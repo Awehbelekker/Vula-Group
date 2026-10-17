@@ -7,21 +7,43 @@
  * Styles live in index.css (.vshell-*) so media queries + tokens (var(--accent) etc.) apply.
  */
 import { useState } from "react";
+import { Menu, Moon, Sun, SunMoon } from "lucide-react";
 import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
+import { iconFor } from "../navConfig";
+import VulaShellV2 from "./VulaShellV2";
 
 // Auto (follow the phone) → Light → Dark → Auto. Per person, remembered on this device.
-const MODES = [["auto", "◐", "Theme: follows your device"], ["light", "☀", "Theme: light"], ["dark", "☾", "Theme: dark"]];
+const MODES = [["auto", "◐", "Theme: follows your device", SunMoon], ["light", "☀", "Theme: light", Sun],
+  ["dark", "☾", "Theme: dark", Moon]];
+
+// Both glyphs render; index.css shows the emoji in the current shell and the Lucide icon under
+// the redesign ([data-ui="v2"]), so switching a tenant over needs no re-render (2026-10-17).
+function Glyph({ emoji, Icon, size = 20 }) {
+  return (
+    <>
+      <span className="vshell-emoji" aria-hidden="true">{emoji}</span>
+      {Icon && <Icon className="vshell-lucide" size={size} strokeWidth={1.75} aria-hidden="true" />}
+    </>
+  );
+}
+
 function ThemeToggle() {
   const [mode, setMode] = useState(getThemeMode());
   const i = Math.max(0, MODES.findIndex(([m]) => m === mode));
   const next = MODES[(i + 1) % MODES.length][0];
   return (
     <button className="vshell-theme" onClick={() => { setThemeMode(next); setMode(next); }}
-      title={MODES[i][2]} aria-label={`${MODES[i][2]} — switch`}>{MODES[i][1]}</button>
+      title={MODES[i][2]} aria-label={`${MODES[i][2]} — switch`}><Glyph emoji={MODES[i][1]} Icon={MODES[i][3]} size={18} /></button>
   );
 }
 
-export default function VulaShell({
+export default function VulaShell(props) {
+  // The redesigned shell (UX redesign Phase D) for a tenant switched onto it — same props.
+  if (props.v2) return <VulaShellV2 {...props} />;
+  return <VulaShellV1 {...props} />;
+}
+
+function VulaShellV1({
   brand,          // { logoUrl?, logoEmoji?, name, sub }
   groups,         // [{label, items:[{id, icon, label, badge?}]}] — pre-filtered
   zones,          // optional: [{id, label, groups}] — a segmented switch above the nav, each
@@ -44,7 +66,7 @@ export default function VulaShell({
 
   return (
     <div className={"vshell" + (zones ? ` vshell--zone-${activeZone?.id}` : "")}>
-      <button className="vshell-burger" aria-label="Menu" onClick={() => setOpen(o => !o)}>☰</button>
+      <button className="vshell-burger" aria-label="Menu" onClick={() => setOpen(o => !o)}><Glyph emoji="☰" Icon={Menu} size={18} /></button>
       {open && <div className="vshell-scrim" onClick={() => setOpen(false)} />}
 
       <aside className={"vshell-side" + (open ? " open" : "")}>
@@ -78,7 +100,7 @@ export default function VulaShell({
                   onClick={() => { onSelect(it.id); setOpen(false); }}
                   title={it.label}
                 >
-                  <span className="vshell-ic">{it.icon}</span>
+                  <span className="vshell-ic"><Glyph emoji={it.icon} Icon={iconFor(it.id)} /></span>
                   <span className="vshell-lb">{it.label}</span>
                   {it.badge ? <span className="vshell-badge">{it.badge}</span> : null}
                 </button>

@@ -1,0 +1,157 @@
+/* ui.css — styles for the shared components in components/ui (2026-10-17, UX redesign Phase C).
+   Tokens only (the redesign's names; index.css gives the current look the same names). Classes
+   rather than inline styles where a component needs hover, focus, a breakpoint or safe-area
+   insets. Imported once by components/ui/index.jsx. */
+
+/* ── Buttons: 44px touch targets in the redesign ─────────────────────────────────────────── */
+:root[data-ui="v2"] .vui-btn { min-height: 44px; border-radius: var(--radius-pill) !important; }
+:root[data-ui="v2"] .vui-btn--sm { min-height: 36px; }
+.vui-btn:focus-visible, .vui-icon-btn:focus-visible, .vui-row:focus-visible, .vui-chip:focus-visible,
+.vui-tab:focus-visible, .vui-tool:focus-visible, .vui-stat--link:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 2px;
+}
+.vui-btn:disabled { opacity: 0.5; cursor: not-allowed !important; }
+.vui-icon-btn {
+  width: 44px; height: 44px; border-radius: var(--radius-pill); border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); display: inline-grid; place-items: center;
+  cursor: pointer; position: relative; flex: none; padding: 0;
+  transition: background var(--t-fast) var(--ease);
+}
+.vui-icon-btn:hover { background: var(--surface-2); }
+.vui-icon-btn--quiet { border-color: transparent; background: transparent; }
+.vui-count {
+  position: absolute; top: -2px; right: -2px; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: var(--radius-pill); background: var(--warm); color: var(--on-brand);
+  font: 600 11px/18px var(--font-sans); text-align: center;
+}
+
+/* ── Pill tabs (SectionTabs variant="pill") ──────────────────────────────────────────────── */
+.vui-tabs--pill { display: inline-flex !important; gap: 4px !important; padding: 4px !important;
+  border: 1px solid var(--line) !important; border-radius: var(--radius-pill); background: var(--surface-2);
+  width: fit-content; justify-self: start; max-width: 100%; overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap !important; }
+.vui-tabs--pill::-webkit-scrollbar { display: none; }
+.vui-tabs--pill .vui-tab { min-height: 36px; }
+.vui-tabs--pill .vui-tab[aria-selected="true"] { background: var(--surface) !important; color: var(--ink) !important;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent); }
+
+/* ── Stat cards ──────────────────────────────────────────────────────────────────────────── */
+.vui-stat--link { cursor: pointer; text-align: left; width: 100%; font: inherit; color: inherit;
+  transition: border-color var(--t-fast) var(--ease); }
+.vui-stat--link:hover { border-color: var(--brand) !important; }
+.vui-ring-track { stroke: var(--surface-2); }
+.vui-ring-fill { stroke: var(--highlight); transition: stroke-dashoffset 600ms var(--ease); }
+
+/* ── List rows ───────────────────────────────────────────────────────────────────────────── */
+.vui-row { display: flex; align-items: center; gap: var(--space-3); min-height: 56px; width: 100%;
+  padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--ink);
+  text-align: left; font: inherit; border-radius: var(--radius-md); text-decoration: none; }
+button.vui-row, a.vui-row { cursor: pointer; transition: background var(--t-fast) var(--ease); }
+button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
+.vui-row + .vui-row { border-top: 1px solid var(--line); border-radius: 0; }
+.vui-disc { width: 36px; height: 36px; border-radius: var(--radius-pill); background: var(--brand-soft);
+  color: var(--brand); display: grid; place-items: center; flex: none; font-weight: 600; font-size: 14px; }
+.vui-row-main { flex: 1; min-width: 0; }
+.vui-row-title { font-size: var(--fs-body); font-weight: 500; line-height: var(--lh-body);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vui-row-detail { font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vui-row-trail { flex: none; font-size: var(--fs-caption); color: var(--muted); display: flex;
+  align-items: center; gap: var(--space-2); }
+
+/* ── Data table: a table from 768px, stacked rows below ─────────────────────────────────── */
+.vui-table-wrap { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface);
+  overflow: auto; max-width: 100%; }
+.vui-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.vui-table th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--muted);
+  font-size: var(--fs-overline); font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  white-space: nowrap; text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.vui-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: top; }
+.vui-table tr:last-child td { border-bottom: none; }
+.vui-table tbody tr.vui-click { cursor: pointer; }
+.vui-table tbody tr.vui-click:hover { background: var(--surface-2); }
+.vui-sort { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.vui-sort:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vui-stack { display: none; }
+@media (max-width: 767px) {
+  .vui-table-wrap--stack .vui-table { display: none; }
+  .vui-table-wrap--stack .vui-stack { display: block; padding: var(--space-1); }
+}
+
+/* ── Filter bar ──────────────────────────────────────────────────────────────────────────── */
+.vui-filters { position: sticky; top: var(--vui-sticky-top, 0); z-index: 5; background: var(--ground);
+  padding: var(--space-2) 0; display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.vui-search { flex: 1 1 220px; min-width: 0; position: relative; }
+.vui-search input { width: 100%; min-height: 44px; padding: 0 12px 0 38px; border: 1px solid var(--line);
+  border-radius: var(--radius-pill); background: var(--surface); color: var(--ink); font: inherit; font-size: 16px; }
+@media (min-width: 768px) { .vui-search input { font-size: var(--fs-body); } }
+.vui-search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+.vui-chips { display: flex; gap: var(--space-2); overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.vui-chips::-webkit-scrollbar { display: none; }
+.vui-chip { min-height: 36px; padding: 0 14px; border-radius: var(--radius-pill); border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); font: 500 var(--fs-label)/1 var(--font-sans);
+  white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.vui-chip[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+
+/* ── Sheet: bottom sheet on a phone, side panel from 768px ──────────────────────────────── */
+.vui-scrim { position: fixed; inset: 0; z-index: 900; background: color-mix(in srgb, var(--ink) 40%, transparent);
+  animation: vuiFade var(--t-sheet) var(--ease) both; }
+.vui-sheet { position: fixed; z-index: 901; background: var(--surface); color: var(--ink);
+  box-shadow: var(--shadow-float); display: flex; flex-direction: column; outline: none;
+  left: 0; right: 0; bottom: 0; max-height: 88vh; border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  padding-bottom: env(safe-area-inset-bottom); animation: vuiUp var(--t-sheet) var(--ease) both; }
+.vui-sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 8px auto 0; }
+@media (min-width: 768px) {
+  .vui-sheet { left: auto; top: 0; width: min(440px, 92vw); max-height: none; height: 100%;
+    border-radius: var(--radius-xl) 0 0 var(--radius-xl); animation-name: vuiLeft; }
+  .vui-sheet-grip { display: none; }
+}
+.vui-sheet-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-4) var(--space-4) var(--space-2); }
+.vui-sheet-head h2 { flex: 1; margin: 0; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); letter-spacing: 0; }
+.vui-sheet-body { padding: 0 var(--space-4) var(--space-4); overflow-y: auto; flex: 1; }
+@keyframes vuiFade { from { opacity: 0; } }
+@keyframes vuiUp { from { transform: translateY(24px); opacity: 0; } }
+@keyframes vuiLeft { from { transform: translateX(24px); opacity: 0; } }
+
+/* ── Command palette ─────────────────────────────────────────────────────────────────────── */
+.vui-palette { position: fixed; z-index: 950; left: 50%; top: 12vh; transform: translateX(-50%);
+  width: min(640px, calc(100vw - 32px)); max-height: 70vh; display: flex; flex-direction: column;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float); overflow: hidden; animation: vuiFade var(--t-fast) var(--ease) both; }
+.vui-palette-input { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--line); color: var(--muted); }
+.vui-palette-input input { flex: 1; min-height: 52px; border: none; outline: none; background: transparent;
+  color: var(--ink); font: inherit; font-size: 16px; }
+.vui-palette-list { overflow-y: auto; padding: var(--space-2); }
+.vui-palette-group { font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted); padding: var(--space-3) var(--space-2) var(--space-1); }
+.vui-palette .vui-row[aria-selected="true"] { background: var(--brand-soft); }
+.vui-kbd { font: 500 11px/1 var(--font-mono); border: 1px solid var(--line); border-radius: 6px;
+  padding: 3px 6px; color: var(--muted); }
+
+/* ── Floating toolbar: fixed above the phone's home bar ─────────────────────────────────── */
+.vui-toolbar { position: fixed; z-index: 800; left: 50%; transform: translateX(-50%);
+  bottom: calc(12px + env(safe-area-inset-bottom)); display: flex; gap: 2px; align-items: center;
+  padding: 6px; border-radius: var(--radius-pill); background: var(--ink); color: var(--ground);
+  box-shadow: var(--shadow-float); max-width: calc(100vw - 24px); }
+:root[data-ui="v2"][data-theme="dark"] .vui-toolbar { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); }
+@media (prefers-color-scheme: dark) {
+  :root[data-ui="v2"]:not([data-theme="light"]) .vui-toolbar { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); }
+}
+.vui-tool { position: relative; min-width: 56px; min-height: 48px; padding: 4px 8px; border: none;
+  border-radius: var(--radius-pill); background: transparent; color: inherit; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font: 500 11px/1.1 var(--font-sans); }
+.vui-tool:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.vui-tool--primary { background: var(--highlight); color: var(--ink); min-width: 52px; }
+.vui-tool--primary:hover { background: var(--highlight); filter: brightness(1.05); }
+.vui-tool .vui-count { top: 2px; right: 8px; }
+/* the page's last row must clear the toolbar */
+.vui-toolbar-pad { height: calc(84px + env(safe-area-inset-bottom)); }
+
+/* ── Toasts: above the floating toolbar when there is one ──────────────────────────────── */
+.vui-toasts { position: fixed; z-index: 1100; left: 50%; transform: translateX(-50%);
+  bottom: calc(20px + var(--vui-toolbar-h, 0px) + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+.vui-toast-action { all: unset; cursor: pointer; font-weight: 600; text-decoration: underline;
+  text-underline-offset: 3px; margin-left: 12px; }
+.vui-toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

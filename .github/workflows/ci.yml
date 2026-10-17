@@ -96,3 +96,8 @@ jobs:
       # allowance per file only goes down — scripts/design-token-baseline.json).
       - name: Design tokens
         run: npm run check:tokens
+
+      # Pure helpers the redesign leans on: tenant brand → contrast-safe tokens, and the one
+      # money formatter (tests/unit, node:test — no extra framework).
+      - name: Unit tests
+        run: npm run test:unit

@@ -15,7 +15,10 @@ import path from "node:path";
 import { SCREENS, VIEWPORTS, openScreen } from "./screens.js";
 
 const partsDir = (ti) => path.join(ti.project.testDir, ".results", "a11y-parts");
-const baseDir = (ti) => path.join(ti.project.testDir, "baseline");
+// UI_V2=1 (the redesign) writes next to the screenshots in .results/v2, never over the baseline.
+const baseDir = (ti) => process.env.UI_V2 === "1"
+  ? path.join(ti.project.testDir, ".results", "v2")
+  : path.join(ti.project.testDir, "baseline");
 const writePart = (ti, name, data) => {
   fs.mkdirSync(partsDir(ti), { recursive: true });
   fs.writeFileSync(path.join(partsDir(ti), name), JSON.stringify(data));

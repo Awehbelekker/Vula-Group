@@ -3,6 +3,46 @@
  * One source of truth: VulaShell renders these groups; App.jsx / VulaMerchantAdmin map ids to
  * components exactly as before — every pre-overhaul tab id is present, nothing dropped.
  */
+import {
+  Banknote, Bike, Bot, BookOpen, Boxes, BrainCircuit, BrickWall, Briefcase, Calculator,
+  CalendarDays, ClipboardList, Clock, Contact, CreditCard, Download, Factory, FileSignature,
+  FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
+  Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
+  PenLine, PencilRuler, Receipt, ReceiptText, Repeat, Rocket, Route, Ruler, ScanLine, Settings,
+  ShoppingBag, Smartphone, Sparkles, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound,
+  Wallet, Wrench, Zap,
+} from "lucide-react";
+
+// Lucide icons for the redesigned shell (2026-10-17, UX redesign B5), keyed by nav id — the
+// same ids as the `icon` emoji below, which the current shell keeps showing until a tenant is
+// switched onto the redesign (VulaShell renders both; index.css shows one). One map for both
+// shells: master and merchant ids that share a name share a meaning (contacts, finances…).
+export const NAV_ICONS = {
+  // merchant
+  overview: House, inbox: Inbox,
+  "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
+  sell: Store, orders: Package, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag,
+  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, suppliers: Truck, import: Download,
+  money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen,
+  payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
+  people: Users, customers: Users, contacts: Contact, followups: MailCheck,
+  "marketing-hub": Sparkles, onboarding: PartyPopper, broadcast: Megaphone, "email-campaigns": Mail,
+  "wa-templates": MessagesSquare, scheduling: Clock, marketing: Sparkles,
+  pages: Globe,
+  operate: HardHat, projects: FolderKanban, workspace: FolderOpen, fieldops: HardHat, labour: BrickWall,
+  qsrates: Ruler, documents: FileText,
+  estimating: Calculator, qs: Calculator, qspro: PencilRuler, takeoff: Ruler, draft: PenLine,
+  team: UsersRound, settings: Settings,
+  "my-work": Briefcase, "rep-contacts": Contact, "rep-callsheet": ClipboardList, "rep-bookings": CalendarDays,
+  "rep-documents": Library, "rep-reminders": Clock, "rep-expenses": Receipt, "rep-expense-sheet": ReceiptText,
+  "rep-crm": Link,
+  // master
+  master: Wrench, training: Library, dashboard: LayoutDashboard, agent: Bot, reports: TrendingUp,
+  onboard: Rocket, admin: FileSignature, merchant: Store,
+};
+
+/** The Lucide icon for a nav id, or null (the shell then shows the emoji). */
+export const iconFor = (id) => NAV_ICONS[id] || null;
 
 // Merchant shell (owner/staff, and master "open as tenant"). ids = VulaMerchantAdmin tab ids.
 //
@@ -241,3 +281,62 @@ export function labelFor(groups, id) {
   }
   return "";
 }
+
+/* ── The redesigned shell's grouping (2026-10-17, UX redesign Phase D) ───────────────────────
+ * The same sections, regrouped for owners into what faces customers (front house), what runs
+ * the business (back house) and admin. Pure presentation over groups that merchantVisible /
+ * filterGroups ALREADY filtered — no id changes, no gating changes, nothing a member couldn't
+ * see before becomes visible. Stock and Suppliers stay inside Sell for now (splitting a section
+ * needs its own section wrapper in VulaMerchantAdmin — a Phase F question). */
+export const NAV_HOUSE = {
+  overview: "top", inbox: "top", "assistant-hub": "top",
+  people: "front", sell: "front", "marketing-hub": "front", pages: "front",
+  money: "back", operate: "back", estimating: "back",
+  team: "admin", settings: "admin",
+  "my-work": "mywork",
+};
+export const HOUSE_LABELS = { front: "Front house", back: "Back house", admin: "Admin", mywork: "My Work" };
+
+/** Regroup already-filtered groups into Home/Inbox/Assistant, then Front house, Back house,
+ * Admin and My Work. An id this map doesn't know lands in Back house rather than vanishing. */
+export function houseGroups(groups) {
+  const buckets = { top: [], front: [], back: [], admin: [], mywork: [] };
+  for (const g of groups || []) for (const it of g.items) (buckets[NAV_HOUSE[it.id]] || buckets.back).push(it);
+  return [
+    { label: "", items: buckets.top },
+    ...["front", "back", "admin", "mywork"].map((h) => ({ label: HOUSE_LABELS[h], house: h, items: buckets[h] })),
+  ].filter((g) => g.items.length);
+}
+
+/** A tenant's own names (vula_tenant_config.ui_labels, migration 215), e.g.
+ * { sections: { people: "Care", bookings: "Visits" } } — applied to section and sub-tab labels
+ * only; ids never change (deep links and team access lists use them). No per-tenant code. */
+export function applyLabels(groups, uiLabels) {
+  const names = uiLabels?.sections;
+  if (!names || typeof names !== "object") return groups;
+  const name = (it) => (typeof names[it.id] === "string" && names[it.id].trim() ? { ...it, label: names[it.id].trim() } : it);
+  return groups.map((g) => ({
+    ...g, items: g.items.map((it) => name(it.subtabs ? { ...it, subtabs: it.subtabs.map(name) } : it)),
+  }));
+}
+
+/** Every page in the (filtered) groups as { id, label, section, sectionLabel } — what the
+ * command palette offers and what a sub-tab id navigates through. */
+export function flattenNav(groups) {
+  const out = [];
+  for (const g of groups || []) for (const it of g.items) {
+    if (it.subtabs) it.subtabs.forEach((st) => out.push({ id: st.id, label: st.label, section: it.id, sectionLabel: it.label }));
+    else out.push({ id: it.id, label: it.label, section: it.id, sectionLabel: "" });
+  }
+  return out;
+}
+
+/** The Add sheet's quick actions — each shows only if its screen is in this login's (filtered)
+ * nav, so a role sees exactly the actions it may use. `launch` opens a Quick Launcher overlay. */
+export const ADD_ACTIONS = [
+  { key: "quote", label: "New quote or invoice", detail: "In Money › Invoices", tab: "invoices" },
+  { key: "expense", label: "Add an expense", tab: "expenses", alsoTab: "rep-expenses" },
+  { key: "scan", label: "Scan a document", detail: "Smart scan files it for you", tab: "scanner", launch: "scanner" },
+  { key: "contact", label: "New contact", tab: "contacts", alsoTab: "rep-contacts" },
+  { key: "broadcast", label: "Broadcast", detail: "Approved templates only", tab: "broadcast" },
+];

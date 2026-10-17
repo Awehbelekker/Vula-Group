@@ -1,8 +1,9 @@
 /* Vula design system — global tokens.
    Adopted from the off-the-hook design language (cream surfaces, Cormorant display,
    card/badge radii, soft motion) but colour-neutral: the accent is per-tenant and
-   driven by --accent (set from commerce_invoice_settings.accent_color at load). */
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Source+Code+Pro:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
+   driven by --accent (set from commerce_invoice_settings.accent_color at load).
+   Fonts load from index.html (<link> + preconnect, 2026-10-17): an @import here was only
+   discovered after this stylesheet downloaded, so text painted late. */
 
 :root {
   /* Brand — from the tenant's brand kit via applyBrand() (theme/tokens.js), which sets the
@@ -95,6 +96,144 @@
   }
 }
 
+/* The redesign's token NAMES on the current look too (2026-10-17, Phase C), pointing at
+   today's values — so a shared component (components/ui) can be written once with the new
+   names and still look like the current dashboard where a tenant hasn't been switched over.
+   The [data-ui="v2"] block below replaces all of these with the redesign's own values. */
+:root {
+  --ground: var(--bg); --surface-2: var(--surface-alt); --line: var(--border);
+  --brand: var(--accent); --brand-strong: var(--accent-dark); --brand-soft: var(--accent-soft);
+  --on-brand: var(--on-accent);
+  --highlight: var(--warn); --highlight-soft: var(--warn-soft);
+  --warm: var(--danger); --warm-soft: var(--danger-soft);
+  --focus: var(--accent);
+  --shadow-float: var(--shadow-lg);
+  --radius-sm: var(--r-input); --radius-md: var(--r-input); --radius-lg: var(--r-card);
+  --radius-xl: var(--r-card); --radius-pill: var(--r-pill);
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-7: 28px; --space-8: 32px;
+  --font-sans: var(--font-body);
+  --fs-display-xl: 40px; --lh-display-xl: 1; --fs-display-lg: 32px; --lh-display-lg: 1.05;
+  --fs-display-md: 22px; --lh-display-md: 1.15; --fs-title: 16px; --lh-title: 22px;
+  --fs-body: 14px; --lh-body: 21px; --fs-label: 13px; --lh-label: 18px;
+  --fs-caption: 12px; --lh-caption: 16px; --fs-overline: 11px; --lh-overline: 14px;
+  --fs-money: 16px; --lh-money: 22px;
+  --t-sheet: 240ms;
+  --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
+  --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand);
+}
+
+/* ── UX redesign tokens (2026-10-17, docs/ux-redesign-audit.md) ─────────────────────────────
+   Only on <html data-ui="v2">, which lib/flags.js sets for a tenant switched onto the new
+   dashboard (vula_tenant_config.ui_v2 + the VITE_UI_V2 build). Every other tenant keeps the
+   values above, unchanged. The old names (--bg, --accent, --border…) become aliases of the new
+   ones here, so a screen that hasn't been migrated still picks up the new look.
+   The tenant's brand sets only --brand: applyBrand() derives --v2-brand* for both modes
+   (theme/tokens.js deriveBrand, contrast-checked); without a brand kit it is Vula green. */
+:root[data-ui="v2"] {
+  --ground: #F6F4EF;
+  --surface: #FFFFFF;
+  --surface-2: #EFEDE6;
+  --line: #E3DFD3;
+  --ink: #161816;
+  --muted: #5E625C;          /* 4.5:1 on ground and surface */
+  --faint: #8A8E86;          /* placeholders and disabled only */
+  --brand: var(--v2-brand, #1F5A45);
+  --brand-strong: var(--v2-brand-strong, #174535);
+  --brand-soft: var(--v2-brand-soft, #E3EEE8);
+  --on-brand: var(--v2-on-brand, #FFFFFF);
+  --highlight: #E8A93A;      /* amber: targets, the Add button, goal progress */
+  --highlight-soft: #F8ECD2; /* money-due chips */
+  --warm: #C4552E;           /* clay: hot deals, overdue, unread counts */
+  --warm-soft: #F7E3DA;
+  --ok: #2E7D4F; --warn: #9A6A00; --danger: #B42318; --info: #2463A8;
+  --focus: #2463A8;
+  /* Text in a tone, on that tone's soft tint (chips, the "hot" tile): the fills above are too
+     light for 12px text in light mode, so each has a darker text shade, solved for 4.5:1 on its
+     own tint (2026-10-17, axe on #/ui-kit). Dark mode uses the tones themselves. */
+  --ok-text: #2A6D46; --warn-text: #7D5805; --danger-text: #B42318; --info-text: #2360A2;
+  --highlight-text: #7F6028; --warm-text: #9A4628; --brand-text: var(--brand-strong);
+  --chart-1: var(--brand); --chart-2: #E8A93A; --chart-3: #C4552E;
+  --chart-4: #2463A8; --chart-5: #7B4F8E; --chart-6: #8FA597;
+  --shadow-float: 0 10px 28px rgba(22, 24, 22, 0.22);
+
+  --radius-sm: 10px; --radius-md: 14px; --radius-lg: 24px; --radius-xl: 28px; --radius-pill: 999px;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-7: 28px; --space-8: 32px;
+
+  /* Type: one display headline per screen; Inter (--font-body) for all interface text */
+  --font-sans: var(--font-body);
+  --fs-display-xl: 40px; --lh-display-xl: 1;
+  --fs-display-lg: 32px; --lh-display-lg: 1.05;
+  --fs-display-md: 22px; --lh-display-md: 1.15;
+  --fs-title: 16px;   --lh-title: 22px;
+  --fs-body: 14px;    --lh-body: 21px;
+  --fs-label: 13px;   --lh-label: 18px;
+  --fs-caption: 12px; --lh-caption: 16px;
+  --fs-overline: 11px; --lh-overline: 14px;
+  --fs-money: 16px;   --lh-money: 22px;
+
+  /* Motion: state changes 150–200ms, sheets 240ms; prefers-reduced-motion stops all of it */
+  --t-sheet: 240ms;
+
+  /* The old names, now pointing at the new tokens */
+  --bg: var(--ground);
+  --surface-alt: var(--surface-2);
+  --border: var(--line);
+  --border-soft: var(--line);
+  --text: var(--ink);
+  --accent: var(--brand);
+  --accent-dark: var(--brand-strong);
+  --accent-soft: var(--brand-soft);
+  --on-accent: var(--on-brand);
+  --ok-soft: color-mix(in srgb, var(--ok) 12%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 12%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 10%, transparent);
+  --info-soft: color-mix(in srgb, var(--info) 10%, transparent);
+  --r-card: var(--radius-lg);
+  --r-input: var(--radius-md);
+  --r-pill: var(--radius-pill);
+  /* cards use a line border, not shadows; only floating things (toolbar, menus, sheets) lift */
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: var(--shadow-float);
+}
+:root[data-ui="v2"][data-theme="dark"] {
+  --ground: #121412; --surface: #1B1E1B; --surface-2: #242824; --line: #323732;
+  --ink: #F1F1EC; --muted: #A3A8A0; --faint: #7B8079;
+  --brand: var(--v2-brand-dm, #5FBF95);
+  --brand-strong: var(--v2-brand-strong-dm, #7FD0AB);
+  --brand-soft: var(--v2-brand-soft-dm, #1E3329);
+  --on-brand: var(--v2-on-brand-dm, #0E1A14);
+  --highlight: #F2BE5C; --highlight-soft: #3A2F19; --warm: #E07A55; --warm-soft: #3B231A;
+  --ok: #6FCF97; --warn: #E8B84A; --danger: #F2836F; --info: #7FB2EA; --focus: #7FB2EA;
+  --chart-2: #F2BE5C; --chart-3: #E07A55; --chart-4: #7FB2EA; --chart-5: #C39AD6; --chart-6: #5D6F63;
+  --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
+  --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand-strong);
+  --shadow-float: 0 10px 28px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-ui="v2"]:not([data-theme="light"]) {
+    --ground: #121412; --surface: #1B1E1B; --surface-2: #242824; --line: #323732;
+    --ink: #F1F1EC; --muted: #A3A8A0; --faint: #7B8079;
+    --brand: var(--v2-brand-dm, #5FBF95);
+    --brand-strong: var(--v2-brand-strong-dm, #7FD0AB);
+    --brand-soft: var(--v2-brand-soft-dm, #1E3329);
+    --on-brand: var(--v2-on-brand-dm, #0E1A14);
+    --highlight: #F2BE5C; --highlight-soft: #3A2F19; --warm: #E07A55; --warm-soft: #3B231A;
+    --ok: #6FCF97; --warn: #E8B84A; --danger: #F2836F; --info: #7FB2EA; --focus: #7FB2EA;
+    --chart-2: #F2BE5C; --chart-3: #E07A55; --chart-4: #7FB2EA; --chart-5: #C39AD6; --chart-6: #5D6F63;
+    --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
+    --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand-strong);
+    --shadow-float: 0 10px 28px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+:root[data-ui="v2"] body { font-size: var(--fs-body); line-height: var(--lh-body); }
+:root[data-ui="v2"] :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:root[data-ui="v2"] .vula-money { font-weight: 500; }
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
@@ -131,6 +270,14 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
   input, select, textarea { font-size: 16px !important; }
 }
 @media (prefers-reduced-motion: reduce) { .vula-skeleton { animation: none; } .vula-fade-up, .vula-slide-in { animation: none; } }
+/* 2026-10-17: everything respects reduced motion, including the inline transitions and
+   keyframes in components (Quick Launcher, Documents…) the rule above never reached. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
 
 /* Thin, branded scrollbars + focus rings */
 ::-webkit-scrollbar { height: 8px; width: 8px; }
@@ -283,9 +430,17 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
 @media (pointer: coarse) { .vula-glass.refract { backdrop-filter: blur(14px) saturate(170%); } }
 @media (prefers-reduced-motion: reduce) { .vula-home-bg { animation: none; } }
 @media (prefers-reduced-transparency: reduce) {
-  .vula-glass, .vula-glass.refract { -webkit-backdrop-filter: none; backdrop-filter: none; background: #fff; }
+  /* the solid card follows the theme (was #fff, a white slab in dark mode) */
+  .vula-glass, .vula-glass.refract { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
   .vula-glass.dark { background: #14503D; }
 }
 
 /* QR codes must stay black-on-white to scan, in light and dark mode */
 .qr-white{background:#fff}
+
+/* Nav glyphs (2026-10-17, UX redesign B5): VulaShell renders the emoji and the Lucide icon;
+   the current shell shows the emoji, the redesign the icon. */
+.vshell-lucide { display: none; }
+:root[data-ui="v2"] .vshell-emoji { display: none; }
+:root[data-ui="v2"] .vshell-lucide { display: inline-block; vertical-align: middle; }
+:root[data-ui="v2"] .vshell-ic { display: inline-flex; align-items: center; justify-content: center; }

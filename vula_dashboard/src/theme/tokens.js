@@ -69,6 +69,93 @@ export const DENSITIES = { comfortable: "Comfortable", compact: "Compact" };
 // WhatsApp menu page and the phone app icon (backend: vula/commerce/brand_sizes.py).
 export const LOGO_SIZES = { sm: "Small", md: "Medium", lg: "Large", xl: "Extra large" };
 
+/* ── Redesign brand (2026-10-17): the tenant's colour sets only --brand ─────────────────────
+ * index.css's [data-ui="v2"] tokens read --v2-brand* (light) and --v2-brand*-dm (dark). The
+ * tenant's colour is adjusted until it works: brand text must reach 4.5:1 on the card surface
+ * (a pale yellow is darkened in light mode, a near-black is lightened in dark mode), and
+ * on-brand text must reach 4.5:1 on the brand fill. */
+const V2_SURFACE = "#FFFFFF";
+const V2_SURFACE_DM = "#1B1E1B";
+const V2_INK = "#161816";
+const V2_ON_DARK = "#0E1A14";
+
+/** Mix `a` into `b` by weight w (0..1) — a solid hex, so the soft tint looks the same on any card. */
+export function mix(a, b, w) {
+  const x = parseHex(a), y = parseHex(b); if (!x || !y) return a;
+  return "#" + x.map((v, i) => clamp(v * w + y[i] * (1 - w)).toString(16).padStart(2, "0")).join("");
+}
+function towards(hex, target, step = 0.12) {
+  return mix(target, hex, step);
+}
+function toHsl(hex) {
+  const [r, g, b] = parseHex(hex).map((v) => v / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min, s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h / 6, s, l];
+}
+function fromHsl([h, s, l]) {
+  const f = (n) => {
+    const k = (n + h * 12) % 12, a = s * Math.min(l, 1 - l);
+    return clamp(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return "#" + [f(0), f(8), f(4)].map((c) => c.toString(16).padStart(2, "0")).join("");
+}
+/** Move `hex`'s lightness (dir -1 darker, +1 lighter) until it reaches `ratio` against `against`.
+ * Hue and saturation stay, so a green stays a clear green in dark mode instead of greying the
+ * way mixing in white does. */
+function untilContrast(hex, against, dir, ratio = 4.5) {
+  if (contrastRatio(hex, against) >= ratio) return hex;
+  const [h, s, l0] = toHsl(hex);
+  for (let l = l0; l >= 0 && l <= 1; l += dir * 0.02) {
+    const c = fromHsl([h, s, l]);
+    if (contrastRatio(c, against) >= ratio) return c;
+  }
+  return dir < 0 ? "#000000" : "#FFFFFF";
+}
+function onFor(fill, candidates) {
+  return candidates.reduce((best, c) => (contrastRatio(c, fill) > contrastRatio(best, fill) ? c : best));
+}
+
+/** Pure: a tenant colour → the four redesign brand tokens for light and dark. Tested in
+ * tests/unit/brand.test.mjs (pale yellow, mid grey, near-black, Vula green). */
+export function deriveBrand(hex) {
+  const lightBrand = untilContrast(hex, V2_SURFACE, -1);
+  const darkBrand = untilContrast(hex, V2_SURFACE_DM, +1);
+  return {
+    light: {
+      brand: lightBrand,
+      strong: shade(lightBrand, -0.22),
+      soft: mix(lightBrand, V2_SURFACE, 0.12),
+      on: onFor(lightBrand, ["#FFFFFF", V2_INK]),
+    },
+    dark: {
+      brand: darkBrand,
+      strong: towards(darkBrand, "#FFFFFF", 0.2),
+      soft: mix(darkBrand, V2_SURFACE_DM, 0.18),
+      on: onFor(darkBrand, [V2_ON_DARK, "#FFFFFF"]),
+    },
+  };
+}
+
+/** Set (or, with no tenant colour, clear back to Vula green) the redesign brand variables. */
+export function applyBrandV2(accent) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  const keys = ["brand", "brand-strong", "brand-soft", "on-brand"];
+  if (!accent) {
+    keys.forEach((k) => { root.style.removeProperty(`--v2-${k}`); root.style.removeProperty(`--v2-${k}-dm`); });
+    return;
+  }
+  const { light, dark } = deriveBrand(accent);
+  const vals = { brand: "brand", "brand-strong": "strong", "brand-soft": "soft", "on-brand": "on" };
+  for (const k of keys) {
+    root.style.setProperty(`--v2-${k}`, light[vals[k]]);
+    root.style.setProperty(`--v2-${k}-dm`, dark[vals[k]]);
+  }
+}
+
 /** Everything in one call — the dashboard, login, Brand kit preview and hosted pages use this. */
 export function applyBrand(brand = {}) {
   if (typeof document === "undefined") return;
@@ -76,6 +163,7 @@ export function applyBrand(brand = {}) {
   const root = document.documentElement;
   const accent = hex(brand.accent_color) || "#2C5545";
   applyAccent(accent);
+  applyBrandV2(hex(brand.accent_color));
   applySecondary(hex(brand.secondary_color));
   applyInk(hex(brand.ink_color) || "#1E1E1E");
   applyFontPairing(brand.font_pairing);
