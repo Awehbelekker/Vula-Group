@@ -8,7 +8,12 @@ Supabase, whose keys live only on the server. They run here, on the server, two 
     started by setting a Railway variable, and its one-line summary read back from the logs;
   * POST /v1/master/kb-maintenance {"jobs": [...]} from a master login.
 
-Jobs: stats, exposure, backfill_preview, backfill_apply, customer_view, retrieval_live.
+Jobs: stats, exposure, backfill_preview, backfill_apply, mark_public, customer_view, retrieval_live.
+
+mark_public (2026-10-17) opens up a REVIEWED list of documents to customers: KB_MARK_PUBLIC is
+JSON {tenant_id: [filename, ...]} (spaces and underscores match each other, case ignored). Each
+match is set public with audience_by=review, which the backfill never overrides. The list lives in
+the environment, not the repository, because filenames are tenant data.
 Each full report goes to vula_eval_reports (model='kb_maintenance', skill=<job>), which only the
 service role behind require_master can read. The log line carries counts only — never chunk
 text, questions, replies or phone numbers (POPIA).
@@ -23,7 +28,8 @@ from typing import Any, Dict, List
 
 log = logging.getLogger(__name__)
 
-JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "customer_view", "retrieval_live")
+JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view",
+        "retrieval_live")
 
 
 async def _stats() -> Dict[str, Any]:
@@ -109,6 +115,33 @@ async def _backfill(apply: bool) -> Dict[str, Any]:
     return out
 
 
+def _norm(name: str) -> str:
+    import re
+    return re.sub(r"[\s_]+", " ", (name or "").strip().lower())
+
+
+async def _mark_public() -> Dict[str, Any]:
+    from config import settings
+    from vula.ingestion.pipeline import QdrantStore
+    wanted = json.loads(settings.kb_mark_public or "{}")
+    store = QdrantStore()
+    out: Dict[str, Any] = {"tenants": {}}
+    for tenant, names in wanted.items():
+        want = {_norm(n) for n in names}
+        docs = await store.list_documents(tenant)
+        hit, verified = set(), 0
+        for d in docs:
+            if _norm(d.get("filename")) in want:
+                res = await store.set_document_audience(tenant, d["doc_id"], "public", by="review")
+                verified += res["chunks"] if res["verified"] else 0
+                hit.add(_norm(d.get("filename")))
+        out["tenants"][tenant] = {"asked": len(want), "matched": len(hit), "chunks_verified": verified,
+                                  "not_found": sorted(want - hit)}
+    out["summary"] = {t: {k: v[k] for k in ("asked", "matched", "chunks_verified")}
+                      | {"not_found": len(v["not_found"])} for t, v in out["tenants"].items()}
+    return out
+
+
 async def _customer_view() -> Dict[str, Any]:
     from evals import retrieval
     from tools.kb_audience_backfill import all_tenant_ids
@@ -131,7 +164,8 @@ async def _retrieval_live() -> Dict[str, Any]:
 
 async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
     fn = {"stats": _stats, "exposure": _exposure, "backfill_preview": lambda: _backfill(False),
-          "backfill_apply": lambda: _backfill(True), "customer_view": _customer_view,
+          "backfill_apply": lambda: _backfill(True), "mark_public": _mark_public,
+          "customer_view": _customer_view,
           "retrieval_live": _retrieval_live}[job]
     from vula.commerce import service
     db = service._client()

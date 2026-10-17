@@ -1558,7 +1558,7 @@ class QdrantStore:
         name = self._collection_name(tenant_id)
         body = {"limit": 1, "with_vector": False, "with_payload": ["audience"],
                 "filter": {"must": [{"key": "filename", "match": {"value": filename}},
-                                    {"key": "audience_by", "match": {"value": "owner"}}]}}
+                                    {"key": "audience_by", "match": {"any": ["owner", "review"]}}]}}
         try:
             async with httpx.AsyncClient(timeout=10.0, headers=self._headers()) as client:
                 r = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)

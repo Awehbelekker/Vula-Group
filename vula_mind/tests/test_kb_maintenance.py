@@ -22,7 +22,8 @@ def db():
 async def _legacy_shop():
     p = VulaIngestionPipeline("shop")
     await p.ingest_text("Invoice from the co-op: yellowtail R 95 per kg.", "Supplier invoice co-op.pdf")
-    await p.ingest_text("Is the fish fresh? Yes, line caught daily.", "Fresh catch FAQ.md")
+    await p.ingest_text("Is the fish fresh? Yes, line caught daily.", "Fresh catch FAQ.md",
+                        source_type="website")
     return p
 
 
