@@ -56,7 +56,9 @@ async def test_tenant_paths_need_sign_in_and_membership(method, path):
     with patch("vula.api.tenant_auth.is_tenant_member", AsyncMock(return_value=False)) as m:
         assert (await server._guard_check(method, path, "Bearer t")).status_code == 403
     assert m.await_args.args[1] in ("off-the-hook", "digg-demo")
-    with patch("vula.api.tenant_auth.is_tenant_member", AsyncMock(return_value=True)):
+    # a full member (owner/manager) — section rules are covered in test_member_scope_security.py
+    with (patch("vula.api.tenant_auth.is_tenant_member", AsyncMock(return_value=True)),
+          patch("vula.api.tenant_auth.member_scope", AsyncMock(return_value={"full": True}))):
         assert await server._guard_check(method, path, "Bearer t") is None
 
 

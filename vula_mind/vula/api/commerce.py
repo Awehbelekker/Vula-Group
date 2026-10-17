@@ -4057,10 +4057,12 @@ async def admin_stats(tenant_id: str):
     # Escalations waiting on a human — the customer is literally waiting; surface it on Home.
     open_escalations, oldest_escalation = 0, None
     try:
-        esc = (db.table("vula_escalations").select("question,created_at")
+        # exact count (2026-10-17): len() of a limit(10) page capped the Home figure at 10
+        res = (db.table("vula_escalations").select("question,created_at", count="exact")
                .eq("tenant_id", tenant_id).eq("status", "open")
-               .order("created_at").limit(10).execute().data or [])
-        open_escalations = len(esc)
+               .order("created_at").limit(10).execute())
+        esc = res.data or []
+        open_escalations = res.count if isinstance(res.count, int) else len(esc)
         if esc:
             oldest_escalation = {"question": (esc[0].get("question") or "")[:120],
                                  "created_at": esc[0].get("created_at")}
@@ -7621,14 +7623,20 @@ async def admin_create_manual_order(tenant_id: str, body: dict):
 
 @router.get("/{tenant_id}/admin/escalations")
 async def admin_list_escalations(tenant_id: str, status: str = "open", limit: int = 50):
+    total = None
     try:
-        rows = (service._client().table("vula_escalations").select("*")
-                .eq("tenant_id", tenant_id).eq("status", status)
-                .order("created_at", desc=True).limit(min(limit, 200)).execute().data or [])
+        # exact count (2026-10-17): open_count was len() of this page, so the Inbox badge
+        # stopped at the page size (50)
+        res = (service._client().table("vula_escalations").select("*", count="exact")
+               .eq("tenant_id", tenant_id).eq("status", status)
+               .order("created_at", desc=True).limit(min(limit, 200)).execute())
+        rows = res.data or []
+        total = res.count if isinstance(res.count, int) else None
     except Exception as exc:
         log.debug("escalations list skipped (run migration 042?): %s", exc)
         rows = []
-    return {"escalations": rows, "open_count": len(rows) if status == "open" else None}
+    open_count = (total if total is not None else len(rows)) if status == "open" else None
+    return {"escalations": rows, "open_count": open_count}
 
 
 @router.post("/{tenant_id}/admin/escalations/{esc_id}/answer")
@@ -7831,8 +7839,10 @@ async def admin_cs_metrics(tenant_id: str):
     # Local-first share (near-zero marginal cost) from the routing telemetry.
     local = cloud = 0
     try:
+        # this tenant's own routing decisions (2026-10-17: was platform-wide, shown as theirs)
         for r in (db.table("vula_reasoning_telemetry").select("outcome")
-                  .eq("system", "vula-llm-router").gte("created_at", cutoff.isoformat())
+                  .eq("system", "vula-llm-router").eq("tenant_id", tenant_id)
+                  .gte("created_at", cutoff.isoformat())
                   .limit(5000).execute().data or []):
             if r.get("outcome") == "local":
                 local += 1

@@ -223,10 +223,16 @@ class FollowupStatusIn(BaseModel):
 
 @router.patch("/followups/{tenant_id}/{followup_id}")
 async def set_followup_status(tenant_id: str, followup_id: str, body: FollowupStatusIn) -> dict:
+    # Scoped to the tenant in the path (2026-10-17): the guard checks the caller belongs to
+    # tenant_id, but the update used to match on id alone — any member could change another
+    # business's follow-up by id.
     try:
-        _client().table("vula_email_followups").update({"status": body.status}).eq("id", followup_id).execute()
+        res = (_client().table("vula_email_followups").update({"status": body.status})
+               .eq("id", followup_id).eq("tenant_id", tenant_id).execute())
     except Exception as exc:
         return {"error": str(exc)}
+    if not (res.data or []):
+        raise HTTPException(status_code=404, detail="Follow-up not found.")
     return {"id": followup_id, "status": body.status}
 
 

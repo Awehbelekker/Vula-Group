@@ -104,3 +104,92 @@ async def require_tenant_actor(tenant: str, authorization: str = Header(default=
         _IDENTITY_CACHE.clear()
     _IDENTITY_CACHE[token] = (now + _IDENTITY_TTL, identity)
     return identity
+
+
+# ── Member scope: WHAT a signed-in member may see, from their verified login (2026-10-17) ─────
+# Until now the dashboard's section gating (navConfig.merchantVisible) was browser-only and fed
+# by GET /v1/team/{t}/me?email=… — which trusted whatever email the caller typed and handed an
+# unknown one full owner access. A sales rep could read Money just by calling the endpoints.
+# This resolves the same rule the dashboard uses, server-side, from the JWT's own email:
+#   master, or this tenant's owner login            → full
+#   a vula_team_members row matched by email        → full if role owner/manager or no access
+#                                                      list (same as /me); inactive → nothing
+#   a staff login with no directory row             → full (unchanged behaviour — logins made
+#                                                      before access lists existed keep working)
+_SCOPE_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+_SCOPE_TTL = 60.0
+_MAX_SCOPE_CACHE = 500
+
+_FULL_TEAM_ROLES = ("owner", "manager")
+
+
+def scope_from_rows(tenant_id: str, email: str, login_rows: list[dict],
+                    team_rows: list[dict]) -> dict:
+    """Pure rule (tested directly): the member's {full, access, role, team row fields}."""
+    if any(r.get("role") == "master" for r in login_rows):
+        return {"full": True, "access": [], "role": "master", "member": None}
+    login_role = next((r.get("role") for r in login_rows if r.get("tenant_id") == tenant_id), None)
+    e = (email or "").strip().lower()
+    member = next((m for m in team_rows if e and (m.get("email") or "").strip().lower() == e), None)
+    if login_role == "owner":
+        return {"full": True, "access": [], "role": "owner", "member": member}
+    if member is None:
+        return {"full": True, "access": [], "role": login_role or "staff", "member": None}
+    access = list(member.get("access") or [])
+    if member.get("active") is False:
+        return {"full": False, "access": [], "role": member.get("role"), "member": member}
+    full = member.get("role") in _FULL_TEAM_ROLES or not access
+    return {"full": full, "access": access, "role": member.get("role"), "member": member}
+
+
+async def member_scope(authorization: str, tenant_id: str) -> dict | None:
+    """The caller's scope on tenant_id, or None if they aren't a member (or not signed in)."""
+    if not await is_tenant_member(authorization, tenant_id):
+        return None
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    now = time.monotonic()
+    hit = _SCOPE_CACHE.get((token, tenant_id))
+    if hit and hit[0] > now:
+        return hit[1]
+
+    from vula.api.master_auth import _verify_jwt
+    user = await _verify_jwt(token) or {}
+    try:
+        from vula.commerce import service as cs
+        db = cs._client()
+        login_rows = (db.table("vula_tenant_users").select("tenant_id,role")
+                      .eq("user_id", user.get("id")).limit(10).execute().data or [])
+        team_rows = (db.table("vula_team_members").select("email,role,access,notify,name,whatsapp,active")
+                     .eq("tenant_id", tenant_id).execute().data or [])
+    except Exception as exc:
+        # Fail closed and don't cache: a DB blip must never widen access, and the next request
+        # retries the lookup.
+        log.warning("member scope lookup failed: %s", exc)
+        return {"full": False, "access": [], "role": None, "member": None, "email": user.get("email")}
+    scope = scope_from_rows(tenant_id, user.get("email") or "", login_rows, team_rows)
+    scope["email"] = user.get("email")
+    if len(_SCOPE_CACHE) > _MAX_SCOPE_CACHE:
+        _SCOPE_CACHE.clear()
+    _SCOPE_CACHE[(token, tenant_id)] = (now + _SCOPE_TTL, scope)
+    return scope
+
+
+def scope_allows(scope: dict | None, any_of: frozenset) -> bool:
+    """A full member passes everything; a restricted one needs at least one of these tab ids.
+    An empty any_of means "full members only" (Team, logins)."""
+    if not scope:
+        return False
+    if scope.get("full"):
+        return True
+    return bool(any_of) and bool(set(scope.get("access") or []) & any_of)
+
+
+async def require_tenant_admin(tenant: str, authorization: str = Header(default="")) -> dict:
+    """require_tenant_actor + full access — for changing the team, roles and logins. Any member
+    could PATCH another member's role/access before (only membership was checked), so a
+    restricted rep could grant themselves Money."""
+    identity = await require_tenant_actor(tenant, authorization)
+    if not scope_allows(await member_scope(authorization, tenant), frozenset()):
+        raise HTTPException(status_code=403,
+                            detail="Only the owner or a manager can change the team and logins.")
+    return identity

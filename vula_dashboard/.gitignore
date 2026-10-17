@@ -1,1 +1,5 @@
 .vercel
+
+# Playwright visual baseline runs (tests/visual/README.md)
+tests/visual/.results/
+playwright-report/

@@ -2,7 +2,7 @@
   "name": "vula-dashboard",
   "version": "1.0.0",
   "private": true,
-  "description": "Vula AI \u2014 Business Intelligence Dashboard",
+  "description": "Vula AI — Business Intelligence Dashboard",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -22,6 +22,8 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
+    "@playwright/test": "1.56.1",
     "@vitejs/plugin-react": "^4.3.0",
     "vite": "^5.2.0"
   }
