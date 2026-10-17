@@ -17,7 +17,7 @@ from config import settings
 from core.llm_router import is_local_model, resolve_generation_route
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, format_kb_chunks,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, fit_kb_chunks, format_kb_chunks,
     looks_like_tenant_data_question, wrong_arithmetic,
 )
 
@@ -63,12 +63,17 @@ class ArchitecturePlanningSkill(BaseSkill):
                             "fee schedule, etc.) or tell me more so I can find it?"),
                     skill_name=self.name, confidence=0.3, sources=all_sources)
 
+            # Two grounding blocks share one prompt here (the practice's own KB and the shared SA
+            # standards), so each gets half of the KB budget (2026-10-16, see fit_kb_chunks).
+            from config import settings as _settings
+            half_budget = max(1, _settings.kb_context_token_budget // 2)
             if tenant_chunks:
+                tenant_chunks = fit_kb_chunks(tenant_chunks, half_budget)
                 contexts.append("## Your practice's knowledge\n"
-                                 + await format_kb_chunks(inp.tenant_id, tenant_chunks))
+                                 + await format_kb_chunks(inp.tenant_id, tenant_chunks, half_budget))
                 all_sources.extend([
                     {"type": "tenant_kb", "filename": c.get("filename", "?"),
-                     "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
+                     "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")}
                     for c in tenant_chunks
                 ])
 
@@ -78,13 +83,14 @@ class ArchitecturePlanningSkill(BaseSkill):
                 training_pipeline = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
                 training_chunks = await training_pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
                 if training_chunks:
+                    training_chunks = fit_kb_chunks(training_chunks, half_budget)
                     contexts.append("## SA construction standards & rates\n" + "\n\n".join(
-                        f"[{c.get('filename','standard')}]: {c.get('text','')[:900]}"
+                        f"[{c.get('filename','standard')}]: {c.get('text','')}"
                         for c in training_chunks
                     ))
                     all_sources.extend([
                         {"type": "training_kb", "filename": c.get("filename", "?"),
-                         "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
+                         "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")}
                         for c in training_chunks
                     ])
             except Exception as exc:

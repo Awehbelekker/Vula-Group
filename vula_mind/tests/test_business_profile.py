@@ -24,11 +24,16 @@ def store(monkeypatch):
 
     monkeypatch.setattr(bp, "_client", lambda: type("C", (), {"table": lambda self, n: _T()})())
 
+    class _Store:
+        async def delete_document(self, tenant_id, doc_id):
+            return 0
+
     class _P:
-        def __init__(self, tenant_id): pass
+        def __init__(self, tenant_id):
+            self.store = _Store()
 
         async def ingest_text(self, content, filename, doc_id, **kw):
-            ingested.append((filename, content))
+            ingested.append((filename, content, kw.get("audience")))
             return type("R", (), {"status": "success"})()
 
     monkeypatch.setattr("vula.ingestion.pipeline.VulaIngestionPipeline", _P)
@@ -48,7 +53,9 @@ def test_whatsapp_interview_saves_answers_into_the_kb(store):
     run("Mon–Fri 8–5, Sat 8–12")
     assert data["oth"]["what_we_do"].startswith("Fresh and frozen")
     assert "area" not in data["oth"]
-    assert ingested and ingested[-1][0] == bp.PROFILE_FILENAME and "Mon–Fri 8–5" in ingested[-1][1]
+    # Opening hours are for customers (2026-10-17): they go to the customer-visible document.
+    assert ingested and ingested[-1][0] == bp.PUBLIC_PROFILE_FILENAME and "Mon–Fri 8–5" in ingested[-1][1]
+    assert ingested[-1][2] == "public"
     assert "Saved" in run("stop")
     assert run("Mon–Fri") is None                                # interview over
 
@@ -75,3 +82,32 @@ def test_starter_placeholders_are_never_retrieved():
     assert len(out) == 2
     assert "[your delivery areas]" not in out[0]["text"] and "packed with ice" in out[0]["text"]
     assert out[1]["filename"] == "menu.pdf"
+
+
+
+# ── Customer and team halves (2026-10-17, KB retrieval 1b) ─────────────────────────────────────
+
+def test_customer_facts_are_public_and_internal_ones_stay_with_the_team(store):
+    data, ingested = store
+    asyncio.run(bp.save_answers("oth", {"hours": "9-5", "team": "Sipho quotes, Lindi does accounts",
+                                        "payroll": "3 staff on PAYE", "delivery_fee": "R60, free over R600"}))
+    docs = {f: (c, a) for f, c, a in ingested}
+    pub, team = docs[bp.PUBLIC_PROFILE_FILENAME], docs[bp.PROFILE_FILENAME]
+    assert pub[1] == "public" and team[1] == "staff"
+    assert "9-5" in pub[0] and "free over R600" in pub[0]
+    assert "Sipho" not in pub[0] and "PAYE" not in pub[0]
+    assert "Sipho" in team[0] and "PAYE" in team[0] and "9-5" not in team[0]
+
+
+def test_the_owner_decides_which_answers_customers_see(store):
+    data, ingested = store
+    asyncio.run(bp.save_answers("oth", {"hours": "9-5", "team": "Sipho quotes"}, public_keys=["team"]))
+    docs = {f: c for f, c, _a in ingested}
+    assert "Sipho" in docs[bp.PUBLIC_PROFILE_FILENAME] and "9-5" not in docs[bp.PUBLIC_PROFILE_FILENAME]
+    assert "9-5" in docs[bp.PROFILE_FILENAME]
+
+
+def test_defaults_put_no_internal_question_on_the_customer_side():
+    public = set(bp.default_public_keys("food")) | set(bp.default_public_keys("trades"))
+    assert {"hours", "area", "payment", "cancellations", "delivery_fee"} <= public
+    assert not public & {"team", "tax_regime", "payroll", "vat_category", "pricing"}

@@ -21,7 +21,12 @@ async def put_profile(tenant_id: str, body: dict) -> dict:
     answers = (body or {}).get("answers")
     if not isinstance(answers, dict):
         raise HTTPException(status_code=400, detail="answers must be an object")
-    res = await bp.save_answers(tenant_id, answers, by="dashboard")
+    # 2026-10-17: the owner's list of answers customers may see (optional; see business_profile.py).
+    public_keys = (body or {}).get("public_keys")
+    if public_keys is not None and not (isinstance(public_keys, list)
+                                        and all(isinstance(k, str) for k in public_keys)):
+        raise HTTPException(status_code=400, detail="public_keys must be a list of question keys")
+    res = await bp.save_answers(tenant_id, answers, by="dashboard", public_keys=public_keys)
     if not res.get("saved"):
         raise HTTPException(status_code=500, detail=res.get("error") or "Couldn't save")
     return res

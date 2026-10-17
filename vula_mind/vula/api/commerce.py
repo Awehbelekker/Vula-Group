@@ -2241,7 +2241,8 @@ async def admin_agent_teach(tenant_id: str, body: TeachRequest):
         import hashlib
         doc_id = "taught_" + hashlib.sha1(q.lower().encode()).hexdigest()[:16]
         await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
-            content=f"Q: {q}\nA: {a}", filename="owner-taught.txt", doc_id=doc_id, source_type="reference")
+            content=f"Q: {q}\nA: {a}", filename="owner-taught.txt", doc_id=doc_id, source_type="reference",
+            audience="public")       # taught for customers' questions too (KB audience, 2026-10-16)
     except Exception as exc:
         return {"error": f"could not teach: {exc}"}
     try:
@@ -5262,8 +5263,13 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
         kb = VulaIngestionPipeline(tenant_id=tenant_id)
-        chunks = await kb.query("brand voice tone about us what we sell", top_k=2)
-        brand_context = "\n".join(c.get("text", "")[:400] for c in chunks)
+        # 2026-10-17: the draft goes out to every customer on the list — customer-visible chunks
+        # only, so a cost price or supplier name can't drift into a broadcast.
+        chunks = await kb.query("brand voice tone about us what we sell", top_k=2, audience="public")
+        from config import settings as _kb_settings
+        from core.skills.base import fit_kb_chunks
+        brand_context = "\n".join(c.get("text", "") for c in fit_kb_chunks(
+            chunks, max(1, _kb_settings.kb_context_token_budget // 4)))
     except Exception:
         pass
 
@@ -5950,7 +5956,8 @@ async def admin_add_recipe(tenant_id: str, body: dict):
     from vula.api import tenants as _tenants
     from vula.ingestion.pipeline import VulaIngestionPipeline
     await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
-        content=f"# {title}\n\n{text}\n\n({_tenants.display_name(tenant_id)} recipe)", filename=f"recipe-{slug}.md")
+        content=f"# {title}\n\n{text}\n\n({_tenants.display_name(tenant_id)} recipe)", filename=f"recipe-{slug}.md",
+        audience="public")           # for customers by design (KB audience, 2026-10-16)
     return {"ok": True, "title": title}
 
 

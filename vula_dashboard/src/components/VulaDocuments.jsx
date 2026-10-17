@@ -572,6 +572,147 @@ function DocumentsHealth({ tenantId }) {
   );
 }
 
+// 2026-10-17 (KB retrieval 1b): who can see each knowledge-base document. The customer assistant,
+// the public web page and anyone messaging who isn't on the team only get documents marked
+// "Customers can see" — everything else stays with the team. Untagged = stored before this
+// existed; until the backfill runs (and strict mode is on) those are still reachable.
+const AUDIENCE_BADGE = {
+  public:   { label: "Customers can see", color: "var(--ok)" },
+  staff:    { label: "Team only",          color: "var(--muted)" },
+  owner:    { label: "Owner only",         color: "var(--info)" },
+  mixed:    { label: "Mixed",              color: "var(--warn)" },
+  untagged: { label: "Not set yet",        color: "var(--warn)" },
+};
+
+function AudienceBadge({ audience }) {
+  const b = AUDIENCE_BADGE[audience] || AUDIENCE_BADGE.untagged;
+  return (
+    <span style={{ fontSize: 11, fontWeight: 600, color: b.color, border: `1px solid ${b.color}`,
+      borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap" }}>{b.label}</span>
+  );
+}
+
+function KnowledgeVisibility({ tenantId, refreshKey }) {
+  const [docs, setDocs] = useState(null);
+  const [strict, setStrict] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const load = useCallback(() => {
+    if (!tenantId?.trim()) return;
+    fetch(`${VULA_API}/documents/${tenantId.trim()}/kb`).then((r) => r.json())
+      .then((d) => { setDocs(d.documents || []); setStrict(!!d.strict); })
+      .catch(() => setDocs(null));
+  }, [tenantId]);
+  useEffect(() => { load(); }, [load, refreshKey]);
+  const setAudience = async (doc, audience) => {
+    setBusy(doc.doc_id);
+    const r = await fetch(`${VULA_API}/documents/${tenantId.trim()}/kb/${encodeURIComponent(doc.doc_id)}/audience`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audience }) });
+    const d = await r.json().catch(() => ({}));
+    setMsg(r.ok ? `${doc.filename}: ${AUDIENCE_BADGE[audience].label.toLowerCase()}.` : (d.detail || "Couldn't change that."));
+    setBusy("");
+    load();
+  };
+  if (!docs || !docs.length) return null;
+  const pub = docs.filter((d) => d.audience === "public").length;
+  const unset = docs.filter((d) => d.audience === "untagged" || d.audience === "mixed").length;
+  const shown = showAll ? docs : docs.slice(0, 15);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>👁 Who can see your documents</h3>
+      <p style={{ margin: "0 0 10px", fontSize: 12.5, color: C.muted }}>
+        Customers chatting on WhatsApp and your public web page only use documents marked
+        “Customers can see”. Invoices, statements and staff documents stay with your team.
+        {pub} of {docs.length} are visible to customers.
+        {unset > 0 && !strict && ` ${unset} aren't set yet and are still visible to customers until they're sorted.`}
+      </p>
+      {shown.map((d) => (
+        <div key={d.doc_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0",
+          borderTop: `1px solid ${C.border}`, flexWrap: "wrap" }}>
+          <span style={{ flex: 1, minWidth: 160, fontSize: 13, color: C.text, overflowWrap: "anywhere" }}>{d.filename}</span>
+          <AudienceBadge audience={d.audience} />
+          {d.audience === "public" ? (
+            <button disabled={busy === d.doc_id} onClick={() => setAudience(d, "staff")}
+              style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer" }}>
+              Team only
+            </button>
+          ) : (
+            <button disabled={busy === d.doc_id} onClick={() => setAudience(d, "public")}
+              style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer" }}>
+              Let customers see it
+            </button>
+          )}
+        </div>
+      ))}
+      {docs.length > 15 && (
+        <button onClick={() => setShowAll((v) => !v)}
+          style={{ marginTop: 8, fontSize: 12, background: "none", border: "none", color: C.green, cursor: "pointer" }}>
+          {showAll ? "Show fewer" : `Show all ${docs.length}`}
+        </button>
+      )}
+      {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// "What customers can see": the documents a customer's search can reach, and what one question
+// would actually return — the same filter the customer assistant uses.
+function CustomerPreview({ tenantId }) {
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const run = async () => {
+    if (!tenantId?.trim()) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`${VULA_API}/documents/${tenantId.trim()}/customer-view?q=${encodeURIComponent(q)}`);
+      setRes(await r.json());
+    } catch { setRes(null); }
+    setLoading(false);
+  };
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>🛍 What customers can see</h3>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && run()}
+          placeholder="Try a customer's question, e.g. do you deliver on Saturdays?"
+          style={{ flex: 1, minWidth: 200, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, color: C.text, background: C.surface }} />
+        <button onClick={run} disabled={loading}
+          style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", fontSize: 13 }}>
+          {loading ? "Checking…" : q.trim() ? "Search as a customer" : "List what they can see"}
+        </button>
+      </div>
+      {res && (
+        <div style={{ marginTop: 10, fontSize: 12.5, color: C.text }}>
+          <div style={{ color: C.muted, marginBottom: 4 }}>
+            {res.visible_documents.length} document{res.visible_documents.length === 1 ? "" : "s"} visible to customers
+            {!res.strict && res.visible_documents.some((d) => d.audience !== "public") && " (including some not set yet)"}:
+          </div>
+          {res.visible_documents.map((d) => (
+            <div key={d.doc_id} style={{ display: "flex", gap: 8, alignItems: "center", margin: "2px 0" }}>
+              <span>• {d.filename}</span><AudienceBadge audience={d.audience} />
+            </div>
+          ))}
+          {q.trim() && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ color: C.muted, marginBottom: 4 }}>
+                {res.results.length ? "A customer asking that would get:" : "A customer asking that would get nothing from your documents."}
+              </div>
+              {res.results.map((h, i) => (
+                <div key={i} style={{ margin: "4px 0", padding: 8, background: C.surfaceAlt, borderRadius: 6 }}>
+                  <strong>{h.filename}</strong> <AudienceBadge audience={h.audience} />
+                  <div style={{ color: C.muted, marginTop: 4, whiteSpace: "pre-wrap" }}>{h.excerpt}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RereadMissing({ tenantId }) {
   const [info, setInfo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -776,6 +917,8 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
   const [queue, setQueue] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [libraryKey, setLibraryKey] = useState(0);
+  // Uploads are team-only unless ticked (2026-10-17): an invoice must never reach a customer.
+  const [forCustomers, setForCustomers] = useState(false);
 
   const load = useCallback(async () => {
     if (!tenantId.trim()) return;
@@ -819,6 +962,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
       // Batch upload — all files in one request, KB ingest runs in parallel on server
       const fd = new FormData();
       fd.append("tenant_id", tenantId.trim());
+      fd.append("audience", forCustomers ? "public" : "staff");
       pending.forEach((item) => fd.append("files", item.file));
       const resp = await fetch(`${VULA_API}/ingest/batch`, { method: "POST", body: fd });
 
@@ -840,6 +984,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
           try {
             const fd2 = new FormData();
             fd2.append("tenant_id", tenantId.trim());
+            fd2.append("audience", forCustomers ? "public" : "staff");
             fd2.append("file", item.file);
             const r = await fetch(`${VULA_API}/ingest`, { method: "POST", body: fd2 });
             setQueue((q) => q.map((x) => x.name === item.name
@@ -855,6 +1000,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
 
     setUploading(false);
     setTimeout(load, 2000);
+    setTimeout(() => setLibraryKey((k) => k + 1), 8000);   // the visibility list, once ingested
   };
 
   const pendingCount = queue.filter((q) => q.status === "pending").length;
@@ -904,6 +1050,8 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
       <LearnFromHistory tenantId={tenantId} />
       <DocumentsHealth tenantId={tenantId} />
       <RereadMissing tenantId={tenantId} />
+      <KnowledgeVisibility tenantId={tenantId} refreshKey={libraryKey} />
+      <CustomerPreview tenantId={tenantId} />
 
       {/* Filed documents — durable copies, modern grid+lightbox, filterable (project/customer/
           category/date/search). key bump forces a reload after a media upload lands. */}
@@ -974,6 +1122,11 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
         </p>
 
         <DropZone onFiles={onFiles} disabled={uploading} />
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, color: C.text, cursor: "pointer" }}>
+          <input type="checkbox" checked={forCustomers} onChange={(e) => setForCustomers(e.target.checked)} />
+          Visible to customers? <span style={{ color: C.muted }}>(menus, FAQs, price lists for customers — leave off for invoices, statements and anything internal)</span>
+        </label>
 
         <UploadQueue items={queue} onClear={() => setQueue([])} />
 

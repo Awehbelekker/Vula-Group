@@ -21,7 +21,7 @@ import pytest
 import vula.api.server as srv
 
 _LOOP_NAMES = (
-    "_seed_training_on_boot", "_infra_snapshot_loop", "_qdrant_backup_loop",
+    "_seed_training_on_boot", "_infra_snapshot_loop", "_qdrant_backup_loop", "_kb_maintenance_on_boot",
     "_recurring_invoices_loop",
     "_scheduled_campaigns_loop", "_automations_loop", "_subscriptions_loop",
     "_recurring_bills_loop", "_daily_commerce_jobs_loop", "_hourly_customer_jobs_loop", "_programme_briefs_loop", "_tap_sweep_loop", "_shopify_sync_loop", "_master_digest_loop", "_owner_digest_loop", "_document_quality_loop", "_shared_kb_loop", "_conversation_check_loop", "_owner_advisor_loop", "_email_sync_loop",

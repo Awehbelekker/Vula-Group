@@ -26,6 +26,7 @@ from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, substitute_if_leaked, tool_source,
     unverified_prices, wrong_arithmetic, drop_unverified_price_sentences, contentless,
+    fit_kb_chunks,
 )
 from vula.commerce import service
 
@@ -1043,6 +1044,13 @@ class CommerceAssistantSkill(BaseSkill):
     # finance_admin.py/reasoning.py.
     verification_policy = "adversarial"
 
+    async def __call__(self, inp: SkillInput) -> SkillOutput:
+        # 2026-10-17: this skill talks to customers, so EVERY KB search it makes — its own three
+        # and any a tool or helper adds later — is limited to customer-visible chunks.
+        from vula.ingestion.pipeline import kb_audience
+        with kb_audience("public"):
+            return await super().__call__(inp)
+
     # ── Entry point ──────────────────────────────────────────────────────────
     async def run(self, inp: SkillInput) -> SkillOutput:
         if _HOW_TO_ORDER_RE.search(inp.question or "") and not _is_booking_focused(inp.tenant_id):
@@ -1382,18 +1390,23 @@ class CommerceAssistantSkill(BaseSkill):
             from vula.ingestion.pipeline import VulaIngestionPipeline
 
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            chunks = await pipeline.query(inp.question, top_k=4)
+            # A customer is asking: public chunks only, never a supplier invoice, statement or
+            # roster from the same collection (2026-10-16, pipeline.audience_filter).
+            chunks = await pipeline.query(inp.question, top_k=4, audience="public")
         except Exception as exc:
             logger.debug("commerce_assistant KB retrieval skipped: %s", exc)
             return "", []
         if not chunks:
             return "", []
+        # 2026-10-16: was 400 characters per chunk (see core/skills/base.py::fit_kb_chunks). Half
+        # the KB budget — this prompt already carries the catalogue, hours and the tool loop.
+        chunks = fit_kb_chunks(chunks, max(1, settings.kb_context_token_budget // 2))
         kb_context = "\n\n".join(
-            f"[{c.get('filename', 'doc')}]: {c.get('text', '')[:400]}" for c in chunks
+            f"[{c.get('filename', 'doc')}]: {c.get('text', '')}" for c in chunks
         )
         sources = [
             {"type": "kb", "name": "kb", "filename": c.get("filename", "?"),
-             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:400]}
+             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")}
             for c in chunks
         ]
         return kb_context, sources
@@ -2279,8 +2292,9 @@ class CommerceAssistantSkill(BaseSkill):
             # question-expansion LLM rewrite (default True) exists for terse/ambiguous user
             # typing and has nothing to add here, only latency (2026-09-08 audit).
             chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(
-                f"{dish} recipe", top_k=2, expand=False)
-            kb_recipe = "\n\n".join((c.get("text") or "")[:600] for c in (chunks or []) if c.get("text"))
+                f"{dish} recipe", top_k=2, expand=False, audience="public")
+            kb_recipe = "\n\n".join(c.get("text") or "" for c in fit_kb_chunks(
+                chunks or [], max(1, settings.kb_context_token_budget // 4)) if c.get("text"))
         except Exception:
             kb_recipe = ""
         grounding = (f"\nOur own recipe to base this on (adapt it, keep it true to ours):\n{kb_recipe}\n"
@@ -2427,8 +2441,9 @@ class CommerceAssistantSkill(BaseSkill):
         kb_text = ""
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
-            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(topic, top_k=3)
-            kb_text = "\n\n".join((c.get("text") or "")[:500] for c in (chunks or []) if c.get("text"))
+            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(topic, top_k=3, audience="public")
+            kb_text = "\n\n".join(c.get("text") or "" for c in fit_kb_chunks(
+                chunks or [], max(1, settings.kb_context_token_budget // 4)) if c.get("text"))
         except Exception as exc:
             logger.debug("research_product KB lookup skipped: %s", exc)
 

@@ -85,6 +85,36 @@ class Settings(BaseSettings):
     chunk_overlap: int = 64
     max_file_mb: int = 50
 
+    # ── KB retrieval (2026-10-16, KB retrieval phase 1 — evals/RETRIEVAL.md) ────
+    # Minimum similarity for a chunk to count. Were hard-coded in pipeline.py (0.30, and 0.35 for
+    # authoritative-only queries); same defaults, now tunable on the retrieval eval. A score is
+    # only comparable within one embed model, so KB_SCORE_THRESHOLDS_BY_MODEL can override per
+    # MODEL_EMBED as JSON: {"text-embedding-3-small": {"default": 0.25, "authoritative": 0.3}}.
+    kb_score_threshold: float = 0.30
+    kb_score_threshold_authoritative: float = 0.35
+    kb_score_thresholds_by_model: str = ""
+    # How much retrieved text (≈ tokens, chars/4) goes into a prompt's grounding block. Replaces
+    # the per-chunk [:900]-character cut, which dropped ~70% of a full 512-word chunk. Sized to
+    # keep a reasoning prompt inside the local 8k window (local_context_tokens) so a longer
+    # grounding block doesn't push the turn to the cloud. See core/skills/base.py::fit_kb_excerpts.
+    kb_context_token_budget: int = 2400
+    # New points get 128-bit uuid5 ids instead of the 32-bit md5 prefix (collisions overwrite
+    # chunks). False = the old ids, a rollback lever only. docs/kb-retrieval-audit.md (C2).
+    qdrant_uuid_point_ids: bool = True
+    # Customer-facing retrieval only ever sees audience="public" chunks once this is true. Until
+    # the existing points are backfilled with an audience it stays false: customers then lose only
+    # the chunks explicitly tagged staff/owner (every new ingest), not the untagged legacy ones.
+    kb_customer_audience_strict: bool = False
+    # 2026-10-17: a sender on a knowledge-mode line who is not on the tenant's team is answered
+    # from customer-visible KB chunks only (vula/api/whatsapp.py::_kb_audience_for). A team
+    # member who isn't registered in vula_team_members is treated as an outsider — add them to
+    # the team. False restores the old full-KB behaviour (rollback lever only).
+    kb_outsiders_public_only: bool = True
+    # One-off KB maintenance run a minute after boot (vula/kb_maintenance.py), comma-separated:
+    # stats, exposure, backfill_preview, backfill_apply, customer_view, retrieval_live. Empty = none.
+    # Set it, read the summary in the logs (full report: vula_eval_reports), then clear it.
+    kb_maintenance: str = ""
+
     # ── Mesh ────────────────────────────────────────────────────────────────
     mesh_port: int = 7437
     mesh_role: str = "desktop"          # desktop | laptop | mobile | server

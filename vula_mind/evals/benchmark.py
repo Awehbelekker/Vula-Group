@@ -480,6 +480,26 @@ async def run(judge_model: Optional[str] = None, only: Optional[str] = None,
         except Exception as exc:  # noqa: BLE001
             rows.append({"id": f"docq:{tid}", "component": f"Document quality · {tid}", "ok": False,
                          "why": [f"couldn't run: {exc}"]})
+    # KB retrieval (2026-10-16, evals/retrieval.py): the live retrieval cases, read-only — did the
+    # right document reach the prompt, did an absent answer stay absent, did a customer get a
+    # staff-only document. Its metrics ride along as report["retrieval"].
+    retrieval_rep = None
+    if not only or "retrieval" in only.lower():
+        try:
+            from evals import retrieval
+            retrieval_rep = await retrieval.run_live()
+            rows += retrieval.benchmark_rows(retrieval_rep)
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"id": "retrieval", "component": "Retrieval", "ok": False,
+                         "why": [f"couldn't run: {type(exc).__name__}: {exc}"[:300]]})
+    # Customer view (2026-10-17): no staff/owner chunk reaches a customer's search, per pilot tenant.
+    if not only or "customer" in only.lower():
+        try:
+            from evals import retrieval
+            rows += retrieval.customer_view_benchmark_rows(await retrieval.run_customer_view())
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"id": "customer_view", "component": "Customer view · no staff documents",
+                         "ok": False, "why": [f"couldn't run: {type(exc).__name__}: {exc}"[:300]]})
     judge_cost = 0.0
     for case in load_cases():
         if only and only.lower() not in case["component"].lower():
@@ -493,4 +513,6 @@ async def run(judge_model: Optional[str] = None, only: Optional[str] = None,
         rows.append(r)
     card = scorecard(rows)
     return {"kind": "benchmark", "judge_model": judge_model, "secs": round(time.monotonic() - t0, 1),
-            "judge_cost_usd": round(judge_cost, 4), **card, "rows": rows}
+            "judge_cost_usd": round(judge_cost, 4), **card, "rows": rows,
+            "retrieval": ({k: retrieval_rep[k] for k in ("summary", "by_tenant", "by_type")}
+                          if retrieval_rep else None)}

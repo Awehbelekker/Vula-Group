@@ -1195,6 +1195,33 @@ async def master_eval_reports(limit: int = 30) -> dict:
 _BENCH = "benchmark"
 
 
+# ── KB maintenance (vula/kb_maintenance.py, 2026-10-17) ───────────────────────
+# Audience backfill, KB stats, past-exposure check and the live retrieval/customer-view evals —
+# jobs that need production's own Qdrant/Supabase keys. Reports land in vula_eval_reports
+# (model='kb_maintenance').
+
+@router.post("/kb-maintenance")
+async def master_kb_maintenance(body: dict, identity: dict = Depends(require_master)) -> dict:
+    from vula.kb_maintenance import JOBS, run_jobs
+    jobs = [j for j in ((body or {}).get("jobs") or []) if j in JOBS]
+    if not jobs:
+        raise HTTPException(status_code=400, detail=f"jobs: one or more of {', '.join(JOBS)}")
+    audit(identity, "kb_maintenance.run", jobs=jobs)
+    from vula.commerce.background_tasks import run_background
+    run_background("master", "kb_maintenance", run_jobs(jobs, by=identity.get("email") or "master"))
+    return {"queued": jobs}
+
+
+@router.get("/kb-maintenance")
+async def master_kb_maintenance_reports(limit: int = 10) -> dict:
+    rows = (_client().table("vula_eval_reports").select("id,skill,status,error,created_by,created_at,finished_at,report")
+            .eq("model", "kb_maintenance").order("created_at", desc=True)
+            .limit(max(1, min(limit, 30))).execute().data or [])
+    return {"runs": [{**{k: r.get(k) for k in ("id", "skill", "status", "error", "created_by", "created_at",
+                                                 "finished_at")},
+                      "summary": (r.get("report") or {}).get("summary")} for r in rows]}
+
+
 @router.post("/benchmark")
 async def master_run_benchmark(body: dict, identity: dict = Depends(require_master)) -> dict:
     from config import settings

@@ -93,7 +93,7 @@ docker run -d \
   --restart unless-stopped \
   -p 6333:6333 \
   -v /data/qdrant:/qdrant/storage \
-  qdrant/qdrant
+  qdrant/qdrant:v1.19.2
 
 # Verify
 curl http://localhost:6333/collections
@@ -106,11 +106,17 @@ docker run -d --name qdrant --restart unless-stopped \
   -p 6333:6333 \
   -v /data/qdrant:/qdrant/storage \
   -e QDRANT__SERVICE__API_KEY=your-qdrant-api-key \
-  qdrant/qdrant
+  qdrant/qdrant:v1.19.2
 
 # Then set in .env:
 # QDRANT_API_KEY=your-qdrant-api-key
 ```
+
+The image is pinned (same version as `docker-compose.yml`) — never run the untagged/`latest`
+image, which changes on every pull. Check what a running server is on with
+`curl -H "api-key: $QDRANT_API_KEY" $QDRANT_BASE/` (or `python vula_mind/tools/kb_stats.py`).
+Qdrant upgrades are supported one minor version at a time (1.17 → 1.18 → 1.19), with a snapshot
+first (`vula/integrations/qdrant_backup.py`).
 
 ---
 
