@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     # the existing points are backfilled with an audience it stays false: customers then lose only
     # the chunks explicitly tagged staff/owner (every new ingest), not the untagged legacy ones.
     kb_customer_audience_strict: bool = False
+    # 2026-10-17: a sender on a knowledge-mode line who is not on the tenant's team is answered
+    # from customer-visible KB chunks only (vula/api/whatsapp.py::_kb_audience_for). A team
+    # member who isn't registered in vula_team_members is treated as an outsider — add them to
+    # the team. False restores the old full-KB behaviour (rollback lever only).
+    kb_outsiders_public_only: bool = True
 
     # ── Mesh ────────────────────────────────────────────────────────────────
     mesh_port: int = 7437

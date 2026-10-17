@@ -90,3 +90,84 @@ async def test_the_customer_assistant_asks_as_public():
         block, sources = await CommerceAssistantSkill()._retrieve_kb(
             SkillInput(question="what do you pay for yellowtail per kg", tenant_id="shop"))
     assert "co-op" not in block and all("invoice" not in s["filename"].lower() for s in sources)
+
+
+# ── 1b (2026-10-17): every customer- or public-facing path, not just commerce_assistant ─────────
+
+from vula.ingestion.pipeline import kb_audience  # noqa: E402
+
+CHATLOG = "Chat export: yellowtail per kg was R 80 last year, said the rep."
+
+
+@pytest.mark.asyncio
+async def test_keyword_pass_honours_authoritative_only():
+    """An authoritative_only query could still return a chat log through the literal pass."""
+    with offline() as mem:
+        p = VulaIngestionPipeline("t-kw")
+        await p.ingest_text(CHATLOG, "chat.txt", source_type="conversation")
+        hits = await p.store.keyword_search("t-kw", ["yellowtail", "rep"], limit=5,
+                                            exclude_source_types=["conversation", "learned"])
+        assert hits == []
+        assert await p.store.keyword_search("t-kw", ["yellowtail", "rep"], limit=5)
+        got = await p.query("yellowtail rep", authoritative_only=True)
+        assert all(c.get("source_type") != "conversation" for c in got)
+
+
+@pytest.mark.asyncio
+async def test_a_public_turn_forces_every_query_public():
+    with offline() as mem:
+        p = await _seed(mem)
+        with kb_audience("public"):
+            got = {c["filename"] for c in await p.query("yellowtail per kg price", top_k=5, audience="staff")}
+        assert "Supplier invoice co-op.pdf" not in got
+        with kb_audience(None):
+            got = {c["filename"] for c in await p.query("yellowtail per kg price", top_k=5)}
+        assert "Supplier invoice co-op.pdf" in got
+
+
+def test_an_outsider_on_a_knowledge_line_is_public(monkeypatch):
+    from vula.api import whatsapp as wa
+    monkeypatch.setattr(wa, "_is_tenant_owner", lambda t, ph: ph == "27820000001")
+    assert wa._kb_audience_for("digg-demo", "27829999999", None) == "public"     # a client
+    assert wa._kb_audience_for("digg-demo", "27829999999", "staff") is None       # team member
+    assert wa._kb_audience_for("digg-demo", "27820000001", None) is None          # the owner
+    assert wa._kb_audience_for("digg-demo", "", None) is None                     # dashboard chat
+    with patch.object(pl.settings, "kb_outsiders_public_only", False):
+        assert wa._kb_audience_for("digg-demo", "27829999999", None) is None
+
+
+@pytest.mark.asyncio
+async def test_rag_reply_runs_an_outsiders_turn_as_public(monkeypatch):
+    from vula.api import whatsapp as wa
+    from vula.ingestion.pipeline import _KB_AUDIENCE
+    seen = []
+
+    async def _inner(*a, **kw):
+        seen.append(_KB_AUDIENCE.get())
+        return "ok"
+
+    monkeypatch.setattr(wa, "_rag_reply_inner", _inner)
+    monkeypatch.setattr(wa, "_is_tenant_owner", lambda t, ph: False)
+    await wa._rag_reply("digg-demo", "q", phone="27829999999")
+    await wa._rag_reply("digg-demo", "q", phone="27829999999", caller_role="owner")
+    assert seen == ["public", None]
+
+
+@pytest.mark.asyncio
+async def test_public_generation_paths_ask_as_public():
+    """The public web page copy and a customer broadcast draft: both write text customers read."""
+    seen = []
+
+    async def _query(self, q, top_k=5, authoritative_only=False, category=None, expand=True, audience=None):
+        seen.append(pl.effective_audience(audience))
+        return []
+
+    with patch.object(VulaIngestionPipeline, "query", _query):
+        from vula.commerce import page_copy
+        await page_copy._grounding("shop", "fresh fish shop")
+        from vula.api import commerce as commerce_api
+        try:
+            await commerce_api.admin_draft_broadcast("shop", {"details": "yellowtail 180"})
+        except Exception:
+            pass                                           # no model here — the KB read is what counts
+    assert seen == ["public", "public"], seen

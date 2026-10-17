@@ -29,6 +29,8 @@ import re
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -1069,7 +1071,7 @@ def point_id(tenant_id: str, chunk_id: str):
 # source says so (the business's own website, its starter FAQ, an answer the owner approved for
 # customers) or the caller passes audience="public" (a recipe, an owner-taught answer).
 AUDIENCES = ("public", "staff", "owner")
-_PUBLIC_SOURCE_TYPES = {"website", "starter", "learned_answer_approved"}
+_PUBLIC_SOURCE_TYPES = {"website", "starter", "learned_answer_approved", "promoted"}
 
 
 def default_audience(source_type: Optional[str], audience: Optional[str] = None) -> str:
@@ -1089,6 +1091,27 @@ def audience_filter(audience: Optional[str]) -> Dict[str, list]:
     if getattr(settings, "kb_customer_audience_strict", False):
         return {"must": [{"key": "audience", "match": {"value": "public"}}]}
     return {"must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
+
+
+# 2026-10-17 (KB retrieval 1b): who the CURRENT turn is answering, for every KB query made while
+# answering it. On a knowledge-mode line (DIGG, gerflor) a number that isn't on the team reaches
+# the same skills the owner uses (whatsapp._rag_reply → AgentRunner → reasoning, architecture…),
+# each with its own query() call; setting this once at the entry means none of them can forget the
+# filter. "public" here always wins over an explicit argument.
+_KB_AUDIENCE: ContextVar[Optional[str]] = ContextVar("kb_audience", default=None)
+
+
+@contextmanager
+def kb_audience(audience: Optional[str]):
+    token = _KB_AUDIENCE.set(audience)
+    try:
+        yield
+    finally:
+        _KB_AUDIENCE.reset(token)
+
+
+def effective_audience(audience: Optional[str]) -> Optional[str]:
+    return "public" if _KB_AUDIENCE.get() == "public" else audience
 
 
 def _audience_allows(audience: Optional[str], payload: dict) -> bool:
@@ -1310,7 +1333,8 @@ class QdrantStore:
             return results
 
     async def keyword_search(self, tenant_id: str, terms: List[str],
-                             limit: int = 5, audience: Optional[str] = None) -> List[dict]:
+                             limit: int = 5, audience: Optional[str] = None,
+                             exclude_source_types: Optional[List[str]] = None) -> List[dict]:
         """Literal term matching, as a companion to the vector search.
 
         2026-09-07: a rep asked "Which importer does the creation range" and vector search
@@ -1337,13 +1361,17 @@ class QdrantStore:
         # was never searched at all. Overlap is a real ranking signal and costs nothing: a
         # chunk holding both "soh" and "inbound" outranks one that merely holds "hand".
         gathered = await asyncio.gather(
-            *[self._keyword_one(tenant_id, t, 3, audience) for t in terms], return_exceptions=True)
+            *[self._keyword_one(tenant_id, t, 3, audience, exclude_source_types=exclude_source_types)
+              for t in terms], return_exceptions=True)
         lowered = [t.lower() for t in terms]
         best: dict = {}
         for res in gathered:
             if isinstance(res, BaseException):
                 continue
             for hit in res:
+                # Belt and braces for the filter below (a legacy collection's substring fallback).
+                if hit.get("source_type") in (exclude_source_types or ()):
+                    continue
                 text = (hit.get("text") or "")
                 key = text[:120]
                 if key in best:
@@ -1354,13 +1382,20 @@ class QdrantStore:
         return sorted(best.values(), key=lambda h: h.get("_overlap", 0), reverse=True)[:limit]
 
     async def _keyword_one(self, tenant_id: str, term: str, limit: int,
-                           audience: Optional[str] = None) -> List[dict]:
-        """Literal matches for ONE term. See keyword_search for why terms are not OR'd."""
+                           audience: Optional[str] = None,
+                           exclude_source_types: Optional[List[str]] = None) -> List[dict]:
+        """Literal matches for ONE term. See keyword_search for why terms are not OR'd.
+
+        2026-10-17: honours exclude_source_types like the vector search does. It didn't, so an
+        authoritative_only query (reasoning, standards, architecture) could still be answered
+        from an ingested chat log or an auto-learned Q&A through this pass."""
         name = self._collection_name(tenant_id)
         aud = audience_filter(audience)
         flt = {"must": [{"key": "text", "match": {"text": term}}] + aud.get("must", [])}
-        if aud.get("must_not"):
-            flt["must_not"] = aud["must_not"]
+        must_not = aud.get("must_not", []) + [
+            {"key": "source_type", "match": {"value": t}} for t in (exclude_source_types or [])]
+        if must_not:
+            flt["must_not"] = must_not
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             for attempt in (1, 2):
                 resp = await client.post(
@@ -1725,6 +1760,7 @@ class VulaIngestionPipeline:
         """
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
         threshold = kb_score_threshold(authoritative_only)
+        audience = effective_audience(audience)
 
         variants = [question]
         if expand:
@@ -1766,7 +1802,8 @@ class VulaIngestionPipeline:
         if terms and (len(merged) < top_k or _is_terse(question)):
             try:
                 keyword_hits = await self.store.keyword_search(
-                    self.tenant_id, terms, limit=max(2, top_k // 2), audience=audience)
+                    self.tenant_id, terms, limit=max(2, top_k // 2), audience=audience,
+                    exclude_source_types=exclude)
             except Exception as exc:
                 logger.debug("keyword pass failed: %s", exc)
 

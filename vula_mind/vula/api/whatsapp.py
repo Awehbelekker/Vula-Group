@@ -5873,8 +5873,33 @@ def _last_skill(tenant_id: str, phone: str) -> Optional[str]:
     return None
 
 
+def _kb_audience_for(tenant_id: str, phone: str, caller_role: Optional[str]) -> Optional[str]:
+    """"public" when the person asking isn't the business's own team, else None (everything).
+
+    2026-10-17 (KB retrieval 1b): on a knowledge-mode line (DIGG, gerflor) a number that isn't on
+    the team — a client, a member of the public — reaches the same skills the owner uses, and
+    their KB search covered every document the business had sent in: invoices, bank statements,
+    payroll. The dashboard chat (no phone) is a signed-in member, so it keeps the full KB."""
+    from config import settings
+    if not phone or not getattr(settings, "kb_outsiders_public_only", True):
+        return None
+    if _is_insider(caller_role) or _is_tenant_owner(tenant_id, phone):
+        return None
+    return "public"
+
+
 async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
+    """Answer a question — see _rag_reply_inner. Every KB search made while answering an outsider
+    is limited to customer-visible documents (vula/ingestion/pipeline.py::kb_audience)."""
+    from vula.ingestion.pipeline import kb_audience
+    with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)):
+        return await _rag_reply_inner(tenant_id, question, conversation_history, phone,
+                                      caller_name=caller_name, caller_role=caller_role)
+
+
+async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
+                           caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — routes through the multi-agent runner.
 
     The agent uses HRM to pick the right skill(s): KB recall, web research

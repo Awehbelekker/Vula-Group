@@ -59,6 +59,7 @@ async def seed_training_kb(force: bool = False) -> SeedResult:
                 content=doc.content,
                 filename=doc.filename,
                 doc_id=doc_id,
+                audience="public",   # Vula's own shared content, not tenant data (2026-10-17)
             )
             if result.status == "success":
                 total_chunks += result.chunks_stored
@@ -131,6 +132,7 @@ async def seed_business_kb(force: bool = False) -> SeedResult:
                 content=doc.content,
                 filename=doc.filename,
                 doc_id=doc_id,
+                audience="public",   # Vula's own shared content, not tenant data (2026-10-17)
             )
             if result.status == "success":
                 total_chunks += result.chunks_stored
@@ -164,7 +166,8 @@ async def seed_documents(tenant_id: str, docs) -> SeedResult:
     for doc in docs:
         doc_id = hashlib.md5(f"{tenant_id}:{doc.filename}".encode()).hexdigest()[:16]
         try:
-            result = await pipeline.ingest_text(content=doc.content, filename=doc.filename, doc_id=doc_id)
+            result = await pipeline.ingest_text(content=doc.content, filename=doc.filename, doc_id=doc_id,
+                                                audience="public")   # shared sector content (2026-10-17)
             if result.status == "success":
                 total_chunks += result.chunks_stored
             else:

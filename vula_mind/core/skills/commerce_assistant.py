@@ -1044,6 +1044,13 @@ class CommerceAssistantSkill(BaseSkill):
     # finance_admin.py/reasoning.py.
     verification_policy = "adversarial"
 
+    async def __call__(self, inp: SkillInput) -> SkillOutput:
+        # 2026-10-17: this skill talks to customers, so EVERY KB search it makes — its own three
+        # and any a tool or helper adds later — is limited to customer-visible chunks.
+        from vula.ingestion.pipeline import kb_audience
+        with kb_audience("public"):
+            return await super().__call__(inp)
+
     # ── Entry point ──────────────────────────────────────────────────────────
     async def run(self, inp: SkillInput) -> SkillOutput:
         if _HOW_TO_ORDER_RE.search(inp.question or "") and not _is_booking_focused(inp.tenant_id):
