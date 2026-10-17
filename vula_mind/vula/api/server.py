@@ -2050,6 +2050,7 @@ async def ingest_documents_batch(
     background_tasks: BackgroundTasks,
     tenant_id: str = Form(...),
     files: List[UploadFile] = File(...),
+    audience: Optional[str] = Form(None),
 ):
     """Upload multiple documents at once — all queued for KB ingestion.
 
@@ -2080,7 +2081,8 @@ async def ingest_documents_batch(
 
             async def _ingest_one(path=file_path, name=file.filename, mime=mime_type) -> None:
                 pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
-                result = await pipeline.ingest_file(path)
+                # "public" only when the uploader ticked "visible to customers" (2026-10-17).
+                result = await pipeline.ingest_file(path, audience=audience)
                 log.info("Batch ingest: %s → %d chunks (%s)", name, result.chunks_stored, result.status)
                 if result.status in ("success", "done"):
                     await _analyze_and_file_upload(tenant_id, result, path, mime)
@@ -2338,6 +2340,56 @@ async def list_documents(tenant_id: str):
         "count": len(docs),
         "kb_chunks": kb_chunks,
     }
+
+
+# ─── Who can see each knowledge-base document (2026-10-17, KB retrieval 1b) ──────
+# The customer assistant, the public web page and a sender who isn't on the team only ever get
+# chunks marked "public" (vula/ingestion/pipeline.py::audience_filter). These let the owner see
+# and change that per document, and preview what a customer's question would reach.
+
+class AudienceIn(BaseModel):
+    audience: str
+
+
+@app.get("/documents/{tenant_id}/kb", dependencies=[Depends(require_auth)])
+async def list_kb_documents(tenant_id: str):
+    validate_tenant(tenant_id)
+    from vula.ingestion.pipeline import QdrantStore
+    docs = await QdrantStore().list_documents(tenant_id)
+    return {"tenant_id": tenant_id, "documents": docs,
+            "strict": bool(settings.kb_customer_audience_strict)}
+
+
+@app.post("/documents/{tenant_id}/kb/{doc_id}/audience", dependencies=[Depends(require_auth)])
+async def set_kb_document_audience(tenant_id: str, doc_id: str, body: AudienceIn):
+    validate_tenant(tenant_id)
+    from vula.ingestion.pipeline import AUDIENCES, QdrantStore
+    if body.audience not in AUDIENCES:
+        raise HTTPException(status_code=400, detail=f"audience must be one of {', '.join(AUDIENCES)}")
+    res = await QdrantStore().set_document_audience(tenant_id, doc_id, body.audience, by="owner")
+    if not res["chunks"]:
+        raise HTTPException(status_code=404, detail="No such document in the knowledge base.")
+    if not res["verified"]:
+        raise HTTPException(status_code=502, detail="Saved, but reading it back didn't match — try again.")
+    return res
+
+
+@app.get("/documents/{tenant_id}/customer-view", dependencies=[Depends(require_auth)])
+async def customer_view_preview(tenant_id: str, q: str = ""):
+    """What a customer can reach: the documents they can see, and — for a question — the chunks
+    their search would return (the same filter the customer assistant uses)."""
+    validate_tenant(tenant_id)
+    from vula.ingestion.pipeline import QdrantStore, VulaIngestionPipeline
+    strict = bool(settings.kb_customer_audience_strict)
+    visible = [d for d in await QdrantStore().list_documents(tenant_id)
+               if d["audience"] == "public" or (not strict and d["audience"] in ("untagged", "mixed"))]
+    hits = []
+    if q.strip():
+        chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(q.strip()[:300], top_k=5, audience="public")
+        # A short excerpt for the owner to recognise the chunk — display only, not grounding.
+        hits = [{"filename": c.get("filename"), "audience": c.get("audience") or "untagged",
+                 "excerpt": (c.get("text") or "")[:300]} for c in chunks]
+    return {"tenant_id": tenant_id, "strict": strict, "visible_documents": visible, "results": hits}
 
 
 # ─── Entry Point ─────────────────────────────────────────────────────────────

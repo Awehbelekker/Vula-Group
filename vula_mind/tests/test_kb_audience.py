@@ -171,3 +171,31 @@ async def test_public_generation_paths_ask_as_public():
         except Exception:
             pass                                           # no model here — the KB read is what counts
     assert seen == ["public", "public"], seen
+
+
+# ── Dashboard: badges, the owner's switch, and the customer preview (2026-10-17) ────────────────
+
+@pytest.mark.asyncio
+async def test_owner_switch_is_verified_survives_reupload_and_shows_in_the_preview():
+    from vula.api import server
+    with offline():
+        p = await _seed(None)
+        docs = {d["filename"]: d for d in (await server.list_kb_documents("shop"))["documents"]}
+        assert docs["Supplier invoice co-op.pdf"]["audience"] == "staff"
+        assert docs["Fresh catch FAQ.md"]["audience"] == "public"
+
+        menu = await p.ingest_text("Winter menu: yellowtail fillet, hake and chips.", "Winter menu.pdf")
+        res = await server.set_kb_document_audience("shop", menu.doc_id, server.AudienceIn(audience="public"))
+        assert res["verified"] and res["chunks"] == 1
+
+        view = await server.customer_view_preview("shop", q="yellowtail")
+        assert {d["filename"] for d in view["visible_documents"]} == {"Fresh catch FAQ.md", "Winter menu.pdf"}
+        assert all(h["filename"] != "Supplier invoice co-op.pdf" for h in view["results"])
+
+        # a re-upload / re-sync of the same file keeps the owner's choice
+        await p.ingest_text("Winter menu v2: yellowtail, hake, calamari.", "Winter menu.pdf", doc_id=menu.doc_id)
+        docs = {d["filename"]: d for d in (await server.list_kb_documents("shop"))["documents"]}
+        assert docs["Winter menu.pdf"]["audience"] == "public" and docs["Winter menu.pdf"]["owner_set"]
+
+        with pytest.raises(Exception):
+            await server.set_kb_document_audience("shop", menu.doc_id, server.AudienceIn(audience="everyone"))

@@ -1539,6 +1539,96 @@ class QdrantStore:
             logger.debug("doc_ids_for_filename failed for %s: %s", filename, exc)
         return found
 
+    async def owner_audience(self, tenant_id: str, filename: str) -> Optional[str]:
+        """The audience the owner chose for an earlier copy of this file, if any — so a re-upload
+        or a mailbox/Drive re-sync keeps "visible to customers" instead of resetting it."""
+        name = self._collection_name(tenant_id)
+        body = {"limit": 1, "with_vector": False, "with_payload": ["audience"],
+                "filter": {"must": [{"key": "filename", "match": {"value": filename}},
+                                    {"key": "audience_by", "match": {"value": "owner"}}]}}
+        try:
+            async with httpx.AsyncClient(timeout=10.0, headers=self._headers()) as client:
+                r = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
+                if not r.is_success:
+                    return None
+                pts = r.json().get("result", {}).get("points", [])
+                aud = (pts[0].get("payload") or {}).get("audience") if pts else None
+                return aud if aud in AUDIENCES else None
+        except Exception as exc:
+            logger.debug("owner audience lookup skipped for %s: %s", filename, exc)
+            return None
+
+    async def list_documents(self, tenant_id: str) -> List[dict]:
+        """One row per KB document — doc_id, filename, chunk count and who can see it — for the
+        dashboard's badges (2026-10-17). Payload keys only, never chunk text. "mixed" = some chunks
+        tagged differently; "untagged" = stored before audiences existed (backfill pending)."""
+        name = self._collection_name(tenant_id)
+        docs: Dict[str, dict] = {}
+        offset = None
+        async with httpx.AsyncClient(timeout=30.0, headers=self._headers()) as client:
+            while True:
+                body: dict = {"limit": 256, "with_vector": False,
+                              "with_payload": ["doc_id", "filename", "audience", "audience_by", "source_type"]}
+                if offset is not None:
+                    body["offset"] = offset
+                resp = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
+                if resp.status_code == 404:
+                    return []
+                resp.raise_for_status()
+                result = resp.json().get("result", {})
+                for p in result.get("points", []):
+                    pl = p.get("payload") or {}
+                    did = str(pl.get("doc_id") or "")
+                    if not did:
+                        continue
+                    d = docs.setdefault(did, {"doc_id": did, "filename": pl.get("filename"), "chunks": 0,
+                                              "audiences": set(), "owner_set": False,
+                                              "source_type": pl.get("source_type")})
+                    d["chunks"] += 1
+                    d["audiences"].add(pl.get("audience") or "untagged")
+                    d["owner_set"] = d["owner_set"] or pl.get("audience_by") == "owner"
+                offset = result.get("next_page_offset")
+                if offset is None:
+                    break
+        out = []
+        for d in docs.values():
+            auds = d.pop("audiences")
+            d["audience"] = next(iter(auds)) if len(auds) == 1 else "mixed"
+            out.append(d)
+        return sorted(out, key=lambda d: str(d.get("filename") or "").lower())
+
+    async def set_document_audience(self, tenant_id: str, doc_id: str, audience: str,
+                                    by: str = "owner") -> dict:
+        """Set who may see every chunk of one document, then read it back (verified, not
+        reported). `by` = "owner" marks an owner's own choice, which the backfill never overrides."""
+        if audience not in AUDIENCES:
+            raise ValueError(f"audience must be one of {AUDIENCES}")
+        name = self._collection_name(tenant_id)
+        flt = {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}
+        async with httpx.AsyncClient(timeout=30.0, headers=self._headers()) as client:
+            for field_name in ("doc_id", "audience"):
+                await client.put(f"{self.base}/collections/{name}/index",
+                                 params={"wait": "true"},
+                                 json={"field_name": field_name, "field_schema": "keyword"})
+            resp = await client.post(f"{self.base}/collections/{name}/points/payload",
+                                     params={"wait": "true"},
+                                     json={"payload": {"audience": audience, "audience_by": by}, "filter": flt})
+            resp.raise_for_status()
+            stored, offset = [], None
+            while True:
+                body: dict = {"limit": 256, "with_vector": False, "with_payload": ["audience"], "filter": flt}
+                if offset is not None:
+                    body["offset"] = offset
+                r = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
+                r.raise_for_status()
+                res = r.json().get("result", {})
+                stored += [(p.get("payload") or {}).get("audience") for p in res.get("points", [])]
+                offset = res.get("next_page_offset")
+                if offset is None:
+                    break
+        return {"doc_id": doc_id, "audience": audience, "chunks": len(stored),
+                "verified": bool(stored) and all(a == audience for a in stored)}
+
     async def _point_count(self, client: httpx.AsyncClient, name: str) -> Optional[int]:
         try:
             r = await client.get(f"{self.base}/collections/{name}")
@@ -1594,6 +1684,9 @@ class VulaIngestionPipeline:
                 )
 
             logger.info(f"[{self.tenant_id}] Parsed {len(pages)} pages from {file_path.name}")
+            prior = await self.store.owner_audience(self.tenant_id, file_path.name)
+            audience = audience or prior
+            owner_set = {"audience_by": "owner"} if prior and audience == prior else {}
 
             # 2. Chunk all pages
             all_chunks: List[DocumentChunk] = []
@@ -1614,6 +1707,7 @@ class VulaIngestionPipeline:
                             "file_size_kb": file_path.stat().st_size // 1024,
                             "source_type": source_type,
                             "audience": default_audience(source_type, audience),
+                            **owner_set,
                         },
                     )
                     all_chunks.append(chunk)
@@ -1679,8 +1773,12 @@ class VulaIngestionPipeline:
             doc_id = hashlib.md5(f"{self.tenant_id}:{filename}".encode()).hexdigest()[:16]
         try:
             raw_chunks = self.chunker.chunk(content)
+            prior = await self.store.owner_audience(self.tenant_id, filename)
+            audience = audience or prior
             chunk_metadata = {"source": "training_kb", "source_type": source_type,
                               "audience": default_audience(source_type, audience)}
+            if prior and audience == prior:
+                chunk_metadata["audience_by"] = "owner"
             if category:
                 chunk_metadata["category"] = category
             all_chunks = [
