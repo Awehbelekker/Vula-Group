@@ -3,6 +3,46 @@
  * One source of truth: VulaShell renders these groups; App.jsx / VulaMerchantAdmin map ids to
  * components exactly as before — every pre-overhaul tab id is present, nothing dropped.
  */
+import {
+  Banknote, Bike, Bot, BookOpen, Boxes, BrainCircuit, BrickWall, Briefcase, Calculator,
+  CalendarDays, ClipboardList, Clock, Contact, CreditCard, Download, Factory, FileSignature,
+  FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
+  Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
+  PenLine, PencilRuler, Receipt, ReceiptText, Repeat, Rocket, Route, Ruler, ScanLine, Settings,
+  ShoppingBag, Smartphone, Sparkles, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound,
+  Wallet, Wrench, Zap,
+} from "lucide-react";
+
+// Lucide icons for the redesigned shell (2026-10-17, UX redesign B5), keyed by nav id — the
+// same ids as the `icon` emoji below, which the current shell keeps showing until a tenant is
+// switched onto the redesign (VulaShell renders both; index.css shows one). One map for both
+// shells: master and merchant ids that share a name share a meaning (contacts, finances…).
+export const NAV_ICONS = {
+  // merchant
+  overview: House, inbox: Inbox,
+  "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
+  sell: Store, orders: Package, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag,
+  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, suppliers: Truck, import: Download,
+  money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen,
+  payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
+  people: Users, customers: Users, contacts: Contact, followups: MailCheck,
+  "marketing-hub": Sparkles, onboarding: PartyPopper, broadcast: Megaphone, "email-campaigns": Mail,
+  "wa-templates": MessagesSquare, scheduling: Clock, marketing: Sparkles,
+  pages: Globe,
+  operate: HardHat, projects: FolderKanban, workspace: FolderOpen, fieldops: HardHat, labour: BrickWall,
+  qsrates: Ruler, documents: FileText,
+  estimating: Calculator, qs: Calculator, qspro: PencilRuler, takeoff: Ruler, draft: PenLine,
+  team: UsersRound, settings: Settings,
+  "my-work": Briefcase, "rep-contacts": Contact, "rep-callsheet": ClipboardList, "rep-bookings": CalendarDays,
+  "rep-documents": Library, "rep-reminders": Clock, "rep-expenses": Receipt, "rep-expense-sheet": ReceiptText,
+  "rep-crm": Link,
+  // master
+  master: Wrench, training: Library, dashboard: LayoutDashboard, agent: Bot, reports: TrendingUp,
+  onboard: Rocket, admin: FileSignature, merchant: Store,
+};
+
+/** The Lucide icon for a nav id, or null (the shell then shows the emoji). */
+export const iconFor = (id) => NAV_ICONS[id] || null;
 
 // Merchant shell (owner/staff, and master "open as tenant"). ids = VulaMerchantAdmin tab ids.
 //

@@ -3,6 +3,8 @@
 // baseline (scripts/design-token-baseline.json), or a new file has any. The baseline only goes
 // DOWN: run with --update after migrating a page to lower its allowance.
 // theme/ (where the tokens live) is exempt.
+// A third-party brand colour that must stay exact (the Google "G", WhatsApp green) can be kept on
+// its line with a `// brand-colour: <whose>` comment — say whose it is (2026-10-17).
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -20,7 +22,7 @@ function files(dir) {
 }
 const counts = {};
 for (const f of files(ROOT)) {
-  const src = readFileSync(f, "utf8");
+  const src = readFileSync(f, "utf8").split("\n").filter((l) => !/brand-colour:\s*\S/.test(l)).join("\n");
   const n = (src.match(HEX) || []).length + (src.match(FONT) || []).length;
   if (n) counts[relative(ROOT, f)] = n;
 }

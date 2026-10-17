@@ -2,19 +2,21 @@
   "name": "vula-dashboard",
   "version": "1.0.0",
   "private": true,
-  "description": "Vula AI — Business Intelligence Dashboard",
+  "description": "Vula AI \u2014 Business Intelligence Dashboard",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "check:puck-sync": "node scripts/check-puck-sync.mjs",
-    "check:tokens": "node scripts/check-design-tokens.mjs"
+    "check:tokens": "node scripts/check-design-tokens.mjs",
+    "test:unit": "node --experimental-detect-module --test tests/unit/brand.test.mjs tests/unit/money.test.mjs"
   },
   "dependencies": {
     "@measured/puck": "^0.20.2",
     "@supabase/supabase-js": "^2.106.2",
     "@zxing/browser": "^0.2.1",
     "leaflet": "^1.9.4",
+    "lucide-react": "1.48.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-rnd": "^10.5.3",
