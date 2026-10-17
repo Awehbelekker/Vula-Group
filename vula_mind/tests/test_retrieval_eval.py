@@ -77,3 +77,39 @@ async def test_fixture_floors_after_phase_1():
     assert s["fact_in_prompt"] >= 0.95, s
     assert s["leak_rate"] == 0.0, s
     assert s["recall@5"] >= 0.95 and s["in_prompt"] >= 0.94, s
+
+
+# ── Customer view (KB retrieval 1b, 2026-10-17) ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+async def test_no_customer_search_reaches_a_staff_chunk_in_any_fixture_tenant(strict):
+    """Every case question and every probe, searched as a customer by vector (no score floor) and
+    by keyword, in each pilot-shaped fixture tenant: no staff/owner chunk, ever."""
+    from unittest.mock import patch
+    from vula.ingestion import pipeline as pl
+    with r.offline(), patch.object(pl.settings, "kb_customer_audience_strict", strict):
+        await r.build_fixture()
+        reached = 0
+        for tenant in r.load_fixture():
+            rep = await r.customer_view(tenant, r.customer_view_probes(tenant))
+            assert rep["ok"], rep["violations"]
+            assert rep["by_audience"]["staff"] == rep["by_audience"]["owner"] == 0
+            reached += rep["by_audience"]["public"]
+        assert reached > 0     # the searches really ran: the seafood FAQ, policy and recipe came back
+
+
+@pytest.mark.asyncio
+async def test_customer_view_reports_untagged_legacy_chunks_and_strict_hides_them():
+    from unittest.mock import patch
+    from vula.ingestion import pipeline as pl
+    with r.offline() as mem:
+        await r.build_fixture()
+        for col in mem.cols.values():
+            for _v, payload in col["points"].values():
+                payload.pop("audience", None)          # a collection from before the change
+        lenient = await r.customer_view("fixture-seafood", r.customer_view_probes("fixture-seafood"))
+        assert lenient["ok"] and lenient["legacy_untagged_visible"] > 0
+        with patch.object(pl.settings, "kb_customer_audience_strict", True):
+            strict = await r.customer_view("fixture-seafood", r.customer_view_probes("fixture-seafood"))
+        assert strict["ok"] and strict["chunks"] == 0

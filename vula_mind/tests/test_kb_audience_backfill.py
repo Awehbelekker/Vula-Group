@@ -97,3 +97,23 @@ async def test_partly_tagged_document_gets_the_same_tag_and_owner_choice_is_kept
         assert rep["by_reason"] == {"matches the rest of the document": 1} and rep["written"] == 1
         await run(T, apply=True, reclassify=True)          # an owner's choice survives a redo
         assert all(pl.get("audience") == "public" for _v, pl in col.values())
+
+
+@pytest.mark.asyncio
+async def test_exposure_check_finds_a_past_reply_that_quoted_a_private_document():
+    """tools/kb_exposure_check.py re-runs a past customer question the way the unfiltered
+    customer path did, and flags a reply carrying a figure from a staff/owner chunk."""
+    from unittest.mock import patch
+
+    from tools.kb_exposure_check import check, rand_figures
+    assert rand_figures("yellowtail R 95 per kg, total R9,453.00, 3 items") == {9500, 945300}
+    with offline() as mem, patch("tools.kb_audience_backfill._categories", return_value={}):
+        p = await _legacy_kb()
+        _strip(mem, p)
+        turns = [{"id": "t1", "source": "commerce", "phone_hash": "abc", "at": "2026-10-01",
+                  "question": "yellowtail price per kg co-op", "reply": "Our yellowtail is R 95 per kg."},
+                 {"id": "t2", "source": "commerce", "phone_hash": "abc", "at": "2026-10-02",
+                  "question": "is the fish fresh", "reply": "Yes, line caught daily."}]
+        rep = await check(T, turns)
+    assert rep["reached_private"] == 1 and rep["figure_overlap"] == 1
+    assert rep["turns"][0]["docs"] == ["Supplier invoice co-op.pdf"]

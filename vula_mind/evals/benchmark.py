@@ -492,6 +492,14 @@ async def run(judge_model: Optional[str] = None, only: Optional[str] = None,
         except Exception as exc:  # noqa: BLE001
             rows.append({"id": "retrieval", "component": "Retrieval", "ok": False,
                          "why": [f"couldn't run: {type(exc).__name__}: {exc}"[:300]]})
+    # Customer view (2026-10-17): no staff/owner chunk reaches a customer's search, per pilot tenant.
+    if not only or "customer" in only.lower():
+        try:
+            from evals import retrieval
+            rows += retrieval.customer_view_benchmark_rows(await retrieval.run_customer_view())
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"id": "customer_view", "component": "Customer view · no staff documents",
+                         "ok": False, "why": [f"couldn't run: {type(exc).__name__}: {exc}"[:300]]})
     judge_cost = 0.0
     for case in load_cases():
         if only and only.lower() not in case["component"].lower():

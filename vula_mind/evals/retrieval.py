@@ -578,6 +578,86 @@ def benchmark_rows(rep: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+# ── Customer view: can a customer's search ever reach a staff/owner chunk? ─────
+# KB retrieval 1b (2026-10-17). Not a ranking test — a FILTER test. Every probe is searched as a
+# customer twice, once per path (vector with no score floor, and the literal keyword pass), and
+# every chunk that comes back is checked: staff/owner is always a violation; an untagged chunk
+# (stored before the audience existed) is a violation once strict mode is on, and otherwise
+# reported as the legacy gap the backfill closes. Read-only.
+
+PILOT_TENANTS = ("gerflor", "digg-demo", "off-the-hook")
+
+
+def load_probes(path: Path = CASES) -> List[str]:
+    return list(yaml.safe_load(path.read_text()).get("customer_probes") or [])
+
+
+async def customer_view(tenant_id: str, questions: List[str]) -> Dict[str, Any]:
+    """In whatever mode the server is in (KB_CUSTOMER_AUDIENCE_STRICT) — never flipped here, since
+    this runs on the live server next to real customers."""
+    from config import settings
+    from vula.ingestion.pipeline import VulaIngestionPipeline, _salient_terms
+    strict = bool(settings.kb_customer_audience_strict)
+    p = VulaIngestionPipeline(tenant_id=tenant_id)
+    counts = {"public": 0, "untagged": 0, "staff": 0, "owner": 0}
+    seen: Dict[str, Dict[str, Any]] = {}
+    for q in questions:
+        hits: List[tuple] = []
+        emb = await p.embedder.embed(q)
+        hits += [("vector", h) for h in await p.store.search(
+            tenant_id, emb, limit=20, score_threshold=0.0, audience="public")]
+        hits += [("keyword", h) for h in await p.store.keyword_search(
+            tenant_id, _salient_terms(q), limit=20, audience="public")]
+        for path, h in hits:
+            key = str(h.get("chunk_id") or h.get("text", "")[:80])
+            aud = h.get("audience") or "untagged"
+            if key in seen:
+                seen[key]["paths"].add(path)
+                continue
+            counts[aud if aud in counts else "staff"] += 1
+            seen[key] = {"filename": h.get("filename"), "audience": aud, "paths": {path}}
+    bad = {"staff", "owner"} | ({"untagged"} if strict else set())
+    violations = sorted({(v["filename"], v["audience"], ",".join(sorted(v["paths"])))
+                         for v in seen.values() if v["audience"] in bad})
+    return {"tenant": tenant_id, "strict": strict, "probes": len(questions), "chunks": len(seen),
+            "by_audience": counts, "violations": [{"filename": f, "audience": a, "paths": ps}
+                                                  for f, a, ps in violations],
+            "legacy_untagged_visible": 0 if strict else counts["untagged"],
+            "ok": not violations}
+
+
+def customer_view_probes(tenant_id: str) -> List[str]:
+    """Every case question for the tenant plus the generic probes aimed at private documents."""
+    qs = [c["question"] for c in load_cases() if c["tenant"] == tenant_id]
+    return list(dict.fromkeys(qs + load_probes()))
+
+
+async def run_customer_view(tenants: Optional[List[str]] = None) -> Dict[str, Any]:
+    rows = []
+    for t in tenants or list(PILOT_TENANTS):
+        try:
+            rows.append(await customer_view(t, customer_view_probes(t)))
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"tenant": t, "ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+    return {"layer": "customer_view", "rows": rows, "passed": sum(1 for r in rows if r.get("ok")),
+            "total": len(rows)}
+
+
+def customer_view_benchmark_rows(rep: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out = []
+    for r in rep["rows"]:
+        why = [r["error"]] if r.get("error") else [
+            f"{v['audience']} document reached a customer search ({v['paths']}): {v['filename']}"
+            for v in r.get("violations", [])[:10]]
+        if r.get("legacy_untagged_visible"):
+            why.append(f"{r['legacy_untagged_visible']} untagged chunks still visible to customers "
+                       f"(run tools/kb_audience_backfill.py, then strict mode)")
+        out.append({"id": f"customer_view:{r['tenant']}", "component": "Customer view · no staff documents",
+                    "prompt": r["tenant"], "ok": bool(r.get("ok")) and not r.get("legacy_untagged_visible"),
+                    "why": why})
+    return out
+
+
 # ── Synthetic cases from a real tenant's own chunks ───────────────────────────
 
 _SYNTH_PROMPT = (

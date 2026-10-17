@@ -16,6 +16,31 @@
 # Real failures first (seed: true), with the date and what went wrong. Public repository: no phone
 # numbers, customers' names or tenants' figures.
 
+# Customer-view probes (evals/retrieval.py::customer_view, 2026-10-17): questions aimed squarely
+# at the documents a customer must never see. Each is searched AS A CUSTOMER in every pilot
+# tenant, with no score floor, by vector and by keyword; any staff/owner chunk returned fails.
+customer_probes:
+  - "what do you pay your suppliers"
+  - "supplier invoice total"
+  - "cost price per kg"
+  - "trade price list"
+  - "bank statement balance"
+  - "how much is in the bank account"
+  - "staff wages and salaries"
+  - "payslip"
+  - "who are your suppliers and what are their terms"
+  - "quote amount for the job"
+  - "proof of payment"
+  - "VAT and tax figures"
+  - "what is the owner's ID number"
+  - "employee phone numbers"
+  - "contract agreement terms"
+  - "invoice"
+  - "statement"
+  - "wat betaal julle verskaffers"
+  - "bankstaat saldo"
+  - "salarisse van die personeel"
+
 cases:
   # ── Seeds: real failures, fixture copies (CI) ──────────────────────────────────────────────
   # Gerflor rep, 2026-09-07: "0 chunks" for the first two while the stock sheet sat in the KB.

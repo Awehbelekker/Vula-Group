@@ -5,6 +5,7 @@
     python -m evals.run retrieval                       # offline fixture subset (what CI runs)
     python -m evals.run retrieval --live [--tenant gerflor] [--cases evals/reports/x.yaml]
     python -m evals.run retrieval-synth --tenant gerflor [--per-doc 5]   # unreviewed cases
+    python -m evals.run customer-view [--tenant off-the-hook]   # live: no staff chunk reaches a customer
 """
 from __future__ import annotations
 
@@ -66,10 +67,31 @@ def main() -> int:
     r.add_argument("--live", action="store_true", help="real tenants, read-only (needs the keys)")
     r.add_argument("--tenant")
     r.add_argument("--cases", help="a YAML file of cases (e.g. reviewed synthetic cases)")
+    cv = sub.add_parser("customer-view")
+    cv.add_argument("--tenant", action="append", help="default: the pilot tenants")
     s = sub.add_parser("retrieval-synth")
     s.add_argument("--tenant", required=True)
     s.add_argument("--per-doc", type=int, default=5)
     a = ap.parse_args()
+
+    if a.layer == "customer-view":
+        from core.llm_router import install_ollama_auth
+        from evals import retrieval
+        install_ollama_auth()
+        report = asyncio.run(retrieval.run_customer_view(a.tenant))
+        print(f"report: {_save(report, 'customer-view')}")
+        for r in report["rows"]:
+            if r.get("error"):
+                print(f"FAIL  {r['tenant']}: {r['error']}")
+                continue
+            print(f"{'PASS' if r['ok'] else 'FAIL'}  {r['tenant']}: {r['probes']} probes, {r['chunks']} chunks "
+                  f"reached a customer search {r['by_audience']}; strict={r['strict']}")
+            for v in r["violations"]:
+                print(f"      {v['audience']:8} via {v['paths']:14} {v['filename']}")
+            if r["legacy_untagged_visible"]:
+                print(f"      {r['legacy_untagged_visible']} untagged (pre-backfill) chunks are still visible "
+                      "to customers — run tools/kb_audience_backfill.py, then KB_CUSTOMER_AUDIENCE_STRICT=true")
+        return 0 if report["passed"] == report["total"] else 1
 
     if a.layer in ("retrieval", "retrieval-synth"):
         import yaml
