@@ -37,6 +37,7 @@ import VulaSmartScanner from "./components/VulaSmartScanner";
 import VulaShell from "./components/VulaShell";
 import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible } from "./navConfig";
 import { applyBrand, applyThemeMode } from "./theme/tokens";
+import { applyUiMode, uiV2For } from "./lib/flags";
 
 const COLORS = {
   bg: "var(--bg)",
@@ -104,6 +105,7 @@ export default function App() {
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [tenantProfile, setTenantProfile] = useState(null); // what kind of business (tenants.tenant_profile)
+  const [tenantUiV2, setTenantUiV2] = useState(false); // switched onto the redesign (migration 215)
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
   const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
@@ -146,6 +148,9 @@ export default function App() {
     if (isPublicRoute) document.documentElement.dataset.theme = "light";
     else applyThemeMode();
   }, [isPublicRoute]);
+  // The redesign (2026-10-17): only for a tenant switched onto it, and never on the public
+  // customer-facing pages, which keep their own look (lib/flags.js).
+  useEffect(() => { applyUiMode(!isPublicRoute && uiV2For(tenantUiV2)); }, [isPublicRoute, tenantUiV2]);
   useEffect(() => {
     // Master HQ wears Vula's own brand; only "Open as tenant" takes on that tenant's brand
     // (the whole master panel used to recolour to whichever tenant was picked in the switcher).
@@ -188,8 +193,8 @@ export default function App() {
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
-      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); })
-      .catch(() => { setTenantModules(null); setTenantProfile(null); });
+      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantUiV2(!!d.ui_v2); })
+      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantUiV2(false); });
   }, [user, role, tenantId, setMember]);
 
   // Real Inbox badge (P0.4): count of open escalations waiting on a human — polled per

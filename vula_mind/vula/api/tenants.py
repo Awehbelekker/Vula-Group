@@ -289,6 +289,9 @@ def _public(cfg: dict) -> dict:
         "default_payment_provider": cfg.get("default_payment_provider"),
         "status": cfg.get("status"),
         "profile": tenant_profile(cfg["tenant_id"]) if cfg.get("tenant_id") else None,
+        # the redesigned dashboard, opt-in per tenant, and its own labels (migration 215)
+        "ui_v2": bool(cfg.get("ui_v2")),
+        "ui_labels": cfg.get("ui_labels") or None,
     }
 
 
