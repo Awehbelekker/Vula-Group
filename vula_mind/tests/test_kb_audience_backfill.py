@@ -15,7 +15,9 @@ T = "shop"
     ({"source_type": "learned", "filename": "learned_x.txt"}, None, "staff"),
     ({"filename": "scan.pdf"}, "Invoice", "staff"),
     ({"filename": "scan.pdf"}, "Bank Statement", "owner"),
-    ({"filename": "scan.pdf"}, "Menu / Price List", "public"),
+    ({"filename": "scan.pdf"}, "Menu / Price List", "staff"),    # can't tell whose menu
+    ({"filename": "scan.pdf"}, "Specification", "staff"),         # DIGG's council submissions
+    ({"filename": "Menu 20260913-1616.jpg"}, None, "staff"),       # a supplier's menu
     ({"filename": "FNB statement Aug.pdf"}, None, "owner"),
     ({"filename": "Staff roster and wages September.pdf"}, None, "owner"),
     ({"filename": "Supplier invoice co-op.pdf"}, None, "staff"),
@@ -30,6 +32,7 @@ def test_classify(payload, category, want):
 
 def test_menu_by_category_is_flagged_for_review():
     assert classify({"filename": "a.pdf"}, "Menu / Price List")[2] is True
+    assert classify({"filename": "SPM price list.pdf"}, None)[2] is True
     assert classify({"filename": "a"}, None, shared=True)[0] == "public"
 
 
@@ -37,7 +40,8 @@ async def _legacy_kb():
     """Ingest, then strip every tag — the state of a collection written before 2026-10-16."""
     p = VulaIngestionPipeline(T)
     await p.ingest_text("Invoice from the co-op: yellowtail R 95 per kg.", "Supplier invoice co-op.pdf")
-    await p.ingest_text("Is the fish fresh? Yes, line caught daily.", "Fresh catch FAQ.md")
+    await p.ingest_text("Is the fish fresh? Yes, line caught daily.", "Fresh catch FAQ.md",
+                        source_type="website")            # public by source, not by its name
     await p.ingest_text("Bank statement: closing balance.", "FNB statement Aug.pdf")
     return p
 
@@ -96,7 +100,9 @@ async def test_partly_tagged_document_gets_the_same_tag_and_owner_choice_is_kept
         rep = await run(T, apply=True)
         assert rep["by_reason"] == {"matches the rest of the document": 1} and rep["written"] == 1
         await run(T, apply=True, reclassify=True)          # an owner's choice survives a redo
-        assert all(pl.get("audience") == "public" for _v, pl in col.values())
+        auds = {pl["filename"]: pl.get("audience") for _v, pl in col.values()}
+        assert auds["Price list.pdf"] == "public"
+        assert auds["Winter menu.pdf"] == "staff"        # a redo re-classifies what no owner chose
 
 
 @pytest.mark.asyncio
@@ -117,3 +123,24 @@ async def test_exposure_check_finds_a_past_reply_that_quoted_a_private_document(
         rep = await check(T, turns)
     assert rep["reached_private"] == 1 and rep["figure_overlap"] == 1
     assert rep["turns"][0]["docs"] == ["Supplier invoice co-op.pdf"]
+
+
+
+@pytest.mark.asyncio
+async def test_mark_public_opens_a_reviewed_list_and_the_backfill_leaves_it_alone():
+    from unittest.mock import patch
+
+    from vula import kb_maintenance as km
+    with offline() as mem:
+        p = VulaIngestionPipeline(T)
+        await p.ingest_text("Weekly prices: hake R 160 per kg.", "21MAY_v2.pdf")
+        await p.ingest_text("Invoice from the co-op: yellowtail R 95 per kg.", "Supplier invoice co-op.pdf")
+        with patch("config.settings.kb_mark_public", '{"shop": ["21MAY v2.pdf", "missing.pdf"]}'):
+            rep = await km._mark_public()
+        assert rep["tenants"][T]["matched"] == 1 and rep["tenants"][T]["not_found"] == ["missing.pdf"]
+        tags = _tags(mem, p)
+        assert tags["21MAY_v2.pdf"] == "public" and tags["Supplier invoice co-op.pdf"] == "staff"
+        await run(T, apply=True, reclassify=True)          # a redo never overrides a reviewed choice
+        assert _tags(mem, p)["21MAY_v2.pdf"] == "public"
+        await p.ingest_text("Weekly prices: hake R 165 per kg.", "21MAY_v2.pdf")   # re-upload keeps it
+        assert _tags(mem, p)["21MAY_v2.pdf"] == "public"

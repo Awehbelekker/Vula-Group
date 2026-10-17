@@ -114,6 +114,8 @@ class Settings(BaseSettings):
     # stats, exposure, backfill_preview, backfill_apply, customer_view, retrieval_live. Empty = none.
     # Set it, read the summary in the logs (full report: vula_eval_reports), then clear it.
     kb_maintenance: str = ""
+    # The reviewed list the mark_public job opens up to customers: JSON {tenant: [filename, ...]}.
+    kb_mark_public: str = ""
 
     # ── Mesh ────────────────────────────────────────────────────────────────
     mesh_port: int = 7437

@@ -13,15 +13,17 @@ supplier invoice, bank statement and wage roster. docs/kb-retrieval-audit.md.
 Classification is per DOCUMENT (all its chunks get the same audience), first rule that matches:
   1. already tagged → left alone (idempotent). A document only partly tagged gets its untagged
      chunks set to the tag the rest already carry. --reclassify redoes tagged documents too,
-     except where the owner chose the audience on the dashboard (audience_by=owner).
+     except where the owner chose the audience on the dashboard (audience_by=owner) or it was
+     set from a reviewed list (audience_by=review, vula/kb_maintenance.py mark_public).
   2. Vula's shared collections (training, sector, network) → public
   3. source_type: website / starter / learned_answer_approved / promoted → public;
      conversation / learned → staff
   4. the filed document's category (vula_filed_documents, joined on doc_id): bank → owner;
      invoices, quotes, statements, payments, contracts, payroll, correspondence… → staff;
-     menu / price list, booking policy, brochure, specification → public BUT flagged for review
+     menu / price list, booking policy, brochure, specification → staff, listed for review
   5. filename: bank/statement/payslip/payroll/wages/salary → owner; invoice/receipt/quote/
-     supplier/roster/contract/… → staff; recipe-*, owner-taught, FAQ, menu → public
+     supplier/roster/contract/… → staff; recipe-*, owner-taught → public; FAQ / menu /
+     price list / catalogue / brochure → staff, listed for review
   6. anything else → staff (the conservative default: an owner can make it public from the
      dashboard's Documents page)
 
@@ -54,8 +56,13 @@ _CATEGORY_RULES: List[Tuple[re.Pattern, str, bool]] = [
                 r"fee proposal|tender|minutes|programme|report|correspondence|business card|"
                 r"site / building|drawing|email attachment|general document|other file|"
                 r"health & safety", re.I), "staff", False),
+    # 2026-10-17, first production preview: "public by category" was wrong both ways — DIGG's
+    # client council submissions were filed as "Specification", gerflor's NETT trade price list and
+    # a supplier's private-label list as "Menu / Price List", while Off the Hook's own weekly price
+    # lists sat under "Quote / Estimate". A category can't say who a document is FOR, so these stay
+    # with the team and are listed for an owner (or a reviewed KB_MARK_PUBLIC list) to open up.
     (re.compile(r"menu|price list|booking policy|brochure|product info|specification", re.I),
-     "public", True),
+     "staff", True),
 ]
 
 _FILENAME_RULES: List[Tuple[re.Pattern, str, bool, str]] = [
@@ -65,8 +72,11 @@ _FILENAME_RULES: List[Tuple[re.Pattern, str, bool, str]] = [
                 r"purchase order|\bpo[-_ ]?\d|credit note|delivery note|remittance|proof of payment|"
                 r"\bpop\b|budget|costing|\bvat\b|\bsars\b|tax|pricing|cost price|trade price", re.I),
      "staff", False, "business-record filename"),
-    (re.compile(r"^recipe-|^owner-taught|\bfaq\b|frequently asked|\bmenu\b", re.I),
-     "public", False, "customer-content filename"),
+    # Only names Vula's own customer-facing endpoints write (recipes, owner-taught answers). A
+    # "Menu …" or "FAQ" file can just as well be a supplier's (2026-10-17: Go Frozen's menu).
+    (re.compile(r"^recipe-|^owner-taught", re.I), "public", False, "customer-content filename"),
+    (re.compile(r"\bfaq\b|frequently asked|\bmenu\b|price ?list|catalogue|brochure", re.I),
+     "staff", True, "maybe for customers — owner to confirm"),
     (re.compile(r"^(website|shopify|woocommerce) — ", re.I), "public", False, "imported website"),
 ]
 
@@ -144,7 +154,7 @@ async def _documents(client, base: str, name: str) -> Dict[str, Dict[str, Any]]:
             d = docs.setdefault(key, {"points": [], "payload": pl, "tags": {}, "owner_set": False})
             d["points"].append(p["id"])
             d["tags"][p["id"]] = pl.get("audience")
-            d["owner_set"] = d["owner_set"] or pl.get("audience_by") == "owner"
+            d["owner_set"] = d["owner_set"] or pl.get("audience_by") in ("owner", "review")
         offset = res.get("next_page_offset")
         if offset is None:
             return docs
@@ -275,7 +285,7 @@ def _print(rep: Dict[str, Any]) -> None:
         for why, n in sorted(rep["by_reason"].items(), key=lambda x: -x[1]):
             print(f"    {n:5}  {why}")
     if rep["review"]:
-        print(f"  {len(rep['review'])} made PUBLIC by category — check these are really for customers:")
+        print(f"  {len(rep['review'])} kept with the team that may be for customers — an owner can open them up:")
         for r in rep["review"]:
             print(f"    - {r['filename']}  ({r['why']})")
     if rep["mode"] != "preview":
