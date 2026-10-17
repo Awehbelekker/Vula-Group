@@ -195,7 +195,8 @@ async def run(tenant_id: str, apply: bool = False, rollback: bool = False,
     from vula.ingestion.pipeline import QdrantStore
     store = QdrantStore()
     name = store._collection_name(tenant_id)
-    shared = tenant_id in _shared_tenant_ids()
+    from vula.ingestion.pipeline import is_shared_collection
+    shared = is_shared_collection(tenant_id)
     own = client is None
     client = client or httpx.AsyncClient(timeout=60.0, headers=store._headers())
     rep: Dict[str, Any] = {"tenant": tenant_id, "collection": name, "mode":
@@ -296,6 +297,7 @@ async def _main(a) -> int:
         rows = _tenants_db().table("vula_tenant_config").select("tenant_id").execute().data or []
         known = {store._collection_name(t["tenant_id"]): t["tenant_id"] for t in rows if t.get("tenant_id")}
         known.update({store._collection_name(t): t for t in _shared_tenant_ids()})
+        known.update({n: "sector_" + n[len("vula_sector_"):] for n in names if n.startswith("vula_sector_")})
         tenants = [known[n] for n in sorted(names) if n in known]
         unknown = sorted(n for n in names if n.startswith("vula_") and n not in known)
         if unknown:

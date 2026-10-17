@@ -199,3 +199,12 @@ async def test_owner_switch_is_verified_survives_reupload_and_shows_in_the_previ
 
         with pytest.raises(Exception):
             await server.set_kb_document_audience("shop", menu.doc_id, server.AudienceIn(audience="everyone"))
+
+
+def test_vulas_shared_collections_are_public_by_tenant_not_by_caller():
+    from vula.ingestion.pipeline import is_shared_collection
+    assert is_shared_collection("vula_training") and is_shared_collection("business_basics")
+    assert is_shared_collection("vula_network") and is_shared_collection("sector_food")
+    assert not is_shared_collection("off-the-hook")
+    assert VulaIngestionPipeline("vula_training")._collection_audience() == "public"
+    assert VulaIngestionPipeline("off-the-hook")._collection_audience() is None

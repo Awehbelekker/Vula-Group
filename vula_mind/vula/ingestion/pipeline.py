@@ -1124,6 +1124,19 @@ def _audience_allows(audience: Optional[str], payload: dict) -> bool:
     return got not in ("staff", "owner")
 
 
+def is_shared_collection(tenant_id: str) -> bool:
+    """Vula's own shared collections — SA construction, small-business, sector packs and the
+    opted-in network — hold no single tenant's data, so everything in them is public."""
+    try:
+        from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+        from vula.training.content import TRAINING_TENANT_ID
+        from vula.training.network import NETWORK_TENANT_ID
+        shared = {TRAINING_TENANT_ID, BUSINESS_TRAINING_TENANT_ID, NETWORK_TENANT_ID}
+    except Exception:
+        shared = set()
+    return tenant_id in shared or (tenant_id or "").startswith("sector_")
+
+
 def kb_score_threshold(authoritative: bool = False) -> float:
     """The minimum similarity for a retrieved chunk (2026-10-16: were the literals 0.3 / 0.35 in
     query(); same defaults, now settings — config.py kb_score_threshold*). A per-embed-model
@@ -1684,8 +1697,8 @@ class VulaIngestionPipeline:
                 )
 
             logger.info(f"[{self.tenant_id}] Parsed {len(pages)} pages from {file_path.name}")
-            prior = await self.store.owner_audience(self.tenant_id, file_path.name)
-            audience = audience or prior
+            prior = await self._prior_owner_audience(file_path.name)
+            audience = audience or self._collection_audience() or prior
             owner_set = {"audience_by": "owner"} if prior and audience == prior else {}
 
             # 2. Chunk all pages
@@ -1773,8 +1786,8 @@ class VulaIngestionPipeline:
             doc_id = hashlib.md5(f"{self.tenant_id}:{filename}".encode()).hexdigest()[:16]
         try:
             raw_chunks = self.chunker.chunk(content)
-            prior = await self.store.owner_audience(self.tenant_id, filename)
-            audience = audience or prior
+            prior = await self._prior_owner_audience(filename)
+            audience = audience or self._collection_audience() or prior
             chunk_metadata = {"source": "training_kb", "source_type": source_type,
                               "audience": default_audience(source_type, audience)}
             if prior and audience == prior:
@@ -2021,6 +2034,17 @@ class VulaIngestionPipeline:
                 raw = r.json().get("response", "")
 
         return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+    async def _prior_owner_audience(self, filename: str) -> Optional[str]:
+        """Best-effort: never let the lookup fail an ingest."""
+        try:
+            got = await self.store.owner_audience(self.tenant_id, filename)
+            return got if got in AUDIENCES else None
+        except Exception:
+            return None
+
+    def _collection_audience(self) -> Optional[str]:
+        return "public" if is_shared_collection(self.tenant_id) else None
 
     def _doc_id(self, file_path: Path) -> str:
         """Identity of a document = tenant + name + CONTENT.
