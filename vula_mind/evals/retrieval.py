@@ -478,8 +478,18 @@ async def run_case(case: Dict[str, Any]) -> Dict[str, Any]:
     if must:
         row["fact_retrieved"] = any(_contains_all(c.get("text") or "", must) for c in chunks)
         row["fact_in_prompt"] = _contains_all(block, must)
+        # The same chunks under the cut every skill used before 2026-10-16 (900 characters each;
+        # 400 in the customer assistant) — a before/after on live data without deploying old code.
+        legacy = "\n\n".join(f"[{c.get('filename')}]: {(c.get('text') or '')[:400 if customer else 900]}"
+                               for c in chunks)
+        row["fact_in_prompt_legacy"] = _contains_all(legacy, must)
     if forbidden:
         row["leak"] = any(_matches(d, f) for d in prod_docs for f in forbidden)
+        # Before C5 the customer search had no audience filter at all.
+        from vula.ingestion.pipeline import VulaIngestionPipeline, kb_audience
+        with kb_audience(None):
+            unfiltered = await VulaIngestionPipeline(tenant_id=tid).query(q, top_k=PROD_TOP_K)
+        row["leak_legacy"] = any(_matches(d, f) for d in ranked_docs(unfiltered) for f in forbidden)
     if case.get("type") == "unanswerable":
         row["ok"] = row["abstained"]
     elif case.get("type") == "sensitive" and forbidden:
@@ -491,7 +501,7 @@ async def run_case(case: Dict[str, Any]) -> Dict[str, Any]:
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
 
-_METRICS = ("recall@5", "recall@20", "rr", "ndcg@10", "in_prompt", "fact_in_prompt")
+_METRICS = ("recall@5", "recall@20", "rr", "ndcg@10", "in_prompt", "fact_in_prompt", "fact_in_prompt_legacy")
 
 
 def _mean(vals: List[Any]) -> Optional[float]:
@@ -518,6 +528,8 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     out["false_abstention"] = _mean([r["abstained"] for r in ans]) if ans else None
     leaks = [r["leak"] for r in ok_rows if "leak" in r]
     out["leak_rate"] = _mean(leaks) if leaks else None
+    legacy = [r["leak_legacy"] for r in ok_rows if "leak_legacy" in r]
+    out["leak_rate_legacy"] = _mean(legacy) if legacy else None
     ms = [r["ms"] for r in ok_rows if r.get("ms") is not None]
     out["p50_ms"], out["p95_ms"] = _pct(ms, 0.5), _pct(ms, 0.95)
     out["context_tokens"] = _mean([r.get("context_tokens") for r in ok_rows])

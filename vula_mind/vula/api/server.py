@@ -1412,6 +1412,13 @@ async def _infra_snapshot_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+async def _kb_maintenance_on_boot() -> None:
+    """KB_MAINTENANCE one-off jobs — audience backfill, KB stats, live evals (2026-10-17).
+    Runs on the scheduler leader only, like every job here, so two workers never backfill twice."""
+    from vula.kb_maintenance import on_boot
+    await on_boot()
+
+
 async def _qdrant_backup_loop() -> None:
     """Daily per-tenant Qdrant collection snapshot → private Supabase Storage bucket, see
     docs/dr.md. Qdrant previously had zero backup mechanism — the highest-severity finding in
@@ -1527,6 +1534,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_seed_training_on_boot()))
     _scheduled_job_tasks.append(_asyncio.create_task(_infra_snapshot_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_qdrant_backup_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_kb_maintenance_on_boot()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_invoices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_scheduled_campaigns_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_automations_loop()))

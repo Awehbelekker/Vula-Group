@@ -282,26 +282,32 @@ def _print(rep: Dict[str, Any]) -> None:
         print(f"  points written {rep['written']}, read back OK {rep['verified']}, mismatched {rep['mismatched']}")
 
 
-async def _main(a) -> int:
+async def all_tenant_ids() -> List[str]:
+    """Every KB collection in Qdrant, as the tenant id that names it. Collection names lost the
+    tenant id's hyphens, so they are mapped back through vula_tenant_config; a collection with no
+    tenant row is kept under its own name (vula_x_y → "x_y" names the same collection), so it is
+    still tagged — by filename rules, since its filed categories can't be joined."""
     import httpx
     from vula.ingestion.pipeline import QdrantStore
-    tenants = [a.tenant] if a.tenant else []
-    if a.all:
-        store = QdrantStore()
-        async with httpx.AsyncClient(timeout=30.0, headers=store._headers()) as c:
-            r = await c.get(f"{store.base}/collections")
-            r.raise_for_status()
-            # Collection names lost the tenant id's hyphens; map back through the tenant list.
-            names = {x["name"] for x in r.json()["result"]["collections"]}
+    store = QdrantStore()
+    async with httpx.AsyncClient(timeout=30.0, headers=store._headers()) as c:
+        r = await c.get(f"{store.base}/collections")
+        r.raise_for_status()
+        names = {x["name"] for x in r.json()["result"]["collections"]}
+    known: Dict[str, str] = {}
+    try:
         from vula.api.tenants import _client as _tenants_db
         rows = _tenants_db().table("vula_tenant_config").select("tenant_id").execute().data or []
         known = {store._collection_name(t["tenant_id"]): t["tenant_id"] for t in rows if t.get("tenant_id")}
-        known.update({store._collection_name(t): t for t in _shared_tenant_ids()})
-        known.update({n: "sector_" + n[len("vula_sector_"):] for n in names if n.startswith("vula_sector_")})
-        tenants = [known[n] for n in sorted(names) if n in known]
-        unknown = sorted(n for n in names if n.startswith("vula_") and n not in known)
-        if unknown:
-            print(f"(not a known tenant, skipped: {', '.join(unknown)})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"(tenant list unavailable: {type(exc).__name__})")
+    known.update({store._collection_name(t): t for t in _shared_tenant_ids()})
+    known.update({n: "sector_" + n[len("vula_sector_"):] for n in names if n.startswith("vula_sector_")})
+    return [known.get(n, n[len("vula_"):]) for n in sorted(names) if n.startswith("vula_")]
+
+
+async def _main(a) -> int:
+    tenants = [a.tenant] if a.tenant else (await all_tenant_ids() if a.all else [])
     bad = 0
     for t in tenants:
         rep = await run(t, apply=a.apply, rollback=a.rollback, reclassify=a.reclassify)

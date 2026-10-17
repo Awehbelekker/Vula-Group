@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     # member who isn't registered in vula_team_members is treated as an outsider — add them to
     # the team. False restores the old full-KB behaviour (rollback lever only).
     kb_outsiders_public_only: bool = True
+    # One-off KB maintenance run a minute after boot (vula/kb_maintenance.py), comma-separated:
+    # stats, exposure, backfill_preview, backfill_apply, customer_view, retrieval_live. Empty = none.
+    # Set it, read the summary in the logs (full report: vula_eval_reports), then clear it.
+    kb_maintenance: str = ""
 
     # ── Mesh ────────────────────────────────────────────────────────────────
     mesh_port: int = 7437
