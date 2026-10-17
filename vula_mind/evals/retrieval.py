@@ -477,12 +477,18 @@ async def run_case(case: Dict[str, Any]) -> Dict[str, Any]:
         row["in_prompt"] = any(_matches(d, e) for d in prod_docs for e in expected)
     if must:
         row["fact_retrieved"] = any(_contains_all(c.get("text") or "", must) for c in chunks)
-        row["fact_in_prompt"] = _contains_all(block, must)
+        # Chunk TEXT only, on both sides (2026-10-17, first live run): the tag in front of each
+        # chunk is a filename on one side and the filed title on the other, and gerflor's file
+        # "…ann b-en- r10.pdf" made the old cut look like it carried "R10" when no chunk did.
+        from config import settings
+        from core.skills.base import fit_kb_chunks
+        budget = max(1, settings.kb_context_token_budget // 2) if customer else None
+        row["fact_in_prompt"] = _contains_all(
+            "\n\n".join(c.get("text") or "" for c in fit_kb_chunks(chunks, budget)), must)
         # The same chunks under the cut every skill used before 2026-10-16 (900 characters each;
         # 400 in the customer assistant) — a before/after on live data without deploying old code.
-        legacy = "\n\n".join(f"[{c.get('filename')}]: {(c.get('text') or '')[:400 if customer else 900]}"
-                               for c in chunks)
-        row["fact_in_prompt_legacy"] = _contains_all(legacy, must)
+        row["fact_in_prompt_legacy"] = _contains_all(
+            "\n\n".join((c.get("text") or "")[:400 if customer else 900] for c in chunks), must)
     if forbidden:
         row["leak"] = any(_matches(d, f) for d in prod_docs for f in forbidden)
         # Before C5 the customer search had no audience filter at all.
