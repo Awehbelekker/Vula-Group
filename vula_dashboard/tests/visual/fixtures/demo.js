@@ -89,6 +89,21 @@ export const expenseLists = {
 };
 export const companyCards = [{ id: "card-1", last4: "4417", label: "Company card", active: true }];
 
+// ── Email contacts + follow-ups (email_connect.py) ──────────────────────────────────────────
+export const emailContacts = [
+  { id: "ec-1", name: "Lindiwe Khoza", email: "lindiwe@harbourvine.example.test", kind: "internal", message_count: 214 },
+  { id: "ec-2", name: "Bay Events Co.", email: "accounts@bayevents.example.test", kind: "client", message_count: 37 },
+  { id: "ec-3", name: "Eureka Mills", email: "orders@eurekamills.example.test", kind: "supplier", message_count: 22 },
+  { id: "ec-4", name: "Fairview Cheese", email: "sales@fairview.example.test", kind: "supplier", message_count: 15 },
+  { id: "ec-5", name: null, email: "newsletter@market.example.test", kind: "external", message_count: 4 },
+];
+export const emailFollowups = [
+  { id: "fu-1", sender_name: "Bay Events Co.", sender: "accounts@bayevents.example.test", reason: "request", urgency: "high",
+    tone: "polite", received_at: at(3, "09:10"), subject: "Platters for the 24th — confirm numbers?", summary: "Wants final numbers and a revised quote for 120 guests." },
+  { id: "fu-2", sender_name: "Eureka Mills", sender: "orders@eurekamills.example.test", reason: "schedule", urgency: "normal",
+    tone: null, received_at: at(0, "08:20"), subject: "Delivery slot next week", summary: "Asks whether Tuesday or Thursday suits for the flour delivery." },
+];
+
 // ── Products (commerce.py::admin_list_products) ──────────────────────────────────────────────
 export const products = [
   ["p-01", "Smoked snoek pâté (200g)", "extras", 8_900, 24],

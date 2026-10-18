@@ -178,3 +178,39 @@ test("expenses: what needs a person is flagged; allocating posts the same assign
   await page.getByRole("button", { name: "Reimbursable" }).click();
   await expect(page.locator(".vex-table tbody tr")).toHaveCount(2);
 });
+
+const CONTACTS = { name: "contacts", role: "owner", nav: "People", tab: "Contacts", ready: "Your email directory" };
+const FOLLOWUPS = { name: "followups", role: "owner", modules: ["followups"], nav: "People", tab: "Follow-ups", ready: "Emails Vula thinks are waiting on you" };
+
+for (const s of [CONTACTS, FOLLOWUPS]) {
+  for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+    for (const theme of THEMES) {
+      test(`${s.name} ${vp} ${theme}`, async ({ page }, ti) => {
+        const errors = await openScreen(page, s, { viewport, theme });
+        await check(page, ti, s.name, `${vp}-${theme}`, viewport);
+        expect(errors).toEqual([]);
+      });
+    }
+  }
+}
+
+test("contacts: kind chips and search filter; re-tag posts the same PATCH", async ({ page }) => {
+  await openScreen(page, CONTACTS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const rows = page.locator(".vui-table tbody tr");
+  await expect(rows).toHaveCount(5);
+  await page.getByRole("button", { name: /Suppliers/ }).click();
+  await expect(rows).toHaveCount(2);
+  await page.getByRole("searchbox").fill("eureka");
+  await expect(rows).toHaveCount(1);
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/email\/contacts\/[^/]+\/ec-3$/.test(new URL(r.url()).pathname));
+  await rows.first().getByLabel("Kind for Eureka Mills").selectOption("client");
+  expect((await patched).postDataJSON()).toEqual({ kind: "client" });
+});
+
+test("follow-ups: Done posts status done", async ({ page }) => {
+  await openScreen(page, FOLLOWUPS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await expect(page.getByText("3d waiting")).toBeVisible();
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/email\/followups\/[^/]+\/fu-1$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Done" }).first().click();
+  expect((await patched).postDataJSON()).toEqual({ status: "done" });
+});

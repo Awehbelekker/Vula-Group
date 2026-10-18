@@ -2,29 +2,22 @@
  * VulaFollowups.jsx — emails awaiting a reply. Vula flags inbound questions/requests/
  * scheduling and nudges on WhatsApp daily until they're handled.
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { daysWaiting, useFollowups } from "./followups/useFollowups";
+import FollowupsV2 from "./followups/FollowupsV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const REASON = { schedule: { label: "📅 Schedule", color: "var(--info)" }, request: { label: "✋ Request", color: "var(--warn)" }, question: { label: "❓ Question", color: "#6B5B95" } };
 
-export default function VulaFollowups({ tenantId }) {
-  const [rows, setRows] = useState([]);
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    const r = await fetch(`${VULA_API}/v1/email/followups/${tenantId}?status=open`);
-    const d = await r.json();
-    setRows(d.followups || []);
-  }, [tenantId]);
-  useEffect(() => { load(); }, [load]);
+/** v2: the redesigned screen (same hook, so the same data and actions). */
+export default function VulaFollowups({ tenantId, v2 = false }) {
+  if (v2) return <FollowupsV2 tenantId={tenantId} />;
+  return <FollowupsV1 tenantId={tenantId} />;
+}
 
-  const setStatus = async (id, status) => {
-    await fetch(`${VULA_API}/v1/email/followups/${tenantId}/${id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
-    });
-    load();
-  };
-  const days = (t) => t ? Math.floor((Date.now() - new Date(t)) / 86400000) : 0;
+// data + actions in followups/useFollowups.js (shared with followups/FollowupsV2.jsx)
+function FollowupsV1({ tenantId }) {
+  const { rows, setStatus } = useFollowups(tenantId);
+  const days = daysWaiting;
 
   return (
     <div style={{ maxWidth: 920, margin: "0 auto", padding: 24 }}>

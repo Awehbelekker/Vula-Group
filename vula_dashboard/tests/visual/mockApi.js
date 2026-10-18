@@ -24,7 +24,7 @@ const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="16
 const json = (body, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 /** [method | "*", RegExp on pathname, (match, url, request) => body | {__raw}] — first hit wins. */
-function routes(role) {
+function routes(role, modules = []) {
   const T = "([^/]+)";
   const C = `^/v1/commerce/${T}`;
   const A = `${C}/admin`;
@@ -34,7 +34,7 @@ function routes(role) {
     r("GET", `^/v1/tenants/?`, () => F.tenantsList),
     r("GET", `^/v1/tenants/registry`, () => F.registry),
     r("GET", `^/v1/tenants/${T}/home`, () => F.homeLayout),
-    r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? F.tenant : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
+    r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? (modules.length ? { ...F.tenant, modules: [...F.tenant.modules, ...modules] } : F.tenant) : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
     r("GET", `^/v1/team/${T}/me`, () => F.teamMeFor(role)),
     // a sales rep's own screens (VulaRepHome / VulaRepToday) — nothing due, nothing booked
     r("GET", `${A}/reminders`, () => ({ reminders: [] })),
@@ -129,6 +129,8 @@ function routes(role) {
     r("GET", `^/v1/whatsapp/connect/status/${T}`, () => F.whatsappStatus),
     r("GET", `^/v1/clickup/status/${T}`, () => F.notConnected),
     r("GET", `^/v1/microsoft/status/${T}`, () => F.notConnected),
+    r("GET", `^/v1/email/contacts/${T}`, () => ({ contacts: F.emailContacts })),
+    r("GET", `^/v1/email/followups/${T}`, () => ({ followups: F.emailFollowups })),
     r("GET", `^/v1/email/status/${T}`, (m) => ({ tenant_id: m[1], accounts: [] })),
 
     // ── Master ──
@@ -141,8 +143,10 @@ function routes(role) {
 
 const seenUnmatched = new Set();
 
-export async function installMockApi(page, { role = "owner" } = {}) {
-  const table = routes(role);
+export async function installMockApi(page, { role = "owner", modules = [] } = {}) {
+  // modules: extra tenant modules for one test (e.g. "followups"), so the shared fixture — and the
+  // flag-off baseline screenshots — stay as they are
+  const table = routes(role, modules);
   const debug = process.env.MOCK_DEBUG === "1";
 
   // Offline: anything that isn't the dev server or the fake hosts is aborted (fonts, map tiles…).

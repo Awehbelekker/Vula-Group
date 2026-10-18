@@ -294,8 +294,8 @@ function PeopleSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingN
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'customers' && <VulaCustomers tenantId={tenantId} v2={v2} />}
-      {active === 'contacts' && <VulaContacts tenantId={tenantId} />}
-      {active === 'followups' && <VulaFollowups tenantId={tenantId} />}
+      {active === 'contacts' && <VulaContacts tenantId={tenantId} v2={v2} />}
+      {active === 'followups' && <VulaFollowups tenantId={tenantId} v2={v2} />}
     </div>
   )
 }

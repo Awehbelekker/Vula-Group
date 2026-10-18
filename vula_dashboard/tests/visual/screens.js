@@ -48,7 +48,7 @@ export async function openScreen(page, screen, { viewport, theme }) {
   await page.setViewportSize(viewport);
   await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
   await page.clock.setFixedTime(new Date(NOW_ISO));     // Date.now()/new Date() frozen; timers still run
-  await installMockApi(page, { role: screen.role });
+  await installMockApi(page, { role: screen.role, modules: screen.modules });
   await seedSession(page, { role: screen.role, theme });
 
   await page.goto("/");
