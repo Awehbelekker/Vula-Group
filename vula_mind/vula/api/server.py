@@ -100,6 +100,7 @@ from vula.api.microsoft import router as microsoft_router
 from vula.api.dynamics365 import router as dynamics365_router
 from vula.api.email_connect import router as email_connect_router
 from vula.api.commerce import router as commerce_router
+from vula.api.command_centre import router as command_centre_router
 from vula.api.bookings import router as bookings_router
 from vula.api.subscriptions import router as subscriptions_router
 from vula.api.recurring_bills import router as recurring_bills_router
@@ -1898,6 +1899,7 @@ app.include_router(manufacturing_router, prefix="/v1/commerce")   # /{tenant}/ad
 app.include_router(woo_webhook_router, prefix="/v1/woocommerce")   # WooCommerce's calls — HMAC-verified
 from vula.api.business_profile import router as business_profile_router  # noqa: E402
 app.include_router(business_profile_router, prefix="/v1/commerce")
+app.include_router(command_centre_router, prefix="/v1/commerce")  # /{tenant}/admin/activity|home|today — tenant-guarded
 app.include_router(bookings_router, prefix="/v1/bookings")
 app.include_router(subscriptions_router, prefix="/v1/subscriptions")
 app.include_router(recurring_bills_router, prefix="/v1/recurring-bills")

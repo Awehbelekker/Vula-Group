@@ -7687,11 +7687,15 @@ async def admin_list_conversations(tenant_id: str, limit: int = Query(50, ge=1, 
 
 
 @router.get("/{tenant_id}/admin/conversations/{session_id}/messages")
-async def admin_get_thread(tenant_id: str, session_id: str):
+async def admin_get_thread(tenant_id: str, session_id: str, request: Request):
     """Return the full thread for one conversation (header + all messages)."""
     thread = await service.get_conversation_thread(tenant_id, session_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    # Reading a customer's conversation is recorded in the merchant audit trail (POPIA,
+    # 2026-10-17) — once per person per conversation per 30 min; the Inbox re-reads every 8s.
+    from vula.api.command_centre import audit_conversation_view
+    await audit_conversation_view(tenant_id, session_id, request.headers.get("authorization", ""))
     return thread
 
 

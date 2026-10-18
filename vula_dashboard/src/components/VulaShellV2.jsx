@@ -12,7 +12,7 @@
  * "Powered by Vula" appears once: the sidebar foot, or the More sheet on a phone.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
+import { CalendarCheck, Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
   FilePlus2, Wallet, ScanLine, UserPlus, Megaphone } from "lucide-react";
 import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
 import { iconFor, houseGroups, flattenNav, ADD_ACTIONS } from "../navConfig";
@@ -199,6 +199,8 @@ export default function VulaShellV2({
         <FloatingToolbar items={[
           { id: "search", label: "Search", Icon: Search, onClick: () => setPalette(true) },
           ...(addActions.length ? [{ id: "add", label: "Add", Icon: Plus, onClick: () => setAdd(true), primary: true }] : []),
+          ...(pages.some((p) => p.id === "today") ? [{ id: "today", label: "Today", Icon: CalendarCheck,
+            onClick: () => select("today"), current: activeId === "today" }] : []),
           ...(inboxItem ? [{ id: "inbox", label: "Inbox", Icon: Inbox, onClick: () => select("inbox"),
             count: Number(String(inboxCount || "").replace("+", "")) || 0, current: activeId === "inbox" }] : []),
           { id: "more", label: "More", Icon: Menu, onClick: () => setMore(true) },

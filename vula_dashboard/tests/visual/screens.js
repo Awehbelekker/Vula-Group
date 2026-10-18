@@ -12,7 +12,8 @@ export const THEMES = ["light", "dark"];
 // nav = sidebar item label (.vshell-it), tab = SectionTabs sub-tab label (role="tab").
 // ready = text that proves the seeded data rendered (not a login / blank / "Loading…").
 export const SCREENS = [
-  { name: "home", role: "owner", nav: null, ready: "Getting you live" },
+  // the redesign's Home (UX redesign Phase E) replaces the go-live checklist page
+  { name: "home", role: "owner", nav: null, ready: process.env.UI_V2 === "1" ? "Won in" : "Getting you live" },
   { name: "inbox", role: "owner", nav: "Inbox", ready: "Waiting on you" },
   { name: "customers", role: "owner", nav: "People", tab: "Customers", ready: "Thandi Mokoena" },
   { name: "orders", role: "owner", nav: "Sell", tab: "Orders", ready: "HV-1052" },

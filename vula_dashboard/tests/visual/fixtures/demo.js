@@ -384,3 +384,62 @@ export const manifest = {
   name: TENANT_NAME, short_name: "Harbour & Vine", start_url: "/", display: "standalone",
   background_color: "#FFFFFF", theme_color: "#2C5545", icons: [{ src: `${API}/v1/commerce/${TENANT_ID}/app-icon/192.png`, sizes: "192x192", type: "image/png" }],
 };
+
+// ── Command centre (vula_mind/vula/api/command_centre.py — UX redesign Phase E) ──────────────
+// Role filtering is the server's job: owner gets front + back; the counter staff login (no
+// Money) gets front only; a sales rep's Today is their own reminder.
+const ccAt = (mins) => new Date(new Date(NOW_ISO).getTime() - mins * 60000).toISOString();
+const lnk = (section, tab) => (tab ? { section, tab } : { section });
+export const homeFor = (role) => ({
+  front: {
+    open_orders: { value: 4, link: lnk("sell", "orders") },
+    won_month: { cents: 31840000, count: 214, target_cents: null, link: lnk("sell", "orders") },
+    chats_waiting: { value: 3, link: lnk("inbox"), hot: [
+      { contact_id: "+27820000110", since: ccAt(120) }, { contact_id: "+27820000103", since: ccAt(49) }, { contact_id: "+27820000109", since: ccAt(18) }] },
+    first_reply: { seconds: 94, link: lnk("inbox") },
+    new_contacts: { value: 12, link: lnk("people", "customers") },
+  },
+  back: role === "owner" ? {
+    money_in: { cents: 18245000, link: lnk("money", "bank") },
+    money_out: { cents: 9612000, link: lnk("money", "bank") },
+    invoices_overdue: { value: 2, cents: 386400, link: lnk("money", "invoices") },
+    bills_due: { value: 3, cents: 1254000, link: lnk("money", "budget") },
+    documents_to_review: { value: 2, link: lnk("operate", "documents") },
+    bank_unmatched: { value: 7, link: lnk("money", "bank") },
+    stock_alerts: { value: 2, link: lnk("sell", "stock") },
+  } : null,
+  month_days_left: 14, as_of: NOW_ISO,
+});
+export const todayFor = (role) => ({
+  date: "2026-10-17",
+  items: role === "rep"
+    ? [{ id: "follow_up:r1", kind: "follow_up", label: "Follow-up due", contact_id: "+27820000105", at: ccAt(-90), link: lnk("my-work", "rep-reminders") }]
+    : [
+      { id: "chat:e1", kind: "chat", label: "A customer is waiting for a person", contact_id: "+27820000110", at: ccAt(120), link: lnk("inbox") },
+      { id: "chat:e2", kind: "chat", label: "A customer is waiting for a person", contact_id: "+27820000103", at: ccAt(49), link: lnk("inbox") },
+      { id: "follow_up:r2", kind: "follow_up", label: "Follow-up overdue", contact_id: "+27820000104", at: ccAt(1500), link: lnk("people", "followups") },
+      { id: "booking:b1", kind: "booking", label: "Booking · Platter tasting", contact_id: "+27820000106", at: ccAt(-150), link: lnk("sell", "bookings") },
+      ...(role === "owner" ? [
+        { id: "quote:q1", kind: "quote", label: "Quote QUO-2026-0031 drafted by Vula — approve", amount_cents: 250000, at: ccAt(300), link: lnk("money", "invoices") },
+        { id: "document:d1", kind: "document", label: "Check Atlantic-Dairy-invoice-BILL-0031.pdf", at: ccAt(400), link: lnk("operate", "documents") },
+      ] : []),
+    ],
+});
+const item = (src, ref, side, type, actor, label, mins, extra = {}) =>
+  ({ id: `${src}:${ref}`, source: src, ref, side, type, actor, label, at: ccAt(mins), ...extra });
+export const activityFor = (role) => {
+  const all = [
+    item("vula", "1", "back", "vula_action", "vula", "Vula recorded a payment", 3, { tool: "record_payment", link: lnk("assistant-hub", "agentlog") }),
+    item("escalation", "e3", "front", "escalation", "vula", "A customer is waiting for a person", 18, { contact_id: "+27820000109", link: lnk("inbox") }),
+    item("chat", "s1", "front", "chat", "vula", "Chat with Fatima Adams", 17, { detail: "Vula answered", contact_id: "+27820000101", link: lnk("inbox") }),
+    item("order", "o1", "front", "order", "customer", "Order HV-1052", 25, { detail: "paid", amount_cents: 48700, link: lnk("sell", "orders") }),
+    item("invoice", "i1", "back", "invoice", "team", "Invoice INV-2026-0121", 40, { detail: "sent", amount_cents: 1250000, link: lnk("money", "invoices") }),
+    item("document", "d1", "back", "document", "vula", "Filed Atlantic-Dairy-invoice-BILL-0031.pdf", 52, { detail: "invoice · needs review · 62% sure", link: lnk("operate", "documents") }),
+    item("chat", "s2", "front", "chat", "team", "Chat with Pieter van der Berg", 64, { detail: "Taken over by your team", link: lnk("inbox") }),
+    item("expense", "x1", "back", "expense", "vula", "Expense · Atlantic Dairy", 90, { detail: "pending", amount_cents: 330000, link: lnk("money", "expenses") }),
+    item("booking", "b1", "front", "booking", "customer", "Booking · Platter tasting", 130, { detail: "17 Oct 12:30", link: lnk("sell", "bookings") }),
+    item("consent", "c1", "front", "consent", "customer", "Opted out of messages", 200, { detail: "stop_keyword", link: lnk("people", "customers") }),
+  ];
+  const items = role === "owner" ? all : role === "rep" ? [] : all.filter((i) => i.side === "front");
+  return { items, next_cursor: null };
+};

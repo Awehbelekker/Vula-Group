@@ -21,6 +21,9 @@ import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
 import VulaStock from './VulaStock'
+import VulaHomeV2 from './VulaHomeV2'
+import VulaToday from './VulaToday'
+import VulaActivity from './VulaActivity'
 import VulaCosting from './VulaCosting'
 import VulaInvoices from './VulaInvoices'
 import VulaBookings from './VulaBookings'
@@ -123,7 +126,7 @@ function subtabsFor(navGroups, sectionId) {
 // confirmed the only two real callers, both always pass these. (The old uncontrolled/modal mode,
 // with its own hand-rolled tab strip and gating, was dead code superseded by that shell takeover
 // — deleted 2026-07-21 rather than kept as an unused second nav path to drift out of sync again.)
-export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange, navRequest }) {
+export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange, navRequest, v2 = false }) {
   // Who is connecting WhatsApp/Yoco/email — recorded as connected_by (was always blank).
   const adminEmail = useAuthStore(st => st.user?.email) || ""
   const tab = activeTab
@@ -132,7 +135,8 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
   // managers (full) see everything including Team/Settings. Module-level (business-type) gating
   // now lives once, in navConfig.jsx, driving the sidebar itself — this is just the access-list
   // safety net for a tab a signed-in staff member shouldn't be on.
-  const canSee = (id) => full || id === 'overview' || (access || []).includes(id)
+  // today / activity (the redesign's own pages) are filtered on the server, like overview
+  const canSee = (id) => full || id === 'overview' || (v2 && (id === 'today' || id === 'activity')) || (access || []).includes(id)
   // If the current tab isn't visible to this member, fall back to a safe default.
   useEffect(() => { if (!canSee(tab)) setTab('overview') }, [access, full])  // eslint-disable-line
   const [products, setProducts] = useState([])
@@ -172,7 +176,10 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
               rule), only WHAT renders on it differs for this one role. */}
           {tab === 'overview'  && (teamRole === 'sales_rep' && !full
             ? <VulaRepHome tenantId={tenantId} repPhone={teamPhone} onNavigate={navigateTo} />
+            : v2 ? <VulaHomeV2 tenantId={tenantId} onNavigate={navigateTo} />
             : <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />)}
+          {v2 && tab === 'today' && <VulaToday tenantId={tenantId} onNavigate={navigateTo} />}
+          {v2 && tab === 'activity' && <VulaActivity tenantId={tenantId} onNavigate={navigateTo} />}
           {tab === 'my-work' && <MyWorkSection tenantId={tenantId} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}

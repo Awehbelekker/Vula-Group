@@ -15,9 +15,9 @@ const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
 
 const ROLES = {
-  owner: { ready: "Getting you live", sees: ["Home", "Inbox", "Money", "Team", "Settings"], hidden: [] },
-  staff: { ready: "Getting you live", sees: ["Home", "Inbox", "People", "Sell"], hidden: ["Money", "Team", "Settings", "Marketing"] },
-  rep: { ready: "Reminders", sees: ["Home", "My Work"], hidden: ["Money", "Team", "Settings", "Inbox"] },
+  owner: { ready: "Won in", sees: ["Home", "Today", "Inbox", "All activity", "Money", "Team", "Settings"], hidden: [] },
+  staff: { ready: "Chats waiting on you", sees: ["Home", "Today", "Inbox", "All activity", "People", "Sell"], hidden: ["Money", "Team", "Settings", "Marketing"] },
+  rep: { ready: "Reminders", sees: ["Home", "Today", "My Work"], hidden: ["Money", "Team", "Settings", "Inbox", "All activity"] },
 };
 
 for (const [role, R] of Object.entries(ROLES)) {
@@ -66,7 +66,7 @@ for (const [role, R] of Object.entries(ROLES)) {
 }
 
 test("Add offers only what the role may use; a sub-tab opens straight from search", async ({ page }) => {
-  await openScreen(page, { name: "home", role: "owner", nav: null, ready: "Getting you live" }, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await openScreen(page, { name: "home", role: "owner", nav: null, ready: "Won in" }, { viewport: VIEWPORTS.mobile, theme: "light" });
   await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "Add" }).click();
   const add = page.getByRole("dialog", { name: "Add" });
   await expect(add.locator(".vui-row-title")).toContainText(["New quote or invoice", "Add an expense"]);
