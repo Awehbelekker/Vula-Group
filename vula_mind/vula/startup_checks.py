@@ -136,6 +136,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("213", "vula_website_leads", None),
     ("214", "vula_business_profile", "public_keys"),
     ("215", "vula_tenant_config", "ui_v2"),
+    # 216 only widens the commerce_expenses status CHECK — nothing a select can probe.
 ]
 
 
