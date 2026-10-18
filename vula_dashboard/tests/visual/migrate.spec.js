@@ -131,3 +131,18 @@ test("invoices: direction and type switch the list; quotes get the bulk delete",
   await pick.check();
   await expect(page.getByRole("region", { name: "Selected quotes" })).toContainText("1 selected");
 });
+
+test("Stock and Suppliers live under Operate; a link to the old place still opens Stock", async ({ page }) => {
+  await openScreen(page, { name: "home", role: "owner", nav: "Sell", ready: "Paid, packed and sent" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.locator('[role=tab][data-tab="stock"]')).toHaveCount(0);
+  await expect(page.locator('[role=tab][data-tab="suppliers"]')).toHaveCount(0);
+  await page.locator(".v2-nav-item", { has: page.locator(".v2-nav-lb", { hasText: /^Operate$/ }) }).click();
+  await expect(page.locator('[role=tab][data-tab="stock"]')).toBeVisible();
+  await expect(page.locator('[role=tab][data-tab="suppliers"]')).toBeVisible();
+  // Home's Low stock tile links { section: "sell", tab: "stock" }
+  await page.locator(".v2-nav-item", { has: page.locator(".v2-nav-lb", { hasText: /^Home$/ }) }).click();
+  await page.getByRole("tab", { name: "Back house" }).click();
+  await page.getByRole("button", { name: /Low stock/ }).click();
+  await expect(page.locator('[role=tab][data-tab="stock"][aria-selected="true"]')).toBeVisible();
+  await expect(page.locator(".v2-title")).toHaveText("Operate");
+});

@@ -36,7 +36,7 @@ import VulaBudget from "./components/VulaBudget";
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 import VulaSmartScanner from "./components/VulaSmartScanner";
 import VulaShell from "./components/VulaShell";
-import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible, applyLabels, flattenNav, withV2Pages } from "./navConfig";
+import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible, applyLabels, flattenNav, withV2Pages, withV2Moves } from "./navConfig";
 import { applyBrand, applyThemeMode } from "./theme/tokens";
 import { applyUiMode, uiV2For, rememberedTenantUi, rememberTenantUi } from "./lib/flags";
 
@@ -307,7 +307,7 @@ export default function App() {
     const visibleGroups = applyLabels(filterGroups(MERCHANT_GROUPS,
       merchantVisible({ full, access, modules: tenantModules, profile: tenantProfile })), tenantLabels);
     const isRep = teamRole === "sales_rep" && !full;
-    const groups = withInboxBadge(v2 ? withV2Pages(visibleGroups, { activity: !isRep }) : visibleGroups, openEscalations);
+    const groups = withInboxBadge(v2 ? withV2Pages(withV2Moves(visibleGroups), { activity: !isRep }) : visibleGroups, openEscalations);
     return (
       <div>
         <VulaShell
@@ -336,7 +336,7 @@ export default function App() {
   if (activeTab === "merchant") {
     const mName = brand?.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
     const mAll = filterGroups(MERCHANT_GROUPS, () => true);
-    const mGroups = withInboxBadge(v2 ? withV2Pages(mAll) : mAll, openEscalations); // master sees every module
+    const mGroups = withInboxBadge(v2 ? withV2Pages(withV2Moves(mAll)) : mAll, openEscalations); // master sees every module
     return (
       <div>
         {/* Prominent, impossible-to-miss impersonation banner — the small brand "sub" label
