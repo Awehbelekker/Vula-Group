@@ -14,6 +14,7 @@ import { toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
 import { FONT_PAIRINGS } from '../theme/tokens'
 import { VULA_API } from '../lib/authFetch'
+import InvoiceListV2 from './invoices/InvoiceListV2'
 
 
 const STATUS = {
@@ -29,7 +30,7 @@ const STATUS = {
 }
 const SENT_CHANNEL_LABEL = { email: 'via Email', whatsapp: 'via WhatsApp', manual: 'manually' }
 
-export default function VulaInvoices({ tenantId, products = [], initialSupplierId = null, onClearSupplierFilter }) {
+export default function VulaInvoices({ tenantId, products = [], initialSupplierId = null, onClearSupplierFilter, v2 = false }) {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(null) // null | 'invoice' | 'quote'
@@ -432,6 +433,20 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       onDone={() => { setCreditingInvoice(null); load() }}
       onCancel={() => setCreditingInvoice(null)}
     />
+  }
+
+  // v2: the redesigned list (invoices/InvoiceListV2.jsx) — same state, same actions, same
+  // sub-screens above; only the list is drawn differently.
+  if (v2) {
+    return <InvoiceListV2 api={{
+      invoices, loading, docType, setDocType, direction, setDirection, supplierFilter, clearSupplierFilter,
+      setShowCreate, setShowSettings, setShowRecurring, setCreditingInvoice,
+      edit: (inv) => { setEditingInvoice(inv); setShowCreate(inv.doc_type) },
+      selectedQuotes, setSelectedQuotes, toggleQuoteSelect, deleteSelectedQuotes, bulkDeleting,
+      emailConfigured, matchingId, matchResults, quoteInvoicedCents,
+      convertToInvoice, setStatus, markPaid, del, recordPayment, cancelInvoice, sendWhatsApp, matchSupplier,
+      requestSupplierApproval, downloadPdf, openFiledDocument, creditNote, payLink, emailInvoice,
+    }} />
   }
 
   return (

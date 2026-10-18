@@ -102,3 +102,32 @@ test("orders: status chips filter on the server; phone cards keep the next-statu
   await page.getByRole("button", { name: "Paid", exact: true }).click();
   await expect(cards.first().getByRole("button", { name: "Confirmed" })).toBeVisible();
 });
+
+const INVOICES = { name: "invoices", role: "owner", nav: "Money", tab: "Invoices", ready: "Invoices, quotes and credit notes you send." };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`invoices ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, INVOICES, { viewport, theme });
+      await expect(page.getByText("INV-2026-0118", { exact: true }).locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "invoices", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "More for INV-2026-0118" }).locator("visible=true").first().click();
+      await expect(page.getByRole("dialog", { name: "More for INV-2026-0118" })).toBeVisible();
+      expect(bad(await new AxeBuilder({ page }).include(".vui-sheet").analyze())).toEqual([]);
+      await page.screenshot({ path: out(ti, `invoices-more-${vp}-${theme}.png`), animations: "disabled" });
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("invoices: direction and type switch the list; quotes get the bulk delete", async ({ page }) => {
+  await openScreen(page, INVOICES, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("tab", { name: "From suppliers" }).click();
+  await expect(page.getByText("Bills your suppliers sent you")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Credit notes" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Sent to clients" }).click();
+  await page.getByRole("tab", { name: "Quotes" }).click();
+  const pick = page.getByRole("checkbox").locator("visible=true").first();
+  await pick.check();
+  await expect(page.getByRole("region", { name: "Selected quotes" })).toContainText("1 selected");
+});
