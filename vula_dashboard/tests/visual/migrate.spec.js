@@ -49,3 +49,29 @@ test("inbox: search and chips filter the list; back returns to it on a phone", a
   await page.getByRole("button", { name: "Back to chats" }).click();
   await expect(page.locator(".vin-list")).toBeVisible();
 });
+
+const CUSTOMERS = { name: "customers", role: "owner", nav: "People", tab: "Customers", ready: "customers in this segment" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`customers ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, CUSTOMERS, { viewport, theme });
+      await check(page, ti, "customers", `${vp}-${theme}`, viewport);
+      await page.getByRole(vp === "mobile" ? "button" : "row", { name: /Thandi Mokoena/ }).first().click();
+      const sheet = page.getByRole("dialog", { name: "Thandi Mokoena" });
+      await expect(sheet.getByText("Prefers delivery before 10am. Wholesale account.")).toBeVisible();
+      await page.screenshot({ path: out(ti, `customers-open-${vp}-${theme}.png`), animations: "disabled" });
+      expect(bad(await new AxeBuilder({ page }).include(".vui-sheet").analyze())).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("customers: segments narrow the list; money in rand from cents", async ({ page }) => {
+  await openScreen(page, CUSTOMERS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.locator(".vui-table tbody tr")).toHaveCount(10);
+  await page.getByRole("button", { name: /High value/ }).click();
+  await expect(page.locator(".vui-table tbody tr")).toHaveCount(6);
+  await expect(page.getByText(/6 customers in this segment/)).toBeVisible();
+  await expect(page.locator(".vui-table tbody tr").first()).toContainText("R 4 128.50");
+});

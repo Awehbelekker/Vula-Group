@@ -185,13 +185,13 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} v2={v2} />}
           {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'sell' && <SellSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'sell')}
+          {tab === 'sell' && <SellSection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'sell')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
-          {tab === 'money' && <MoneySection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'money')}
+          {tab === 'money' && <MoneySection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'money')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             invoiceSupplierFilter={invoiceSupplierFilter} onClearSupplierFilter={() => setInvoiceSupplierFilter(null)} />}
-          {tab === 'people' && <PeopleSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'people')}
+          {tab === 'people' && <PeopleSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'people')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'marketing-hub' && <MarketingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'marketing-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
@@ -233,7 +233,7 @@ function AssistantSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
   )
 }
 
-function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
+function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'orders' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
@@ -253,7 +253,7 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
   )
 }
 
-function MoneySection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, invoiceSupplierFilter, onClearSupplierFilter }) {
+function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsumePendingNav, invoiceSupplierFilter, onClearSupplierFilter }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'invoices' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
@@ -288,13 +288,13 @@ function FinancesSubsection({ tenantId }) {
   )
 }
 
-function PeopleSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+function PeopleSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'customers' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'customers' && <VulaCustomers tenantId={tenantId} />}
+      {active === 'customers' && <VulaCustomers tenantId={tenantId} v2={v2} />}
       {active === 'contacts' && <VulaContacts tenantId={tenantId} />}
       {active === 'followups' && <VulaFollowups tenantId={tenantId} />}
     </div>

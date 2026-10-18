@@ -79,6 +79,7 @@ function routes(role) {
       rows = [...rows].sort((a, b) => b.total_spent_cents - a.total_spent_cents);
       return { customers: rows, count: rows.length, total_all: F.customers.length, audience: aud };
     }),
+    r("GET", `${A}/customers/${T}/detail`, (m) => F.customerDetail(decodeURIComponent(m[2]))),
     r("GET", `${A}/orders`, (m, url) => {
       const st = url.searchParams.get("status");
       const rows = st ? F.orders.filter((o) => o.status === st) : F.orders;
