@@ -170,7 +170,7 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
         <LearnedSummary tenantId={tenantId} />
       </section>
 
-      <p style={s.footer}>Powered by Vula</p>
+      <p className="vula-powered" style={s.footer}>Powered by Vula</p>
     </div>
   )
 }

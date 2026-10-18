@@ -58,7 +58,7 @@ export default function VulaFollowups({ tenantId }) {
           );
         })}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 20 }}>Powered by Vula · checked every sync</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 20 }}><span className="vula-powered">Powered by Vula · </span>checked every sync</p>
     </div>
   );
 }

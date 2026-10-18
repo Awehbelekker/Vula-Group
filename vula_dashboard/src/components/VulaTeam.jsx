@@ -263,7 +263,7 @@ export default function VulaTeam({ tenantId }) {
         )}
       </div>
 
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 12 }}>Powered by Vula · each member gets only what you select</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 12 }}><span className="vula-powered">Powered by Vula · </span>each member gets only what you select</p>
     </div>
   );
 }

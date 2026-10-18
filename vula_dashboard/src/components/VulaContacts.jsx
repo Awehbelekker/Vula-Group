@@ -124,7 +124,7 @@ export default function VulaContacts({ tenantId }) {
           </div>
         ))}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}>Powered by Vula · auto-synced every 15 min</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}><span className="vula-powered">Powered by Vula · </span>auto-synced every 15 min</p>
     </div>
   );
 }

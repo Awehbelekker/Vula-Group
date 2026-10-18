@@ -102,7 +102,7 @@ export default function VulaPayments({ tenantId }) {
           );
         })}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}>Powered by Vula · pay-links use your default gateway</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}><span className="vula-powered">Powered by Vula · </span>pay-links use your default gateway</p>
     </div>
   );
 }

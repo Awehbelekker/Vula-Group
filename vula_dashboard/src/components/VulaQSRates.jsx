@@ -146,7 +146,7 @@ export default function VulaQSRates({ tenantId }) {
           <button style={{ ...link, color: C.green, padding: 14 }} onClick={() => setShowAll(true)}>Show all {learned.length}</button>
         )}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}>Powered by Vula</p>
+      <p className="vula-powered" style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}>Powered by Vula</p>
     </div>
   );
 }
