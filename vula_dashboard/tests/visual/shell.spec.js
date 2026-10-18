@@ -74,6 +74,6 @@ test("Add offers only what the role may use; a sub-tab opens straight from searc
   await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "Search" }).click();
   await page.getByRole("combobox").fill("invoices");
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("tab", { name: /Invoices$/, selected: true })).toBeVisible();
+  await expect(page.locator('[role=tab][data-tab="invoices"][aria-selected="true"]')).toBeVisible();   // the Money section tab (the list has its own "Invoices" type tab)
   await expect(page.locator(".v2-title")).toHaveText("Money");
 });

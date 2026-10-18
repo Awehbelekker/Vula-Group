@@ -65,6 +65,7 @@ function routes(role) {
       return { escalations: rows, open_count: st === "open" ? rows.length : null };
     }),
     r("GET", `${A}/conversations`, (m) => ({ tenant_id: m[1], conversations: F.conversations })),
+    r("GET", `${A}/conversations/${T}/messages`, () => F.thread),
     r("GET", `${A}/canned-replies`, (m) => ({ tenant_id: m[1], canned_replies: [] })),
 
     // ── People / Sell ──
@@ -78,6 +79,7 @@ function routes(role) {
       rows = [...rows].sort((a, b) => b.total_spent_cents - a.total_spent_cents);
       return { customers: rows, count: rows.length, total_all: F.customers.length, audience: aud };
     }),
+    r("GET", `${A}/customers/${T}/detail`, (m) => F.customerDetail(decodeURIComponent(m[2]))),
     r("GET", `${A}/orders`, (m, url) => {
       const st = url.searchParams.get("status");
       const rows = st ? F.orders.filter((o) => o.status === st) : F.orders;

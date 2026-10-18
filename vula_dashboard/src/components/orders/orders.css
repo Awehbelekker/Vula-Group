@@ -1,0 +1,32 @@
+/* orders.css — the redesigned Orders list (orders/OrdersV2.jsx). Tokens only. A table from
+   1200px (where its action column fits without scrolling out of view); below that one card per
+   order, two across on a tablet, so the next-status buttons are always on screen. */
+
+.vor-cards { display: none; }
+@media (max-width: 1199px) {
+  .vor-table { display: none; }
+  .vor-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: var(--space-2); align-items: start; }
+}
+.vor-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vor-id { font: 600 var(--fs-body)/1.3 var(--font-mono); color: var(--ink); white-space: nowrap; }
+.vor-who { display: flex; flex-direction: column; min-width: 0; }
+.vor-sub { font-size: var(--fs-caption); color: var(--muted); }
+.vor-check { width: 20px; height: 20px; accent-color: var(--brand); cursor: pointer; margin: 0; }
+.vor-actions { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); justify-content: flex-end; }
+.vor-table .vui-table td { vertical-align: middle; }
+.vor-table .vor-actions { flex-wrap: nowrap; }
+.vor-table .vui-btn { white-space: nowrap; }
+
+.vor-bulk { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); background: var(--danger-soft);
+  color: var(--danger-text); font-size: var(--fs-body); }
+
+.vor-card { overflow: hidden; }
+.vor-card-main { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 4px;
+  width: 100%; padding: var(--space-3) var(--space-4); }
+.vor-card-main:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.vor-card-top { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.vor-total { margin-left: auto; font-weight: 600; color: var(--ink); }
+.vor-card-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) var(--space-3); border-top: 1px solid var(--line); }
+.vor-card-foot .vor-actions { margin-left: auto; }

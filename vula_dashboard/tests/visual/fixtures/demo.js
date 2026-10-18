@@ -37,6 +37,28 @@ export const customers = [
 ];
 const cust = Object.fromEntries(customers.map((c) => [c.phone, c]));
 
+// one customer's 360 (commerce.py::admin_customer_detail)
+export const customerDetail = (phone) => {
+  const c = cust[phone] || customers[0];
+  return {
+    profile: { name: c.name, phone: c.phone, email: `${c.name.split(" ")[0].toLowerCase()}@example.test`, preferred_language: "en",
+      first_order_at: "2026-03-14T10:00:00+02:00", last_order_at: c.last_order_at },
+    stats: { lifetime_value_cents: c.total_spent_cents, order_count: c.orders, paid_order_count: c.orders,
+      avg_order_cents: c.orders ? Math.round(c.total_spent_cents / c.orders) : 0, invoice_outstanding_cents: c.orders > 5 ? 145_000 : 0 },
+    payment_behavior: null, note: c.orders > 5 ? "Prefers delivery before 10am. Wholesale account." : "",
+    events: c.orders ? [
+      { type: "order", at: c.last_order_at, title: "Order HV-1052", detail: "paid", amount_cents: 48_500 },
+      { type: "invoice", at: at(5, "09:00"), title: "INV-2026-0118", detail: "sent", amount_cents: 145_000 },
+      { type: "order", at: at(9, "11:20"), title: "Order HV-1031", detail: "delivered", amount_cents: 36_900 },
+    ] : [],
+    conversation: [
+      { role: "user", text: "Morning! Is the sourdough in yet?", at: at(1, "07:40") },
+      { role: "assistant", text: "Morning! Yes — fresh out at 7. Shall I put one aside?", at: at(1, "07:41") },
+    ],
+    engagement: [{ campaign: "Spring platters", status: "clicked", at: at(6, "12:00") }],
+  };
+};
+
 // ── Products (commerce.py::admin_list_products) ──────────────────────────────────────────────
 export const products = [
   ["p-01", "Smoked snoek pâté (200g)", "extras", 8_900, 24],
@@ -184,6 +206,18 @@ export const conversations = [
   conv(7, "+27820000106", "Collected, thank you — the board was a hit.", "user", 3, "10:02"),
   conv(8, "+27820000105", "Your order HV-1047 has been delivered. Enjoy!", "assistant", 4, "15:40"),
 ];
+
+// one open thread (commerce.py::admin_get_thread) — the chat behind escalation esc-03
+export const thread = {
+  session_id: "sess-001", customer: cust["+27820000109"]?.name || null, phone: "+27820000109", paused: false,
+  assigned_to: null, tags: ["catering"], agent_note: null,
+  messages: [
+    { id: "m1", role: "user", content: "Hi! Can you do a platter for 20 people next Friday?", created_at: at(0, "10:10") },
+    { id: "m2", role: "assistant", content: "We'd love to. Our grazing platters start at R95 a person. What budget did you have in mind?", created_at: at(0, "10:11") },
+    { id: "m3", role: "user", content: "Budget about R2,500.", created_at: at(0, "10:12") },
+    { id: "m4", role: "assistant", content: "Let me check with the team and come back to you shortly.", created_at: at(0, "10:13") },
+  ],
+};
 
 // ── Invoices (commerce.py::admin_list_invoices) ──────────────────────────────────────────────
 const inv = (n, doc_type, status, phone, total_cents, issue, due, extra = {}) => ({

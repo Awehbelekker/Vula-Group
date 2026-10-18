@@ -1,0 +1,30 @@
+/* customers.css — the redesigned Customers (customers/CustomersV2.jsx). Tokens only. */
+
+.vcu-reach { margin: var(--space-2) 0 var(--space-3); font-size: var(--fs-caption); color: var(--muted); }
+.vcu-who { display: inline-flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.vcu-who-text { display: flex; flex-direction: column; min-width: 0; }
+.vcu-name { font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vcu-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0; }
+.vcu-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vcu-wa { width: 36px; height: 36px; color: var(--brand); text-decoration: none; }
+.vui-table td:has(.vcu-wa) { padding-top: 6px; padding-bottom: 6px; }
+
+/* the open customer (in the Sheet) */
+.vcu-detail { display: flex; flex-direction: column; gap: var(--space-4); }
+.vcu-detail section { min-width: 0; }
+.vcu-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr)); gap: var(--space-2); }
+.vcu-profile { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: var(--fs-body); }
+.vcu-profile dt { color: var(--muted); }
+.vcu-profile dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.vcu-tags { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--space-2); }
+@media (max-width: 420px) { .vcu-tags { grid-template-columns: minmax(0, 1fr); } }
+.vcu-h { margin: 0 0 var(--space-2); font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vcu-convo { display: flex; flex-direction: column; gap: 6px; }
+.vcu-bubble { align-self: flex-start; max-width: 85%; padding: 6px 10px; border-radius: 12px; font-size: var(--fs-caption);
+  line-height: 1.45; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.vcu-bubble--out { align-self: flex-end; background: var(--brand-soft); border-color: transparent; }
+.vcu-bubble time { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.vcu-foot { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.vcu-wa-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; font: 600 13.5px var(--font-sans);
+  background: var(--brand); color: var(--on-brand); border-radius: var(--radius-pill); text-decoration: none; }

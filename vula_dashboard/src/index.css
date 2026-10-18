@@ -209,7 +209,7 @@
   --ok: #6FCF97; --warn: #E8B84A; --danger: #F2836F; --info: #7FB2EA; --focus: #7FB2EA;
   --chart-2: #F2BE5C; --chart-3: #E07A55; --chart-4: #7FB2EA; --chart-5: #C39AD6; --chart-6: #5D6F63;
   --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
-  --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand-strong);
+  --highlight-text: var(--highlight); --warm-text: #EE9A7A; --brand-text: var(--brand-strong);
   --shadow-float: 0 10px 28px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
 }
@@ -225,7 +225,7 @@
     --ok: #6FCF97; --warn: #E8B84A; --danger: #F2836F; --info: #7FB2EA; --focus: #7FB2EA;
     --chart-2: #F2BE5C; --chart-3: #E07A55; --chart-4: #7FB2EA; --chart-5: #C39AD6; --chart-6: #5D6F63;
     --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
-    --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand-strong);
+    --highlight-text: var(--highlight); --warm-text: #EE9A7A; --brand-text: var(--brand-strong);
     --shadow-float: 0 10px 28px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }

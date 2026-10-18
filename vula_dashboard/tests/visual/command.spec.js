@@ -39,7 +39,7 @@ test("home: front, back and all; every figure opens its list", async ({ page }) 
   await page.getByRole("tab", { name: "Back house" }).click();
   await expect(page.getByText("Invoices overdue")).toBeVisible();
   await page.getByRole("button", { name: /Invoices overdue/ }).click();
-  await expect(page.getByRole("tab", { name: /Invoices$/, selected: true })).toBeVisible();
+  await expect(page.locator('[role=tab][data-tab="invoices"][aria-selected="true"]')).toBeVisible();   // the Money section tab (the list has its own "Invoices" type tab)
 });
 
 test("home: a staff login without Money gets no Back house", async ({ page }) => {
@@ -59,7 +59,7 @@ test("activity: filters and the detail panel", async ({ page }) => {
   await expect(page.locator(".vui-toolbar")).toBeVisible();
   expect(bad(await new AxeBuilder({ page }).include(".vui-sheet").analyze())).toEqual([]);
   await sheet.getByRole("button", { name: "Open the list" }).click();
-  await expect(page.getByRole("tab", { name: /Invoices$/, selected: true })).toBeVisible();
+  await expect(page.locator('[role=tab][data-tab="invoices"][aria-selected="true"]')).toBeVisible();   // the Money section tab (the list has its own "Invoices" type tab)
 });
 
 test("today is on the phone toolbar", async ({ page }) => {

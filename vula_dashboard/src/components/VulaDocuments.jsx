@@ -204,7 +204,7 @@ function DocTile({ doc, projects, onAssign, onOpenImage }) {
         </div>
         {doc.summary && <p style={{ margin: "4px 0 0", fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.summary}</p>}
         {needsProject && (
-          <select defaultValue="" onClick={(e) => e.stopPropagation()} onChange={(e) => onAssign(doc.id, e.target.value)}
+          <select defaultValue="" aria-label="File under a project" onClick={(e) => e.stopPropagation()} onChange={(e) => onAssign(doc.id, e.target.value)}
             style={{ marginTop: 6, width: "100%", fontSize: 11, padding: "5px 6px", border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, background: C.surface }}>
             <option value="" disabled>File under…</option>
             {projects.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
@@ -286,21 +286,21 @@ export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, project,
 
       {!customerPhone && (
         <div style={{ padding: "10px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 8, flexWrap: "wrap", background: C.surfaceAlt }}>
-          <input value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder="🔍 Search name, supplier, number, project…"
+          <input aria-label="Search documents" value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder="🔍 Search name, supplier, number, project…"
             style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface }} />
-          <select value={filters.category} onChange={(e) => setFilter("category", e.target.value)}
+          <select aria-label="Category" value={filters.category} onChange={(e) => setFilter("category", e.target.value)}
             style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }}>
             <option value="">All categories</option>
             {categories.map(([c, n]) => <option key={c} value={c}>{c} ({n})</option>)}
           </select>
           {!project && (
-            <select value={filters.project} onChange={(e) => setFilter("project", e.target.value)}
+            <select aria-label="Project" value={filters.project} onChange={(e) => setFilter("project", e.target.value)}
               style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, maxWidth: 200 }}>
               <option value="">All projects</option>
               {projects.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
             </select>
           )}
-          <select value={filters.customer_phone} onChange={(e) => setFilter("customer_phone", e.target.value)}
+          <select aria-label="Customer" value={filters.customer_phone} onChange={(e) => setFilter("customer_phone", e.target.value)}
             style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, maxWidth: 180 }}>
             <option value="">All customers</option>
             {customers.map((c) => <option key={c.phone} value={c.phone}>{c.name || c.phone}</option>)}

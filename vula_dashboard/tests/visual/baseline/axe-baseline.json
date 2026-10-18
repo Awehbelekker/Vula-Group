@@ -176,7 +176,7 @@
         {
           "id": "select-name",
           "impact": "critical",
-          "nodes": 5,
+          "nodes": 1,
           "help": "Select element must have an accessible name"
         }
       ]
