@@ -80,7 +80,8 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   }
 
   return (
-    <div style={{ color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
+    // no 1000px cap (2026-10-18): the shell already bounds the width; tables use the room
+    <div className="vula-master" style={{ color: C.text, minWidth: 0 }}>
       <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
       {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
