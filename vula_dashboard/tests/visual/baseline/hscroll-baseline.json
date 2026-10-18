@@ -37,9 +37,9 @@
       "hscroll": false
     },
     "master": {
-      "scrollWidth": 421,
+      "scrollWidth": 390,
       "clientWidth": 390,
-      "hscroll": true
+      "hscroll": false
     }
   }
 }
