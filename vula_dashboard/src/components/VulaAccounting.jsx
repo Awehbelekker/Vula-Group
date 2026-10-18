@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
+import { toast } from "./ui/index.jsx";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -27,6 +28,17 @@ export default function VulaAccounting({ tenantId }) {
   }, [tenantId, since, until]);
   useEffect(() => { load(); }, [load]);
 
+  const exportLedger = async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/ledger.csv?${qs()}`);
+      if (!r.ok) throw new Error(String(r.status));
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url; a.download = `ledger_${since}_${until}.csv`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { toast("Couldn't export the ledger — please try again.", "danger"); }
+  };
+
   return (
     <div style={{ color: C.text, maxWidth: 720 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
@@ -35,8 +47,9 @@ export default function VulaAccounting({ tenantId }) {
         <input type="date" value={since} onChange={e => setSince(e.target.value)} style={input} />
         <span style={{ fontSize: 12, color: C.muted }}>to</span>
         <input type="date" value={until} onChange={e => setUntil(e.target.value)} style={input} />
-        <a href={`${VULA_API}/v1/commerce/${tenantId}/admin/reports/ledger.csv?${qs()}`} target="_blank" rel="noreferrer"
-          style={{ ...btn, ...btnOn, marginLeft: "auto", textDecoration: "none" }}>⬇ Export for accountant (CSV)</a>
+        {/* fetched (not a plain link) so the signed-in token goes with it — the route is member-only */}
+        <button type="button" onClick={exportLedger}
+          style={{ ...btn, ...btnOn, marginLeft: "auto" }}>⬇ Export for accountant (CSV)</button>
       </div>
       <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>Your books, built from the reconciled bank statement. Export the ledger for your accountant to file.</p>
 
