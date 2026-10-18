@@ -65,6 +65,7 @@ function routes(role) {
       return { escalations: rows, open_count: st === "open" ? rows.length : null };
     }),
     r("GET", `${A}/conversations`, (m) => ({ tenant_id: m[1], conversations: F.conversations })),
+    r("GET", `${A}/conversations/${T}/messages`, () => F.thread),
     r("GET", `${A}/canned-replies`, (m) => ({ tenant_id: m[1], canned_replies: [] })),
 
     // ── People / Sell ──

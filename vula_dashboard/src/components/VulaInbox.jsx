@@ -4,52 +4,24 @@
  * The owner sees every customer chat the AI is having, can open a thread,
  * TAKE OVER (bot goes quiet, they reply as themselves over WhatsApp), and
  * HAND BACK to the bot when done. Auto-refreshes so new messages appear.
+ * Data and actions live in inbox/useInbox.js (shared with the redesign's inbox/InboxV2.jsx).
  */
 
-import { promptDialog } from './ui/index.jsx'
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { VULA_API } from '../lib/authFetch'
+import { useState, useEffect, useRef } from 'react'
+import { since as sinceShort, useEscalation, useInboxList, useThread } from './inbox/useInbox'
+import InboxV2 from './inbox/InboxV2'
 
 
-export default function VulaInbox({ tenantId }) {
-  const [convos, setConvos] = useState([])
-  const [escalations, setEscalations] = useState([])
-  const [loading, setLoading] = useState(true)
+/** v2: the redesigned Inbox (same hooks, so the same data and actions). */
+export default function VulaInbox({ tenantId, v2 = false }) {
+  if (v2) return <InboxV2 tenantId={tenantId} />
+  return <InboxV1 tenantId={tenantId} />
+}
+
+function InboxV1({ tenantId }) {
+  const { convos, escalations, loading, load, loadEscalations } = useInboxList(tenantId)
   const [active, setActive] = useState(null)      // session_id of open thread
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations`)
-      const d = await r.json()
-      setConvos(d.conversations || [])
-    } catch {}
-    setLoading(false)
-  }, [tenantId])
-
-  const loadEscalations = useCallback(async () => {
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations`)
-      const d = await r.json()
-      setEscalations(d.escalations || [])
-    } catch {}
-  }, [tenantId])
-
-  useEffect(() => {
-    load()
-    loadEscalations()
-    const t = setInterval(load, 15000)   // refresh list every 15s
-    const te = setInterval(loadEscalations, 15000)
-    return () => { clearInterval(t); clearInterval(te) }
-  }, [load, loadEscalations])
-
-  const since = ts => {
-    if (!ts) return ''
-    const mins = Math.floor((Date.now() - new Date(ts)) / 60000)
-    if (mins < 1) return 'now'
-    if (mins < 60) return `${mins}m`
-    if (mins < 1440) return `${Math.floor(mins / 60)}h`
-    return `${Math.floor(mins / 1440)}d`
-  }
+  const since = sinceShort
 
   if (active) {
     return <Thread tenantId={tenantId} sessionId={active} onBack={() => { setActive(null); load() }} />
@@ -102,41 +74,8 @@ export default function VulaInbox({ tenantId }) {
 // ── One open escalation — answer or dismiss straight from the dashboard ───────
 
 function EscalationRow({ tenantId, esc, onDone }) {
-  const [answer, setAnswer] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const since = ts => {
-    if (!ts) return ''
-    const mins = Math.floor((Date.now() - new Date(ts)) / 60000)
-    if (mins < 1) return 'just now'
-    if (mins < 60) return `${mins}m ago`
-    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`
-    return `${Math.floor(mins / 1440)}d ago`
-  }
-
-  async function send() {
-    const text = answer.trim()
-    if (!text || busy) return
-    setBusy(true)
-    try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/answer`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer: text }),
-      })
-      onDone()
-    } catch {}
-    setBusy(false)
-  }
-
-  async function dismiss() {
-    if (busy) return
-    setBusy(true)
-    try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/dismiss`, { method: 'POST' })
-      onDone()
-    } catch {}
-    setBusy(false)
-  }
+  const { answer, setAnswer, busy, send, dismiss } = useEscalation(tenantId, esc, onDone)
+  const since = ts => sinceShort(ts, true)
 
   return (
     <div style={s.escRow}>
@@ -164,83 +103,11 @@ function EscalationRow({ tenantId, esc, onDone }) {
 // ── Single conversation thread ────────────────────────────────────────────────
 
 function Thread({ tenantId, sessionId, onBack }) {
-  const [data, setData] = useState(null)
-  const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [canned, setCanned] = useState([])
-  const [rated, setRated] = useState({})   // message id -> 'up' | 'down' (this visit)
+  const { data, msgs, paused, input, setInput, busy, canned, rated, rate, setHandoff, sendReply, saveMeta } =
+    useThread(tenantId, sessionId)
   const endRef = useRef(null)
 
-  // 👍/👎 on an AI reply. A 👎 can carry "what it should have said", which is also taught to
-  // the assistant for next time (backend: /admin/conversations/{id}/feedback, migration 176).
-  const rate = async (m, i, rating) => {
-    if (!m.id) return
-    let correction = null
-    if (rating === 'down') {
-      correction = await promptDialog('What should the assistant have said? (optional — it will learn this)') || null
-    }
-    const question = [...msgs.slice(0, i)].reverse().find(x => x.role === 'user')?.content || null
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/feedback`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message_id: m.id, rating, question, answer: m.content, correction }),
-      })
-      if (r.ok) setRated(prev => ({ ...prev, [m.id]: rating }))
-    } catch { /* rating is best-effort; the thread still works */ }
-  }
-
-  useEffect(() => {
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/canned-replies`)
-      .then(r => r.json()).then(d => setCanned(d.canned_replies || [])).catch(() => {})
-  }, [tenantId])
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/messages`)
-      setData(await r.json())
-    } catch {}
-  }, [tenantId, sessionId])
-
-  useEffect(() => {
-    load()
-    const t = setInterval(load, 8000)    // refresh thread every 8s
-    return () => clearInterval(t)
-  }, [load])
-
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [data?.messages?.length])
-
-  async function setHandoff(paused) {
-    setBusy(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/handoff`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paused }),
-    })
-    await load()
-    setBusy(false)
-  }
-
-  async function sendReply(e) {
-    e.preventDefault()
-    const text = input.trim()
-    if (!text || busy) return
-    setBusy(true); setInput('')
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/reply`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
-    })
-    await load()
-    setBusy(false)
-  }
-
-  async function saveMeta(patch) {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/meta`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-    }).catch(() => {})
-    load()
-  }
-
-  const msgs = data?.messages || []
-  const paused = data?.paused
 
   return (
     <div style={s.threadWrap}>

@@ -182,7 +182,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
           {v2 && tab === 'activity' && <VulaActivity tenantId={tenantId} onNavigate={navigateTo} />}
           {tab === 'my-work' && <MyWorkSection tenantId={tenantId} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}
+          {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} v2={v2} />}
           {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'sell' && <SellSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'sell')}

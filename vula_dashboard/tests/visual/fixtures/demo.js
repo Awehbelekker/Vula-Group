@@ -185,6 +185,18 @@ export const conversations = [
   conv(8, "+27820000105", "Your order HV-1047 has been delivered. Enjoy!", "assistant", 4, "15:40"),
 ];
 
+// one open thread (commerce.py::admin_get_thread) — the chat behind escalation esc-03
+export const thread = {
+  session_id: "sess-001", customer: cust["+27820000109"]?.name || null, phone: "+27820000109", paused: false,
+  assigned_to: null, tags: ["catering"], agent_note: null,
+  messages: [
+    { id: "m1", role: "user", content: "Hi! Can you do a platter for 20 people next Friday?", created_at: at(0, "10:10") },
+    { id: "m2", role: "assistant", content: "We'd love to. Our grazing platters start at R95 a person. What budget did you have in mind?", created_at: at(0, "10:11") },
+    { id: "m3", role: "user", content: "Budget about R2,500.", created_at: at(0, "10:12") },
+    { id: "m4", role: "assistant", content: "Let me check with the team and come back to you shortly.", created_at: at(0, "10:13") },
+  ],
+};
+
 // ── Invoices (commerce.py::admin_list_invoices) ──────────────────────────────────────────────
 const inv = (n, doc_type, status, phone, total_cents, issue, due, extra = {}) => ({
   id: `inv-${String(n).padStart(3, "0")}`, tenant_id: TENANT_ID, doc_type, direction: "outbound",
