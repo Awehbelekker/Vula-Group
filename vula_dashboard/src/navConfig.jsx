@@ -4,7 +4,7 @@
  * components exactly as before — every pre-overhaul tab id is present, nothing dropped.
  */
 import {
-  Banknote, Bike, Bot, BookOpen, Boxes, BrainCircuit, BrickWall, Briefcase, Calculator,
+  Activity, Banknote, Bike, CalendarCheck, Bot, BookOpen, Boxes, BrainCircuit, BrickWall, Briefcase, Calculator,
   CalendarDays, ClipboardList, Clock, Contact, CreditCard, Download, Factory, FileSignature,
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
   Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
@@ -19,7 +19,7 @@ import {
 // shells: master and merchant ids that share a name share a meaning (contacts, finances…).
 export const NAV_ICONS = {
   // merchant
-  overview: House, inbox: Inbox,
+  overview: House, inbox: Inbox, today: CalendarCheck, activity: Activity,
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
   sell: Store, orders: Package, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag,
   subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, suppliers: Truck, import: Download,
@@ -289,7 +289,7 @@ export function labelFor(groups, id) {
  * see before becomes visible. Stock and Suppliers stay inside Sell for now (splitting a section
  * needs its own section wrapper in VulaMerchantAdmin — a Phase F question). */
 export const NAV_HOUSE = {
-  overview: "top", inbox: "top", "assistant-hub": "top",
+  overview: "top", today: "top", inbox: "top", activity: "top", "assistant-hub": "top",
   people: "front", sell: "front", "marketing-hub": "front", pages: "front",
   money: "back", operate: "back", estimating: "back",
   team: "admin", settings: "admin",
@@ -306,6 +306,19 @@ export function houseGroups(groups) {
     { label: "", items: buckets.top },
     ...["front", "back", "admin", "mywork"].map((h) => ({ label: HOUSE_LABELS[h], house: h, items: buckets[h] })),
   ].filter((g) => g.items.length);
+}
+
+/** The redesign's own pages (Phase E): Today, and All activity, added to the menu only in the
+ * redesigned shell. Both are filtered on the server to what the login may see, so they need no
+ * access-list entry; a sales rep gets Today (their own reminders) but not the tenant-wide feed. */
+export function withV2Pages(groups, { activity = true } = {}) {
+  const add = [{ id: "today", icon: "📅", label: "Today" }, ...(activity ? [{ id: "activity", icon: "🗂️", label: "All activity" }] : [])];
+  if (!groups?.length) return groups;
+  const [first, ...rest] = groups;
+  const items = [...first.items];
+  const at = items.findIndex((it) => it.id === "overview");
+  items.splice(at + 1, 0, ...add);
+  return [{ ...first, items }, ...rest];
 }
 
 /** A tenant's own names (vula_tenant_config.ui_labels, migration 215), e.g.

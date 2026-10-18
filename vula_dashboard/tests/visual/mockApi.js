@@ -51,6 +51,14 @@ function routes(role) {
     r("GET", `${A}/shop-funnel`, () => F.shopFunnel),
 
     // ── Inbox ──
+    // command centre (UX redesign Phase E) — filtered per role like the server does
+    r("GET", `${A}/home`, () => F.homeFor(role)),
+    r("GET", `${A}/today`, () => F.todayFor(role)),
+    r("GET", `${A}/activity`, (m, url) => {
+      const d = F.activityFor(role);
+      const side = url.searchParams.get("side"), actor = url.searchParams.get("actor");
+      return { ...d, items: d.items.filter((i) => (!side || i.side === side) && (!actor || i.actor === actor)) };
+    }),
     r("GET", `${A}/escalations`, (m, url) => {
       const st = url.searchParams.get("status") || "open";
       const rows = st === "open" ? F.escalations : [];
