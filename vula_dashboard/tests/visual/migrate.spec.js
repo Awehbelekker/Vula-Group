@@ -75,3 +75,30 @@ test("customers: segments narrow the list; money in rand from cents", async ({ p
   await expect(page.getByText(/6 customers in this segment/)).toBeVisible();
   await expect(page.locator(".vui-table tbody tr").first()).toContainText("R 4 128.50");
 });
+
+const ORDERS = { name: "orders", role: "owner", nav: "Sell", tab: "Orders", ready: "Paid, packed and sent" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`orders ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, ORDERS, { viewport, theme });
+      await expect(page.getByText("HV-1052", { exact: true }).locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "orders", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("orders: status chips filter on the server; phone cards keep the next-status buttons", async ({ page }) => {
+  await openScreen(page, ORDERS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  const cards = page.locator(".vor-card");
+  const all = await cards.count();
+  expect(all).toBeGreaterThan(2);
+  await page.getByRole("button", { name: "Unpaid" }).click();
+  await expect(cards.first()).toContainText("Awaiting payment");
+  expect(await cards.count()).toBeLessThan(all);
+  await expect(cards.first().getByRole("button", { name: "Delete" })).toBeVisible();
+  await page.getByRole("button", { name: "Unpaid" }).click();
+  await page.getByRole("button", { name: "Paid", exact: true }).click();
+  await expect(cards.first().getByRole("button", { name: "Confirmed" })).toBeVisible();
+});
