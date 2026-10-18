@@ -146,3 +146,35 @@ test("Stock and Suppliers live under Operate; a link to the old place still open
   await expect(page.locator('[role=tab][data-tab="stock"][aria-selected="true"]')).toBeVisible();
   await expect(page.locator(".v2-title")).toHaveText("Operate");
 });
+
+const EXPENSES = { name: "expenses", role: "owner", nav: "Money", tab: "Expenses", ready: "Receipts sent on WhatsApp appear here" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`expenses ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, EXPENSES, { viewport, theme });
+      await expect(page.getByText("Sourdough flour, 25kg").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "expenses", `${vp}-${theme}`, viewport);
+      await page.getByText("Platter boards (x12)").locator("visible=true").first().click();
+      const sheet = page.getByRole("dialog", { name: "Platter boards (x12)" });
+      await expect(sheet.getByLabel("Project")).toBeVisible();
+      expect(bad(await new AxeBuilder({ page }).include(".vui-sheet").analyze())).toEqual([]);
+      await page.screenshot({ path: out(ti, `expenses-open-${vp}-${theme}.png`), animations: "disabled" });
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("expenses: what needs a person is flagged; allocating posts the same assign call", async ({ page }) => {
+  await openScreen(page, EXPENSES, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.getByText("Needs project + purpose").locator("visible=true")).toBeVisible();
+  await expect(page.getByText("Not booked yet").locator("visible=true")).toBeVisible();          // the 'unconfirmed' status (migration 216)
+  await expect(page.getByText("Owed to people").locator("..")).toContainText("R 850");
+  const posted = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/expenses\/exp-007\/assign$/.test(new URL(r.url()).pathname));
+  await page.getByText("Platter boards (x12)").locator("visible=true").click();
+  await page.getByRole("dialog").getByLabel("Project").selectOption("Bay Events platters");
+  expect((await posted).postDataJSON()).toEqual({ project: "Bay Events platters" });
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Reimbursable" }).click();
+  await expect(page.locator(".vex-table tbody tr")).toHaveCount(2);
+});

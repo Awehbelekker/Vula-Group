@@ -59,6 +59,36 @@ export const customerDetail = (phone) => {
   };
 };
 
+// ── Expenses (commerce.py::admin_list_expenses, /reports/expenses, /cards) ──────────────────
+const exp = (n, date, description, amount_cents, extra = {}) => ({
+  id: `exp-${String(n).padStart(3, "0")}`, tenant_id: TENANT_ID, date, description, amount_cents,
+  vat_cents: Math.round(amount_cents * 15 / 115), supplier: null, channel: "dashboard", paid_by_name: "Demo Owner",
+  paid_with: "company_card", card_last4: "4417", reimbursable: false, category: "Cost of sales", account_code: "5000",
+  purpose_category: "stock", purpose_detail: null, project: "", section: null, notes: null, status: "submitted", ...extra,
+});
+export const expenses = [
+  exp(9, "2026-10-17", "Sourdough flour, 25kg", 64_900, { supplier: "Eureka Mills", channel: "whatsapp" }),
+  exp(8, "2026-10-16", "Delivery fuel", 85_000, { supplier: "Engen Sea Point", paid_by_name: "Zanele", paid_with: "personal", card_last4: null,
+    reimbursable: true, category: "Motor vehicle", account_code: "6200", purpose_category: "delivery", channel: "whatsapp" }),
+  exp(7, "2026-10-15", "Platter boards (x12)", 143_880, { supplier: "Builders Express", project: null, purpose_category: null, category: "Equipment", account_code: "6400" }),
+  exp(6, "2026-10-14", "Cheese wheel — aged cheddar", 212_500, { supplier: "Fairview", status: "approved" }),
+  exp(5, "2026-10-12", "Parking — supplier visit", 3_500, { paid_by_name: "Sipho", paid_with: "cash", card_last4: null, reimbursable: true,
+    status: "reimbursed", category: "Travel", account_code: "6300", purpose_category: "travel" }),
+  exp(4, "2026-10-11", "Card machine rolls", 18_950, { supplier: "Yoco", status: "unconfirmed", channel: "whatsapp", purpose_category: null }),
+];
+export const expenseReport = {
+  total_cents: expenses.reduce((a, e) => a + e.amount_cents, 0),
+  vat_cents: expenses.reduce((a, e) => a + e.vat_cents, 0),
+  reimbursable_owed_cents: 85_000, count: expenses.length,
+  by_person: [{ name: "Zanele", owed_cents: 85_000 }, { name: "Sipho", owed_cents: 0 }],
+};
+export const expenseLists = {
+  projects: ["Spring market stall", "Bay Events platters"], sections: [],
+  categories: [{ code: "5000", name: "Cost of sales" }, { code: "6200", name: "Motor vehicle" }, { code: "6300", name: "Travel" }, { code: "6400", name: "Equipment" }],
+  purpose_categories: ["stock", "delivery", "travel", "equipment", "marketing", "other"],
+};
+export const companyCards = [{ id: "card-1", last4: "4417", label: "Company card", active: true }];
+
 // ── Products (commerce.py::admin_list_products) ──────────────────────────────────────────────
 export const products = [
   ["p-01", "Smoked snoek pâté (200g)", "extras", 8_900, 24],

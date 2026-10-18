@@ -79,6 +79,13 @@ function routes(role) {
       rows = [...rows].sort((a, b) => b.total_spent_cents - a.total_spent_cents);
       return { customers: rows, count: rows.length, total_all: F.customers.length, audience: aud };
     }),
+    r("GET", `${A}/expenses`, (m, url) => {
+      const st = url.searchParams.get("status"), reimb = url.searchParams.get("reimbursable");
+      const rows = F.expenses.filter((e) => (!st || e.status === st) && (!reimb || e.reimbursable));
+      return { expenses: rows, ...F.expenseLists };
+    }),
+    r("GET", `${A}/reports/expenses`, () => F.expenseReport),
+    r("GET", `${A}/cards`, () => ({ cards: F.companyCards })),
     r("GET", `${A}/customers/${T}/detail`, (m) => F.customerDetail(decodeURIComponent(m[2]))),
     r("GET", `${A}/orders`, (m, url) => {
       const st = url.searchParams.get("status");

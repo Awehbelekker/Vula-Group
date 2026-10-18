@@ -1,0 +1,55 @@
+/* expenses.css — the redesigned Expenses & claims (expenses/ExpensesV2.jsx). Tokens only. A table
+   from 1200px, one card per expense below it. */
+
+.vex-list { display: none; }
+@media (max-width: 1199px) {
+  .vex-table { display: none; }
+  .vex-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: var(--space-2); align-items: start; }
+}
+.vex-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vex-sub { font-size: var(--fs-caption); color: var(--muted); }
+.vex-table td:first-child .vex-sub { white-space: nowrap; }
+.vex-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-items: flex-start; }
+.vex-wa { color: var(--muted); margin-left: 6px; vertical-align: -2px; }
+.vex-amt { display: inline-flex; flex-direction: column; align-items: flex-end; }
+.vex-actions { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); justify-content: flex-end; }
+.vex-table .vui-table td { vertical-align: middle; }
+.vex-table .vui-btn { white-space: nowrap; }
+.vex-stats { display: grid; gap: var(--space-2); grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); margin-bottom: var(--space-3); }
+.vex-msg { margin: 0 0 var(--space-2); font-size: var(--fs-caption); color: var(--ok-text); }
+.vex-h { margin: 0; padding: var(--space-3) var(--space-4); font: 600 var(--fs-label)/1.3 var(--font-sans); }
+
+.vex-owed { margin-bottom: var(--space-3); overflow: hidden; }
+.vex-owed .vex-h { background: var(--highlight-soft); color: var(--highlight-text); }
+.vex-owed-row { display: flex; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-4); font-size: var(--fs-body); }
+.vex-owed-row + .vex-owed-row { border-top: 1px solid var(--line); }
+
+.vex-cards { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+.vex-cards-label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--fs-body); }
+.vex-card-chip { display: inline-flex; align-items: center; gap: 2px; padding-left: 12px; border-radius: var(--radius-pill);
+  background: var(--surface-2); font: 500 var(--fs-caption)/1 var(--font-mono); }
+.vex-card-x { width: 32px; height: 32px; color: var(--danger-text); }
+.vex-card-add { display: inline-flex; gap: var(--space-2); align-items: center; }
+.vex-card-add .vula-input { width: 130px; }
+.vex-cards-note { flex-basis: 100%; margin: 0; }
+
+.vex-item { overflow: hidden; }
+.vex-item-main { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 4px; width: 100%;
+  padding: var(--space-3) var(--space-4); }
+.vex-item-main:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.vex-item-top { display: flex; gap: var(--space-2); align-items: baseline; }
+.vex-item-what { font-weight: 500; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.vex-item-amt { margin-left: auto; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.vex-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.vex-item-foot { padding: var(--space-2) var(--space-4) var(--space-3); border-top: 1px solid var(--line); }
+.vex-item-foot .vex-actions { justify-content: flex-start; }
+
+.vex-alloc { display: flex; flex-direction: column; gap: var(--space-3); }
+.vex-dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 var(--space-2); font-size: var(--fs-body); }
+.vex-dl dt { color: var(--muted); }
+.vex-dl dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+
+.vex-add { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); margin-bottom: var(--space-3); align-items: end; }
+.vex-check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-body); color: var(--ink); min-height: 44px; }
+.vex-add-go { grid-column: 1 / -1; }
+.vex-foot { margin-top: var(--space-3); line-height: 1.5; }
