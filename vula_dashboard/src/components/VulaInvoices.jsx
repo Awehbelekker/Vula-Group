@@ -242,9 +242,12 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   function whatsAppLinkFallback(inv, reason) {
     if (reason) toast(`Couldn't send automatically (${reason}) — opening WhatsApp for you to send it yourself.`, 'danger')
     const phone = toWhatsAppNumber(inv.customer_phone)
-    const pdfUrl = `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`
-    const msg = `Hi ${inv.customer_name}, here's your invoice ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
-      (inv.due_date ? `Due ${inv.due_date}. ` : '') + `Download: ${pdfUrl}`
+    // The customer has no login, so the link is the public pay page (invoice / pro-forma), never
+    // the admin PDF route — that one needs a signed-in member once ENFORCE_TENANT_AUTH is on.
+    const payable = ['invoice', 'proforma'].includes(inv.doc_type || 'invoice')
+    const pageUrl = `${VULA_API}/v1/commerce/${tenantId}/pay/${inv.id}`
+    const msg = `Hi ${inv.customer_name}, here's your ${(inv.doc_type || 'invoice').replace('_', ' ')} ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
+      (inv.due_date ? `Due ${inv.due_date}. ` : '') + (payable ? `View and pay: ${pageUrl}` : '')
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank')
     if (inv.status === 'draft') setStatus(inv, 'sent', { sent_channel: 'manual' })
   }
