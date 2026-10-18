@@ -26,6 +26,7 @@ NO_PROBE = {
     "181": "replaces stock functions only (untracked-product fix) — no table or column to probe",
     "192": "storage bucket visibility + a storage policy — no public-schema table or column",
     "193": "storage policies + a policy helper function — no public-schema table or column",
+    "216": "widens the commerce_expenses status CHECK only — no table or column to probe",
 }
 
 
