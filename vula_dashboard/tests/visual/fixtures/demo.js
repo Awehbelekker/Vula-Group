@@ -104,6 +104,21 @@ export const emailFollowups = [
     tone: null, received_at: at(0, "08:20"), subject: "Delivery slot next week", summary: "Asks whether Tuesday or Thursday suits for the flour delivery." },
 ];
 
+// ── Team (team.py, users.py) ─────────────────────────────────────────────────────────────────
+export const teamMembers = [
+  { id: "tm-1", name: "Demo Owner", whatsapp: "+27820000001", role: "owner", active: true, access: [], notify: ["which_project", "followup_digest", "new_order"] },
+  { id: "tm-2", name: "Zanele", whatsapp: "+27820000011", role: "staff", active: true, access: ["orders", "inbox", "stock"], notify: ["new_order", "low_stock"] },
+  { id: "tm-3", name: "Sipho", whatsapp: "+27820000012", role: "sales_rep", active: false, access: ["rep-contacts", "rep-callsheet"], notify: [] },
+];
+export const teamLogins = [
+  { user_id: "u-owner-0001", email: `owner@${TENANT_ID}.example.test`, role: "owner", last_sign_in: at(0, "07:30") },
+  { user_id: "u-staff-0002", email: `zanele@${TENANT_ID}.example.test`, role: "staff", last_sign_in: null },
+];
+export const teamAudit = [
+  { id: "au-1", created_at: at(1, "15:02"), actor_email: `owner@${TENANT_ID}.example.test`, action: "member_updated", detail: { name: "Zanele" } },
+  { id: "au-2", created_at: at(4, "10:40"), actor_email: `owner@${TENANT_ID}.example.test`, action: "login_created", detail: { email: `zanele@${TENANT_ID}.example.test` } },
+];
+
 // ── Products (commerce.py::admin_list_products) ──────────────────────────────────────────────
 export const products = [
   ["p-01", "Smoked snoek pâté (200g)", "extras", 8_900, 24],

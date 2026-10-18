@@ -201,7 +201,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
           {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'team'      && <VulaTeam          tenantId={tenantId} />}
+          {tab === 'team'      && <VulaTeam          tenantId={tenantId} v2={v2} />}
           {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />}
         </div>
     </>

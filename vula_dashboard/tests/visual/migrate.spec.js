@@ -214,3 +214,30 @@ test("follow-ups: Done posts status done", async ({ page }) => {
   await page.getByRole("button", { name: "Done" }).first().click();
   expect((await patched).postDataJSON()).toEqual({ status: "done" });
 });
+
+const TEAM = { name: "team", role: "owner", nav: "Team", ready: "Logins & passwords" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`team ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, TEAM, { viewport, theme });
+      await expect(page.getByText("Zanele").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "team", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("team: access chips toggle with the same PATCH; Stock sits under Operate", async ({ page }) => {
+  await openScreen(page, TEAM, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const zanele = page.locator(".vtm-member", { hasText: "Zanele" });
+  const operate = zanele.getByRole("group", { name: "Operate access for Zanele" });
+  await expect(operate.getByRole("button", { name: "Stock" })).toHaveAttribute("aria-pressed", "true");
+  await expect(zanele.getByRole("group", { name: "Sell access for Zanele" }).getByRole("button", { name: "Stock" })).toHaveCount(0);
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/team\/[^/]+\/tm-2$/.test(new URL(r.url()).pathname));
+  await zanele.getByRole("group", { name: "Sell access for Zanele" }).getByRole("button", { name: "Products" }).click();
+  expect((await patched).postDataJSON()).toEqual({ access: ["orders", "inbox", "stock", "products"] });
+  // owner: full access, every chip pressed
+  const owner = page.locator(".vtm-member", { hasText: "Demo Owner" });
+  await expect(owner.getByText("Full access (owner / manager)")).toBeVisible();
+});

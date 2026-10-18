@@ -36,6 +36,9 @@ function routes(role, modules = []) {
     r("GET", `^/v1/tenants/${T}/home`, () => F.homeLayout),
     r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? (modules.length ? { ...F.tenant, modules: [...F.tenant.modules, ...modules] } : F.tenant) : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
     r("GET", `^/v1/team/${T}/me`, () => F.teamMeFor(role)),
+    r("GET", `^/v1/team/${T}/audit`, () => ({ events: F.teamAudit })),
+    r("GET", `^/v1/team/${T}`, () => ({ members: F.teamMembers })),
+    r("GET", `^/v1/users/${T}/users`, () => ({ users: F.teamLogins })),
     // a sales rep's own screens (VulaRepHome / VulaRepToday) — nothing due, nothing booked
     r("GET", `${A}/reminders`, () => ({ reminders: [] })),
     r("GET", `${A}/call-sheet`, () => ({ contacts: [], rows: [] })),
