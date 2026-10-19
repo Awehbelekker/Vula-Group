@@ -528,6 +528,9 @@ const CONNECTIONS = [
       last_synced_at: "2026-10-17T10:05:00+02:00", last_sync_status: "ok" }));
     await page.route(/\/v1\/clickup\/lists\/[^/]+$/, okJson({ lists: [{ id: "L1", name: "Catering jobs" }, { id: "L2", name: "Shop tasks" }] }));
   }],
+  ["Email (IMAP / SMTP)", "2 connected", async (page) => page.route(/\/v1\/email\/status\/[^/]+$/, okJson({ accounts: [
+    { id: "ma-1", email: "hello@harbourvine.example.test", is_primary: true, send_mode: "draft", last_sync_at: "2026-10-17T09:40:00+02:00" },
+    { id: "ma-2", email: "orders@harbourvine.example.test", is_primary: false, send_mode: "send", last_sync_at: null }] }))],
 ];
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -583,6 +586,20 @@ test("settings: ClickUp — the token way round, and a refused sign-in says so",
   const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/clickup\/connect$/.test(new URL(r.url()).pathname));
   await page.getByRole("button", { name: "Connect with token" }).click();
   expect((await post).postDataJSON()).toEqual({ tenant_id: expect.any(String), api_token: "pk_12345_FAKE" });
+});
+
+test("settings: email — a preset fills the hosts and connect sends the same body", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await settingsSection(page, "Email (IMAP / SMTP)");
+  await page.getByRole("button", { name: "Connect a mailbox" }).click();
+  await page.getByLabel("Quick setup").selectOption("Zoho");
+  await expect(page.getByLabel("IMAP host")).toHaveValue("imap.zoho.com");
+  await page.getByLabel("Email address").fill("sales@harbourvine.example.test");
+  await page.getByLabel("Password / app password").fill("not-a-real-password");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/email\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect mailbox" }).click();
+  expect((await post).postDataJSON()).toMatchObject({ email: "sales@harbourvine.example.test", imap_host: "imap.zoho.com", imap_port: 993,
+    smtp_host: "smtp.zoho.com", smtp_port: 465, send_mode: "draft" });
 });
 
 test("settings: a Microsoft sync that is failing says so", async ({ page }) => {
