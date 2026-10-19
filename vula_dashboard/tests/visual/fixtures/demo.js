@@ -774,3 +774,32 @@ export const masterThread = { messages: [
 export const masterErrors = { window_hours: 48,
   webhook_failures: [{ id: "wf-1", created_at: "2026-10-17T07:12:00+02:00", phone: "+27820000109", msg_type: "image", error: "Media download timed out (Meta 131052)" }],
   verification_flags: [{ created_at: "2026-10-16T18:20:00+02:00", task: "commerce_admin", outcome: "defect_found" }] };
+
+// ── Master › Health, Users (master.py: health, qdrant-backup, users) ──────────────────────────
+export const masterHealth = {
+  whatsapp: [
+    { tenant_id: "demo-shop", phone_number: "+27 82 000 0001", status: "connected", webhook_registered: true },
+    { tenant_id: "demo-cycles", phone_number: "+27 82 000 0007", status: "error", webhook_registered: false, last_error: "Token expired (190)" },
+  ],
+  scheduler: { leader: "web-7f9c", lease_expired: false },
+  scheduled_jobs: [
+    { tenant_id: "demo-shop", job_type: "morning_brief", enabled: true, hour: 7, minute: 0, template_name: "vula_morning_brief", last_fired_at: "2026-10-17T07:00:04+02:00" },
+    { tenant_id: "demo-bakery", job_type: "payment_reminders", enabled: false, hour: 9, minute: 30, template_name: null, last_fired_at: null },
+  ],
+  llm_router_24h: { total: 412, local: 371, cloud: 41, escalation_reasons: { "local unreachable": 9, "frontier task": 32 } },
+  skill_routing_24h: { total: 388, fallthrough_to_reasoning_pct: 11, by_match: { keyword: 301, llm_fallback: 44, reasoning: 43 } },
+  escalations: { open: 3, oldest: "2026-10-16T16:12:00+02:00" },
+  vrl_health: { total_events: 96, low_coverage: false, last_event_at: "2026-10-17T10:02:00+02:00",
+    by_verifier: { adversarial: { accepted: 51, total: 58, defect_found: 7 }, deterministic: { accepted: 38, total: 38, defect_found: 0 } } },
+  webhook_failures_24h: { count: 1, recent: [{ created_at: "2026-10-17T07:12:00+02:00", tenant_id: "demo-shop", msg_type: "image", error: "Media download timed out (Meta 131052)" }] },
+  migration_state: [{ migration: "217", applied: false, note: "ui_v2 default on", table: "vula_tenant_config" }],
+};
+export const qdrantBackups = { statuses: [
+  { tenant_id: "demo-shop", last_backup_status: "ok", last_backup_at: "2026-10-17T02:00:00+02:00", last_backup_error: null },
+  { tenant_id: "demo-build", last_backup_status: "error", last_backup_at: "2026-10-17T02:00:00+02:00", last_backup_error: "snapshot upload: 403 from storage" },
+] };
+export const masterUsers = { users: [
+  { user_id: "u-owner", email: "owner@harbourvine.example.test", tenant_id: "demo-shop", role: "owner", created_at: "2026-06-02T10:00:00+02:00" },
+  { user_id: "u-staff", email: "counter@harbourvine.example.test", tenant_id: "demo-shop", role: "staff", created_at: "2026-07-14T09:00:00+02:00" },
+  { user_id: "u-master", email: "operator@vula.example.test", tenant_id: "master", role: "master", created_at: "2026-01-05T08:00:00+02:00" },
+] };

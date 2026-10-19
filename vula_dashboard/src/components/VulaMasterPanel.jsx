@@ -12,6 +12,8 @@ import { todaySA } from '../lib/dates'
 import { SectionTabs, confirmDialog } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import TenantsV2 from './master/TenantsV2'
+import { HealthV2, UsageV2, UsersV2 } from './master/OpsV2'
+import { useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './master/useMasterOps'
 import TenantDetailV2 from './master/TenantDetailV2'
 import { HEALTH_COLOUR, ago, matchesTenant, sortTenants, useManageTenant, useMasterTenants } from './master/useMasterTenants'
 import VulaMasterTenantDetail from './VulaMasterTenantDetail'
@@ -97,9 +99,9 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange, 
         onCreated={(tenantId) => { setOnboardSelect(tenantId); setTab('onboard') }} />}
       {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
         selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} />}
-      {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={openDetail} />}
-      {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={openDetail} />}
-      {tab === 'users' && <UsersPanel onError={setErr} />}
+      {tab === 'health' && (v2 ? <HealthV2 onError={setErr} onViewDetail={openDetail} /> : <HealthPanel onError={setErr} onViewDetail={openDetail} />)}
+      {tab === 'usage' && (v2 ? <UsageV2 onError={setErr} onViewDetail={openDetail} /> : <UsagePanel onError={setErr} onViewDetail={openDetail} />)}
+      {tab === 'users' && (v2 ? <UsersV2 onError={setErr} /> : <UsersPanel onError={setErr} />)}
       {tab === 'knowledge' && <KnowledgePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'models' && <ModelsPanel onError={setErr} />}
@@ -359,20 +361,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
 
 /* ── Platform health ───────────────────────────────────────────────────────── */
 function HealthPanel({ onError, onViewDetail }) {
-  const [h, setH] = useState(null)
-  const [migMsg, setMigMsg] = useState('')
-  const [qb, setQb] = useState(null)
-  const [qbBusy, setQbBusy] = useState(false)
-  useEffect(() => { authFetch('/v1/master/health').then(setH).catch(e => onError(e.message)) }, [])
-  useEffect(() => { authFetch('/v1/master/qdrant-backup').then(r => setQb(r.statuses || [])).catch(e => onError(e.message)) }, [])
-  const runQdrantBackup = async () => {
-    setQbBusy(true)
-    try {
-      const r = await authFetch('/v1/master/qdrant-backup/run', { method: 'POST' })
-      if (r.error) onError(r.error)
-      else setQb(r.statuses || [])
-    } catch (e) { onError(e.message) } finally { setQbBusy(false) }
-  }
+  const { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql } = useMasterHealth({ onError })
   if (!h) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const router = h.llm_router_24h || {}
   const localPct = router.total ? Math.round((router.local / router.total) * 100) : null
@@ -504,14 +493,7 @@ function HealthPanel({ onError, onViewDetail }) {
         <div style={{ ...card, borderColor: C.amber }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <h4 style={{ ...h4, margin: 0 }}>🗄️ Migrations not yet applied</h4>
-            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={async () => {
-              try {
-                const r = await authFetch('/v1/master/migrations/pending-sql')
-                if (!r.sql) return setMigMsg('Nothing pending.')
-                await navigator.clipboard.writeText(r.sql)
-                setMigMsg(`Copied SQL for ${r.migrations.join(', ')} — paste it into the Supabase SQL editor and run once, then reload this page.`)
-              } catch (e) { onError(`Couldn't copy: ${e.message}`) }
-            }}>Copy SQL to apply</button>
+            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={copyPendingSql}>Copy SQL to apply</button>
           </div>
           <div style={{ fontSize: 12, color: C.muted, margin: '4px 0 6px' }}>
             One script of every missing migration, in order. Each one is idempotent, so it's safe to run once in the Supabase SQL editor.
@@ -532,27 +514,14 @@ function HealthPanel({ onError, onViewDetail }) {
 
 /* The Monday tenant-health email (vula/master_digest.py) — preview it, or send it now. */
 function WeeklyDigestCard({ onError }) {
-  const [text, setText] = useState(null)
-  const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
+  const { text, msg, busy, preview, send } = useWeeklyDigest({ onError })
   return (
     <div style={card}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <h4 style={{ ...h4, margin: 0 }}>📬 Weekly digest</h4>
         <span style={{ fontSize: 12, color: C.muted }}>Emailed to TEAM_EMAIL every Monday morning.</span>
-        <button style={{ ...miniBtn, marginLeft: 'auto' }} disabled={busy} onClick={async () => {
-          setBusy(true)
-          try { setText((await authFetch('/v1/master/digest')).text) } catch (e) { onError(e.message) }
-          setBusy(false)
-        }}>Preview</button>
-        <button style={miniBtn} disabled={busy} onClick={async () => {
-          setBusy(true)
-          try {
-            const r = await authFetch('/v1/master/digest/send', { method: 'POST' })
-            setMsg(r.sent ? 'Sent.' : `Not sent: ${r.reason}`)
-          } catch (e) { onError(e.message) }
-          setBusy(false)
-        }}>Send now</button>
+        <button style={{ ...miniBtn, marginLeft: 'auto' }} disabled={busy} onClick={preview}>Preview</button>
+        <button style={miniBtn} disabled={busy} onClick={send}>Send now</button>
       </div>
       {msg && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{msg}</div>}
       {text && <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'var(--font-body)' }}>{text}</pre>}
@@ -562,8 +531,7 @@ function WeeklyDigestCard({ onError }) {
 
 /* ── Usage & billing ───────────────────────────────────────────────────────── */
 function UsagePanel({ onError, onViewDetail }) {
-  const [u, setU] = useState(null)
-  useEffect(() => { authFetch('/v1/master/usage?days=14').then(setU).catch(e => onError(e.message)) }, [])
+  const { u } = useMasterUsage({ onError })
   if (!u) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const tenants = Object.entries(u.per_tenant || {})
   const rate = u.usd_zar_rate || 18
@@ -609,58 +577,7 @@ function UsagePanel({ onError, onViewDetail }) {
 
 /* ── Users ─────────────────────────────────────────────────────────────────── */
 function UsersPanel({ onError }) {
-  const [users, setUsers] = useState(null)
-  const [tenants, setTenants] = useState([])
-  const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ tenant_id: '', email: '', name: '', role: 'staff' })
-  const [busy, setBusy] = useState(null)
-  const [notice, setNotice] = useState('')
-
-  const load = () => {
-    authFetch('/v1/master/users').then(d => setUsers(d.users || [])).catch(e => onError(e.message))
-  }
-  useEffect(() => {
-    load()
-    authFetch('/v1/master/tenants').then(d => {
-      const list = d.tenants || []
-      setTenants(list)
-      if (list.length) setForm(f => ({ ...f, tenant_id: f.tenant_id || list[0].tenant_id }))
-    }).catch(() => {})
-  }, [])  // eslint-disable-line
-
-  const create = async () => {
-    if (!form.tenant_id || !form.email.trim()) return onError('tenant + email required')
-    setBusy('create')
-    try {
-      const r = await authFetch(`/v1/master/tenants/${form.tenant_id}/users`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: form.email.trim(), name: form.name.trim() || undefined, role: form.role }),
-      })
-      if (r.error) onError(r.error)
-      else {
-        setNotice(`Created ${r.email} — temp password: ${r.temp_password}`)
-        setForm(f => ({ ...f, email: '', name: '' })); setCreating(false); load()
-      }
-    } catch (e) { onError(e.message) } finally { setBusy(null) }
-  }
-
-  const reset = async (r) => {
-    setBusy(r.user_id)
-    try {
-      const d = await authFetch(`/v1/master/tenants/${r.tenant_id}/users/${r.user_id}/reset`, { method: 'POST' })
-      if (d.error) onError(d.error)
-      else setNotice(`New temp password for ${r.email || r.user_id}: ${d.temp_password}`)
-    } catch (e) { onError(e.message) } finally { setBusy(null) }
-  }
-
-  const remove = async (r) => {
-    setBusy(r.user_id)
-    try {
-      await authFetch(`/v1/master/tenants/${r.tenant_id}/users/${r.user_id}`, { method: 'DELETE' })
-      load()
-    } catch (e) { onError(e.message) } finally { setBusy(null) }
-  }
-
+  const { users, tenants, creating, setCreating, form, setForm, busy, notice, setNotice, create, reset, remove } = useMasterUsers({ onError })
   if (!users) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   return (
     <div>

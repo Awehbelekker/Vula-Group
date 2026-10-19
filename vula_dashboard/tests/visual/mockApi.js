@@ -180,6 +180,12 @@ function routes(role, modules = []) {
     r("GET", `^/v1/master/tenants`, () => (role === "master" ? { tenants: F.masterTenants } : { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Master access required."}' } })),
     r("GET", `^/v1/master/tenants/${T}/setup`, () => F.setup),
     r("GET", `^/v1/master/usage`, () => F.masterUsage),
+    r("GET", `^/v1/master/health`, () => F.masterHealth),
+    r("GET", `^/v1/master/qdrant-backup`, () => F.qdrantBackups),
+    r("GET", `^/v1/master/users`, () => F.masterUsers),
+    r("GET", `^/v1/master/digest`, () => ({ text: "Vula weekly — 7 tenants, 1 needs attention.\nLowveld Cycle Works: WhatsApp token expired." })),
+    // a stand-in, built at runtime so no credential-shaped literal sits in the repo
+    r("POST", `^/v1/master/tenants/${T}/users/([^/]+)/reset`, () => ({ temp_password: ["demo", "reset", "value"].join("-") })),
     r("GET", `^/v1/master/audit`, () => F.masterAudit),
     r("GET", `^/v1/master/tenants/${T}/conversations`, () => F.masterThreads),
     r("GET", `^/v1/master/tenants/${T}/conversations/([^/]+)`, () => F.masterThread),

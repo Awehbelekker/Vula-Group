@@ -569,6 +569,46 @@ test("master tenant detail: linking a number and pushing the catalogue send the 
   expect((await push).postDataJSON()).toEqual({});
 });
 
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`master ops ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, MASTER, { viewport, theme });
+      await page.getByRole("tab", { name: "Health" }).click();
+      await expect(page.getByText("Lease healthy")).toBeVisible();
+      await check(page, ti, "master-health", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Usage" }).click();
+      await expect(page.getByText(/US\$6\.48 · R/).locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "master-usage", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Users" }).click();
+      await expect(page.getByText("counter@harbourvine.example.test").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "master-users", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("master ops: backup, digest, new login and password reset make the same calls", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("tab", { name: "Health" }).click();
+  const backup = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/qdrant-backup\/run$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Run backup now" }).click();
+  await backup;
+  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.getByText("Lowveld Cycle Works: WhatsApp token expired.", { exact: false })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Users" }).click();
+  await page.getByRole("button", { name: "New login" }).click();
+  await page.getByLabel("Tenant").selectOption("demo-bakery");
+  await page.getByLabel("Email").fill(" baker@kloof.example.test ");
+  await page.getByLabel("Role").selectOption("manager");
+  const create = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-bakery\/users$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Create login" }).click();
+  expect((await create).postDataJSON()).toEqual({ email: "baker@kloof.example.test", role: "manager" });
+
+  await page.getByRole("button", { name: "Reset the password for counter@harbourvine.example.test" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "New temp password for counter@harbourvine.example.test: demo-reset-value" })).toBeVisible();
+});
+
 test("master tenants: search, create, suspend and billing send the same requests", async ({ page }) => {
   await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.getByLabel("Search tenants").fill("salon");

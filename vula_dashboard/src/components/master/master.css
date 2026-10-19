@@ -53,3 +53,14 @@
 .vms-msg { display: flex; flex-direction: column; gap: 2px; max-width: min(75%, 560px); padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); border: 1px solid var(--line); }
 .vms-msg--in { align-self: flex-start; background: var(--surface); }
 .vms-msg--out { align-self: flex-end; background: var(--surface-2); }
+
+/* Health / Usage / Users (OpsV2) */
+.vms-two { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); align-items: start; }
+.vms-plain { margin: 0; padding-left: var(--space-5); display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vms-attn { border-color: var(--warn) !important; }
+.vms-title-sm { flex: 1 1 auto; }
+.vms-link { border: none; background: none; padding: 0; min-height: 32px; color: var(--brand-text); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.vms-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vms-pre { margin: 0; white-space: pre-wrap; font: var(--fs-body)/1.5 var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
+.vms-grow { flex: 1 1 200px; min-width: 0; }
+.vms-notice { padding: var(--space-3) var(--space-4) !important; }
