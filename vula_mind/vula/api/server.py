@@ -1420,6 +1420,13 @@ async def _kb_maintenance_on_boot() -> None:
     await on_boot()
 
 
+async def _local_llm_watch_loop() -> None:
+    """WhatsApp Ian when the local Ollama tunnel stops answering (2026-10-19) — the router falls
+    back to the cloud silently, and a 3½-day outage went unnoticed. See vula/local_llm_watch.py."""
+    from vula.local_llm_watch import run_forever
+    await run_forever()
+
+
 async def _qdrant_backup_loop() -> None:
     """Daily per-tenant Qdrant collection snapshot → private Supabase Storage bucket, see
     docs/dr.md. Qdrant previously had zero backup mechanism — the highest-severity finding in
@@ -1573,6 +1580,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_inbound_redrive_loop()))
     # Mass Mind Phase 1 — cross-tenant rollup of the two recovery loops above (migration 160).
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
+    # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
+    _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_pattern_rollup_loop()))
     # Tenant Mind Phase 2 — quietly re-check voice suggestions as new samples accumulate (163).

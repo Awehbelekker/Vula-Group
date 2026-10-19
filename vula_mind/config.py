@@ -132,6 +132,16 @@ class Settings(BaseSettings):
     whatsapp_phone_id: str = ""
     whatsapp_token: str = ""
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
+    # Ian — platform feedback (vula/integrations/platform_support.py) and platform health alerts.
+    # Was read there but never declared, so every forward raised AttributeError after logging.
+    platform_support_phone: str = ""
+    # Local-LLM watch (vula/local_llm_watch.py, 2026-10-19): WhatsApp platform_support_phone when
+    # the local Ollama tunnel has been unreachable this many minutes, again every
+    # local_llm_alert_repeat_h hours while it stays down, and once when it's back. The alert goes
+    # out on local_llm_alert_tenant's WhatsApp number (empty = the platform's own number).
+    local_llm_alert_after_min: int = 15
+    local_llm_alert_repeat_h: float = 6.0
+    local_llm_alert_tenant: str = ""
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     # Meta only allows FREE-FORM WhatsApp text within 24 hours of the person's last inbound
     # message. Everything proactive Vula sends — an order alert, a document notification, an

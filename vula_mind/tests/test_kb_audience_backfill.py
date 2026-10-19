@@ -144,3 +144,11 @@ async def test_mark_public_opens_a_reviewed_list_and_the_backfill_leaves_it_alon
         assert _tags(mem, p)["21MAY_v2.pdf"] == "public"
         await p.ingest_text("Weekly prices: hake R 165 per kg.", "21MAY_v2.pdf")   # re-upload keeps it
         assert _tags(mem, p)["21MAY_v2.pdf"] == "public"
+
+
+def test_exposure_check_treats_dashboard_admin_sessions_as_staff():
+    from tools.kb_exposure_check import is_staff_session
+    assert is_staff_session("admin:27820000000")
+    assert is_staff_session("webadmin:off-the-hook-abc123")
+    assert not is_staff_session("27820000000")
+    assert not is_staff_session(None)
