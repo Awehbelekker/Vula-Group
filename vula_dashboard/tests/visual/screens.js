@@ -69,7 +69,8 @@ export async function openScreen(page, screen, { viewport, theme }) {
     await page.getByRole("tab", { name: new RegExp(`${screen.tab}$`) }).first().click();
   }
 
-  await page.getByText(screen.ready, { exact: false }).first().waitFor({ timeout: 15000 });
+  // a visible match: below 1200px the redesign keeps a list's table in the DOM, hidden, beside its cards
+  await page.getByText(screen.ready, { exact: false }).locator("visible=true").first().waitFor({ timeout: 15000 });
   await page.waitForLoadState("networkidle");
   await page.evaluate(() => document.fonts.ready);
   await page.addStyleTag({ content: HIDE_CARET });
