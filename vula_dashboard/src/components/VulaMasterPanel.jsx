@@ -413,6 +413,9 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
   const [gateway, setGateway] = useState(tenant.default_payment_provider || '')
   const [shareNetwork, setShareNetwork] = useState(!!tenant.share_knowledge_with_network)
   const [spendCap, setSpendCap] = useState(tenant.spend_cap_usd != null ? String(tenant.spend_cap_usd) : '')
+  // The redesigned dashboard (migrations 215 / 217): on for every business by default; off here
+  // puts this one business back on the old design.
+  const [uiV2, setUiV2] = useState(tenant.ui_v2 !== false)
   const allModules = registry.modules || []
 
   const toggle = (id) => setModules(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id])
@@ -459,11 +462,16 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
         <input type="checkbox" checked={shareNetwork} onChange={e => setShareNetwork(e.target.checked)} />
         Share this tenant's reviewed answers with other Vula businesses (opt-in — see Knowledge tab)
       </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
+        <input type="checkbox" checked={uiV2} onChange={e => setUiV2(e.target.checked)} />
+        New dashboard design (untick to put this business back on the old one)
+      </label>
       <button style={{ ...btn, ...btnOn, alignSelf: 'flex-start' }}
         onClick={() => onSave({
           modules, plan, store_url: storeUrl, default_payment_provider: gateway,
           share_knowledge_with_network: shareNetwork,
           spend_cap_usd: spendCap === '' ? null : Number(spendCap),
+          ui_v2: uiV2,
         })}>Save changes</button>
     </div>
   )

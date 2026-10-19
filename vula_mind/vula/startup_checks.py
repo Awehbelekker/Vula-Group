@@ -137,6 +137,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("214", "vula_business_profile", "public_keys"),
     ("215", "vula_tenant_config", "ui_v2"),
     # 216 only widens the commerce_expenses status CHECK — nothing a select can probe.
+    # 217 only flips ui_v2's default and backfills it — 215's sentinel covers the column.
 ]
 
 
