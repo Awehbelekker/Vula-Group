@@ -108,3 +108,4 @@
 .vcn-wa-lines { list-style: none; margin: var(--space-3) 0 0; padding: 0; align-self: stretch; display: flex; flex-direction: column; gap: var(--space-2); text-align: left; font-size: var(--fs-body); color: var(--ink); }
 .vcn-wa-lines li { display: flex; gap: var(--space-2); align-items: flex-start; overflow-wrap: anywhere; min-width: 0; }
 .vcn-wa-lines svg { flex: none; margin-top: 2px; color: var(--muted); }
+.vcn-token { padding-top: var(--space-3); border-top: 1px solid var(--line); }

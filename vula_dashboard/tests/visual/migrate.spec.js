@@ -523,6 +523,11 @@ const CONNECTIONS = [
     page.route(/\/v1\/google\/status\/[^/]+$/, okJson({ status: "connected", email: "owner@harbourvine.example.test" }))],
   ["Microsoft (OneDrive & Outlook)", "Connect Microsoft"],
   ["Your WhatsApp profile", "Apply to WhatsApp"],
+  ["ClickUp", "Send missed documents", async (page) => {
+    await page.route(/\/v1\/clickup\/status\/[^/]+$/, okJson({ status: "connected", team_id: "9012345", default_list_id: "L2",
+      last_synced_at: "2026-10-17T10:05:00+02:00", last_sync_status: "ok" }));
+    await page.route(/\/v1\/clickup\/lists\/[^/]+$/, okJson({ lists: [{ id: "L1", name: "Catering jobs" }, { id: "L2", name: "Shop tasks" }] }));
+  }],
 ];
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -565,6 +570,19 @@ test("settings: the WhatsApp profile applies the same body", async ({ page }) =>
   await page.getByRole("button", { name: "Apply to WhatsApp" }).click();
   expect((await post).postDataJSON().profile).toMatchObject({ about: "Deli and bakery, Sea Point",
     websites: ["https://harbourvine.example.test", "https://order.harbourvine.example.test"], email: "hello@harbourvine.example.test" });
+});
+
+test("settings: ClickUp — the token way round, and a refused sign-in says so", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.route(/\/v1\/clickup\/status\/[^/]+$/, okJson({ status: "needs_reconnect", last_sync_error: "OAUTH_025 token revoked" }));
+  await settingsSection(page, "ClickUp");
+  await expect(page.getByRole("alert")).toContainText("ClickUp has stopped accepting Vula's sign-in. (OAUTH_025 token revoked)");
+  await expect(page.locator(".vst-page").getByText("Needs reconnecting")).toBeVisible();
+  await page.getByRole("button", { name: /Connect with a ClickUp token/ }).click();
+  await page.getByLabel("ClickUp API token").fill("  pk_12345_FAKE  ");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/clickup\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect with token" }).click();
+  expect((await post).postDataJSON()).toEqual({ tenant_id: expect.any(String), api_token: "pk_12345_FAKE" });
 });
 
 test("settings: a Microsoft sync that is failing says so", async ({ page }) => {
