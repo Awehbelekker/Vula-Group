@@ -6,6 +6,7 @@
  */
 import { useEffect, useState } from 'react'
 import { authFetch } from '../../lib/authFetch'
+import { confirmDialog } from '../ui/index.jsx'
 
 export function useMasterHealth({ onError }) {
   const [h, setH] = useState(null)
@@ -105,6 +106,10 @@ export function useMasterUsers({ onError }) {
   }
 
   const remove = async (r) => {
+    // a removed login is locked out at once and can't be undone, so ask first (2026-10-19)
+    const who = r.email || r.user_id
+    if (!(await confirmDialog(`Remove ${who}'s login for ${r.tenant_id}? They're signed out and can't get back in until a new login is made.`,
+      { danger: true, confirmLabel: 'Remove' }))) return
     setBusy(r.user_id)
     try {
       await authFetch(`/v1/master/tenants/${r.tenant_id}/users/${r.user_id}`, { method: 'DELETE' })

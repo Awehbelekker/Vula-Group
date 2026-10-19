@@ -842,3 +842,18 @@ export const evalReports = { reports: [
 export const feedbackCases = { cases: [
   { id: "fb-1", tenant_id: "demo-shop", question: "how much did I spend on dairy", routes_to: "reasoning", correction: "Should use finance_admin", yaml: "- prompt: how much did I spend on dairy\n  expect: reasoning" },
 ] };
+
+// ── Smart Scanner (/admin/scan, /scan/commit, /scan/match-lines) ────────────────────────────────
+export const scanResult = { ok: true, extracted: {
+  doc_type: "delivery_note", confidence: "high", supplier: "Atlantic Dairy Co-op", date: "2026-10-17", category: "stock",
+  reference: "DN-55821", total_cents: 184_250,
+  line_items: [
+    { description: "Aged cheddar 250g x 12", quantity: 12, unit: "ea", unit_price_cents: 7_950, total_cents: 95_400 },
+    { description: "Cream cheese tubs 500g", quantity: 6, unit: "ea", unit_price_cents: 14_808, total_cents: 88_850 },
+  ] } };
+export const scanCommitPreview = { ok: true, preview: { supplier: "Atlantic Dairy Co-op", supplier_known: true, payment_terms_days: 30,
+  due_date: "2026-11-16", days_until_due: 30, supplier_match: { supplier_name: "Atlantic Dairy Co-op", tier: "exact name", confidence: 1, auto_applied: true } } };
+export const scanMatches = { lines: [
+  { description: "Aged cheddar 250g x 12", quantity: 12, unit_price_cents: 7_950, match: { product_id: "p-03", name: "Aged cheddar (250g)" }, suggestions: [] },
+  { description: "Cream cheese tubs 500g", quantity: 6, unit_price_cents: 14_808, match: null, suggestions: [{ product_id: "p-01", name: "Smoked snoek pâté (200g)" }] },
+] };

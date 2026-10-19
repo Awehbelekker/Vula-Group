@@ -340,7 +340,7 @@ export default function App() {
             access={access} full={full} teamRole={teamRole} teamPhone={teamPhone} activeTab={merchTab} onTabChange={setMerchTab}
             navRequest={navRequest} v2={v2} />
         </VulaShell>
-        <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} />
+        <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} v2={v2} />
       </div>
     );
   }
@@ -453,7 +453,7 @@ export default function App() {
             {...(activeTab === "master" ? { activeTab: masterSubTab, onTabChange: setMasterSubTab } : {})} />
         </div>
       </VulaShell>
-      <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} />
+      <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} v2={v2} />
     </>
   );
 }
