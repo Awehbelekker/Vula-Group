@@ -20,7 +20,7 @@ export const SCREENS = [
   { name: "invoices", role: "owner", nav: "Money", tab: "Invoices", ready: "INV-2026-0118" },
   { name: "documents", role: "owner", nav: "Operate", tab: "Documents", ready: "Atlantic-Dairy-invoice-BILL-0031.pdf" },
   { name: "settings", role: "owner", nav: "Settings", ready: "Brand kit" },
-  { name: "master", role: "master", nav: "Master", ready: "need attention ·" },
+  { name: "master", role: "master", nav: "Master", ready: "need attention" },
 ];
 
 const HIDE_CARET = `*, *::before, *::after { caret-color: transparent !important; }`;

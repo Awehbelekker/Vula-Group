@@ -430,7 +430,7 @@ export default function App() {
         ) : null}
       >
         <div style={{ padding: "4px 0 24px" }}>
-          <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
+          <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} v2={v2}
             onOpenTenant={async (tid) => {
               // An optional support reason for the audit trail (vula_admin_audit + the tenant's
               // own vula_merchant_audit); blank is fine. 2026-09-29: an in-app dialog instead of
