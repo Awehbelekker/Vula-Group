@@ -12,6 +12,7 @@ import { todaySA } from '../lib/dates'
 import { SectionTabs, confirmDialog } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import TenantsV2 from './master/TenantsV2'
+import TenantDetailV2 from './master/TenantDetailV2'
 import { HEALTH_COLOUR, ago, matchesTenant, sortTenants, useManageTenant, useMasterTenants } from './master/useMasterTenants'
 import VulaMasterTenantDetail from './VulaMasterTenantDetail'
 
@@ -83,7 +84,8 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange, 
   const Tenants = v2 ? TenantsV2 : TenantsPanel   // the redesign's list (master/TenantsV2.jsx)
 
   if (detailTenant) {
-    return <VulaMasterTenantDetail tenantId={detailTenant} onOpenTenant={onOpenTenant} onBack={closeDetail} />
+    const Detail = v2 ? TenantDetailV2 : VulaMasterTenantDetail
+    return <Detail tenantId={detailTenant} onOpenTenant={onOpenTenant} onBack={closeDetail} />
   }
 
   return (

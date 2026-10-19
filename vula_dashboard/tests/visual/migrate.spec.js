@@ -532,6 +532,43 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
   }
 }
 
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`master tenant detail ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, MASTER, { viewport, theme });
+      await page.getByText("Harbour & Vine Deli", { exact: true }).locator("visible=true").first().click();
+      await page.getByRole("button", { name: "Details" }).click();
+      await expect(page.getByRole("heading", { name: "demo-shop" })).toBeVisible();
+      await expect(page.getByLabel("Phone number ID")).toBeVisible();
+      await check(page, ti, "master-detail", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Usage" }).click();
+      await expect(page.getByText("US$6.48")).toBeVisible();
+      await page.getByRole("tab", { name: "Conversations" }).click();
+      await page.getByText("+27820000101").locator("visible=true").first().click();
+      await expect(page.getByRole("list", { name: "Messages with +27820000101" })).toBeVisible();
+      await check(page, ti, "master-detail-thread", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Errors" }).click();
+      await expect(page.getByText("Media download timed out (Meta 131052)").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "master-detail-errors", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("master tenant detail: linking a number and pushing the catalogue send the same bodies", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.evaluate(() => { window.location.hash = "#/master/tenant/demo-shop"; });
+  await expect(page.getByRole("heading", { name: "demo-shop" })).toBeVisible();
+  await page.getByLabel("Phone number ID").fill(" 1098765432 ");
+  await page.getByLabel("PIN (optional)").fill("123456");
+  const link = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-shop\/whatsapp-number$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Link number" }).click();
+  expect((await link).postDataJSON()).toEqual({ phone_number_id: "1098765432", pin: "123456" });
+  const push = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-shop\/meta-catalog$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Push products" }).click();
+  expect((await push).postDataJSON()).toEqual({});
+});
+
 test("master tenants: search, create, suspend and billing send the same requests", async ({ page }) => {
   await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.getByLabel("Search tenants").fill("salon");

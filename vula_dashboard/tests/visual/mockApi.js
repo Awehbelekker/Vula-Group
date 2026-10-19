@@ -179,6 +179,11 @@ function routes(role, modules = []) {
     r("GET", `^/status`, () => ({ status: "ok" })),   // server.py health check (master's Dashboard tab)
     r("GET", `^/v1/master/tenants`, () => (role === "master" ? { tenants: F.masterTenants } : { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Master access required."}' } })),
     r("GET", `^/v1/master/tenants/${T}/setup`, () => F.setup),
+    r("GET", `^/v1/master/usage`, () => F.masterUsage),
+    r("GET", `^/v1/master/audit`, () => F.masterAudit),
+    r("GET", `^/v1/master/tenants/${T}/conversations`, () => F.masterThreads),
+    r("GET", `^/v1/master/tenants/${T}/conversations/([^/]+)`, () => F.masterThread),
+    r("GET", `^/v1/master/tenants/${T}/errors`, () => F.masterErrors),
     r("GET", `^/v1/admin/signups`, () => ({ signups: [] })),
   ];
 }

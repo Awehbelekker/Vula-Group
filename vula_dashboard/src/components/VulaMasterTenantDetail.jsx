@@ -16,9 +16,11 @@
  * endpoints — /v1/master/tenants/{tenant_id}/conversations[/{phone}] and .../errors — since
  * nothing before this exposed a tenant's real conversation history or error events without
  * direct Railway/Supabase access; see master.py's docstrings on those for what each pulls from.
+ *
+ * Data and actions: master/useTenantDetail.js (shared with the redesign's TenantDetailV2).
  */
-import { useEffect, useState } from 'react'
-import { authFetch, VULA_API } from '../lib/authFetch'
+import { useState } from 'react'
+import { useTenantAudit, useTenantConversations, useTenantErrors, useTenantEscalations, useTenantOverview, useTenantUsage, useLinkWhatsAppNumber, useWhatsAppCatalogue } from './master/useTenantDetail'
 import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { ManageTenantRow } from './VulaMasterPanel'
@@ -68,31 +70,7 @@ export default function VulaMasterTenantDetail({ tenantId, onOpenTenant, onBack 
 }
 
 function TenantOverviewTab({ tenantId, onError }) {
-  const [tenant, setTenant] = useState(null)
-  const [registry, setRegistry] = useState({ business_types: [], modules: [] })
-
-  const load = async () => {
-    try {
-      const [t, r] = await Promise.all([
-        authFetch('/v1/master/tenants'),
-        authFetch('/v1/tenants/registry'),
-      ])
-      setTenant((t.tenants || []).find((x) => x.tenant_id === tenantId) || null)
-      setRegistry(r)
-    } catch (e) { onError(e.message) }
-  }
-  useEffect(() => { load() }, [tenantId])  // eslint-disable-line
-
-  const save = async (patch) => {
-    try {
-      await authFetch(`/v1/master/tenants/${tenantId}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-      load()
-    } catch (e) { onError(e.message) }
-  }
-
+  const { tenant, registry, save } = useTenantOverview({ tenantId, onError })
   if (!tenant) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   return (
     <div style={card}>
@@ -114,23 +92,7 @@ function TenantOverviewTab({ tenantId, onError }) {
 // linked to this business without Embedded Signup. Vula checks the number with Meta first and
 // registers it if needed; the PIN goes only to Meta.
 function LinkWhatsAppNumber({ tenantId }) {
-  const [pnid, setPnid] = useState('')
-  const [pin, setPin] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [res, setRes] = useState(null)
-  const [msg, setMsg] = useState('')
-  const link = async () => {
-    setBusy(true); setMsg(''); setRes(null)
-    try {
-      const d = await authFetch(`/v1/master/tenants/${tenantId}/whatsapp-number`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone_number_id: pnid.trim(), pin: pin.trim() || undefined }),
-      })
-      if (d.detail) setMsg(d.detail)
-      else { setRes(d); setPin('') }
-    } catch (e) { setMsg(e.message) }
-    setBusy(false)
-  }
+  const { pnid, setPnid, pin, setPin, busy, res, msg, link } = useLinkWhatsAppNumber({ tenantId })
   return (
     <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12 }}>
       <b style={{ fontSize: 13 }}>Link a WhatsApp number on Vula’s account</b>
@@ -156,23 +118,7 @@ function LinkWhatsAppNumber({ tenantId }) {
 }
 
 function WhatsAppCatalogue({ tenantId }) {
-  const [cid, setCid] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [res, setRes] = useState(null)
-  const [msg, setMsg] = useState('')
-  const push = async () => {
-    setBusy(true); setMsg(''); setRes(null)
-    try {
-      const d = await authFetch(`/v1/master/tenants/${tenantId}/meta-catalog`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ catalog_id: cid.trim() || undefined }),
-      })
-      if (d.detail) setMsg(d.detail)
-      else if (d.status !== 'success') setMsg(d.error || d.message || 'The catalogue was not updated.')
-      else setRes(d)
-    } catch (e) { setMsg(e.message) }
-    setBusy(false)
-  }
+  const { cid, setCid, busy, res, msg, push } = useWhatsAppCatalogue({ tenantId })
   return (
     <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12 }}>
       <b style={{ fontSize: 13 }}>WhatsApp catalogue</b>
@@ -194,8 +140,7 @@ function WhatsAppCatalogue({ tenantId }) {
 }
 
 function TenantUsageTab({ tenantId, onError }) {
-  const [u, setU] = useState(null)
-  useEffect(() => { authFetch('/v1/master/usage?days=14').then(setU).catch((e) => onError(e.message)) }, [tenantId])  // eslint-disable-line
+  const { u } = useTenantUsage({ tenantId, onError })
   if (!u) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const t = (u.per_tenant || {})[tenantId]
   if (!t) return <div style={{ color: C.muted, fontSize: 13 }}>No usage recorded for this tenant in the last 14 days.</div>
@@ -219,10 +164,7 @@ function Stat({ label, value }) {
 }
 
 function TenantAuditTab({ tenantId, onError }) {
-  const [events, setEvents] = useState(null)
-  useEffect(() => {
-    authFetch(`/v1/master/audit?tenant_id=${tenantId}&limit=50`).then((d) => setEvents(d.events || [])).catch((e) => onError(e.message))
-  }, [tenantId])  // eslint-disable-line
+  const { events } = useTenantAudit({ tenantId, onError })
   if (!events) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   return (
     <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
@@ -250,11 +192,7 @@ function TenantAuditTab({ tenantId, onError }) {
 // interactive thread view. Deliberately not answer/dismiss-able from here (kept lightweight);
 // "Open full admin →" is where a real reply happens.
 function TenantEscalationsTab({ tenantId, onError }) {
-  const [rows, setRows] = useState(null)
-  useEffect(() => {
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations?status=open&limit=20`)
-      .then((r) => r.json()).then((d) => setRows(d.escalations || [])).catch((e) => onError(e.message))
-  }, [tenantId])  // eslint-disable-line
+  const { rows } = useTenantEscalations({ tenantId, onError })
   if (!rows) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   if (!rows.length) return <div style={{ color: C.muted, fontSize: 13 }}>No open escalations for this tenant. ✓</div>
   return (
@@ -278,22 +216,7 @@ function TenantEscalationsTab({ tenantId, onError }) {
 // (thread picker → one thread's messages) kept in one component since there's nothing else
 // to coordinate with — a thread click doesn't need to survive navigating away from this tab.
 function TenantConversationsTab({ tenantId, onError }) {
-  const [threads, setThreads] = useState(null)
-  const [openPhone, setOpenPhone] = useState(null)
-  const [messages, setMessages] = useState(null)
-
-  useEffect(() => {
-    setOpenPhone(null); setMessages(null)
-    authFetch(`/v1/master/tenants/${tenantId}/conversations`)
-      .then((d) => setThreads(d.threads || [])).catch((e) => onError(e.message))
-  }, [tenantId])  // eslint-disable-line
-
-  const openThread = (phone) => {
-    setOpenPhone(phone); setMessages(null)
-    authFetch(`/v1/master/tenants/${tenantId}/conversations/${encodeURIComponent(phone)}`)
-      .then((d) => setMessages(d.messages || [])).catch((e) => onError(e.message))
-  }
-
+  const { threads, openPhone, setOpenPhone, messages, openThread } = useTenantConversations({ tenantId, onError })
   if (openPhone) {
     return (
       <div>
@@ -350,10 +273,7 @@ function TenantConversationsTab({ tenantId, onError }) {
 // verification defects); deliberately not routing/escalation telemetry, which is normal
 // operation, not an error — see vula/api/master.py's master_tenant_errors docstring.
 function TenantErrorsTab({ tenantId, onError }) {
-  const [d, setD] = useState(null)
-  useEffect(() => {
-    authFetch(`/v1/master/tenants/${tenantId}/errors`).then(setD).catch((e) => onError(e.message))
-  }, [tenantId])  // eslint-disable-line
+  const { d } = useTenantErrors({ tenantId, onError })
   if (!d) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const failures = Array.isArray(d.webhook_failures) ? d.webhook_failures : []
   const flags = Array.isArray(d.verification_flags) ? d.verification_flags : []
