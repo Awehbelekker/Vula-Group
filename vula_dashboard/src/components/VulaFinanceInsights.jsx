@@ -3,37 +3,13 @@
  * VAT collected, receivables, top customers — plus a plain-language "Ask Vula" read.
  * Backend: /v1/commerce/{tenant}/admin/finances/insights
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { INSIGHT_PERIODS as PERIODS, RISK_LABELS, useFinanceInsights } from "./finances/useFinances";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const PERIODS = [{ d: 7, l: "7 days" }, { d: 30, l: "30 days" }, { d: 90, l: "90 days" }];
-const RISK_LABELS = { high_risk: "High risk", frequently_late: "Often late" };
 
 export default function VulaFinanceInsights({ tenantId }) {
-  const [days, setDays] = useState(30);
-  const [d, setD] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [summary, setSummary] = useState("");
-  const [asking, setAsking] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true); setSummary("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/finances/insights?days=${days}`)
-      .then(r => r.json()).catch(() => null);
-    setD(r); setLoading(false);
-  }, [tenantId, days]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const askVula = async () => {
-    setAsking(true);
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/finances/insights?days=${days}&explain=true`)
-      .then(r => r.json()).catch(() => null);
-    setSummary(r?.summary || "Couldn't generate a summary right now.");
-    setAsking(false);
-  };
+  const { days, setDays, d, loading, summary, asking, askVula } = useFinanceInsights(tenantId);
 
   if (loading) return <div style={{ color: C.muted, fontSize: 13, padding: 12 }}>Crunching the numbers…</div>;
   if (!d || d.error) return <div style={{ color: C.muted, fontSize: 13, padding: 12 }}>No financial data yet.</div>;

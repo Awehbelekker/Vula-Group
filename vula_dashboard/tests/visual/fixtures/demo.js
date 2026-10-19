@@ -643,3 +643,45 @@ export const reportPnl = {
 };
 export const reportVat = { vat_registered: true, output_vat_cents: 2_444_674, input_vat_cents: 1_198_210, net_vat_cents: 1_246_464,
   note: "From bank lines with VAT recorded — check against your invoices before filing." };
+
+// ── Finances (finances/insights, reports, projects/finances, trial balance, cross-check) ─────
+export const financeInsights = {
+  revenue_cents: 18_742_500, expenses_cents: 12_364_800, gross_profit_cents: 6_377_700, margin_pct: 34, orders_count: 142,
+  vat: { collected_cents: 2_444_674, note: "VAT collected is from paid invoices only." },
+  receivables: { outstanding_cents: 864_200, count: 3, overdue_cents: 312_400,
+    aging: { current: 551_800, days_1_30: 212_400, days_31_60: 100_000, days_61_90: 0, days_90_plus: 0 } },
+  payment_behavior: { overall: { on_time_pct: 82, sample_size: 61 },
+    watch_list: [{ customer_name: "Bay Events Co.", customer_phone: "+27820000106", label: "frequently_late", on_time_pct: 40, avg_days_late: 12 }] },
+  top_customers: [{ name: "Bay Events Co.", revenue_cents: 2_622_500 }, { name: "Thandi Mokoena", revenue_cents: 412_850 }, { name: "Pieter van der Berg", revenue_cents: 268_400 }],
+  top_expense_categories: [{ category: "Cost of sales", amount_cents: 7_412_000 }, { category: "Casual labour", amount_cents: 1_920_000 }, { category: "Rent", amount_cents: 1_850_000 }],
+};
+const trendDay = (i) => { const d = new Date(Date.UTC(2026, 9, 17 - 29 + i)); return d.toISOString().slice(0, 10); };
+const REV = [412, 520, 0, 610, 735, 880, 455, 390, 505, 0, 640, 720, 910, 480, 430, 560, 0, 690, 760, 1020, 515, 470, 585, 0, 705, 790, 1150, 540, 610, 665];
+export const salesReport = {
+  total_revenue_cents: 16_747_000, total_orders: 142,   // = the sum of revenue_trend
+  revenue_trend: REV.map((r, i) => ({ date: trendDay(i), orders: r ? Math.round(r / 140) + 2 : 0, revenue_cents: r * 1_000 })),
+  top_products: [{ name: "Catering platter (60)", units: 9, revenue_cents: 2_622_500 }, { name: "Sourdough loaf", units: 412, revenue_cents: 2_266_000 },
+    { name: "Cheese board", units: 88, revenue_cents: 1_672_000 }, { name: "Coffee beans 1kg", units: 41, revenue_cents: 1_066_000 }],
+};
+export const projectFinances = {
+  total_in: 64500.5, total_out: 31275.25,
+  projects: [{ project: "Catering", count: 12, in: 52_400, out: 24_100.25, budget: 60_000, remaining: 35_899.75 },
+    { project: "Shop", count: 31, in: 12_100.5, out: 7_175, budget: 0, remaining: null }],
+  transactions: [
+    { id: "ft-1", direction: "in", counterparty: "Bay Events Co.", description: "INV-0041 payment", project: "Catering", amount: 8642, reconciled: true, kind: "payment" },
+    { id: "ft-2", direction: "out", counterparty: "Atlantic Dairy Co-op", description: "BILL-0031", project: "Shop", amount: 8642, reconciled: false, kind: "invoice" },
+    { id: "ft-3", direction: "out", counterparty: null, filename: "Westbank-bakery-delivery-note.pdf", description: null, project: null, amount: 1240.5, reconciled: false, kind: "delivery_note" },
+  ],
+};
+export const projectClaims = { claims: [
+  { id: "cl-1", claim_number: 1, cumulative_value_cents: 3_000_000, retention_cents: 150_000, retention_pct: 5, certified_to_date_cents: 2_850_000, this_payment_cents: 2_850_000, status: "certified", linked_invoice_id: "inv-0039" },
+  { id: "cl-2", claim_number: 2, cumulative_value_cents: 5_200_000, retention_cents: 260_000, retention_pct: 5, certified_to_date_cents: 4_940_000, this_payment_cents: 2_090_000, status: "draft", linked_invoice_id: null },
+] };
+export const trialBalance = { total_debit_cents: 31_442_150, total_credit_cents: 31_442_150, accounts: [
+  { code: "1000", name: "Bank", type: "asset", debit_cents: 18_742_500, credit_cents: 0 },
+  { code: "4000", name: "Sales", type: "income", debit_cents: 0, credit_cents: 18_742_500 },
+  { code: "5000", name: "Cost of sales", type: "expense", debit_cents: 7_412_000, credit_cents: 0 },
+  { code: "2000", name: "Accounts payable", type: "liability", debit_cents: 5_287_650, credit_cents: 12_699_650 },
+] };
+export const crossCheck = { text: "9 documents filed; 7 are in the books and 5 are matched to the bank.", unbooked: [], unbooked_total_cents: 0,
+  bills_unpaid: [], no_document: [], no_document_total_cents: 0, sales_unpaid: [], money_in_unmatched_cents: 0, money_in_unmatched_lines: 0, unexplained_in_sample: [] };

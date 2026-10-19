@@ -625,3 +625,53 @@ test("books: a date range goes to both reports; the ledger export downloads", as
   await page.getByRole("button", { name: "Export for accountant (CSV)" }).click();
   expect((await dl).suggestedFilename()).toBe("ledger_2026-10-01_.csv");
 });
+
+// ── Finances (insights, sales, ledger) ──
+const FINANCES = { name: "finances", role: "owner", nav: "Money", tab: "Finances", ready: "Financial insights" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`finances ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, FINANCES, { viewport, theme });
+      await expect(page.getByRole("img", { name: /^Revenue per day — last 30 days: R.167.470\.00 over 30 days/ })).toBeVisible();
+      await check(page, ti, "finances", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Ledger" }).click();
+      await page.getByRole("button", { name: /^Catering/ }).click();
+      await expect(page.getByText("Progress claims (interim payment certificates)")).toBeVisible();
+      await page.getByRole("button", { name: "General ledger (trial balance)" }).click();
+      await expect(page.getByRole("row", { name: /^Bank · asset R.187.425\.00/ })).toBeVisible();   // cents, not 100× (the old bug)
+      await check(page, ti, "finances-ledger", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("finances: the chart has a table view; periods and the CSV export behave as before", async ({ page }) => {
+  await openScreen(page, FINANCES, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("button", { name: "Show as table" }).click();
+  await expect(page.getByRole("row", { name: /^17 Oct 7 R.6.650\.00$/ })).toBeVisible();
+  const r7 = page.waitForRequest((r) => /\/admin\/reports$/.test(new URL(r.url()).pathname) && new URL(r.url()).searchParams.get("days") === "7");
+  await page.getByRole("group", { name: "Days" }).getByRole("button", { name: "7 days" }).click();
+  await r7;
+  const ins = page.waitForRequest((r) => /\/finances\/insights$/.test(new URL(r.url()).pathname) && new URL(r.url()).searchParams.get("days") === "90");
+  await page.getByRole("group", { name: "Period" }).getByRole("button", { name: "90 days" }).click();
+  await ins;
+});
+
+test("finances ledger: budget, a new claim and certify send the same bodies", async ({ page }) => {
+  await openScreen(page, FINANCES, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.getByRole("tab", { name: "Ledger" }).click();
+  await page.getByRole("button", { name: "Set the budget for Shop" }).click();
+  await page.getByLabel("Budget for Shop (R)").fill("15000");
+  const bud = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/projects\/[^/]+\/budget$/.test(new URL(r.url()).pathname));
+  await page.getByLabel("Budget for Shop (R)").press("Enter");
+  expect((await bud).postDataJSON()).toEqual({ project: "Shop", budget: 15000 });
+  await page.getByRole("button", { name: /^Catering/ }).click();
+  await page.getByLabel("New claim — work done to date (R)").fill("6400000");
+  const claim = page.waitForRequest((r) => r.method() === "POST" && /\/p\/Catering\/claims$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Add claim" }).click();
+  expect((await claim).postDataJSON()).toEqual({ cumulative_value: 6400000, retention_pct: 5 });
+  const cert = page.waitForRequest((r) => r.method() === "POST" && /\/claims\/cl-2\/certify$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Certify" }).click();
+  await cert;
+});

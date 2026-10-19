@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
 import { downloadCsv } from "../lib/csv";
-import { VULA_API } from "../lib/authFetch";
+import { useSalesReport } from "./finances/useFinances";
 
 
 const C = {
@@ -56,25 +55,7 @@ function BarChart({ data }) {
 }
 
 export default function VulaReports({ tenantId }) {
-  const [days, setDays] = useState(30);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async (d) => {
-    if (!tenantId) return;
-    setLoading(true); setError("");
-    try {
-      const res = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports?days=${d}`);
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      setData(await res.json());
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
-  }, [tenantId]);
-
-  useEffect(() => { load(days); }, [load, days]);
-
-  const avgCents = data?.total_orders > 0 ? Math.round(data.total_revenue_cents / data.total_orders) : 0;
+  const { days, setDays, data, loading, error, avgCents } = useSalesReport(tenantId);
 
   return (
     <div style={{ padding: "4px 0" }}>
