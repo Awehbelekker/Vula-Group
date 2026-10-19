@@ -5,6 +5,7 @@ import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
+import * as F from "./fixtures/demo.js";
 
 test.skip(process.env.UI_V2 !== "1", "the redesign runs with UI_V2=1");
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
@@ -674,6 +675,69 @@ test("finances ledger: budget, a new claim and certify send the same bodies", as
   const cert = page.waitForRequest((r) => r.method() === "POST" && /\/claims\/cl-2\/certify$/.test(new URL(r.url()).pathname));
   await page.getByRole("button", { name: "Certify" }).click();
   await cert;
+});
+
+// ── Finances › Ledger: job costing + cross-check, as a project business ──
+// Routed in after the screen opens (Playwright tries the newest route first); the Ledger tab
+// mounts both, so they read the project profile and the fuller fixtures.
+async function asProjectBusiness(page) {
+  const ok = (body) => (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+  await page.route(/vula\.test\/v1\/tenants\/[^/?]+$/, ok({ ...F.tenant, profile: { ...F.tenant.profile, uses_projects: true } }));
+  await page.route(/\/admin\/projects\/costing$/, ok(F.jobCosting));
+  await page.route(/\/admin\/crosscheck$/, ok(F.crossCheckFull));
+  await page.route(/\/admin\/reports\/vat-scenario$/, ok(F.vatScenario));
+}
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`job costing + cross-check ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, FINANCES, { viewport, theme });
+      await asProjectBusiness(page);
+      await page.getByRole("tab", { name: "Ledger" }).click();
+      await expect(page.getByRole("heading", { name: "Job costing — is each project making its fee?" })).toBeVisible();
+      await page.getByRole("button", { name: /^Bo-Kaap shopfit/ }).click();
+      await expect(page.getByRole("list", { name: "Cost by trade for Bo-Kaap shopfit" }).getByText(/^R.163.000$/)).toBeVisible();
+      await page.getByRole("button", { name: /^Supplier bills not marked paid/ }).click();
+      await expect(page.getByRole("region", { name: "VAT per month" })).toBeVisible();
+      await page.getByRole("heading", { name: "Job costing — is each project making its fee?" }).scrollIntoViewIfNeeded();
+      await check(page, ti, "jobcosting", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("job costing + cross-check: fee, price advice, book and match send the same requests", async ({ page }) => {
+  await openScreen(page, FINANCES, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await asProjectBusiness(page);
+  await page.getByRole("tab", { name: "Ledger" }).click();
+  await page.getByRole("button", { name: /^Clifton house/ }).click();
+  await page.getByLabel("Fee % for Clifton house").fill("12.5");
+  const fee = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/projects\/terms$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Save fee" }).click();
+  expect((await fee).postDataJSON()).toEqual({ project: "Clifton house", fee_pct: 12.5 });
+
+  await page.getByLabel("Item or work").fill("ceiling board");
+  await page.getByLabel("Quantity").fill("40");
+  await page.getByLabel("Unit").fill("m2");
+  const adv = page.waitForRequest((r) => /\/admin\/projects\/price-advice$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Price it" }).click();
+  expect(Object.fromEntries(new URL((await adv).url()).searchParams)).toEqual({ item: "ceiling board", quantity: "40", unit: "m2" });
+
+  await page.getByRole("button", { name: /^Bills filed but not in the books/ }).click();
+  const book = page.waitForRequest((r) => r.method() === "POST" && /\/crosscheck\/book-unbooked$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Book them" }).click();
+  await book;
+  await page.getByRole("button", { name: /^Supplier bills not marked paid/ }).click();
+  const match = page.waitForRequest((r) => r.method() === "POST" && /\/bank\/transactions\/tx-77\/match$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Yes, Atlantic Electrical was paid on 2026-10-06" }).click();
+  expect((await match).postDataJSON()).toEqual({ action: "match", invoice_id: "bi-1" });
+});
+
+test("a business without projects shows no empty job-costing box", async ({ page }) => {
+  await openScreen(page, FINANCES, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("tab", { name: "Ledger" }).click();
+  await expect(page.getByRole("heading", { name: /^Cross-check/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Job costing/ })).toHaveCount(0);
 });
 
 // ── Sell › Discounts, Subscriptions, Delivery ──

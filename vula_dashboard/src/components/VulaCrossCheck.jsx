@@ -5,9 +5,9 @@
  * that probably paid each — one tap to confirm), payments with no invoice on file (no VAT claim
  * without one), unpaid sales invoices, and a VAT view: what the business charges and can claim —
  * or, not registered, what it would be — per month. Backend: vula/commerce/cross_check.py.
+ * Data and actions: finances/useCrossCheck.js (shared with the redesign's CrossCheckV2).
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useCrossCheck } from "./finances/useCrossCheck";
 import { ErrorCard, Skeleton } from "./ui/index.jsx";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)",
@@ -28,35 +28,7 @@ function Section({ title, count, children, open, onToggle }) {
 }
 
 export default function VulaCrossCheck({ tenantId }) {
-  const [rep, setRep] = useState(null);
-  const [vat, setVat] = useState(null);
-  const [open, setOpen] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  const base = `${VULA_API}/v1/commerce/${tenantId}/admin`;
-
-  const [loaded, setLoaded] = useState(false);
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    const [a, b] = await Promise.all([
-      fetch(`${base}/crosscheck`).then(r => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${base}/reports/vat-scenario`).then(r => (r.ok ? r.json() : null)).catch(() => null),
-    ]);
-    setRep(a); setVat(b); setLoaded(true);
-  }, [tenantId, base]);
-  useEffect(() => { load(); }, [load]);
-
-  const toggle = (k) => setOpen(open === k ? "" : k);
-  const bookAll = async () => {
-    setBusy(true);
-    const r = await fetch(`${base}/crosscheck/book-unbooked`, { method: "POST" }).then(r => r.json()).catch(() => ({}));
-    setBusy(false); setMsg(r.detail || `Booked ${r.booked ?? 0}; ${r.skipped ?? 0} couldn't be.`); load();
-  };
-  const confirm = async (txnId, invoiceId) => {
-    await fetch(`${base}/bank/transactions/${txnId}/match`, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "match", invoice_id: invoiceId }) }).catch(() => {});
-    load();
-  };
+  const { rep, vat, open, toggle, busy, msg, loaded, load, bookAll, confirm } = useCrossCheck(tenantId);
 
   if (!loaded) return <div style={{ padding: 16 }}><Skeleton height={18} width="40%" /><Skeleton height={48} style={{ marginTop: 12 }} /></div>;
   if (!rep || rep.detail) return <ErrorCard what="the cross-check" onRetry={load} />;
