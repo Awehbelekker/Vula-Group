@@ -288,7 +288,7 @@ export default function VulaFinances({ tenantId }) {
           </div>
         )}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 20 }}>Powered by Vula · figures from filed invoices & payments</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 20 }}><span className="vula-powered">Powered by Vula · </span>figures from filed invoices & payments</p>
     </div>
   );
 }

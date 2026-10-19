@@ -90,7 +90,7 @@ button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
 .vui-chip { min-height: 36px; padding: 0 14px; border-radius: var(--radius-pill); border: 1px solid var(--line);
   background: var(--surface); color: var(--ink); font: 500 var(--fs-label)/1 var(--font-sans);
   white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.vui-chip[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.vui-chip[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-text); }
 
 /* ── Sheet: bottom sheet on a phone, side panel from 768px ──────────────────────────────── */
 .vui-scrim { position: fixed; inset: 0; z-index: 900; background: color-mix(in srgb, var(--ink) 40%, transparent);
@@ -155,3 +155,6 @@ button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
 .vui-toast-action { all: unset; cursor: pointer; font-weight: 600; text-decoration: underline;
   text-underline-offset: 3px; margin-left: 12px; }
 .vui-toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
+/* ── Page footers: the redesign says "Powered by Vula" once, in the shell (Phase F) ──────── */
+:root[data-ui="v2"] .vula-powered { display: none !important; }

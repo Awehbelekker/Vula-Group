@@ -1,0 +1,33 @@
+/* team.css — the redesigned Team (team/TeamV2.jsx). Tokens only. */
+.vtm-block, .vtm-member { margin-bottom: var(--space-3); }
+.vtm-member--off { background: var(--surface-2) !important; border-style: dashed !important; }
+.vtm-h { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 4px; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vtm-h3 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-4) 0 var(--space-2);
+  font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vtm-h3 .vui-badge, .vtm-h3 span { text-transform: none; letter-spacing: 0; }
+.vtm-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--space-2); }
+.vtm-strong { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.vtm-form { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); align-items: end; margin: var(--space-3) 0; }
+.vtm-go { display: flex; align-items: flex-end; }
+.vtm-pw { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+  background: var(--highlight-soft); color: var(--ink); font: 500 var(--fs-body)/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.vtm-msg { margin: 0 0 var(--space-2); font-size: var(--fs-caption); color: var(--danger-text); }
+.vtm-msg--ok { color: var(--ok-text); }
+.vtm-logins { border-top: 1px solid var(--line); }
+.vtm-login { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--line); }
+.vtm-login-who { display: flex; flex-direction: column; min-width: 0; flex: 1 1 200px; }
+.vtm-login-who .vtm-sub { margin: 0; }
+.vtm-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.vtm-mypw { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); margin-top: var(--space-3); }
+.vtm-mypw > div:first-child { flex: 1 1 240px; }
+.vtm-member-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vtm-role { width: auto !important; min-width: 170px; }
+.vtm-group { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: var(--space-2); align-items: start; padding: 6px 0; }
+@media (max-width: 600px) { .vtm-group { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+.vtm-group-label { font-size: var(--fs-caption); color: var(--muted); padding-top: 9px; }
+.vtm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.vtm-chip { min-height: 32px; padding: 0 12px; }
+.vtm-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); cursor: pointer; min-height: 44px; }
+.vtm-summary .vtm-sub { margin: 0; }
+.vtm-audit-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); padding: 6px 0; border-top: 1px solid var(--line); font-size: var(--fs-body); }
+.vtm-audit-row .vtm-sub { margin: 0; min-width: 150px; }

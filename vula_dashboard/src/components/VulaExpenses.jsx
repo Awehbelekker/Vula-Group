@@ -3,13 +3,14 @@
  * Who paid, what for, VAT, which project, and reimbursement status (submitted → approved →
  * reimbursed). Receipts snapped on WhatsApp land here automatically; add manual ones too.
  * Backend: /v1/commerce/{tenant}/admin/expenses (+ /assign, /{id}/status, /reports/expenses).
+ * Data and actions live in expenses/useExpenses.js (shared with expenses/ExpensesV2.jsx).
  */
-import { useEffect, useState } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useState } from "react";
+import { addExpense, EXPENSE_FILTERS, useExpenses } from "./expenses/useExpenses";
+import ExpensesV2 from "./expenses/ExpensesV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((Number(c) || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const api = (t, p, opts) => fetch(`${VULA_API}/v1/commerce/${t}/admin${p}`, opts).then(r => r.json());
 
 const STATUS = {
   submitted: { label: "Submitted", color: C.muted },
@@ -19,70 +20,20 @@ const STATUS = {
   rejected: { label: "Rejected", color: C.red },
 };
 
-export default function VulaExpenses({ tenantId, defaultPaidBy }) {
-  const [rows, setRows] = useState([]);
-  const [projects, setProjects] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [sections, setSections] = useState([]);
-  const [purposeCategories, setPurposeCategories] = useState([]);
-  const [rep, setRep] = useState(null);
-  const [filter, setFilter] = useState("all");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+/** v2: the redesigned screen (same hook, so the same data and actions). */
+export default function VulaExpenses({ tenantId, defaultPaidBy, v2 = false }) {
+  if (v2) return <ExpensesV2 tenantId={tenantId} defaultPaidBy={defaultPaidBy} />;
+  return <ExpensesV1 tenantId={tenantId} defaultPaidBy={defaultPaidBy} />;
+}
+
+// data + actions in expenses/useExpenses.js (shared with the redesign's expenses/ExpensesV2.jsx)
+function ExpensesV1({ tenantId, defaultPaidBy }) {
+  const {
+    rows, projects, categories, sections, purposeCategories, rep, filter, setFilter, busy, msg,
+    cards, newCard, setNewCard, load, addCard, dropCard, setStatus, assign, owed,
+  } = useExpenses(tenantId, defaultPaidBy);
   const [adding, setAdding] = useState(false);
-  const [cards, setCards] = useState([]);
-  const [newCard, setNewCard] = useState("");
 
-  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 4000); };
-
-  const load = async () => {
-    setBusy(true);
-    const params = new URLSearchParams();
-    if (filter === "owed") params.set("reimbursable", "true");
-    else if (filter !== "all") params.set("status", filter);
-    if (defaultPaidBy) params.set("paid_by", defaultPaidBy);
-    const q = params.toString() ? `?${params}` : "";
-    const [d, r, c] = await Promise.all([
-      api(tenantId, `/expenses${q}`).catch(() => ({ expenses: [] })),
-      api(tenantId, `/reports/expenses`).catch(() => null),
-      api(tenantId, `/cards`).catch(() => ({ cards: [] })),
-    ]);
-    setRows(d.expenses || []);
-    setProjects(d.projects || []);
-    setCategories(d.categories || []);
-    setSections(d.sections || []);
-    setPurposeCategories(d.purpose_categories || []);
-    setRep(r);
-    setCards(c.cards || []);
-    setBusy(false);
-  };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [tenantId, filter]);
-
-  const addCard = async () => {
-    const last4 = (newCard || "").replace(/\D/g, "").slice(-4);
-    if (last4.length !== 4) return flash("Enter the card's last 4 digits.");
-    await api(tenantId, `/cards`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ last4, label: "Company card" }),
-    });
-    setNewCard(""); flash("Company card saved — receipts on it are matched to the bank statement."); load();
-  };
-  const dropCard = async (id) => { await api(tenantId, `/cards/${id}`, { method: "DELETE" }); load(); };
-
-  const setStatus = async (id, status) => {
-    await api(tenantId, `/expenses/${id}/status`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
-    });
-    flash("Updated."); load();
-  };
-  const assign = async (id, patch) => {
-    await api(tenantId, `/expenses/${id}/assign`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
-    });
-    flash("Allocated + learned."); load();
-  };
-
-  const owed = rep?.reimbursable_owed_cents || 0;
 
   return (
     <div style={{ color: C.text, maxWidth: 960 }}>
@@ -133,7 +84,7 @@ export default function VulaExpenses({ tenantId, defaultPaidBy }) {
 
       {/* Filters */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "6px 0 10px" }}>
-        {["all", "submitted", "approved", "owed", "reimbursed"].map(f => (
+        {EXPENSE_FILTERS.map(f => (
           <button key={f} onClick={() => setFilter(f)}
             style={{ ...chip, ...(filter === f ? chipOn : {}) }}>{f === "owed" ? "reimbursable" : f}</button>
         ))}
@@ -242,14 +193,7 @@ function AddForm({ tenantId, projects, sections, onDone }) {
   const submit = async () => {
     if (!f.amount || !f.description) return;
     setBusy(true);
-    await api(tenantId, "/expenses", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount_cents: Math.round(parseFloat(f.amount) * 100), description: f.description,
-        supplier: f.supplier || null, date: f.date || null, project: f.project || null,
-        section: f.section || null, paid_by_name: f.paid_by_name || null, reimbursable: f.reimbursable,
-      }),
-    });
+    await addExpense(tenantId, f);
     setBusy(false); onDone();
   };
   return (

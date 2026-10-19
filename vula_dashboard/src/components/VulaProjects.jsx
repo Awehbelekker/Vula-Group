@@ -231,7 +231,7 @@ export default function VulaProjects({ tenantId }) {
           )}
         </div>
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 24 }}>Powered by Vula</p>
+      <p className="vula-powered" style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 24 }}>Powered by Vula</p>
     </div>
   );
 }

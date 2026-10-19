@@ -59,6 +59,66 @@ export const customerDetail = (phone) => {
   };
 };
 
+// ── Expenses (commerce.py::admin_list_expenses, /reports/expenses, /cards) ──────────────────
+const exp = (n, date, description, amount_cents, extra = {}) => ({
+  id: `exp-${String(n).padStart(3, "0")}`, tenant_id: TENANT_ID, date, description, amount_cents,
+  vat_cents: Math.round(amount_cents * 15 / 115), supplier: null, channel: "dashboard", paid_by_name: "Demo Owner",
+  paid_with: "company_card", card_last4: "4417", reimbursable: false, category: "Cost of sales", account_code: "5000",
+  purpose_category: "stock", purpose_detail: null, project: "", section: null, notes: null, status: "submitted", ...extra,
+});
+export const expenses = [
+  exp(9, "2026-10-17", "Sourdough flour, 25kg", 64_900, { supplier: "Eureka Mills", channel: "whatsapp" }),
+  exp(8, "2026-10-16", "Delivery fuel", 85_000, { supplier: "Engen Sea Point", paid_by_name: "Zanele", paid_with: "personal", card_last4: null,
+    reimbursable: true, category: "Motor vehicle", account_code: "6200", purpose_category: "delivery", channel: "whatsapp" }),
+  exp(7, "2026-10-15", "Platter boards (x12)", 143_880, { supplier: "Builders Express", project: null, purpose_category: null, category: "Equipment", account_code: "6400" }),
+  exp(6, "2026-10-14", "Cheese wheel — aged cheddar", 212_500, { supplier: "Fairview", status: "approved" }),
+  exp(5, "2026-10-12", "Parking — supplier visit", 3_500, { paid_by_name: "Sipho", paid_with: "cash", card_last4: null, reimbursable: true,
+    status: "reimbursed", category: "Travel", account_code: "6300", purpose_category: "travel" }),
+  exp(4, "2026-10-11", "Card machine rolls", 18_950, { supplier: "Yoco", status: "unconfirmed", channel: "whatsapp", purpose_category: null }),
+];
+export const expenseReport = {
+  total_cents: expenses.reduce((a, e) => a + e.amount_cents, 0),
+  vat_cents: expenses.reduce((a, e) => a + e.vat_cents, 0),
+  reimbursable_owed_cents: 85_000, count: expenses.length,
+  by_person: [{ name: "Zanele", owed_cents: 85_000 }, { name: "Sipho", owed_cents: 0 }],
+};
+export const expenseLists = {
+  projects: ["Spring market stall", "Bay Events platters"], sections: [],
+  categories: [{ code: "5000", name: "Cost of sales" }, { code: "6200", name: "Motor vehicle" }, { code: "6300", name: "Travel" }, { code: "6400", name: "Equipment" }],
+  purpose_categories: ["stock", "delivery", "travel", "equipment", "marketing", "other"],
+};
+export const companyCards = [{ id: "card-1", last4: "4417", label: "Company card", active: true }];
+
+// ── Email contacts + follow-ups (email_connect.py) ──────────────────────────────────────────
+export const emailContacts = [
+  { id: "ec-1", name: "Lindiwe Khoza", email: "lindiwe@harbourvine.example.test", kind: "internal", message_count: 214 },
+  { id: "ec-2", name: "Bay Events Co.", email: "accounts@bayevents.example.test", kind: "client", message_count: 37 },
+  { id: "ec-3", name: "Eureka Mills", email: "orders@eurekamills.example.test", kind: "supplier", message_count: 22 },
+  { id: "ec-4", name: "Fairview Cheese", email: "sales@fairview.example.test", kind: "supplier", message_count: 15 },
+  { id: "ec-5", name: null, email: "newsletter@market.example.test", kind: "external", message_count: 4 },
+];
+export const emailFollowups = [
+  { id: "fu-1", sender_name: "Bay Events Co.", sender: "accounts@bayevents.example.test", reason: "request", urgency: "high",
+    tone: "polite", received_at: at(3, "09:10"), subject: "Platters for the 24th — confirm numbers?", summary: "Wants final numbers and a revised quote for 120 guests." },
+  { id: "fu-2", sender_name: "Eureka Mills", sender: "orders@eurekamills.example.test", reason: "schedule", urgency: "normal",
+    tone: null, received_at: at(0, "08:20"), subject: "Delivery slot next week", summary: "Asks whether Tuesday or Thursday suits for the flour delivery." },
+];
+
+// ── Team (team.py, users.py) ─────────────────────────────────────────────────────────────────
+export const teamMembers = [
+  { id: "tm-1", name: "Demo Owner", whatsapp: "+27820000001", role: "owner", active: true, access: [], notify: ["which_project", "followup_digest", "new_order"] },
+  { id: "tm-2", name: "Zanele", whatsapp: "+27820000011", role: "staff", active: true, access: ["orders", "inbox", "stock"], notify: ["new_order", "low_stock"] },
+  { id: "tm-3", name: "Sipho", whatsapp: "+27820000012", role: "sales_rep", active: false, access: ["rep-contacts", "rep-callsheet"], notify: [] },
+];
+export const teamLogins = [
+  { user_id: "u-owner-0001", email: `owner@${TENANT_ID}.example.test`, role: "owner", last_sign_in: at(0, "07:30") },
+  { user_id: "u-staff-0002", email: `zanele@${TENANT_ID}.example.test`, role: "staff", last_sign_in: null },
+];
+export const teamAudit = [
+  { id: "au-1", created_at: at(1, "15:02"), actor_email: `owner@${TENANT_ID}.example.test`, action: "member_updated", detail: { name: "Zanele" } },
+  { id: "au-2", created_at: at(4, "10:40"), actor_email: `owner@${TENANT_ID}.example.test`, action: "login_created", detail: { email: `zanele@${TENANT_ID}.example.test` } },
+];
+
 // ── Products (commerce.py::admin_list_products) ──────────────────────────────────────────────
 export const products = [
   ["p-01", "Smoked snoek pâté (200g)", "extras", 8_900, 24],

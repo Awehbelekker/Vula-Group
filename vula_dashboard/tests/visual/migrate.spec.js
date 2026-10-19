@@ -131,3 +131,113 @@ test("invoices: direction and type switch the list; quotes get the bulk delete",
   await pick.check();
   await expect(page.getByRole("region", { name: "Selected quotes" })).toContainText("1 selected");
 });
+
+test("Stock and Suppliers live under Operate; a link to the old place still opens Stock", async ({ page }) => {
+  await openScreen(page, { name: "home", role: "owner", nav: "Sell", ready: "Paid, packed and sent" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.locator('[role=tab][data-tab="stock"]')).toHaveCount(0);
+  await expect(page.locator('[role=tab][data-tab="suppliers"]')).toHaveCount(0);
+  await page.locator(".v2-nav-item", { has: page.locator(".v2-nav-lb", { hasText: /^Operate$/ }) }).click();
+  await expect(page.locator('[role=tab][data-tab="stock"]')).toBeVisible();
+  await expect(page.locator('[role=tab][data-tab="suppliers"]')).toBeVisible();
+  // Home's Low stock tile links { section: "sell", tab: "stock" }
+  await page.locator(".v2-nav-item", { has: page.locator(".v2-nav-lb", { hasText: /^Home$/ }) }).click();
+  await page.getByRole("tab", { name: "Back house" }).click();
+  await page.getByRole("button", { name: /Low stock/ }).click();
+  await expect(page.locator('[role=tab][data-tab="stock"][aria-selected="true"]')).toBeVisible();
+  await expect(page.locator(".v2-title")).toHaveText("Operate");
+});
+
+const EXPENSES = { name: "expenses", role: "owner", nav: "Money", tab: "Expenses", ready: "Receipts sent on WhatsApp appear here" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`expenses ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, EXPENSES, { viewport, theme });
+      await expect(page.getByText("Sourdough flour, 25kg").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "expenses", `${vp}-${theme}`, viewport);
+      await page.getByText("Platter boards (x12)").locator("visible=true").first().click();
+      const sheet = page.getByRole("dialog", { name: "Platter boards (x12)" });
+      await expect(sheet.getByLabel("Project")).toBeVisible();
+      expect(bad(await new AxeBuilder({ page }).include(".vui-sheet").analyze())).toEqual([]);
+      await page.screenshot({ path: out(ti, `expenses-open-${vp}-${theme}.png`), animations: "disabled" });
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("expenses: what needs a person is flagged; allocating posts the same assign call", async ({ page }) => {
+  await openScreen(page, EXPENSES, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.getByText("Needs project + purpose").locator("visible=true")).toBeVisible();
+  await expect(page.getByText("Not booked yet").locator("visible=true")).toBeVisible();          // the 'unconfirmed' status (migration 216)
+  await expect(page.getByText("Owed to people").locator("..")).toContainText("R 850");
+  const posted = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/expenses\/exp-007\/assign$/.test(new URL(r.url()).pathname));
+  await page.getByText("Platter boards (x12)").locator("visible=true").click();
+  await page.getByRole("dialog").getByLabel("Project").selectOption("Bay Events platters");
+  expect((await posted).postDataJSON()).toEqual({ project: "Bay Events platters" });
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Reimbursable" }).click();
+  await expect(page.locator(".vex-table tbody tr")).toHaveCount(2);
+});
+
+const CONTACTS = { name: "contacts", role: "owner", nav: "People", tab: "Contacts", ready: "Your email directory" };
+const FOLLOWUPS = { name: "followups", role: "owner", modules: ["followups"], nav: "People", tab: "Follow-ups", ready: "Emails Vula thinks are waiting on you" };
+
+for (const s of [CONTACTS, FOLLOWUPS]) {
+  for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+    for (const theme of THEMES) {
+      test(`${s.name} ${vp} ${theme}`, async ({ page }, ti) => {
+        const errors = await openScreen(page, s, { viewport, theme });
+        await check(page, ti, s.name, `${vp}-${theme}`, viewport);
+        expect(errors).toEqual([]);
+      });
+    }
+  }
+}
+
+test("contacts: kind chips and search filter; re-tag posts the same PATCH", async ({ page }) => {
+  await openScreen(page, CONTACTS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const rows = page.locator(".vui-table tbody tr");
+  await expect(rows).toHaveCount(5);
+  await page.getByRole("button", { name: /Suppliers/ }).click();
+  await expect(rows).toHaveCount(2);
+  await page.getByRole("searchbox").fill("eureka");
+  await expect(rows).toHaveCount(1);
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/email\/contacts\/[^/]+\/ec-3$/.test(new URL(r.url()).pathname));
+  await rows.first().getByLabel("Kind for Eureka Mills").selectOption("client");
+  expect((await patched).postDataJSON()).toEqual({ kind: "client" });
+});
+
+test("follow-ups: Done posts status done", async ({ page }) => {
+  await openScreen(page, FOLLOWUPS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await expect(page.getByText("3d waiting")).toBeVisible();
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/email\/followups\/[^/]+\/fu-1$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Done" }).first().click();
+  expect((await patched).postDataJSON()).toEqual({ status: "done" });
+});
+
+const TEAM = { name: "team", role: "owner", nav: "Team", ready: "Logins & passwords" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`team ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, TEAM, { viewport, theme });
+      await expect(page.getByText("Zanele").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "team", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("team: access chips toggle with the same PATCH; Stock sits under Operate", async ({ page }) => {
+  await openScreen(page, TEAM, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const zanele = page.locator(".vtm-member", { hasText: "Zanele" });
+  const operate = zanele.getByRole("group", { name: "Operate access for Zanele" });
+  await expect(operate.getByRole("button", { name: "Stock" })).toHaveAttribute("aria-pressed", "true");
+  await expect(zanele.getByRole("group", { name: "Sell access for Zanele" }).getByRole("button", { name: "Stock" })).toHaveCount(0);
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/team\/[^/]+\/tm-2$/.test(new URL(r.url()).pathname));
+  await zanele.getByRole("group", { name: "Sell access for Zanele" }).getByRole("button", { name: "Products" }).click();
+  expect((await patched).postDataJSON()).toEqual({ access: ["orders", "inbox", "stock", "products"] });
+  // owner: full access, every chip pressed
+  const owner = page.locator(".vtm-member", { hasText: "Demo Owner" });
+  await expect(owner.getByText("Full access (owner / manager)")).toBeVisible();
+});

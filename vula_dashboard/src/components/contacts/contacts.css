@@ -1,0 +1,7 @@
+/* contacts.css — the redesigned email-contact library (contacts/ContactsV2.jsx). Tokens only. */
+.vco-who { display: inline-flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.vco-name { font-weight: 500; color: var(--ink); }
+.vco-sub { font-size: var(--fs-caption); color: var(--muted); }
+.vco-hint { margin: 0 0 var(--space-1); }
+.vco-msg { margin: 0 0 var(--space-2); font-size: var(--fs-caption); color: var(--ok-text); }
+.vco-kind { width: auto !important; min-width: 120px; padding-top: 6px !important; padding-bottom: 6px !important; }

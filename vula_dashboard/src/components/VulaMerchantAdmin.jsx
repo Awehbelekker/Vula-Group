@@ -15,7 +15,7 @@ import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { SectionTabs, toast, confirmDialog, Skeleton, ErrorCard } from './ui/index.jsx'
 import { toQty } from './VulaStock'
 import { useSectionTabs } from '../hooks/useSectionTabs'
-import { MERCHANT_GROUPS } from '../navConfig.jsx'
+import { MERCHANT_GROUPS, sectionOf } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
@@ -140,7 +140,12 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
   // section (e.g. Invoices, inside Money) now switches the top-level tab AND records which
   // sub-tab that section should open on — each Section wrapper below consumes+clears this once.
   const [pendingNav, setPendingNav] = useState(null)   // { subtab } for whichever section `tab` is about to become
-  const navigateTo = (section, subtab) => { setPendingNav(subtab ? { subtab } : null); setTab(section) }
+  // a sub-tab opens in whichever section holds it in this menu (the redesign moves some — e.g.
+  // Stock from Sell to Operate — so a link naming the old section still lands right)
+  const navigateTo = (section, subtab) => {
+    setPendingNav(subtab ? { subtab } : null)
+    setTab(subtab ? sectionOf(navGroups, subtab, section) : section)
+  }
   // The redesigned shell's search and Add menu open a sub-tab directly (2026-10-17): App passes
   // { section, subtab, n } — n changes on every request so the same page can be reopened.
   useEffect(() => { if (navRequest) navigateTo(navRequest.section, navRequest.subtab) }, [navRequest])  // eslint-disable-line
@@ -173,7 +178,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             : <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />)}
           {v2 && tab === 'today' && <VulaToday tenantId={tenantId} onNavigate={navigateTo} />}
           {v2 && tab === 'activity' && <VulaActivity tenantId={tenantId} onNavigate={navigateTo} />}
-          {tab === 'my-work' && <MyWorkSection tenantId={tenantId} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
+          {tab === 'my-work' && <MyWorkSection tenantId={tenantId} v2={v2} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} v2={v2} />}
           {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
@@ -191,11 +196,12 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)}
             onSendAsBroadcast={(text) => { setBroadcastDraft(text); navigateTo('marketing-hub', 'broadcast') }} />}
           {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: 'var(--muted)' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
-          {tab === 'operate' && <OperateSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'operate')}
-            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
+          {tab === 'operate' && <OperateSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'operate')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
+            onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
           {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'team'      && <VulaTeam          tenantId={tenantId} />}
+          {tab === 'team'      && <VulaTeam          tenantId={tenantId} v2={v2} />}
           {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />}
         </div>
     </>
@@ -253,7 +259,7 @@ function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsum
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'invoices' && <VulaInvoices tenantId={tenantId} v2={v2} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={onClearSupplierFilter} />}
-      {active === 'expenses' && <VulaExpenses tenantId={tenantId} />}
+      {active === 'expenses' && <VulaExpenses tenantId={tenantId} v2={v2} />}
       {active === 'bank' && <VulaBankRec tenantId={tenantId} />}
       {active === 'books' && <VulaAccounting tenantId={tenantId} />}
       {active === 'payments' && <VulaPayments tenantId={tenantId} />}
@@ -288,8 +294,8 @@ function PeopleSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingN
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'customers' && <VulaCustomers tenantId={tenantId} v2={v2} />}
-      {active === 'contacts' && <VulaContacts tenantId={tenantId} />}
-      {active === 'followups' && <VulaFollowups tenantId={tenantId} />}
+      {active === 'contacts' && <VulaContacts tenantId={tenantId} v2={v2} />}
+      {active === 'followups' && <VulaFollowups tenantId={tenantId} v2={v2} />}
     </div>
   )
 }
@@ -312,7 +318,7 @@ function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
   )
 }
 
-function OperateSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+function OperateSection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'projects' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
@@ -324,11 +330,14 @@ function OperateSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav 
       {active === 'labour' && <VulaLabour tenantId={tenantId} />}
       {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
       {active === 'documents' && <VulaDocuments tenantId={tenantId} />}
+      {/* the redesign files Stock and Suppliers here (navConfig.withV2Moves) */}
+      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
+      {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
     </div>
   )
 }
 
-function MyWorkSection({ tenantId, repPhone, subtabs, pendingSubtab, onConsumePendingNav }) {
+function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'rep-contacts' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
@@ -339,7 +348,7 @@ function MyWorkSection({ tenantId, repPhone, subtabs, pendingSubtab, onConsumePe
       {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} />}
       {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
       {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
-      {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} />}
+      {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
       {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} />}
     </div>

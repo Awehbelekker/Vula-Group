@@ -321,6 +321,48 @@ export function withV2Pages(groups, { activity = true } = {}) {
   return [{ ...first, items }, ...rest];
 }
 
+/** Sub-tabs the redesign files under a different section (Phase F, 2026-10-18): Stock and
+ * Suppliers are back-house work, so they leave Sell for Operate. Applied to the already-filtered
+ * groups, so who may see them is unchanged — only where they sit in the menu. Operate is created
+ * when the tenant has none of its own pages; a section left with no sub-tabs is dropped. */
+export const V2_MOVES = { stock: "operate", suppliers: "operate" };
+const OPERATE = { id: "operate", icon: "🏗️", label: "Operate" };
+
+export function withV2Moves(groups) {
+  if (!groups?.length) return groups;
+  const moved = {};
+  const out = groups.map((g) => ({
+    ...g,
+    items: g.items.map((it) => {
+      if (!it.subtabs) return it;
+      const keep = it.subtabs.filter((st) => {
+        const to = V2_MOVES[st.id];
+        if (!to || to === it.id) return true;
+        (moved[to] = moved[to] || []).push(st);
+        return false;
+      });
+      return keep.length === it.subtabs.length ? it : { ...it, subtabs: keep };
+    }).filter((it) => !it.subtabs || it.subtabs.length),
+  })).filter((g) => g.items.length);
+  let result = out;
+  for (const [to, subtabs] of Object.entries(moved)) {
+    const has = result.some((g) => g.items.some((it) => it.id === to));
+    result = has
+      ? result.map((g) => ({ ...g, items: g.items.map((it) => (it.id === to ? { ...it, subtabs: [...(it.subtabs || []), ...subtabs] } : it)) }))
+      : [...result, { label: OPERATE.label, items: [{ ...OPERATE, subtabs }] }];
+  }
+  return result;
+}
+
+/** The section that holds a sub-tab in these (filtered, possibly moved) groups — so a link that
+ * names the old place ({ section: "sell", tab: "stock" }) still opens the page where it now is. */
+export function sectionOf(groups, subtab, fallback) {
+  for (const g of groups || []) for (const it of g.items) {
+    if (it.subtabs?.some((st) => st.id === subtab)) return it.id;
+  }
+  return fallback;
+}
+
 /** A tenant's own names (vula_tenant_config.ui_labels, migration 215), e.g.
  * { sections: { people: "Care", bookings: "Visits" } } — applied to section and sub-tab labels
  * only; ids never change (deep links and team access lists use them). No per-tenant code. */

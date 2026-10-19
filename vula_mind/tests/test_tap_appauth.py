@@ -45,7 +45,11 @@ def test_enrol_issues_device_and_working_token(env):
     a = auth.actor(r["access_token"])
     assert (a.tenant_id, a.member_id, a.sees_all) == (T, "m1", False)
     dev = next(iter(repo.devices.values()))
-    assert dev["pin_hash"] != "2468" and "2468" not in str(dev) and dev["token_hash"] != r["device_token"]
+    # the plain PIN is stored nowhere — checked on every field except the random hex ones (a
+    # 64-char hash or salt contains "2468" by chance about once in a thousand runs)
+    random_hex = ("pin_hash", "pin_salt", "token_hash")
+    assert dev["pin_hash"] != "2468" and dev["token_hash"] != r["device_token"]
+    assert not any("2468" in str(v) for k, v in dev.items() if k not in random_hex)
     assert hash_pin("2468", dev["pin_salt"]) == dev["pin_hash"]
 
 
