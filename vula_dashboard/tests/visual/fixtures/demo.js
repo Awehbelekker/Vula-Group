@@ -135,6 +135,13 @@ export const products = [
   description: "", sold_by: "unit", status: "active", created_at: at(40, "09:00"),
 }));
 
+// per-tenant product categories (migration 073)
+export const productCategories = [
+  { key: "extras", label: "Deli & pantry", sort_order: 1 },
+  { key: "fresh_fish", label: "Fresh fish", sort_order: 2 },
+  { key: "fresh_chicken", label: "Fresh chicken", sort_order: 3 },
+];
+
 // ── Orders (commerce.py::admin_list_orders → service.list_orders) ────────────────────────────
 const ord = (n, phone, status, total_cents, daysAgo, hhmm, slot, extra = {}) => ({
   id: `ord-${String(n).padStart(4, "0")}`, tenant_id: TENANT_ID, display_id: `HV-${1040 + n}`,

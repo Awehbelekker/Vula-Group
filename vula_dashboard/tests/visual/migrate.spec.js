@@ -241,3 +241,36 @@ test("team: access chips toggle with the same PATCH; Stock sits under Operate", 
   const owner = page.locator(".vtm-member", { hasText: "Demo Owner" });
   await expect(owner.getByText("Full access (owner / manager)")).toBeVisible();
 });
+
+const PRODUCTS = { name: "products", role: "owner", nav: "Sell", tab: "Products", ready: "Everything you sell, by category" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`products ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, PRODUCTS, { viewport, theme });
+      await expect(page.getByText("Sourdough loaf", { exact: true })).toBeVisible();
+      await check(page, ti, "products", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "Edit Smoked snoek pâté (200g)" }).click();
+      await expect(page.getByRole("dialog", { name: "Smoked snoek pâté (200g)" })).toBeVisible();
+      await page.screenshot({ path: out(ti, `products-edit-${vp}-${theme}.png`), animations: "disabled" });
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("products: price saves in integer cents; the stock switch and star send the same PATCH", async ({ page }) => {
+  await openScreen(page, PRODUCTS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const price = page.getByLabel("Price for Sourdough loaf, in rand");
+  const priced = page.waitForRequest((r) => r.method() === "PATCH" && /\/admin\/products\/p-02$/.test(new URL(r.url()).pathname));
+  await price.fill("69.90");
+  await price.press("Enter");
+  expect((await priced).postDataJSON()).toEqual({ price_cents: 6990 });
+  const stocked = page.waitForRequest((r) => r.method() === "PATCH" && /\/admin\/products\/p-02$/.test(new URL(r.url()).pathname));
+  await page.getByRole("switch", { name: "Sourdough loaf in stock" }).click();
+  expect((await stocked).postDataJSON()).toEqual({ in_stock: false });
+  const starred = page.waitForRequest((r) => r.method() === "PATCH" && /\/admin\/products\/p-02$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Mark Sourdough loaf catch of the day" }).click();
+  expect((await starred).postDataJSON()).toEqual({ is_daily_catch: true });
+  await page.getByRole("button", { name: "Fresh fish" }).click();
+  await expect(page.locator(".vpr-row")).toHaveCount(1);
+});

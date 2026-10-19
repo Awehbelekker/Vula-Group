@@ -1,0 +1,60 @@
+/* products.css — the redesigned Products list (products/ProductsV2.jsx). Tokens only. One row per
+   product: photo, name + chips, price, then stock switch / star / Edit; it wraps on a phone. */
+
+.vpr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vpr-sub { font-size: var(--fs-caption); color: var(--muted); }
+.vpr-bad { color: var(--danger-text); }
+.vpr-block { margin-bottom: var(--space-3); }
+.vpr-block-line { display: block; margin-top: 4px; }
+.vpr-h { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vpr-form { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); align-items: end; }
+.vpr-form-go { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.vpr-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--space-2); }
+.vpr-cat { padding: 6px 12px; border-radius: var(--radius-pill); background: var(--surface-2); font-size: var(--fs-caption); color: var(--ink); }
+.vpr-cat-add { display: flex; gap: var(--space-2); }
+.vpr-cat-add .vula-input { flex: 1; min-width: 0; }
+.vpr-result { margin: var(--space-2) 0 0; font-size: var(--fs-body); }
+
+.vpr-group { margin-bottom: var(--space-4); }
+.vpr-cat-h { margin: var(--space-2) 0; font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vpr-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: var(--space-2) var(--space-3); align-items: center;
+  padding: var(--space-2) var(--space-3); }
+.vpr-row + .vpr-row { border-top: 1px solid var(--line); }
+.vpr-row--out { background: var(--surface-2); }
+
+.vpr-thumb { width: 44px; height: 44px; border-radius: var(--radius-md); background: var(--brand-soft); color: var(--brand-text);
+  display: grid; place-items: center; font-weight: 600; overflow: hidden; }
+.vpr-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.vpr-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.vpr-name { font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+.vpr-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.vpr-price { display: inline-flex; align-items: center; gap: 4px; }
+.vpr-price .vula-input { width: 96px !important; text-align: right; font-family: var(--font-mono); padding-top: 6px !important; padding-bottom: 6px !important; }
+.vpr-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.vpr-star { width: 40px; height: 40px; color: var(--muted); }
+.vpr-star[aria-pressed="true"] { color: var(--highlight-text); }
+.vpr-star[aria-pressed="true"] svg { fill: currentColor; }
+
+/* the in-stock switch: a real switch (role=switch), 44px tall target */
+.vpr-switch { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 10px 0 4px; border: none; background: transparent;
+  color: var(--ink); font: 500 var(--fs-caption)/1 var(--font-sans); cursor: pointer; border-radius: var(--radius-pill); }
+.vpr-switch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vpr-switch-knob { width: 36px; height: 22px; border-radius: 11px; background: var(--line); position: relative; flex: none; transition: background var(--t-fast) var(--ease); }
+.vpr-switch-knob::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 30%, transparent); transition: transform var(--t-fast) var(--ease); }
+.vpr-switch[aria-checked="true"] .vpr-switch-knob { background: var(--ok); }
+.vpr-switch[aria-checked="true"] .vpr-switch-knob::after { transform: translateX(14px); }
+.vpr-switch-label { min-width: 46px; text-align: left; }
+.vpr-edit { display: flex; flex-direction: column; gap: var(--space-2); }
+
+@media (max-width: 760px) {
+  /* photo + name, then price and the actions on one line under it */
+  .vpr-row { grid-template-columns: 44px max-content minmax(0, 1fr); grid-template-areas: "thumb main main" ". price actions"; }
+  .vpr-thumb { grid-area: thumb; } .vpr-main { grid-area: main; } .vpr-price { grid-area: price; }
+  .vpr-actions { grid-area: actions; justify-content: flex-end; flex-wrap: nowrap; }
+  .vpr-switch-label { display: none; }
+  .vpr-switch { padding-right: 4px; }
+  .vpr-price .vula-input { width: 84px !important; }
+  .vpr-unit, .vpr-edit-label { display: none; }
+  .vpr-edit-btn { padding: 0 !important; width: 40px; justify-content: center; gap: 0 !important; }
+}

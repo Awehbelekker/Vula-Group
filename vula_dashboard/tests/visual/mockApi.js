@@ -96,7 +96,7 @@ function routes(role, modules = []) {
       return { orders: rows, count: rows.length };
     }),
     r("GET", `${A}/products`, () => ({ products: F.products, count: F.products.length })),
-    r("GET", `${A}/categories`, () => ({ categories: {} })),
+    r("GET", `${A}/categories`, () => ({ categories: F.productCategories })),
 
     // ── Money ──
     r("GET", `${A}/invoices`, (m, url) => {
