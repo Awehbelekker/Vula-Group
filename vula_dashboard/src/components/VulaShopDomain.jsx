@@ -5,10 +5,10 @@
  * address (shop.yourbusiness.co.za) just shows the business's name at the top when the shop or
  * a receipt opens. Type it, copy the two DNS records to whoever looks after the domain, and Vula
  * switches over by itself once it works.
+ * Data and actions: settings/connect/useShopDomain.js (shared with the redesign's ShopDomainV2).
  */
-import { useEffect, useState } from 'react'
-import { Badge, Button, Field, Input, confirmDialog, toast } from './ui/index.jsx'
-import { VULA_API } from '../lib/authFetch'
+import { Badge, Button, Field, Input } from './ui/index.jsx'
+import { copy, useShopDomain } from './settings/connect/useShopDomain'
 
 const STATE = {
   waiting_dns: ['warn', 'Waiting for the DNS records'],
@@ -16,56 +16,8 @@ const STATE = {
   live: ['ok', 'Live'],
 }
 
-async function copy(text) {
-  try { await navigator.clipboard.writeText(text); toast('Copied') } catch { toast('Copy failed — select and copy it instead', 'danger') }
-}
-
 export default function VulaShopDomain({ tenantId }) {
-  const base = `${VULA_API}/v1/commerce/${tenantId}/admin/shop-domain`
-  const [info, setInfo] = useState(null)
-  const [domain, setDomain] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
-
-  async function load() {
-    try {
-      const r = await fetch(base)
-      const data = r.ok ? await r.json() : { state: 'none' }
-      setInfo(data)
-      if (!domain && data.suggestion) setDomain(data.suggestion)
-    } catch {
-      setInfo({ state: 'none' })
-    }
-  }
-
-  useEffect(() => { if (tenantId) load() }, [tenantId])
-  useEffect(() => {                      // keep checking while it's being set up
-    if (!info || !['waiting_dns', 'securing'].includes(info.state)) return
-    const t = setTimeout(load, 20000)
-    return () => clearTimeout(t)
-  }, [info])
-
-  async function connect(e) {
-    e.preventDefault()
-    setBusy(true); setError(null)
-    try {
-      const r = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain }) })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.detail || 'Could not add that address')
-      setInfo(data)
-      toast('Address added — now add the DNS records below.')
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function remove() {
-    if (!(await confirmDialog('Stop using your own address? Links go back to Vula’s, hidden behind the WhatsApp buttons as before.'))) return
-    const r = await fetch(base, { method: 'DELETE' })
-    if (r.ok) { setInfo(await r.json()); toast('Removed.') }
-  }
+  const { info, domain, setDomain, busy, error, connect, remove } = useShopDomain(tenantId)
 
   if (!info) return <div style={{ fontSize: 13, color: 'var(--muted)' }}>Loading…</div>
 

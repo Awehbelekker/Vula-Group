@@ -535,6 +535,10 @@ const CONNECTIONS = [
     shop_domain: "harbourvine.myshopify.com", live_updates: true, scopes: ["read_products", "read_inventory", "read_orders"],
     last_sync_at: "2026-10-17T08:15:00+02:00", last_sync: { products_found: 64, products_created: 2, products_updated: 5, stock_changes: 11 }, sync: {} }))],
   ["WooCommerce shop", "Connect WooCommerce"],
+  ["Your shop’s own address", "DNS records to add", async (page) => page.route(/\/admin\/shop-domain$/, okJson({ domain: "shop.harbourvine.example.test",
+    state: "waiting_dns", automated: true, instructions: "Please add these two DNS records for shop.harbourvine.example.test …",
+    records: [{ type: "CNAME", name: "shop", value: "shops.vula.example.test", ok: true },
+      { type: "TXT", name: "_vula-verify.shop", value: "vula-verify=8f3c2a91d7e04b6f", ok: false }] }))],
 ];
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -545,7 +549,7 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
         if (setup) await setup(page);
         if (vp !== "desktop" && await page.getByRole("button", { name: "All settings" }).isVisible()) await page.getByRole("button", { name: "All settings" }).click();
         await settingsSection(page, label);
-        await expect(page.locator(".vst-page").getByText(ready, { exact: false }).first()).toBeVisible();
+        await expect(page.locator(".vst-page").getByText(ready, { exact: false }).or(page.locator(".vst-page").getByRole("list", { name: ready })).first()).toBeVisible();
         await check(page, ti, `settings-${label.toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "").slice(0, 24)}`, `${vp}-${theme}`, viewport);
       }
       expect(errors).toEqual([]);
@@ -627,6 +631,16 @@ test("settings: Shopify and WooCommerce connect send the same bodies", async ({ 
   const body = (await shop).postDataJSON();
   expect(body).toMatchObject({ shop_domain: "harbourvine.myshopify.com", access_token: "shpat_fake" });
   expect(body.client_secret).toBeUndefined();
+});
+
+test("settings: the shop's own address is added with the same body", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "dark" });
+  await settingsSection(page, "Your shop’s own address");
+  await expect(page.getByLabel("Your shop’s address")).toHaveValue("shop.harbourvine.example.test");   // the suggestion
+  await page.getByLabel("Your shop’s address").fill("shop.harbourandvine.example.test");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/shop-domain$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Use this address" }).click();
+  expect((await post).postDataJSON()).toEqual({ domain: "shop.harbourandvine.example.test" });
 });
 
 test("settings: a Microsoft sync that is failing says so", async ({ page }) => {
