@@ -197,7 +197,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)}
             onSendAsBroadcast={(text) => { setBroadcastDraft(text); navigateTo('marketing-hub', 'broadcast') }} />}
           {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: 'var(--muted)' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
-          {tab === 'operate' && <OperateSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'operate')}
+          {tab === 'operate' && <OperateSection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'operate')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
           {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
@@ -319,18 +319,18 @@ function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
   )
 }
 
-function OperateSection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
+function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'projects' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'projects' && <VulaProjects tenantId={tenantId} />}
+      {active === 'projects' && <VulaProjects tenantId={tenantId} v2={v2} />}
       {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
       {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} />}
       {active === 'labour' && <VulaLabour tenantId={tenantId} />}
       {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
-      {active === 'documents' && <VulaDocuments tenantId={tenantId} />}
+      {active === 'documents' && <VulaDocuments tenantId={tenantId} v2={v2} />}
       {/* the redesign files Stock and Suppliers here (navConfig.withV2Moves) */}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
       {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
@@ -347,7 +347,7 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
       {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
-      {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
+      {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} v2={v2} />}
       {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
       {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} repPhone={repPhone} />}

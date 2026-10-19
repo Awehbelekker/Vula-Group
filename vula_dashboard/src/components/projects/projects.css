@@ -1,0 +1,52 @@
+/* projects.css — the redesigned Projects command centre (projects/ProjectsV2.jsx). Tokens only.
+   Two panes from 1024px (projects list | the open project or the code library); under that one
+   column — the list then the code library, or just the open project with a way back. */
+
+.vpj { min-width: 0; }
+.vpj-panes { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+.vpj-list, .vpj-page { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.vpj[data-open="true"] .vpj-list { display: none; }
+.vpj[data-open="true"] > div:first-child { display: none !important; }   /* the PageHeader, while a project is open */
+
+.vpj-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.vpj-client { margin: 0; font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vpj-phase { padding-left: var(--space-6) !important; }
+.vpj-row--on { background: var(--brand-soft); }
+.vpj-new { display: flex; flex-direction: column; gap: var(--space-2); }
+.vpj-h { display: flex; align-items: center; gap: var(--space-2); margin: 0; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vpj-msg { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); color: var(--ink); font-size: var(--fs-body); }
+.vpj-back, .vpj-lib { align-self: flex-start; }
+
+.vpj-block { display: flex; flex-direction: column; gap: var(--space-2); }
+.vpj-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.vpj-head-main { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vpj-title { margin: 0; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
+.vpj-sub { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.vpj-h3 { margin: var(--space-2) 0 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vpj-form { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); align-items: end; }
+.vpj-wide { grid-column: 1 / -1; }
+.vpj-go { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vpj-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vpj-alias { display: inline-flex; align-items: center; gap: 2px; padding-left: 12px; border-radius: var(--radius-pill); background: var(--surface-2); color: var(--ink); font-size: var(--fs-caption); }
+.vpj-alias-x { width: 32px !important; height: 32px !important; }
+.vpj-alias-in { flex: 1 1 180px; min-width: 0; max-width: 280px; }
+
+.vpj-section { overflow: hidden; }
+.vpj-section-head { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.vpj-strong { margin: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vpj-section-body { display: flex; flex-direction: column; }
+.vpj-line { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-4); min-height: 44px; color: var(--ink); font-size: var(--fs-body); }
+.vpj-line + .vpj-line { border-top: 1px solid var(--line); }
+.vpj-line > span:first-child { min-width: 0; overflow-wrap: anywhere; text-transform: none; }
+.vpj-value { flex: none; text-align: right; }
+.vpj-linkish { border: none; background: none; padding: 0; color: var(--brand-text); font: inherit; cursor: pointer; text-align: left; min-height: 44px; }
+.vpj-linkish:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vpj-empty { margin: 0; padding: var(--space-3) var(--space-4); color: var(--muted); font-size: var(--fs-body); }
+.vpj-pad { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+
+@media (min-width: 1024px) {
+  .vpj-panes { grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); align-items: start; }
+  .vpj[data-open="true"] .vpj-list { display: flex; }
+  .vpj[data-open="true"] > div:first-child { display: flex !important; }
+  .vpj-back { display: none !important; }
+}

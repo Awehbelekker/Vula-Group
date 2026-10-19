@@ -8,7 +8,7 @@ import { Download, FileText, MessageCircle, Megaphone, Package, ReceiptText, Use
 import { formatMoney } from '../../lib/money'
 import { whatsAppLink } from '../../lib/phone'
 import { Button, DataTable, EmptyState, Field, FilterBar, Input, ListRow, PageHeader, Sheet, Skeleton, StatCard, StatusChip, Textarea } from '../ui/index.jsx'
-import { FiledLibrary } from '../VulaDocuments'
+import FiledLibraryV2 from '../documents/FiledLibraryV2'
 import { AUDIENCES, LANG_NAMES, seenAgo, useCustomers } from './useCustomers'
 import './customers.css'
 
@@ -167,7 +167,7 @@ function CustomerDetail({ c, customer, tenantId }) {
 
       {/* documents & media filed against this customer (migration 109) */}
       <section>
-        <FiledLibrary tenantId={tenantId} customerPhone={customer.phone} title="Documents & media" />
+        <FiledLibraryV2 tenantId={tenantId} customerPhone={customer.phone} title="Documents & media" />
       </section>
     </div>
   )

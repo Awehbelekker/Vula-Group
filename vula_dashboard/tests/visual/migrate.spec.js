@@ -318,3 +318,121 @@ test("bookings on a phone: the day's list comes first; New booking opens the for
   await page.getByText("New booking").click();
   await expect(page.getByLabel("Time")).toBeVisible();
 });
+
+// ── Projects ──
+const PROJECTS = { name: "projects", role: "owner", modules: ["projects"], nav: "Operate", tab: "Projects", ready: "Bay Events catering" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`projects ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, PROJECTS, { viewport, theme });
+      await expect(page.getByText("Master code library · 2")).toBeVisible();
+      await check(page, ti, "projects", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: /^Bay Events catering BE-2026/ }).click();
+      await expect(page.getByRole("heading", { name: "Bay Events catering", level: 2 })).toBeVisible();
+      await expect(page.getByText("Documents · 10 (with phases)")).toBeVisible();
+      await check(page, ti, "projects-open", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Money" }).click();
+      await expect(page.getByText(/^R.64.500\.50$/)).toBeVisible();
+      await check(page, ti, "projects-money", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("projects: alias, phase and BOQ value send the same bodies; a phone goes back to the list", async ({ page }) => {
+  await openScreen(page, PROJECTS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.getByRole("button", { name: /^Bay Events catering BE-2026/ }).click();
+  await expect(page.locator(".vpj-list")).toBeHidden();
+  const alias = page.waitForRequest((r) => r.method() === "POST" && /\/p\/pj-1\/aliases$/.test(new URL(r.url()).pathname));
+  await page.getByLabel("Add another name for this project").fill("BEC");
+  await page.getByLabel("Add another name for this project").press("Enter");
+  expect((await alias).postDataJSON()).toEqual({ alias: "BEC" });
+  const phase = page.waitForRequest((r) => r.method() === "POST" && /\/p\/pj-1\/phases$/.test(new URL(r.url()).pathname));
+  await page.getByLabel("New phase").fill("Phase 3");
+  await page.getByRole("button", { name: "Add phase" }).click();
+  expect((await phase).postDataJSON()).toEqual({ phase: "Phase 3" });
+  await page.getByRole("tab", { name: "BOQ" }).click();
+  await expect(page.getByText(/^BOQ · R.120.000\.00$/)).toBeVisible();
+  await page.getByLabel("Contract value (R)").fill("1 250 000");
+  const boq = page.waitForRequest((r) => r.method() === "POST" && /\/boq$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Save value" }).click();
+  expect((await boq).postDataJSON()).toEqual({ total: 1250000 });
+  await page.getByRole("button", { name: "All projects" }).click();
+  await expect(page.locator(".vpj-list")).toBeVisible();
+});
+
+test("projects: search narrows the list, a phase opens with a way to its parent", async ({ page }) => {
+  await openScreen(page, PROJECTS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByPlaceholder("Find a project, client or number").fill("market");
+  await expect(page.getByRole("button", { name: /^Spring market stall/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Bay Events catering BE-2026/ })).toHaveCount(0);
+  await page.getByPlaceholder("Find a project, client or number").fill("");
+  await page.getByRole("button", { name: /^Spring gala/ }).click();
+  await expect(page.getByRole("button", { name: "Phase of Bay Events catering" })).toBeVisible();
+  await expect(page.locator(".vpj-list")).toBeVisible();     // both panes on a desktop
+});
+
+// ── Documents ──
+const DOCUMENTS = { name: "documents", role: "owner", nav: "Operate", tab: "Documents", ready: "Atlantic-Dairy-invoice-BILL-0031.pdf" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`documents ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, DOCUMENTS, { viewport, theme });
+      await expect(page.getByText("9 documents")).toBeVisible();
+      await check(page, ti, "documents", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Add" }).click();
+      await expect(page.getByRole("heading", { name: "Upload to what Vula knows" })).toBeVisible();
+      await check(page, ti, "documents-add", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Tidy up" }).click();
+      await expect(page.getByRole("heading", { name: "Documents health" })).toBeVisible();
+      await check(page, ti, "documents-tidy", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "What customers see" }).click();
+      await expect(page.getByText("2 of 4 are visible to customers", { exact: false })).toBeVisible();
+      await check(page, ti, "documents-customers", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("documents: filters go to the server, File under… assigns, Load more continues from what's shown", async ({ page }) => {
+  await openScreen(page, DOCUMENTS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const filtered = page.waitForRequest((r) => /\/filed$/.test(new URL(r.url()).pathname) && new URL(r.url()).searchParams.get("category") === "Invoice");
+  await page.getByLabel("Category").selectOption("Invoice");
+  expect(new URL((await filtered).url()).searchParams.get("offset")).toBe("0");
+  await page.getByLabel("Category").selectOption("");
+  const assign = page.waitForRequest((r) => r.method() === "POST" && /\/assign-project$/.test(new URL(r.url()).pathname));
+  await page.getByLabel("File Menu-spring-2026.pdf under a project").selectOption("Catering");
+  expect((await assign).postDataJSON()).toEqual({ tenant_id: expect.any(String), project: "Catering", clickup_list_id: null });
+  // a longer library: Load more asks for the page after the documents already shown
+  const page9 = Array.from({ length: 9 }, (_, i) => ({ id: `big-${i}`, filename: `Statement-${i + 1}.pdf`, category: "Invoice", project: "Shop", status: "filed", fields: {} }));
+  await page.route(/\/filed\?/, (route) => route.fulfill({ json: { documents: page9, total: 30 } }));
+  await page.getByLabel("Category").selectOption("Invoice");
+  const more = page.waitForRequest((r) => /\/filed$/.test(new URL(r.url()).pathname) && new URL(r.url()).searchParams.get("offset") !== "0");
+  await page.getByRole("button", { name: /^Load more/ }).click();
+  expect(new URL((await more).url()).searchParams.get("offset")).toBe("9");
+});
+
+test("documents: who-can-see toggles and the customer's-eye search use the same calls", async ({ page }) => {
+  await openScreen(page, DOCUMENTS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.getByRole("tab", { name: "What customers see" }).click();
+  const aud = page.waitForRequest((r) => r.method() === "POST" && /\/kb\/kb-2\/audience$/.test(new URL(r.url()).pathname));
+  await page.locator(".vdc-line", { hasText: "Allergen-guide.docx" }).getByRole("button", { name: "Let customers see it" }).click();
+  expect((await aud).postDataJSON()).toEqual({ audience: "public" });
+  await page.getByLabel("A customer's question").fill("do you deliver on Saturdays?");
+  await page.getByRole("button", { name: "Search as a customer" }).click();
+  await expect(page.getByText("We deliver Tuesday to Saturday", { exact: false })).toBeVisible();
+});
+
+test("documents: a queued file uploads as one batch, team-only unless ticked", async ({ page }) => {
+  await openScreen(page, DOCUMENTS, { viewport: VIEWPORTS.tablet, theme: "light" });
+  await page.getByRole("button", { name: "Add documents" }).click();
+  await page.locator(".vdc-drop input[type=file]").setInputFiles({ name: "Price-list.csv", mimeType: "text/csv", buffer: Buffer.from("a,b\n1,2\n") });
+  await expect(page.locator(".vdc-qrow", { hasText: "Price-list.csv" })).toContainText("Pending");
+  const up = page.waitForRequest((r) => r.method() === "POST" && /\/ingest\/batch$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Upload 1 file" }).click();
+  const body = (await up).postDataBuffer().toString();
+  expect(body).toContain('name="audience"\r\n\r\nstaff');
+  expect(body).toContain('filename="Price-list.csv"');
+});

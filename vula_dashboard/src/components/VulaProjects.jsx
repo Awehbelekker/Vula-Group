@@ -7,10 +7,12 @@
  * money, standards and team. Plus the master code library. 2026-10-02 (Ian: "how can a tenant
  * add projects and aliases, phases, more projects for one client, each with their own BOQ and
  * filed invoices and slips?").
+ * Data and actions live in projects/useProjects.js (shared with projects/ProjectsV2.jsx).
  */
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { FiledLibrary } from "./VulaDocuments";
+import { PROJECT_TABS as TABS, fetchBoq, saveBoqTotal, fetchFinancials, moneyRows, uploadToProject, useProjects } from "./projects/useProjects";
+import ProjectsV2 from "./projects/ProjectsV2";
 
 
 const C = {
@@ -25,125 +27,20 @@ const btn = { padding: "8px 14px", background: C.green, color: "var(--on-accent)
 const btnGhost = { padding: "6px 12px", background: C.surface, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, cursor: "pointer" };
 
 const R = (cents) => `R${(Number(cents || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const TABS = [["overview", "Overview"], ["documents", "Documents"], ["boq", "BOQ"], ["money", "Money"], ["team", "Standards & team"]];
 
-export default function VulaProjects({ tenantId }) {
-  const [projects, setProjects] = useState([]);
-  const [codes, setCodes] = useState([]);
-  const [clients, setClients] = useState([]);
-  const [sel, setSel] = useState(null);          // full selected project
-  const [ov, setOv] = useState(null);            // its overview (phases, documents, BOQ)
-  const [tab, setTab] = useState("overview");
-  const [query, setQuery] = useState("");
-  const [newProj, setNewProj] = useState({ name: "", number: "", client: "" });
-  const [newCode, setNewCode] = useState({ code_ref: "", title: "", version: "", content: "" });
-  const [newMember, setNewMember] = useState({ name: "", role: "" });
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+/** v2: the redesigned screen (same hook, so the same data and actions). */
+export default function VulaProjects({ tenantId, v2 = false }) {
+  if (v2) return <ProjectsV2 tenantId={tenantId} />;
+  return <ProjectsV1 tenantId={tenantId} />;
+}
 
-  const api = useCallback(async (method, path, body) => {
-    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}${path}`, {
-      method, headers: { "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const d = await r.json().catch(() => ({}));
-    return r.ok ? d : { error: d.detail || d.error || "Something went wrong." };
-  }, [tenantId]);
-
-  const loadProjects = useCallback(async () => {
-    const d = await api("GET", "");
-    setProjects(d.projects || []);
-  }, [api]);
-  const loadCodes = useCallback(async () => {
-    const d = await api("GET", "/codes");
-    setCodes(d.codes || []);
-  }, [api]);
-  const openProject = useCallback(async (pid) => {
-    setMsg("");
-    const [p, o] = await Promise.all([api("GET", `/p/${pid}`), api("GET", `/p/${pid}/overview`)]);
-    setSel(p.error ? null : p);
-    setOv(o.error ? null : o);
-  }, [api]);
-
-  useEffect(() => { if (tenantId) { loadProjects(); loadCodes(); } }, [tenantId, loadProjects, loadCodes]);
-  useEffect(() => {
-    // Client picker: the business's customers and contacts, plus clients already on projects.
-    if (!tenantId) return;
-    Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers`).then((r) => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/contacts`).then((r) => r.json()).catch(() => ({})),
-    ]).then(([c, k]) => {
-      const names = [...(c.customers || []).map((x) => x.name), ...(k.contacts || []).map((x) => x.company || x.name)];
-      setClients([...new Set(names.filter(Boolean))].sort());
-    });
-  }, [tenantId]);
-
-  // Main projects grouped by client, each with its phases underneath.
-  const groups = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const match = (p) => !q || [p.name, p.number, p.client, ...(p.aliases || [])].some((v) => (v || "").toLowerCase().includes(q));
-    const byParent = {};
-    projects.filter((p) => p.parent_id).forEach((p) => { (byParent[p.parent_id] = byParent[p.parent_id] || []).push(p); });
-    const mains = projects.filter((p) => !p.parent_id && (match(p) || (byParent[p.id] || []).some(match)));
-    const out = {};
-    mains.forEach((p) => { const k = p.client || "No client"; (out[k] = out[k] || []).push({ ...p, phases: byParent[p.id] || [] }); });
-    return Object.entries(out).sort(([a], [b]) => (a === "No client") - (b === "No client") || a.localeCompare(b));
-  }, [projects, query]);
-  const allClients = useMemo(() => [...new Set([...clients, ...projects.map((p) => p.client).filter(Boolean)])].sort(), [clients, projects]);
-
-  const createProject = async () => {
-    if (!newProj.name.trim()) return;
-    setBusy(true);
-    const p = await api("POST", "", newProj);
-    setBusy(false);
-    if (p.error) { setMsg(p.error); return; }
-    setNewProj({ name: "", number: "", client: "" });
-    await loadProjects();
-    if (p.id) openProject(p.id);
-  };
-  const saveEdit = async (patch) => {
-    if (!sel) return;
-    const d = await api("PATCH", `/p/${sel.id}`, patch);
-    if (d.error) { setMsg(d.error); return; }
-    const moved = Object.values(d.moved || {}).reduce((a, b) => a + b, 0);
-    setMsg(moved ? `Saved — ${moved} record(s) moved to the new name; the old name still works.` : "Saved.");
-    await loadProjects(); openProject(sel.id);
-  };
-  const addAlias = async (alias) => {
-    if (!sel || !alias.trim()) return;
-    const d = await api("POST", `/p/${sel.id}/aliases`, { alias });
-    if (d.error) { setMsg(d.error); return; }
-    const n = (d.moved || {}).vula_filed_documents || 0;
-    setMsg(`“${alias}” now files under ${sel.name}${n ? ` — ${n} document(s) moved` : ""}.`);
-    await loadProjects(); openProject(sel.id);
-  };
-  const removeAlias = async (alias) => saveEdit({ aliases: (sel.aliases || []).filter((a) => a !== alias) });
-  const addPhase = async (phase, moveFrom) => {
-    if (!sel || !phase.trim()) return;
-    const d = await api("POST", `/p/${sel.id}/phases`, { phase, move_from: moveFrom || undefined });
-    if (d.error) { setMsg(d.error); return; }
-    setMsg(`${d.name} added — its own BOQ, budget and documents.`);
-    await loadProjects(); openProject(sel.id);
-  };
-  const addCode = async () => {
-    if (!newCode.code_ref.trim() || !newCode.title.trim()) return;
-    setBusy(true);
-    await api("POST", "/codes", { ...newCode, category: "Standards", status: "current" });
-    setNewCode({ code_ref: "", title: "", version: "", content: "" });
-    await loadCodes();
-    setBusy(false);
-  };
-  const linkCode = async (cid) => { if (sel) { await api("POST", `/p/${sel.id}/codes/${cid}`); openProject(sel.id); } };
-  const unlinkCode = async (cid) => { if (sel) { await api("DELETE", `/p/${sel.id}/codes/${cid}`); openProject(sel.id); } };
-  const addMember = async () => {
-    if (!sel || !newMember.name.trim()) return;
-    await api("POST", `/p/${sel.id}/team`, newMember);
-    setNewMember({ name: "", role: "" });
-    openProject(sel.id);
-  };
-
-  const linkedIds = new Set((sel?.codes || []).map((c) => c.id));
-  const unlinked = codes.filter((c) => !linkedIds.has(c.id));
+// data + actions in projects/useProjects.js (shared with projects/ProjectsV2.jsx)
+function ProjectsV1({ tenantId }) {
+  const {
+    codes, sel, ov, tab, setTab, query, setQuery, newProj, setNewProj, newCode, setNewCode, newMember, setNewMember,
+    busy, msg, groups, allClients, openProject, closeProject, createProject, saveEdit, addAlias, removeAlias, addPhase,
+    addCode, linkCode, unlinkCode, addMember, unlinked,
+  } = useProjects(tenantId);
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px" }}>
@@ -226,7 +123,7 @@ export default function VulaProjects({ tenantId }) {
                   </Section>
                 </>
               )}
-              <button style={{ ...btnGhost, marginTop: 4 }} onClick={() => { setSel(null); setOv(null); }}>← Code library</button>
+              <button style={{ ...btnGhost, marginTop: 4 }} onClick={closeProject}>← Code library</button>
             </div>
           )}
         </div>
@@ -344,13 +241,7 @@ function ProjectDocuments({ tenantId, project }) {
     const list = Array.from(files || []);
     if (!list.length) return;
     setNote(`Uploading ${list.length} file(s)…`);
-    let ok = 0;
-    for (const f of list) {
-      const fd = new FormData();
-      fd.append("tenant_id", tenantId); fd.append("file", f); fd.append("project", project);
-      const r = await fetch(`${VULA_API}/ingest`, { method: "POST", body: fd }).catch(() => null);
-      if (r && r.ok) ok += 1;
-    }
+    const ok = await uploadToProject(tenantId, project, list);
     setNote(`${ok} of ${list.length} uploaded — Vula reads each one and files it under ${project} in a minute or two.`);
   };
   return (
@@ -369,15 +260,12 @@ function ProjectBoq({ tenantId, project }) {
   const [boq, setBoq] = useState(null);
   const [total, setTotal] = useState("");
   const load = useCallback(() => {
-    fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`).then((r) => r.json())
+    fetchBoq(tenantId, project)
       .then((d) => { setBoq(d); setTotal(d.total_cents ? String(d.total_cents / 100) : ""); }).catch(() => setBoq(null));
   }, [tenantId, project]);
   useEffect(() => { load(); }, [load]);
   const save = async () => {
-    const v = parseFloat(String(total).replace(/[^\d.]/g, ""));
-    if (!v) return;
-    await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ total: v }) });
+    if (!(await saveBoqTotal(tenantId, project, total))) return;
     load();
   };
   const sections = boq?.sections || [];
@@ -398,11 +286,11 @@ function ProjectBoq({ tenantId, project }) {
 function ProjectMoney({ tenantId, project }) {
   const [f, setF] = useState(null);
   useEffect(() => {
-    fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then((r) => r.json())
+    fetchFinancials(tenantId, project)
       .then(setF).catch(() => setF(null));
   }, [tenantId, project]);
   if (!f) return <Empty>Loading…</Empty>;
-  const rows = Object.entries(f).filter(([, v]) => typeof v === "number" || (typeof v === "string" && /^R/.test(v)));
+  const rows = moneyRows(f);
   return (
     <Section title="Money" hint="Contract, invoiced, paid in and spent for this project. Job costing (cost, fee, profit) is in Finances.">
       {rows.length === 0 && <Empty>No money recorded against this project yet.</Empty>}
