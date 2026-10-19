@@ -1,0 +1,21 @@
+/* books.css — the redesigned Accounts (books/BooksV2.jsx). Tokens only. */
+.vbk2 { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); max-width: 880px; }
+.vbk2 > div:first-child { margin-bottom: 0 !important; }
+.vbk2-range { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); align-items: end; }
+.vbk2-sub { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.vbk2-sub svg { vertical-align: -2px; }
+.vbk2-range .vbk2-sub { grid-column: 1 / -1; }
+.vbk2-stats { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.vbk2-card { overflow: hidden; }
+.vbk2-h { margin: 0; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vbk2-group + .vbk2-group { border-top: 1px solid var(--line); }
+.vbk2-over { margin: 0; padding: var(--space-3) var(--space-4) var(--space-1); font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vbk2-lines { margin: 0; }
+.vbk2-line { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); min-height: 44px; padding: var(--space-2) var(--space-4); box-sizing: border-box; }
+.vbk2-line + .vbk2-line { border-top: 1px solid var(--line); }
+.vbk2-line dt { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-body); color: var(--ink); }
+.vbk2-line dd { margin: 0; flex: none; text-align: right; color: var(--ink); }
+.vbk2-line--total dt, .vbk2-line--total dd { font-weight: 600; }
+.vbk2-empty { margin: 0; padding: var(--space-4); font-size: var(--fs-body); color: var(--muted); }
+.vbk2-pad { padding: 0 var(--space-4) var(--space-3); }

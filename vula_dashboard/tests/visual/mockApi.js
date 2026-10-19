@@ -87,6 +87,9 @@ function routes(role, modules = []) {
       const rows = F.expenses.filter((e) => (!st || e.status === st) && (!reimb || e.reimbursable));
       return { expenses: rows, ...F.expenseLists };
     }),
+    r("GET", `${A}/reports/pnl`, () => F.reportPnl),
+    r("GET", `${A}/reports/vat`, () => F.reportVat),
+    r("GET", `^/v1/payments/${T}/providers`, () => F.paymentProviders),
     r("GET", `${A}/reports/expenses`, () => F.expenseReport),
     r("GET", `${A}/cards`, () => ({ cards: F.companyCards })),
     r("GET", `${A}/customers/${T}/detail`, (m) => F.customerDetail(decodeURIComponent(m[2]))),

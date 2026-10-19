@@ -626,3 +626,20 @@ export const bankCandidates = [
   { id: "inv-0041", number: "INV-0041", party: "Bay Events Co.", balance_cents: 864_200, exact: true, status: "sent" },
   { id: "inv-0038", number: "INV-0038", party: "Fairview Cheese", balance_cents: 1_200_000, exact: false, status: "part_paid" },
 ];
+
+// ── Payments gateways (api/payments.py) + Accounts / books (reports.py, migration 058) ───────
+export const paymentProviders = {
+  connected: [{ provider: "yoco", is_default: true, mode: "live" }, { provider: "ozow", is_default: false, mode: "test" }],
+  available: [["yoco", "Yoco", ["secret_key"]], ["payfast", "PayFast", ["merchant_id", "merchant_key", "passphrase"]],
+    ["peach", "Peach Payments", ["entity_id", "access_token", "webhook_secret"]], ["ikhokha", "iKhokha", ["app_id", "app_secret"]],
+    ["ozow", "Ozow (instant EFT)", ["site_code", "private_key", "api_key"]], ["paystack", "Paystack", ["secret_key"]]]
+    .map(([id, label, fields]) => ({ id, label, fields })),
+};
+export const reportPnl = {
+  total_income_cents: 18_742_500, total_expense_cents: 12_364_800, net_profit_cents: 6_377_700,
+  income: [{ account: "Sales", amount_cents: 16_120_000 }, { account: "Catering", amount_cents: 2_622_500 }],
+  expenses: [{ account: "Cost of sales", amount_cents: 7_412_000 }, { account: "Rent", amount_cents: 1_850_000 },
+    { account: "Casual labour", amount_cents: 1_920_000 }, { account: "Motor vehicle", amount_cents: 642_800 }, { account: "Bank charges", amount_cents: 1_540_000 }],
+};
+export const reportVat = { vat_registered: true, output_vat_cents: 2_444_674, input_vat_cents: 1_198_210, net_vat_cents: 1_246_464,
+  note: "From bank lines with VAT recorded — check against your invoices before filing." };
