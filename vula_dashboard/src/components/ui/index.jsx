@@ -192,13 +192,22 @@ export function SectionTabs({ tabs, active, onChange, variant, label }) {
           background: active === t.id ? T.accentSoft : "transparent",
           color: active === t.id ? T.accent : T.muted,
         }}>
-          {t.Icon ? <t.Icon size={16} strokeWidth={1.75} aria-hidden="true" style={{ verticalAlign: "-3px", marginRight: 6 }} />
+          {t.Icon && t.icon ? <TabGlyph emoji={t.icon} Icon={t.Icon} />
+            : t.Icon ? <t.Icon size={16} strokeWidth={1.75} aria-hidden="true" style={{ verticalAlign: "-3px", marginRight: 6 }} />
             : t.icon ? `${t.icon} ` : ""}{t.label}
         </button>
       ))}
     </div>
   );
 }
+// A tab with both: the current look keeps its emoji, the redesign shows the Lucide icon — the
+// shell's own vshell-emoji / vshell-lucide pair, so index.css shows one per [data-ui].
+const TabGlyph = ({ emoji, Icon }) => (
+  <>
+    <span className="vshell-emoji" aria-hidden="true">{`${emoji} `}</span>
+    <Icon className="vshell-lucide" size={16} strokeWidth={1.75} aria-hidden="true" style={{ verticalAlign: "-3px", marginRight: 6 }} />
+  </>
+);
 /** The redesign's segmented tabs — SectionTabs as pills. */
 export const PillTabs = (props) => <SectionTabs variant="pill" {...props} />;
 

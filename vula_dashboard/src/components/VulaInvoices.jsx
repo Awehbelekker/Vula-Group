@@ -14,6 +14,7 @@ import { toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
 import { FONT_PAIRINGS } from '../theme/tokens'
 import { VULA_API } from '../lib/authFetch'
+import { todaySA } from '../lib/dates'
 import InvoiceListV2 from './invoices/InvoiceListV2'
 
 
@@ -835,7 +836,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
         discount_pct: parseFloat(discountPct) || 0,
         deposit_cents: depositCents,
         project: project || null,
-        issue_date: new Date().toISOString().slice(0, 10),
+        issue_date: todaySA(),
         due_date: dueDate || null,
         valid_until: validUntil || null,
         status: 'draft',
@@ -1139,7 +1140,7 @@ const TEMPLATES = [
 
 function RecurringManager({ tenantId, onCancel }) {
   const [list, setList] = useState([])
-  const [form, setForm] = useState({ label: '', customer_name: '', customer_phone: '', customer_email: '', cadence: 'monthly', next_run_at: new Date().toISOString().slice(0, 10) })
+  const [form, setForm] = useState({ label: '', customer_name: '', customer_phone: '', customer_email: '', cadence: 'monthly', next_run_at: todaySA() })
   const [items, setItems] = useState([{ description: '', quantity: 1, unit_price: '' }])
   const [saving, setSaving] = useState(false)
 

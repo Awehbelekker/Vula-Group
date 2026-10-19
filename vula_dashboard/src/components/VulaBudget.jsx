@@ -9,6 +9,7 @@
 import { confirmDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback } from 'react'
 import { VULA_API } from '../lib/authFetch'
+import { lastDayOfMonth, todaySA } from '../lib/dates'
 
 
 const CATEGORIES = ['stock', 'delivery', 'packaging', 'marketing', 'equipment', 'staff', 'rent', 'utilities', 'other']
@@ -24,11 +25,11 @@ export default function VulaBudget({ tenantId, stats }) {
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
   const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10), due_date: '' })
+  const [form, setForm] = useState({ category: 'stock', description: '', amount: '', supplier: '', date: todaySA(), due_date: '' })
   const [due, setDue] = useState(null) // { overdue, upcoming, *_total_cents }
   const [recurring, setRecurring] = useState([])
   const [showAddRecurring, setShowAddRecurring] = useState(false)
-  const [rForm, setRForm] = useState({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: new Date().toISOString().slice(0, 10) })
+  const [rForm, setRForm] = useState({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: todaySA() })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -37,7 +38,7 @@ export default function VulaBudget({ tenantId, stats }) {
     // here instead of trusting the server for those two things.
     const [y, m] = month.split('-').map(Number)
     const since = `${month}-01`
-    const until = new Date(y, m, 0).toISOString().slice(0, 10)  // last day of the selected month
+    const until = lastDayOfMonth(y, m)
     const [exp, dueResp] = await Promise.all([
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses?since=${since}&until=${until}`).then(r => r.json()),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/due?days_ahead=30`).then(r => r.json()).catch(() => null),
@@ -70,7 +71,7 @@ export default function VulaBudget({ tenantId, stats }) {
         amount_cents: cents, cadence: rForm.cadence, next_due: rForm.next_due,
       }),
     })
-    setRForm({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: new Date().toISOString().slice(0, 10) })
+    setRForm({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: todaySA() })
     setShowAddRecurring(false)
     loadRecurring()
   }
@@ -102,7 +103,7 @@ export default function VulaBudget({ tenantId, stats }) {
         due_date: form.due_date || null,
       }),
     })
-    setForm({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10), due_date: '' })
+    setForm({ category: 'stock', description: '', amount: '', supplier: '', date: todaySA(), due_date: '' })
     setShowAdd(false)
     load()
   }

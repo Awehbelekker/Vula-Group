@@ -62,8 +62,8 @@ export function useCustomers(tenantId) {
     const w = window.open('', '_blank')
     if (!w) return
     w.document.write(`<html><head><title>Statement — ${esc(name || phone)}</title>
-      <style>body{font-family:system-ui;padding:24px;color:var(--ink)}table{width:100%;border-collapse:collapse;margin-top:14px}
-      th,td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:left;font-size:13px}
+      <style>body{font-family:system-ui;padding:24px;color:black}table{width:100%;border-collapse:collapse;margin-top:14px}
+      th,td{padding:6px 8px;border-bottom:1px solid silver;text-align:left;font-size:13px}
       h1{font-size:18px}.tot{font-weight:700}</style></head><body>
       <h1>Statement of account</h1>
       <p>${esc(name || '')} · ${esc(phone)}</p>

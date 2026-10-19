@@ -17,6 +17,7 @@
  * Every change is recorded as a stock movement (migration 182).
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { ClipboardList, PackagePlus, Pencil } from 'lucide-react'
 import { VULA_API } from '../lib/authFetch'
 import { useAuthStore } from '../store/auth'
 import { Card, Button, Badge, SectionTabs, EmptyState, inputStyle, toast, confirmDialog } from './ui/index.jsx'
@@ -578,9 +579,9 @@ function QuickAdjust({ tenantId, products }) {
 // ── Tab ───────────────────────────────────────────────────────────────────────
 
 const MODES = [
-  { id: 'count', icon: '📋', label: 'Stock-take' },
-  { id: 'receive', icon: '📦', label: 'Receive' },
-  { id: 'adjust', icon: '✏️', label: 'Quick adjust' },
+  { id: 'count', icon: '📋', Icon: ClipboardList, label: 'Stock-take' },
+  { id: 'receive', icon: '📦', Icon: PackagePlus, label: 'Receive' },
+  { id: 'adjust', icon: '✏️', Icon: Pencil, label: 'Quick adjust' },
 ]
 
 export default function VulaStock({ tenantId, products: initial = [] }) {

@@ -5,9 +5,10 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { isOnSADay, todaySA } from "../../lib/dates";
 
 export const DAYNAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 1..7
-export const today = () => new Date().toISOString().slice(0, 10);
+export const today = () => todaySA();
 export function shift(d, n) { const x = new Date(d + "T12:00:00"); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); }
 export function mondayOf(d) {
   const x = new Date(d + "T12:00:00");
@@ -16,7 +17,7 @@ export function mondayOf(d) {
   return x.toISOString().slice(0, 10);
 }
 export const timeOf = (iso) => new Date(iso).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg" });
-export const onDay = (b, d) => (b.start_at || "").slice(0, 10) === d || new Date(b.start_at).toISOString().slice(0, 10) === d;
+export const onDay = (b, d) => isOnSADay(b.start_at, d);
 
 /** POST a booking into a free slot (f.start is the slot's label, e.g. "09:30"). */
 export function bookSlot(tenantId, date, f, services) {
