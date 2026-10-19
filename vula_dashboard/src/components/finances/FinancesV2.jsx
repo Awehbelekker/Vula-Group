@@ -10,8 +10,8 @@ import { ChevronRight, Download, FileText, Sparkles, Users } from "lucide-react"
 import { formatMoney } from "../../lib/money";
 import { downloadCsv } from "../../lib/csv";
 import { Button, Card, EmptyState, Field, Input, PillTabs, Skeleton, StatCard, StatusChip } from "../ui/index.jsx";
-import VulaJobCosting from "../VulaJobCosting";
-import VulaCrossCheck from "../VulaCrossCheck";
+import JobCostingV2 from "./JobCostingV2";
+import CrossCheckV2 from "./CrossCheckV2";
 import RevenueChart from "./RevenueChart";
 import { INSIGHT_PERIODS, REPORT_DAYS, RISK_LABELS, useFinanceInsights, useLedger, useSalesReport } from "./useFinances";
 import "./finances.css";
@@ -171,8 +171,8 @@ function Ledger({ tenantId }) {
     <section className="vfn-stack" aria-labelledby="vfn-ledger">
       <div className="vfn-head"><h2 id="vfn-ledger" className="vfn-h2">Money per project</h2></div>
       <p className="vfn-sub">Built from the invoices and payments Vula files. Payments are matched to invoices, not guessed.</p>
-      <Card><VulaJobCosting tenantId={tenantId} /></Card>
-      <Card><VulaCrossCheck tenantId={tenantId} /></Card>
+      <JobCostingV2 tenantId={tenantId} />
+      <CrossCheckV2 tenantId={tenantId} />
       <div className="vfn-stats">
         <StatCard variant="tile" label="Money in" value={rands(data.total_in)} color="var(--ok-text)" />
         <StatCard variant="tile" label="Money out" value={rands(data.total_out)} />

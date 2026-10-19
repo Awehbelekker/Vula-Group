@@ -714,3 +714,44 @@ export const recurringSubs = [
   { id: "rs-2", customer_name: "Bay Events Co.", customer_phone: "+27820000106", cadence: "monthly", status: "paused", payment_method: "eft",
     items: [{ product_id: "p-03", product_name: "Aged cheddar (250g)", quantity: 3, unit_price_cents: 11_900 }], delivery_cents: 0, next_run: "2026-11-01", last_run: null },
 ];
+
+// ── Job costing + a fuller cross-check (Finances › Ledger, project businesses) ────────────────
+// Only the job-costing test routes these in (with a uses_projects profile); every other screen
+// keeps the bakery's empty cross-check above.
+const trade = (t, cents) => ({ trade: t, cents });
+export const jobCosting = {
+  fee_default_pct: 10, fees_earned_cents: 3_700_000, fees_target_cents: 7_972_000, overheads_cents: 2_480_000, overhead_rate_pct: 3.3,
+  business_result_cents: 1_220_000, unallocated_project_spend_cents: 1_215_000, unallocated_project_lines: 7,
+  projects: [
+    { project: "Clifton house", status: "on track", first: "2026-03-02", last: "2026-10-14", fee_pct: 10,
+      received_cents: 48_400_000, cost_cents: 43_600_000, target_received_cents: 47_960_000, fee_earned_cents: 4_800_000, fee_target_cents: 4_360_000,
+      overhead_share_cents: 1_450_000, profit_cents: 3_350_000, unallocated_trade_cents: 0, variations: null,
+      trades: [trade("Structural steel", 14_200_000), trade("Brickwork", 11_800_000), trade("Electrical", 9_100_000), trade("Plumbing", 8_500_000)] },
+    { project: "Bo-Kaap shopfit", status: "loss", first: "2026-07-20", last: "2026-10-09", fee_pct: 12,
+      received_cents: 29_000_000, cost_cents: 30_100_000, target_received_cents: 33_712_000, fee_earned_cents: -1_100_000, fee_target_cents: 3_612_000,
+      overhead_share_cents: 1_030_000, profit_cents: -2_130_000, unallocated_trade_cents: 2_400_000,
+      variations: { documents: 2, claimed_cents: 1_850_000, extra_cost_cents: 2_260_000 },
+      trades: [trade("Joinery", 16_300_000), trade("Ceilings", 6_200_000), trade("Electrical", 5_200_000)] },
+  ],
+};
+export const crossCheckFull = { text: "42 documents filed; 37 are in the books and 31 are matched to the bank. 4 things need you.",
+  unbooked: [{ id: "ub-1", supplier: "Cape Timber Supplies", filename: "ctsupplies-inv-2231.pdf", category: "materials", date: "2026-10-08", total_cents: 1_865_000 }],
+  unbooked_total_cents: 1_865_000,
+  bills_unpaid: [
+    { invoice_id: "bi-1", supplier: "Atlantic Electrical", invoice_number: "AE-0918", issue_date: "2026-09-30", total_cents: 4_312_500,
+      likely_payment: { txn_id: "tx-77", txn_date: "2026-10-06", description: "ATLANTIC ELEC EFT" }, possible_payments: 1 },
+    { invoice_id: "bi-2", supplier: "Peninsula Plumbing", invoice_number: "PP-332", issue_date: "2026-10-02", total_cents: 980_000, likely_payment: null, possible_payments: 3 },
+  ],
+  no_document: [{ counterparty: "Builders Warehouse", lines: 4, last: "2026-10-12", projects: ["Clifton house"], total_cents: 2_745_050 }],
+  no_document_total_cents: 2_745_050,
+  sales_unpaid: [{ invoice_id: "si-1", customer: "Mokoena Family Trust", invoice_number: "INV-0207", issue_date: "2026-10-01", total_cents: 11_500_000,
+    likely_payment: { txn_id: "tx-81", txn_date: "2026-10-15" } }],
+  money_in_unmatched_cents: 650_000, money_in_unmatched_lines: 1,
+  unexplained_in_sample: [{ txn_id: "tx-90", description: "CASH DEPOSIT SEA POINT", txn_date: "2026-10-11", amount_cents: 650_000 }] };
+export const vatScenario = { vat_registered: true, over_threshold: false,
+  text: "Last 3 months: R 136 440.00 VAT on sales, R 98 112.30 claimable — about R 38 327.70 to pay SARS.",
+  months: [
+    { month: "2026-08", sales: 29_000_000, output: 4_350_000, input_claimable: 3_105_000, input_no_vat_number: 210_000, net_cents: 1_245_000 },
+    { month: "2026-09", sales: 33_400_000, output: 5_010_000, input_claimable: 3_870_230, input_no_vat_number: 0, net_cents: 1_139_770 },
+    { month: "2026-10", sales: 28_560_000, output: 4_284_000, input_claimable: 2_836_000, input_no_vat_number: 95_000, net_cents: 1_448_000 },
+  ] };
