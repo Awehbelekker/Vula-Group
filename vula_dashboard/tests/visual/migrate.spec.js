@@ -605,6 +605,13 @@ test("master ops: backup, digest, new login and password reset make the same cal
   await page.getByRole("button", { name: "Create login" }).click();
   expect((await create).postDataJSON()).toEqual({ email: "baker@kloof.example.test", role: "manager" });
 
+  await page.getByRole("button", { name: "Remove counter@harbourvine.example.test" }).click();   // asks first; Cancel removes nothing
+  const confirm = page.getByRole("dialog").filter({ hasText: "Remove counter@harbourvine.example.test's login for demo-shop?" });
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Remove counter@harbourvine.example.test" }).click();
+  const del = page.waitForRequest((r) => r.method() === "DELETE" && /\/v1\/master\/tenants\/demo-shop\/users\/u-staff$/.test(new URL(r.url()).pathname));
+  await confirm.getByRole("button", { name: "Remove" }).click();
+  await del;
   await page.getByRole("button", { name: "Reset the password for counter@harbourvine.example.test" }).click();
   await expect(page.getByRole("status").filter({ hasText: "New temp password for counter@harbourvine.example.test: demo-reset-value" })).toBeVisible();
 });
