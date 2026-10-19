@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Upload, X } from "lucide-react";
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
-import { FiledLibrary } from "../VulaDocuments";
+import FiledLibraryV2 from "../documents/FiledLibraryV2";
 import { PROJECT_TABS, fetchBoq, fetchFinancials, moneyRows, saveBoqTotal, uploadToProject, useProjects } from "./useProjects";
 import "./projects.css";
 
@@ -212,7 +212,7 @@ function ProjectDocuments({ tenantId, project }) {
         <input ref={ref} type="file" multiple hidden tabIndex={-1} aria-hidden="true" onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
         {note && <span className="vpj-sub" role="status">{note}</span>}
       </div>
-      <FiledLibrary tenantId={tenantId} project={project} title={project} />
+      <FiledLibraryV2 tenantId={tenantId} project={project} title={project} />
     </>
   );
 }

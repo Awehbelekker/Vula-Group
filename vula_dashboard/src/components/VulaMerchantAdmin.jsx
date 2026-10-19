@@ -330,7 +330,7 @@ function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onCons
       {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} />}
       {active === 'labour' && <VulaLabour tenantId={tenantId} />}
       {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
-      {active === 'documents' && <VulaDocuments tenantId={tenantId} />}
+      {active === 'documents' && <VulaDocuments tenantId={tenantId} v2={v2} />}
       {/* the redesign files Stock and Suppliers here (navConfig.withV2Moves) */}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
       {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
@@ -347,7 +347,7 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
       {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
-      {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
+      {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} v2={v2} />}
       {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
       {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} repPhone={repPhone} />}

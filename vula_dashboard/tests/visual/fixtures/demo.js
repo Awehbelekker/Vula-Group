@@ -587,3 +587,14 @@ export const projectBoq = { total_cents: 12000000, sections: [{ section: "Food",
 export const projectFinancials = { project: "Bay Events catering", contract: 120000, invoiced: 64500.5, invoiced_paid: 40000, invoice_count: 3,
   quoted: 12000, quote_count: 1, paid_in: 40000, spent: 31275.25, labour_cents: 480000, net: 8724.75, remaining: 88724.75, outstanding: 24500.5,
   latest_claim: null, transactions: [] };
+
+// ── Knowledge-base visibility + the customer's-eye search (documents.py, KB retrieval 1b) ──
+export const kbVisibility = { strict: false, documents: [
+  { doc_id: "kb-1", filename: "Menu-spring-2026.pdf", audience: "public" },
+  { doc_id: "kb-2", filename: "Allergen-guide.docx", audience: "untagged" },
+  { doc_id: "kb-3", filename: "Catering-FAQ.txt", audience: "public" },
+  { doc_id: "kb-4", filename: "Staff-rota-October.xlsx", audience: "staff" },
+] };
+export const customerView = (q) => ({ strict: false,
+  visible_documents: kbVisibility.documents.filter((d) => d.audience !== "staff"),
+  results: q ? [{ filename: "Catering-FAQ.txt", audience: "public", excerpt: "We deliver Tuesday to Saturday within the City Bowl and Atlantic Seaboard." }] : [] });
