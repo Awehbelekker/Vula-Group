@@ -436,3 +436,80 @@ test("documents: a queued file uploads as one batch, team-only unless ticked", a
   expect(body).toContain('name="audience"\r\n\r\nstaff');
   expect(body).toContain('filename="Price-list.csv"');
 });
+
+// ── Settings ──
+const SETTINGS = { name: "settings", role: "owner", nav: "Settings", ready: "Brand kit" };
+const settingsSection = async (page, label) => {
+  await page.locator(".vst-nav").getByRole("button", { name: label }).click();
+  await expect(page.locator("#vst-title")).toHaveText(label);
+};
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`settings ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, SETTINGS, { viewport, theme });
+      if (vp === "desktop") await expect(page.getByLabel("Business name")).toHaveValue("Harbour & Vine Deli");
+      await check(page, ti, "settings", `${vp}-${theme}`, viewport);
+      await settingsSection(page, "Brand kit");
+      await expect(page.getByLabel("Business name")).toHaveValue("Harbour & Vine Deli");
+      await check(page, ti, "settings-brand", `${vp}-${theme}`, viewport);
+      if (vp !== "desktop") await page.getByRole("button", { name: "All settings" }).click();
+      await settingsSection(page, "Opening hours");
+      await expect(page.getByLabel("Fri closes")).toHaveValue("18:00");
+      await check(page, ti, "settings-hours", `${vp}-${theme}`, viewport);
+      if (vp !== "desktop") await page.getByRole("button", { name: "All settings" }).click();
+      await settingsSection(page, "What Vula has learned");
+      await expect(page.getByText("Do you deliver to Camps Bay?", { exact: false })).toBeVisible();
+      await check(page, ti, "settings-learned", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+const putBody = (page, path) => page.waitForRequest((r) => ["PUT", "POST"].includes(r.method()) && new URL(r.url()).pathname.endsWith(path));
+
+test("settings: brand kit, hours and delivery save the same bodies", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByLabel("Business name").fill("Harbour & Vine");
+  await page.getByRole("group", { name: "Corners" }).getByRole("button", { name: "Sharp" }).click();
+  const brand = putBody(page, "/admin/invoice-settings");
+  await page.getByRole("button", { name: "Save brand kit" }).click();
+  const b = (await brand).postDataJSON();
+  expect(b).toMatchObject({ trading_as: "Harbour & Vine", corner_style: "sharp", accent_color: "#2C5545", secondary_color: "#C8963E",
+    header_cta_text: "Order on WhatsApp", header_sticky: true, logo_size: "md" });
+
+  await settingsSection(page, "Opening hours");
+  await page.getByRole("checkbox", { name: "Sun" }).check();
+  await page.getByLabel("Sun closes").fill("12:00");
+  const hours = putBody(page, "/admin/order-settings");
+  await page.getByRole("button", { name: "Save opening hours" }).click();
+  const h = (await hours).postDataJSON();
+  expect(h.business_hours.sun).toEqual({ open: "08:00", close: "12:00" });
+  expect(h.business_hours.fri).toEqual({ open: "07:30", close: "18:00" });
+  expect(h.business_hours_note).toBe("Closed on public holidays.");
+
+  await settingsSection(page, "Delivery areas & fees");
+  await expect(page.getByLabel("Delivery fee")).toHaveValue("45");
+  await page.getByLabel("Delivery fee").fill("52.50");
+  const del = putBody(page, "/admin/order-settings");
+  await page.getByRole("button", { name: "Save delivery settings" }).click();
+  expect((await del).postDataJSON()).toMatchObject({ delivery_fee_cents: 5250, free_delivery_over_cents: 50000, min_order_cents: 15000,
+    delivery_areas: ["Sea Point", "Green Point", "Mouille Point", "Gardens"], delivery_radius_km: 6 });
+});
+
+test("settings on a phone: the section list, one section, back to the list", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await expect(page.locator(".vst-page")).toBeHidden();
+  await settingsSection(page, "Business profile");
+  await expect(page.locator(".vst-nav")).toBeHidden();
+  const first = page.locator(".vst-q").first();
+  await first.locator("textarea").fill("Sea Point, Cape Town");
+  await first.getByRole("checkbox", { name: "Customers can see this answer" }).check();
+  const prof = putBody(page, "/admin/business-profile");
+  await page.getByRole("button", { name: "Save profile" }).click();
+  const body = (await prof).postDataJSON();
+  expect(Object.values(body.answers)).toContain("Sea Point, Cape Town");
+  expect(body.public_keys.length).toBe(1);
+  await page.getByRole("button", { name: "All settings" }).click();
+  await expect(page.locator(".vst-nav")).toBeVisible();
+});

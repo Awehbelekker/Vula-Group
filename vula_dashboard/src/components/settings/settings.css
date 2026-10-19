@@ -1,0 +1,92 @@
+/* settings.css — the redesigned Settings (settings/SettingsV2.jsx). Tokens only. From 1024px the
+   section list sits beside the open section; under that one column — the list, or one section
+   with "All settings" to go back. Every flex child holding text has min-width: 0. */
+
+.vst { min-width: 0; }
+.vst-panes { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+.vst-nav, .vst-page { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.vst[data-open="false"] .vst-page { display: none; }
+.vst[data-open="true"] .vst-nav { display: none; }
+.vst[data-open="true"] > div:first-child { display: none !important; }   /* the PageHeader, while a section is open */
+.vst-back { align-self: flex-start; }
+
+.vst-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.vst-group-h { margin: 0; font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vst-item { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 52px; padding: var(--space-2) var(--space-3);
+  border: none; border-radius: var(--radius-md); background: none; color: var(--ink); font: 500 var(--fs-body)/1.3 var(--font-sans); text-align: left; cursor: pointer; }
+.vst-item + .vst-item { margin-top: 2px; }
+.vst-item:hover { background: var(--surface-2); }
+.vst-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.vst-item-ic { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand-text); }
+.vst-item-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.vst-item-go { flex: none; color: var(--muted); }
+
+.vst-head { display: flex; flex-direction: column; gap: var(--space-1); }
+.vst-title { display: flex; align-items: center; gap: var(--space-2); margin: 0; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vst-sub { margin: 0; font-size: var(--fs-caption); line-height: 1.5; color: var(--muted); }
+.vst-body { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
+.vst-msg { font-size: var(--fs-body); color: var(--ok-text); }
+.vst-stack { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vst-card { display: flex; flex-direction: column; gap: var(--space-3); }
+.vst-h { display: flex; align-items: center; gap: var(--space-2); margin: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vst-strong { display: inline-flex; align-items: center; gap: var(--space-2); font-weight: 600; color: var(--ink); }
+.vst-label { font-size: var(--fs-caption); color: var(--muted); }
+.vst-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vst-grow { flex: 1 1 180px; min-width: 0; }
+.vst-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.vst-check { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; font-size: var(--fs-body); color: var(--ink); cursor: pointer; }
+.vst-check input { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--brand); }
+.vst-save { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.vst-save--in { padding-top: var(--space-2); border-top: 1px solid var(--line); }
+
+/* brand kit */
+.vst-brand { display: grid; gap: var(--space-4); grid-template-columns: minmax(0, 1fr); }
+.vst-choice { display: flex; flex-direction: column; gap: var(--space-1); }
+.vst-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.vst-upload { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--brand);
+  border-radius: var(--radius-pill); background: var(--brand-soft); color: var(--brand-text); font: 600 var(--fs-body)/1 var(--font-sans); cursor: pointer; }
+.vst-upload:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vst-file { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.vst-logo-img { max-height: 44px; max-width: 160px; object-fit: contain; }
+.vst-icon-img { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; }
+.vst-sub svg { vertical-align: -2px; }
+.vst-suggest { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px dashed var(--brand); border-radius: var(--radius-md); background: var(--brand-soft); }
+.vst-dot { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line); flex: none; }
+.vst-colour { display: grid; grid-template-columns: 120px 44px minmax(0, 140px) auto; align-items: center; gap: var(--space-2); }
+.vst-swatch { width: 44px; height: 40px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; }
+.vst-hex { font-family: var(--font-mono) !important; }
+.vst-preview { min-width: 0; }
+
+/* profile, hours, delivery, learned */
+.vst-q { display: flex; flex-direction: column; gap: var(--space-1); }
+.vst-q-label { font-size: var(--fs-body); font-weight: 500; color: var(--ink); }
+.vst-days { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vst-day { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-1) 0; }
+.vst-day + .vst-day { border-top: 1px solid var(--line); }
+.vst-day-name { width: 88px; }
+.vst-times { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--muted); }
+.vst-times .vula-input { width: 128px !important; }
+.vst-rand { display: flex; align-items: center; gap: var(--space-2); color: var(--muted); font-family: var(--font-mono); }
+.vst-rand .vula-input { flex: 1; min-width: 0; }
+.vst-map { height: 280px; border-radius: var(--radius-md); border: 1px solid var(--line); overflow: hidden; }
+.vst-quote { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); }
+.vst-list { margin: 0; padding-left: var(--space-5); font-size: var(--fs-caption); color: var(--muted); }
+
+@media (max-width: 640px) {
+  .vst-colour { grid-template-columns: 44px minmax(0, 1fr) auto; }
+  .vst-colour .vst-label { grid-column: 1 / -1; }
+  .vst-map { height: 220px; }
+}
+@media (min-width: 1024px) {
+  .vst-panes { grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); align-items: start; }
+  .vst[data-open] .vst-nav, .vst[data-open] .vst-page { display: flex; }
+  .vst[data-open="true"] > div:first-child { display: flex !important; }
+  .vst-nav { position: sticky; top: 80px; max-height: calc(100dvh - 100px); overflow-y: auto; padding-right: 2px; }
+  .vst-back { display: none !important; }
+  .vst-item[aria-current="page"] { background: var(--brand-soft); color: var(--brand-text); font-weight: 600; }
+}
+@media (min-width: 1280px) {
+  .vst-brand { grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+  .vst-preview { position: sticky; top: 80px; }
+  .vst-save { grid-column: 1 / -1; }
+}
