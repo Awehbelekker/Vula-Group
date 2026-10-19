@@ -17,7 +17,7 @@ import VulaYocoConnect from '../VulaYocoConnect'
 import StoreConnectV2 from './connect/StoreConnectV2'
 import ShopDomainV2 from './connect/ShopDomainV2'
 import WAProfileV2 from './connect/WAProfileV2'
-import VulaWhatsAppConnect from '../VulaWhatsAppConnect'
+import WhatsAppConnectV2 from './connect/WhatsAppConnectV2'
 import ClickUpConnectV2 from './connect/ClickUpConnectV2'
 import OAuthConnectV2 from './connect/OAuthConnectV2'
 import EmailConnectV2 from './connect/EmailConnectV2'
@@ -103,7 +103,7 @@ function Section({ id, tenantId, tenantName, adminEmail }) {
     case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />
     case 'woo': return <StoreConnectV2 key="woo" store="woo" tenantId={tenantId} adminEmail={adminEmail} />
     case 'domain': return <ShopDomainV2 tenantId={tenantId} />
-    case 'whatsapp': return <Card><VulaWhatsAppConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} /></Card>
+    case 'whatsapp': return <WhatsAppConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
     case 'waprofile': return <WAProfileV2 tenantId={tenantId} />
     case 'google': return <OAuthConnectV2 key="google" provider="google" tenantId={tenantId} tenantName={tenantName} />
     case 'microsoft': return <OAuthConnectV2 key="microsoft" provider="microsoft" tenantId={tenantId} tenantName={tenantName} />

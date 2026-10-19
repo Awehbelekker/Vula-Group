@@ -539,6 +539,8 @@ const CONNECTIONS = [
     state: "waiting_dns", automated: true, instructions: "Please add these two DNS records for shop.harbourvine.example.test …",
     records: [{ type: "CNAME", name: "shop", value: "shops.vula.example.test", ok: true },
       { type: "TXT", name: "_vula-verify.shop", value: "vula-verify=8f3c2a91d7e04b6f", ok: false }] }))],
+  ["WhatsApp number", "Not registered", async (page) => page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson({ status: "connected",
+    phone_number: "+27 82 000 0001", verified_name: "Harbour & Vine Deli", webhook_registered: false }))],
 ];
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -641,6 +643,18 @@ test("settings: the shop's own address is added with the same body", async ({ pa
   const post = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/shop-domain$/.test(new URL(r.url()).pathname));
   await page.getByRole("button", { name: "Use this address" }).click();
   expect((await post).postDataJSON()).toEqual({ domain: "shop.harbourandvine.example.test" });
+});
+
+test("settings: WhatsApp disconnect asks first, then makes the same call", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.tablet, theme: "light" });
+  await page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson({ status: "connected", phone_number: "+27 82 000 0001",
+    verified_name: "Harbour & Vine Deli", webhook_registered: true }));
+  await settingsSection(page, "WhatsApp number");
+  await page.getByRole("button", { name: "Disconnect" }).click();
+  const del = page.waitForRequest((r) => r.method() === "DELETE" && /\/v1\/whatsapp\/disconnect\/[^/]+$/.test(new URL(r.url()).pathname));
+  await page.getByRole("dialog").getByRole("button", { name: "Yes" }).click();
+  await del;
+  await expect(page.locator(".vst-page").getByText("Not connected")).toBeVisible();
 });
 
 test("settings: a Microsoft sync that is failing says so", async ({ page }) => {
