@@ -515,6 +515,53 @@ test("settings on a phone: the section list, one section, back to the list", asy
   await expect(page.locator(".vst-nav")).toBeVisible();
 });
 
+// ── Settings › connections (settings/connect/) ──
+const okJson = (body) => (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+const CONNECTIONS = [
+  // [section label, what shows once it has loaded, optional routes to install first]
+  ["Google (Drive & Gmail)", "Draft-only (you approve & send)", async (page) =>
+    page.route(/\/v1\/google\/status\/[^/]+$/, okJson({ status: "connected", email: "owner@harbourvine.example.test" }))],
+  ["Microsoft (OneDrive & Outlook)", "Connect Microsoft"],
+];
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`settings connections ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, SETTINGS, { viewport, theme });
+      for (const [label, ready, setup] of CONNECTIONS) {
+        if (setup) await setup(page);
+        if (vp !== "desktop" && await page.getByRole("button", { name: "All settings" }).isVisible()) await page.getByRole("button", { name: "All settings" }).click();
+        await settingsSection(page, label);
+        await expect(page.locator(".vst-page").getByText(ready, { exact: false }).first()).toBeVisible();
+        await check(page, ti, `settings-${label.split(" ")[0].toLowerCase()}`, `${vp}-${theme}`, viewport);
+      }
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("settings: Microsoft connect opens the approval window from the same authorize call", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.route(/\/v1\/microsoft\/authorize-url/, okJson({ url: "http://api.vula.test/fake-ms-consent" }));
+  await page.context().route(/fake-ms-consent/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>consent</title>" }));   // the popup is its own page
+  await settingsSection(page, "Microsoft (OneDrive & Outlook)");
+  const auth = page.waitForRequest((r) => /\/v1\/microsoft\/authorize-url$/.test(new URL(r.url()).pathname));
+  const popup = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Microsoft" }).click();
+  expect(new URL((await auth).url()).searchParams.get("tenant_id")).toBeTruthy();
+  const win = await popup;
+  await win.waitForLoadState();
+  expect(win.url()).toBe("http://api.vula.test/fake-ms-consent");
+});
+
+test("settings: a Microsoft sync that is failing says so", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.route(/\/v1\/microsoft\/status\/[^/]+$/, okJson({ status: "connected", email: "o@x.example.test",
+    last_synced_at: "2026-10-17T06:30:00+02:00", last_sync_status: "error", last_sync_error: "invalid_grant" }));
+  await settingsSection(page, "Microsoft (OneDrive & Outlook)");
+  await expect(page.getByText("Failing — 4h ago · invalid_grant")).toBeVisible();
+});
+
 // ── Bank & matching ──
 const BANK = { name: "bank", role: "owner", nav: "Money", tab: "Bank & matching", ready: "ATLANTIC DAIRY COOP DEBIT ORDER" };
 

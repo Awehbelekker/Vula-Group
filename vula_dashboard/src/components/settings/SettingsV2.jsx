@@ -20,8 +20,7 @@ import VulaWAProfile from '../VulaWAProfile'
 import VulaWooConnect from '../VulaWooConnect'
 import VulaWhatsAppConnect from '../VulaWhatsAppConnect'
 import VulaClickUpConnect from '../VulaClickUpConnect'
-import VulaGoogleConnect from '../VulaGoogleConnect'
-import VulaMicrosoftConnect from '../VulaMicrosoftConnect'
+import OAuthConnectV2 from './connect/OAuthConnectV2'
 import VulaEmailConnect from '../VulaEmailConnect'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
 import './settings.css'
@@ -107,8 +106,8 @@ function Section({ id, tenantId, tenantName, adminEmail }) {
     case 'domain': return <Card><VulaShopDomain tenantId={tenantId} /></Card>
     case 'whatsapp': return <Card><VulaWhatsAppConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} /></Card>
     case 'waprofile': return <Card><VulaWAProfile tenantId={tenantId} /></Card>
-    case 'google': return <Card><VulaGoogleConnect tenantId={tenantId} tenantName={tenantName} /></Card>
-    case 'microsoft': return <Card><VulaMicrosoftConnect tenantId={tenantId} tenantName={tenantName} /></Card>
+    case 'google': return <OAuthConnectV2 provider="google" tenantId={tenantId} tenantName={tenantName} />
+    case 'microsoft': return <OAuthConnectV2 provider="microsoft" tenantId={tenantId} tenantName={tenantName} />
     case 'email': return <Card><VulaEmailConnect tenantId={tenantId} adminEmail={adminEmail} /></Card>
     case 'clickup': return <Card><VulaClickUpConnect tenantId={tenantId} tenantName={tenantName} /></Card>
     default: return null
