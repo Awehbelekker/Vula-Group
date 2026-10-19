@@ -131,6 +131,11 @@ function routes(role, modules = []) {
     r("GET", `${A}/order-settings`, () => ({ settings: F.orderSettings })),
     r("GET", `${A}/learned-summary`, () => F.learnedSummary),
     r("GET", `${A}/business-profile`, () => F.businessProfile),
+    r("PUT", `${A}/business-profile`, (m, url, req) => {        // the real endpoint echoes the saved profile
+      const { answers = {}, public_keys = [] } = req.postDataJSON() || {};
+      const answered = Object.values(answers).filter((v) => (v || "").trim()).length;
+      return { ...F.businessProfile, answers, public_keys, answered };
+    }),
     r("GET", `${A}/shopify`, () => ({ connected: false })),
     r("GET", `${A}/woocommerce`, () => ({ connected: false })),
     r("GET", `${A}/shop-domain`, () => ({ state: "none", domain: null, suggestion: "shop.harbourvine.example.test" })),

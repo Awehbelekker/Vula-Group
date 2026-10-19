@@ -268,3 +268,7 @@ export function liftForDark(hex, surface = "#1C1C1A") {
   }
   return c;
 }
+
+/** A brand kit's defaults until the tenant's own load (Settings › Brand kit), and the grey a
+ *  colour picker shows for an optional colour that isn't set. */
+export const DEFAULT_BRAND = { accent: "#2C5545", ink: "#1E1E1E", pickerEmpty: "#888888" };
