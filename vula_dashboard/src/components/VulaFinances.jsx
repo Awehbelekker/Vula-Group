@@ -8,6 +8,7 @@ import VulaCrossCheck from "./VulaCrossCheck";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const rand = (n) => "R" + (Number(n) || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
+// The trial balance sends integer cents (ledger.py trial_balance) — divide before rand() (it takes rands).
 
 function Cell({ label, value, sub, color }) {
   const C = { surface: "var(--surface)", border: "var(--border)", muted: "var(--muted)", text: "var(--text)" };
@@ -179,14 +180,14 @@ export default function VulaFinances({ tenantId }) {
                 {tb.accounts.map((a) => (
                   <div key={a.code} style={{ padding: "7px 16px", borderTop: `1px solid ${C.alt}`, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 12.5 }}>
                     <span>{a.name} <span style={{ color: C.muted, fontSize: 10 }}>· {a.type}</span></span>
-                    <span>{a.debit_cents ? rand(a.debit_cents) : "—"}</span>
-                    <span>{a.credit_cents ? rand(a.credit_cents) : "—"}</span>
+                    <span>{a.debit_cents ? rand(a.debit_cents / 100) : "—"}</span>
+                    <span>{a.credit_cents ? rand(a.credit_cents / 100) : "—"}</span>
                   </div>
                 ))}
                 <div style={{ padding: "8px 16px", borderTop: `1px solid ${C.border}`, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 12.5, fontWeight: 700, background: C.alt }}>
                   <span>Total</span>
-                  <span>{rand(tb.total_debit_cents)}</span>
-                  <span style={{ color: tb.total_debit_cents === tb.total_credit_cents ? C.green : C.red }}>{rand(tb.total_credit_cents)}</span>
+                  <span>{rand(tb.total_debit_cents / 100)}</span>
+                  <span style={{ color: tb.total_debit_cents === tb.total_credit_cents ? C.green : C.red }}>{rand(tb.total_credit_cents / 100)}</span>
                 </div>
               </>
             )}
