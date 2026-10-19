@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { downloadCsv } from '../../lib/csv'
 import { VULA_API } from '../../lib/authFetch'
+import { escapeHtml as esc } from '../../lib/html'
 
 export const AUDIENCES = [
   { id: 'all',         label: 'All' },
@@ -54,17 +55,18 @@ export function useCustomers(tenantId) {
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/statement`)
     const st = await r.json()
     const R = c => `R${((c || 0) / 100).toFixed(2)}`
+    // Customer text is escaped (lib/html.js): this about:blank window shares the dashboard's origin.
     const rows = (st.invoices || []).map(inv =>
-      `<tr><td>${(inv.created_at || '').slice(0, 10)}</td><td>${inv.invoice_number || ''}</td><td>${inv.doc_type}</td>
-       <td>${inv.status}</td><td style="text-align:right">${R(inv.total_cents)}</td></tr>`).join('')
+      `<tr><td>${esc((inv.created_at || '').slice(0, 10))}</td><td>${esc(inv.invoice_number || '')}</td><td>${esc(inv.doc_type)}</td>
+       <td>${esc(inv.status)}</td><td style="text-align:right">${R(inv.total_cents)}</td></tr>`).join('')
     const w = window.open('', '_blank')
     if (!w) return
-    w.document.write(`<html><head><title>Statement — ${name || phone}</title>
+    w.document.write(`<html><head><title>Statement — ${esc(name || phone)}</title>
       <style>body{font-family:system-ui;padding:24px;color:var(--ink)}table{width:100%;border-collapse:collapse;margin-top:14px}
       th,td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:left;font-size:13px}
       h1{font-size:18px}.tot{font-weight:700}</style></head><body>
       <h1>Statement of account</h1>
-      <p>${name || ''} · ${phone}</p>
+      <p>${esc(name || '')} · ${esc(phone)}</p>
       <table><tr><th>Date</th><th>No.</th><th>Type</th><th>Status</th><th style="text-align:right">Amount</th></tr>${rows}</table>
       <p class="tot">Total invoiced: ${R(st.total_invoiced_cents)}</p>
       <p class="tot">Total paid: ${R(st.total_paid_cents)}</p>

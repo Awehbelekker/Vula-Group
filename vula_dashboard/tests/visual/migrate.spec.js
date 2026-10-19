@@ -675,3 +675,101 @@ test("finances ledger: budget, a new claim and certify send the same bodies", as
   await page.getByRole("button", { name: "Certify" }).click();
   await cert;
 });
+
+// ── Sell › Discounts, Subscriptions, Delivery ──
+const DISCOUNTS = { name: "discounts", role: "owner", nav: "Sell", tab: "Discounts", ready: "SPRING15" };
+const RECURRING = { name: "recurring", role: "owner", nav: "Sell", tab: "Subscriptions", ready: "Pieter van der Berg" };
+const DELIVERY = { name: "delivery", role: "owner", nav: "Sell", tab: "Delivery", ready: "ORD-1051" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`discounts ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, DISCOUNTS, { viewport, theme });
+      await expect(page.getByRole("switch", { name: "FREESHIP is off" })).toBeVisible();
+      await check(page, ti, "discounts", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "Edit SPRING15" }).click();
+      await expect(page.getByRole("dialog", { name: "Edit SPRING15" })).toBeVisible();
+      await check(page, ti, "discounts-edit", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+    test(`recurring ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, RECURRING, { viewport, theme });
+      await expect(page.getByText(/^R.175\.00$/)).toBeVisible();   // 2 × R65 + R45 delivery
+      await check(page, ti, "recurring", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "New recurring order" }).click();
+      await expect(page.getByRole("dialog", { name: "New recurring order" })).toBeVisible();
+      await check(page, ti, "recurring-new", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+    test(`delivery ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, DELIVERY, { viewport, theme });
+      await expect(page.getByRole("heading", { name: /^Morning/ })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Order workflow" })).toBeVisible();
+      await check(page, ti, "delivery", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("discounts: a fixed amount is sent in cents; on/off and edit use the same calls", async ({ page }) => {
+  await openScreen(page, DISCOUNTS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.getByRole("button", { name: "Add discount code" }).click();
+  const dlg = page.getByRole("dialog", { name: "New discount code" });
+  await dlg.getByLabel("Code").fill("braai25");
+  await dlg.getByLabel("Kind").selectOption("fixed");
+  await dlg.getByLabel("Amount off (R)").fill("25.50");
+  await dlg.getByLabel("Minimum order (R, optional)").fill("200");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/discount-codes$/.test(new URL(r.url()).pathname));
+  await dlg.getByRole("button", { name: "Add code" }).click();
+  expect((await post).postDataJSON()).toEqual({ code: "BRAAI25", type: "fixed", value: 2550, min_order_cents: 20000, starts_at: null, ends_at: null,
+    usage_limit: null, active: true, first_order_only: false, per_customer_limit: null });
+  const off = page.waitForRequest((r) => r.method() === "PATCH" && /\/discount-codes\/dc-1$/.test(new URL(r.url()).pathname));
+  await page.getByRole("switch", { name: "SPRING15 is on" }).click();
+  expect((await off).postDataJSON()).toEqual({ active: false });
+});
+
+test("recurring: a new order sends its items with server prices; pause uses the same call", async ({ page }) => {
+  await openScreen(page, RECURRING, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("button", { name: "New recurring order" }).click();
+  const dlg = page.getByRole("dialog", { name: "New recurring order" });
+  await dlg.getByLabel("Customer name").fill("Nomsa Dlamini");
+  await dlg.getByLabel("Customer WhatsApp number").fill("27820000199");
+  await dlg.getByLabel("Product 1").selectOption("p-02");
+  await dlg.getByLabel("Quantity 1").fill("2");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/subscriptions\/[^/]+$/.test(new URL(r.url()).pathname));
+  await dlg.getByRole("button", { name: "Create recurring order" }).click();
+  expect((await post).postDataJSON()).toEqual({ customer_name: "Nomsa Dlamini", customer_phone: "27820000199", cadence: "weekly", payment_method: "cod",
+    items: [{ product_id: "p-02", product_name: "Sourdough loaf", quantity: 2, unit_price_cents: 6500 }] });
+  const pause = page.waitForRequest((r) => r.method() === "POST" && /\/rs-1\/status$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Pause Pieter van der Berg's order" }).click();
+  expect((await pause).postDataJSON()).toEqual({ status: "paused" });
+});
+
+test("delivery: the run sheet escapes what customers typed (no script from a name or address)", async ({ page }) => {
+  await openScreen(page, DELIVERY, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const evil = '<img src=x onerror="window.__pwned=1">';
+  await page.route(/\/admin\/delivery-list/, (route) => route.fulfill({ json: { date: "2026-10-17", total: 1, paid_count: 0, unpaid_count: 1,
+    paid_revenue_cents: 0, unpaid_revenue_cents: 1000, orders: [{ id: "x1", display_id: "ORD-9", delivery_slot: "morning", status: "pending_payment",
+      customer_name: evil, customer_phone: "+27820000001", delivery_address: `<script>window.__pwned=2</script>`, total_cents: 1000,
+      commerce_order_items: [{ product_name: "<b>bold</b>", quantity: 1 }] }] } }));
+  await page.getByLabel("Day").fill("2026-10-18");
+  await expect(page.getByText(evil)).toBeVisible();     // shown as text on the page too
+  await page.evaluate(() => {
+    window.__printed = "";
+    window.open = () => ({ document: { write: (h) => { window.__printed += h; }, close() {} }, print() {} });
+  });
+  await page.getByRole("button", { name: "Print run sheet" }).click();
+  const html = await page.evaluate(() => window.__printed);
+  expect(html).toContain("&lt;img src=x onerror=&quot;window.__pwned=1&quot;&gt;");
+  expect(html).toContain("&lt;script&gt;");
+  expect(html).not.toContain("<img");
+  expect(html).not.toContain("<script>");
+  expect(html).toContain("&lt;b&gt;bold&lt;/b&gt; ×1");
+});
+
+test("delivery: workflow settings save the same body", async ({ page }) => {
+  await openScreen(page, DELIVERY, { viewport: VIEWPORTS.mobile, theme: "light" });
+  const put = page.waitForRequest((r) => r.method() === "PUT" && /\/admin\/order-settings$/.test(new URL(r.url()).pathname));
+  await page.getByRole("checkbox", { name: "Pay on delivery" }).click();
+  expect((await put).postDataJSON().payment_methods).toEqual(["yoco", "eft", "cod"]);   // the fixture has yoco + eft; ticking adds cod
+});

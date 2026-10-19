@@ -30,6 +30,11 @@ import VulaBookings from './VulaBookings'
 import VulaMarketing from './VulaMarketing'
 import VulaFinanceInsights from './VulaFinanceInsights'
 import FinancesV2 from './finances/FinancesV2'
+import { useDiscounts, valueLabel } from './discounts/useDiscounts'
+import DiscountsV2 from './discounts/DiscountsV2'
+import { DEL_PAID, printRunSheet, useDeliveryList } from './delivery/useDelivery'
+import { escapeHtml as esc } from '../lib/html'
+import DeliveryV2 from './delivery/DeliveryV2'
 import VulaBankRec from './VulaBankRec'
 import VulaAccounting from './VulaAccounting'
 import VulaLabour from './VulaLabour'
@@ -242,9 +247,9 @@ function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsume
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'orders' && <OrdersTab tenantId={tenantId} v2={v2} />}
       {active === 'products' && <ProductsTab tenantId={tenantId} v2={v2} />}
-      {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
-      {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
-      {active === 'delivery' && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
+      {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} v2={v2} />}
+      {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} v2={v2} />}
+      {active === 'delivery' && (v2 ? <DeliveryV2 tenantId={tenantId} /> : <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>)}
       {active === 'bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
       {active === 'costing' && <VulaCosting tenantId={tenantId} />}
@@ -1078,18 +1083,19 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
   function printSlip() {
     const w = window.open('', '_blank')
     if (!w) return
+    // Customer text is escaped (lib/html.js): this about:blank window shares the dashboard's origin.
     const rows = items.map(i =>
-      `<tr><td>${i.product_name || i.name || 'Item'}</td><td style="text-align:right">${i.quantity}</td><td style="text-align:right">${fmt(i.unit_price_cents || i.price_cents)}</td></tr>`
+      `<tr><td>${esc(i.product_name || i.name || 'Item')}</td><td style="text-align:right">${esc(i.quantity)}</td><td style="text-align:right">${fmt(i.unit_price_cents || i.price_cents)}</td></tr>`
     ).join('')
     w.document.write(`
-      <html><head><title>Packing slip ${order.display_id}</title>
+      <html><head><title>Packing slip ${esc(order.display_id)}</title>
       <style>body{font-family:system-ui;padding:24px;color:var(--ink)}h1{font-size:20px}
       table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}</style>
       </head><body>
-      <h1>Packing slip — ${order.display_id}</h1>
-      <p><strong>${order.customer_name || ''}</strong> · ${order.customer_phone || ''}</p>
-      <p>${order.delivery_address || 'No address'} · ${order.delivery_slot || ''}</p>
-      ${order.delivery_notes ? `<p>Notes: ${order.delivery_notes}</p>` : ''}
+      <h1>Packing slip — ${esc(order.display_id)}</h1>
+      <p><strong>${esc(order.customer_name || '')}</strong> · ${esc(order.customer_phone || '')}</p>
+      <p>${esc(order.delivery_address || 'No address')} · ${esc(order.delivery_slot || '')}</p>
+      ${order.delivery_notes ? `<p>Notes: ${esc(order.delivery_notes)}</p>` : ''}
       <table><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th></tr>${rows}</table>
       <h3 style="text-align:right">Total: ${fmt(order.total_cents)}</h3>
       </body></html>`)
@@ -1189,55 +1195,11 @@ const SLOT_LABELS = {
   afternoon: '☀️ Afternoon',
   evening:   '🌆 Evening',
 }
-const DEL_PAID = new Set(['paid', 'confirmed', 'packing', 'dispatched', 'delivered'])
 
 function DeliveryTab({ tenantId }) {
-  const today = new Date().toISOString().slice(0, 10)
-  const [date, setDate] = useState(today)
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/delivery-list?date=${date}`)
-    const d = await r.json().catch(() => null)
-    setData(d)
-    setLoading(false)
-  }, [tenantId, date])
-
-  useEffect(() => { load() }, [load])
-
+  const { today, date, setDate, data, loading, orders, bySlot, slots } = useDeliveryList(tenantId)
   const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
-  const orders = data?.orders || []
-
-  // Group by delivery slot, preserving the backend's slot ordering.
-  const bySlot = {}
-  for (const o of orders) {
-    const k = o.delivery_slot || 'unscheduled'
-    ;(bySlot[k] = bySlot[k] || []).push(o)
-  }
-  const slots = Object.keys(bySlot)
-
-  function printRun() {
-    const w = window.open('', '_blank')
-    if (!w) return
-    const blocks = slots.map(slot => {
-      const rows = bySlot[slot].map(o => {
-        const items = (o.commerce_order_items || [])
-          .map(i => `${i.product_name || 'Item'} ×${i.quantity}`).join(', ')
-        return `<tr><td>${o.display_id}</td><td>${o.customer_name || ''}<br>${o.customer_phone || ''}</td>`
-          + `<td>${o.delivery_address || '—'}</td><td>${items}</td>`
-          + `<td style="text-align:right">${fmt(o.total_cents)}${DEL_PAID.has(o.status) ? '' : ' (UNPAID)'}</td></tr>`
-      }).join('')
-      return `<h2>${SLOT_LABELS[slot] || slot}</h2><table>`
-        + `<tr><th>#</th><th>Customer</th><th>Address</th><th>Items</th><th style="text-align:right">Total</th></tr>${rows}</table>`
-    }).join('')
-    w.document.write(`<html><head><title>Delivery run — ${date}</title>
-      <style>body{font-family:system-ui;padding:24px;color:var(--ink)}h1{font-size:20px}h2{font-size:15px;margin-top:18px}
-      table{width:100%;border-collapse:collapse;margin-top:6px}td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left;font-size:12px;vertical-align:top}</style>
-      </head><body><h1>Delivery run — ${date}</h1>${blocks || '<p>No deliveries.</p>'}</body></html>`)
-    w.document.close(); w.print()
-  }
+  const printRun = () => printRunSheet({ date, slots, bySlot, slotLabel: slot => SLOT_LABELS[slot] || slot })
 
   return (
     <div>
@@ -2214,102 +2176,14 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
 
 // ── Discount codes (migration 091) ────────────────────────────────────────────
 
-const BLANK_DISCOUNT = {
-  code: '', type: 'percent', value: '', min_order_cents: '', starts_at: '', ends_at: '',
-  usage_limit: '', active: true, first_order_only: false, per_customer_limit: '',
+function DiscountCodesTab({ tenantId, v2 = false }) {
+  if (v2) return <DiscountsV2 tenantId={tenantId} />
+  return <DiscountCodesV1 tenantId={tenantId} />
 }
 
-function DiscountCodesTab({ tenantId }) {
-  const [codes, setCodes] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [editing, setEditing] = useState(null) // null | {} (new) | code row
-  const [form, setForm] = useState(BLANK_DISCOUNT)
-  const [error, setError] = useState(null)
+function DiscountCodesV1({ tenantId }) {
+  const { codes, loading, saving, editing, form, setForm, error, startEdit, startNew, cancel, save, remove, toggleActive } = useDiscounts(tenantId)
   const inp = { padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes`)
-    const d = await r.json()
-    setCodes(d.discount_codes || [])
-    setLoading(false)
-  }, [tenantId])
-
-  useEffect(() => { load() }, [load])
-
-  function startEdit(c) {
-    setForm({
-      code: c.code || '', type: c.type || 'percent',
-      value: c.value != null ? (c.type === 'fixed' ? (c.value / 100).toFixed(2) : String(c.value)) : '',
-      min_order_cents: c.min_order_cents != null ? (c.min_order_cents / 100).toFixed(2) : '',
-      starts_at: (c.starts_at || '').slice(0, 10), ends_at: (c.ends_at || '').slice(0, 10),
-      usage_limit: c.usage_limit ?? '', active: c.active !== false,
-      first_order_only: c.first_order_only || false, per_customer_limit: c.per_customer_limit ?? '',
-    })
-    setEditing(c)
-    setError(null)
-  }
-  function startNew() { setForm(BLANK_DISCOUNT); setEditing({}); setError(null) }
-  function cancel() { setEditing(null); setForm(BLANK_DISCOUNT); setError(null) }
-
-  async function save(e) {
-    e.preventDefault()
-    if (!form.code.trim()) return
-    setSaving(true)
-    setError(null)
-    const payload = {
-      code: form.code.trim(),
-      type: form.type,
-      value: form.type === 'fixed'
-        ? Math.round(parseFloat(form.value || 0) * 100)
-        : (parseInt(form.value, 10) || 0),
-      min_order_cents: form.min_order_cents !== '' ? Math.round(parseFloat(form.min_order_cents) * 100) : null,
-      starts_at: form.starts_at ? `${form.starts_at}T00:00:00+02:00` : null,
-      ends_at: form.ends_at ? `${form.ends_at}T23:59:59+02:00` : null,
-      usage_limit: form.usage_limit !== '' ? parseInt(form.usage_limit, 10) : null,
-      active: form.active,
-      first_order_only: form.first_order_only,
-      per_customer_limit: form.per_customer_limit !== '' ? parseInt(form.per_customer_limit, 10) : null,
-    }
-    const isEdit = editing && editing.id
-    const r = await fetch(
-      `${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes${isEdit ? `/${editing.id}` : ''}`,
-      { method: isEdit ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-    )
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}))
-      setError(d.detail || 'Could not save that code.')
-      setSaving(false)
-      return
-    }
-    cancel()
-    setSaving(false)
-    await load()
-  }
-
-  async function remove(c) {
-    if (!(await confirmDialog(`Delete code "${c.code}"?`, { danger: true, confirmLabel: 'Yes' }))) return
-    setSaving(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, { method: 'DELETE' })
-    await load()
-    setSaving(false)
-  }
-
-  async function toggleActive(c) {
-    setSaving(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !c.active }),
-    })
-    await load()
-    setSaving(false)
-  }
-
-  function valueLabel(c) {
-    if (c.type === 'percent') return `${c.value}% off`
-    if (c.type === 'fixed') return `R${(c.value / 100).toFixed(2)} off`
-    return 'Free shipping'
-  }
 
   if (loading) return <p style={styles.loading}>Loading discount codes…</p>
 

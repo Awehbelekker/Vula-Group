@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "check:puck-sync": "node scripts/check-puck-sync.mjs",
     "check:tokens": "node scripts/check-design-tokens.mjs",
-    "test:unit": "node --experimental-detect-module --test tests/unit/brand.test.mjs tests/unit/money.test.mjs"
+    "test:unit": "node --experimental-detect-module --test tests/unit/brand.test.mjs tests/unit/money.test.mjs tests/unit/html.test.mjs"
   },
   "dependencies": {
     "@measured/puck": "^0.20.2",

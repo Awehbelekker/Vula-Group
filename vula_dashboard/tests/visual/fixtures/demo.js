@@ -685,3 +685,32 @@ export const trialBalance = { total_debit_cents: 31_442_150, total_credit_cents:
 ] };
 export const crossCheck = { text: "9 documents filed; 7 are in the books and 5 are matched to the bank.", unbooked: [], unbooked_total_cents: 0,
   bills_unpaid: [], no_document: [], no_document_total_cents: 0, sales_unpaid: [], money_in_unmatched_cents: 0, money_in_unmatched_lines: 0, unexplained_in_sample: [] };
+
+// ── Discounts (migration 091), delivery list, recurring orders (migration 051) ────────────────
+export const discountCodes = [
+  { id: "dc-1", code: "SPRING15", type: "percent", value: 15, min_order_cents: 30_000, usage_count: 42, usage_limit: 100, active: true,
+    starts_at: "2026-10-01T00:00:00+02:00", ends_at: "2026-10-31T23:59:59+02:00", first_order_only: false, per_customer_limit: 1 },
+  { id: "dc-2", code: "WELCOME50", type: "fixed", value: 5_000, min_order_cents: null, usage_count: 9, usage_limit: null, active: true,
+    starts_at: null, ends_at: null, first_order_only: true, per_customer_limit: null },
+  { id: "dc-3", code: "FREESHIP", type: "free_shipping", value: 0, min_order_cents: 50_000, usage_count: 120, usage_limit: null, active: false,
+    starts_at: null, ends_at: "2026-09-30T23:59:59+02:00", first_order_only: false, per_customer_limit: null },
+];
+const delOrder = (id, display, slot, status, name, phone, address, total, items, notes) => ({ id, display_id: display, delivery_slot: slot, status,
+  customer_name: name, customer_phone: phone, delivery_address: address, total_cents: total, delivery_notes: notes || null,
+  commerce_order_items: items.map(([product_name, quantity]) => ({ product_name, quantity })) });
+export const deliveryList = (() => {
+  const orders = [
+    delOrder("do-1", "ORD-1051", "morning", "paid", "Thandi Mokoena", "+27820000101", "14 Beach Rd, Sea Point", 41_285, [["Sourdough loaf", 2], ["Cheese board", 1]]),
+    delOrder("do-2", "ORD-1052", "morning", "pending_payment", "Sipho Ndlovu", "+27820000104", "3 Lower Main Rd, Observatory", 18_900, [["Coffee beans 1kg", 1]], "Gate code 4417"),
+    delOrder("do-3", "ORD-1053", "afternoon", "confirmed", "Ayesha Daniels", "+27820000103", "22 Albert Rd, Woodstock", 26_450, [["Catering platter (12)", 1]]),
+  ];
+  const paid = orders.filter((o) => o.status !== "pending_payment");
+  return { date: "2026-10-17", orders, total: orders.length, paid_count: paid.length, unpaid_count: orders.length - paid.length,
+    paid_revenue_cents: paid.reduce((a, o) => a + o.total_cents, 0), unpaid_revenue_cents: orders.filter((o) => o.status === "pending_payment").reduce((a, o) => a + o.total_cents, 0) };
+})();
+export const recurringSubs = [
+  { id: "rs-1", customer_name: "Pieter van der Berg", customer_phone: "+27820000102", cadence: "weekly", status: "active", payment_method: "cod",
+    items: [{ product_id: "p-02", product_name: "Sourdough loaf", quantity: 2, unit_price_cents: 6_500 }], delivery_cents: 4_500, next_run: "2026-10-23", last_run: "2026-10-16T07:00:00+02:00" },
+  { id: "rs-2", customer_name: "Bay Events Co.", customer_phone: "+27820000106", cadence: "monthly", status: "paused", payment_method: "eft",
+    items: [{ product_id: "p-03", product_name: "Aged cheddar (250g)", quantity: 3, unit_price_cents: 11_900 }], delivery_cents: 0, next_run: "2026-11-01", last_run: null },
+];
