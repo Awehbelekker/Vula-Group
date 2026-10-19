@@ -1,0 +1,53 @@
+/* bank.css — the redesigned Bank & matching (bank/BankV2.jsx). Tokens only. One column at every
+   width: each bank line is a card whose controls wrap beneath it; every text holder has
+   min-width: 0, so a long statement description wraps instead of pushing the page sideways. */
+
+.vbr { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.vbr > div:first-child { margin-bottom: 0 !important; }
+.vbr-msg { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); color: var(--ink); font-size: var(--fs-body); }
+.vbr-sub { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.vbr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vbr-h { display: flex; align-items: center; gap: var(--space-2); margin: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
+.vbr-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vbr-grow { flex: 1 1 160px; min-width: 0; }
+.vbr-check { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--fs-body); color: var(--ink); cursor: pointer; }
+.vbr-check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--brand); }
+
+.vbr-upload { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-4); border-radius: var(--radius-pill);
+  background: var(--brand); color: var(--on-brand); font: 600 var(--fs-body)/1 var(--font-sans); cursor: pointer; position: relative; }
+.vbr-upload--secondary { align-self: flex-start; background: var(--brand-soft); color: var(--brand-text); border: 1px solid var(--brand); }
+.vbr-upload--busy { opacity: .7; cursor: progress; }
+.vbr-upload:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vbr-file { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+.vbr-stats { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); }
+.vbr-filter-extra { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vbr-filter-extra .vula-input { width: auto !important; min-width: 0; max-width: 100%; }
+.vbr-filter-extra .vui-chip { display: inline-flex; align-items: center; gap: 6px; }
+
+.vbr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vbr-card { display: flex; flex-direction: column; gap: var(--space-2); }
+.vbr-txn { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.vbr-top { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); min-width: 0; }
+.vbr-dir { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-body); color: var(--ink); }
+.vbr-dir--in svg { color: var(--ok-text); }
+.vbr-dir--out svg { color: var(--muted); }
+.vbr-status { margin-left: auto; }
+.vbr-desc { margin: 0; min-width: 0; font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vbr-controls, .vbr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vbr-controls .vula-input, .vbr-actions .vula-input { width: auto !important; flex: 1 1 150px; min-width: 0; max-width: 260px; }
+.vbr-actions { padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.vbr-confirm { border-color: var(--warn) !important; }
+.vbr-worker { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-caption); color: var(--brand-text); }
+.vbr-tools { display: flex; flex-direction: column; gap: var(--space-3); }
+
+@media (max-width: 640px) {
+  /* two stats a row, figures a touch smaller so "R 18 742.50" fits a half-width tile */
+  .vbr-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .vbr-stats > * { padding: var(--space-3) !important; }
+  .vbr-stats .vula-money { font-size: 17px !important; }
+  .vbr-controls .vula-input, .vbr-actions .vula-input { max-width: none; flex-basis: 100%; }
+  .vbr-filter-extra { width: 100%; }
+  .vbr-filter-extra .vula-input { flex: 1; }
+}

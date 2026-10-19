@@ -513,3 +513,58 @@ test("settings on a phone: the section list, one section, back to the list", asy
   await page.getByRole("button", { name: "All settings" }).click();
   await expect(page.locator(".vst-nav")).toBeVisible();
 });
+
+// ── Bank & matching ──
+const BANK = { name: "bank", role: "owner", nav: "Money", tab: "Bank & matching", ready: "ATLANTIC DAIRY COOP DEBIT ORDER" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`bank ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, BANK, { viewport, theme });
+      await expect(page.getByText(/^R.18.742\.50$/)).toBeVisible();
+      await check(page, ti, "bank", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "Group by payee" }).click();
+      await expect(page.getByRole("button", { name: "Apply to all 6" })).toBeVisible();
+      await check(page, ti, "bank-groups", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "Tools" }).click();
+      await expect(page.getByRole("dialog", { name: "Statement tools" })).toBeVisible();
+      await check(page, ti, "bank-tools", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+const bankPost = (page, re) => page.waitForRequest((r) => r.method() === "POST" && re.test(new URL(r.url()).pathname));
+
+test("bank: category, worker, match and ignore send the same bodies", async ({ page }) => {
+  await openScreen(page, BANK, { viewport: VIEWPORTS.mobile, theme: "light" });
+  const cat = bankPost(page, /\/bank\/transactions\/bt-3\/categorize$/);
+  await page.getByLabel("Category for CASH SEND LWAZI").selectOption("rent");
+  expect((await cat).postDataJSON()).toEqual({ account_code: "rent" });
+  const wk = bankPost(page, /\/bank\/transactions\/bt-3\/worker$/);
+  await page.getByLabel("Worker for CASH SEND LWAZI").selectOption("wk-2");
+  expect((await wk).postDataJSON()).toEqual({ worker_id: "wk-2" });
+  const match = bankPost(page, /\/bank\/transactions\/bt-1\/match$/);
+  const picker = page.getByLabel("Match invoice for PAYMENT RECEIVED BAY EVENTS CO INV-0041");
+  await picker.focus();
+  await expect(picker.locator("option", { hasText: "INV-0041" })).toHaveCount(1);
+  await picker.selectOption("inv-0041");
+  expect((await match).postDataJSON()).toEqual({ action: "match", invoice_id: "inv-0041" });
+  const ign = bankPost(page, /\/bank\/transactions\/bt-2\/match$/);
+  await page.locator(".vbr-txn", { hasText: "ATLANTIC DAIRY COOP DEBIT ORDER" }).getByRole("button", { name: "Ignore" }).click();
+  expect((await ign).postDataJSON()).toEqual({ action: "ignore" });
+});
+
+test("bank: filters ask the server; a payee group applies one category to all its lines", async ({ page }) => {
+  await openScreen(page, BANK, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const f = page.waitForRequest((r) => /\/bank\/transactions$/.test(new URL(r.url()).pathname) && new URL(r.url()).searchParams.get("status") === "matched");
+  await page.getByRole("button", { name: "Matched", exact: true }).click();
+  await f;
+  await expect(page.locator(".vbr-txn")).toHaveCount(2);
+  await page.getByRole("button", { name: "Group by payee" }).click();
+  const group = page.locator(".vbr-card", { hasText: "CASH SEND LWAZI" });
+  await group.getByLabel("Category for CASH SEND LWAZI").selectOption("cost_of_sales");
+  const bulk = bankPost(page, /\/bank\/transactions\/bulk-categorize$/);
+  await group.getByRole("button", { name: "Apply to all 6" }).click();
+  expect((await bulk).postDataJSON()).toEqual({ txn_ids: ["bt-3"], account_code: "cost_of_sales", project: null, trade: null });
+});

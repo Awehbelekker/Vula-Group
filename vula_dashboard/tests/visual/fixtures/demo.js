@@ -598,3 +598,31 @@ export const kbVisibility = { strict: false, documents: [
 export const customerView = (q) => ({ strict: false,
   visible_documents: kbVisibility.documents.filter((d) => d.audience !== "staff"),
   results: q ? [{ filename: "Catering-FAQ.txt", audience: "public", excerpt: "We deliver Tuesday to Saturday within the City Bowl and Atlantic Seaboard." }] : [] });
+
+// ── Bank & matching (bank.py, migration 057) ─────────────────────────────────────────────────
+export const bankSummary = {
+  txn_count: 7, money_in_cents: 1_874_250, money_out_cents: 1_236_480, matched: 3, needs_input: 1,
+  unmatched_credits: 1, unmatched_debits: 2, invoices_sent_unpaid_cents: 864_200, invoices_paid_cents: 1_412_000,
+};
+export const bankAccounts = { vat_registered: true, accounts: [
+  { code: "sales", name: "Sales" }, { code: "cost_of_sales", name: "Cost of sales" }, { code: "casual_labour", name: "Casual labour" },
+  { code: "rent", name: "Rent" }, { code: "bank_charges", name: "Bank charges" }, { code: "motor_vehicle", name: "Motor vehicle" },
+] };
+export const bankWorkers = [{ id: "wk-1", name: "Lwazi" }, { id: "wk-2", name: "Nomvula" }];
+export const bankTxns = [
+  { id: "bt-1", direction: "in", amount_cents: 864_200, txn_date: day(1), description: "PAYMENT RECEIVED BAY EVENTS CO INV-0041", match_status: "unmatched", account_code: "sales", categorized_by: "rule", vat_cents: 112_722 },
+  { id: "bt-2", direction: "out", amount_cents: 864_200, txn_date: day(2), description: "ATLANTIC DAIRY COOP DEBIT ORDER 0031", match_status: "unmatched", account_code: "cost_of_sales", categorized_by: "ai", vat_cents: 112_722 },
+  { id: "bt-3", direction: "out", amount_cents: 45_000, txn_date: day(2), description: "CASH SEND LWAZI", match_status: "unmatched", account_code: "casual_labour", categorized_by: "default", vat_cents: 0 },
+  { id: "bt-4", direction: "in", amount_cents: 412_850, txn_date: day(3), description: "EFT THANDI MOKOENA ORD-1042", match_status: "matched", account_code: "sales", categorized_by: "match", vat_cents: 53_850 },
+  { id: "bt-5", direction: "out", amount_cents: 1_850_000, txn_date: day(5), description: "RENT SEA POINT PROPERTIES OCT", match_status: "matched", account_code: "rent", categorized_by: "rule", vat_cents: 0 },
+  { id: "bt-6", direction: "out", amount_cents: 18_480, txn_date: day(6), description: "MONTHLY ACCOUNT FEE", match_status: "ignored", account_code: "bank_charges", categorized_by: "rule", vat_cents: 0 },
+  { id: "bt-7", direction: "out", amount_cents: 62_000, txn_date: day(8), description: "ENGEN SEA POINT FUEL", match_status: "needs_input", account_code: "motor_vehicle", categorized_by: "ai", vat_cents: 8_087, worker_id: "wk-1" },
+];
+export const bankGroups = [
+  { key: "ATLANTIC DAIRY COOP", count: 4, total_cents: 3_456_800, oldest: day(30), newest: day(2), txn_ids: ["bt-2"], account_code: "cost_of_sales" },
+  { key: "CASH SEND LWAZI", count: 6, total_cents: 270_000, oldest: day(40), newest: day(2), txn_ids: ["bt-3"], account_code: "casual_labour" },
+];
+export const bankCandidates = [
+  { id: "inv-0041", number: "INV-0041", party: "Bay Events Co.", balance_cents: 864_200, exact: true, status: "sent" },
+  { id: "inv-0038", number: "INV-0038", party: "Fairview Cheese", balance_cents: 1_200_000, exact: false, status: "part_paid" },
+];
