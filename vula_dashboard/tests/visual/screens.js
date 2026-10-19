@@ -53,7 +53,7 @@ export async function openScreen(page, screen, { viewport, theme }) {
 
   await page.goto("/");
   // a UI_V2 run waits for the redesigned shell (the tenant's flag arrives after first paint)
-  await page.locator(process.env.UI_V2 === "1" && screen.role !== "master" ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(process.env.UI_V2 === "1" ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
 
   if (screen.nav && await page.locator(".v2-shell").count()) {
     await openV2(page, screen.nav);

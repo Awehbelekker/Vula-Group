@@ -6,6 +6,7 @@
  * (vula/api/master.py + master_auth.py), the first real auth boundary in the platform.
  */
 import { useEffect, useState, Fragment, useCallback } from 'react'
+import { Brain, Building2, Coins, FlaskConical, HeartPulse, MessagesSquare, Rocket, ScrollText, Target, UserRound } from 'lucide-react'
 import { authFetch } from '../lib/authFetch'
 import { todaySA } from '../lib/dates'
 import { SectionTabs, confirmDialog } from './ui/index.jsx'
@@ -14,17 +15,18 @@ import VulaMasterTenantDetail from './VulaMasterTenantDetail'
 
 const C = { surface: 'var(--surface)', border: 'var(--border)', green: 'var(--accent)', red: 'var(--danger)', amber: 'var(--warn)', text: 'var(--text)', muted: 'var(--muted)', alt: 'var(--surface-alt)' }
 
+// icon: the current look's emoji; Icon: the redesign's (SectionTabs shows one per [data-ui])
 const SUBTABS = [
-  { id: 'tenants', label: 'Tenants', icon: '🏢' },
-  { id: 'onboard', label: 'Onboard', icon: '🚀' },
-  { id: 'health', label: 'Health', icon: '💓' },
-  { id: 'usage', label: 'Usage', icon: '💰' },
-  { id: 'users', label: 'Users', icon: '👤' },
-  { id: 'knowledge', label: 'Knowledge', icon: '🧠' },
-  { id: 'audit', label: 'Audit', icon: '📜' },
-  { id: 'models', label: 'Models', icon: '🧪' },
-  { id: 'benchmark', label: 'Benchmark', icon: '🎯' },
-  { id: 'conversations', label: 'Conversations', icon: '💬' },
+  { id: 'tenants', label: 'Tenants', icon: '🏢', Icon: Building2 },
+  { id: 'onboard', label: 'Onboard', icon: '🚀', Icon: Rocket },
+  { id: 'health', label: 'Health', icon: '💓', Icon: HeartPulse },
+  { id: 'usage', label: 'Usage', icon: '💰', Icon: Coins },
+  { id: 'users', label: 'Users', icon: '👤', Icon: UserRound },
+  { id: 'knowledge', label: 'Knowledge', icon: '🧠', Icon: Brain },
+  { id: 'audit', label: 'Audit', icon: '📜', Icon: ScrollText },
+  { id: 'models', label: 'Models', icon: '🧪', Icon: FlaskConical },
+  { id: 'benchmark', label: 'Benchmark', icon: '🎯', Icon: Target },
+  { id: 'conversations', label: 'Conversations', icon: '💬', Icon: MessagesSquare },
 ]
 
 // #/master/tenant/{id} — bookmarkable/shareable deep link into the tenant drill-in (2026-09-16).
