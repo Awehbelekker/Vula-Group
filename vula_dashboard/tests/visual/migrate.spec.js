@@ -515,6 +515,63 @@ test("settings on a phone: the section list, one section, back to the list", asy
   await expect(page.locator(".vst-nav")).toBeVisible();
 });
 
+// ── Smart Scanner (Money › Scanner, and Add › Scan) ──
+const SCANNER = { name: "scanner", role: "owner", nav: "Money", tab: "Scanner", ready: "Take a photo or choose one", modules: ["scanner"] };   // the Smart Scanner module
+// a tiny white PNG stands in for the photo; the mock reads it as a delivery note
+const PHOTO = { name: "delivery-note.png", mimeType: "image/png", buffer: Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=", "base64") };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`scanner ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, SCANNER, { viewport, theme });
+      await check(page, ti, "scanner", `${vp}-${theme}`, viewport);
+      await page.locator("#vsc-file").setInputFiles(PHOTO);
+      await expect(page.getByText("Match lines to your products (1/2 found)")).toBeVisible();
+      await expect(page.getByText(/^R.1.842\.50$/)).toBeVisible();
+      await check(page, ti, "scanner-review", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("scanner: review, then commit, stock and cost prices send the same bodies", async ({ page }) => {
+  await openScreen(page, SCANNER, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.getByRole("tab", { name: "Delivery note" }).click();
+  const scan = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/scan$/.test(new URL(r.url()).pathname));
+  await page.locator("#vsc-file").setInputFiles(PHOTO);
+  const sb = (await scan).postDataJSON();
+  expect(sb.doc_type).toBe("delivery_note");
+  expect(sb.image_base64).toMatch(/^data:image\/png;base64,/);
+  await expect(page.getByText("Supplier \"Atlantic Dairy Co-op\" — 30 day terms")).toBeVisible();
+
+  // the unmatched line: pick a product and a quantity, then book both ticked lines
+  await page.getByLabel("Product for Cream cheese tubs 500g").selectOption("p-01");
+  await page.getByLabel("Quantity for Cream cheese tubs 500g").fill("5");
+  const stock = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/stock\/receive$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Book ticked lines into stock" }).click();
+  expect((await stock).postDataJSON()).toEqual({ reference: "DN-55821", lines: [
+    { product_id: "p-03", quantity: 12, unit_cost_cents: 7950 }, { product_id: "p-01", quantity: 5, unit_cost_cents: 14808 }] });
+  await expect(page.getByRole("status").filter({ hasText: "Booked 2 lines into stock." })).toBeVisible();
+
+  const commit = page.waitForRequest((r) => r.method() === "POST" && /\/scan\/commit$/.test(new URL(r.url()).pathname) && r.postDataJSON()?.auto_commit === true);
+  await page.getByRole("button", { name: /^Commit to books · R.1.842\.50$/ }).click();
+  expect((await commit).postDataJSON().extracted.total_cents).toBe(184250);
+  await expect(page.getByText("Booked R 1 842.50 from Atlantic Dairy Co-op as a bill, due 16 Nov.")).toBeVisible();
+  await page.getByRole("button", { name: "Scan another" }).click();
+  await expect(page.getByText("Take a photo or choose one")).toBeVisible();
+});
+
+test("scanner: Add › Scan opens it in a sheet", async ({ page }) => {
+  await openScreen(page, { name: "home", role: "owner", nav: null, ready: "Won in", modules: ["scanner"] }, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "Add" }).click();
+  await page.getByRole("dialog", { name: "Add" }).getByText("Scan a document").click();
+  const sheet = page.getByRole("dialog", { name: "Smart scan" });
+  await expect(sheet.getByText("Take a photo or choose one")).toBeVisible();
+  await sheet.locator("#vsc-file").setInputFiles(PHOTO);
+  await expect(sheet.getByText("Match lines to your products (1/2 found)")).toBeVisible();
+});
+
 // ── Master HQ › Tenants ──
 const MASTER = { name: "master", role: "master", nav: "Master", ready: "need attention" };
 

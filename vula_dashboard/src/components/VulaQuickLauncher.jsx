@@ -9,6 +9,7 @@ import VulaSmartScanner from "./VulaSmartScanner";
 import VulaFollowups from "./VulaFollowups";
 import VulaFinances from "./VulaFinances";
 import VulaInvoices from "./VulaInvoices";
+import { Sheet } from "./ui/index.jsx";
 
 const C = { green: "var(--accent)", surface: "var(--surface)", border: "var(--border)", text: "var(--text)" };
 
@@ -20,7 +21,7 @@ const ACTIONS = [
   { key: "invoices", icon: "🧾", label: "New invoice", comp: VulaInvoices },
 ];
 
-export default function VulaQuickLauncher({ tenantId, access = [], full = true, hideFab = false }) {
+export default function VulaQuickLauncher({ tenantId, access = [], full = true, hideFab = false, v2 = false }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(null);   // action key with an open overlay
 
@@ -43,8 +44,16 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true, 
 
   return (
     <>
+      {/* The redesign opens the action in its own Sheet primitive (2026-10-19) */}
+      {v2 && (
+        <Sheet open={!!ActiveComp} title={ACTIONS.find((a) => a.key === active)?.label || ""} onClose={() => setActive(null)}>
+          {/* only the scanner has a redesigned version that sits in a sheet; the rest render as before */}
+          {ActiveComp && (active === "scanner" ? <ActiveComp tenantId={tenantId} v2 inSheet /> : <ActiveComp tenantId={tenantId} />)}
+        </Sheet>
+      )}
+
       {/* Overlay sheet */}
-      {ActiveComp && (
+      {!v2 && ActiveComp && (
         <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,18,15,0.45)", display: "flex", justifyContent: "center", alignItems: "flex-end" }} onClick={() => setActive(null)}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg)", width: "100%", maxWidth: 560, height: "92vh", borderRadius: "16px 16px 0 0", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 -8px 40px rgba(0,0,0,0.25)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>

@@ -179,6 +179,13 @@ function routes(role, modules = []) {
     r("GET", `^/status`, () => ({ status: "ok" })),   // server.py health check (master's Dashboard tab)
     r("GET", `^/v1/master/tenants`, () => (role === "master" ? { tenants: F.masterTenants } : { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Master access required."}' } })),
     r("GET", `^/v1/master/tenants/${T}/setup`, () => F.setup),
+    r("POST", `${A}/scan`, () => F.scanResult),
+    r("POST", `${A}/scan/commit`, (m, url, req) => (req.postDataJSON()?.auto_commit
+      ? { ok: true, message: "Booked R 1 842.50 from Atlantic Dairy Co-op as a bill, due 16 Nov.", record_type: "bill", kb_chunks_added: 0 }
+      : F.scanCommitPreview)),
+    r("POST", `${A}/scan/match-lines`, () => F.scanMatches),
+    r("POST", `${A}/stock/receive`, (m, url, req) => ({ received: (req.postDataJSON()?.lines || []).length, failed: [] })),
+    r("POST", `${A}/products/costs`, (m, url, req) => ({ updated: (req.postDataJSON()?.costs || []).length })),
     r("GET", `^/v1/master/usage`, () => F.masterUsage),
     r("GET", `^/v1/master/health`, () => F.masterHealth),
     r("GET", `^/v1/admin/signups`, () => F.signups),
