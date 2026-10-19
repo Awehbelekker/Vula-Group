@@ -119,6 +119,21 @@ export const teamAudit = [
   { id: "au-2", created_at: at(4, "10:40"), actor_email: `owner@${TENANT_ID}.example.test`, action: "login_created", detail: { email: `zanele@${TENANT_ID}.example.test` } },
 ];
 
+// ── Bookings (bookings.py, migration 050) — today is the frozen NOW day ─────────────────────
+export const bookingServices = [
+  { id: "svc-1", name: "Platter tasting", duration_min: 30, price_cents: 0, active: true },
+  { id: "svc-2", name: "Catering consult", duration_min: 60, price_cents: 45_000, active: true },
+  { id: "svc-3", name: "Cheese masterclass", duration_min: 90, price_cents: 65_000, active: false },
+];
+export const bookingsList = [
+  { id: "bk-1", start_at: at(0, "09:30"), service_name: "Platter tasting", customer_name: "Fatima Adams", customer_phone: "+27820000109", channel: "whatsapp", status: "confirmed", notes: "20 guests, budget R2,500" },
+  { id: "bk-2", start_at: at(0, "11:00"), service_name: "Catering consult", customer_name: "Bay Events Co.", customer_phone: null, channel: "dashboard", status: "pending", notes: null },
+  { id: "bk-3", start_at: at(0, "14:30"), service_name: "Platter tasting", customer_name: "Thandi Mokoena", customer_phone: "+27820000101", channel: "whatsapp", status: "completed", notes: null },
+  { id: "bk-4", start_at: at(-1, "10:00"), service_name: "Catering consult", customer_name: "Marco Rossi", customer_phone: "+27820000106", channel: "web", status: "confirmed", notes: null },
+];
+export const bookingAvailability = { closed: false, slots: ["10:00", "12:00", "12:30", "15:30", "16:00"].map((l) => ({ label: l, start_utc: `${l}Z` })) };
+export const bookingRules = { slot_minutes: 30, workdays: [1, 2, 3, 4, 5, 6], open_time: "08:00", close_time: "17:00", buffer_min: 10, lead_hours: 2, horizon_days: 30 };
+
 // ── Products (commerce.py::admin_list_products) ──────────────────────────────────────────────
 export const products = [
   ["p-01", "Smoked snoek pâté (200g)", "extras", 8_900, 24],

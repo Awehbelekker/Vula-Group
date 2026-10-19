@@ -244,7 +244,7 @@ function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsume
       {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
       {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
       {active === 'delivery' && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
-      {active === 'bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
       {active === 'costing' && <VulaCosting tenantId={tenantId} />}
       {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
@@ -346,7 +346,7 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
-      {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
       {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
       {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
