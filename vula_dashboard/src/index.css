@@ -445,7 +445,7 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
 .qr-white{background:#fff}
 
 /* Nav glyphs (2026-10-17, UX redesign B5): VulaShell renders the emoji and the Lucide icon;
-   the current shell shows the emoji, the redesign the icon. */
+   the current shell shows the emoji, the redesign the icon. SectionTabs reuses the pair. */
 .vshell-lucide { display: none; }
 :root[data-ui="v2"] .vshell-emoji { display: none; }
 :root[data-ui="v2"] .vshell-lucide { display: inline-block; vertical-align: middle; }

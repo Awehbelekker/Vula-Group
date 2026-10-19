@@ -15,7 +15,7 @@ import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { SectionTabs, toast, confirmDialog, Skeleton, ErrorCard } from './ui/index.jsx'
 import { toQty } from './VulaStock'
 import { useSectionTabs } from '../hooks/useSectionTabs'
-import { MERCHANT_GROUPS, sectionOf } from '../navConfig.jsx'
+import { MERCHANT_GROUPS, iconFor, sectionOf } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
@@ -116,7 +116,8 @@ const CATEGORY_LABELS = {
 function subtabsFor(navGroups, sectionId) {
   for (const g of navGroups || []) {
     const hit = g.items.find(it => it.id === sectionId)
-    if (hit?.subtabs) return hit.subtabs
+    // the redesign shows each sub-tab's Lucide icon in place of its emoji (index.css picks one)
+    if (hit?.subtabs) return hit.subtabs.map(t => ({ ...t, Icon: iconFor(t.id) || undefined }))
   }
   return null
 }
