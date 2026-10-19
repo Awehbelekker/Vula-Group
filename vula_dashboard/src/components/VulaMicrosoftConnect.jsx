@@ -1,46 +1,13 @@
 /**
  * VulaMicrosoftConnect.jsx — one-click "Connect Microsoft" (OneDrive + Outlook), draft-only mail.
  * Mirrors VulaGoogleConnect: popup OAuth → backend callback → status poll.
+ * Flow: settings/connect/useOAuthConnect.js (shared with the redesign's OAuthConnectV2).
  */
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { VULA_API } from '../lib/authFetch'
+import { timeAgo, useOAuthConnect } from './settings/connect/useOAuthConnect'
 
 
 export default function VulaMicrosoftConnect({ tenantId, tenantName }) {
-  const [status, setStatus] = useState(null)
-  const [account, setAccount] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const pollRef = useRef(null)
-
-  const loadStatus = useCallback(async () => {
-    if (!tenantId) return
-    try {
-      const r = await fetch(`${VULA_API}/v1/microsoft/status/${tenantId}`)
-      const d = await r.json()
-      setStatus(d.status); setAccount(d)
-    } catch { setStatus('error') }
-  }, [tenantId])
-
-  useEffect(() => { loadStatus() }, [loadStatus])
-  useEffect(() => {
-    const onMsg = (e) => { if (e.data === 'microsoft-connected') loadStatus() }
-    const onFocus = () => loadStatus()
-    window.addEventListener('message', onMsg); window.addEventListener('focus', onFocus)
-    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('focus', onFocus); if (pollRef.current) clearInterval(pollRef.current) }
-  }, [loadStatus])
-
-  const handleConnect = useCallback(async () => {
-    setLoading(true); setError(null)
-    try {
-      const r = await fetch(`${VULA_API}/v1/microsoft/authorize-url?tenant_id=${encodeURIComponent(tenantId)}`)
-      const d = await r.json()
-      if (!d.url) throw new Error(d.error || 'Microsoft app not configured.')
-      window.open(d.url, 'ms-oauth', 'width=520,height=680')
-      let ticks = 0
-      pollRef.current = setInterval(() => { loadStatus(); if (++ticks > 30 || status === 'connected') clearInterval(pollRef.current) }, 3000)
-    } catch (err) { setError(err.message) } finally { setLoading(false) }
-  }, [tenantId, loadStatus, status])
+  const { status, account, loading, error, handleConnect } = useOAuthConnect({ tenantId, provider: 'microsoft', popupName: 'ms-oauth', label: 'Microsoft' })
 
   return (
     <div style={styles.card}>
@@ -80,18 +47,6 @@ export default function VulaMicrosoftConnect({ tenantId, tenantName }) {
   )
 }
 
-function _timeAgo(iso) {
-  if (!iso) return null
-  const ms = Date.now() - new Date(iso).getTime()
-  if (!Number.isFinite(ms) || ms < 0) return null
-  const mins = Math.round(ms / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.round(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.round(hours / 24)}d ago`
-}
-
 // Sync HEALTH is distinct from OAuth connection status — a tenant can stay "Connected" (a valid
 // token) while the background sync has been silently failing for days (migration 169, go-live
 // readiness pass Phase 3.2). Shows nothing until at least one sync has actually run.
@@ -102,7 +57,7 @@ function SyncHealthRow({ lastSyncedAt, lastSyncStatus, lastSyncError }) {
     <div style={{ ...styles.infoRow, borderBottom: 'none' }}>
       <span style={styles.label}>Sync</span>
       <span style={{ ...styles.value, color: failing ? 'var(--danger)' : styles.value.color }}>
-        {failing ? `Failing — ${_timeAgo(lastSyncedAt)}` : `Last synced ${_timeAgo(lastSyncedAt)}`}
+        {failing ? `Failing — ${timeAgo(lastSyncedAt)}` : `Last synced ${timeAgo(lastSyncedAt)}`}
         {failing && lastSyncError && (
           <span style={{ display: 'block', fontSize: 11, color: 'var(--danger)', fontWeight: 400, marginTop: 2 }}>
             {String(lastSyncError).slice(0, 120)}

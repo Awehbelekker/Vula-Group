@@ -5,10 +5,10 @@
  * Client ID and secret here. Vula then reads the whole catalogue (drafts, every photo, stock)
  * and Shopify tells Vula whenever a product, stock level or order changes. Secrets are sent
  * once and never shown again.
+ * Data and actions: settings/connect/useStoreConnect.js (shared with the redesign's StoreConnectV2).
  */
-import { useEffect, useState } from 'react'
-import { Badge, Button, Field, Input, confirmDialog, toast } from './ui/index.jsx'
-import { VULA_API } from '../lib/authFetch'
+import { Badge, Button, Field, Input } from './ui/index.jsx'
+import { useStoreConnect } from './settings/connect/useStoreConnect'
 
 const STEPS = [
   'In Shopify, open Settings › Apps and sales channels › Develop apps (or dev.shopify.com › Apps) and create an app called “Vula”.',
@@ -23,69 +23,8 @@ function when(iso) {
 }
 
 export default function VulaShopifyConnect({ tenantId, adminEmail }) {
-  const base = `${VULA_API}/v1/commerce/${tenantId}/admin/shopify`
-  const [info, setInfo] = useState(null)
-  const [showForm, setShowForm] = useState(false)
-  const [useToken, setUseToken] = useState(false)
-  const [form, setForm] = useState({ shop_domain: '', client_id: '', client_secret: '', access_token: '' })
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
-
-  async function load() {
-    try {
-      const r = await fetch(base)
-      setInfo(r.ok ? await r.json() : { connected: false })
-    } catch {
-      setInfo({ connected: false })
-    }
-  }
-
-  useEffect(() => { if (tenantId) load() }, [tenantId])
-  useEffect(() => {
-    if (!info?.sync?.running) return
-    const t = setTimeout(load, 4000)
-    return () => clearTimeout(t)
-  }, [info])
-
-  async function connect(e) {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      const body = useToken
-        ? { shop_domain: form.shop_domain, access_token: form.access_token }
-        : { shop_domain: form.shop_domain, client_id: form.client_id, client_secret: form.client_secret }
-      const r = await fetch(`${base}/connect`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, connected_by: adminEmail }),
-      })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.detail || 'Shopify connection failed')
-      setForm({ shop_domain: '', client_id: '', client_secret: '', access_token: '' })
-      setShowForm(false)
-      toast('Shopify connected — reading your catalogue now.')
-      load()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function syncNow() {
-    const r = await fetch(`${base}/sync`, { method: 'POST' })
-    const data = await r.json().catch(() => ({}))
-    if (!r.ok) { toast(data.detail || 'Could not start the sync', 'danger'); return }
-    toast(data.started ? 'Reading your Shopify catalogue…' : 'A sync is already running.')
-    load()
-  }
-
-  async function disconnect() {
-    if (!(await confirmDialog('Disconnect Shopify? Your products stay in Vula, but they stop updating from Shopify.'))) return
-    await fetch(base, { method: 'DELETE' })
-    toast('Shopify disconnected.')
-    load()
-  }
+  const { info, showForm, setShowForm, useToken, setUseToken, form, setForm, busy, error, setError, connect, syncNow, disconnect } =
+    useStoreConnect({ tenantId, adminEmail, store: 'shopify' })
 
   if (!info) return <div style={{ fontSize: 13, color: 'var(--muted)' }}>Loading…</div>
 

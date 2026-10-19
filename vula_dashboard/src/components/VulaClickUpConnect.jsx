@@ -15,116 +15,17 @@
  * a popup that never comes back (2026-10-03: since August the OAuth callback was never reached,
  * while Vula's old sign-in had lost the workspace). A refused sign-in shows as
  * "Needs reconnecting" (backend: needs_reconnect) instead of a green "Connected".
+ *
+ * Data and actions: settings/connect/useClickUpConnect.js (shared with the redesign's ClickUpConnectV2).
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { VULA_API } from '../lib/authFetch'
+import { timeAgo } from './settings/connect/useOAuthConnect'
+import { useClickUpConnect } from './settings/connect/useClickUpConnect'
 
 
 export default function VulaClickUpConnect({ tenantId, tenantName }) {
-  const [status, setStatus] = useState(null)   // null | connected | not_connected | error
-  const [account, setAccount] = useState(null)
-  const [lists, setLists] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const pollRef = useRef(null)
-  const [showToken, setShowToken] = useState(false)
-  const [token, setToken] = useState('')
-  const [notice, setNotice] = useState(null)
-
-  const loadStatus = useCallback(async () => {
-    if (!tenantId) return
-    try {
-      const r = await fetch(`${VULA_API}/v1/clickup/status/${tenantId}`)
-      const d = await r.json()
-      setStatus(d.status)
-      setAccount(d)
-      if (d.status === 'connected') {
-        const lr = await fetch(`${VULA_API}/v1/clickup/lists/${tenantId}`)
-        const ld = await lr.json()
-        setLists(ld.lists || [])
-      }
-    } catch {
-      setStatus('error')
-    }
-  }, [tenantId])
-
-  useEffect(() => { loadStatus() }, [loadStatus])
-
-  // Re-poll when the popup posts back, on window focus, and briefly on an interval.
-  useEffect(() => {
-    const onMsg = (e) => { if (e.data === 'clickup-connected') loadStatus() }
-    const onFocus = () => loadStatus()
-    window.addEventListener('message', onMsg)
-    window.addEventListener('focus', onFocus)
-    return () => {
-      window.removeEventListener('message', onMsg)
-      window.removeEventListener('focus', onFocus)
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [loadStatus])
-
-  const handleConnect = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    // Open the window NOW, inside the tap: a window opened after an `await` isn't a user action
-    // any more, and phones and Safari silently block it (2026-09-29, Judy couldn't reconnect).
-    // If it's blocked anyway, go to ClickUp in this tab; the callback brings her back.
-    const popup = window.open('', 'clickup-oauth', 'width=620,height=760')
-    try {
-      const r = await fetch(`${VULA_API}/v1/clickup/authorize-url?tenant_id=${encodeURIComponent(tenantId)}`)
-      const d = await r.json()
-      if (!d.url) throw new Error(d.error || 'ClickUp app not configured.')
-      if (popup && !popup.closed) popup.location.href = d.url
-      else { window.location.href = d.url; return }
-      // Poll for ~90s while the user authorises in the popup.
-      let ticks = 0
-      pollRef.current = setInterval(() => {
-        loadStatus()
-        if (++ticks > 30 || status === 'connected') clearInterval(pollRef.current)
-      }, 3000)
-    } catch (err) {
-      if (popup && !popup.closed) popup.close()
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [tenantId, loadStatus, status])
-
-  const connectWithToken = async () => {
-    setLoading(true); setError(null); setNotice(null)
-    try {
-      const r = await fetch(`${VULA_API}/v1/clickup/connect`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenant_id: tenantId, api_token: token.trim() }),
-      })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.detail || 'ClickUp didn\'t accept that token.')
-      setToken(''); setShowToken(false)
-      setNotice(`Connected to ${d.workspace || 'ClickUp'} — documents filed while it was off are being sent across now.`)
-      loadStatus()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const refileMissing = async () => {
-    setError(null); setNotice(null)
-    const r = await fetch(`${VULA_API}/v1/clickup/refile-missing/${tenantId}`, { method: 'POST' })
-    const d = await r.json().catch(() => ({}))
-    if (r.ok) setNotice('Sending documents that never reached ClickUp — this runs in the background.')
-    else setError(d.detail || 'Could not start that.')
-  }
-
-  const setDefaultList = async (listId) => {
-    await fetch(`${VULA_API}/v1/clickup/default-list`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenant_id: tenantId, list_id: listId }),
-    })
-    loadStatus()
-  }
+  const { status, account, lists, loading, error, notice, showToken, setShowToken, token, setToken,
+    handleConnect, connectWithToken, refileMissing, setDefaultList } = useClickUpConnect(tenantId)
 
   // Shown connected or not: on 3 Oct the panel still read "Connected" on a dead token, so the
   // only way to reconnect was the popup — which needs CLICKUP_CLIENT_ID, missing on Railway.
@@ -224,18 +125,6 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
   )
 }
 
-function _timeAgo(iso) {
-  if (!iso) return null
-  const ms = Date.now() - new Date(iso).getTime()
-  if (!Number.isFinite(ms) || ms < 0) return null
-  const mins = Math.round(ms / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.round(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.round(hours / 24)}d ago`
-}
-
 // Sync HEALTH is distinct from OAuth connection status — a tenant can stay "Connected" (a valid
 // token) while the background sync has been silently failing for days (migration 169, go-live
 // readiness pass Phase 3.2). Shows nothing until at least one sync has actually run.
@@ -246,7 +135,7 @@ function SyncHealthRow({ lastSyncedAt, lastSyncStatus, lastSyncError }) {
     <div style={{ ...styles.infoRow, borderBottom: 'none' }}>
       <span style={styles.label}>Sync</span>
       <span style={{ ...styles.value, color: failing ? 'var(--danger)' : styles.value.color }}>
-        {failing ? `Failing — ${_timeAgo(lastSyncedAt)}` : `Last synced ${_timeAgo(lastSyncedAt)}`}
+        {failing ? `Failing — ${timeAgo(lastSyncedAt)}` : `Last synced ${timeAgo(lastSyncedAt)}`}
         {failing && lastSyncError && (
           <span style={{ display: 'block', fontSize: 11, color: 'var(--danger)', fontWeight: 400, marginTop: 2 }}>
             {String(lastSyncError).slice(0, 120)}

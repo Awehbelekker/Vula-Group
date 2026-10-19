@@ -1,46 +1,13 @@
 /**
  * VulaGoogleConnect.jsx — one-click "Connect Google" (Drive + Gmail), draft-only email.
  * Mirrors VulaClickUpConnect: popup OAuth → backend callback → status poll.
+ * Flow: settings/connect/useOAuthConnect.js (shared with the redesign's OAuthConnectV2).
  */
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { VULA_API } from '../lib/authFetch'
+import { useOAuthConnect } from './settings/connect/useOAuthConnect'
 
 
 export default function VulaGoogleConnect({ tenantId, tenantName }) {
-  const [status, setStatus] = useState(null)
-  const [account, setAccount] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const pollRef = useRef(null)
-
-  const loadStatus = useCallback(async () => {
-    if (!tenantId) return
-    try {
-      const r = await fetch(`${VULA_API}/v1/google/status/${tenantId}`)
-      const d = await r.json()
-      setStatus(d.status); setAccount(d)
-    } catch { setStatus('error') }
-  }, [tenantId])
-
-  useEffect(() => { loadStatus() }, [loadStatus])
-  useEffect(() => {
-    const onMsg = (e) => { if (e.data === 'google-connected') loadStatus() }
-    const onFocus = () => loadStatus()
-    window.addEventListener('message', onMsg); window.addEventListener('focus', onFocus)
-    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('focus', onFocus); if (pollRef.current) clearInterval(pollRef.current) }
-  }, [loadStatus])
-
-  const handleConnect = useCallback(async () => {
-    setLoading(true); setError(null)
-    try {
-      const r = await fetch(`${VULA_API}/v1/google/authorize-url?tenant_id=${encodeURIComponent(tenantId)}`)
-      const d = await r.json()
-      if (!d.url) throw new Error(d.error || 'Google app not configured.')
-      window.open(d.url, 'google-oauth', 'width=520,height=680')
-      let ticks = 0
-      pollRef.current = setInterval(() => { loadStatus(); if (++ticks > 30 || status === 'connected') clearInterval(pollRef.current) }, 3000)
-    } catch (err) { setError(err.message) } finally { setLoading(false) }
-  }, [tenantId, loadStatus, status])
+  const { status, account, loading, error, handleConnect } = useOAuthConnect({ tenantId, provider: 'google', popupName: 'google-oauth', label: 'Google' })
 
   return (
     <div style={styles.card}>

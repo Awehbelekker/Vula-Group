@@ -515,6 +515,172 @@ test("settings on a phone: the section list, one section, back to the list", asy
   await expect(page.locator(".vst-nav")).toBeVisible();
 });
 
+// ── Settings › connections (settings/connect/) ──
+const okJson = (body) => (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+const CONNECTIONS = [
+  ["Payments (Yoco)", "Test — no real money moves"],
+  // [section label, what shows once it has loaded, optional routes to install first]
+  ["Google (Drive & Gmail)", "Draft-only (you approve & send)", async (page) =>
+    page.route(/\/v1\/google\/status\/[^/]+$/, okJson({ status: "connected", email: "owner@harbourvine.example.test" }))],
+  ["Microsoft (OneDrive & Outlook)", "Connect Microsoft"],
+  ["Your WhatsApp profile", "Apply to WhatsApp"],
+  ["ClickUp", "Send missed documents", async (page) => {
+    await page.route(/\/v1\/clickup\/status\/[^/]+$/, okJson({ status: "connected", team_id: "9012345", default_list_id: "L2",
+      last_synced_at: "2026-10-17T10:05:00+02:00", last_sync_status: "ok" }));
+    await page.route(/\/v1\/clickup\/lists\/[^/]+$/, okJson({ lists: [{ id: "L1", name: "Catering jobs" }, { id: "L2", name: "Shop tasks" }] }));
+  }],
+  ["Email (IMAP / SMTP)", "2 connected", async (page) => page.route(/\/v1\/email\/status\/[^/]+$/, okJson({ accounts: [
+    { id: "ma-1", email: "hello@harbourvine.example.test", is_primary: true, send_mode: "draft", last_sync_at: "2026-10-17T09:40:00+02:00" },
+    { id: "ma-2", email: "orders@harbourvine.example.test", is_primary: false, send_mode: "send", last_sync_at: null }] }))],
+  ["Shopify store", "Live updates on", async (page) => page.route(/\/admin\/shopify$/, okJson({ connected: true, shop_name: "Harbour & Vine",
+    shop_domain: "harbourvine.myshopify.com", live_updates: true, scopes: ["read_products", "read_inventory", "read_orders"],
+    last_sync_at: "2026-10-17T08:15:00+02:00", last_sync: { products_found: 64, products_created: 2, products_updated: 5, stock_changes: 11 }, sync: {} }))],
+  ["WooCommerce shop", "Connect WooCommerce"],
+  ["Your shop’s own address", "DNS records to add", async (page) => page.route(/\/admin\/shop-domain$/, okJson({ domain: "shop.harbourvine.example.test",
+    state: "waiting_dns", automated: true, instructions: "Please add these two DNS records for shop.harbourvine.example.test …",
+    records: [{ type: "CNAME", name: "shop", value: "shops.vula.example.test", ok: true },
+      { type: "TXT", name: "_vula-verify.shop", value: "vula-verify=8f3c2a91d7e04b6f", ok: false }] }))],
+  ["WhatsApp number", "Not registered", async (page) => page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson({ status: "connected",
+    phone_number: "+27 82 000 0001", verified_name: "Harbour & Vine Deli", webhook_registered: false }))],
+];
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`settings connections ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, SETTINGS, { viewport, theme });
+      for (const [label, ready, setup] of CONNECTIONS) {
+        if (setup) await setup(page);
+        if (vp !== "desktop" && await page.getByRole("button", { name: "All settings" }).isVisible()) await page.getByRole("button", { name: "All settings" }).click();
+        await settingsSection(page, label);
+        await expect(page.locator(".vst-page").getByText(ready, { exact: false }).or(page.locator(".vst-page").getByRole("list", { name: ready })).first()).toBeVisible();
+        await check(page, ti, `settings-${label.toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "").slice(0, 24)}`, `${vp}-${theme}`, viewport);
+      }
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("settings: Microsoft connect opens the approval window from the same authorize call", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.route(/\/v1\/microsoft\/authorize-url/, okJson({ url: "http://api.vula.test/fake-ms-consent" }));
+  await page.context().route(/fake-ms-consent/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>consent</title>" }));   // the popup is its own page
+  await settingsSection(page, "Microsoft (OneDrive & Outlook)");
+  const auth = page.waitForRequest((r) => /\/v1\/microsoft\/authorize-url$/.test(new URL(r.url()).pathname));
+  const popup = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Microsoft" }).click();
+  expect(new URL((await auth).url()).searchParams.get("tenant_id")).toBeTruthy();
+  const win = await popup;
+  await win.waitForLoadState();
+  expect(win.url()).toBe("http://api.vula.test/fake-ms-consent");
+});
+
+test("settings: the WhatsApp profile applies the same body", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.tablet, theme: "light" });
+  await settingsSection(page, "Your WhatsApp profile");
+  await page.getByLabel("About (the line under your name)").fill("Deli and bakery, Sea Point");
+  await expect(page.getByRole("figure", { name: "How your profile looks on WhatsApp" })).toContainText("Deli and bakery, Sea Point");
+  await page.getByLabel("Websites (up to 2)").fill("https://harbourvine.example.test\nhttps://order.harbourvine.example.test");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/wa-profile$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Apply to WhatsApp" }).click();
+  expect((await post).postDataJSON().profile).toMatchObject({ about: "Deli and bakery, Sea Point",
+    websites: ["https://harbourvine.example.test", "https://order.harbourvine.example.test"], email: "hello@harbourvine.example.test" });
+});
+
+test("settings: ClickUp — the token way round, and a refused sign-in says so", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.route(/\/v1\/clickup\/status\/[^/]+$/, okJson({ status: "needs_reconnect", last_sync_error: "OAUTH_025 token revoked" }));
+  await settingsSection(page, "ClickUp");
+  await expect(page.getByRole("alert")).toContainText("ClickUp has stopped accepting Vula's sign-in. (OAUTH_025 token revoked)");
+  await expect(page.locator(".vst-page").getByText("Needs reconnecting")).toBeVisible();
+  await page.getByRole("button", { name: /Connect with a ClickUp token/ }).click();
+  await page.getByLabel("ClickUp API token").fill("  pk_12345_FAKE  ");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/clickup\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect with token" }).click();
+  expect((await post).postDataJSON()).toEqual({ tenant_id: expect.any(String), api_token: "pk_12345_FAKE" });
+});
+
+test("settings: email — a preset fills the hosts and connect sends the same body", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await settingsSection(page, "Email (IMAP / SMTP)");
+  await page.getByRole("button", { name: "Connect a mailbox" }).click();
+  await page.getByLabel("Quick setup").selectOption("Zoho");
+  await expect(page.getByLabel("IMAP host")).toHaveValue("imap.zoho.com");
+  await page.getByLabel("Email address").fill("sales@harbourvine.example.test");
+  await page.getByLabel("Password / app password").fill("not-a-real-password");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/email\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect mailbox" }).click();
+  expect((await post).postDataJSON()).toMatchObject({ email: "sales@harbourvine.example.test", imap_host: "imap.zoho.com", imap_port: 993,
+    smtp_host: "smtp.zoho.com", smtp_port: 465, send_mode: "draft" });
+});
+
+test("settings: Shopify and WooCommerce connect send the same bodies", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await settingsSection(page, "WooCommerce shop");
+  await page.getByRole("button", { name: "Connect WooCommerce" }).click();
+  await page.getByLabel("Shop address").fill("https://www.harbourvine.example.test");
+  await page.getByLabel("Consumer key").fill("ck_fake");
+  await page.getByLabel("Consumer secret").fill("cs_fake");
+  const woo = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/woocommerce\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect WooCommerce" }).click();
+  expect((await woo).postDataJSON()).toMatchObject({ store_url: "https://www.harbourvine.example.test", consumer_key: "ck_fake", consumer_secret: "cs_fake" });
+
+  await settingsSection(page, "Shopify store");
+  await page.getByRole("button", { name: "Connect Shopify" }).click();
+  await page.getByLabel("Store address").fill("harbourvine.myshopify.com");
+  await page.getByRole("button", { name: "I have an Admin API access token (older custom app)" }).click();
+  await page.getByLabel("Admin API access token").fill("shpat_fake");
+  const shop = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/shopify\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect Shopify" }).click();
+  const body = (await shop).postDataJSON();
+  expect(body).toMatchObject({ shop_domain: "harbourvine.myshopify.com", access_token: "shpat_fake" });
+  expect(body.client_secret).toBeUndefined();
+});
+
+test("settings: the shop's own address is added with the same body", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "dark" });
+  await settingsSection(page, "Your shop’s own address");
+  await expect(page.getByLabel("Your shop’s address")).toHaveValue("shop.harbourvine.example.test");   // the suggestion
+  await page.getByLabel("Your shop’s address").fill("shop.harbourandvine.example.test");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/shop-domain$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Use this address" }).click();
+  expect((await post).postDataJSON()).toEqual({ domain: "shop.harbourandvine.example.test" });
+});
+
+test("settings: WhatsApp disconnect asks first, then makes the same call", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.tablet, theme: "light" });
+  await page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson({ status: "connected", phone_number: "+27 82 000 0001",
+    verified_name: "Harbour & Vine Deli", webhook_registered: true }));
+  await settingsSection(page, "WhatsApp number");
+  await page.getByRole("button", { name: "Disconnect" }).click();
+  const del = page.waitForRequest((r) => r.method() === "DELETE" && /\/v1\/whatsapp\/disconnect\/[^/]+$/.test(new URL(r.url()).pathname));
+  await page.getByRole("dialog").getByRole("button", { name: "Yes" }).click();
+  await del;
+  await expect(page.locator(".vst-page").getByText("Not connected")).toBeVisible();
+});
+
+test("settings: Yoco — update keys sends the same body; test uses the same call", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await settingsSection(page, "Payments (Yoco)");
+  await expect(page.locator(".vst-page").getByText("Connected · test mode")).toBeVisible();
+  const test = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/yoco\/test\/[^/]+$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await test;
+  await page.getByRole("button", { name: "Update keys" }).click();
+  await page.getByLabel("Secret key").fill("  sk_test_fake  ");
+  await page.getByRole("checkbox", { name: /Register Vula’s webhook/ }).uncheck();
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/yoco\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Update keys" }).click();
+  expect((await post).postDataJSON()).toMatchObject({ secret_key: "sk_test_fake", public_key: null, auto_register_webhook: false });
+});
+
+test("settings: a Microsoft sync that is failing says so", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.route(/\/v1\/microsoft\/status\/[^/]+$/, okJson({ status: "connected", email: "o@x.example.test",
+    last_synced_at: "2026-10-17T06:30:00+02:00", last_sync_status: "error", last_sync_error: "invalid_grant" }));
+  await settingsSection(page, "Microsoft (OneDrive & Outlook)");
+  await expect(page.getByText("Failing — 4h ago · invalid_grant")).toBeVisible();
+});
+
 // ── Bank & matching ──
 const BANK = { name: "bank", role: "owner", nav: "Money", tab: "Bank & matching", ready: "ATLANTIC DAIRY COOP DEBIT ORDER" };
 

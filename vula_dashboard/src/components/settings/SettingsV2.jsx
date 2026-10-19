@@ -13,16 +13,14 @@ import {
 import { Button, Card, Field, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
 import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES } from '../../theme/tokens'
 import BrandPreview from './BrandPreview'
-import VulaYocoConnect from '../VulaYocoConnect'
-import VulaShopifyConnect from '../VulaShopifyConnect'
-import VulaShopDomain from '../VulaShopDomain'
-import VulaWAProfile from '../VulaWAProfile'
-import VulaWooConnect from '../VulaWooConnect'
-import VulaWhatsAppConnect from '../VulaWhatsAppConnect'
-import VulaClickUpConnect from '../VulaClickUpConnect'
-import VulaGoogleConnect from '../VulaGoogleConnect'
-import VulaMicrosoftConnect from '../VulaMicrosoftConnect'
-import VulaEmailConnect from '../VulaEmailConnect'
+import YocoConnectV2 from './connect/YocoConnectV2'
+import StoreConnectV2 from './connect/StoreConnectV2'
+import ShopDomainV2 from './connect/ShopDomainV2'
+import WAProfileV2 from './connect/WAProfileV2'
+import WhatsAppConnectV2 from './connect/WhatsAppConnectV2'
+import ClickUpConnectV2 from './connect/ClickUpConnectV2'
+import OAuthConnectV2 from './connect/OAuthConnectV2'
+import EmailConnectV2 from './connect/EmailConnectV2'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
 import './settings.css'
 
@@ -100,17 +98,17 @@ function Section({ id, tenantId, tenantName, adminEmail }) {
     case 'hours': return <Hours tenantId={tenantId} />
     case 'delivery': return <Delivery tenantId={tenantId} />
     case 'learned': return <Learned tenantId={tenantId} />
-    // the connect flows are the same components as today, framed in a card
-    case 'payments': return <Card><VulaYocoConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} /></Card>
-    case 'shopify': return <Card><VulaShopifyConnect tenantId={tenantId} adminEmail={adminEmail} /></Card>
-    case 'woo': return <Card><VulaWooConnect tenantId={tenantId} adminEmail={adminEmail} /></Card>
-    case 'domain': return <Card><VulaShopDomain tenantId={tenantId} /></Card>
-    case 'whatsapp': return <Card><VulaWhatsAppConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} /></Card>
-    case 'waprofile': return <Card><VulaWAProfile tenantId={tenantId} /></Card>
-    case 'google': return <Card><VulaGoogleConnect tenantId={tenantId} tenantName={tenantName} /></Card>
-    case 'microsoft': return <Card><VulaMicrosoftConnect tenantId={tenantId} tenantName={tenantName} /></Card>
-    case 'email': return <Card><VulaEmailConnect tenantId={tenantId} adminEmail={adminEmail} /></Card>
-    case 'clickup': return <Card><VulaClickUpConnect tenantId={tenantId} tenantName={tenantName} /></Card>
+    // the connections: the same flows as the current panels (settings/connect/ hooks), redesigned
+    case 'payments': return <YocoConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
+    case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />
+    case 'woo': return <StoreConnectV2 key="woo" store="woo" tenantId={tenantId} adminEmail={adminEmail} />
+    case 'domain': return <ShopDomainV2 tenantId={tenantId} />
+    case 'whatsapp': return <WhatsAppConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
+    case 'waprofile': return <WAProfileV2 tenantId={tenantId} />
+    case 'google': return <OAuthConnectV2 key="google" provider="google" tenantId={tenantId} tenantName={tenantName} />
+    case 'microsoft': return <OAuthConnectV2 key="microsoft" provider="microsoft" tenantId={tenantId} tenantName={tenantName} />
+    case 'email': return <EmailConnectV2 tenantId={tenantId} adminEmail={adminEmail} />
+    case 'clickup': return <ClickUpConnectV2 tenantId={tenantId} tenantName={tenantName} />
     default: return null
   }
 }
