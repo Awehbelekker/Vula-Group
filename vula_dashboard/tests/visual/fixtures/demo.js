@@ -559,3 +559,31 @@ export const activityFor = (role) => {
   const items = role === "owner" ? all : role === "rep" ? [] : all.filter((i) => i.side === "front");
   return { items, next_cursor: null };
 };
+
+// ── Projects command centre (projects.py, migration 07x/18x) ─────────────────────────────────
+export const projectsList = [
+  { id: "pj-1", name: "Bay Events catering", number: "BE-2026", client: "Bay Events Co.", status: "active", aliases: ["Bay Events"], parent_id: null },
+  { id: "pj-1a", name: "Bay Events catering — Spring gala", phase: "Spring gala", number: null, client: "Bay Events Co.", status: "active", aliases: [], parent_id: "pj-1" },
+  { id: "pj-1b", name: "Bay Events catering — Year-end function", phase: "Year-end function", number: null, client: "Bay Events Co.", status: "on_hold", aliases: [], parent_id: "pj-1" },
+  { id: "pj-2", name: "Spring market stall", number: null, client: "", status: "complete", aliases: [], parent_id: null },
+];
+export const projectCodes = [
+  { id: "cd-1", code_ref: "R638", title: "Regulations governing general hygiene requirements for food premises", version: "2018", status: "current", doc_id: "kb-1" },
+  { id: "cd-2", code_ref: "SANS 10049", title: "Food safety management — Requirements for prerequisite programmes", version: "Ed 4", status: "superseded", doc_id: null },
+];
+export const projectDetail = (id) => {
+  const p = projectsList.find((x) => x.id === id) || projectsList[0];
+  return { ...p, codes: id === "pj-1" ? [projectCodes[0]] : [], team: id === "pj-1" ? [{ id: "pt-1", name: "Thandi Mokoena", role: "Event coordinator" }] : [] };
+};
+export const projectOverview = (id) => id === "pj-1"
+  ? { phases: [
+      { id: "pj-1a", name: projectsList[1].name, phase: "Spring gala", documents: 4, boq: { total_cents: 4850000 } },
+      { id: "pj-1b", name: projectsList[2].name, phase: "Year-end function", documents: 1, boq: null }],
+    documents: { Quote: 2, Invoice: 3 }, documents_with_phases: { Quote: 3, Invoice: 5, "Menu / spec": 2 },
+    boq: { title: "Contract value", total_cents: 12000000 }, parent: null }
+  : { phases: [], documents: { Invoice: 1 }, documents_with_phases: { Invoice: 1 }, boq: null,
+      parent: projectsList.find((x) => x.id === id)?.parent_id ? { id: "pj-1", name: projectsList[0].name } : null };
+export const projectBoq = { total_cents: 12000000, sections: [{ section: "Food", budget_cents: 8200000 }, { section: "Staff", budget_cents: 2600000 }, { section: "Hire", budget_cents: 1200000 }] };
+export const projectFinancials = { project: "Bay Events catering", contract: 120000, invoiced: 64500.5, invoiced_paid: 40000, invoice_count: 3,
+  quoted: 12000, quote_count: 1, paid_in: 40000, spent: 31275.25, labour_cents: 480000, net: 8724.75, remaining: 88724.75, outstanding: 24500.5,
+  latest_claim: null, transactions: [] };

@@ -318,3 +318,57 @@ test("bookings on a phone: the day's list comes first; New booking opens the for
   await page.getByText("New booking").click();
   await expect(page.getByLabel("Time")).toBeVisible();
 });
+
+// ── Projects ──
+const PROJECTS = { name: "projects", role: "owner", modules: ["projects"], nav: "Operate", tab: "Projects", ready: "Bay Events catering" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`projects ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, PROJECTS, { viewport, theme });
+      await expect(page.getByText("Master code library · 2")).toBeVisible();
+      await check(page, ti, "projects", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: /^Bay Events catering BE-2026/ }).click();
+      await expect(page.getByRole("heading", { name: "Bay Events catering", level: 2 })).toBeVisible();
+      await expect(page.getByText("Documents · 10 (with phases)")).toBeVisible();
+      await check(page, ti, "projects-open", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Money" }).click();
+      await expect(page.getByText(/^R.64.500\.50$/)).toBeVisible();
+      await check(page, ti, "projects-money", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("projects: alias, phase and BOQ value send the same bodies; a phone goes back to the list", async ({ page }) => {
+  await openScreen(page, PROJECTS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.getByRole("button", { name: /^Bay Events catering BE-2026/ }).click();
+  await expect(page.locator(".vpj-list")).toBeHidden();
+  const alias = page.waitForRequest((r) => r.method() === "POST" && /\/p\/pj-1\/aliases$/.test(new URL(r.url()).pathname));
+  await page.getByLabel("Add another name for this project").fill("BEC");
+  await page.getByLabel("Add another name for this project").press("Enter");
+  expect((await alias).postDataJSON()).toEqual({ alias: "BEC" });
+  const phase = page.waitForRequest((r) => r.method() === "POST" && /\/p\/pj-1\/phases$/.test(new URL(r.url()).pathname));
+  await page.getByLabel("New phase").fill("Phase 3");
+  await page.getByRole("button", { name: "Add phase" }).click();
+  expect((await phase).postDataJSON()).toEqual({ phase: "Phase 3" });
+  await page.getByRole("tab", { name: "BOQ" }).click();
+  await expect(page.getByText(/^BOQ · R.120.000\.00$/)).toBeVisible();
+  await page.getByLabel("Contract value (R)").fill("1 250 000");
+  const boq = page.waitForRequest((r) => r.method() === "POST" && /\/boq$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Save value" }).click();
+  expect((await boq).postDataJSON()).toEqual({ total: 1250000 });
+  await page.getByRole("button", { name: "All projects" }).click();
+  await expect(page.locator(".vpj-list")).toBeVisible();
+});
+
+test("projects: search narrows the list, a phase opens with a way to its parent", async ({ page }) => {
+  await openScreen(page, PROJECTS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByPlaceholder("Find a project, client or number").fill("market");
+  await expect(page.getByRole("button", { name: /^Spring market stall/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Bay Events catering BE-2026/ })).toHaveCount(0);
+  await page.getByPlaceholder("Find a project, client or number").fill("");
+  await page.getByRole("button", { name: /^Spring gala/ }).click();
+  await expect(page.getByRole("button", { name: "Phase of Bay Events catering" })).toBeVisible();
+  await expect(page.locator(".vpj-list")).toBeVisible();     // both panes on a desktop
+});

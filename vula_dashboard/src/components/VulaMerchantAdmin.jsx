@@ -197,7 +197,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)}
             onSendAsBroadcast={(text) => { setBroadcastDraft(text); navigateTo('marketing-hub', 'broadcast') }} />}
           {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: 'var(--muted)' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
-          {tab === 'operate' && <OperateSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'operate')}
+          {tab === 'operate' && <OperateSection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'operate')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
           {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
@@ -319,13 +319,13 @@ function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
   )
 }
 
-function OperateSection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
+function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'projects' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'projects' && <VulaProjects tenantId={tenantId} />}
+      {active === 'projects' && <VulaProjects tenantId={tenantId} v2={v2} />}
       {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
       {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} />}
       {active === 'labour' && <VulaLabour tenantId={tenantId} />}
