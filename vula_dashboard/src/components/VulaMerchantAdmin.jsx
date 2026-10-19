@@ -1089,8 +1089,8 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
     ).join('')
     w.document.write(`
       <html><head><title>Packing slip ${esc(order.display_id)}</title>
-      <style>body{font-family:system-ui;padding:24px;color:var(--ink)}h1{font-size:20px}
-      table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}</style>
+      <style>body{font-family:system-ui;padding:24px;color:black}h1{font-size:20px}
+      table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 4px;border-bottom:1px solid silver;text-align:left}</style>
       </head><body>
       <h1>Packing slip — ${esc(order.display_id)}</h1>
       <p><strong>${esc(order.customer_name || '')}</strong> · ${esc(order.customer_phone || '')}</p>

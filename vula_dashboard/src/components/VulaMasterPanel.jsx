@@ -7,6 +7,7 @@
  */
 import { useEffect, useState, Fragment, useCallback } from 'react'
 import { authFetch } from '../lib/authFetch'
+import { todaySA } from '../lib/dates'
 import { SectionTabs, confirmDialog } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import VulaMasterTenantDetail from './VulaMasterTenantDetail'
@@ -1128,7 +1129,7 @@ const KIND_LABEL = {
 }
 
 function ConversationsPanel({ onError }) {
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+  const yesterday = todaySA(-1)
   const [day, setDay] = useState(yesterday)
   const [data, setData] = useState(null)
   const [open, setOpen] = useState(null)
@@ -1153,7 +1154,7 @@ function ConversationsPanel({ onError }) {
           Every reply Vula sent that day, checked without a model. Emailed to the team each morning for yesterday.
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input type="date" style={input} value={day} max={new Date().toISOString().slice(0, 10)}
+          <input type="date" style={input} value={day} max={todaySA()}
             onChange={e => setDay(e.target.value)} />
           <button style={miniBtn} onClick={send} disabled={sending}>{sending ? 'Sending…' : 'Email yesterday now'}</button>
           {data && <span style={{ fontSize: 13 }}>

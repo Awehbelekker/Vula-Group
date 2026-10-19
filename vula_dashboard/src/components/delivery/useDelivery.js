@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { VULA_API } from '../../lib/authFetch'
 import { escapeHtml as esc } from '../../lib/html'
+import { todaySA } from '../../lib/dates'
 
 export const DEL_PAID = new Set(['paid', 'confirmed', 'packing', 'dispatched', 'delivered'])
 export const SLOT_NAMES = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' }
@@ -14,7 +15,7 @@ export const PAYMENT_OPTIONS = [['online', 'Card / online'], ['cod', 'Pay on del
 const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
 
 export function useDeliveryList(tenantId) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todaySA()
   const [date, setDate] = useState(today)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)

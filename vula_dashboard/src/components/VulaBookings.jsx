@@ -96,8 +96,7 @@ function BookingsV1({ tenantId }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
             {DAYNAMES.map((label, i) => {
               const d = shift(weekStart, i);
-              const dayBookings = weekBookings.filter(b => (b.start_at || "").slice(0, 10) === d
-                || new Date(b.start_at).toISOString().slice(0, 10) === d);
+              const dayBookings = weekBookings.filter(b => onDay(b, d));
               const isToday = d === today();
               return (
                 <div key={d} style={{ ...card, flexDirection: "column", alignItems: "stretch", gap: 6, cursor: "pointer",

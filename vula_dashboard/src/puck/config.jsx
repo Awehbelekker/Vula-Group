@@ -16,6 +16,7 @@
  */
 import { useEffect, useState, useRef } from "react";
 import VulaImageUpload from "../components/VulaImageUpload";
+import { todaySA } from "../lib/dates";
 
 const ACCENT = "var(--brand-accent, #0E7C7B)";
 const ACCENT_FG = "var(--brand-accent-fg, #ffffff)";
@@ -842,7 +843,7 @@ function LiveCategories({ title, linkBase }) {
 function LiveBooking({ title, subtitle }) {
   const [services, setServices] = useState(null);
   const [serviceId, setServiceId] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => todaySA());
   const [slots, setSlots] = useState(null);
   const [slot, setSlot] = useState(null);
   const [name, setName] = useState("");
@@ -916,7 +917,7 @@ function LiveBooking({ title, subtitle }) {
             {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         ) : null}
-        <input type="date" value={date} min={new Date().toISOString().slice(0, 10)}
+        <input type="date" value={date} min={todaySA()}
           onChange={(e) => setDate(e.target.value)} style={inputStyle} />
         {slots === null ? (
           <div className="vula-skeleton" style={{ height: 80, borderRadius: 8 }} />
