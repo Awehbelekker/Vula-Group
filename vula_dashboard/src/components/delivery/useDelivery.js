@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { VULA_API } from '../../lib/authFetch'
+import { escapeHtml as esc } from '../../lib/html'
 
 export const DEL_PAID = new Set(['paid', 'confirmed', 'packing', 'dispatched', 'delivered'])
 export const SLOT_NAMES = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' }
@@ -40,8 +41,7 @@ export function useDeliveryList(tenantId) {
 }
 
 // Customer names, addresses, notes and product names come from WhatsApp customers, so every one is
-// escaped before it goes into the print window (an about:blank window shares the dashboard's origin).
-const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
+// escaped (lib/html.js) before it goes into the print window.
 
 /** Open the day's run sheet in a new window and print it. `slotLabel(slot)` names each slot. */
 export function printRunSheet({ date, slots, bySlot, slotLabel }) {

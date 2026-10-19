@@ -33,6 +33,7 @@ import FinancesV2 from './finances/FinancesV2'
 import { useDiscounts, valueLabel } from './discounts/useDiscounts'
 import DiscountsV2 from './discounts/DiscountsV2'
 import { DEL_PAID, printRunSheet, useDeliveryList } from './delivery/useDelivery'
+import { escapeHtml as esc } from '../lib/html'
 import DeliveryV2 from './delivery/DeliveryV2'
 import VulaBankRec from './VulaBankRec'
 import VulaAccounting from './VulaAccounting'
@@ -1082,18 +1083,19 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
   function printSlip() {
     const w = window.open('', '_blank')
     if (!w) return
+    // Customer text is escaped (lib/html.js): this about:blank window shares the dashboard's origin.
     const rows = items.map(i =>
-      `<tr><td>${i.product_name || i.name || 'Item'}</td><td style="text-align:right">${i.quantity}</td><td style="text-align:right">${fmt(i.unit_price_cents || i.price_cents)}</td></tr>`
+      `<tr><td>${esc(i.product_name || i.name || 'Item')}</td><td style="text-align:right">${esc(i.quantity)}</td><td style="text-align:right">${fmt(i.unit_price_cents || i.price_cents)}</td></tr>`
     ).join('')
     w.document.write(`
-      <html><head><title>Packing slip ${order.display_id}</title>
+      <html><head><title>Packing slip ${esc(order.display_id)}</title>
       <style>body{font-family:system-ui;padding:24px;color:var(--ink)}h1{font-size:20px}
       table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}</style>
       </head><body>
-      <h1>Packing slip — ${order.display_id}</h1>
-      <p><strong>${order.customer_name || ''}</strong> · ${order.customer_phone || ''}</p>
-      <p>${order.delivery_address || 'No address'} · ${order.delivery_slot || ''}</p>
-      ${order.delivery_notes ? `<p>Notes: ${order.delivery_notes}</p>` : ''}
+      <h1>Packing slip — ${esc(order.display_id)}</h1>
+      <p><strong>${esc(order.customer_name || '')}</strong> · ${esc(order.customer_phone || '')}</p>
+      <p>${esc(order.delivery_address || 'No address')} · ${esc(order.delivery_slot || '')}</p>
+      ${order.delivery_notes ? `<p>Notes: ${esc(order.delivery_notes)}</p>` : ''}
       <table><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th></tr>${rows}</table>
       <h3 style="text-align:right">Total: ${fmt(order.total_cents)}</h3>
       </body></html>`)
