@@ -522,6 +522,7 @@ const CONNECTIONS = [
   ["Google (Drive & Gmail)", "Draft-only (you approve & send)", async (page) =>
     page.route(/\/v1\/google\/status\/[^/]+$/, okJson({ status: "connected", email: "owner@harbourvine.example.test" }))],
   ["Microsoft (OneDrive & Outlook)", "Connect Microsoft"],
+  ["Your WhatsApp profile", "Apply to WhatsApp"],
 ];
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -533,7 +534,7 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
         if (vp !== "desktop" && await page.getByRole("button", { name: "All settings" }).isVisible()) await page.getByRole("button", { name: "All settings" }).click();
         await settingsSection(page, label);
         await expect(page.locator(".vst-page").getByText(ready, { exact: false }).first()).toBeVisible();
-        await check(page, ti, `settings-${label.split(" ")[0].toLowerCase()}`, `${vp}-${theme}`, viewport);
+        await check(page, ti, `settings-${label.toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "").slice(0, 24)}`, `${vp}-${theme}`, viewport);
       }
       expect(errors).toEqual([]);
     });
@@ -552,6 +553,18 @@ test("settings: Microsoft connect opens the approval window from the same author
   const win = await popup;
   await win.waitForLoadState();
   expect(win.url()).toBe("http://api.vula.test/fake-ms-consent");
+});
+
+test("settings: the WhatsApp profile applies the same body", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.tablet, theme: "light" });
+  await settingsSection(page, "Your WhatsApp profile");
+  await page.getByLabel("About (the line under your name)").fill("Deli and bakery, Sea Point");
+  await expect(page.getByRole("figure", { name: "How your profile looks on WhatsApp" })).toContainText("Deli and bakery, Sea Point");
+  await page.getByLabel("Websites (up to 2)").fill("https://harbourvine.example.test\nhttps://order.harbourvine.example.test");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/wa-profile$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Apply to WhatsApp" }).click();
+  expect((await post).postDataJSON().profile).toMatchObject({ about: "Deli and bakery, Sea Point",
+    websites: ["https://harbourvine.example.test", "https://order.harbourvine.example.test"], email: "hello@harbourvine.example.test" });
 });
 
 test("settings: a Microsoft sync that is failing says so", async ({ page }) => {

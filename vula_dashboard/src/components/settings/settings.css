@@ -101,3 +101,10 @@
 .vcn-row dd.vcn-ok { color: var(--ok-text); }
 .vcn-row dd.vcn-warn { color: var(--warn-text); }
 .vcn-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vcn-wa { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); align-items: start; }
+.vcn-wa-preview { margin: 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-1); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-2); text-align: center; min-width: 0; }
+.vcn-wa-pic { width: 84px; height: 84px; border-radius: 50%; object-fit: cover; background: var(--surface); }
+.vcn-wa-name { margin: var(--space-2) 0 0; font-weight: 600; color: var(--ink); }
+.vcn-wa-lines { list-style: none; margin: var(--space-3) 0 0; padding: 0; align-self: stretch; display: flex; flex-direction: column; gap: var(--space-2); text-align: left; font-size: var(--fs-body); color: var(--ink); }
+.vcn-wa-lines li { display: flex; gap: var(--space-2); align-items: flex-start; overflow-wrap: anywhere; min-width: 0; }
+.vcn-wa-lines svg { flex: none; margin-top: 2px; color: var(--muted); }
