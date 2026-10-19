@@ -2,14 +2,13 @@
  * VulaFinances.jsx — money in/out per project, budget-vs-actual, built from filed
  * invoices/payments. Payments reconciled to invoices (matched, not guessed).
  */
-import { toast } from './ui/index.jsx'
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useLedger } from "./finances/useFinances";
 import VulaJobCosting from "./VulaJobCosting";
 import VulaCrossCheck from "./VulaCrossCheck";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const rand = (n) => "R" + (Number(n) || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
+// The trial balance sends integer cents (ledger.py trial_balance) — divide before rand() (it takes rands).
 
 function Cell({ label, value, sub, color }) {
   const C = { surface: "var(--surface)", border: "var(--border)", muted: "var(--muted)", text: "var(--text)" };
@@ -23,104 +22,11 @@ function Cell({ label, value, sub, color }) {
 }
 
 export default function VulaFinances({ tenantId }) {
-  const [data, setData] = useState({ projects: [], transactions: [], total_in: 0, total_out: 0 });
-  const [editing, setEditing] = useState(null);
-  const [budget, setBudget] = useState("");
-  const [openProj, setOpenProj] = useState(null);
-  const [detail, setDetail] = useState(null);
-  const [tb, setTb] = useState(null);
-  const [tbOpen, setTbOpen] = useState(false);
-
-  const loadTrialBalance = useCallback(async () => {
-    if (!tenantId) return;
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/trial-balance`);
-    setTb(await r.json());
-  }, [tenantId]);
-
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/finances`);
-    setData(await r.json());
-  }, [tenantId]);
-  useEffect(() => { load(); }, [load]);
-
-  const [contractDraft, setContractDraft] = useState("");
-  const [claims, setClaims] = useState([]);
-  const [newClaim, setNewClaim] = useState({ value: "", retention: "5" });
-  const [claimBusy, setClaimBusy] = useState(false);
-  const [invoicing, setInvoicing] = useState(null); // { claimId, name, phone, email, address }
-
-  const loadClaims = async (project) => {
-    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims`).then(r => r.json()).catch(() => null);
-    setClaims(r?.claims || []);
-  };
-
-  const openDetail = async (project) => {
-    if (openProj === project) { setOpenProj(null); return; }
-    setOpenProj(project); setDetail(null); setContractDraft(""); setClaims([]); setInvoicing(null);
-    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
-    setDetail(r);
-    loadClaims(project);
-  };
-
-  const refreshProject = async (project) => {
-    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
-    setDetail(r);
-    loadClaims(project);
-  };
-
-  const addClaim = async (project) => {
-    const value = Number(newClaim.value);
-    if (!value) return;
-    setClaimBusy(true);
-    const d = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cumulative_value: value, retention_pct: Number(newClaim.retention) || 5 }),
-    }).then(r => r.json()).catch(() => ({}));
-    setClaimBusy(false);
-    if (d.claim) { setNewClaim({ value: "", retention: "5" }); refreshProject(project); }
-    else toast(d.detail || d.error || "Could not create claim.");
-  };
-
-  const certifyClaim = async (project, claimId) => {
-    await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims/${claimId}/certify`, { method: "POST" });
-    refreshProject(project);
-  };
-
-  const submitInvoice = async (project) => {
-    if (!invoicing?.name) return;
-    setClaimBusy(true);
-    const d = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims/${invoicing.claimId}/invoice`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        customer_name: invoicing.name, customer_phone: invoicing.phone || undefined,
-        customer_email: invoicing.email || undefined, customer_address: invoicing.address || undefined,
-      }),
-    }).then(r => r.json()).catch(() => ({}));
-    setClaimBusy(false);
-    if (d.invoice) { toast(`Invoice ${d.invoice.invoice_number || ""} created for this claim.`); setInvoicing(null); refreshProject(project); }
-    else toast(d.detail || "Could not create invoice.");
-  };
-
-  const saveContract = async (project) => {
-    const total = Number(contractDraft);
-    if (!total) return;
-    await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ total }),
-    });
-    setContractDraft("");
-    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
-    setDetail(r); load();
-  };
-
-  const saveBudget = async (project) => {
-    await fetch(`${VULA_API}/v1/projects/${tenantId}/budget`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project, budget: Number(budget) || 0 }),
-    });
-    setEditing(null); setBudget(""); load();
-  };
+  const {
+    data, editing, budget, setBudget, startBudget, openProj, detail, tb, tbOpen, toggleTrialBalance,
+    contractDraft, setContractDraft, claims, newClaim, setNewClaim, claimBusy, invoicing, setInvoicing,
+    openDetail, addClaim, certifyClaim, submitInvoice, saveContract, saveBudget,
+  } = useLedger(tenantId);
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
@@ -162,7 +68,7 @@ export default function VulaFinances({ tenantId }) {
               <span>
                 {editing === p.project
                   ? <input autoFocus value={budget} onChange={(e) => setBudget(e.target.value)} onBlur={() => saveBudget(p.project)} onKeyDown={(e) => e.key === "Enter" && saveBudget(p.project)} placeholder="0" style={{ width: 80, padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 12 }} />
-                  : <span onClick={() => { setEditing(p.project); setBudget(p.budget || ""); }} style={{ cursor: "pointer", color: p.budget ? C.text : C.muted, borderBottom: `1px dotted ${C.muted}` }}>{p.budget ? rand(p.budget) : "set"}</span>}
+                  : <span onClick={() => startBudget(p)} style={{ cursor: "pointer", color: p.budget ? C.text : C.muted, borderBottom: `1px dotted ${C.muted}` }}>{p.budget ? rand(p.budget) : "set"}</span>}
               </span>
               <span style={{ color: p.remaining != null && p.remaining < 0 ? C.red : C.text }}>{p.remaining != null ? rand(p.remaining) : "—"}</span>
             </div>
@@ -259,7 +165,7 @@ export default function VulaFinances({ tenantId }) {
         ))}
       </div>
       <div style={{ marginTop: 20 }}>
-        <span onClick={() => { setTbOpen(!tbOpen); if (!tb) loadTrialBalance(); }} style={{ fontSize: 12, color: C.muted, cursor: "pointer", borderBottom: `1px dotted ${C.muted}` }}>
+        <span onClick={toggleTrialBalance} style={{ fontSize: 12, color: C.muted, cursor: "pointer", borderBottom: `1px dotted ${C.muted}` }}>
           {tbOpen ? "▾" : "▸"} General ledger (trial balance)
         </span>
         {tbOpen && (
@@ -274,14 +180,14 @@ export default function VulaFinances({ tenantId }) {
                 {tb.accounts.map((a) => (
                   <div key={a.code} style={{ padding: "7px 16px", borderTop: `1px solid ${C.alt}`, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 12.5 }}>
                     <span>{a.name} <span style={{ color: C.muted, fontSize: 10 }}>· {a.type}</span></span>
-                    <span>{a.debit_cents ? rand(a.debit_cents) : "—"}</span>
-                    <span>{a.credit_cents ? rand(a.credit_cents) : "—"}</span>
+                    <span>{a.debit_cents ? rand(a.debit_cents / 100) : "—"}</span>
+                    <span>{a.credit_cents ? rand(a.credit_cents / 100) : "—"}</span>
                   </div>
                 ))}
                 <div style={{ padding: "8px 16px", borderTop: `1px solid ${C.border}`, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 12.5, fontWeight: 700, background: C.alt }}>
                   <span>Total</span>
-                  <span>{rand(tb.total_debit_cents)}</span>
-                  <span style={{ color: tb.total_debit_cents === tb.total_credit_cents ? C.green : C.red }}>{rand(tb.total_credit_cents)}</span>
+                  <span>{rand(tb.total_debit_cents / 100)}</span>
+                  <span style={{ color: tb.total_debit_cents === tb.total_credit_cents ? C.green : C.red }}>{rand(tb.total_credit_cents / 100)}</span>
                 </div>
               </>
             )}

@@ -29,6 +29,7 @@ import VulaInvoices from './VulaInvoices'
 import VulaBookings from './VulaBookings'
 import VulaMarketing from './VulaMarketing'
 import VulaFinanceInsights from './VulaFinanceInsights'
+import FinancesV2 from './finances/FinancesV2'
 import VulaBankRec from './VulaBankRec'
 import VulaAccounting from './VulaAccounting'
 import VulaLabour from './VulaLabour'
@@ -267,7 +268,7 @@ function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsum
       {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} />}
       {active === 'budget' && <VulaBudget tenantId={tenantId} />}
       {active === 'scanner' && <VulaSmartScanner tenantId={tenantId} products={products} />}
-      {active === 'finances' && <FinancesSubsection tenantId={tenantId} />}
+      {active === 'finances' && <FinancesSubsection tenantId={tenantId} v2={v2} />}
     </div>
   )
 }
@@ -276,8 +277,9 @@ function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsum
 // toggle underneath — previously two competing top-level tabs each mounted VulaFinanceInsights
 // a second time alongside a different sibling (VulaReports vs VulaFinances).
 const FINANCES_INNER_TABS = [{ id: 'insights', label: 'Insights' }, { id: 'ledger', label: 'Ledger' }]
-function FinancesSubsection({ tenantId }) {
+function FinancesSubsection({ tenantId, v2 = false }) {
   const { tabs, active, setActive } = useSectionTabs(FINANCES_INNER_TABS, { defaultTabId: 'insights' })
+  if (v2) return <FinancesV2 tenantId={tenantId} />   // the redesign: same data, finances/FinancesV2.jsx
   return (
     <div>
       <VulaFinanceInsights tenantId={tenantId} />
