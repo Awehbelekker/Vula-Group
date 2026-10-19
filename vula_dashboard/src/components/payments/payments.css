@@ -1,0 +1,14 @@
+/* payments.css — the redesigned Payments gateways (payments/PaymentsV2.jsx). Tokens only. */
+.vpy { min-width: 0; }
+.vpy-grid { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.vpy-card { display: flex; flex-direction: column; gap: var(--space-2); height: 100%; box-sizing: border-box; }
+.vpy-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vpy-ic { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand-text); }
+.vpy-name { margin: 0; flex: 1 1 auto; min-width: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vpy-sub { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.vpy-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: auto; padding-top: var(--space-1); }
+.vpy-foot { margin-top: var(--space-4); text-align: center; }
+.vpy-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.vpy-where { display: flex; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+  background: var(--surface-2); font-size: var(--fs-caption); color: var(--ink); overflow-wrap: anywhere; }
+.vpy-where svg { flex: none; margin-top: 2px; color: var(--muted); }

@@ -87,6 +87,9 @@ function routes(role, modules = []) {
       const rows = F.expenses.filter((e) => (!st || e.status === st) && (!reimb || e.reimbursable));
       return { expenses: rows, ...F.expenseLists };
     }),
+    r("GET", `${A}/reports/pnl`, () => F.reportPnl),
+    r("GET", `${A}/reports/vat`, () => F.reportVat),
+    r("GET", `^/v1/payments/${T}/providers`, () => F.paymentProviders),
     r("GET", `${A}/reports/expenses`, () => F.expenseReport),
     r("GET", `${A}/cards`, () => ({ cards: F.companyCards })),
     r("GET", `${A}/customers/${T}/detail`, (m) => F.customerDetail(decodeURIComponent(m[2]))),
@@ -106,6 +109,16 @@ function routes(role, modules = []) {
       if (dt) rows = rows.filter((i) => i.doc_type === dt);
       return { invoices: rows, count: rows.length };
     }),
+    r("GET", `${A}/bank/reconciliation`, () => F.bankSummary),
+    r("GET", `${A}/bank/transactions/groups`, () => ({ groups: F.bankGroups })),
+    r("GET", `${A}/bank/transactions/([^/]+)/candidates`, () => ({ candidates: F.bankCandidates })),
+    r("GET", `${A}/bank/transactions`, (m, url) => {
+      const st = url.searchParams.get("status"), ac = url.searchParams.get("account_code");
+      const rows = F.bankTxns.filter((t) => (!st || st === "no_project" || t.match_status === st) && (!ac || t.account_code === ac));
+      return { transactions: rows, count: rows.length };
+    }),
+    r("GET", `${A}/accounts`, () => F.bankAccounts),
+    r("GET", `${A}/workers`, () => ({ workers: F.bankWorkers })),
     r("GET", `${A}/invoice-settings`, () => ({ settings: F.invoiceSettings, onboarded: true, email_configured: true })),
 
     // ── Documents ──

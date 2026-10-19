@@ -3,41 +3,19 @@
  * general-ledger export her accountant can file from. Built from the reconciled bank ledger.
  * Backend: /v1/commerce/{tenant}/admin/reports/* (migration 058).
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
-import { toast } from "./ui/index.jsx";
+import { useBooks } from "./books/useBooks";
+import BooksV2 from "./books/BooksV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function VulaAccounting({ tenantId }) {
-  const [since, setSince] = useState("");
-  const [until, setUntil] = useState("");
-  const [pnl, setPnl] = useState(null);
-  const [vat, setVat] = useState(null);
+export default function VulaAccounting({ tenantId, v2 = false }) {
+  if (v2) return <BooksV2 tenantId={tenantId} />;
+  return <AccountingV1 tenantId={tenantId} />;
+}
 
-  const qs = () => { const p = new URLSearchParams(); if (since) p.set("since", since); if (until) p.set("until", until); return p.toString(); };
-
-  const load = useCallback(async () => {
-    const q = new URLSearchParams(); if (since) q.set("since", since); if (until) q.set("until", until);
-    const [p, v] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/pnl?${q}`).then(r => r.json()).catch(() => null),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/vat?${q}`).then(r => r.json()).catch(() => null),
-    ]);
-    setPnl(p); setVat(v);
-  }, [tenantId, since, until]);
-  useEffect(() => { load(); }, [load]);
-
-  const exportLedger = async () => {
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/ledger.csv?${qs()}`);
-      if (!r.ok) throw new Error(String(r.status));
-      const url = URL.createObjectURL(await r.blob());
-      const a = document.createElement("a");
-      a.href = url; a.download = `ledger_${since}_${until}.csv`; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch { toast("Couldn't export the ledger — please try again.", "danger"); }
-  };
+function AccountingV1({ tenantId }) {
+  const { since, setSince, until, setUntil, pnl, vat, exportLedger } = useBooks(tenantId);
 
   return (
     <div style={{ color: C.text, maxWidth: 720 }}>

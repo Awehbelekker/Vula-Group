@@ -513,3 +513,115 @@ test("settings on a phone: the section list, one section, back to the list", asy
   await page.getByRole("button", { name: "All settings" }).click();
   await expect(page.locator(".vst-nav")).toBeVisible();
 });
+
+// ── Bank & matching ──
+const BANK = { name: "bank", role: "owner", nav: "Money", tab: "Bank & matching", ready: "ATLANTIC DAIRY COOP DEBIT ORDER" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`bank ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, BANK, { viewport, theme });
+      await expect(page.getByText(/^R.18.742\.50$/)).toBeVisible();
+      await check(page, ti, "bank", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "Group by payee" }).click();
+      await expect(page.getByRole("button", { name: "Apply to all 6" })).toBeVisible();
+      await check(page, ti, "bank-groups", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "Tools" }).click();
+      await expect(page.getByRole("dialog", { name: "Statement tools" })).toBeVisible();
+      await check(page, ti, "bank-tools", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+const bankPost = (page, re) => page.waitForRequest((r) => r.method() === "POST" && re.test(new URL(r.url()).pathname));
+
+test("bank: category, worker, match and ignore send the same bodies", async ({ page }) => {
+  await openScreen(page, BANK, { viewport: VIEWPORTS.mobile, theme: "light" });
+  const cat = bankPost(page, /\/bank\/transactions\/bt-3\/categorize$/);
+  await page.getByLabel("Category for CASH SEND LWAZI").selectOption("rent");
+  expect((await cat).postDataJSON()).toEqual({ account_code: "rent" });
+  const wk = bankPost(page, /\/bank\/transactions\/bt-3\/worker$/);
+  await page.getByLabel("Worker for CASH SEND LWAZI").selectOption("wk-2");
+  expect((await wk).postDataJSON()).toEqual({ worker_id: "wk-2" });
+  const match = bankPost(page, /\/bank\/transactions\/bt-1\/match$/);
+  const picker = page.getByLabel("Match invoice for PAYMENT RECEIVED BAY EVENTS CO INV-0041");
+  await picker.focus();
+  await expect(picker.locator("option", { hasText: "INV-0041" })).toHaveCount(1);
+  await picker.selectOption("inv-0041");
+  expect((await match).postDataJSON()).toEqual({ action: "match", invoice_id: "inv-0041" });
+  const ign = bankPost(page, /\/bank\/transactions\/bt-2\/match$/);
+  await page.locator(".vbr-txn", { hasText: "ATLANTIC DAIRY COOP DEBIT ORDER" }).getByRole("button", { name: "Ignore" }).click();
+  expect((await ign).postDataJSON()).toEqual({ action: "ignore" });
+});
+
+test("bank: filters ask the server; a payee group applies one category to all its lines", async ({ page }) => {
+  await openScreen(page, BANK, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const f = page.waitForRequest((r) => /\/bank\/transactions$/.test(new URL(r.url()).pathname) && new URL(r.url()).searchParams.get("status") === "matched");
+  await page.getByRole("button", { name: "Matched", exact: true }).click();
+  await f;
+  await expect(page.locator(".vbr-txn")).toHaveCount(2);
+  await page.getByRole("button", { name: "Group by payee" }).click();
+  const group = page.locator(".vbr-card", { hasText: "CASH SEND LWAZI" });
+  await group.getByLabel("Category for CASH SEND LWAZI").selectOption("cost_of_sales");
+  const bulk = bankPost(page, /\/bank\/transactions\/bulk-categorize$/);
+  await group.getByRole("button", { name: "Apply to all 6" }).click();
+  expect((await bulk).postDataJSON()).toEqual({ txn_ids: ["bt-3"], account_code: "cost_of_sales", project: null, trade: null });
+});
+
+// ── Payments gateways + Accounts ──
+const PAYMENTS = { name: "payments", role: "owner", nav: "Money", tab: "Payments", ready: "Peach Payments" };
+const BOOKS = { name: "books", role: "owner", nav: "Money", tab: "Accounts", ready: "Net profit" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`payments ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, PAYMENTS, { viewport, theme });
+      await expect(page.getByText("Default", { exact: true })).toBeVisible();
+      await check(page, ti, "payments", `${vp}-${theme}`, viewport);
+      await page.locator(".vpy-card", { hasText: "PayFast" }).getByRole("button", { name: "Connect" }).click();
+      await expect(page.getByRole("dialog", { name: "Connect PayFast" })).toBeVisible();
+      await check(page, ti, "payments-connect", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+    test(`books ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, BOOKS, { viewport, theme });
+      await expect(page.getByText(/^R.63.777\.00$/)).toBeVisible();
+      await expect(page.getByText("VAT payable to SARS")).toBeVisible();
+      await check(page, ti, "books", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("payments: connecting a gateway sends its labelled keys; default and disconnect use the same calls", async ({ page }) => {
+  await openScreen(page, PAYMENTS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.locator(".vpy-card", { hasText: "PayFast" }).getByRole("button", { name: "Connect" }).click();
+  const dlg = page.getByRole("dialog", { name: "Connect PayFast" });
+  await dlg.getByLabel("Merchant ID").fill("merchant-0001");
+  await dlg.getByLabel("Merchant key").fill("fake-merchant-key");
+  await dlg.getByLabel("Passphrase").fill("fake-passphrase");
+  await expect(dlg.getByLabel("Merchant key")).toHaveAttribute("type", "password");
+  await dlg.getByLabel("Mode").selectOption("test");
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/payments\/[^/]+\/providers$/.test(new URL(r.url()).pathname));
+  await dlg.getByRole("button", { name: "Connect" }).click();
+  expect((await post).postDataJSON()).toEqual({ provider: "payfast", mode: "test", is_default: false,
+    credentials: { merchant_id: "merchant-0001", merchant_key: "fake-merchant-key", passphrase: "fake-passphrase" } });
+  const def = page.waitForRequest((r) => r.method() === "POST" && /\/providers\/ozow\/default$/.test(new URL(r.url()).pathname));
+  await page.locator(".vpy-card", { hasText: "Ozow" }).getByRole("button", { name: "Make default" }).click();
+  await def;
+  const del = page.waitForRequest((r) => r.method() === "DELETE" && /\/providers\/ozow$/.test(new URL(r.url()).pathname));
+  await page.locator(".vpy-card", { hasText: "Ozow" }).getByRole("button", { name: "Disconnect" }).click();
+  await del;
+});
+
+test("books: a date range goes to both reports; the ledger export downloads", async ({ page }) => {
+  await openScreen(page, BOOKS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const pnl = page.waitForRequest((r) => /\/reports\/pnl$/.test(new URL(r.url()).pathname) && new URL(r.url()).searchParams.get("since") === "2026-10-01");
+  await page.getByLabel("From").fill("2026-10-01");
+  await pnl;
+  await page.route(/\/reports\/ledger\.csv/, (route) => route.fulfill({ status: 200, contentType: "text/csv", body: "date,account,amount\n" }));
+  const dl = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export for accountant (CSV)" }).click();
+  expect((await dl).suggestedFilename()).toBe("ledger_2026-10-01_.csv");
+});
