@@ -5,7 +5,9 @@
  *   VITE_UI_V2=true            the build carries the new look at all (Vercel env var)
  *   vula_tenant_config.ui_v2   this business is on it (migration 215, returned by
  *                              GET /v1/tenants/{t}); on for every business since 217 —
- *                              Master › Tenants switches one back
+ *                              Master › Tenants switches one back. Master HQ itself has no
+ *                              tenant row: it follows the build; "Open as tenant" follows
+ *                              that tenant's switch (App.jsx)
  * When the build has it, `?ui=v2` / `?ui=v1` in the address bar pins a preview for this device
  * (Ian checking a tenant before switching it on) — remembered until `?ui=auto`.
  * The new look itself is index.css's [data-ui="v2"] tokens, so turning this off is instant.

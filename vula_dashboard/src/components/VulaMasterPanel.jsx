@@ -6,25 +6,30 @@
  * (vula/api/master.py + master_auth.py), the first real auth boundary in the platform.
  */
 import { useEffect, useState, Fragment, useCallback } from 'react'
+import { Brain, Building2, Coins, FlaskConical, HeartPulse, MessagesSquare, Rocket, ScrollText, Target, UserRound } from 'lucide-react'
 import { authFetch } from '../lib/authFetch'
 import { todaySA } from '../lib/dates'
 import { SectionTabs, confirmDialog } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
+import TenantsV2 from './master/TenantsV2'
+import TenantDetailV2 from './master/TenantDetailV2'
+import { HEALTH_COLOUR, ago, matchesTenant, sortTenants, useManageTenant, useMasterTenants } from './master/useMasterTenants'
 import VulaMasterTenantDetail from './VulaMasterTenantDetail'
 
 const C = { surface: 'var(--surface)', border: 'var(--border)', green: 'var(--accent)', red: 'var(--danger)', amber: 'var(--warn)', text: 'var(--text)', muted: 'var(--muted)', alt: 'var(--surface-alt)' }
 
+// icon: the current look's emoji; Icon: the redesign's (SectionTabs shows one per [data-ui])
 const SUBTABS = [
-  { id: 'tenants', label: 'Tenants', icon: '🏢' },
-  { id: 'onboard', label: 'Onboard', icon: '🚀' },
-  { id: 'health', label: 'Health', icon: '💓' },
-  { id: 'usage', label: 'Usage', icon: '💰' },
-  { id: 'users', label: 'Users', icon: '👤' },
-  { id: 'knowledge', label: 'Knowledge', icon: '🧠' },
-  { id: 'audit', label: 'Audit', icon: '📜' },
-  { id: 'models', label: 'Models', icon: '🧪' },
-  { id: 'benchmark', label: 'Benchmark', icon: '🎯' },
-  { id: 'conversations', label: 'Conversations', icon: '💬' },
+  { id: 'tenants', label: 'Tenants', icon: '🏢', Icon: Building2 },
+  { id: 'onboard', label: 'Onboard', icon: '🚀', Icon: Rocket },
+  { id: 'health', label: 'Health', icon: '💓', Icon: HeartPulse },
+  { id: 'usage', label: 'Usage', icon: '💰', Icon: Coins },
+  { id: 'users', label: 'Users', icon: '👤', Icon: UserRound },
+  { id: 'knowledge', label: 'Knowledge', icon: '🧠', Icon: Brain },
+  { id: 'audit', label: 'Audit', icon: '📜', Icon: ScrollText },
+  { id: 'models', label: 'Models', icon: '🧪', Icon: FlaskConical },
+  { id: 'benchmark', label: 'Benchmark', icon: '🎯', Icon: Target },
+  { id: 'conversations', label: 'Conversations', icon: '💬', Icon: MessagesSquare },
 ]
 
 // #/master/tenant/{id} — bookmarkable/shareable deep link into the tenant drill-in (2026-09-16).
@@ -37,7 +42,7 @@ function readDetailTenantFromHash() {
 
 // activeTab/onTabChange: optional external control (App.jsx lifts this in Phase 5 so returning
 // from a tenant visit restores the sub-tab the operator was on) — uncontrolled by default.
-export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }) {
+export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange, v2 = false }) {
   const { tabs, active: tab, setActive: setTab } = useSectionTabs(SUBTABS, {
     defaultTabId: 'tenants',   // Tenants is the real operator landing — who's signed up, paid,
                                 // trial, active/suspended. Health (routing %, scheduler leases,
@@ -76,16 +81,19 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
     else setDetailTenant(null)
   }, [])
 
+  const Tenants = v2 ? TenantsV2 : TenantsPanel   // the redesign's list (master/TenantsV2.jsx)
+
   if (detailTenant) {
-    return <VulaMasterTenantDetail tenantId={detailTenant} onOpenTenant={onOpenTenant} onBack={closeDetail} />
+    const Detail = v2 ? TenantDetailV2 : VulaMasterTenantDetail
+    return <Detail tenantId={detailTenant} onOpenTenant={onOpenTenant} onBack={closeDetail} />
   }
 
   return (
     // no 1000px cap (2026-10-18): the shell already bounds the width; tables use the room
     <div className="vula-master" style={{ color: C.text, minWidth: 0 }}>
-      <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
+      <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} variant={v2 ? 'pill' : undefined} label="Master" />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
-      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
+      {tab === 'tenants' && <Tenants onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
         onCreated={(tenantId) => { setOnboardSelect(tenantId); setTab('onboard') }} />}
       {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
         selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} />}
@@ -200,11 +208,6 @@ function OnboardPanel({ onError, onOpenTenant, onProvision, selectTenantId, onCo
 }
 
 /* ── Tenants & provisioning ─────────────────────────────────────────────────── */
-// Health from /v1/master/tenants (master._health): red = WhatsApp down, amber = unanswered
-// questions / no number / quiet 30 days, green = fine, off = suspended.
-const HEALTH_ORDER = { red: 0, amber: 1, green: 2, off: 3 }
-const HEALTH_COLOUR = { red: 'var(--danger)', amber: 'var(--warn)', green: 'var(--ok)', off: 'var(--muted)' }
-
 function HealthDot({ t }) {
   const h = t.health || 'green'
   const why = (t.health_reasons || []).join(' · ') || 'All good'
@@ -212,119 +215,10 @@ function HealthDot({ t }) {
     style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', marginTop: 4, background: HEALTH_COLOUR[h] || HEALTH_COLOUR.green }} />
 }
 
-function ago(iso) {
-  if (!iso) return 'never'
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
-  if (Number.isNaN(days)) return '—'
-  return days <= 0 ? 'today' : days === 1 ? 'yesterday' : days < 60 ? `${days} days ago` : `${Math.round(days / 30)} months ago`
-}
-
-function matchesTenant(t, q) {
-  const s = q.trim().toLowerCase()
-  if (!s) return true
-  return [t.tenant_id, t.display_name, t.business_type, t.signup_email, t.plan]
-    .some(v => (v || '').toString().toLowerCase().includes(s))
-}
-
-function sortTenants(list, by) {
-  const name = (t) => (t.display_name || t.tenant_id || '').toLowerCase()
-  const act = (t) => (t.last_activity ? new Date(t.last_activity).getTime() : 0)
-  return [...list].sort((a, b) =>
-    by === 'name' ? name(a).localeCompare(name(b))
-      : by === 'activity' ? act(b) - act(a) || name(a).localeCompare(name(b))
-        : (HEALTH_ORDER[a.health] ?? 2) - (HEALTH_ORDER[b.health] ?? 2) || act(b) - act(a))
-}
-
 function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumePrefill, onCreated }) {
-  const [rows, setRows] = useState([])
-  const [registry, setRegistry] = useState({ business_types: [], modules: [] })
-  const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ tenant_id: '', display_name: '', business_type: 'retail' })
-  const [busy, setBusy] = useState(false)
-  const [managing, setManaging] = useState(null)   // tenant_id being module/plan-edited
-  const [q, setQ] = useState('')
-  const [sort, setSort] = useState('health')          // health | activity | name
-
-  const load = async () => {
-    try {
-      const [t, r] = await Promise.all([
-        authFetch('/v1/master/tenants'),
-        authFetch('/v1/tenants/registry'),
-      ])
-      setRows(t.tenants || []); setRegistry(r)
-    } catch (e) { onError(e.message) }
-  }
-  useEffect(() => { load() }, [])
-
-  useEffect(() => {
-    if (!prefill) return
-    setForm({ tenant_id: prefill.tenant_id || '', display_name: prefill.display_name || '', business_type: prefill.business_type || 'retail' })
-    setCreating(true)
-    onConsumePrefill && onConsumePrefill()
-  }, [prefill])  // eslint-disable-line
-
-  const create = async () => {
-    if (!form.tenant_id.trim()) return onError('tenant_id required (slug, e.g. my-shop)')
-    setBusy(true)
-    try {
-      const r = await authFetch('/v1/tenants', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      })
-      if (r.error) onError(r.error)
-      else {
-        const newTenantId = form.tenant_id
-        setCreating(false); setForm({ tenant_id: '', display_name: '', business_type: 'retail' }); load()
-        onCreated && onCreated(newTenantId)
-      }
-    } catch (e) { onError(e.message) } finally { setBusy(false) }
-  }
-
-  const toggleActive = async (t) => {
-    const name = t.display_name || t.tenant_id
-    if (t.active !== false && !(await confirmDialog(
-      `Suspend ${name}? Their WhatsApp bot, checkout and dashboard logins stop working until you activate them again.`,
-      { danger: true, confirmLabel: 'Suspend' }))) return
-    try {
-      await authFetch(`/v1/master/tenants/${t.tenant_id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: t.active === false }),
-      })
-      load()
-    } catch (e) { onError(e.message) }
-  }
-
-  const saveManage = async (tenant_id, patch) => {
-    try {
-      await authFetch(`/v1/master/tenants/${tenant_id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-      load()
-    } catch (e) { onError(e.message) }
-  }
-
-  const markPaid = async (t) => {
-    try { await authFetch(`/v1/master/tenants/${t.tenant_id}/mark-paid`, { method: 'POST' }); load() }
-    catch (e) { onError(e.message) }
-  }
-  const extendTrial = async (t) => {
-    try {
-      await authFetch(`/v1/master/tenants/${t.tenant_id}/extend-trial`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ days: 14 }),
-      })
-      load()
-    } catch (e) { onError(e.message) }
-  }
-  const cancelSub = async (t) => {
-    if (!(await confirmDialog(`Cancel ${t.display_name || t.tenant_id}'s subscription? This also suspends them — bot, checkout, and dashboard logins stop working immediately.`, { danger: true, confirmLabel: 'Yes' }))) return
-    try { await authFetch(`/v1/master/tenants/${t.tenant_id}/cancel`, { method: 'POST' }); load() }
-    catch (e) { onError(e.message) }
-  }
-  const reactivateSub = async (t) => {
-    try { await authFetch(`/v1/master/tenants/${t.tenant_id}/reactivate`, { method: 'POST' }); load() }
-    catch (e) { onError(e.message) }
-  }
+  const { rows, registry, creating, setCreating, form, setForm, busy, managing, setManaging, q, setQ, sort, setSort,
+    create, toggleActive, saveManage, markPaid, extendTrial, cancelSub, reactivateSub } =
+    useMasterTenants({ onError, prefill, onConsumePrefill, onCreated })
 
   return (
     <div>
@@ -408,18 +302,8 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
 // Exported (2026-07-22) so VulaMasterTenantDetail.jsx's Overview sub-tab can reuse it too,
 // instead of duplicating the plan/store-url/gateway/modules editor a second time.
 export function ManageTenantRow({ tenant, registry, onSave }) {
-  const [modules, setModules] = useState(tenant.modules || [])
-  const [plan, setPlan] = useState(tenant.plan || 'starter')
-  const [storeUrl, setStoreUrl] = useState(tenant.store_url || '')
-  const [gateway, setGateway] = useState(tenant.default_payment_provider || '')
-  const [shareNetwork, setShareNetwork] = useState(!!tenant.share_knowledge_with_network)
-  const [spendCap, setSpendCap] = useState(tenant.spend_cap_usd != null ? String(tenant.spend_cap_usd) : '')
-  // The redesigned dashboard (migrations 215 / 217): on for every business by default; off here
-  // puts this one business back on the old design.
-  const [uiV2, setUiV2] = useState(tenant.ui_v2 !== false)
-  const allModules = registry.modules || []
-
-  const toggle = (id) => setModules(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id])
+  const { modules, plan, setPlan, storeUrl, setStoreUrl, gateway, setGateway, shareNetwork, setShareNetwork,
+    spendCap, setSpendCap, uiV2, setUiV2, allModules, toggle, patch } = useManageTenant(tenant, registry)
 
   return (
     <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -468,12 +352,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
         New dashboard design (untick to put this business back on the old one)
       </label>
       <button style={{ ...btn, ...btnOn, alignSelf: 'flex-start' }}
-        onClick={() => onSave({
-          modules, plan, store_url: storeUrl, default_payment_provider: gateway,
-          share_knowledge_with_network: shareNetwork,
-          spend_cap_usd: spendCap === '' ? null : Number(spendCap),
-          ui_v2: uiV2,
-        })}>Save changes</button>
+        onClick={() => onSave(patch())}>Save changes</button>
     </div>
   )
 }

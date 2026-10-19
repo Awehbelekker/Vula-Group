@@ -515,6 +515,84 @@ test("settings on a phone: the section list, one section, back to the list", asy
   await expect(page.locator(".vst-nav")).toBeVisible();
 });
 
+// ── Master HQ › Tenants ──
+const MASTER = { name: "master", role: "master", nav: "Master", ready: "need attention" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`master tenants ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, MASTER, { viewport, theme });
+      await expect(page.getByRole("img", { name: /^Health: Check — 3 unanswered question/ }).first()).toBeVisible();
+      await check(page, ti, "master-tenants", `${vp}-${theme}`, viewport);
+      await page.getByText("Harbour & Vine Deli", { exact: true }).locator("visible=true").first().click();
+      await expect(page.getByRole("dialog", { name: "Harbour & Vine Deli" })).toBeVisible();
+      await check(page, ti, "master-tenant-sheet", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`master tenant detail ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, MASTER, { viewport, theme });
+      await page.getByText("Harbour & Vine Deli", { exact: true }).locator("visible=true").first().click();
+      await page.getByRole("button", { name: "Details" }).click();
+      await expect(page.getByRole("heading", { name: "demo-shop" })).toBeVisible();
+      await expect(page.getByLabel("Phone number ID")).toBeVisible();
+      await check(page, ti, "master-detail", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Usage" }).click();
+      await expect(page.getByText("US$6.48")).toBeVisible();
+      await page.getByRole("tab", { name: "Conversations" }).click();
+      await page.getByText("+27820000101").locator("visible=true").first().click();
+      await expect(page.getByRole("list", { name: "Messages with +27820000101" })).toBeVisible();
+      await check(page, ti, "master-detail-thread", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Errors" }).click();
+      await expect(page.getByText("Media download timed out (Meta 131052)").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "master-detail-errors", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("master tenant detail: linking a number and pushing the catalogue send the same bodies", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.evaluate(() => { window.location.hash = "#/master/tenant/demo-shop"; });
+  await expect(page.getByRole("heading", { name: "demo-shop" })).toBeVisible();
+  await page.getByLabel("Phone number ID").fill(" 1098765432 ");
+  await page.getByLabel("PIN (optional)").fill("123456");
+  const link = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-shop\/whatsapp-number$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Link number" }).click();
+  expect((await link).postDataJSON()).toEqual({ phone_number_id: "1098765432", pin: "123456" });
+  const push = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-shop\/meta-catalog$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Push products" }).click();
+  expect((await push).postDataJSON()).toEqual({});
+});
+
+test("master tenants: search, create, suspend and billing send the same requests", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByLabel("Search tenants").fill("salon");
+  await expect(page.getByRole("row")).toHaveCount(2);   // header + Fynbos Hair Studio
+  await page.getByLabel("Search tenants").fill("");
+
+  await page.getByRole("button", { name: "New tenant" }).click();
+  await page.getByLabel("Tenant ID").fill("demo-new");
+  await page.getByLabel("Display name").fill("New Shop");
+  const create = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/v1/tenants");
+  await page.getByRole("button", { name: "Create tenant" }).click();
+  expect((await create).postDataJSON()).toEqual({ tenant_id: "demo-new", display_name: "New Shop", business_type: "retail" });
+
+  await page.getByRole("tab", { name: "Tenants" }).click();
+  await page.getByRole("row", { name: /Kloof Street Bakehouse/ }).click();
+  const trial = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-bakery\/extend-trial$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "+14 day trial" }).click();
+  expect((await trial).postDataJSON()).toEqual({ days: 14 });
+  const sus = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/master\/tenants\/demo-bakery$/.test(new URL(r.url()).pathname));
+  await page.getByRole("dialog", { name: "Kloof Street Bakehouse" }).getByRole("button", { name: "Suspend" }).click();
+  await page.getByRole("dialog").filter({ hasText: "Suspend Kloof Street Bakehouse?" }).getByRole("button", { name: "Suspend" }).click();
+  expect((await sus).postDataJSON()).toEqual({ active: false });
+});
+
 // ── Settings › connections (settings/connect/) ──
 const okJson = (body) => (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
 const CONNECTIONS = [

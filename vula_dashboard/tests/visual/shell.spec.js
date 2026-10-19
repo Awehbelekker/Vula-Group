@@ -79,8 +79,8 @@ test("Add offers only what the role may use; a sub-tab opens straight from searc
 });
 
 test("Master can put one business back on the old design", async ({ page }) => {
-  await openScreen(page, { name: "master", role: "master", nav: "Master", ready: "need attention ·" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await page.getByRole("button", { name: "Manage" }).first().click();
+  await openScreen(page, { name: "master", role: "master", nav: "Master", ready: "need attention" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("row", { name: /Harbour & Vine Deli/ }).click();   // a tenant opens in a sheet
   const box = page.getByRole("checkbox", { name: /New dashboard design/ });
   await expect(box).toBeChecked();             // on for every business since migration 217
   await box.uncheck();

@@ -1,0 +1,55 @@
+/* master.css — the redesigned Master HQ (master/*V2.jsx). Tokens only; every text holder has
+   min-width: 0 so long tenant names and slugs wrap instead of widening the page. */
+
+.vms { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.vms-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vms-h { margin: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vms-muted { color: var(--muted); font-size: var(--fs-caption); }
+.vms-warn { color: var(--warn-text); }
+.vms-mono, .vms-id { font-family: var(--font-mono) !important; }
+.vms-danger { color: var(--danger-text) !important; }
+
+.vms-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); }
+.vms-summary { margin: 0 0 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+
+.vms-who { display: inline-flex; align-items: flex-start; gap: var(--space-2); min-width: 0; }
+.vms-who > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.vms-name { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.vms-id { font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; }
+.vms-billing { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+.vms-dot { flex: none; display: inline-block; width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; background: var(--ok); }
+.vms-dot--danger { background: var(--danger); }
+.vms-dot--warn { background: var(--warn); }
+.vms-dot--muted { background: var(--muted); }
+
+.vms-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vms-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.vms-rows { margin: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.vms-rows > div { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-1) var(--space-3); padding: var(--space-2) var(--space-3); min-height: 40px; box-sizing: border-box; }
+.vms-rows > div + div { border-top: 1px solid var(--line); }
+.vms-rows dt { font-size: var(--fs-caption); color: var(--muted); }
+.vms-rows dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-body); color: var(--ink); text-align: right; }
+.vms-fieldset { margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: var(--space-2); }
+.vms-mods { display: flex; flex-wrap: wrap; gap: 6px; }
+.vms-mod { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); font-size: var(--fs-caption); color: var(--ink); cursor: pointer; }
+.vms-check { display: flex; align-items: flex-start; gap: var(--space-2); min-height: 44px; font-size: var(--fs-body); color: var(--ink); cursor: pointer; }
+.vms-check input { margin-top: 3px; }
+
+/* tenant drill-in (TenantDetailV2) */
+.vms-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.vms-title { margin: 0; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vms-h { display: flex; align-items: center; }
+.vms-ic { flex: none; margin-right: var(--space-2); color: var(--muted); }
+.vms-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vms-ok { margin: 0; font-size: var(--fs-body); color: var(--ok-text); overflow-wrap: anywhere; }
+.vms-body { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vms-end { align-self: end; }
+.vms-push { margin-left: auto; }
+.vms-code { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; white-space: normal; }
+.vms-stats { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); }
+.vms-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vms-thread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vms-msg { display: flex; flex-direction: column; gap: 2px; max-width: min(75%, 560px); padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); border: 1px solid var(--line); }
+.vms-msg--in { align-self: flex-start; background: var(--surface); }
+.vms-msg--out { align-self: flex-end; background: var(--surface-2); }

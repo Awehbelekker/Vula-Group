@@ -109,6 +109,7 @@ export default function App() {
   // switched onto the redesign (migration 215); starts from this device's memory of it
   const [tenantUiV2, setTenantUiV2] = useState(() => rememberedTenantUi(useAuthStore.getState().tenantId));
   const [tenantLabels, setTenantLabels] = useState(null); // the tenant's own section names (ui_labels)
+  const [masterTenantUiV2, setMasterTenantUiV2] = useState(false); // the opened tenant's ui_v2, for master's "Open as tenant"
   const [navRequest, setNavRequest] = useState(null);   // open a section's sub-tab (redesigned shell)
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
@@ -127,6 +128,18 @@ export default function App() {
   useEffect(() => {
     if (role !== "master" || !masterTenant) return;
     try { localStorage.setItem(MASTER_TENANT_KEY, masterTenant); } catch { /* private mode */ }
+  }, [role, masterTenant]);
+
+  // "Open as tenant" shows the workspace as its owner sees it — in that tenant's own design
+  // (migration 215/217), not master's (2026-10-19).
+  useEffect(() => {
+    if (role !== "master" || !masterTenant) return;
+    let alive = true;
+    setMasterTenantUiV2(rememberedTenantUi(masterTenant));
+    fetch(`${VULA_API}/v1/tenants/${masterTenant}`).then((r) => r.json())
+      .then((d) => { if (alive) { setMasterTenantUiV2(!!d.ui_v2); rememberTenantUi(masterTenant, !!d.ui_v2); } })
+      .catch(() => {});
+    return () => { alive = false; };
   }, [role, masterTenant]);
 
   // The signed-in user's own business ("" until the login carries one — never a stand-in).
@@ -153,8 +166,11 @@ export default function App() {
     else applyThemeMode();
   }, [isPublicRoute]);
   // The redesign (2026-10-17): only for a tenant switched onto it, and never on the public
-  // customer-facing pages, which keep their own look (lib/flags.js).
-  const v2 = !isPublicRoute && uiV2For(tenantUiV2);
+  // customer-facing pages, which keep their own look (lib/flags.js). Master HQ has no tenant
+  // row of its own: it follows the build (2026-10-19), while "Open as tenant" follows that
+  // tenant's own switch; ?ui=v1 still pins the current look on this device.
+  const masterUi = activeTab === "merchant" ? masterTenantUiV2 : true;
+  const v2 = !isPublicRoute && uiV2For(role === "master" ? masterUi : tenantUiV2);
   useEffect(() => { applyUiMode(v2); }, [v2]);
   useEffect(() => {
     // Master HQ wears Vula's own brand; only "Open as tenant" takes on that tenant's brand
@@ -414,7 +430,7 @@ export default function App() {
         ) : null}
       >
         <div style={{ padding: "4px 0 24px" }}>
-          <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
+          <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} v2={v2}
             onOpenTenant={async (tid) => {
               // An optional support reason for the audit trail (vula_admin_audit + the tenant's
               // own vula_merchant_audit); blank is fine. 2026-09-29: an in-app dialog instead of

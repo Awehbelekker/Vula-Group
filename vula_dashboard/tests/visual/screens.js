@@ -20,7 +20,7 @@ export const SCREENS = [
   { name: "invoices", role: "owner", nav: "Money", tab: "Invoices", ready: "INV-2026-0118" },
   { name: "documents", role: "owner", nav: "Operate", tab: "Documents", ready: "Atlantic-Dairy-invoice-BILL-0031.pdf" },
   { name: "settings", role: "owner", nav: "Settings", ready: "Brand kit" },
-  { name: "master", role: "master", nav: "Master", ready: "need attention ·" },
+  { name: "master", role: "master", nav: "Master", ready: "need attention" },
 ];
 
 const HIDE_CARET = `*, *::before, *::after { caret-color: transparent !important; }`;
@@ -53,7 +53,7 @@ export async function openScreen(page, screen, { viewport, theme }) {
 
   await page.goto("/");
   // a UI_V2 run waits for the redesigned shell (the tenant's flag arrives after first paint)
-  await page.locator(process.env.UI_V2 === "1" && screen.role !== "master" ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(process.env.UI_V2 === "1" ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
 
   if (screen.nav && await page.locator(".v2-shell").count()) {
     await openV2(page, screen.nav);

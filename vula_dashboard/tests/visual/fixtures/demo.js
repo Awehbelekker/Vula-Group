@@ -755,3 +755,22 @@ export const vatScenario = { vat_registered: true, over_threshold: false,
     { month: "2026-09", sales: 33_400_000, output: 5_010_000, input_claimable: 3_870_230, input_no_vat_number: 0, net_cents: 1_139_770 },
     { month: "2026-10", sales: 28_560_000, output: 4_284_000, input_claimable: 2_836_000, input_no_vat_number: 95_000, net_cents: 1_448_000 },
   ] };
+
+// ── Master › a tenant's drill-in (master.py: usage, audit, conversations, errors) ─────────────
+export const masterUsage = { days: 14, per_tenant: {
+  "demo-shop": { calls: 1842, ai_cost_usd: 6.48, infra_cost_usd: 0.31, vectors: 12406, storage_mb: 214.6 } } };
+export const masterAudit = { events: [
+  { id: "au-1", created_at: "2026-10-17T08:05:00+02:00", actor_email: "operator@vula.example.test", action: "master_update_tenant", detail: { plan: "growth" } },
+  { id: "au-2", created_at: "2026-10-16T15:42:00+02:00", actor_email: "operator@vula.example.test", action: "master_impersonate_tenant", detail: { reason: "support ticket #118" } },
+] };
+export const masterThreads = { threads: [
+  { phone: "+27820000101", last_message: "Can you do a platter for 12 on Saturday?", last_role: "user", last_at: "2026-10-17T09:58:00+02:00" },
+  { phone: "+27820000104", last_message: "Your order HV-1051 is on its way.", last_role: "assistant", last_at: "2026-10-17T08:31:00+02:00" },
+] };
+export const masterThread = { messages: [
+  { role: "user", text: "Can you do a platter for 12 on Saturday?", created_at: "2026-10-17T09:57:00+02:00" },
+  { role: "assistant", text: "Let me check with the team and come back to you within the hour.", created_at: "2026-10-17T09:58:00+02:00" },
+] };
+export const masterErrors = { window_hours: 48,
+  webhook_failures: [{ id: "wf-1", created_at: "2026-10-17T07:12:00+02:00", phone: "+27820000109", msg_type: "image", error: "Media download timed out (Meta 131052)" }],
+  verification_flags: [{ created_at: "2026-10-16T18:20:00+02:00", task: "commerce_admin", outcome: "defect_found" }] };
