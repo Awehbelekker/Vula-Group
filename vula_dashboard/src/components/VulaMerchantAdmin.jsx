@@ -82,6 +82,7 @@ import VulaTapToPay from './VulaTapToPay'
 import { VULA_API } from '../lib/authFetch'
 import { NEXT_STATUSES, ORDER_DELETABLE, ORDER_FILTERS, useOrders } from './orders/useOrders'
 import OrdersV2 from './orders/OrdersV2'
+import ProductsV2 from './products/ProductsV2'
 
 
 const STATUS_LABELS = {
@@ -239,11 +240,11 @@ function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsume
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'orders' && <OrdersTab tenantId={tenantId} v2={v2} />}
-      {active === 'products' && <ProductsTab tenantId={tenantId} />}
+      {active === 'products' && <ProductsTab tenantId={tenantId} v2={v2} />}
       {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
       {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
       {active === 'delivery' && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
-      {active === 'bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
       {active === 'costing' && <VulaCosting tenantId={tenantId} />}
       {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
@@ -345,7 +346,7 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
-      {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
       {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
       {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
@@ -1300,7 +1301,7 @@ function DeliveryTab({ tenantId }) {
 
 // ── Products ──────────────────────────────────────────────────────────────────
 
-function ProductsTab({ tenantId }) {
+function ProductsTab({ tenantId, v2 = false }) {
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])   // per-tenant (migration 073); fallback = legacy labels
   const [loading, setLoading] = useState(true)
@@ -1447,6 +1448,17 @@ function ProductsTab({ tenantId }) {
     if (!grouped[cat]) grouped[cat] = []
     grouped[cat].push(p)
   })
+
+  // v2: the redesigned list (products/ProductsV2.jsx) — same state and actions; the full
+  // editor (ProductEditPanel) opens in a Sheet there
+  if (v2) {
+    return <ProductsV2 EditPanel={ProductEditPanel} api={{
+      tenantId, products, categories, loading, saving, editPrice, setEditPrice, savePrice, patch, deleteProduct,
+      catKeys, catLabel, showAdd, setShowAdd, form, setForm, adding, createProduct, showCats, setShowCats,
+      newCat, setNewCat, addCategory, exportCsv, fileInputRef, onImportFile, importRows, importing, importResults,
+      validateImportRow, commitImport, closeImport: () => { setImportRows(null); setImportResults(null) },
+    }} />
+  }
 
   if (loading) return <p style={styles.loading}>Loading products…</p>
 

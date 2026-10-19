@@ -96,7 +96,7 @@ function routes(role, modules = []) {
       return { orders: rows, count: rows.length };
     }),
     r("GET", `${A}/products`, () => ({ products: F.products, count: F.products.length })),
-    r("GET", `${A}/categories`, () => ({ categories: {} })),
+    r("GET", `${A}/categories`, () => ({ categories: F.productCategories })),
 
     // ── Money ──
     r("GET", `${A}/invoices`, (m, url) => {
@@ -132,6 +132,10 @@ function routes(role, modules = []) {
     r("GET", `^/v1/whatsapp/connect/status/${T}`, () => F.whatsappStatus),
     r("GET", `^/v1/clickup/status/${T}`, () => F.notConnected),
     r("GET", `^/v1/microsoft/status/${T}`, () => F.notConnected),
+    r("GET", `^/v1/bookings/${T}/services`, () => ({ services: F.bookingServices })),
+    r("GET", `^/v1/bookings/${T}/availability`, () => F.bookingAvailability),
+    r("GET", `^/v1/bookings/${T}/settings`, () => ({ settings: F.bookingRules })),
+    r("GET", `^/v1/bookings/${T}`, () => ({ bookings: F.bookingsList })),
     r("GET", `^/v1/email/contacts/${T}`, () => ({ contacts: F.emailContacts })),
     r("GET", `^/v1/email/followups/${T}`, () => ({ followups: F.emailFollowups })),
     r("GET", `^/v1/email/status/${T}`, (m) => ({ tenant_id: m[1], accounts: [] })),

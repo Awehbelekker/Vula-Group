@@ -2,9 +2,11 @@
  * VulaBookings.jsx — appointments/scheduling for health/wellness/services tenants.
  * Day view of bookings, quick-book into a free slot, service types, and availability rules.
  * Backend: /v1/bookings/{tenant} (migration 050).
+ * Data and actions live in bookings/useBookings.js (shared with bookings/BookingsV2.jsx).
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useState } from "react";
+import { DAYNAMES, today, shift, timeOf, onDay, bookSlot, saveService, deleteService, saveRules, useBookings } from "./bookings/useBookings";
+import BookingsV2 from "./bookings/BookingsV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const STATUS = {
@@ -14,75 +16,20 @@ const STATUS = {
   cancelled: { label: "Cancelled", color: "var(--danger)" },
   no_show:   { label: "No-show",   color: "var(--muted)" },
 };
-const DAYNAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 1..7
-
-const today = () => new Date().toISOString().slice(0, 10);
 const fmtR = (c) => `R${((c || 0) / 100).toFixed(2)}`;
 
-function mondayOf(d) {
-  const x = new Date(d + "T12:00:00");
-  const dow = x.getDay() || 7;   // Sun=0 → 7
-  x.setDate(x.getDate() - (dow - 1));
-  return x.toISOString().slice(0, 10);
+/** v2: the redesigned screen (same hook, so the same data and actions). */
+export default function VulaBookings({ tenantId, v2 = false }) {
+  if (v2) return <BookingsV2 tenantId={tenantId} />;
+  return <BookingsV1 tenantId={tenantId} />;
 }
 
-export default function VulaBookings({ tenantId }) {
-  const [view, setView] = useState("day");     // day | week | services | settings
-  const [date, setDate] = useState(today());
-  const [bookings, setBookings] = useState([]);
-  const [weekBookings, setWeekBookings] = useState([]);
-  const [services, setServices] = useState([]);
-  const [avail, setAvail] = useState(null);
-  const [settings, setSettings] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  const loadDay = useCallback(async () => {
-    if (!tenantId) return;
-    const from = `${date}T00:00:00+02:00`;
-    const [b, a] = await Promise.all([
-      fetch(`${VULA_API}/v1/bookings/${tenantId}?from=${encodeURIComponent(from)}`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/bookings/${tenantId}/availability?date=${date}`).then(r => r.json()).catch(() => ({})),
-    ]);
-    const all = (b.bookings || []).filter(x => (x.start_at || "").slice(0, 10) === date
-      || new Date(x.start_at).toISOString().slice(0, 10) === date);
-    setBookings(all);
-    setAvail(a);
-  }, [tenantId, date]);
-
-  const weekStart = mondayOf(date);
-  const loadWeek = useCallback(async () => {
-    if (!tenantId) return;
-    const from = `${weekStart}T00:00:00+02:00`;
-    const b = await fetch(`${VULA_API}/v1/bookings/${tenantId}?from=${encodeURIComponent(from)}`).then(r => r.json()).catch(() => ({}));
-    const weekEnd = shift(weekStart, 7);
-    setWeekBookings((b.bookings || []).filter(x => (x.start_at || "").slice(0, 10) < weekEnd));
-  }, [tenantId, weekStart]);
-
-  const loadServices = useCallback(async () => {
-    const d = await fetch(`${VULA_API}/v1/bookings/${tenantId}/services?all=true`).then(r => r.json()).catch(() => ({}));
-    setServices(d.services || []);
-  }, [tenantId]);
-
-  const loadSettings = useCallback(async () => {
-    const d = await fetch(`${VULA_API}/v1/bookings/${tenantId}/settings`).then(r => r.json()).catch(() => ({}));
-    setSettings(d.settings || null);
-  }, [tenantId]);
-
-  useEffect(() => { loadDay(); }, [loadDay]);
-  useEffect(() => { if (view === "week") loadWeek(); }, [view, loadWeek]);
-  useEffect(() => { loadServices(); }, [loadServices]);
-  useEffect(() => { if (view === "settings") loadSettings(); }, [view, loadSettings]);
-
-  const setStatus = async (id, status) => {
-    await fetch(`${VULA_API}/v1/bookings/${tenantId}/${id}/status`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    });
-    loadDay();
-  };
-
-  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
+// data + actions in bookings/useBookings.js (shared with bookings/BookingsV2.jsx)
+function BookingsV1({ tenantId }) {
+  const {
+    view, setView, date, setDate, bookings, weekBookings, weekStart, services, avail, settings, setSettings,
+    busy, setBusy, msg, flash, loadDay, loadServices, setStatus,
+  } = useBookings(tenantId);
 
   return (
     <div style={{ color: C.text }}>
@@ -193,15 +140,7 @@ function QuickBook({ tenantId, date, services, avail, busy, setBusy, onBooked, f
   const book = async () => {
     if (!f.start) return flash("Pick a time");
     setBusy(true);
-    const svc = services.find(s => s.id === f.service_id);
-    const r = await fetch(`${VULA_API}/v1/bookings/${tenantId}`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        start: `${date}T${f.start}`, service_id: f.service_id || null,
-        service_name: svc?.name, customer_name: f.customer_name,
-        customer_phone: f.customer_phone, notes: f.notes, channel: "dashboard",
-      }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
+    const r = await bookSlot(tenantId, date, f, services);
     setBusy(false);
     if (r.error) return flash(r.error);
     setF({ start: "", service_id: "", customer_name: "", customer_phone: "", notes: "" });
@@ -237,14 +176,12 @@ function QuickBook({ tenantId, date, services, avail, busy, setBusy, onBooked, f
 function ServicesTab({ tenantId, services, reload, flash }) {
   const [f, setF] = useState({ name: "", duration_min: 30, price_cents: 0, active: true });
   const save = async (body) => {
-    const r = await fetch(`${VULA_API}/v1/bookings/${tenantId}/services`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
+    const r = await saveService(tenantId, body);
     if (r.error) return flash(r.error);
     reload();
   };
   const del = async (id) => {
-    await fetch(`${VULA_API}/v1/bookings/${tenantId}/services/${id}`, { method: "DELETE" });
+    await deleteService(tenantId, id);
     reload();
   };
   return (
@@ -278,14 +215,7 @@ function SettingsTab({ tenantId, settings, onSaved }) {
     setS({ ...s, workdays: [...days].sort() });
   };
   const save = async () => {
-    const r = await fetch(`${VULA_API}/v1/bookings/${tenantId}/settings`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        slot_minutes: +s.slot_minutes, workdays: s.workdays, open_time: s.open_time,
-        close_time: s.close_time, buffer_min: +s.buffer_min, lead_hours: +s.lead_hours,
-        horizon_days: +s.horizon_days,
-      }),
-    }).then(r => r.json()).catch(() => ({}));
+    const r = await saveRules(tenantId, s);
     if (r.settings) onSaved(r.settings);
   };
   return (
@@ -315,8 +245,6 @@ function SettingsTab({ tenantId, settings, onSaved }) {
 
 const Row = ({ children }) => <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>{children}</div>;
 const Field = ({ label, children }) => <div><div style={lbl}>{label}</div>{children}</div>;
-
-function shift(d, n) { const x = new Date(d + "T12:00:00"); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); }
 
 const btn = { padding: "8px 14px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
 const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };

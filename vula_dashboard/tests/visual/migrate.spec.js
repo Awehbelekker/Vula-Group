@@ -241,3 +241,80 @@ test("team: access chips toggle with the same PATCH; Stock sits under Operate", 
   const owner = page.locator(".vtm-member", { hasText: "Demo Owner" });
   await expect(owner.getByText("Full access (owner / manager)")).toBeVisible();
 });
+
+const PRODUCTS = { name: "products", role: "owner", nav: "Sell", tab: "Products", ready: "Everything you sell, by category" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`products ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, PRODUCTS, { viewport, theme });
+      await expect(page.getByText("Sourdough loaf", { exact: true })).toBeVisible();
+      await check(page, ti, "products", `${vp}-${theme}`, viewport);
+      await page.getByRole("button", { name: "Edit Smoked snoek pâté (200g)" }).click();
+      await expect(page.getByRole("dialog", { name: "Smoked snoek pâté (200g)" })).toBeVisible();
+      await page.screenshot({ path: out(ti, `products-edit-${vp}-${theme}.png`), animations: "disabled" });
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("products: price saves in integer cents; the stock switch and star send the same PATCH", async ({ page }) => {
+  await openScreen(page, PRODUCTS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const price = page.getByLabel("Price for Sourdough loaf, in rand");
+  const priced = page.waitForRequest((r) => r.method() === "PATCH" && /\/admin\/products\/p-02$/.test(new URL(r.url()).pathname));
+  await price.fill("69.90");
+  await price.press("Enter");
+  expect((await priced).postDataJSON()).toEqual({ price_cents: 6990 });
+  const stocked = page.waitForRequest((r) => r.method() === "PATCH" && /\/admin\/products\/p-02$/.test(new URL(r.url()).pathname));
+  await page.getByRole("switch", { name: "Sourdough loaf in stock" }).click();
+  expect((await stocked).postDataJSON()).toEqual({ in_stock: false });
+  const starred = page.waitForRequest((r) => r.method() === "PATCH" && /\/admin\/products\/p-02$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Mark Sourdough loaf catch of the day" }).click();
+  expect((await starred).postDataJSON()).toEqual({ is_daily_catch: true });
+  await page.getByRole("button", { name: "Fresh fish" }).click();
+  await expect(page.locator(".vpr-row")).toHaveCount(1);
+});
+
+const BOOKINGS = { name: "bookings", role: "owner", modules: ["bookings"], nav: "Sell", tab: "Bookings", ready: "Appointments, the services people can book" };
+
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`bookings ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, BOOKINGS, { viewport, theme });
+      await expect(page.getByText("Fatima Adams", { exact: false }).first()).toBeVisible();
+      await check(page, ti, "bookings", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Week" }).click();
+      await expect(page.getByRole("button", { name: /^Sat 2026-10-17: 3 appointments/ })).toBeVisible();
+      await check(page, ti, "bookings-week", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Availability" }).click();
+      await expect(page.getByRole("group", { name: "Working days" })).toBeVisible();
+      await check(page, ti, "bookings-rules", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("bookings: book a free slot and mark one done — same POST bodies", async ({ page }) => {
+  await openScreen(page, BOOKINGS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.locator(".vbk-qb")).toHaveAttribute("open", "");      // open on desktop
+  await page.getByLabel("Time").selectOption("12:00");
+  await page.getByLabel("Service").selectOption("svc-2");
+  await page.getByLabel("Customer name").fill("Nomsa Dlamini");
+  const booked = page.waitForRequest((r) => r.method() === "POST" && /^\/v1\/bookings\/[^/]+$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Book", exact: true }).click();
+  expect((await booked).postDataJSON()).toEqual({ start: "2026-10-17T12:00", service_id: "svc-2", service_name: "Catering consult",
+    customer_name: "Nomsa Dlamini", customer_phone: "", notes: "", channel: "dashboard" });
+  const done = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/bookings\/[^/]+\/bk-1\/status$/.test(new URL(r.url()).pathname));
+  await page.locator(".vbk-appt", { hasText: "Fatima Adams" }).getByRole("button", { name: "Done" }).click();
+  expect((await done).postDataJSON()).toEqual({ status: "completed" });
+  await page.getByRole("tab", { name: "Week" }).click();
+  await page.getByRole("button", { name: /^Sun 2026-10-18/ }).click();
+  await expect(page.getByText("Marco Rossi")).toBeVisible();
+});
+
+test("bookings on a phone: the day's list comes first; New booking opens the form", async ({ page }) => {
+  await openScreen(page, BOOKINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await expect(page.getByLabel("Time")).toBeHidden();
+  await page.getByText("New booking").click();
+  await expect(page.getByLabel("Time")).toBeVisible();
+});
