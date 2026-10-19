@@ -803,3 +803,42 @@ export const masterUsers = { users: [
   { user_id: "u-staff", email: "counter@harbourvine.example.test", tenant_id: "demo-shop", role: "staff", created_at: "2026-07-14T09:00:00+02:00" },
   { user_id: "u-master", email: "operator@vula.example.test", tenant_id: "master", role: "master", created_at: "2026-01-05T08:00:00+02:00" },
 ] };
+
+// ── Master › Onboard, Knowledge, Benchmark, Conversations, Models (master.py) ─────────────────
+export const signups = { signups: [
+  { company_name: "Muizenberg Surf Co", contact_name: "Lindiwe Khumalo", email: "lindiwe@surfco.example.test", whatsapp: "+27820000201", industry: "retail", plan: "growth" },
+] };
+export const learnedAnswers = { candidates: [
+  { id: "la-1", tenant_id: "demo-shop", tenant_display_name: TENANT_NAME, source: "web_research",
+    question: "Do I need a liquor licence to sell wine with a catering platter in the Western Cape?",
+    answer: "Yes — selling alcohol, even bundled with food, needs a licence under the Western Cape Liquor Act (2008). A special event licence covers once-off functions." },
+  { id: "la-2", tenant_id: "demo-build", tenant_display_name: "Ridgeline Renovations", source: "tenant_review",
+    question: "How long does plaster need before painting?", answer: "About a week per 3 mm in normal weather; damp-test first." },
+] };
+export const goLive = { status: "done", passed: 10, total: 12, pass_pct: 83, ready: false, failures: [
+  { prompt: "What did we make last month?", why: ["Invented a figure (R 84 000) not in the books"], answer: "You made about R 84 000 last month." },
+] };
+export const benchmark = {
+  latest: { components: [
+    { component: "routing", passed: 41, total: 50, pass_pct: 82, judge_avg: null, p50_secs: 0.4 },
+    { component: "commerce_admin", passed: 23, total: 25, pass_pct: 92, judge_avg: 4.4, p50_secs: 6.1 },
+  ], gaps: [{ id: "g-1", component: "routing", prompt: "add 2 boxes of tiles to the Clifton quote", why: ["Routed to reasoning, expected commerce_admin"], answer: "" }] },
+  runs: [{ id: "br-1", created_at: "2026-10-16T21:00:00+02:00", skill: null, status: "done", passed: 64, total: 75, secs: 412, judge_cost_usd: 0.83 }],
+};
+export const conversationCheck = { totals: { replies: 128, flagged: 4 }, tenants: [
+  { tenant_id: "demo-shop", replies: 74, flagged: 3, unfollowed_promises: 1, counts: { promise: 1, cant_answer: 2, repeat: 0 },
+    examples: { promise: [{ question: "Can you do a platter for 12 on Saturday?", reply: "Let me check with the team and come back to you.", next: "No escalation raised" }],
+      cant_answer: [{ question: "Do you have gluten-free rye?", reply: "I couldn't find that in your catalogue." }] } },
+  { tenant_id: "demo-bakery", replies: 54, flagged: 1, unfollowed_promises: 0, counts: { caveat: 1 }, examples: { caveat: [{ question: "Price for 3 dozen?", reply: "R 540 (checker: confirm the dozen price)." }] } },
+] };
+export const evalCandidates = { candidates: ["openrouter/anthropic/claude-haiku-5-5", "openrouter/openai/gpt-mini", "openrouter/qwen/qwen3-32b"],
+  openrouter_configured: true, current: { model_worker_cloud: "openrouter/anthropic/claude-haiku-5-5", model_worker_cheap: "openrouter/qwen/qwen3-32b", cloud_model_by_task: null } };
+export const evalReports = { reports: [
+  { id: "ev-1", created_at: "2026-10-16T14:10:00+02:00", model: "openrouter/anthropic/claude-haiku-5-5", skill: null, status: "done", passed: 46, total: 50,
+    p50_secs: 1.8, p95_secs: 4.2, cost_per_100_usd: 0.41, errors: 0, failures: [{ prompt: "mark INV-0207 paid", expect: "mark_invoice_paid", got: "list_invoices" }] },
+  { id: "ev-2", created_at: "2026-10-16T14:10:00+02:00", model: "openrouter/qwen/qwen3-32b", skill: null, status: "done", passed: 31, total: 50,
+    p50_secs: 2.6, p95_secs: 7.9, cost_per_100_usd: 0.05, errors: 2, failures: [] },
+] };
+export const feedbackCases = { cases: [
+  { id: "fb-1", tenant_id: "demo-shop", question: "how much did I spend on dairy", routes_to: "reasoning", correction: "Should use finance_admin", yaml: "- prompt: how much did I spend on dairy\n  expect: reasoning" },
+] };
