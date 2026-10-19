@@ -81,7 +81,8 @@ def tenant_overview() -> dict:
             **{k: c.get(k) for k in ("tenant_id", "display_name", "business_type", "modules",
                                      "theme", "active", "plan", "store_url",
                                      "default_payment_provider",
-                                     "share_knowledge_with_network", "spend_cap_usd") if k in c},
+                                     "share_knowledge_with_network", "spend_cap_usd",
+                                     "ui_v2") if k in c},
             "paid": s.get("paid"), "signup_status": s.get("status"),
             "trial_ends": s.get("trial_ends"), "signup_email": s.get("email"),
             "logins": user_counts.get(c["tenant_id"], 0),
@@ -153,11 +154,14 @@ def _health(t: dict) -> dict:
 @router.patch("/tenants/{tenant_id}")
 async def master_update_tenant(tenant_id: str, body: dict,
                                identity: dict = Depends(require_master)):
-    """Update a tenant's config (modules, display_name, theme, active). Audited."""
+    """Update a tenant's config (modules, display_name, theme, active, the dashboard design).
+    Audited."""
     allowed = {"display_name", "business_type", "modules", "theme", "active", "plan",
                "store_url", "default_payment_provider", "share_knowledge_with_network",
-               "spend_cap_usd"}
+               "spend_cap_usd", "ui_v2"}
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
+    if "ui_v2" in patch:   # the redesigned dashboard on/off for this one business (215 / 217)
+        patch["ui_v2"] = bool(patch["ui_v2"])
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
     from vula.api import tenants as _t

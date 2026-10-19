@@ -27,6 +27,7 @@ NO_PROBE = {
     "192": "storage bucket visibility + a storage policy — no public-schema table or column",
     "193": "storage policies + a policy helper function — no public-schema table or column",
     "216": "widens the commerce_expenses status CHECK only — no table or column to probe",
+    "217": "changes a column default and backfills ui_v2 — 215's sentinel already probes the column",
 }
 
 

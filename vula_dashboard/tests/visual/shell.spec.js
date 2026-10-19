@@ -77,3 +77,14 @@ test("Add offers only what the role may use; a sub-tab opens straight from searc
   await expect(page.locator('[role=tab][data-tab="invoices"][aria-selected="true"]')).toBeVisible();   // the Money section tab (the list has its own "Invoices" type tab)
   await expect(page.locator(".v2-title")).toHaveText("Money");
 });
+
+test("Master can put one business back on the old design", async ({ page }) => {
+  await openScreen(page, { name: "master", role: "master", nav: "Master", ready: "need attention ·" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("button", { name: "Manage" }).first().click();
+  const box = page.getByRole("checkbox", { name: /New dashboard design/ });
+  await expect(box).toBeChecked();             // on for every business since migration 217
+  await box.uncheck();
+  const patch = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/master\/tenants\/[^/]+$/.test(r.url()));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  expect((await patch).postDataJSON()).toMatchObject({ ui_v2: false });
+});

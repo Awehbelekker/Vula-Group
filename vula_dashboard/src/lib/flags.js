@@ -3,8 +3,9 @@
  *
  * Two switches, both needed:
  *   VITE_UI_V2=true            the build carries the new look at all (Vercel env var)
- *   vula_tenant_config.ui_v2   this business has been switched onto it (migration 215,
- *                              returned by GET /v1/tenants/{t}); opt-in per tenant
+ *   vula_tenant_config.ui_v2   this business is on it (migration 215, returned by
+ *                              GET /v1/tenants/{t}); on for every business since 217 —
+ *                              Master › Tenants switches one back
  * When the build has it, `?ui=v2` / `?ui=v1` in the address bar pins a preview for this device
  * (Ian checking a tenant before switching it on) — remembered until `?ui=auto`.
  * The new look itself is index.css's [data-ui="v2"] tokens, so turning this off is instant.
