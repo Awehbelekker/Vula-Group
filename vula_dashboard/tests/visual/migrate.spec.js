@@ -531,6 +531,10 @@ const CONNECTIONS = [
   ["Email (IMAP / SMTP)", "2 connected", async (page) => page.route(/\/v1\/email\/status\/[^/]+$/, okJson({ accounts: [
     { id: "ma-1", email: "hello@harbourvine.example.test", is_primary: true, send_mode: "draft", last_sync_at: "2026-10-17T09:40:00+02:00" },
     { id: "ma-2", email: "orders@harbourvine.example.test", is_primary: false, send_mode: "send", last_sync_at: null }] }))],
+  ["Shopify store", "Live updates on", async (page) => page.route(/\/admin\/shopify$/, okJson({ connected: true, shop_name: "Harbour & Vine",
+    shop_domain: "harbourvine.myshopify.com", live_updates: true, scopes: ["read_products", "read_inventory", "read_orders"],
+    last_sync_at: "2026-10-17T08:15:00+02:00", last_sync: { products_found: 64, products_created: 2, products_updated: 5, stock_changes: 11 }, sync: {} }))],
+  ["WooCommerce shop", "Connect WooCommerce"],
 ];
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -600,6 +604,29 @@ test("settings: email — a preset fills the hosts and connect sends the same bo
   await page.getByRole("button", { name: "Connect mailbox" }).click();
   expect((await post).postDataJSON()).toMatchObject({ email: "sales@harbourvine.example.test", imap_host: "imap.zoho.com", imap_port: 993,
     smtp_host: "smtp.zoho.com", smtp_port: 465, send_mode: "draft" });
+});
+
+test("settings: Shopify and WooCommerce connect send the same bodies", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await settingsSection(page, "WooCommerce shop");
+  await page.getByRole("button", { name: "Connect WooCommerce" }).click();
+  await page.getByLabel("Shop address").fill("https://www.harbourvine.example.test");
+  await page.getByLabel("Consumer key").fill("ck_fake");
+  await page.getByLabel("Consumer secret").fill("cs_fake");
+  const woo = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/woocommerce\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect WooCommerce" }).click();
+  expect((await woo).postDataJSON()).toMatchObject({ store_url: "https://www.harbourvine.example.test", consumer_key: "ck_fake", consumer_secret: "cs_fake" });
+
+  await settingsSection(page, "Shopify store");
+  await page.getByRole("button", { name: "Connect Shopify" }).click();
+  await page.getByLabel("Store address").fill("harbourvine.myshopify.com");
+  await page.getByRole("button", { name: "I have an Admin API access token (older custom app)" }).click();
+  await page.getByLabel("Admin API access token").fill("shpat_fake");
+  const shop = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/shopify\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Connect Shopify" }).click();
+  const body = (await shop).postDataJSON();
+  expect(body).toMatchObject({ shop_domain: "harbourvine.myshopify.com", access_token: "shpat_fake" });
+  expect(body.client_secret).toBeUndefined();
 });
 
 test("settings: a Microsoft sync that is failing says so", async ({ page }) => {

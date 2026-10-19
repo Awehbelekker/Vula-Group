@@ -5,10 +5,10 @@
  * secret here. Vula reads the whole catalogue (drafts, variations, every photo, stock); with a
  * Read/Write key WooCommerce tells Vula whenever a product, stock level or order changes. Keys
  * are sent once and never shown again.
+ * Data and actions: settings/connect/useStoreConnect.js (shared with the redesign's StoreConnectV2).
  */
-import { useEffect, useState } from 'react'
-import { Badge, Button, Field, Input, confirmDialog, toast } from './ui/index.jsx'
-import { VULA_API } from '../lib/authFetch'
+import { Badge, Button, Field, Input } from './ui/index.jsx'
+import { useStoreConnect } from './settings/connect/useStoreConnect'
 
 const STEPS = [
   'In WordPress, open WooCommerce › Settings › Advanced › REST API and click “Add key”.',
@@ -22,66 +22,8 @@ function when(iso) {
 }
 
 export default function VulaWooConnect({ tenantId, adminEmail }) {
-  const base = `${VULA_API}/v1/commerce/${tenantId}/admin/woocommerce`
-  const [info, setInfo] = useState(null)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ store_url: '', consumer_key: '', consumer_secret: '' })
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
-
-  async function load() {
-    try {
-      const r = await fetch(base)
-      setInfo(r.ok ? await r.json() : { connected: false })
-    } catch {
-      setInfo({ connected: false })
-    }
-  }
-
-  useEffect(() => { if (tenantId) load() }, [tenantId])
-  useEffect(() => {
-    if (!info?.sync?.running) return
-    const t = setTimeout(load, 4000)
-    return () => clearTimeout(t)
-  }, [info])
-
-  async function connect(e) {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      const body = form
-      const r = await fetch(`${base}/connect`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, connected_by: adminEmail }),
-      })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.detail || 'WooCommerce connection failed')
-      setForm({ store_url: '', consumer_key: '', consumer_secret: '' })
-      setShowForm(false)
-      toast('WooCommerce connected — reading your catalogue now.')
-      load()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function syncNow() {
-    const r = await fetch(`${base}/sync`, { method: 'POST' })
-    const data = await r.json().catch(() => ({}))
-    if (!r.ok) { toast(data.detail || 'Could not start the sync', 'danger'); return }
-    toast(data.started ? 'Reading your WooCommerce catalogue…' : 'A sync is already running.')
-    load()
-  }
-
-  async function disconnect() {
-    if (!(await confirmDialog('Disconnect WooCommerce? Your products stay in Vula, but they stop updating from your shop.'))) return
-    await fetch(base, { method: 'DELETE' })
-    toast('WooCommerce disconnected.')
-    load()
-  }
+  const { info, showForm, setShowForm, form, setForm, busy, error, setError, connect, syncNow, disconnect } =
+    useStoreConnect({ tenantId, adminEmail, store: 'woo' })
 
   if (!info) return <div style={{ fontSize: 13, color: 'var(--muted)' }}>Loading…</div>
 

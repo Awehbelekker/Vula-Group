@@ -14,10 +14,9 @@ import { Button, Card, Field, IconButton, Input, PageHeader, Select, Skeleton, S
 import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES } from '../../theme/tokens'
 import BrandPreview from './BrandPreview'
 import VulaYocoConnect from '../VulaYocoConnect'
-import VulaShopifyConnect from '../VulaShopifyConnect'
+import StoreConnectV2 from './connect/StoreConnectV2'
 import VulaShopDomain from '../VulaShopDomain'
 import WAProfileV2 from './connect/WAProfileV2'
-import VulaWooConnect from '../VulaWooConnect'
 import VulaWhatsAppConnect from '../VulaWhatsAppConnect'
 import ClickUpConnectV2 from './connect/ClickUpConnectV2'
 import OAuthConnectV2 from './connect/OAuthConnectV2'
@@ -101,13 +100,13 @@ function Section({ id, tenantId, tenantName, adminEmail }) {
     case 'learned': return <Learned tenantId={tenantId} />
     // the connect flows are the same components as today, framed in a card
     case 'payments': return <Card><VulaYocoConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} /></Card>
-    case 'shopify': return <Card><VulaShopifyConnect tenantId={tenantId} adminEmail={adminEmail} /></Card>
-    case 'woo': return <Card><VulaWooConnect tenantId={tenantId} adminEmail={adminEmail} /></Card>
+    case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />
+    case 'woo': return <StoreConnectV2 key="woo" store="woo" tenantId={tenantId} adminEmail={adminEmail} />
     case 'domain': return <Card><VulaShopDomain tenantId={tenantId} /></Card>
     case 'whatsapp': return <Card><VulaWhatsAppConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} /></Card>
     case 'waprofile': return <WAProfileV2 tenantId={tenantId} />
-    case 'google': return <OAuthConnectV2 provider="google" tenantId={tenantId} tenantName={tenantName} />
-    case 'microsoft': return <OAuthConnectV2 provider="microsoft" tenantId={tenantId} tenantName={tenantName} />
+    case 'google': return <OAuthConnectV2 key="google" provider="google" tenantId={tenantId} tenantName={tenantName} />
+    case 'microsoft': return <OAuthConnectV2 key="microsoft" provider="microsoft" tenantId={tenantId} tenantName={tenantName} />
     case 'email': return <EmailConnectV2 tenantId={tenantId} adminEmail={adminEmail} />
     case 'clickup': return <ClickUpConnectV2 tenantId={tenantId} tenantName={tenantName} />
     default: return null
