@@ -16,7 +16,8 @@ filenames and turn ids; customer phones are never printed, and question/reply te
 --show-text (for reading on your own machine — don't paste it anywhere). Not legal advice: this
 gives the facts a POPIA breach assessment needs, it doesn't make the assessment.
 
-Sources: commerce_conversation_messages (customer sessions — session_key not "admin:…") and
+Sources: commerce_conversation_messages (customer sessions — session_key not "admin:…" (WhatsApp
+admin agent) or "webadmin:…" (the dashboard's admin assistant, also staff)) and
 vula_turns (every WhatsApp message since 2026-10-06; senders not on the team).
 """
 from __future__ import annotations
@@ -44,6 +45,13 @@ def rand_figures(text: str) -> set:
     return out
 
 
+def is_staff_session(session_key) -> bool:
+    """admin:<phone> is the WhatsApp admin agent; webadmin:<id> the dashboard's admin assistant
+    (commerce.admin_assistant). Both are staff — counting webadmin as customers (2026-10-17)
+    inflated the exposure numbers."""
+    return str(session_key or "").startswith(("admin:", "webadmin:"))
+
+
 def _hash(phone: str) -> str:
     return hashlib.sha256((phone or "").encode()).hexdigest()[:10]
 
@@ -57,7 +65,7 @@ def customer_turns(tenant_id: str, since: str, limit: int) -> List[Dict[str, Any
         sessions = (db.table("commerce_conversation_sessions").select("id,session_key")
                     .eq("tenant_id", tenant_id).execute().data or [])
         cust = {s["id"]: s["session_key"] for s in sessions
-                if not str(s.get("session_key") or "").startswith("admin:")}
+                if not is_staff_session(s.get("session_key"))}
         for sid, key in cust.items():
             msgs = (db.table("commerce_conversation_messages").select("id,role,content,created_at")
                     .eq("session_id", sid).gte("created_at", since).order("created_at")
