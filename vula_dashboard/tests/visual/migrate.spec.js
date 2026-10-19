@@ -518,6 +518,7 @@ test("settings on a phone: the section list, one section, back to the list", asy
 // ── Settings › connections (settings/connect/) ──
 const okJson = (body) => (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
 const CONNECTIONS = [
+  ["Payments (Yoco)", "Test — no real money moves"],
   // [section label, what shows once it has loaded, optional routes to install first]
   ["Google (Drive & Gmail)", "Draft-only (you approve & send)", async (page) =>
     page.route(/\/v1\/google\/status\/[^/]+$/, okJson({ status: "connected", email: "owner@harbourvine.example.test" }))],
@@ -655,6 +656,21 @@ test("settings: WhatsApp disconnect asks first, then makes the same call", async
   await page.getByRole("dialog").getByRole("button", { name: "Yes" }).click();
   await del;
   await expect(page.locator(".vst-page").getByText("Not connected")).toBeVisible();
+});
+
+test("settings: Yoco — update keys sends the same body; test uses the same call", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await settingsSection(page, "Payments (Yoco)");
+  await expect(page.locator(".vst-page").getByText("Connected · test mode")).toBeVisible();
+  const test = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/yoco\/test\/[^/]+$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await test;
+  await page.getByRole("button", { name: "Update keys" }).click();
+  await page.getByLabel("Secret key").fill("  sk_test_fake  ");
+  await page.getByRole("checkbox", { name: /Register Vula’s webhook/ }).uncheck();
+  const post = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/yoco\/connect$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Update keys" }).click();
+  expect((await post).postDataJSON()).toMatchObject({ secret_key: "sk_test_fake", public_key: null, auto_register_webhook: false });
 });
 
 test("settings: a Microsoft sync that is failing says so", async ({ page }) => {

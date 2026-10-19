@@ -13,7 +13,7 @@ import {
 import { Button, Card, Field, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
 import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES } from '../../theme/tokens'
 import BrandPreview from './BrandPreview'
-import VulaYocoConnect from '../VulaYocoConnect'
+import YocoConnectV2 from './connect/YocoConnectV2'
 import StoreConnectV2 from './connect/StoreConnectV2'
 import ShopDomainV2 from './connect/ShopDomainV2'
 import WAProfileV2 from './connect/WAProfileV2'
@@ -98,8 +98,8 @@ function Section({ id, tenantId, tenantName, adminEmail }) {
     case 'hours': return <Hours tenantId={tenantId} />
     case 'delivery': return <Delivery tenantId={tenantId} />
     case 'learned': return <Learned tenantId={tenantId} />
-    // the connect flows are the same components as today, framed in a card
-    case 'payments': return <Card><VulaYocoConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} /></Card>
+    // the connections: the same flows as the current panels (settings/connect/ hooks), redesigned
+    case 'payments': return <YocoConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
     case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />
     case 'woo': return <StoreConnectV2 key="woo" store="woo" tenantId={tenantId} adminEmail={adminEmail} />
     case 'domain': return <ShopDomainV2 tenantId={tenantId} />
