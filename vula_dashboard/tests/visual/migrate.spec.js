@@ -569,6 +569,117 @@ test("master tenant detail: linking a number and pushing the catalogue send the 
   expect((await push).postDataJSON()).toEqual({});
 });
 
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`master ops ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, MASTER, { viewport, theme });
+      await page.getByRole("tab", { name: "Health" }).click();
+      await expect(page.getByText("Lease healthy")).toBeVisible();
+      await check(page, ti, "master-health", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Usage" }).click();
+      await expect(page.getByText(/US\$6\.48 · R/).locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "master-usage", `${vp}-${theme}`, viewport);
+      await page.getByRole("tab", { name: "Users" }).click();
+      await expect(page.getByText("counter@harbourvine.example.test").locator("visible=true").first()).toBeVisible();
+      await check(page, ti, "master-users", `${vp}-${theme}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("master ops: backup, digest, new login and password reset make the same calls", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("tab", { name: "Health" }).click();
+  const backup = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/qdrant-backup\/run$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Run backup now" }).click();
+  await backup;
+  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.getByText("Lowveld Cycle Works: WhatsApp token expired.", { exact: false })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Users" }).click();
+  await page.getByRole("button", { name: "New login" }).click();
+  await page.getByLabel("Tenant").selectOption("demo-bakery");
+  await page.getByLabel("Email").fill(" baker@kloof.example.test ");
+  await page.getByLabel("Role").selectOption("manager");
+  const create = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-bakery\/users$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Create login" }).click();
+  expect((await create).postDataJSON()).toEqual({ email: "baker@kloof.example.test", role: "manager" });
+
+  await page.getByRole("button", { name: "Reset the password for counter@harbourvine.example.test" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "New temp password for counter@harbourvine.example.test: demo-reset-value" })).toBeVisible();
+});
+
+const MASTER_TOOLS = [
+  // [tab, what shows once it has loaded, capture name]
+  ["Onboard", "New signups — not yet provisioned (1)", "master-onboard"],
+  ["Knowledge", "Do I need a liquor licence", "master-knowledge"],
+  ["Audit", "master_impersonate_tenant", "master-audit"],
+  ["Benchmark", "Latest scorecard — worst first", "master-benchmark"],
+  ["Conversations", "4 of 128 replies need a look", "master-conversations"],
+  ["Models", "Model bake-off", "master-models"],
+];
+for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+  for (const theme of THEMES) {
+    test(`master tools ${vp} ${theme}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, MASTER, { viewport, theme });
+      for (const [tab, ready, name] of MASTER_TOOLS) {
+        await page.getByRole("tab", { name: tab }).click();
+        await expect(page.getByText(ready, { exact: false }).locator("visible=true").first()).toBeVisible();
+        await check(page, ti, name, `${vp}-${theme}`, viewport);
+      }
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test("master tools: promote, go-live, benchmark, conversation day, retitle and bake-off send the same requests", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const req = (method, re) => page.waitForRequest((r) => r.method() === method && re.test(new URL(r.url()).pathname + new URL(r.url()).search));
+
+  await page.getByRole("tab", { name: "Onboard" }).click();
+  await page.getByRole("button", { name: "Provision Muizenberg Surf Co" }).click();
+  await expect(page.getByRole("dialog", { name: "New tenant" })).toBeVisible();
+  await expect(page.getByLabel("Tenant ID")).toHaveValue("muizenberg-surf-co");
+  await page.getByRole("dialog", { name: "New tenant" }).getByRole("button", { name: "Cancel" }).click();
+
+  await page.getByRole("tab", { name: "Knowledge" }).click();
+  const first = page.getByRole("listitem").filter({ hasText: "Do I need a liquor licence" });
+  await first.getByLabel("Promote to").selectOption("network");
+  const promote = req("POST", /\/learned-answers\/la-1\/promote$/);
+  await first.getByRole("button", { name: "Promote" }).click();
+  expect((await promote).postDataJSON()).toEqual({ target: "network" });
+
+  await page.getByRole("tab", { name: "Benchmark" }).click();
+  await page.getByLabel("Tenant").first().selectOption("demo-shop");
+  await expect(page.getByText("Invented a figure (R 84 000) not in the books")).toBeVisible();
+  const golive = req("POST", /\/v1\/master\/golive-test$/);
+  await page.getByRole("button", { name: "Run go-live test" }).click();
+  expect((await golive).postDataJSON()).toEqual({ tenant_id: "demo-shop" });
+  await page.getByLabel("Only components containing").fill("routing");
+  const bench = req("POST", /\/v1\/master\/benchmark$/);
+  await page.getByRole("button", { name: "Run benchmark" }).click();
+  expect((await bench).postDataJSON()).toEqual({ only: "routing" });
+  await page.getByRole("button", { name: /^routing/ }).click();
+  await expect(page.getByText("Routed to reasoning, expected commerce_admin")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Conversations" }).click();
+  const day = req("GET", /\/conversations\/check\?day=2026-10-15$/);
+  await page.getByLabel("Day").fill("2026-10-15");
+  await day;
+  const conv = page.locator(".vms").filter({ hasText: "Name documents from their content" }).last();
+  await conv.getByLabel("Tenant").last().selectOption("demo-build");
+  const retitle = req("POST", /\/v1\/master\/documents\/retitle$/);
+  await conv.getByRole("button", { name: "Preview" }).last().click();
+  expect((await retitle).postDataJSON()).toEqual({ tenant_id: "demo-build", apply: false });
+
+  await page.getByRole("tab", { name: "Models" }).click();
+  await page.getByRole("checkbox", { name: "openai/gpt-mini" }).uncheck();
+  await page.getByLabel("Skill").selectOption("email_admin");
+  const bake = req("POST", /\/v1\/master\/evals\/tools$/);
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  expect((await bake).postDataJSON()).toEqual({ models: ["openrouter/anthropic/claude-haiku-5-5", "openrouter/qwen/qwen3-32b"], skill: "email_admin" });
+});
+
 test("master tenants: search, create, suspend and billing send the same requests", async ({ page }) => {
   await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.getByLabel("Search tenants").fill("salon");

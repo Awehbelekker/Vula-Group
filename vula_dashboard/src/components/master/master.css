@@ -53,3 +53,43 @@
 .vms-msg { display: flex; flex-direction: column; gap: 2px; max-width: min(75%, 560px); padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); border: 1px solid var(--line); }
 .vms-msg--in { align-self: flex-start; background: var(--surface); }
 .vms-msg--out { align-self: flex-end; background: var(--surface-2); }
+
+/* Health / Usage / Users (OpsV2) */
+.vms-two { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); align-items: start; }
+.vms-plain { margin: 0; padding-left: var(--space-5); display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vms-attn { border-color: var(--warn) !important; }
+.vms-title-sm { flex: 1 1 auto; }
+.vms-link { border: none; background: none; padding: 0; min-height: 32px; color: var(--brand-text); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.vms-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vms-pre { margin: 0; white-space: pre-wrap; font: var(--fs-body)/1.5 var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
+.vms-grow { flex: 1 1 200px; min-width: 0; }
+.vms-notice { padding: var(--space-3) var(--space-4) !important; }
+
+/* Onboard / Knowledge / Benchmark / Conversations / Models (ToolsV2) */
+.vms-item { padding: var(--space-2) 0; }
+.vms-list > .vms-item + .vms-item { border-top: 1px solid var(--line); }
+.vms-block { display: block; }
+.vms-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vms-meter { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.vms-meter > span { display: block; height: 100%; border-radius: 3px; background: var(--brand); }
+.vms-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vms-step { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2) var(--space-3); padding: var(--space-2) 0; }
+.vms-step + .vms-step { border-top: 1px solid var(--line); }
+.vms-step-n { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--line); color: var(--muted); font-size: var(--fs-caption); font-weight: 600; }
+.vms-step--done .vms-step-n { background: var(--ok); border-color: var(--ok); color: var(--on-accent); }
+.vms-step--done .vms-name { color: var(--muted); }
+.vms-miss { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vms-proj { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.vms-proj-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); width: 100%; min-height: 48px; padding: var(--space-2) var(--space-4); border: none; background: none; text-align: left; color: var(--ink); font: inherit; cursor: pointer; }
+.vms-proj-head:disabled { cursor: default; }
+.vms-proj-head:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.vms-chev { flex: none; color: var(--muted); transition: transform var(--t-fast) var(--ease); }
+.vms-chev-sp { flex: none; width: 18px; }
+.vms-proj-head[aria-expanded="true"] .vms-chev { transform: rotate(90deg); }
+.vms-detail { padding: var(--space-3) var(--space-4) var(--space-4); border-top: 1px solid var(--line); background: var(--surface-2); }
+.vms-detail.vms-plain { margin: 0; padding-left: calc(var(--space-4) + var(--space-5)); }
+.vms-pad { margin: 0 var(--space-4) var(--space-3) !important; }
+.vms-quote { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); }
+.vms-renames { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; font-size: var(--fs-body); }
+.vms-renames li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: var(--space-1) 0; overflow-wrap: anywhere; }
+.vms-renames li + li { border-top: 1px solid var(--line); }

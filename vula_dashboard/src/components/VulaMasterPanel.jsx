@@ -7,12 +7,15 @@
  */
 import { useEffect, useState, Fragment, useCallback } from 'react'
 import { Brain, Building2, Coins, FlaskConical, HeartPulse, MessagesSquare, Rocket, ScrollText, Target, UserRound } from 'lucide-react'
-import { authFetch } from '../lib/authFetch'
 import { todaySA } from '../lib/dates'
-import { SectionTabs, confirmDialog } from './ui/index.jsx'
+import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import TenantsV2 from './master/TenantsV2'
+import { HealthV2, UsageV2, UsersV2 } from './master/OpsV2'
+import { AuditV2, BenchmarkV2, ConversationsCheckV2, KnowledgeV2, ModelsV2, OnboardV2 } from './master/ToolsV2'
+import { useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './master/useMasterOps'
 import TenantDetailV2 from './master/TenantDetailV2'
+import { useAdvisorPreview, useBenchmark, useConversationCheck, useGoLiveTest, useKnowledgeQueue, useMasterAudit, useMasterOnboard, useModelBakeoff, useRetitle } from './master/useMasterTools'
 import { HEALTH_COLOUR, ago, matchesTenant, sortTenants, useManageTenant, useMasterTenants } from './master/useMasterTenants'
 import VulaMasterTenantDetail from './VulaMasterTenantDetail'
 
@@ -82,6 +85,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange, 
   }, [])
 
   const Tenants = v2 ? TenantsV2 : TenantsPanel   // the redesign's list (master/TenantsV2.jsx)
+  const Onboard = v2 ? OnboardV2 : OnboardPanel
 
   if (detailTenant) {
     const Detail = v2 ? TenantDetailV2 : VulaMasterTenantDetail
@@ -95,51 +99,23 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange, 
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
       {tab === 'tenants' && <Tenants onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
         onCreated={(tenantId) => { setOnboardSelect(tenantId); setTab('onboard') }} />}
-      {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
+      {tab === 'onboard' && <Onboard onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
         selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} />}
-      {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={openDetail} />}
-      {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={openDetail} />}
-      {tab === 'users' && <UsersPanel onError={setErr} />}
-      {tab === 'knowledge' && <KnowledgePanel onError={setErr} onViewDetail={openDetail} />}
-      {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
-      {tab === 'models' && <ModelsPanel onError={setErr} />}
-      {tab === 'benchmark' && <><GoLivePanel onError={setErr} /><div style={{ height: 12 }} /><BenchmarkPanel onError={setErr} /></>}
-      {tab === 'conversations' && <ConversationsPanel onError={setErr} />}
+      {tab === 'health' && (v2 ? <HealthV2 onError={setErr} onViewDetail={openDetail} /> : <HealthPanel onError={setErr} onViewDetail={openDetail} />)}
+      {tab === 'usage' && (v2 ? <UsageV2 onError={setErr} onViewDetail={openDetail} /> : <UsagePanel onError={setErr} onViewDetail={openDetail} />)}
+      {tab === 'users' && (v2 ? <UsersV2 onError={setErr} /> : <UsersPanel onError={setErr} />)}
+      {tab === 'knowledge' && (v2 ? <KnowledgeV2 onError={setErr} onViewDetail={openDetail} /> : <KnowledgePanel onError={setErr} onViewDetail={openDetail} />)}
+      {tab === 'audit' && (v2 ? <AuditV2 onError={setErr} onViewDetail={openDetail} /> : <AuditPanel onError={setErr} onViewDetail={openDetail} />)}
+      {tab === 'models' && (v2 ? <ModelsV2 onError={setErr} /> : <ModelsPanel onError={setErr} />)}
+      {tab === 'benchmark' && (v2 ? <BenchmarkV2 onError={setErr} /> : <><GoLivePanel onError={setErr} /><div style={{ height: 12 }} /><BenchmarkPanel onError={setErr} /></>)}
+      {tab === 'conversations' && (v2 ? <ConversationsCheckV2 onError={setErr} /> : <ConversationsPanel onError={setErr} />)}
     </div>
   )
 }
 
 /* ── Onboarding cockpit — guided go-live checklist per tenant (UI overhaul P3) ── */
 function OnboardPanel({ onError, onOpenTenant, onProvision, selectTenantId, onConsumeSelect }) {
-  const [tenants, setTenants] = useState([])
-  const [selected, setSelected] = useState('')
-  const [setup, setSetup] = useState(null)
-  const [signups, setSignups] = useState([])
-
-  useEffect(() => {
-    authFetch('/v1/master/tenants').then(d => {
-      const list = d.tenants || []
-      setTenants(list)
-      if (list.length && !selected) setSelected(list[0].tenant_id)
-    }).catch(e => onError(e.message))
-    authFetch('/v1/admin/signups?limit=50').then(d => setSignups(d.signups || [])).catch(() => {})
-  }, [])  // eslint-disable-line
-
-  useEffect(() => {
-    if (!selectTenantId) return
-    setSelected(selectTenantId)
-    onConsumeSelect && onConsumeSelect()
-  }, [selectTenantId])  // eslint-disable-line
-
-  useEffect(() => {
-    if (!selected) return
-    setSetup(null)
-    authFetch(`/v1/master/tenants/${selected}/setup`).then(setSetup).catch(e => onError(e.message))
-  }, [selected])  // eslint-disable-line
-
-  const knownIds = new Set(tenants.map(t => t.tenant_id))
-  const unprovisioned = signups.filter(s => !s.tenant_id || !knownIds.has(s.tenant_id))
-
+  const { tenants, selected, setSelected, setup, unprovisioned } = useMasterOnboard({ onError, selectTenantId, onConsumeSelect })
   return (
     <div>
       {unprovisioned.length > 0 && (
@@ -359,20 +335,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
 
 /* ── Platform health ───────────────────────────────────────────────────────── */
 function HealthPanel({ onError, onViewDetail }) {
-  const [h, setH] = useState(null)
-  const [migMsg, setMigMsg] = useState('')
-  const [qb, setQb] = useState(null)
-  const [qbBusy, setQbBusy] = useState(false)
-  useEffect(() => { authFetch('/v1/master/health').then(setH).catch(e => onError(e.message)) }, [])
-  useEffect(() => { authFetch('/v1/master/qdrant-backup').then(r => setQb(r.statuses || [])).catch(e => onError(e.message)) }, [])
-  const runQdrantBackup = async () => {
-    setQbBusy(true)
-    try {
-      const r = await authFetch('/v1/master/qdrant-backup/run', { method: 'POST' })
-      if (r.error) onError(r.error)
-      else setQb(r.statuses || [])
-    } catch (e) { onError(e.message) } finally { setQbBusy(false) }
-  }
+  const { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql } = useMasterHealth({ onError })
   if (!h) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const router = h.llm_router_24h || {}
   const localPct = router.total ? Math.round((router.local / router.total) * 100) : null
@@ -504,14 +467,7 @@ function HealthPanel({ onError, onViewDetail }) {
         <div style={{ ...card, borderColor: C.amber }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <h4 style={{ ...h4, margin: 0 }}>🗄️ Migrations not yet applied</h4>
-            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={async () => {
-              try {
-                const r = await authFetch('/v1/master/migrations/pending-sql')
-                if (!r.sql) return setMigMsg('Nothing pending.')
-                await navigator.clipboard.writeText(r.sql)
-                setMigMsg(`Copied SQL for ${r.migrations.join(', ')} — paste it into the Supabase SQL editor and run once, then reload this page.`)
-              } catch (e) { onError(`Couldn't copy: ${e.message}`) }
-            }}>Copy SQL to apply</button>
+            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={copyPendingSql}>Copy SQL to apply</button>
           </div>
           <div style={{ fontSize: 12, color: C.muted, margin: '4px 0 6px' }}>
             One script of every missing migration, in order. Each one is idempotent, so it's safe to run once in the Supabase SQL editor.
@@ -532,27 +488,14 @@ function HealthPanel({ onError, onViewDetail }) {
 
 /* The Monday tenant-health email (vula/master_digest.py) — preview it, or send it now. */
 function WeeklyDigestCard({ onError }) {
-  const [text, setText] = useState(null)
-  const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
+  const { text, msg, busy, preview, send } = useWeeklyDigest({ onError })
   return (
     <div style={card}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <h4 style={{ ...h4, margin: 0 }}>📬 Weekly digest</h4>
         <span style={{ fontSize: 12, color: C.muted }}>Emailed to TEAM_EMAIL every Monday morning.</span>
-        <button style={{ ...miniBtn, marginLeft: 'auto' }} disabled={busy} onClick={async () => {
-          setBusy(true)
-          try { setText((await authFetch('/v1/master/digest')).text) } catch (e) { onError(e.message) }
-          setBusy(false)
-        }}>Preview</button>
-        <button style={miniBtn} disabled={busy} onClick={async () => {
-          setBusy(true)
-          try {
-            const r = await authFetch('/v1/master/digest/send', { method: 'POST' })
-            setMsg(r.sent ? 'Sent.' : `Not sent: ${r.reason}`)
-          } catch (e) { onError(e.message) }
-          setBusy(false)
-        }}>Send now</button>
+        <button style={{ ...miniBtn, marginLeft: 'auto' }} disabled={busy} onClick={preview}>Preview</button>
+        <button style={miniBtn} disabled={busy} onClick={send}>Send now</button>
       </div>
       {msg && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{msg}</div>}
       {text && <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'var(--font-body)' }}>{text}</pre>}
@@ -562,8 +505,7 @@ function WeeklyDigestCard({ onError }) {
 
 /* ── Usage & billing ───────────────────────────────────────────────────────── */
 function UsagePanel({ onError, onViewDetail }) {
-  const [u, setU] = useState(null)
-  useEffect(() => { authFetch('/v1/master/usage?days=14').then(setU).catch(e => onError(e.message)) }, [])
+  const { u } = useMasterUsage({ onError })
   if (!u) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const tenants = Object.entries(u.per_tenant || {})
   const rate = u.usd_zar_rate || 18
@@ -609,58 +551,7 @@ function UsagePanel({ onError, onViewDetail }) {
 
 /* ── Users ─────────────────────────────────────────────────────────────────── */
 function UsersPanel({ onError }) {
-  const [users, setUsers] = useState(null)
-  const [tenants, setTenants] = useState([])
-  const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ tenant_id: '', email: '', name: '', role: 'staff' })
-  const [busy, setBusy] = useState(null)
-  const [notice, setNotice] = useState('')
-
-  const load = () => {
-    authFetch('/v1/master/users').then(d => setUsers(d.users || [])).catch(e => onError(e.message))
-  }
-  useEffect(() => {
-    load()
-    authFetch('/v1/master/tenants').then(d => {
-      const list = d.tenants || []
-      setTenants(list)
-      if (list.length) setForm(f => ({ ...f, tenant_id: f.tenant_id || list[0].tenant_id }))
-    }).catch(() => {})
-  }, [])  // eslint-disable-line
-
-  const create = async () => {
-    if (!form.tenant_id || !form.email.trim()) return onError('tenant + email required')
-    setBusy('create')
-    try {
-      const r = await authFetch(`/v1/master/tenants/${form.tenant_id}/users`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: form.email.trim(), name: form.name.trim() || undefined, role: form.role }),
-      })
-      if (r.error) onError(r.error)
-      else {
-        setNotice(`Created ${r.email} — temp password: ${r.temp_password}`)
-        setForm(f => ({ ...f, email: '', name: '' })); setCreating(false); load()
-      }
-    } catch (e) { onError(e.message) } finally { setBusy(null) }
-  }
-
-  const reset = async (r) => {
-    setBusy(r.user_id)
-    try {
-      const d = await authFetch(`/v1/master/tenants/${r.tenant_id}/users/${r.user_id}/reset`, { method: 'POST' })
-      if (d.error) onError(d.error)
-      else setNotice(`New temp password for ${r.email || r.user_id}: ${d.temp_password}`)
-    } catch (e) { onError(e.message) } finally { setBusy(null) }
-  }
-
-  const remove = async (r) => {
-    setBusy(r.user_id)
-    try {
-      await authFetch(`/v1/master/tenants/${r.tenant_id}/users/${r.user_id}`, { method: 'DELETE' })
-      load()
-    } catch (e) { onError(e.message) } finally { setBusy(null) }
-  }
-
+  const { users, tenants, creating, setCreating, form, setForm, busy, notice, setNotice, create, reset, remove } = useMasterUsers({ onError })
   if (!users) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   return (
     <div>
@@ -721,30 +612,7 @@ function UsersPanel({ onError }) {
    reviewed answers a curator may promote into a shared collection — 'network' additionally
    requires that tenant have opted in (Tenants tab → Manage → the share checkbox above). */
 function KnowledgePanel({ onError, onViewDetail }) {
-  const [rows, setRows] = useState(null)
-  const [busy, setBusy] = useState(null)
-  const [targets, setTargets] = useState({})
-
-  const load = () => {
-    authFetch('/v1/master/learned-answers?limit=100')
-      .then(d => setRows(d.candidates || []))
-      .catch(e => onError(e.message))
-  }
-  useEffect(() => { load() }, [])  // eslint-disable-line
-
-  const promote = async (row) => {
-    const target = targets[row.id] || 'business'
-    setBusy(row.id)
-    try {
-      const r = await authFetch(`/v1/master/learned-answers/${row.id}/promote`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target }),
-      })
-      if (r.error) onError(r.error)
-      else load()
-    } catch (e) { onError(e.message) } finally { setBusy(null) }
-  }
-
+  const { rows, busy, targets, setTargets, promote } = useKnowledgeQueue({ onError })
   if (!rows) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   return (
     <div>
@@ -798,8 +666,7 @@ function KnowledgePanel({ onError, onViewDetail }) {
 
 /* ── Audit ─────────────────────────────────────────────────────────────────── */
 function AuditPanel({ onError, onViewDetail }) {
-  const [events, setEvents] = useState(null)
-  useEffect(() => { authFetch('/v1/master/audit?limit=100').then(d => setEvents(d.events || [])).catch(e => onError(e.message)) }, [])
+  const { events } = useMasterAudit({ onError })
   if (!events) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   return (
     <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
@@ -838,24 +705,7 @@ function AuditPanel({ onError, onViewDetail }) {
  * ~12 questions shaped for ONE tenant's business type, read-only, rules + judge. A tenant is ready
  * at 85%. Run before a new tenant goes live and after deploys; the result feeds its checklist. */
 function GoLivePanel({ onError }) {
-  const [tenant, setTenant] = useState('')
-  const [res, setRes] = useState(null)
-  const load = useCallback((tid) => authFetch(`/v1/master/golive-test?tenant_id=${encodeURIComponent(tid)}`)
-    .then(setRes).catch(e => onError(e.message)), [])
-  useEffect(() => {
-    if (!tenant || res?.status !== 'running') return
-    const t = setInterval(() => load(tenant), 10000)
-    return () => clearInterval(t)
-  }, [tenant, res?.status])
-  const run = async () => {
-    try {
-      const r = await authFetch('/v1/master/golive-test', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tenant_id: tenant }),
-      })
-      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
-      else load(tenant)
-    } catch (e) { onError(e.message) }
-  }
+  const { tenant, setTenant, res, setRes, load, run } = useGoLiveTest({ onError })
   return (
     <div style={card}>
       <h4 style={h4}>Go-live test (one tenant)</h4>
@@ -889,29 +739,7 @@ function GoLivePanel({ onError }) {
 }
 
 function BenchmarkPanel({ onError }) {
-  const [data, setData] = useState(null)
-  const [only, setOnly] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [open, setOpen] = useState(null)
-  const load = () => authFetch('/v1/master/benchmark').then(setData).catch(e => onError(e.message))
-  useEffect(() => { load() }, [])
-  const running = (data?.runs || []).some(r => r.status === 'running')
-  useEffect(() => {
-    if (!running) return
-    const t = setInterval(load, 15000)
-    return () => clearInterval(t)
-  }, [running])
-  const run = async () => {
-    setBusy(true)
-    try {
-      const r = await authFetch('/v1/master/benchmark', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ only: only || null }),
-      })
-      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
-      else load()
-    } catch (e) { onError(e.message) } finally { setBusy(false) }
-  }
+  const { data, only, setOnly, busy, open, setOpen, running, run } = useBenchmark({ onError })
   if (!data) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const latest = data.latest
   const tone = (pct) => pct >= 85 ? C.green : pct >= 60 ? C.amber : C.red
@@ -1008,23 +836,7 @@ const KIND_LABEL = {
 }
 
 function ConversationsPanel({ onError }) {
-  const yesterday = todaySA(-1)
-  const [day, setDay] = useState(yesterday)
-  const [data, setData] = useState(null)
-  const [open, setOpen] = useState(null)
-  const [sending, setSending] = useState(false)
-  const load = useCallback(() => {
-    setData(null)
-    authFetch(`/v1/master/conversations/check?day=${day}`).then(setData).catch(e => onError(e.message))
-  }, [day])
-  useEffect(() => { load() }, [load])
-  const send = async () => {
-    setSending(true)
-    try {
-      const r = await authFetch('/v1/master/conversations/check/send', { method: 'POST' })
-      if (!r.sent) onError(r.reason || 'Not sent')
-    } catch (e) { onError(e.message) } finally { setSending(false) }
-  }
+  const { day, setDay, data, open, setOpen, sending, send } = useConversationCheck({ onError })
   return (
     <div style={{ display: 'grid', gap: 12 }}>
       <div style={card}>
@@ -1079,10 +891,7 @@ function ConversationsPanel({ onError }) {
 }
 
 function AdvisorPreview({ onError }) {
-  const [tenant, setTenant] = useState('')
-  const [res, setRes] = useState(null)
-  const load = () => authFetch(`/v1/master/advisor/preview?tenant_id=${encodeURIComponent(tenant)}`)
-    .then(setRes).catch(e => onError(e.message))
+  const { tenant, setTenant, res, load } = useAdvisorPreview({ onError })
   return (
     <div style={card}>
       <h4 style={h4}>Weekly owner advisor — preview</h4>
@@ -1103,26 +912,7 @@ function AdvisorPreview({ onError }) {
 }
 
 function RetitlePanel({ onError }) {
-  const [tenant, setTenant] = useState('')
-  const [state, setState] = useState(null)
-  const poll = useCallback((tid) => authFetch(`/v1/master/documents/retitle?tenant_id=${encodeURIComponent(tid)}`)
-    .then(setState).catch(e => onError(e.message)), [])
-  useEffect(() => {
-    if (!tenant || state?.status !== 'running') return
-    const t = setInterval(() => poll(tenant), 5000)
-    return () => clearInterval(t)
-  }, [tenant, state?.status])
-  const start = async (apply) => {
-    if (apply && !(await confirmDialog(`Rename ${state?.items?.length || 0} documents for ${tenant}?`))) return
-    try {
-      const r = await authFetch('/v1/master/documents/retitle', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenant_id: tenant, apply }),
-      })
-      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
-      else poll(tenant)
-    } catch (e) { onError(e.message) }
-  }
+  const { tenant, setTenant, state, setState, start } = useRetitle({ onError })
   return (
     <div style={card}>
       <h4 style={h4}>Name documents from their content</h4>
@@ -1162,47 +952,7 @@ function RetitlePanel({ onError }) {
  * never leaves Railway). Every tool is stubbed and the sandbox tenant has no data, so nothing
  * touches a real business. Results decide CLOUD_MODEL_BY_TASK — a human change on Railway. */
 function ModelsPanel({ onError }) {
-  const [info, setInfo] = useState(null)
-  const [picked, setPicked] = useState([])
-  const [custom, setCustom] = useState('')
-  const [skill, setSkill] = useState('')
-  const [reports, setReports] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [open, setOpen] = useState(null)
-  const [fbCases, setFbCases] = useState(null)
-  const [copied, setCopied] = useState('')
-  const copy = (text, id) => {
-    try { navigator.clipboard.writeText(text); setCopied(id); setTimeout(() => setCopied(''), 1500) }
-    catch { onError('Copy failed — select the text instead.') }
-  }
-
-  const loadReports = () => authFetch('/v1/master/evals/reports?limit=30')
-    .then(d => setReports(d.reports || [])).catch(e => onError(e.message))
-  useEffect(() => {
-    authFetch('/v1/master/evals/candidates').then(d => { setInfo(d); setPicked(d.candidates || []) }).catch(e => onError(e.message))
-    loadReports()
-    authFetch('/v1/master/evals/feedback-cases?limit=50').then(d => setFbCases(d.cases || [])).catch(() => setFbCases([]))
-  }, [])
-  const running = (reports || []).some(r => r.status === 'running')
-  useEffect(() => {
-    if (!running) return
-    const t = setInterval(loadReports, 10000)
-    return () => clearInterval(t)
-  }, [running])
-
-  const run = async () => {
-    const models = [...picked, ...custom.split(',').map(x => x.trim()).filter(Boolean)]
-    setBusy(true)
-    try {
-      const r = await authFetch('/v1/master/evals/tools', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models, skill: skill || null }),
-      })
-      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
-      else { setCustom(''); loadReports() }
-    } catch (e) { onError(e.message) } finally { setBusy(false) }
-  }
-
+  const { info, picked, setPicked, custom, setCustom, skill, setSkill, reports, busy, open, setOpen, fbCases, copied, copy, running, run } = useModelBakeoff({ onError })
   if (!info) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const toggle = (m) => setPicked(p => p.includes(m) ? p.filter(x => x !== m) : [...p, m])
   const pct = (r) => r.total ? Math.round(100 * r.passed / r.total) : null
