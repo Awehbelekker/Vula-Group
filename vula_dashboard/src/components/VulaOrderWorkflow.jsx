@@ -2,36 +2,16 @@
  * VulaOrderWorkflow.jsx — per-tenant order workflow settings.
  * Require owner approval before fulfilment, and choose where the fulfilment ticket goes.
  */
-import { useState, useEffect } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { PAYMENT_OPTIONS, useOrderWorkflow } from "./delivery/useDelivery";
 
 const C = { surface: "var(--surface)", border: "var(--border)", accent: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
 export default function VulaOrderWorkflow({ tenantId }) {
-  const [s, setS] = useState(null);
-  const [msg, setMsg] = useState("");
-
-  useEffect(() => {
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/order-settings`)
-      .then((r) => r.json()).then((d) => setS(d.settings || {})).catch(() => setS({}));
-  }, [tenantId]);
-
-  const save = async (patch) => {
-    const next = { ...s, ...patch };
-    setS(next);
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/order-settings`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next),
-    }).then((r) => r.json()).catch(() => ({}));
-    if (d.settings) setS(d.settings);
-    setMsg("Saved ✓"); setTimeout(() => setMsg(""), 1500);
-  };
+  const { s, msg, save, methods, toggleMethod } = useOrderWorkflow(tenantId);
 
   if (!s) return null;
   const field = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 };
-  const methods = Array.isArray(s.payment_methods) ? s.payment_methods : ["online", "cod", "eft"];
-  const toggleMethod = (m, on) =>
-    save({ payment_methods: on ? [...new Set([...methods, m])] : methods.filter((x) => x !== m) });
-  const PM = [["online", "Card / online"], ["cod", "Pay on delivery"], ["eft", "EFT / bank transfer"]];
+  const PM = PAYMENT_OPTIONS;
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
