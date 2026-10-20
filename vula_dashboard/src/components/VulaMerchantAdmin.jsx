@@ -191,7 +191,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
           {tab === 'my-work' && <MyWorkSection tenantId={tenantId} v2={v2} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} v2={v2} />}
-          {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
+          {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'assistant-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'sell' && <SellSection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'sell')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
@@ -228,16 +228,16 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
 // `subtabs` is the already access/module-filtered list from navConfig (via subtabsFor above) —
 // these components never re-derive gating themselves.
 
-function AssistantSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+function AssistantSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'assistant' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'assistant' && <VulaAssistant tenantId={tenantId} />}
-      {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} />}
-      {active === 'automations' && <VulaAutomations tenantId={tenantId} />}
-      {active === 'flows' && <VulaFlowBuilder tenantId={tenantId} />}
+      {active === 'assistant' && <VulaAssistant tenantId={tenantId} v2={v2} />}
+      {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} v2={v2} />}
+      {active === 'automations' && <VulaAutomations tenantId={tenantId} v2={v2} />}
+      {active === 'flows' && <VulaFlowBuilder tenantId={tenantId} v2={v2} />}
     </div>
   )
 }
