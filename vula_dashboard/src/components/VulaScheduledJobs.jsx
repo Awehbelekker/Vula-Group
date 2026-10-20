@@ -4,41 +4,18 @@
  * chase). Times, template and on/off per job — previously hardcoded in the backend.
  * Backend: /v1/commerce/{tenant}/admin/scheduled-jobs (migration 069).
  */
-import { useEffect, useState } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { DAYS, pad, useScheduledJobs, useJobForm } from "./marketing/useScheduledJobs";
+import ScheduledJobsV2 from "./marketing/ScheduledJobsV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
-const api = (t, p, opts) => fetch(`${VULA_API}/v1/commerce/${t}/admin${p}`, opts).then(r => r.json());
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const pad = (n) => String(n).padStart(2, "0");
 
-export default function VulaScheduledJobs({ tenantId }) {
-  const [jobs, setJobs] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+export default function VulaScheduledJobs({ v2 = false, ...props }) {
+  return v2 ? <ScheduledJobsV2 {...props} /> : <ScheduledJobsV1 {...props} />;
+}
 
-  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 6000); };
-
-  const load = async () => {
-    setBusy(true);
-    const d = await api(tenantId, "/scheduled-jobs").catch(() => ({ jobs: [], approved_templates: [] }));
-    setJobs(d.jobs || []);
-    setTemplates(d.approved_templates || []);
-    setBusy(false);
-  };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [tenantId]);
-
-  const save = async (job_type, patch) => {
-    const r = await api(tenantId, "/scheduled-jobs", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_type, ...patch }),
-    }).catch(() => ({ error: "network" }));
-    if (r.detail || r.error) return flash(r.detail || r.error);
-    setJobs(js => js.map(j => (j.job_type === job_type ? { ...j, ...r } : j)));
-    flash("Saved.");
-  };
+function ScheduledJobsV1({ tenantId }) {
+  const { jobs, templates, busy, msg, save } = useScheduledJobs(tenantId);
 
   return (
     <div style={{ color: C.text, maxWidth: 860 }}>
@@ -64,25 +41,7 @@ export default function VulaScheduledJobs({ tenantId }) {
 }
 
 function JobCard({ job, templates, onSave }) {
-  const [enabled, setEnabled] = useState(job.enabled);
-  const [tpl, setTpl] = useState(job.template_name || "");
-  const [hour, setHour] = useState(job.hour ?? 8);
-  const [minute, setMinute] = useState(job.minute ?? 0);
-  const [dow, setDow] = useState(job.day_of_week ?? 4);
-  const [interval, setIntervalMin] = useState(job.interval_minutes ?? 30);
-  const [saving, setSaving] = useState(false);
-
-  const timed = job.kind === "daily" || job.kind === "weekly";
-
-  const submit = async () => {
-    setSaving(true);
-    const patch = { enabled, template_name: tpl || null };
-    if (timed) { patch.hour = Number(hour); patch.minute = Number(minute); }
-    if (job.kind === "weekly") patch.day_of_week = Number(dow);
-    if (job.kind === "interval") patch.interval_minutes = Number(interval);
-    await onSave(patch);
-    setSaving(false);
-  };
+  const { enabled, setEnabled, tpl, setTpl, hour, setHour, minute, setMinute, dow, setDow, interval, setIntervalMin, saving, timed, submit } = useJobForm(job, onSave);
 
   return (
     <div style={{ ...card, marginTop: 10, opacity: enabled ? 1 : 0.6 }}>

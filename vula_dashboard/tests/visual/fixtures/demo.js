@@ -957,3 +957,52 @@ export const importInvoices = [
   { invoice_number: "INV-003991", customer_name: "Bo-Kaap Bistro", date: "2026-09-15", total_rands: 2_310, status: "unpaid" },
 ];
 export const chatLearn = { chats: 3, messages: 412, business: "Harbour & Vine", voice_samples: 96, tone_suggested: true, answers_to_review: 7, pairs_found: 31 };
+
+// ── Broadcast (commerce.py broadcasts / segments / campaigns / wa-templates) ──
+export const broadcasts = [
+  { id: "bc-2", name: "🐟 Weekly fish specials", template_name: "weekly_specials", audience_filter: "active_30d", status: "sent",
+    created_at: at(3, "16:30"), sent_count: 184, delivered_count: 179, read_count: 142, clicked_count: 37 },
+  { id: "bc-1", name: "Spring platter offer", template_name: "promo_image", audience_filter: "all,seg:sg-1", status: "sent",
+    created_at: at(10, "17:00"), sent_count: 412, delivered_count: 398, read_count: 301, clicked_count: 64 },
+];
+export const broadcastFunnel = {
+  funnel: { sent: 184, delivered: 179, read: 142, clicked: 37, failed: 5, attributed_orders: 9, attributed_revenue_cents: 418_500 },
+  recipients: [
+    { phone: "+27820000101", status: "read", clicked_at: at(3, "16:41") },
+    { phone: "+27820000104", status: "read", clicked_at: at(3, "17:02") },
+    { phone: "+27820000199", status: "failed", error: "131026 Message undeliverable" },
+  ],
+};
+export const segments = [{ id: "sg-1", name: "Lapsed regulars", criteria: { not_ordered_within_days: 30, min_spend: 500, tags: ["vip"] } }];
+export const audienceCounts = { counts: { all: 486, active_30d: 184, high_value: 97 }, segments: { "sg-1": 42 } };
+export const campaigns = [{ id: "cp-1", name: "🔔 Reorder reminder", audience_filter: "seg:sg-1", recurrence: "weekly", next_run_at: at(-2, "16:30"), active: true }];
+export const waTemplates = [
+  { name: "weekly_specials", category: "MARKETING", status: "APPROVED", header_type: "NONE", language: "en",
+    body_text: "Hi {{1}}! This week's fresh catch is in: {{2}}. Reply to order, or STOP to opt out." },
+  { name: "promo_image", category: "MARKETING", status: "APPROVED", header_type: "IMAGE", language: "en",
+    body_text: "{{1}} Tap Shop now to have a look. Reply STOP if you'd rather not get offers." },
+  { name: "order_ready", category: "UTILITY", status: "PENDING", header_type: "NONE", language: "en", body_text: "Your order {{1}} is ready." },
+];
+export const broadcastAnalytics = {
+  days: 90,
+  totals: { broadcasts: 6, sent: 1_842, open_rate: 74.2, click_rate: 16.8, attributed_revenue_cents: 1_286_400, attributed_orders: 31 },
+  trend: [{ week: "2026-08-24", sent: 210, clicked: 31 }, { week: "2026-08-31", sent: 0, clicked: 0 }, { week: "2026-09-07", sent: 412, clicked: 64 },
+    { week: "2026-09-14", sent: 188, clicked: 22 }, { week: "2026-09-21", sent: 402, clicked: 70 }, { week: "2026-09-28", sent: 0, clicked: 0 },
+    { week: "2026-10-05", sent: 446, clicked: 81 }, { week: "2026-10-12", sent: 184, clicked: 37 }],
+  best_performing: [{ id: "bc-0", name: "Braai pack launch", click_rate: 24.1 }, { id: "bc-2", name: "Weekly fish specials", click_rate: 20.1 }],
+};
+
+// ── Marketing: email, scheduling, copy, client onboarding ──
+export const emailCampaigns = [
+  { id: "em-1", name: "September newsletter", subject: "September newsletter", audience_filter: "all", status: "sent", created_at: at(16, "09:00"), sent_count: 212, failed_count: 3 },
+];
+export const scheduledJobs = {
+  approved_templates: ["weekly_specials", "promo_image"],
+  jobs: [
+    { job_type: "delivery_briefing", label: "Delivery briefing", description: "Tomorrow's deliveries, to the owner every evening.", kind: "daily", enabled: true, hour: 18, minute: 0, template_name: null, last_fired_at: "2026-10-16T16:00:00Z" },
+    { job_type: "weekly_specials", label: "Weekly specials reminder", description: "Reminds you to send this week's specials.", kind: "weekly", enabled: true, hour: 9, minute: 30, day_of_week: 3, template_name: "weekly_specials" },
+    { job_type: "unpaid_chase", label: "Unpaid-order chase", description: "Nudges customers with an unpaid order.", kind: "interval", enabled: false, interval_minutes: 60, template_name: null },
+  ],
+};
+export const marketingSaved = [{ id: "ms-1", kind: "promo", topic: "Braai packs", body: "Braai season is here! Our braai packs are R399 this weekend only." }];
+export const onboardingStats = { total: 312, invited: 180, awaiting_reply: 64, in_progress: 12, opted_in: 41, complete: 9, opted_out: 6 };

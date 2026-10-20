@@ -1,0 +1,35 @@
+/* marketing.css — the redesigned Marketing tabs (marketing/*V2.jsx: Templates, Scheduling,
+   Campaigns, Client onboarding). Tokens only; every text holder min-width: 0. */
+
+.vmk { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 900px; }
+.vmk-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.vmk-head > .vmk-sub { flex: 1 1 280px; }
+.vmk-sub { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.vmk-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.vmk-muted svg { vertical-align: -2px; }
+.vmk-note { margin: 0; font-size: var(--fs-body); color: var(--ok-text); overflow-wrap: anywhere; }
+.vmk-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vmk-h { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vmk-mono { font-family: var(--font-mono) !important; }
+.vmk-danger { color: var(--danger-text) !important; }
+.vmk-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vmk-grow { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; color: var(--ink); }
+.vmk-end { align-self: end; }
+.vmk-trail { display: inline-flex; align-items: center; gap: var(--space-1); }
+.vmk-body-cell { display: block; max-width: 320px; white-space: normal; color: var(--muted); overflow-wrap: anywhere; }
+.vmk-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vmk-off { border-style: dashed !important; }
+.vmk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vmk-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vmk-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); align-items: end; }
+.vmk-time { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.vmk-switch { display: flex; align-items: flex-start; gap: var(--space-2); min-height: 44px; cursor: pointer; font-size: var(--fs-body); }
+.vmk-switch input { margin-top: 4px; flex: none; }
+.vmk-fieldset { margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.vmk-legend { padding: 0; margin-bottom: var(--space-1); display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vmk-button { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: flex-end;
+  padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.vmk-copy { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vmk-push { margin-left: auto; }
+.vmk-stats { display: grid; gap: var(--space-2); grid-template-columns: repeat(auto-fill, minmax(min(100%, 130px), 1fr)); }
+.vmk-button > label { flex: 1 1 150px; min-width: 0; }

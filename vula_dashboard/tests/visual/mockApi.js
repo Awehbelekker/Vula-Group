@@ -221,6 +221,40 @@ function routes(role, modules = []) {
     r("POST", `${A}/import/invoices/extract`, () => ({ invoices: F.importInvoices })),
     r("POST", `${A}/import/invoices/commit`, (m, url, req) => ({ created: (req.postDataJSON()?.invoices || []).length, skipped: 0 })),
     r("POST", `${A}/import/chats/learn`, (m, url, req) => (req.postDataJSON()?.business ? F.chatLearn : { need_sender: ["Harbour & Vine", "Thandi Mokoena"] })),
+    r("GET", `${A}/broadcasts`, () => ({ broadcasts: F.broadcasts })),
+    r("GET", `${A}/broadcasts/analytics`, () => F.broadcastAnalytics),
+    r("GET", `${A}/broadcasts/${T}/recipients`, () => F.broadcastFunnel),
+    r("POST", `${A}/broadcasts/draft`, () => ({ message: "Fresh this week: yellowtail R180/kg, snoek R95. Free delivery over R500. Reply to order!" })),
+    r("POST", `${A}/broadcasts/send`, (m, url, req) => { const b = req.postDataJSON() || {};
+      if (b.test_phone) return { sent: 1, failed: 0 };
+      return b.dry_run ? { recipient_count: 184, suppressed_count: 3, sample: [{ name: "Thandi" }, { name: "Pieter" }, { name: "Ayesha" }] }
+        : { sent: 184, failed: 0, recipient_count: 184 }; }),
+    r("POST", `${A}/broadcasts/promo`, (m, url, req) => { const b = req.postDataJSON() || {};
+      if (b.dry_run) return { recipient_count: 97, suppressed_count: 2, template_status: "APPROVED", image_url: null };
+      return b.test_phone ? { sent: 1 } : { queued: true, recipient_count: 97 }; }),
+    r("GET", `${A}/segments`, () => ({ segments: F.segments })),
+    r("POST", `${A}/segments`, () => ({ id: "sg-new" })),
+    r("DELETE", `${A}/segments/${T}`, () => ({ ok: true })),
+    r("GET", `${A}/audience-counts`, () => F.audienceCounts),
+    r("GET", `${A}/campaigns`, () => ({ campaigns: F.campaigns })),
+    r("POST", `${A}/campaigns`, () => ({ id: "cp-new" })),
+    r("DELETE", `${A}/campaigns/${T}`, () => ({ ok: true })),
+    r("GET", `${A}/wa-templates`, () => ({ templates: F.waTemplates })),
+    r("GET", `${A}/email-campaigns`, () => ({ campaigns: F.emailCampaigns })),
+    r("POST", `${A}/email-campaigns/send`, (m, url, req) => { const b = req.postDataJSON() || {};
+      if (b.test_email) return { sent: 1 };
+      return b.dry_run ? { recipient_count: 212, suppressed_count: 4, sample: [{ email: "thandi@example.test" }, { email: "pieter@example.test" }] } : { sent: 212, failed: 0 }; }),
+    r("POST", `${A}/wa-templates/standard`, () => ({ submitted: ["order_unpaid_reminder"], already_there: ["weekly_specials"], failed: [] })),
+    r("POST", `${A}/wa-templates`, () => ({ ok: true })),
+    r("DELETE", `${A}/wa-templates/${T}`, () => ({ ok: true })),
+    r("GET", `${A}/scheduled-jobs`, () => F.scheduledJobs),
+    r("POST", `${A}/scheduled-jobs`, (m, url, req) => req.postDataJSON()),
+    r("GET", `${A}/marketing/saved`, () => ({ saved: F.marketingSaved })),
+    r("POST", `${A}/marketing/saved`, () => ({ id: "ms-new" })),
+    r("DELETE", `${A}/marketing/saved/${T}`, () => ({ ok: true })),
+    r("POST", `${A}/marketing/generate`, () => ({ variants: ["Fresh off the boat: yellowtail R180/kg today only!", "Today's catch: snoek R95. Order on WhatsApp before 2pm."] })),
+    r("GET", `${A}/onboarding/status`, () => ({ stats: F.onboardingStats })),
+    r("POST", `${A}/onboarding/send-batch`, (m, url, req) => (req.postDataJSON()?.test_phone ? { sent: 1 } : { sent: req.postDataJSON()?.batch_size, failed: 0, remaining: 155 })),
     r("POST", `${A}/stock/receive`, (m, url, req) => ({ received: (req.postDataJSON()?.lines || []).length, failed: [] })),
     r("POST", `${A}/products/costs`, (m, url, req) => ({ updated: (req.postDataJSON()?.costs || []).length })),
     r("GET", `^/v1/master/usage`, () => F.masterUsage),

@@ -4,35 +4,17 @@
  * rating), previews to her own phone first, and watches the opt-in funnel fill.
  * (Distinct from VulaOnboarding.jsx, which is the Vula platform trial-signup wizard.)
  */
-import { useState, useEffect } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useClientOnboarding } from "./marketing/useClientOnboarding";
+import ClientOnboardingV2 from "./marketing/ClientOnboardingV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", text: "var(--text)", muted: "var(--muted)" };
 
-export default function VulaClientOnboarding({ tenantId }) {
-  const [stats, setStats] = useState(null);
-  const [test, setTest] = useState("");
-  const [batch, setBatch] = useState(25);
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
+export default function VulaClientOnboarding({ v2 = false, ...props }) {
+  return v2 ? <ClientOnboardingV2 {...props} /> : <ClientOnboardingV1 {...props} />;
+}
 
-  const load = () =>
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/onboarding/status`)
-      .then((r) => r.json()).then((d) => setStats(d.stats || {})).catch(() => setStats({}));
-  useEffect(() => { load(); }, [tenantId]);
-
-  const send = async (payload, label) => {
-    setBusy(true); setMsg(`${label}…`);
-    try {
-      const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/onboarding/send-batch`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-      }).then((r) => r.json());
-      if (d.error) setMsg(`⚠️ ${d.error}`);
-      else setMsg(`✓ Sent ${d.sent}${d.failed ? `, ${d.failed} failed` : ""}${d.remaining != null ? ` · ${d.remaining} left` : ""}`);
-      load();
-    } catch { setMsg("⚠️ Request failed"); }
-    setBusy(false);
-  };
+function ClientOnboardingV1({ tenantId }) {
+  const { stats, test, setTest, batch, setBatch, msg, busy, send } = useClientOnboarding(tenantId);
 
   if (!stats) return null;
   const field = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 };
