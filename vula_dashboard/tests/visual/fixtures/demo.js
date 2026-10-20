@@ -808,8 +808,17 @@ export const masterUsers = { users: [
 ] };
 
 // ── Master › Onboard, Knowledge, Benchmark, Conversations, Models (master.py) ─────────────────
+// Muizenberg is the one not yet provisioned (Master › Onboard); the rest already have a workspace
+// (their tenant_id is a known tenant), so they only show in Signups and Subscriptions.
 export const signups = { signups: [
-  { company_name: "Muizenberg Surf Co", contact_name: "Lindiwe Khumalo", email: "lindiwe@surfco.example.test", whatsapp: "+27820000201", industry: "retail", plan: "growth" },
+  { company_name: "Muizenberg Surf Co", contact_name: "Lindiwe Khumalo", email: "lindiwe@surfco.example.test", whatsapp: "+27820000201", industry: "retail", plan: "growth",
+    status: "provisioning", paid: false, trial_ends: "2026-10-12T10:00:00Z", created_at: "2026-09-20T09:00:00Z" },
+  { company_name: "Harbour & Vine Deli", contact_name: "Demo Owner", email: "owner@harbourvine.example.test", whatsapp: "+27820000001", industry: "retail", plan: "business",
+    tenant_id: "demo-shop", status: "active", paid: true, trial_ends: "2026-09-01T10:00:00Z", created_at: "2026-08-02T09:00:00Z" },
+  { company_name: "Ridgeline Renovations", contact_name: "Sam Petersen", email: "sam@ridgeline.example.test", whatsapp: "", industry: "construction", plan: "starter",
+    tenant_id: "demo-build", status: "active", paid: false, trial_ends: "2026-10-19T10:00:00Z", created_at: "2026-09-22T09:00:00Z" },
+  { company_name: "Bay Events Co", contact_name: "Naledi Mokoena", email: "naledi@bayevents.example.test", whatsapp: "+27820000301", industry: "services", plan: "growth",
+    tenant_id: "demo-shop", status: "active", paid: false, trial_ends: "2026-11-10T10:00:00Z", created_at: "2026-10-11T09:00:00Z" },
 ] };
 export const learnedAnswers = { candidates: [
   { id: "la-1", tenant_id: "demo-shop", tenant_display_name: TENANT_NAME, source: "web_research",
@@ -1162,3 +1171,10 @@ export const sitePage = (slug) => ({
   puck_data: { content: [{ type: "Hero", props: { id: "Hero-1", title: "A family deli in Sea Point", subtitle: "Cheese, bread and catering since 2014.", image: "", overlayOpacity: 55, ctaText: "Order on WhatsApp", ctaHref: "/shop", ctaText2: "", ctaHref2: "" } }], root: { props: {} } },
 });
 export const sitePageVersions = [{ id: "pv-1", title: "About us", created_at: "2026-10-12T09:30:00Z" }];
+
+// ── Master › Training KB ──
+export const trainingStatus = { seeded: true, chunks: 1842 };
+export const trainingTopics = { topics: [
+  { topic: "JBCC contracts and payment certificates", filename: "jbcc.md", chars: 18400 },
+  { topic: "Reading architectural drawings", filename: "drawings.md", chars: 12600 },
+] };

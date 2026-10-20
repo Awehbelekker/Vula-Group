@@ -26,15 +26,26 @@ export const SCREENS = [
 const HIDE_CARET = `*, *::before, *::after { caret-color: transparent !important; }`;
 
 /** The redesigned shell: sidebar on desktop, icon rail (aria-label) on tablet, More sheet on a phone. */
-async function openV2(page, label) {
+/** zone: Master HQ's sidebar workspace ("Vula's Business") to switch to before picking `label`. */
+async function openV2(page, label, zone) {
   const exact = new RegExp(`^${label}$`);
+  const pickZone = (scope) => zone && scope.getByRole("group", { name: "Workspace" }).getByRole("button", { name: zone }).click();
   if (await page.locator(".v2-shell--desktop").count()) {
+    await pickZone(page);
     await page.locator(".v2-nav-item", { has: page.locator(".v2-nav-lb", { hasText: exact }) }).first().click();
   } else if (await page.locator(".v2-shell--tablet").count()) {
-    await page.locator(`.v2-side.rail .v2-nav-item[aria-label="${label}"]`).first().click();
+    if (zone) {   // the rail has no zone switch: open the full menu, switch, pick
+      await page.getByRole("button", { name: "Open the menu" }).click();
+      const drawer = page.getByRole("dialog", { name: "Menu" });
+      await pickZone(drawer);
+      await drawer.locator(".v2-nav-item", { has: page.locator(".v2-nav-lb", { hasText: exact }) }).first().click();
+    } else {
+      await page.locator(`.v2-side.rail .v2-nav-item[aria-label="${label}"]`).first().click();
+    }
   } else {
     await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "More" }).click();
     const sheet = page.getByRole("dialog", { name: "Menu" });
+    await pickZone(sheet);
     await sheet.locator(".vui-row", { has: page.locator(".vui-row-title", { hasText: exact }) }).first().click();
     await sheet.waitFor({ state: "hidden" });
   }
@@ -56,13 +67,14 @@ export async function openScreen(page, screen, { viewport, theme }) {
   await page.locator(process.env.UI_V2 === "1" ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
 
   if (screen.nav && await page.locator(".v2-shell").count()) {
-    await openV2(page, screen.nav);
+    await openV2(page, screen.nav, screen.zone);
   } else if (screen.nav) {
     const burger = page.locator("button.vshell-burger");
     if (await burger.isVisible()) {           // < 860px: the sidebar is a drawer
       await burger.click();
       await page.locator(".vshell-side.open").waitFor();
     }
+    if (screen.zone) await page.locator(".vshell-zone-btn", { hasText: screen.zone }).first().click();
     await page.locator(".vshell-it", { has: page.locator(".vshell-lb", { hasText: new RegExp(`^${screen.nav}$`) }) }).first().click();
   }
   if (screen.tab) {
