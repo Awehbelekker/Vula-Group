@@ -240,6 +240,21 @@ def check(answer: str, *, skill: str, tenant_id: Optional[str] = None, customer:
 
 # ── seeing every model call ───────────────────────────────────────────────────
 
+def _local_timeout(kwargs: dict) -> None:
+    """A local (Ollama) call with no timeout of its own gets settings.local_call_timeout_s.
+    2026-10-20, DIGG: a slip's expense classification waited 279 s on a slow local server —
+    most callers pass no timeout, so litellm's 600 s default applied and Judy's photo took five
+    minutes to answer. Every caller already falls back (cloud, or a safe default) on an error."""
+    try:
+        from config import settings
+        from core.llm_router import is_local_model
+        if kwargs.get("timeout") is None and is_local_model(kwargs.get("model")) \
+                and settings.local_call_timeout_s:
+            kwargs["timeout"] = settings.local_call_timeout_s
+    except Exception:
+        pass
+
+
 def install() -> None:
     """Record the messages of every litellm.acompletion call made during a skill run as evidence.
     Idempotent; a no-op if litellm isn't importable."""
@@ -256,6 +271,7 @@ def install() -> None:
             saw_messages(kwargs.get("messages"))
         except Exception:
             pass
+        _local_timeout(kwargs)
         return await current(*args, **kwargs)
 
     acompletion._vula_supervised = True
