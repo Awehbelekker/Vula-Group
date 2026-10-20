@@ -286,6 +286,66 @@ test.describe("redesign: costing", () => {
   });
 });
 
+const IMPORT = { name: "import", role: "owner", nav: "Sell", tab: "Import", ready: "Paste an old WhatsApp chat" };
+
+test.describe("redesign: import", () => {
+  test.skip(!V2, "the redesign runs with UI_V2=1");
+
+  for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+    for (const theme of THEMES) {
+      test(`import ${vp} ${theme}`, async ({ page }, ti) => {
+        const errors = await openScreen(page, IMPORT, { viewport, theme });
+        await check(page, ti, "import", `${vp}-${theme}`, viewport);
+        await page.getByLabel("Chat or emails").fill("[04/09/2026, 10:12] Thandi: 2 snoek pâté and a sourdough please");
+        await page.getByRole("button", { name: "Extract orders" }).click();
+        await expect(page.getByRole("group", { name: "Order 1" })).toBeVisible();
+        await check(page, ti, "import-orders", `${vp}-${theme}`, viewport);
+        await page.getByRole("tab", { name: /Old invoices/ }).click();
+        await page.getByLabel("Invoice list").fill("INV-003983, Seaside Guesthouse, 4860.50, paid");
+        await page.getByRole("button", { name: "Extract invoices" }).click();
+        await expect(page.getByText("INV-003991").locator("visible=true").first()).toBeVisible();
+        await check(page, ti, "import-invoices", `${vp}-${theme}`, viewport);
+        expect(errors).toEqual([]);
+      });
+    }
+  }
+
+  test("import: edited orders, trimmed invoices and chat learning send the same bodies", async ({ page }) => {
+    await openScreen(page, IMPORT, { viewport: VIEWPORTS.mobile, theme: "light" });
+    const orders = capture(page, "POST", /\/import\/commit$/);
+    const invoices = capture(page, "POST", /\/import\/invoices\/commit$/);
+    const learned = capture(page, "POST", /\/import\/chats\/learn$/);
+
+    await page.getByLabel("Chat or emails").fill("chat text");
+    await page.getByRole("button", { name: "Extract orders" }).click();
+    const second = page.getByRole("group", { name: "Order 2" });
+    await second.getByLabel("Customer").fill("Lerato Khumalo");
+    await second.getByRole("checkbox", { name: "Paid" }).check();
+    await page.getByRole("group", { name: "Order 1" }).getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("button", { name: "Commit 1 order" }).click();
+    await expect.poll(() => orders.length).toBe(1);
+    expect(orders[0]).toEqual({ orders: [{ ...F.importOrders[1], customer_name: "Lerato Khumalo", paid: true }] });
+    await expect(page.getByText("1 order(s) added.")).toBeVisible();
+
+    await page.getByRole("tab", { name: /Old invoices/ }).click();
+    await page.getByLabel("Invoice list").fill("csv");
+    await page.getByRole("button", { name: "Extract invoices" }).click();
+    await page.getByRole("button", { name: "Remove invoice INV-003983" }).locator("visible=true").first().click();
+    await page.getByRole("button", { name: "Register 1 invoice" }).click();
+    await expect.poll(() => invoices.length).toBe(1);
+    expect(invoices[0]).toEqual({ invoices: [F.importInvoices[1]] });
+
+    await page.getByRole("tab", { name: /Learn from WhatsApp/ }).click();
+    await page.locator("#vim-chats").setInputFiles({ name: "WhatsApp Chat with Thandi.txt", mimeType: "text/plain", buffer: Buffer.from("[04/09/2026, 10:12] Thandi: Hi") });
+    await expect(page.getByText("1 chat ready")).toBeVisible();
+    await page.getByRole("button", { name: "Learn from these chats" }).click();
+    await page.getByRole("group", { name: "Which of these is you?" }).getByRole("button", { name: "Harbour & Vine" }).click();
+    await expect(page.getByText("Read 3 chats, 412 messages")).toBeVisible();
+    expect(learned.map((b) => b.business)).toEqual([null, "Harbour & Vine"]);
+    expect(learned[1].files).toEqual([{ name: "WhatsApp Chat with Thandi.txt", text: "[04/09/2026, 10:12] Thandi: Hi" }]);
+  });
+});
+
 test("current look: Stock still counts a scan on the shared hooks", async ({ page }) => {
   test.skip(V2, "the current look runs without UI_V2");
   await openScreen(page, { ...STOCK, nav: "Sell" }, { viewport: VIEWPORTS.desktop, theme: "light" });

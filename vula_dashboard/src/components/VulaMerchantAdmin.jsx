@@ -257,7 +257,7 @@ function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsume
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} v2={v2} />}
       {active === 'costing' && <VulaCosting tenantId={tenantId} v2={v2} />}
       {active === 'suppliers' && (v2 ? <SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} /> : <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
-      {active === 'import' && <VulaImport tenantId={tenantId} />}
+      {active === 'import' && <VulaImport tenantId={tenantId} v2={v2} />}
     </div>
   )
 }

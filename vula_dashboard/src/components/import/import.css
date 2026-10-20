@@ -1,0 +1,34 @@
+/* import.css — the redesigned Sell › Import (import/ImportV2.jsx). Tokens only; one column up to
+   820px, every text holder min-width: 0. On a phone the commit button stays above the toolbar. */
+
+.vim { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 820px; }
+.vim-sub { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.vim-body { margin: 0; font-size: var(--fs-body); color: var(--ink); }
+.vim-muted { font-size: var(--fs-caption); color: var(--muted); }
+.vim-note { margin: 0; font-size: var(--fs-body); color: var(--ok-text); overflow-wrap: anywhere; }
+.vim-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vim-h { margin: 0; display: flex; align-items: center; gap: var(--space-2); font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vim-ok { color: var(--ok-text); flex: none; }
+.vim-danger { color: var(--danger-text) !important; }
+.vim-count { font-weight: 600; color: var(--ink); }
+.vim-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vim-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vim-push { margin-left: auto; }
+.vim-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); }
+.vim-text { min-height: 180px !important; font-family: var(--font-mono) !important; font-size: var(--fs-caption) !important; }
+.vim-file { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.vim-upload { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-4); box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); color: var(--ink); font: 600 var(--fs-body)/1 var(--font-sans); cursor: pointer; }
+.vim-file:focus-visible + .vim-upload { outline: 2px solid var(--focus); outline-offset: 3px; }
+.vim-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vim-items { margin: 0; font-size: var(--fs-body); color: var(--muted); overflow-wrap: anywhere; }
+.vim-items b { color: var(--ink); }
+.vim-check { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; font-size: var(--fs-body); color: var(--ink); cursor: pointer; }
+.vim-trail { display: inline-flex; align-items: center; gap: var(--space-1); }
+.vim-facts { margin: 0; padding-left: var(--space-5); display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-body); line-height: 1.5; color: var(--ink); }
+.vim-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+@media (max-width: 767px) {
+  .vim-actions--sticky { position: sticky; bottom: calc(88px + env(safe-area-inset-bottom)); z-index: 2; padding: var(--space-3) 0;
+    background: linear-gradient(to bottom, transparent, var(--ground) 30%); }
+  .vim-actions--sticky > * { flex: 1 1 100%; }
+}

@@ -943,3 +943,17 @@ export const mfgSuggest = { suggestions: [
 export const mfgBank = { since: "2026-07-01", labour_monthly_cents: 1_860_000, overhead_monthly_cents: 942_000,
   overhead_by_account: [{ label: "Rent", monthly_cents: 650_000 }, { label: "Electricity", monthly_cents: 292_000 }],
   labour_rate_cents: 9_300, overhead_per_hour_cents: 4_710, overhead_per_batch_cents: null, overhead_per_unit_cents: null };
+
+// ── Import (commerce.py import/extract + import/invoices + import/chats/learn) ──
+export const importOrders = [
+  { customer_name: "Thandi Mokoena", customer_phone: "+27820000101", date: "2026-09-04", paid: true, delivered: true,
+    items: [{ quantity: 2, name: "Smoked snoek pâté (200g)", unit_price_rands: 89 }, { quantity: 1, name: "Sourdough loaf", unit_price_rands: 65 }],
+    total_rands: 243, delivery_address: "12 Beach Rd, Sea Point" },
+  { customer_name: "", customer_phone: "+27820000177", date: "2026-09-11", paid: false, delivered: false,
+    items: [{ quantity: 1, name: "Charcuterie board for 4" }], total_rands: null },
+];
+export const importInvoices = [
+  { invoice_number: "INV-003983", customer_name: "Seaside Guesthouse", date: "2026-08-28", total_rands: 4_860.5, status: "paid" },
+  { invoice_number: "INV-003991", customer_name: "Bo-Kaap Bistro", date: "2026-09-15", total_rands: 2_310, status: "unpaid" },
+];
+export const chatLearn = { chats: 3, messages: 412, business: "Harbour & Vine", voice_samples: 96, tone_suggested: true, answers_to_review: 7, pairs_found: 31 };
