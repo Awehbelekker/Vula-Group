@@ -1,0 +1,14 @@
+/* costing.css — Sell › Costing in the redesign (VulaCosting.jsx with v2). Only the v2 branches use
+   these classes; flag off the screen keeps its inline layout. Tokens only, phone-width safe. */
+
+.vco { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vco > p { margin: 0 !important; }
+/* a recipe line: material on its own row on a phone, then qty / unit / waste / remove */
+.vco-recipe { display: grid; gap: var(--space-2); margin-bottom: var(--space-2); align-items: center;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
+@media (max-width: 600px) {
+  .vco-recipe { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto; padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); }
+  .vco-recipe > :first-child { grid-column: 1 / -1; }
+}
+.vco-line > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.vco-trail { display: inline-flex; flex-direction: column; align-items: flex-end; gap: var(--space-1); }

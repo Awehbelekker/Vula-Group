@@ -23,7 +23,7 @@ const STOCK = { name: "stock", role: "owner", nav: "Operate", tab: "Stock", read
 const SOURDOUGH = "6001234500021";   // fixtures: the lookup answers p-02 for this code, 404 for any other
 
 /** Requests to a path, as parsed JSON bodies. */
-function capture(page, method, re) {
+function capture(page, method, re) {  // method: POST / PUT / PATCH
   const seen = [];
   page.on("request", (r) => { if (r.method() === method && re.test(new URL(r.url()).pathname)) seen.push(r.postDataJSON()); });
   return seen;
@@ -198,6 +198,91 @@ test.describe("redesign: suppliers", () => {
     await page.getByRole("button", { name: "Mark received" }).click();
     await expect.poll(() => moved.length).toBe(1);
     expect(moved[0]).toEqual(["po-1", { status: "received" }]);
+  });
+});
+
+const COSTING = { name: "costing", role: "owner", nav: "Sell", tab: "Costing", ready: "What each product really costs", modules: ["manufacturing"] };
+
+test.describe("redesign: costing", () => {
+  test.skip(!V2, "the redesign runs with UI_V2=1");
+
+  for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+    for (const theme of THEMES) {
+      test(`costing ${vp} ${theme}`, async ({ page }, ti) => {
+        const errors = await openScreen(page, COSTING, { viewport, theme });
+        await expect(page.getByText("R 34.12").first()).toBeVisible();
+        await check(page, ti, "costing", `${vp}-${theme}`, viewport);
+        await page.getByRole("button", { name: "Edit recipe" }).first().click();
+        await expect(page.getByLabel("Material 3", { exact: true })).toHaveValue("Glass jar 200ml");
+        await check(page, ti, "costing-recipe", `${vp}-${theme}`, viewport);
+        await page.getByRole("button", { name: "Cancel" }).click();
+        await page.getByRole("tab", { name: /Materials/ }).click();
+        await page.getByRole("button", { name: "Find price for Kalamata olives" }).locator("visible=true").first()
+          .or(page.getByText("Kalamata olives").locator("visible=true").first()).first().click();
+        await expect(page.getByText("KALAMATA OLIVES PITTED 2KG")).toBeVisible();
+        await check(page, ti, "costing-materials", `${vp}-${theme}`, viewport);
+        await page.getByRole("tab", { name: /Batches/ }).click();
+        await expect(page.getByText("reversed").locator("visible=true").first()).toBeVisible();
+        await check(page, ti, "costing-batches", `${vp}-${theme}`, viewport);
+        await page.getByRole("tab", { name: /Labour/ }).click();
+        await expect(page.getByText(/From your bank/)).toBeVisible();
+        await check(page, ti, "costing-settings", `${vp}-${theme}`, viewport);
+        expect(errors).toEqual([]);
+      });
+    }
+  }
+
+  test("costing: recipe, delivery, price, batch and settings send the same bodies", async ({ page }) => {
+    await openScreen(page, COSTING, { viewport: VIEWPORTS.mobile, theme: "light" });
+    const recipes = capture(page, "POST", /\/mfg\/recipes$/);
+    const received = capture(page, "POST", /\/mfg\/materials\/receive$/);
+    const priced = capture(page, "POST", /\/mfg\/materials\/m-4\/price$/);
+    const batches = capture(page, "POST", /\/mfg\/batches$/);
+    const settings = capture(page, "PUT", /\/mfg\/settings$/);
+
+    await page.getByRole("button", { name: "Edit recipe" }).first().click();
+    await expect(page.getByLabel("Material 3", { exact: true })).toHaveValue("Glass jar 200ml");
+    await page.getByRole("button", { name: "Remove material 3" }).click();
+    await page.getByRole("button", { name: "Add material" }).click();
+    await page.getByLabel("Material 3", { exact: true }).fill("Lemon");
+    await page.getByLabel("Quantity of material 3").fill("4");
+    await page.getByLabel("Unit of material 3").selectOption("each");
+    await page.getByRole("button", { name: "Save recipe" }).click();
+    await expect.poll(() => recipes.length).toBe(1);
+    expect(recipes[0]).toEqual({ product_id: "p-01", makes: 24, labour_hours: 1.5, ingredients: [
+      { material: "Smoked snoek", qty: 2.4, unit: "kg", waste_pct: 5 },
+      { material: "Cream cheese", qty: 2.4, unit: "kg", waste_pct: 0 },
+      { material: "Lemon", qty: 4, unit: "each", waste_pct: 0 },
+    ] });
+
+    await page.getByRole("tab", { name: /Materials/ }).click();
+    await page.getByLabel("Material delivered").selectOption("Smoked snoek");
+    await page.getByLabel("Amount delivered").fill("2");
+    await page.getByLabel("Total cost (R)").fill("R 290.00");
+    await page.getByRole("button", { name: "Book in" }).click();
+    await expect.poll(() => received.length).toBe(1);
+    expect(received[0]).toEqual({ material: "Smoked snoek", qty: 2, unit: "kg", total_cents: 29_000 });
+
+    await page.getByText("Kalamata olives").locator("visible=true").first().click();
+    await page.getByRole("button", { name: "Use KALAMATA OLIVES PITTED 2KG" }).click();
+    await expect.poll(() => priced.length).toBe(1);
+    expect(priced[0]).toEqual({ pick: 1 });
+
+    await page.getByRole("tab", { name: /Batches/ }).click();
+    await page.getByLabel("Product made").selectOption("p-01");
+    await page.getByLabel("Good units").fill("24");
+    await page.getByLabel("Rejects").fill("1");
+    await page.getByRole("button", { name: "Work out the cost" }).click();
+    await expect(page.getByText("R 36.01 each")).toBeVisible();
+    await page.getByRole("button", { name: "Log this batch" }).click();
+    await expect.poll(() => batches.length).toBe(1);
+    expect(batches[0]).toEqual({ product_id: "p-01", good: 24, rejects: 1, labour_hours: null });
+
+    await page.getByRole("tab", { name: /Labour/ }).click();
+    await page.getByRole("button", { name: /Labour R 93.00\/h/ }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => settings.length).toBe(1);
+    expect(settings[0]).toEqual({ labour_rate_cents: 9_300, overhead_rule: "per_labour_hour", overhead_rate_cents: 2_400 });
   });
 });
 

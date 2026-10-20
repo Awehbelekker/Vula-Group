@@ -901,3 +901,45 @@ export const supplierPurchaseOrders = [
   ...purchaseOrders.map((p) => ({ ...p, total_cents: p.id === "po-1" ? 93_000 : 0, sent_channel: p.status === "sent" ? "email" : null,
     items: p.items.map((it) => ({ ...it, name: products.find((x) => x.id === it.product_id)?.name })) })),
 ];
+
+// ── Costing (vula_mind/vula/api/manufacturing.py — Manufacturing Core, phases 2–3) ──
+const mat = (id, name, base_unit, stock_qty, unit_cost, pack_size = null, pack_unit = null) =>
+  ({ id, name, base_unit, stock_qty, unit_cost, pack_size, pack_unit });
+export const mfgOverview = {
+  ready: true,
+  settings: { labour_rate_cents: 8_500, overhead_rule: "per_labour_hour", overhead_rate_cents: 2_400 },
+  products: [{ id: "p-01", name: "Smoked snoek pâté (200g)" }, { id: "p-04", name: "Olive tapenade (150g)" }, { id: "p-08", name: "Rooibos & honey granola" }],
+  materials: [
+    mat("m-1", "Smoked snoek", "g", 4_200, "0.1450"),
+    mat("m-2", "Cream cheese", "g", 6_000, "0.0820", 1000, "g"),
+    mat("m-3", "Glass jar 200ml", "each", 96, "6.5000"),
+    mat("m-4", "Kalamata olives", "g", -250, null),
+  ],
+  recipes: [
+    { product_id: "p-01", product: "Smoked snoek pâté (200g)", recipe_version: 3, vat_registered: true,
+      expected: { good: 24, unit_cost_cents: 3_412, materials_cents: 2_655, labour_cents: 531, overhead_cents: 226, missing_costs: [],
+        lines: [{ material_id: "m-1", name: "Smoked snoek", qty_base: 2400, base_unit: "g", cost_cents: 34_800 },
+                { material_id: "m-2", name: "Cream cheese", qty_base: 2400, base_unit: "g", cost_cents: 19_680 },
+                { material_id: "m-3", name: "Glass jar 200ml", qty_base: 24, base_unit: "each", cost_cents: 15_600 }] },
+      margin: { margin_cents: 4_327, margin_pct: 55.9 },
+      runs: [{ unit_cost_cents: 3_398 }, { unit_cost_cents: 3_455 }] },
+    { product_id: "p-04", product: "Olive tapenade (150g)", recipe_version: 1, vat_registered: true,
+      expected: { good: 20, unit_cost_cents: 2_980, materials_cents: 2_300, labour_cents: 480, overhead_cents: 200, missing_costs: ["Kalamata olives"],
+        lines: [{ material_id: "m-4", name: "Kalamata olives", qty_base: 3000, base_unit: "g", cost_cents: null },
+                { material_id: "m-3", name: "Glass jar 200ml", qty_base: 20, base_unit: "each", cost_cents: 13_000 }] },
+      margin: { margin_cents: 1_455, margin_pct: 16.8 }, runs: [] },
+  ],
+  runs: [
+    { id: "run-2", product: "Smoked snoek pâté (200g)", good_qty: "24", reject_qty: "1", unit_cost: "33.98", status: "confirmed", confirmed_at: at(1, "15:10") },
+    { id: "run-1", product: "Smoked snoek pâté (200g)", good_qty: "22", reject_qty: "0", unit_cost: "34.55", status: "reversed", confirmed_at: at(6, "11:40") },
+  ],
+};
+export const mfgRecipe = { recipe: { batch_yield: "24", labour_hours: "1.5", lines: [
+  { material: "Smoked snoek", qty: "2.4", unit: "kg", waste_pct: "5" }, { material: "Cream cheese", qty: "2.4", unit: "kg", waste_pct: "0" },
+  { material: "Glass jar 200ml", qty: "24", unit: "each", waste_pct: "0" }] } };
+export const mfgSuggest = { suggestions: [
+  { key: "s-1", description: "KALAMATA OLIVES PITTED 2KG", invoice_price_cents: 31_900, supplier: "Cape Charcuterie", latest_on: "2026-10-02",
+    observations: 3, low_cents: 29_900, high_cents: 31_900, vat_note: "VAT taken off", per_unit: "R 138.70 / kg" }] };
+export const mfgBank = { since: "2026-07-01", labour_monthly_cents: 1_860_000, overhead_monthly_cents: 942_000,
+  overhead_by_account: [{ label: "Rent", monthly_cents: 650_000 }, { label: "Electricity", monthly_cents: 292_000 }],
+  labour_rate_cents: 9_300, overhead_per_hour_cents: 4_710, overhead_per_batch_cents: null, overhead_per_unit_cents: null };

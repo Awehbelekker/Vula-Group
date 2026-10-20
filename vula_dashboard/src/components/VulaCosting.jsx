@@ -7,15 +7,37 @@
  * overhead, over the good units (rejects make each good one dearer). The same steps work on
  * WhatsApp ("made 12 basins, 1 reject, 6 hours"). Every figure comes from the server.
  */
-import { useCallback, useEffect, useState } from 'react'
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, SectionTabs, Select, Skeleton, Table, confirmDialog, toast } from './ui/index.jsx'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { Boxes, Factory, FileSpreadsheet, Plus, Receipt, Settings2, Undo2, X } from 'lucide-react'
+import { Badge, Button, Card, DataTable, EmptyState, Field, IconButton, Input, PageHeader, PillTabs, SectionTabs, Select, Skeleton, StatusChip, Table, confirmDialog, toast } from './ui/index.jsx'
 import { VULA_API } from '../lib/authFetch'
+import { formatMoney } from '../lib/money'
+import { SA_TZ } from '../lib/dates'
+import './costing/costing.css'
 
 const R = c => (c == null ? '—' : `R${(c / 100).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+// The redesign (2026-10-20, UX redesign Phase F) is the same screen with the new components:
+// formatMoney, Lucide icons, PillTabs, DataTable, labelled inputs and phone-width layouts. Flag
+// off, every branch below renders exactly as before.
+const V2 = createContext(false)
+const useV2 = () => useContext(V2)
+const money2 = c => (c == null ? '—' : formatMoney(c, { cents: 'always' }))
+const useMoney = () => (useV2() ? money2 : R)
+// v2 variants for the old ones: soft → secondary, ghost → secondary
+/** Badge flag off, the redesign's StatusChip flag on. */
+function Tag({ tone, children }) {
+  return useV2() ? <StatusChip tone={tone}>{children}</StatusChip> : <Badge tone={tone}>{children}</Badge>
+}
+const vv = (v2, variant) => (v2 && (variant === 'soft' || variant === 'ghost') ? 'secondary' : variant)
 const UNITS = ['kg', 'g', 'l', 'ml', 'each', 'm', 'm2']
 const RULES = [
   ['none', 'No overhead'], ['per_labour_hour', 'Per labour hour'], ['per_run', 'Per batch'], ['per_unit', 'Per unit made'],
 ]
+
+const whenSA = (iso) => {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: SA_TZ })
+}
 
 function perUnit(m) {
   if (m.unit_cost == null) return null
@@ -31,7 +53,7 @@ function showQty(q, base) {
   return `${+n.toFixed(3)}${base === 'each' ? '' : ' ' + base}`
 }
 
-export default function VulaCosting({ tenantId }) {
+export default function VulaCosting({ tenantId, v2 = false }) {
   const base = `${VULA_API}/v1/commerce/${tenantId}/admin/mfg`
   const [data, setData] = useState(null)
   const [tab, setTab] = useState('sheets')
@@ -48,20 +70,22 @@ export default function VulaCosting({ tenantId }) {
 
   if (!data) return <Card><Skeleton height={120} /></Card>
   if (!data.ready) return (
-    <EmptyState icon="🏭" title="Costing isn't set up on this server yet">
+    <EmptyState icon="🏭" Icon={v2 ? Factory : undefined} title="Costing isn't set up on this server yet">
       {data.error ? 'Could not load costing.' : 'The costing tables are being added — check back shortly.'}
     </EmptyState>)
 
   const tabs = [
-    { id: 'sheets', label: `Cost sheets (${data.recipes.length})` },
-    { id: 'materials', label: `Materials (${data.materials.length})` },
-    { id: 'batches', label: 'Batches' },
-    { id: 'settings', label: 'Labour & overhead' },
+    { id: 'sheets', label: `Cost sheets (${data.recipes.length})`, ...(v2 ? { Icon: FileSpreadsheet } : {}) },
+    { id: 'materials', label: `Materials (${data.materials.length})`, ...(v2 ? { Icon: Boxes } : {}) },
+    { id: 'batches', label: 'Batches', ...(v2 ? { Icon: Factory } : {}) },
+    { id: 'settings', label: 'Labour & overhead', ...(v2 ? { Icon: Settings2 } : {}) },
   ]
+  const Tabs = v2 ? PillTabs : SectionTabs
   return (
-    <div>
+    <V2.Provider value={v2}>
+    <div className={v2 ? 'vco' : undefined}>
       <PageHeader title="Costing" sub="What each product really costs to make — materials, labour and overhead over the good units — and your margin." />
-      <SectionTabs tabs={tabs} active={tab} onChange={setTab} />
+      <Tabs label="Costing" tabs={tabs} active={tab} onChange={setTab} />
       {tab === 'sheets' && <Sheets data={data} call={call} reload={load} />}
       {tab === 'materials' && <Materials data={data} call={call} reload={load} base={base} />}
       {tab === 'batches' && <Batches data={data} call={call} reload={load} />}
@@ -70,11 +94,13 @@ export default function VulaCosting({ tenantId }) {
         Tip: all of this works on WhatsApp too — send <b>set up costing</b> and Vula asks one question at a time, using your invoices and bank statements. Or just say "got 2 bags concrete mix for R190", "made 12 round basins, 1 reject, 6 hours", "what does a round basin cost us?".
       </p>
     </div>
+    </V2.Provider>
   )
 }
 
 // ── Cost sheets + recipe editor ─────────────────────────────────────────────────────────
 function Sheets({ data, call, reload }) {
+  const v2 = useV2()
   const [editing, setEditing] = useState(null)   // product id
   if (editing) return <RecipeEditor data={data} call={call} productId={editing} onDone={() => { setEditing(null); reload() }} />
   const withRecipe = new Set(data.recipes.map(s => String(s.product_id)))
@@ -82,7 +108,7 @@ function Sheets({ data, call, reload }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {data.recipes.length === 0 && (
-        <EmptyState icon="🧾" title="No recipes yet">
+        <EmptyState icon="🧾" Icon={v2 ? Receipt : undefined} title="No recipes yet">
           Add what goes into one batch of a product, and Vula works out what each one costs.
         </EmptyState>)}
       {data.recipes.map(s => <SheetCard key={s.product_id} s={s} onEdit={() => setEditing(s.product_id)} />)}
@@ -100,12 +126,13 @@ function Sheets({ data, call, reload }) {
 }
 
 function SheetCard({ s, onEdit }) {
+  const v2 = useV2(), R = useMoney()
   const e = s.expected, m = s.margin
   const tone = m.margin_pct == null ? 'muted' : m.margin_pct < 20 ? 'danger' : m.margin_pct < 35 ? 'warn' : 'ok'
   return (
     <Card>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-        <b style={{ fontSize: 16 }}>{s.product}</b>
+        <b style={{ fontSize: 16, ...(v2 ? { overflowWrap: 'anywhere' } : {}) }}>{s.product}</b>
         <span style={{ color: 'var(--muted)', fontSize: 12 }}>recipe v{s.recipe_version} · one batch makes {+e.good}</span>
         <span style={{ marginLeft: 'auto', fontSize: 20, fontWeight: 700 }}>{R(e.unit_cost_cents)} <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 400 }}>each</span></span>
       </div>
@@ -116,27 +143,29 @@ function SheetCard({ s, onEdit }) {
       </div>
       <div style={{ fontSize: 12.5, color: 'var(--text)' }}>
         {e.lines.map(l => (
-          <div key={l.material_id} style={{ display: 'flex', gap: 8, padding: '2px 0' }}>
+          <div key={l.material_id} className={v2 ? 'vco-line' : undefined} style={{ display: 'flex', gap: 8, padding: '2px 0' }}>
             <span style={{ flex: 1 }}>{l.name}</span><span style={{ color: 'var(--muted)' }}>{showQty(l.qty_base, l.base_unit)}</span>
-            <span style={{ width: 90, textAlign: 'right' }}>{l.cost_cents == null ? <Badge tone="warn">no price</Badge> : R(l.cost_cents)}</span>
+            <span style={{ width: 90, textAlign: 'right' }}>{l.cost_cents == null ? <Tag tone="warn">no price</Tag> : R(l.cost_cents)}</span>
           </div>))}
       </div>
       {e.missing_costs.length > 0 && <p style={{ fontSize: 12, color: 'var(--warn)', margin: '6px 0 0' }}>Not costed yet — no price for {e.missing_costs.join(', ')}. Book a delivery for each to complete it.</p>}
       {s.runs.length > 0 && <p style={{ fontSize: 12, color: 'var(--muted)', margin: '8px 0 0' }}>Last batches: {s.runs.filter(r => r.unit_cost_cents != null).slice(0, 5).map(r => R(r.unit_cost_cents)).join(' · ')}</p>}
-      <div style={{ marginTop: 10 }}><Button variant="soft" size="sm" onClick={onEdit}>Edit recipe</Button></div>
+      <div style={{ marginTop: 10 }}><Button variant={vv(v2, 'soft')} size="sm" onClick={onEdit}>Edit recipe</Button></div>
     </Card>
   )
 }
 
 function Stat({ label, v, tone }) {
+  const v2 = useV2()
   return (
     <div style={{ background: 'var(--surface-alt)', borderRadius: 10, padding: '8px 10px' }}>
       <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</div>
-      <div style={{ fontWeight: 700, color: tone ? `var(--${tone})` : 'var(--text)' }}>{v}</div>
+      <div style={{ fontWeight: 700, color: tone ? (v2 && tone !== 'muted' ? `var(--${tone}-text)` : `var(--${tone})`) : 'var(--text)' }}>{v}</div>
     </div>)
 }
 
 function RecipeEditor({ data, call, productId, onDone }) {
+  const v2 = useV2()
   const product = data.products.find(p => String(p.id) === String(productId))
   const [makes, setMakes] = useState('1')
   const [hours, setHours] = useState('0')
@@ -173,21 +202,23 @@ function RecipeEditor({ data, call, productId, onDone }) {
       <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 12px' }}>What goes into one batch. Saving makes a new version — batches already made keep the recipe they used. A material that isn't listed yet is added without a price.</p>
       <datalist id="vula-materials">{data.materials.map(m => <option key={m.id} value={m.name} />)}</datalist>
       {lines.map((l, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px,2fr) minmax(70px,1fr) minmax(70px,1fr) minmax(70px,1fr) auto', gap: 6, marginBottom: 6 }}>
-          <Input list="vula-materials" placeholder="Material" value={l.material} onChange={e => set(i, 'material', e.target.value)} />
-          <Input type="number" step="any" min="0" placeholder="Qty" value={l.qty} onChange={e => set(i, 'qty', e.target.value)} />
-          <Select value={l.unit} onChange={e => set(i, 'unit', e.target.value)}>{UNITS.map(u => <option key={u}>{u}</option>)}<option value="bag">bag</option></Select>
-          <Input type="number" step="any" min="0" placeholder="Waste %" value={l.waste_pct} onChange={e => set(i, 'waste_pct', e.target.value)} />
-          <Button variant="ghost" size="sm" onClick={() => setLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>
+        <div key={i} className={v2 ? 'vco-recipe' : undefined} style={v2 ? undefined : { display: 'grid', gridTemplateColumns: 'minmax(140px,2fr) minmax(70px,1fr) minmax(70px,1fr) minmax(70px,1fr) auto', gap: 6, marginBottom: 6 }}>
+          <Input list="vula-materials" placeholder="Material" aria-label={`Material ${i + 1}`} value={l.material} onChange={e => set(i, 'material', e.target.value)} />
+          <Input type="number" step="any" min="0" placeholder="Qty" aria-label={`Quantity of material ${i + 1}`} value={l.qty} onChange={e => set(i, 'qty', e.target.value)} />
+          <Select value={l.unit} aria-label={`Unit of material ${i + 1}`} onChange={e => set(i, 'unit', e.target.value)}>{UNITS.map(u => <option key={u}>{u}</option>)}<option value="bag">bag</option></Select>
+          <Input type="number" step="any" min="0" placeholder="Waste %" aria-label={`Waste % of material ${i + 1}`} value={l.waste_pct} onChange={e => set(i, 'waste_pct', e.target.value)} />
+          {v2
+            ? <IconButton quiet Icon={X} label={`Remove material ${i + 1}`} onClick={() => setLines(ls => ls.filter((_, j) => j !== i))} />
+            : <Button variant="ghost" size="sm" onClick={() => setLines(ls => ls.filter((_, j) => j !== i))}>✕</Button>}
         </div>))}
-      <Button variant="ghost" size="sm" onClick={() => setLines(ls => [...ls, { material: '', qty: '', unit: 'kg', waste_pct: '' }])}>+ Add material</Button>
+      <Button variant={vv(v2, 'ghost')} size="sm" Icon={v2 ? Plus : undefined} onClick={() => setLines(ls => [...ls, { material: '', qty: '', unit: 'kg', waste_pct: '' }])}>{v2 ? 'Add material' : '+ Add material'}</Button>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginTop: 12 }}>
         <Field label="One batch makes (good units)"><Input type="number" step="any" min="0" value={makes} onChange={e => setMakes(e.target.value)} /></Field>
         <Field label="Labour hours per batch"><Input type="number" step="any" min="0" value={hours} onChange={e => setHours(e.target.value)} /></Field>
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <Button disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save recipe'}</Button>
-        <Button variant="soft" onClick={onDone}>Cancel</Button>
+        <Button variant={vv(v2, 'soft')} onClick={onDone}>Cancel</Button>
       </div>
     </Card>
   )
@@ -195,6 +226,7 @@ function RecipeEditor({ data, call, productId, onDone }) {
 
 // ── Materials ───────────────────────────────────────────────────────────────────────────
 function Materials({ data, call, reload }) {
+  const v2 = useV2()
   const [add, setAdd] = useState({ name: '', unit: 'kg', pack_size: '', pack_unit: 'kg' })
   const [rec, setRec] = useState({ material: '', qty: '', unit: 'kg', total: '' })
   const [pricing, setPricing] = useState(null)
@@ -221,33 +253,41 @@ function Materials({ data, call, reload }) {
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Table rowKey="id" rows={data.materials} empty="No materials yet — add the first below."
-        columns={[
+      {(() => {
+        const columns = [
           { key: 'name', label: 'Material' },
-          { key: 'stock', label: 'On hand', align: 'right', render: m => <span style={{ color: Number(m.stock_qty) < 0 ? 'var(--danger)' : undefined }}>{showQty(m.stock_qty, m.base_unit)}</span> },
-          { key: 'cost', label: 'Average cost', align: 'right', render: m => perUnit(m) || <Badge tone="warn">no price yet</Badge> },
+          { key: 'stock', label: 'On hand', align: 'right', render: m => <span style={{ color: Number(m.stock_qty) < 0 ? (v2 ? 'var(--danger-text)' : 'var(--danger)') : undefined }}>{showQty(m.stock_qty, m.base_unit)}</span> },
+          { key: 'cost', label: 'Average cost', align: 'right', render: m => perUnit(m) || <Tag tone="warn">no price yet</Tag> },
           { key: 'pack', label: 'Pack', render: m => m.pack_size ? `${+m.pack_size} ${m.pack_unit}` : '—' },
           { key: 'find', label: '', align: 'right', render: m => (
-            <Button variant={m.unit_cost == null ? 'soft' : 'ghost'} size="sm" onClick={() => setPricing(m)}>
+            <Button variant={vv(v2, m.unit_cost == null ? 'soft' : 'ghost')} size="sm" aria-label={v2 ? `${m.unit_cost == null ? 'Find price' : 'Change price'} for ${m.name}` : undefined}
+              onClick={e => { e.stopPropagation(); setPricing(m) }}>
               {m.unit_cost == null ? 'Find price' : 'Change price'}</Button>) },
-        ]} />
+        ]
+        return v2
+          ? <DataTable caption="Materials" rows={data.materials} columns={columns} empty="No materials yet — add the first below."
+              onRowClick={setPricing}
+              stack={{ title: m => m.name, detail: m => `On hand ${showQty(m.stock_qty, m.base_unit)}${m.pack_size ? ` · pack ${+m.pack_size} ${m.pack_unit}` : ''}`,
+                trailing: m => perUnit(m) || <Tag tone="warn">no price yet</Tag> }} />
+          : <Table rowKey="id" rows={data.materials} empty="No materials yet — add the first below." columns={columns} />
+      })()}
       {pricing && <PriceFinder m={pricing} call={call} onDone={() => { setPricing(null); reload() }} />}
       <Card>
         <b>Book a delivery</b>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '2px 0 10px' }}>What arrived and what it cost in total (excluding VAT you can claim back). The average cost updates.</p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
-          <Select value={rec.material} onChange={e => setRec({ ...rec, material: e.target.value })}>
+          <Select value={rec.material} aria-label="Material delivered" onChange={e => setRec({ ...rec, material: e.target.value })}>
             <option value="">Material…</option>{data.materials.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</Select>
-          <Input type="number" step="any" min="0" placeholder="Amount" value={rec.qty} onChange={e => setRec({ ...rec, qty: e.target.value })} />
-          <Select value={rec.unit} onChange={e => setRec({ ...rec, unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}<option value="bag">bag</option><option value="pack">pack</option></Select>
-          <Input placeholder="Total cost R" value={rec.total} onChange={e => setRec({ ...rec, total: e.target.value })} />
+          <Input type="number" step="any" min="0" placeholder="Amount" aria-label="Amount delivered" value={rec.qty} onChange={e => setRec({ ...rec, qty: e.target.value })} />
+          <Select value={rec.unit} aria-label="Unit delivered" onChange={e => setRec({ ...rec, unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}<option value="bag">bag</option><option value="pack">pack</option></Select>
+          <Input placeholder="Total cost R" aria-label="Total cost (R)" inputMode="decimal" value={rec.total} onChange={e => setRec({ ...rec, total: e.target.value })} />
           <Button disabled={busy} onClick={receive}>Book in</Button>
         </div>
       </Card>
       <Card>
         <b>Add a material</b>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginTop: 8 }}>
-          <Input placeholder="Name, e.g. Concrete mix" value={add.name} onChange={e => setAdd({ ...add, name: e.target.value })} />
+          <Input placeholder="Name, e.g. Concrete mix" aria-label="New material name" value={add.name} onChange={e => setAdd({ ...add, name: e.target.value })} />
           <Field label="Measured in"><Select value={add.unit} onChange={e => setAdd({ ...add, unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}</Select></Field>
           <Field label="Pack size (optional)"><Input type="number" step="any" min="0" placeholder="e.g. 25" value={add.pack_size} onChange={e => setAdd({ ...add, pack_size: e.target.value })} /></Field>
           <Field label="Pack unit"><Select value={add.pack_unit} onChange={e => setAdd({ ...add, pack_unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}</Select></Field>
@@ -260,6 +300,7 @@ function Materials({ data, call, reload }) {
 
 // ── Batches ─────────────────────────────────────────────────────────────────────────────
 function Batches({ data, call, reload }) {
+  const v2 = useV2(), R = useMoney()
   const [f, setF] = useState({ product_id: '', good: '', rejects: '', labour_hours: '' })
   const [preview, setPreview] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -288,12 +329,12 @@ function Batches({ data, call, reload }) {
         <b>Log a batch</b>
         {recipes.length === 0 ? <p style={{ fontSize: 13, color: 'var(--muted)' }}>Add a recipe first (Cost sheets).</p> : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, marginTop: 8 }}>
-            <Select value={f.product_id} onChange={e => { setF({ ...f, product_id: e.target.value }); setPreview(null) }}>
+            <Select value={f.product_id} aria-label="Product made" onChange={e => { setF({ ...f, product_id: e.target.value }); setPreview(null) }}>
               <option value="">Product…</option>{recipes.map(s => <option key={s.product_id} value={s.product_id}>{s.product}</option>)}</Select>
-            <Input type="number" step="any" min="0" placeholder="Good units" value={f.good} onChange={e => { setF({ ...f, good: e.target.value }); setPreview(null) }} />
-            <Input type="number" step="any" min="0" placeholder="Rejects" value={f.rejects} onChange={e => { setF({ ...f, rejects: e.target.value }); setPreview(null) }} />
-            <Input type="number" step="any" min="0" placeholder="Hours (optional)" value={f.labour_hours} onChange={e => { setF({ ...f, labour_hours: e.target.value }); setPreview(null) }} />
-            <Button variant="soft" disabled={busy} onClick={doPreview}>Work out the cost</Button>
+            <Input type="number" step="any" min="0" placeholder="Good units" aria-label="Good units" value={f.good} onChange={e => { setF({ ...f, good: e.target.value }); setPreview(null) }} />
+            <Input type="number" step="any" min="0" placeholder="Rejects" aria-label="Rejects" value={f.rejects} onChange={e => { setF({ ...f, rejects: e.target.value }); setPreview(null) }} />
+            <Input type="number" step="any" min="0" placeholder="Hours (optional)" aria-label="Labour hours (optional)" value={f.labour_hours} onChange={e => { setF({ ...f, labour_hours: e.target.value }); setPreview(null) }} />
+            <Button variant={vv(v2, 'soft')} disabled={busy} onClick={doPreview}>Work out the cost</Button>
           </div>)}
         {preview && (
           <div style={{ marginTop: 12, padding: 12, background: 'var(--surface-alt)', borderRadius: 10 }}>
@@ -302,16 +343,26 @@ function Batches({ data, call, reload }) {
             <Button disabled={busy} onClick={log}>Log this batch</Button>
           </div>)}
       </Card>
-      <Table rowKey="id" rows={data.runs} empty="No batches logged yet."
-        columns={[
-          { key: 'at', label: 'When', render: r => String(r.confirmed_at || r.created_at || '').slice(0, 16).replace('T', ' ') },
+      {(() => {
+        const when = r => v2 ? whenSA(r.confirmed_at || r.created_at) : String(r.confirmed_at || r.created_at || '').slice(0, 16).replace('T', ' ')
+        const each = r => r.unit_cost == null ? '—' : R(Math.round(Number(r.unit_cost) * 100))
+        const chip = r => <Tag tone={r.status === 'confirmed' ? 'ok' : r.status === 'reversed' ? 'muted' : 'warn'}>{r.status}</Tag>
+        const columns = [
+          { key: 'at', label: 'When', render: when },
           { key: 'product', label: 'Product' },
           { key: 'good', label: 'Good', align: 'right', render: r => +r.good_qty },
           { key: 'rej', label: 'Rejects', align: 'right', render: r => +r.reject_qty || '—' },
-          { key: 'unit', label: 'Cost each', align: 'right', render: r => r.unit_cost == null ? '—' : R(Math.round(Number(r.unit_cost) * 100)) },
-          { key: 'status', label: 'Status', render: r => <Badge tone={r.status === 'confirmed' ? 'ok' : r.status === 'reversed' ? 'muted' : 'warn'}>{r.status}</Badge> },
-          { key: 'act', label: '', render: r => r.status === 'confirmed' ? <Button variant="ghost" size="sm" onClick={() => reverse(r)}>Reverse</Button> : null },
-        ]} />
+          { key: 'unit', label: 'Cost each', align: 'right', render: each },
+          { key: 'status', label: 'Status', render: chip },
+          { key: 'act', label: '', render: r => r.status === 'confirmed'
+            ? <Button variant={vv(v2, 'ghost')} size="sm" Icon={v2 ? Undo2 : undefined} aria-label={v2 ? `Reverse the batch of ${+r.good_qty} × ${r.product}` : undefined} onClick={() => reverse(r)}>Reverse</Button> : null },
+        ]
+        return v2
+          ? <DataTable caption="Batches" rows={data.runs} columns={columns} empty="No batches logged yet."
+              stack={{ title: r => `${+r.good_qty} × ${r.product}`, detail: r => `${when(r)}${+r.reject_qty ? ` · ${+r.reject_qty} rejects` : ''} · ${each(r)} each`,
+                trailing: r => <span className="vco-trail">{chip(r)}{columns[6].render(r)}</span> }} />
+          : <Table rowKey="id" rows={data.runs} empty="No batches logged yet." columns={columns} />
+      })()}
     </div>
   )
 }
@@ -319,6 +370,7 @@ function Batches({ data, call, reload }) {
 // ── Labour & overhead ───────────────────────────────────────────────────────────────────
 // What past supplier invoices say a material costs — the owner picks one, or types what they pay.
 function PriceFinder({ m, call, onDone }) {
+  const v2 = useV2(), R = useMoney()
   const [sug, setSug] = useState(null)
   const [own, setOwn] = useState({ total: '', qty: '', unit: m.base_unit === 'g' ? 'kg' : m.base_unit === 'ml' ? 'l' : m.base_unit })
   const [busy, setBusy] = useState(false)
@@ -339,25 +391,27 @@ function PriceFinder({ m, call, onDone }) {
   return (
     <Card>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <b>Price for {m.name}</b><Button variant="ghost" size="sm" onClick={onDone}>Close</Button>
+        <b>Price for {m.name}</b>{v2
+          ? <IconButton quiet Icon={X} label="Close the price finder" onClick={onDone} />
+          : <Button variant="ghost" size="sm" onClick={onDone}>Close</Button>}
       </div>
       <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '2px 0 10px' }}>From your supplier invoices — VAT is taken off or left on depending on how each invoice was priced and whether you're VAT registered. Pick the right item, or type what you pay.</p>
       {sug == null ? <Skeleton height={60} /> : sug.length === 0
         ? <p style={{ fontSize: 13 }}>Nothing like {m.name} on your invoices yet.</p>
         : sug.map((x, i) => (
-          <div key={x.key} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
-            <div style={{ flex: 1, fontSize: 13 }}>
+          <div key={x.key} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i ? '1px solid var(--border)' : 'none', ...(v2 ? { flexWrap: 'wrap' } : {}) }}>
+            <div style={{ flex: 1, fontSize: 13, ...(v2 ? { minWidth: 180, overflowWrap: 'anywhere' } : {}) }}>
               <b>{x.description}</b> — {R(x.invoice_price_cents)}
               <div style={{ color: 'var(--muted)', fontSize: 12 }}>{[x.supplier, x.latest_on].filter(Boolean).join(' · ')}{x.observations > 1 ? ` · ${x.observations} times, ${R(x.low_cents)}–${R(x.high_cents)}` : ''}{x.vat_note ? ` · ${x.vat_note}` : ''}</div>
             </div>
             <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{x.per_unit}</span>
-            <Button size="sm" disabled={busy} onClick={() => save({ pick: i + 1 })}>Use</Button>
+            <Button size="sm" disabled={busy} aria-label={v2 ? `Use ${x.description}` : undefined} onClick={() => save({ pick: i + 1 })}>Use</Button>
           </div>))}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginTop: 12 }}>
-        <Input placeholder="Price R" value={own.total} onChange={e => setOwn({ ...own, total: e.target.value })} />
-        <Input type="number" step="any" min="0" placeholder="for how much" value={own.qty} onChange={e => setOwn({ ...own, qty: e.target.value })} />
-        <Select value={own.unit} onChange={e => setOwn({ ...own, unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}{m.pack_size ? <option value="pack">pack</option> : null}</Select>
-        <Button variant="soft" disabled={busy} onClick={saveOwn}>Set my price</Button>
+        <Input placeholder="Price R" aria-label="My price (R)" inputMode="decimal" value={own.total} onChange={e => setOwn({ ...own, total: e.target.value })} />
+        <Input type="number" step="any" min="0" placeholder="for how much" aria-label="For how much" value={own.qty} onChange={e => setOwn({ ...own, qty: e.target.value })} />
+        <Select value={own.unit} aria-label="Unit" onChange={e => setOwn({ ...own, unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}{m.pack_size ? <option value="pack">pack</option> : null}</Select>
+        <Button variant={vv(v2, 'soft')} disabled={busy} onClick={saveOwn}>Set my price</Button>
       </div>
     </Card>
   )
@@ -365,6 +419,7 @@ function PriceFinder({ m, call, onDone }) {
 
 // Labour and running costs from the bank, turned into a rate for the counts the owner gives.
 function BankSuggest({ call, onUse }) {
+  const v2 = useV2(), R = useMoney()
   const [q, setQ] = useState({ hours: '', batches: '', units: '' })
   const [b, setB] = useState(null)
   const look = useCallback(() => {
@@ -392,11 +447,11 @@ function BankSuggest({ call, onUse }) {
         <Field label="Units made a month"><Input type="number" min="0" value={q.units} onChange={e => setQ({ ...q, units: e.target.value })} /></Field>
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-        <Button variant="ghost" size="sm" onClick={look}>Work it out</Button>
-        {b.labour_rate_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ labour: b.labour_rate_cents })}>Labour {R(b.labour_rate_cents)}/h</Button>}
-        {b.overhead_per_hour_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ rule: 'per_labour_hour', rate: b.overhead_per_hour_cents })}>Overhead {R(b.overhead_per_hour_cents)}/labour hour</Button>}
-        {b.overhead_per_batch_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ rule: 'per_run', rate: b.overhead_per_batch_cents })}>Overhead {R(b.overhead_per_batch_cents)}/batch</Button>}
-        {b.overhead_per_unit_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ rule: 'per_unit', rate: b.overhead_per_unit_cents })}>Overhead {R(b.overhead_per_unit_cents)}/unit</Button>}
+        <Button variant={vv(v2, 'ghost')} size="sm" onClick={look}>Work it out</Button>
+        {b.labour_rate_cents != null && <Button variant={vv(v2, 'soft')} size="sm" onClick={() => onUse({ labour: b.labour_rate_cents })}>Labour {R(b.labour_rate_cents)}/h</Button>}
+        {b.overhead_per_hour_cents != null && <Button variant={vv(v2, 'soft')} size="sm" onClick={() => onUse({ rule: 'per_labour_hour', rate: b.overhead_per_hour_cents })}>Overhead {R(b.overhead_per_hour_cents)}/labour hour</Button>}
+        {b.overhead_per_batch_cents != null && <Button variant={vv(v2, 'soft')} size="sm" onClick={() => onUse({ rule: 'per_run', rate: b.overhead_per_batch_cents })}>Overhead {R(b.overhead_per_batch_cents)}/batch</Button>}
+        {b.overhead_per_unit_cents != null && <Button variant={vv(v2, 'soft')} size="sm" onClick={() => onUse({ rule: 'per_unit', rate: b.overhead_per_unit_cents })}>Overhead {R(b.overhead_per_unit_cents)}/unit</Button>}
       </div>
     </div>)
 }
