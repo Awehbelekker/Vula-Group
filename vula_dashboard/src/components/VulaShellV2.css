@@ -102,3 +102,9 @@
 :root[data-ui="v2"] .v2-content .vula-tabs [role="tab"] { min-height: 36px; }
 :root[data-ui="v2"] .v2-content .vula-tabs [role="tab"][aria-selected="true"] { background: var(--surface) !important; color: var(--ink) !important;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent); }
+
+/* Master "Open as tenant": the impersonation banner above the tenant's shell (App.jsx) */
+.v2-impersonate { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-4); background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--surface); color: var(--warn-text); border-bottom: 1px solid var(--warn);
+  font: 600 var(--fs-caption)/1.4 var(--font-sans); text-align: center; overflow-wrap: anywhere; }
+.v2-impersonate-why { font-weight: 400; }

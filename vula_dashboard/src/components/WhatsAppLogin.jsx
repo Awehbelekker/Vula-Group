@@ -6,81 +6,10 @@
  * person to Approve on WhatsApp and this page signs in. Anywhere else — or if they'd rather — they
  * type their WhatsApp number and get a 6-digit code. No password either way.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { supabase } from '../lib/supabase'
-import { VULA_API } from '../lib/authFetch'
-
-const isPhone = () => /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '')
-
-async function post(path, body) {
-  const r = await fetch(`${VULA_API}/v1/auth/wa${path}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  const d = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(d.detail || 'Something went wrong — try again.')
-  return d
-}
-
-async function signInWith(tokenHash) {
-  const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'email' })
-  if (error) throw error
-  return data.user
-}
+import { isPhone, useWhatsAppLogin } from './login/useWhatsAppLogin'
 
 export default function WhatsAppLogin({ onUser, styles: s }) {
-  const [qr, setQr] = useState(null)              // {id, secret, link, qr_svg, code}
-  const [state, setState] = useState('loading')   // loading | qr | waiting | code_phone | code_enter | done
-  const [msg, setMsg] = useState('')
-  const [err, setErr] = useState('')
-  const [phone, setPhone] = useState('')
-  const [code, setCode] = useState('')
-  const [codeReq, setCodeReq] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const timer = useRef(null)
-
-  const stop = () => { if (timer.current) { clearInterval(timer.current); timer.current = null } }
-
-  const startQr = useCallback(async () => {
-    stop(); setErr(''); setMsg('')
-    try {
-      const d = await post('/start', { host: window.location.hostname })
-      if (!d.available) { setState('code_phone'); return }
-      setQr(d); setState('qr')
-      timer.current = setInterval(async () => {
-        try {
-          const r = await fetch(`${VULA_API}/v1/auth/wa/status?id=${encodeURIComponent(d.id)}&secret=${encodeURIComponent(d.secret)}`)
-          const st = await r.json().catch(() => ({}))
-          if (st.status === 'awaiting_approval') { setState('waiting') }
-          else if (st.status === 'approved' && st.token_hash) {
-            stop(); setState('done'); onUser(await signInWith(st.token_hash))
-          } else if (st.status === 'denied') {
-            stop(); setErr('That login was blocked on WhatsApp.'); setState('qr')
-          } else if (st.status === 'expired' || st.status === 'used' || !r.ok) {
-            stop(); setMsg('That code expired — here is a fresh one.'); startQr()
-          }
-        } catch (e) { stop(); setErr(e.message || 'Login failed — try again.') }
-      }, 2000)
-    } catch (e) { setErr(e.message); setState('code_phone') }
-  }, [onUser])
-
-  useEffect(() => { startQr(); return stop }, [startQr])
-
-  async function sendCode(e) {
-    e.preventDefault(); setErr(''); setBusy(true)
-    try {
-      const d = await post('/code', { phone, host: window.location.hostname })
-      setCodeReq(d); setMsg(d.message); setState('code_enter')
-    } catch (e2) { setErr(e2.message) }
-    setBusy(false)
-  }
-
-  async function verify(e) {
-    e.preventDefault(); setErr(''); setBusy(true)
-    try {
-      const d = await post('/code/verify', { id: codeReq.id, secret: codeReq.secret, code })
-      setState('done'); onUser(await signInWith(d.token_hash))
-    } catch (e2) { setErr(e2.message) }
-    setBusy(false)
-  }
+  const { qr, state, setState, msg, setMsg, err, setErr, phone, setPhone, code, setCode, busy, stop, startQr, sendCode, verify } = useWhatsAppLogin({ onUser })
 
   const box = { border: '1px solid var(--border)', borderRadius: 14, padding: 16, display: 'flex',
                 flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center' }

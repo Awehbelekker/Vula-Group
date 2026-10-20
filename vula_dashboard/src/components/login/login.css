@@ -1,0 +1,53 @@
+/* login.css — the redesigned sign-in screen (login/LoginV2.jsx). Tokens only; one column that
+   fits a 320px phone, every text holder min-width: 0. */
+
+.vlg { min-height: 100vh; min-height: 100dvh; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+  padding: var(--space-6) var(--space-4); background: var(--ground); color: var(--ink); }
+.vlg-card { width: 100%; max-width: 420px; box-sizing: border-box; padding: var(--space-6) var(--space-5) !important;
+  display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vlg-brand { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); margin-bottom: var(--space-3); }
+.vlg-logo { display: block; max-width: 200px; max-height: 64px; width: auto; height: auto; object-fit: contain; }
+.vlg-name { font: 600 var(--fs-display-lg)/var(--lh-display-lg) var(--font-display); color: var(--brand-text); overflow-wrap: anywhere; }
+.vlg-over { font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.vlg-h1 { margin: 0; font: 600 var(--fs-display-md)/var(--lh-display-md) var(--font-display); color: var(--ink); }
+.vlg-h2 { margin: 0; display: inline-flex; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vlg-sub { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.vlg-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; color: var(--muted); max-width: 300px; overflow-wrap: anywhere; }
+.vlg-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vlg-wide { width: 100%; justify-content: center; min-height: 48px; }
+.vlg-info, .vlg-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); font-size: var(--fs-body); line-height: 1.45; overflow-wrap: anywhere; }
+.vlg-info { background: var(--ok-soft); color: var(--ok-text); }
+.vlg-error { background: var(--danger-soft); color: var(--danger-text); }
+.vlg-wa .vlg-error { width: 100%; box-sizing: border-box; text-align: left; }
+.vlg-ok { margin: 0; font-size: var(--fs-body); color: var(--ok-text); }
+
+.vlg-divider { margin: var(--space-1) 0; display: flex; align-items: center; gap: var(--space-3); font-size: var(--fs-caption); color: var(--muted); }
+.vlg-divider::before, .vlg-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+
+.vlg-links, .vlg-foot { margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-1) var(--space-2);
+  font-size: var(--fs-body); color: var(--muted); text-align: center; }
+.vlg-links:empty { display: none; }
+.vlg-links .vui-btn, .vlg-foot .vui-btn { min-height: 40px; }
+
+/* WhatsApp panel */
+.vlg-wa { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: var(--space-4); text-align: center;
+  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.vlg-wa .vlg-form { text-align: left; }
+/* The QR stays black on white in dark mode too, or phone cameras can't read it */
+.vlg-qr { width: 196px; height: 196px; box-sizing: border-box; padding: 6px; border-radius: var(--radius-md); background: white; }
+.vlg-qr svg { display: block; width: 100%; height: 100%; }
+.vlg-wa-open { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); width: 100%; min-height: 48px; box-sizing: border-box;
+  border-radius: var(--radius-pill); background: var(--brand); color: var(--on-accent); font: 600 var(--fs-body)/1 var(--font-sans); text-decoration: none; }
+.vlg-wa-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.vlg-code { text-align: center; letter-spacing: .4em; font-size: var(--fs-display-md) !important; font-family: var(--font-mono) !important; }
+
+@media (max-width: 480px) {
+  .vlg { align-items: flex-start; padding: var(--space-4); }
+  .vlg-card { padding: var(--space-5) var(--space-4) !important; }
+}
+.vlg-wa .vui-btn { color: var(--brand-text) !important; }
+
+/* password box with a show/hide eye */
+.vlg-pw { position: relative; display: block; }
+.vlg-pw > input { padding-right: 48px !important; }
+.vlg-pw-eye { position: absolute; top: 50%; right: 2px; transform: translateY(-50%); width: 40px !important; height: 40px !important; min-height: 40px !important; }
