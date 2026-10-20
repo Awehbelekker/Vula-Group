@@ -1,0 +1,22 @@
+/* suppliers.css — the redesigned Operate › Suppliers (suppliers/SuppliersV2.jsx). Tokens only;
+   every text holder min-width: 0 so long supplier names and e-mail addresses wrap. */
+
+.vsp { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vsp + .vsp { margin-top: var(--space-4); }
+.vsp-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.vsp-h2 { margin: 0; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vsp-h { margin: 0; display: inline-flex; align-items: center; gap: var(--space-2); font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vsp-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.vsp-error { margin: 0; font-size: var(--fs-caption); color: var(--danger-text); overflow-wrap: anywhere; }
+.vsp-danger { color: var(--danger-text) !important; }
+.vsp-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vsp-grow { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+.vsp-icons { display: inline-flex; gap: var(--space-1); }
+.vsp-card { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.vsp-suggest { border-color: var(--warn) !important; }
+.vsp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vsp-item + .vsp-item { padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.vsp-channel { width: auto !important; min-width: 120px; }
+.vsp-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vsp-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.vsp-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }

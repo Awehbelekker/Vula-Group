@@ -857,3 +857,103 @@ export const scanMatches = { lines: [
   { description: "Aged cheddar 250g x 12", quantity: 12, unit_price_cents: 7_950, match: { product_id: "p-03", name: "Aged cheddar (250g)" }, suggestions: [] },
   { description: "Cream cheese tubs 500g", quantity: 6, unit_price_cents: 14_808, match: null, suggestions: [{ product_id: "p-01", name: "Smoked snoek pâté (200g)" }] },
 ] };
+
+// ── Stock (stock/useStock.js; commerce.py stock-take / receive / adjust, migrations 182–183) ──
+export const stockCounts = [
+  { id: "sc-1", note: "Month end — cold room", status: "open", started_by: "owner@harbourvine.example.test", created_at: at(0, "07:30") },
+  { id: "sc-2", note: "September close", status: "applied", started_by: "owner@harbourvine.example.test", created_at: at(16, "17:05") },
+];
+const countLine = (pid, expected, counted, cost) => {
+  const p = products.find((x) => x.id === pid);
+  return { product_id: pid, variant_id: null, name: p.name, expected, counted, variance: counted - expected,
+    variance_cents: cost == null ? null : (counted - expected) * cost };
+};
+export const stockCountDetail = (id) => ({
+  count: stockCounts.find((c) => c.id === id) || stockCounts[0],
+  lines: [countLine("p-03", 3, 2, 6_200), countLine("p-06", 9, 9.5, 14_000), countLine("p-02", 12, 12, null)],
+  variance_cents: -6_200 + 7_000, lines_without_cost: 1,
+  uncounted: [{ name: "Charcuterie board for 4", expected: 6 }, { name: "Rooibos & honey granola", expected: 30 }],
+});
+export const purchaseOrders = [
+  { id: "po-1", po_number: "PO-0031", supplier_name: "Atlantic Dairy Co-op", status: "sent",
+    items: [{ product_id: "p-03", quantity: 12, unit_cost_cents: 6_200 }, { product_id: "p-02", quantity: 6, unit_cost_cents: 3_100 }] },
+  { id: "po-2", po_number: "PO-0029", supplier_name: "Cape Charcuterie", status: "received", items: [] },
+];
+export const stockMovements = [
+  { id: "mv-1", reason: "sale", delta: -1, qty_after: 2, actor: "shop", created_at: at(0, "09:10") },
+  { id: "mv-2", reason: "receive", delta: 12, qty_after: 3, actor: "owner@harbourvine.example.test", created_at: at(3, "11:00") },
+  { id: "mv-3", reason: "count", delta: -2, qty_after: 5, actor: "counter@harbourvine.example.test", created_at: at(16, "17:30") },
+];
+
+// ── Suppliers + purchase orders (commerce.py suppliers / purchase-orders, P3.3) ──
+export const suppliers = [
+  { id: "sup-1", name: "Atlantic Dairy Co-op", payment_terms_days: 30, tax_id: "4123456789", contact_phone: "+27215550101",
+    contact_email: "orders@atlanticdairy.example.test", aliases: ["Atlantic Dairy", "ADC"], notes: "" },
+  { id: "sup-2", name: "Cape Charcuterie", payment_terms_days: 14, tax_id: "", contact_phone: "+27215550188", contact_email: "", aliases: [], notes: "" },
+];
+export const reorderSuggestions = [
+  { supplier_id: "sup-1", supplier_name: "Atlantic Dairy Co-op",
+    items: [{ product_id: "p-03", name: "Aged cheddar (250g)", stock_quantity: 3, suggested_qty: 12, unit_cost_cents: 6_200 }] },
+];
+export const supplierPurchaseOrders = [
+  { id: "po-3", po_number: "PO-0032", supplier_name: "Cape Charcuterie", status: "draft", total_cents: 96_000,
+    items: [{ name: "Charcuterie board for 4", quantity: 4 }] },
+  ...purchaseOrders.map((p) => ({ ...p, total_cents: p.id === "po-1" ? 93_000 : 0, sent_channel: p.status === "sent" ? "email" : null,
+    items: p.items.map((it) => ({ ...it, name: products.find((x) => x.id === it.product_id)?.name })) })),
+];
+
+// ── Costing (vula_mind/vula/api/manufacturing.py — Manufacturing Core, phases 2–3) ──
+const mat = (id, name, base_unit, stock_qty, unit_cost, pack_size = null, pack_unit = null) =>
+  ({ id, name, base_unit, stock_qty, unit_cost, pack_size, pack_unit });
+export const mfgOverview = {
+  ready: true,
+  settings: { labour_rate_cents: 8_500, overhead_rule: "per_labour_hour", overhead_rate_cents: 2_400 },
+  products: [{ id: "p-01", name: "Smoked snoek pâté (200g)" }, { id: "p-04", name: "Olive tapenade (150g)" }, { id: "p-08", name: "Rooibos & honey granola" }],
+  materials: [
+    mat("m-1", "Smoked snoek", "g", 4_200, "0.1450"),
+    mat("m-2", "Cream cheese", "g", 6_000, "0.0820", 1000, "g"),
+    mat("m-3", "Glass jar 200ml", "each", 96, "6.5000"),
+    mat("m-4", "Kalamata olives", "g", -250, null),
+  ],
+  recipes: [
+    { product_id: "p-01", product: "Smoked snoek pâté (200g)", recipe_version: 3, vat_registered: true,
+      expected: { good: 24, unit_cost_cents: 3_412, materials_cents: 2_655, labour_cents: 531, overhead_cents: 226, missing_costs: [],
+        lines: [{ material_id: "m-1", name: "Smoked snoek", qty_base: 2400, base_unit: "g", cost_cents: 34_800 },
+                { material_id: "m-2", name: "Cream cheese", qty_base: 2400, base_unit: "g", cost_cents: 19_680 },
+                { material_id: "m-3", name: "Glass jar 200ml", qty_base: 24, base_unit: "each", cost_cents: 15_600 }] },
+      margin: { margin_cents: 4_327, margin_pct: 55.9 },
+      runs: [{ unit_cost_cents: 3_398 }, { unit_cost_cents: 3_455 }] },
+    { product_id: "p-04", product: "Olive tapenade (150g)", recipe_version: 1, vat_registered: true,
+      expected: { good: 20, unit_cost_cents: 2_980, materials_cents: 2_300, labour_cents: 480, overhead_cents: 200, missing_costs: ["Kalamata olives"],
+        lines: [{ material_id: "m-4", name: "Kalamata olives", qty_base: 3000, base_unit: "g", cost_cents: null },
+                { material_id: "m-3", name: "Glass jar 200ml", qty_base: 20, base_unit: "each", cost_cents: 13_000 }] },
+      margin: { margin_cents: 1_455, margin_pct: 16.8 }, runs: [] },
+  ],
+  runs: [
+    { id: "run-2", product: "Smoked snoek pâté (200g)", good_qty: "24", reject_qty: "1", unit_cost: "33.98", status: "confirmed", confirmed_at: at(1, "15:10") },
+    { id: "run-1", product: "Smoked snoek pâté (200g)", good_qty: "22", reject_qty: "0", unit_cost: "34.55", status: "reversed", confirmed_at: at(6, "11:40") },
+  ],
+};
+export const mfgRecipe = { recipe: { batch_yield: "24", labour_hours: "1.5", lines: [
+  { material: "Smoked snoek", qty: "2.4", unit: "kg", waste_pct: "5" }, { material: "Cream cheese", qty: "2.4", unit: "kg", waste_pct: "0" },
+  { material: "Glass jar 200ml", qty: "24", unit: "each", waste_pct: "0" }] } };
+export const mfgSuggest = { suggestions: [
+  { key: "s-1", description: "KALAMATA OLIVES PITTED 2KG", invoice_price_cents: 31_900, supplier: "Cape Charcuterie", latest_on: "2026-10-02",
+    observations: 3, low_cents: 29_900, high_cents: 31_900, vat_note: "VAT taken off", per_unit: "R 138.70 / kg" }] };
+export const mfgBank = { since: "2026-07-01", labour_monthly_cents: 1_860_000, overhead_monthly_cents: 942_000,
+  overhead_by_account: [{ label: "Rent", monthly_cents: 650_000 }, { label: "Electricity", monthly_cents: 292_000 }],
+  labour_rate_cents: 9_300, overhead_per_hour_cents: 4_710, overhead_per_batch_cents: null, overhead_per_unit_cents: null };
+
+// ── Import (commerce.py import/extract + import/invoices + import/chats/learn) ──
+export const importOrders = [
+  { customer_name: "Thandi Mokoena", customer_phone: "+27820000101", date: "2026-09-04", paid: true, delivered: true,
+    items: [{ quantity: 2, name: "Smoked snoek pâté (200g)", unit_price_rands: 89 }, { quantity: 1, name: "Sourdough loaf", unit_price_rands: 65 }],
+    total_rands: 243, delivery_address: "12 Beach Rd, Sea Point" },
+  { customer_name: "", customer_phone: "+27820000177", date: "2026-09-11", paid: false, delivered: false,
+    items: [{ quantity: 1, name: "Charcuterie board for 4" }], total_rands: null },
+];
+export const importInvoices = [
+  { invoice_number: "INV-003983", customer_name: "Seaside Guesthouse", date: "2026-08-28", total_rands: 4_860.5, status: "paid" },
+  { invoice_number: "INV-003991", customer_name: "Bo-Kaap Bistro", date: "2026-09-15", total_rands: 2_310, status: "unpaid" },
+];
+export const chatLearn = { chats: 3, messages: 412, business: "Harbour & Vine", voice_samples: 96, tone_suggested: true, answers_to_review: 7, pairs_found: 31 };

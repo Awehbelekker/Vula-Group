@@ -3,73 +3,18 @@
  * extracts the past orders, you review + edit, then commit them into the system.
  * Backend: /v1/commerce/{tenant}/admin/import/extract + /commit.
  */
-import { useState } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useImport, useChatLearn } from "./import/useImport";
+import ImportV2 from "./import/ImportV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (n) => `R${(Number(n) || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function VulaImport({ tenantId }) {
-  const [mode, setMode] = useState("orders");          // 'orders' | 'invoices'
-  const [text, setText] = useState("");
-  const [orders, setOrders] = useState(null);
-  const [invoices, setInvoices] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+export default function VulaImport({ v2 = false, ...props }) {
+  return v2 ? <ImportV2 {...props} /> : <ImportV1 {...props} />;
+}
 
-  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 5000); };
-
-  const onFile = async (file) => {
-    if (!file) return;
-    const t = await file.text();
-    setText(t.slice(0, 200000));
-    flash(`Loaded ${file.name}`);
-  };
-
-  const extract = async () => {
-    if (!text.trim()) return flash("Paste or upload something first.");
-    setBusy(true); setOrders(null); setInvoices(null); flash("Reading your history…");
-    if (mode === "invoices") {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/invoices/extract`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
-      }).then(r => r.json()).catch(() => ({ invoices: [] }));
-      setBusy(false); setInvoices(r.invoices || []);
-      return flash(`Found ${(r.invoices || []).length} invoice(s) — review, then commit.`);
-    }
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/extract`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
-    }).then(r => r.json()).catch(() => ({ orders: [] }));
-    setBusy(false);
-    setOrders(r.orders || []);
-    flash(`Found ${(r.orders || []).length} order(s) — review below, then commit.`);
-  };
-
-  const commitInvoices = async () => {
-    if (!invoices?.length) return;
-    setBusy(true); flash("Registering invoices…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/invoices/commit`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invoices }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
-    setBusy(false);
-    if (r.error) return flash(r.error);
-    flash(`✓ ${r.created} invoice(s) registered${r.skipped ? `, ${r.skipped} skipped` : ""} — bank payments will now match them.`);
-    setInvoices(null); setText("");
-  };
-
-  const upd = (i, patch) => setOrders(os => os.map((o, j) => j === i ? { ...o, ...patch } : o));
-  const drop = (i) => setOrders(os => os.filter((_, j) => j !== i));
-
-  const commit = async () => {
-    if (!orders?.length) return;
-    setBusy(true); flash("Adding to Vula…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/commit`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orders }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
-    setBusy(false);
-    if (r.error) return flash(r.error);
-    flash(`✓ ${r.created} order(s) added${r.skipped ? `, ${r.skipped} skipped (duplicates)` : ""}.`);
-    setOrders(null); setText("");
-  };
+function ImportV1({ tenantId }) {
+  const { mode, switchMode, text, setText, orders, setOrders, invoices, setInvoices, busy, msg, onFile, extract, commitInvoices, upd, drop, commit, dropInvoice } = useImport(tenantId);
 
   return (
     <div style={{ color: C.text, maxWidth: 820 }}>
@@ -77,7 +22,7 @@ export default function VulaImport({ tenantId }) {
       <div style={{ display: "flex", gap: 6, margin: "6px 0" }}>
         {[["orders", "💬 Orders (chats/emails)"], ["invoices", "🧾 Old invoices (Xero export)"],
           ["learn", "🧠 Learn from WhatsApp chats"]].map(([v, l]) => (
-          <button key={v} onClick={() => { setMode(v); setOrders(null); setInvoices(null); }}
+          <button key={v} onClick={() => switchMode(v)}
             style={{ ...btn, ...(mode === v ? btnOn : {}) }}>{l}</button>
         ))}
       </div>
@@ -157,7 +102,7 @@ export default function VulaImport({ tenantId }) {
                     <td style={{ padding: "7px 10px" }}>{v.date || "—"}</td>
                     <td style={{ padding: "7px 10px" }}>{R(v.total_rands)}</td>
                     <td style={{ padding: "7px 10px", color: v.status === "paid" ? 'var(--ok)' : C.red, fontWeight: 600 }}>{v.status || "unpaid"}</td>
-                    <td style={{ padding: "7px 10px" }}><button style={miniBtn} onClick={() => setInvoices(vs => vs.filter((_, j) => j !== i))}>Remove</button></td>
+                    <td style={{ padding: "7px 10px" }}><button style={miniBtn} onClick={() => dropInvoice(i)}>Remove</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -173,38 +118,7 @@ export default function VulaImport({ tenantId }) {
 /** Learn tone + common answers from WhatsApp exports (backend: vula/commerce/chat_learn.py).
  *  Answers wait for review in Settings › What Vula has learned; the chats aren't kept. */
 function ChatLearn({ tenantId }) {
-  const [files, setFiles] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState(null);
-  const [err, setErr] = useState("");
-
-  const pick = async (list) => {
-    setRes(null); setErr("");
-    const out = [];
-    for (const f of Array.from(list || []).slice(0, 40)) {
-      if (f.size > 4_000_000) { setErr(`${f.name} is too big — export "Without media".`); continue; }
-      if (f.name.toLowerCase().endsWith(".zip")) {
-        const buf = new Uint8Array(await f.arrayBuffer());
-        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-        out.push({ name: f.name, b64: btoa(bin) });
-      } else {
-        out.push({ name: f.name, text: await f.text() });
-      }
-    }
-    setFiles(out);
-  };
-
-  const learn = async (business) => {
-    if (!files.length) return setErr("Choose one or more chat exports first.");
-    setBusy(true); setErr(""); setRes(null);
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/chats/learn`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, business: business || null }),
-    }).then(r => r.json()).catch(() => ({ error: "Couldn't reach Vula — try again." }));
-    setBusy(false);
-    if (r.error || r.detail) return setErr(r.error || r.detail);
-    setRes(r);
-  };
+  const { files, busy, res, err, pick, learn } = useChatLearn(tenantId);
 
   return (
     <div>

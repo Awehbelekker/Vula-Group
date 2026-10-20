@@ -1,0 +1,65 @@
+/* stock.css — the redesigned Stock tab (stock/StockV2.jsx). Tokens only; one column up to 760px,
+   every text holder min-width: 0. On a phone the main action stays in reach above the toolbar. */
+
+.vst { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; max-width: 760px; }
+.vst-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vst-h { margin: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
+.vst-h4 { margin: 0; font: 600 var(--fs-caption)/1.4 var(--font-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.vst-title { margin: 0; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
+.vst-sub { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.vst-tip, .vst-muted { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.vst-mono { font-family: var(--font-mono); }
+.vst-note { margin: 0; font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vst-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); overflow-wrap: anywhere; }
+.vst-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vst-row.vst-end, .vst-end { align-self: flex-end; }
+.vst-grow { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.vst-push { margin-left: auto; }
+.vst-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); }
+.vst-neg { color: var(--danger-text); }
+.vst-pos { color: var(--ok-text); }
+.vst-danger { color: var(--danger-text) !important; }
+.vst-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* camera */
+.vst-video { position: relative; overflow: hidden; border-radius: var(--radius-md); background: var(--ink); aspect-ratio: 4 / 3; max-height: 320px; }
+.vst-video[hidden] { display: none; }
+.vst-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.vst-aim { position: absolute; left: 10%; right: 10%; top: 50%; height: 2px; background: var(--danger); }
+.vst-manual { display: flex; gap: var(--space-2); flex: 1 1 240px; min-width: 0; }
+.vst-manual > input { min-width: 0; }
+
+/* product search */
+.vst-picker { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.vst-search { position: relative; display: block; }
+.vst-search > svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.vst-search > input { padding-left: 36px !important; }
+.vst-hits { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.vst-hits li + li { border-top: 1px solid var(--line); }
+.vst-hits button { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); width: 100%; min-height: 44px;
+  padding: var(--space-2) var(--space-3); border: none; background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-body); text-align: left; cursor: pointer; }
+.vst-hits button:hover { background: var(--surface-2); }
+.vst-hits button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.vst-linker { border-color: var(--warn) !important; }
+
+/* quantity lists */
+.vst-lines { list-style: none; margin: 0; padding: 0; }
+.vst-lines li { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); min-height: 56px; box-sizing: border-box; font-size: var(--fs-body); color: var(--ink); }
+.vst-lines li + li { border-top: 1px solid var(--line); }
+.vst-qty { width: 96px !important; flex: none; text-align: right; }
+
+/* review + item facts */
+.vst-facts { margin: 0; display: grid; gap: var(--space-2) var(--space-4); grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); }
+.vst-facts dt { font-size: var(--fs-caption); color: var(--muted); }
+.vst-facts dd { margin: 2px 0 0; font-size: var(--fs-title); font-weight: 600; color: var(--ink); }
+.vst-big { font-size: var(--fs-display-md) !important; }
+.vst-stack-trail { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.vst-moves { list-style: none; margin: 0; padding: 0; }
+.vst-moves li { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); padding: var(--space-2) 0; font-size: var(--fs-body); color: var(--ink); }
+.vst-moves li + li { border-top: 1px solid var(--line); }
+
+@media (max-width: 767px) {
+  .vst-actions--sticky { position: sticky; bottom: calc(88px + env(safe-area-inset-bottom)); z-index: 2; padding: var(--space-3) 0;
+    background: linear-gradient(to bottom, transparent, var(--ground) 30%); }
+  .vst-actions--sticky > * { flex: 1 1 100%; }
+}
