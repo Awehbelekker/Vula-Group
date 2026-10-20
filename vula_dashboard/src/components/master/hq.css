@@ -1,0 +1,26 @@
+/* hq.css — the redesigned Master HQ business screens (master/SignupsV2, SubscriptionsV2,
+   TrainingV2, OnboardWizardV2). Tokens only; every text holder min-width: 0. */
+
+.vhq { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 1000px; }
+.vhq-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vhq-grow { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; color: var(--ink); }
+.vhq-sub { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.vhq-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.vhq-h { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vhq-overline { margin: var(--space-3) 0 0; display: flex; align-items: center; gap: var(--space-2); font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vhq-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vhq-ok { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--ok-soft); color: var(--ok-text); font-size: var(--fs-body); }
+.vhq-tiles { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.vhq-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vhq-item + .vhq-item { border-top: 1px solid var(--line); }
+.vhq-toggle { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-height: 56px; padding: var(--space-3); border: none; background: none; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.vhq-toggle:hover { background: var(--surface-2); }
+.vhq-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.vhq-detail { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); margin: 0; padding: 0 var(--space-3) var(--space-3); }
+.vhq-detail dt { font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vhq-detail dd { margin: 2px 0 0; font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vhq-bar { height: 4px; margin: 0 var(--space-3) var(--space-2); border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
+.vhq-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
+.vhq-bar--warn > span { background: var(--warn); }
+.vhq-bar--danger > span { background: var(--danger); }
+.vhq-steps { margin: 0; padding-left: var(--space-5); font-size: var(--fs-body); line-height: 1.8; color: var(--ink); }

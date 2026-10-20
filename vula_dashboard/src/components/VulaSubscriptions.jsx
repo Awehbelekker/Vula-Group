@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useSubscriptions } from "./master/useSignupsHQ";
+import SubscriptionsV2 from "./master/SubscriptionsV2";
 
 
 const C = {
@@ -168,40 +168,8 @@ function UrgencySection({ title, color, tenants, selected, onSelect }) {
   );
 }
 
-export default function VulaSubscriptions() {
-  const [tenants, setTenants] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [selected, setSelected] = useState(null);
-  const [view, setView] = useState("urgency"); // urgency | all
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const resp = await fetch(`${VULA_API}/v1/admin/signups?limit=100`);
-      if (!resp.ok) throw new Error(`${resp.status}`);
-      const data = await resp.json();
-      setTenants(data.signups || []);
-    } catch (e) {
-      setError(e.message);
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  // Stats
-  const paid = tenants.filter((t) => t.paid);
-  const mrr = paid.reduce((s, t) => s + (PLAN_PRICE[t.plan] || 0), 0);
-  const expiredCount = tenants.filter((t) => !t.paid && daysUntil(t.trial_ends) !== null && daysUntil(t.trial_ends) < 0).length;
-  const soonCount = tenants.filter((t) => {
-    const d = daysUntil(t.trial_ends);
-    return !t.paid && d !== null && d >= 0 && d <= 7;
-  }).length;
-
-  // Sort by urgency
-  const sorted = [...tenants].sort((a, b) => subState(a).priority - subState(b).priority);
+function VulaSubscriptionsV1() {
+  const { tenants, loading, error, selected, setSelected, view, setView, load, paid, mrr, expiredCount, soonCount, sorted } = useSubscriptions();
 
   const sections = [
     { title: "Expired — needs reactivation", color: C.red, filter: (t) => !t.paid && (daysUntil(t.trial_ends) ?? 1) < 0 },
@@ -322,4 +290,8 @@ export default function VulaSubscriptions() {
       </div>
     </>
   );
+}
+
+export default function VulaSubscriptions({ v2 = false, ...props }) {
+  return v2 ? <SubscriptionsV2 {...props} /> : <VulaSubscriptionsV1 {...props} />;
 }

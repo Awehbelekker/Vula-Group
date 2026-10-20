@@ -1,0 +1,35 @@
+/* onboard.css — the redesigned Onboard Client wizard (onboard/OnboardWizardV2.jsx). Tokens only. */
+
+.vob { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; max-width: 680px; }
+.vob-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-2); }
+.vob-steps li { flex: 1; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-caption); color: var(--muted); min-width: 0; }
+.vob-steps li::before { content: ""; display: block; height: 4px; border-radius: var(--radius-pill); background: var(--surface-2); }
+.vob-steps li[data-done="true"]::before, .vob-steps li[aria-current="step"]::before { background: var(--brand); }
+.vob-steps li[aria-current="step"] { color: var(--ink); font-weight: 600; }
+.vob-h { margin: 0; font: 600 var(--fs-display-sm, 24px)/1.25 var(--font-display, var(--font-sans)); color: var(--ink); }
+.vob-tiers { display: flex; flex-direction: column; gap: var(--space-3); }
+.vob-tier { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.vob-tier[aria-checked="true"] { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); background: var(--brand-soft); }
+.vob-tier:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vob-tier-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.vob-features { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px var(--space-3); font-size: var(--fs-caption); color: var(--muted); }
+.vob-features li { display: inline-flex; align-items: center; gap: 4px; }
+.vob-drop { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-6) var(--space-4); border: 2px dashed var(--line); border-radius: var(--radius-lg); background: var(--surface); text-align: center; color: var(--ink); cursor: pointer; font: inherit; width: 100%; }
+.vob-drop--over { border-color: var(--brand); background: var(--brand-soft); }
+.vob-drop:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vob-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.vob-check { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-3); border-radius: var(--radius-md); font-size: var(--fs-body); color: var(--ink); cursor: pointer; }
+.vob-check:hover { background: var(--surface-2); }
+.vob-check input { width: 18px; height: 18px; accent-color: var(--brand); flex: none; }
+.vob-next { margin: 0; padding-left: var(--space-5); display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-body); color: var(--ink); }
+.vob-done { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); text-align: center; }
+.vob-done-ic { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok-text); }
+.vob-url { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.vob-timeline { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-3); text-align: left; font-size: var(--fs-body); }
+.vob-timeline dt { color: var(--muted); font-size: var(--fs-caption); padding-top: 2px; }
+.vob-timeline dd { margin: 0; color: var(--ink); }
+.vob-pay { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-4); border-radius: var(--radius-md); background: var(--brand); color: var(--on-brand); font-weight: 600; text-decoration: none; }
+.vob-pay:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vob-drop { position: relative; }
+.vob-file { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.vob-drop:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
