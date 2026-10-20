@@ -1,0 +1,37 @@
+/* estimating.css — the redesigned Estimating screens (estimating/*V2.jsx: Quick Cost, QS Pro,
+   Takeoff, Draft). Tokens only; every text holder min-width: 0. Estimates show money through
+   formatMoney; the figures themselves are the current screens' own maths, unchanged. */
+
+.ves { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 1100px; }
+.ves-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.ves-h { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.ves-overline { margin: var(--space-2) 0 0; font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.ves-sub { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.ves-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.ves-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.ves-ok { font-size: var(--fs-body); color: var(--ok-text); }
+.ves-note { margin: 0; display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-3); border-radius: var(--radius-md); background: var(--warn-soft); color: var(--ink); font-size: var(--fs-caption); line-height: 1.5; }
+.ves-danger { color: var(--danger-text) !important; }
+.ves-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.ves-grow { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; color: var(--ink); }
+.ves-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); align-items: start; }
+.ves-cols { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; }
+.ves-cols > * { min-width: 0; }
+.ves-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.ves-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ves-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3); min-height: 56px; box-sizing: border-box; }
+.ves-item + .ves-item { border-top: 1px solid var(--line); }
+.ves-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+.ves-kv { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); padding: var(--space-2) 0; font-size: var(--fs-body); color: var(--ink); }
+.ves-kv + .ves-kv { border-top: 1px solid var(--line); }
+.ves-kv > span:first-child { min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 2px; }
+.ves-kv--total { font-weight: 600; font-size: var(--fs-title); }
+.ves-kv--hl { background: var(--brand-soft); margin: 0 calc(-1 * var(--space-3)); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); }
+.ves-doc { margin: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 400 var(--fs-body)/1.65 var(--font-sans); max-height: 70vh; overflow-y: auto; }
+.ves-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); color: var(--ink); }
+.ves-table th { text-align: left; font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: var(--space-2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+.ves-table td { padding: var(--space-2); border-bottom: 1px solid var(--line); vertical-align: middle; }
+.ves-table td.ves-num, .ves-table th.ves-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ves-scroll { overflow-x: auto; min-width: 0; }
+.ves-sticky { position: sticky; top: var(--space-3); }
+@media (max-width: 899px) { .ves-sticky { position: static; } }
