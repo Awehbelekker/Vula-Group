@@ -3,49 +3,13 @@
  * (vula/commerce/call_sheet.py). Thin wrapper — reuses the same compose/edit logic the
  * WhatsApp configure_call_sheet/view_call_sheet/update_call_sheet tools already use.
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { DAYS, useRepCallSheet } from "./rep/useRepCallSheet";
+import RepCallSheetV2 from "./rep/RepCallSheetV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-export default function VulaRepCallSheet({ tenantId, repPhone }) {
-  const [config, setConfig] = useState({});
-  const [entries, setEntries] = useState([]);
-  const [instruction, setInstruction] = useState("");
-  const [preview, setPreview] = useState(null);
-  const [msg, setMsg] = useState("");
-
-  const load = useCallback(async () => {
-    if (!tenantId || !repPhone) return;
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet?rep_phone=${encodeURIComponent(repPhone)}`);
-    const d = await r.json().catch(() => ({}));
-    setConfig(d.config || {});
-    setEntries(d.entries || []);
-  }, [tenantId, repPhone]);
-  useEffect(() => { load(); }, [load]);
-
-  const saveConfig = async (patch) => {
-    setMsg("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet/configure`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rep_phone: repPhone, ...patch }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (d.saved) load(); else setMsg(d.detail || "Could not save.");
-  };
-
-  const submitInstruction = async (confirm) => {
-    setMsg("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet/update`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rep_phone: repPhone, instruction, confirm }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (d.error) { setMsg(d.error); setPreview(null); return; }
-    if (d.preview) { setPreview(d); return; }
-    if (d.applied) { setPreview(null); setInstruction(""); load(); }
-  };
+function VulaRepCallSheetV1({ tenantId, repPhone }) {
+  const { config, entries, instruction, setInstruction, preview, msg, saveConfig, submitInstruction } = useRepCallSheet(tenantId, repPhone);
 
   if (!repPhone) return <div style={{ padding: 20, color: C.muted, fontSize: 13 }}>Couldn't identify your rep phone number.</div>;
 
@@ -109,4 +73,8 @@ export default function VulaRepCallSheet({ tenantId, repPhone }) {
       ))}
     </div>
   );
+}
+
+export default function VulaRepCallSheet({ v2 = false, ...props }) {
+  return v2 ? <RepCallSheetV2 {...props} /> : <VulaRepCallSheetV1 {...props} />;
 }

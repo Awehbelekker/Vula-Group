@@ -183,7 +183,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
               owner overview — 'overview' itself stays always-visible (merchantVisible's own
               rule), only WHAT renders on it differs for this one role. */}
           {tab === 'overview'  && (teamRole === 'sales_rep' && !full
-            ? <VulaRepHome tenantId={tenantId} repPhone={teamPhone} onNavigate={navigateTo} />
+            ? <VulaRepHome tenantId={tenantId} v2={v2} repPhone={teamPhone} onNavigate={navigateTo} />
             : v2 ? <VulaHomeV2 tenantId={tenantId} onNavigate={navigateTo} />
             : <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />)}
           {v2 && tab === 'today' && <VulaToday tenantId={tenantId} onNavigate={navigateTo} />}
@@ -354,14 +354,14 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
-      {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} v2={v2} repPhone={repPhone} />}
+      {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} v2={v2} repPhone={repPhone} />}
       {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
       {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} v2={v2} />}
-      {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} v2={v2} repPhone={repPhone} />}
       {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
-      {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} repPhone={repPhone} />}
-      {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} />}
+      {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} v2={v2} repPhone={repPhone} />}
+      {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} v2={v2} />}
     </div>
   )
 }

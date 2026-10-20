@@ -2,30 +2,13 @@
  * VulaRepReminders.jsx — a sales rep's own reminders (vula_reminders, created_by-scoped).
  * First dashboard surface for vula_reminders at all — previously WhatsApp-only.
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useRepReminders } from "./rep/useRepReminders";
+import RepRemindersV2 from "./rep/RepRemindersV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
-export default function VulaRepReminders({ tenantId, repPhone }) {
-  const [reminders, setReminders] = useState([]);
-  const [status, setStatus] = useState("open");
-
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    const params = new URLSearchParams({ created_by: repPhone || "", status });
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reminders?${params}`);
-    const d = await r.json().catch(() => ({}));
-    setReminders(d.reminders || []);
-  }, [tenantId, repPhone, status]);
-  useEffect(() => { load(); }, [load]);
-
-  const complete = async (id) => {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reminders/${id}`, { method: "PATCH" });
-    load();
-  };
-
-  const isOverdue = (r) => r.due_at && new Date(r.due_at) < new Date() && r.status === "open";
+function VulaRepRemindersV1({ tenantId, repPhone }) {
+  const { reminders, status, setStatus, complete, isOverdue } = useRepReminders(tenantId, repPhone);
 
   return (
     <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
@@ -64,4 +47,8 @@ export default function VulaRepReminders({ tenantId, repPhone }) {
       ))}
     </div>
   );
+}
+
+export default function VulaRepReminders({ v2 = false, ...props }) {
+  return v2 ? <RepRemindersV2 {...props} /> : <VulaRepRemindersV1 {...props} />;
 }

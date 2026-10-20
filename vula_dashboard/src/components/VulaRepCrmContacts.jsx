@@ -2,37 +2,13 @@
  * VulaRepCrmContacts.jsx — a sales rep's own contacts (commerce_contacts, created_by-scoped).
  * Distinct from VulaContacts.jsx, which is an unrelated email-derived contact directory.
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useRepContacts } from "./rep/useRepContacts";
+import RepContactsV2 from "./rep/RepContactsV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
-export default function VulaRepCrmContacts({ tenantId, repPhone }) {
-  const [contacts, setContacts] = useState([]);
-  const [search, setSearch] = useState("");
-  const [form, setForm] = useState({ name: "", phone: "", email: "", company: "", title: "", notes: "" });
-  const [msg, setMsg] = useState("");
-
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    const params = new URLSearchParams({ created_by: repPhone || "", search });
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/contacts?${params}`);
-    const d = await r.json().catch(() => ({}));
-    setContacts(d.contacts || []);
-  }, [tenantId, repPhone, search]);
-  useEffect(() => { load(); }, [load]);
-
-  const save = async () => {
-    if (!form.name.trim()) { setMsg("Name is required."); return; }
-    setMsg("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/contacts`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, created_by: repPhone || "" }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (d.saved) { setForm({ name: "", phone: "", email: "", company: "", title: "", notes: "" }); load(); }
-    else setMsg(d.detail || d.error || "Could not save contact.");
-  };
+function VulaRepCrmContactsV1({ tenantId, repPhone }) {
+  const { contacts, search, setSearch, form, setForm, msg, save } = useRepContacts(tenantId, repPhone);
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: 20 }}>
@@ -81,3 +57,7 @@ export default function VulaRepCrmContacts({ tenantId, repPhone }) {
 }
 
 const inputStyle = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, flex: "1 1 160px" };
+
+export default function VulaRepCrmContacts({ v2 = false, ...props }) {
+  return v2 ? <RepContactsV2 {...props} /> : <VulaRepCrmContactsV1 {...props} />;
+}

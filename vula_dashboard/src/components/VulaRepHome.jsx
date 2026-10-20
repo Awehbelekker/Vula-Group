@@ -4,28 +4,13 @@
  * sales_rep dashboard login (see VulaMerchantAdmin.jsx's overview branch).
  */
 import VulaRepToday from './VulaRepToday'
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useRepHome } from "./rep/useRepHome";
+import RepHomeV2 from "./rep/RepHomeV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
-export default function VulaRepHome({ tenantId, repPhone, onNavigate }) {
-  const [reminders, setReminders] = useState(null);   // null = still loading
-  const [callSheet, setCallSheet] = useState(null);
-
-  const load = useCallback(async () => {
-    if (!tenantId || !repPhone) return;
-    const rParams = new URLSearchParams({ created_by: repPhone, status: "open" });
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reminders?${rParams}`)
-      .then((r) => r.json()).then((d) => setReminders(d.reminders || [])).catch(() => setReminders([]));
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet?rep_phone=${encodeURIComponent(repPhone)}`)
-      .then((r) => r.json()).then((d) => setCallSheet(d)).catch(() => {});
-  }, [tenantId, repPhone]);
-  useEffect(() => { load(); }, [load]);
-
-  const list = reminders || [];
-  const overdue = list.filter((r) => r.due_at && new Date(r.due_at) < new Date());
-  const upcoming = list.filter((r) => !r.due_at || new Date(r.due_at) >= new Date());
+function VulaRepHomeV1({ tenantId, repPhone, onNavigate }) {
+  const { reminders, callSheet, list, overdue } = useRepHome(tenantId, repPhone);
 
   // A real button when it goes somewhere (keyboard + screen reader reachable), a plain card otherwise.
   const Card = ({ title, children, onClick }) => {
@@ -78,4 +63,8 @@ export default function VulaRepHome({ tenantId, repPhone, onNavigate }) {
       </div>
     </div>
   );
+}
+
+export default function VulaRepHome({ v2 = false, ...props }) {
+  return v2 ? <RepHomeV2 {...props} /> : <VulaRepHomeV1 {...props} />;
 }

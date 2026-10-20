@@ -4,41 +4,18 @@
  * — reuses the same schedule/budget columns the WhatsApp configure_expense_sheet tool already
  * writes to (vula/commerce/expense_sheet.py, migrations 139/140).
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useRepExpenseSheet } from "./rep/useRepExpenseSheet";
+import RepExpenseSheetV2 from "./rep/RepExpenseSheetV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)",
             amber: "var(--warn)", text: "var(--text)", muted: "var(--muted)" };
 const R = (cents) => `R${((Number(cents) || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function VulaRepExpenseSheet({ tenantId, repPhone }) {
-  const [config, setConfig] = useState({});
-  const [mtdCents, setMtdCents] = useState(0);
-  const [msg, setMsg] = useState("");
-
-  const load = useCallback(async () => {
-    if (!tenantId || !repPhone) return;
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expense-sheet?rep_phone=${encodeURIComponent(repPhone)}`);
-    const d = await r.json().catch(() => ({}));
-    setConfig(d.config || {});
-    setMtdCents(d.mtd_spend_cents || 0);
-  }, [tenantId, repPhone]);
-  useEffect(() => { load(); }, [load]);
-
-  const saveConfig = async (patch) => {
-    setMsg("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expense-sheet/configure`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rep_phone: repPhone, ...patch }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (d.saved) load(); else setMsg(d.detail || "Could not save.");
-  };
+function VulaRepExpenseSheetV1({ tenantId, repPhone }) {
+  const { config, mtdCents, msg, saveConfig, budgetCents, pct } = useRepExpenseSheet(tenantId, repPhone);
 
   if (!repPhone) return <div style={{ padding: 20, color: C.muted, fontSize: 13 }}>Couldn't identify your rep phone number.</div>;
 
-  const budgetCents = config.expense_budget_cents || 0;
-  const pct = budgetCents ? Math.min(100, Math.round((mtdCents / budgetCents) * 100)) : 0;
   const barColor = pct >= 100 ? C.red : pct >= 90 ? C.amber : C.green;
 
   return (
@@ -96,4 +73,8 @@ export default function VulaRepExpenseSheet({ tenantId, repPhone }) {
       </div>
     </div>
   );
+}
+
+export default function VulaRepExpenseSheet({ v2 = false, ...props }) {
+  return v2 ? <RepExpenseSheetV2 {...props} /> : <VulaRepExpenseSheetV1 {...props} />;
 }
