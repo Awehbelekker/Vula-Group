@@ -201,7 +201,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             invoiceSupplierFilter={invoiceSupplierFilter} onClearSupplierFilter={() => setInvoiceSupplierFilter(null)} />}
           {tab === 'people' && <PeopleSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'people')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'marketing-hub' && <MarketingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'marketing-hub')}
+          {tab === 'marketing-hub' && <MarketingSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'marketing-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)}
             onSendAsBroadcast={(text) => { setBroadcastDraft(text); navigateTo('marketing-hub', 'broadcast') }} />}
@@ -313,14 +313,14 @@ function PeopleSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingN
 
 // Broadcast tab bug fix: this used to render VulaClientOnboarding then VulaBroadcast glued
 // together under one "📢 Broadcast" label — two unrelated features, now two real sub-tabs.
-function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav, draftBody, onConsumeDraft, onSendAsBroadcast }) {
+function MarketingSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav, draftBody, onConsumeDraft, onSendAsBroadcast }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'broadcast' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} />}
-      {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
+      {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} v2={v2} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
       {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} />}
       {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} />}
       {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} />}

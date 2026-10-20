@@ -221,6 +221,25 @@ function routes(role, modules = []) {
     r("POST", `${A}/import/invoices/extract`, () => ({ invoices: F.importInvoices })),
     r("POST", `${A}/import/invoices/commit`, (m, url, req) => ({ created: (req.postDataJSON()?.invoices || []).length, skipped: 0 })),
     r("POST", `${A}/import/chats/learn`, (m, url, req) => (req.postDataJSON()?.business ? F.chatLearn : { need_sender: ["Harbour & Vine", "Thandi Mokoena"] })),
+    r("GET", `${A}/broadcasts`, () => ({ broadcasts: F.broadcasts })),
+    r("GET", `${A}/broadcasts/analytics`, () => F.broadcastAnalytics),
+    r("GET", `${A}/broadcasts/${T}/recipients`, () => F.broadcastFunnel),
+    r("POST", `${A}/broadcasts/draft`, () => ({ message: "Fresh this week: yellowtail R180/kg, snoek R95. Free delivery over R500. Reply to order!" })),
+    r("POST", `${A}/broadcasts/send`, (m, url, req) => { const b = req.postDataJSON() || {};
+      if (b.test_phone) return { sent: 1, failed: 0 };
+      return b.dry_run ? { recipient_count: 184, suppressed_count: 3, sample: [{ name: "Thandi" }, { name: "Pieter" }, { name: "Ayesha" }] }
+        : { sent: 184, failed: 0, recipient_count: 184 }; }),
+    r("POST", `${A}/broadcasts/promo`, (m, url, req) => { const b = req.postDataJSON() || {};
+      if (b.dry_run) return { recipient_count: 97, suppressed_count: 2, template_status: "APPROVED", image_url: null };
+      return b.test_phone ? { sent: 1 } : { queued: true, recipient_count: 97 }; }),
+    r("GET", `${A}/segments`, () => ({ segments: F.segments })),
+    r("POST", `${A}/segments`, () => ({ id: "sg-new" })),
+    r("DELETE", `${A}/segments/${T}`, () => ({ ok: true })),
+    r("GET", `${A}/audience-counts`, () => F.audienceCounts),
+    r("GET", `${A}/campaigns`, () => ({ campaigns: F.campaigns })),
+    r("POST", `${A}/campaigns`, () => ({ id: "cp-new" })),
+    r("DELETE", `${A}/campaigns/${T}`, () => ({ ok: true })),
+    r("GET", `${A}/wa-templates`, () => ({ templates: F.waTemplates })),
     r("POST", `${A}/stock/receive`, (m, url, req) => ({ received: (req.postDataJSON()?.lines || []).length, failed: [] })),
     r("POST", `${A}/products/costs`, (m, url, req) => ({ updated: (req.postDataJSON()?.costs || []).length })),
     r("GET", `^/v1/master/usage`, () => F.masterUsage),
