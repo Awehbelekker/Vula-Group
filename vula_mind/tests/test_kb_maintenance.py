@@ -72,3 +72,68 @@ async def test_boot_runs_only_known_jobs_named_in_the_setting(monkeypatch):
     with patch("config.settings.kb_maintenance", ""):
         await km.on_boot()
     assert ran == []
+
+
+# ── weekly customer-view guard (2026-10-20) ───────────────────────────────────
+
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+
+def _guard_env(monkeypatch, last, summary, retry_rows=None):
+    from vula import kb_maintenance as km
+    sent, ran = [], []
+    monkeypatch.setattr(km, "_last_done", lambda job: last)
+
+    async def fake_run_job(job, by="boot"):
+        ran.append((job, by))
+        return {"summary": dict(summary)}
+
+    async def fake_alert(text):
+        sent.append(text)
+        return True
+
+    async def no_sleep(_s):
+        return None
+
+    async def fake_retry(tenants):
+        return {"rows": retry_rows or []}
+
+    monkeypatch.setattr(km, "run_job", fake_run_job)
+    monkeypatch.setattr("vula.integrations.platform_support.alert_operator", fake_alert)
+    monkeypatch.setattr(km.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr("evals.retrieval.run_customer_view", fake_retry)
+    return km, sent, ran
+
+
+async def test_weekly_guard_not_due_within_a_week(monkeypatch):
+    now = _dt(2026, 10, 20, tzinfo=_tz.utc)
+    km, sent, ran = _guard_env(monkeypatch, now - _td(days=3), {})
+    assert await km.weekly_guard(now) is None
+    assert ran == [] and sent == []
+
+
+async def test_weekly_guard_clean_run_sends_nothing(monkeypatch):
+    now = _dt(2026, 10, 20, tzinfo=_tz.utc)
+    clean = {"gerflor": {"ok": True, "violations": 0, "untagged_visible": 0}}
+    km, sent, ran = _guard_env(monkeypatch, now - _td(days=8), clean)
+    assert await km.weekly_guard(now) == []
+    assert ran == [("customer_view", "weekly")] and sent == []
+
+
+async def test_weekly_guard_alerts_on_violation(monkeypatch):
+    now = _dt(2026, 10, 20, tzinfo=_tz.utc)
+    bad = {"off-the-hook": {"ok": False, "violations": 2, "untagged_visible": 0},
+           "gerflor": {"ok": True, "violations": 0, "untagged_visible": 0}}
+    km, sent, _ = _guard_env(monkeypatch, None, bad)
+    problems = await km.weekly_guard(now)
+    assert problems == ["off-the-hook: 2 private and 0 untagged document chunks visible to customers"]
+    assert len(sent) == 1 and "off-the-hook" in sent[0] and "\n" not in sent[0]
+
+
+async def test_weekly_guard_retries_a_timed_out_tenant_before_alerting(monkeypatch):
+    now = _dt(2026, 10, 20, tzinfo=_tz.utc)
+    summary = {"digg-demo": "ConnectTimeout: "}
+    retry = [{"tenant": "digg-demo", "ok": True, "violations": [], "legacy_untagged_visible": 0}]
+    km, sent, _ = _guard_env(monkeypatch, None, summary, retry)
+    assert await km.weekly_guard(now) == []
+    assert sent == []

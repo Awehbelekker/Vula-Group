@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     local_llm_alert_after_min: int = 15
     local_llm_alert_repeat_h: float = 6.0
     local_llm_alert_tenant: str = ""
+    # Weekly customer-view guard (vula/kb_maintenance.weekly_guard, 2026-10-20): re-check once a
+    # week that customers see only public documents; WhatsApp platform_support_phone if not.
+    kb_customer_view_weekly: bool = True
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     # Meta only allows FREE-FORM WhatsApp text within 24 hours of the person's last inbound
     # message. Everything proactive Vula sends — an order alert, a document notification, an

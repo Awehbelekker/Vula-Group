@@ -133,3 +133,26 @@ async def forward(tenant_id: str, phone: str, sender_name: str, text: str) -> No
         # approved yet (or doesn't exist for this tenant) AND Ian has no open 24h window with
         # this tenant's number — the DB log above already guarantees the message isn't lost.
         logger.info("platform feedback WhatsApp forward skipped (%s): %s", tenant_id, exc)
+
+
+async def alert_operator(text: str) -> bool:
+    """A platform health alert (one line) to platform_support_phone: the approved template first,
+    so it arrives outside Meta's 24-hour window, free text as a fallback. Sent from
+    settings.local_llm_alert_tenant's number (the template lives on that tenant's WABA). Never
+    raises; False when nothing was delivered."""
+    from config import settings
+    to = settings.platform_support_phone
+    if not to:
+        return False
+    tenant = settings.local_llm_alert_tenant or ""
+    from vula.api.whatsapp import _send_reply, _send_wa_template
+    try:
+        if await _send_wa_template(tenant, to, TEMPLATE_NAME, text):
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("operator alert template send failed: %s", exc)
+    try:
+        return bool(await _send_reply(to, text, tenant_id=tenant))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("operator alert WhatsApp send failed: %s", exc)
+        return False
