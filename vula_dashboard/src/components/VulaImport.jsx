@@ -75,11 +75,13 @@ export default function VulaImport({ tenantId }) {
     <div style={{ color: C.text, maxWidth: 820 }}>
       <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0 2px" }}>📥 Import your history</h4>
       <div style={{ display: "flex", gap: 6, margin: "6px 0" }}>
-        {[["orders", "💬 Orders (chats/emails)"], ["invoices", "🧾 Old invoices (Xero export)"]].map(([v, l]) => (
+        {[["orders", "💬 Orders (chats/emails)"], ["invoices", "🧾 Old invoices (Xero export)"],
+          ["learn", "🧠 Learn from WhatsApp chats"]].map(([v, l]) => (
           <button key={v} onClick={() => { setMode(v); setOrders(null); setInvoices(null); }}
             style={{ ...btn, ...(mode === v ? btnOn : {}) }}>{l}</button>
         ))}
       </div>
+      {mode === "learn" ? <ChatLearn tenantId={tenantId} /> : <>
       <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>
         {mode === "invoices"
           ? "Paste or upload your old invoice list (Xero: Business → Invoices → Export, or any pasted table). Vula registers your past invoice numbers so bank payments like “INVOICE 003983” match up — unpaid ones stay open, paid ones go straight to history."
@@ -162,6 +164,87 @@ export default function VulaImport({ tenantId }) {
             </table>
           </div>
         </>
+      )}
+      </>}
+    </div>
+  );
+}
+
+/** Learn tone + common answers from WhatsApp exports (backend: vula/commerce/chat_learn.py).
+ *  Answers wait for review in Settings › What Vula has learned; the chats aren't kept. */
+function ChatLearn({ tenantId }) {
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState(null);
+  const [err, setErr] = useState("");
+
+  const pick = async (list) => {
+    setRes(null); setErr("");
+    const out = [];
+    for (const f of Array.from(list || []).slice(0, 40)) {
+      if (f.size > 4_000_000) { setErr(`${f.name} is too big — export "Without media".`); continue; }
+      if (f.name.toLowerCase().endsWith(".zip")) {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        out.push({ name: f.name, b64: btoa(bin) });
+      } else {
+        out.push({ name: f.name, text: await f.text() });
+      }
+    }
+    setFiles(out);
+  };
+
+  const learn = async (business) => {
+    if (!files.length) return setErr("Choose one or more chat exports first.");
+    setBusy(true); setErr(""); setRes(null);
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/chats/learn`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files, business: business || null }),
+    }).then(r => r.json()).catch(() => ({ error: "Couldn't reach Vula — try again." }));
+    setBusy(false);
+    if (r.error || r.detail) return setErr(r.error || r.detail);
+    setRes(r);
+  };
+
+  return (
+    <div>
+      <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>
+        Upload exported WhatsApp chats with your customers (in WhatsApp: open a chat › More › Export chat ›
+        Without media). Vula learns how you write and the questions you answer most. You review every answer
+        before it's used, the tone is only a suggestion, and the chats themselves aren't kept — customers'
+        names and numbers are taken out.
+      </p>
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <label style={{ ...btn, cursor: "pointer" }}>⬆ Choose chat exports (.txt or .zip)
+            <input type="file" multiple accept=".txt,.zip,text/plain,application/zip" style={{ display: "none" }}
+              onChange={e => pick(e.target.files)} />
+          </label>
+          <span style={{ fontSize: 12.5, color: C.muted }}>{files.length ? `${files.length} chat(s) ready` : "No chats chosen yet"}</span>
+          <button style={{ ...btn, ...btnOn, marginLeft: "auto" }} disabled={busy || !files.length} onClick={() => learn()}>
+            {busy ? "Reading your chats… (about a minute)" : "Learn from these chats"}
+          </button>
+        </div>
+        {err && <div style={{ marginTop: 8, fontSize: 12.5, color: C.red }}>{err}</div>}
+      </div>
+
+      {res?.need_sender && (
+        <div style={{ ...card, marginTop: 10 }}>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>Which of these is <b>you</b> (the business)?</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {res.need_sender.map(s => <button key={s} style={btn} disabled={busy} onClick={() => learn(s)}>{s}</button>)}
+          </div>
+        </div>
+      )}
+
+      {res && !res.need_sender && (
+        <div style={{ ...card, marginTop: 10, fontSize: 13, lineHeight: 1.6 }}>
+          <div>✓ Read <b>{res.chats}</b> chat(s), {res.messages} messages — you're “{res.business}”.</div>
+          <div>🗣️ {res.voice_samples} of your messages added to learn your tone.
+            {res.tone_suggested ? " A new tone suggestion is waiting in Settings › What Vula has learned." : " Not enough yet for a tone suggestion — add more chats."}</div>
+          <div>💬 {res.answers_to_review} answer(s) to review (from {res.pairs_found} questions customers asked).
+            Keep the right ones in <b>Settings › What Vula has learned</b> — only kept answers are used.</div>
+        </div>
       )}
     </div>
   );

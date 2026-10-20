@@ -3932,6 +3932,21 @@ async def admin_import_extract(tenant_id: str, body: ImportExtractIn):
     return {"orders": orders, "count": len(orders)}
 
 
+class ChatLearnIn(BaseModel):
+    files: list = []          # [{name, text}] for .txt, [{name, b64}] for .zip
+    business: Optional[str] = None   # which sender is the business, when Vula couldn't tell
+
+
+@router.post("/{tenant_id}/admin/import/chats/learn")
+async def admin_import_chats_learn(tenant_id: str, body: ChatLearnIn):
+    """Learn tone and common answers from WhatsApp chat exports (vula/commerce/chat_learn.py).
+    Answers land pending review; the tone is a suggestion; the chats themselves aren't kept."""
+    from vula.commerce import chat_learn
+    if not body.files:
+        raise HTTPException(status_code=400, detail="Upload at least one WhatsApp export.")
+    return await chat_learn.learn(tenant_id, body.files, me=(body.business or "").strip() or None)
+
+
 @router.post("/{tenant_id}/admin/import/invoices/extract")
 async def admin_import_invoices_extract(tenant_id: str, body: ImportExtractIn):
     """Draft historical invoices from a pasted export (e.g. Xero CSV). Review only."""
