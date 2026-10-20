@@ -2,35 +2,14 @@
  * VulaRepCrmLookup.jsx — search Dynamics 365 accounts/contacts/opportunities from the dashboard.
  * Shows the connect flow if not yet connected; a search box + results once it is.
  */
-import { useState, useEffect, useCallback } from "react";
 import VulaDynamics365Connect from "./VulaDynamics365Connect";
-import { VULA_API } from "../lib/authFetch";
+import { KINDS, useRepCrmLookup } from "./rep/useRepCrmLookup";
+import RepCrmLookupV2 from "./rep/RepCrmLookupV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
-const KINDS = [["contact", "Contacts"], ["account", "Accounts"], ["opportunity", "Opportunities"]];
 
-export default function VulaRepCrmLookup({ tenantId }) {
-  const [connected, setConnected] = useState(null);
-  const [kind, setKind] = useState("contact");
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
-  const [error, setError] = useState("");
-
-  const checkStatus = useCallback(async () => {
-    const r = await fetch(`${VULA_API}/v1/dynamics365/status/${tenantId}`);
-    const d = await r.json().catch(() => ({}));
-    setConnected(d.status === "connected");
-  }, [tenantId]);
-  useEffect(() => { checkStatus(); }, [checkStatus]);
-
-  const search = async () => {
-    setError("");
-    const params = new URLSearchParams({ query, kind });
-    const r = await fetch(`${VULA_API}/v1/dynamics365/${tenantId}/search?${params}`);
-    const d = await r.json().catch(() => ({}));
-    if (d.error) { setError(d.error); setResults([]); }
-    else setResults(d.results || []);
-  };
+function VulaRepCrmLookupV1({ tenantId }) {
+  const { connected, kind, setKind, query, setQuery, results, error, search } = useRepCrmLookup(tenantId);
 
   if (connected === null) return null;
   if (!connected) {
@@ -73,4 +52,8 @@ export default function VulaRepCrmLookup({ tenantId }) {
       {results.length === 0 && !error && <div style={{ fontSize: 13, color: C.muted }}>No results yet — try a search.</div>}
     </div>
   );
+}
+
+export default function VulaRepCrmLookup({ v2 = false, ...props }) {
+  return v2 ? <RepCrmLookupV2 {...props} /> : <VulaRepCrmLookupV1 {...props} />;
 }

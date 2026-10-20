@@ -3,47 +3,11 @@
  * popup-OAuth-poll pattern exactly, plus an org_url input Dataverse needs (tokens are org-scoped,
  * unlike Graph's one universal resource).
  */
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { VULA_API } from '../lib/authFetch'
+import { useDynamics365Connect } from './rep/useRepCrmLookup'
 
 
 export default function VulaDynamics365Connect({ tenantId }) {
-  const [status, setStatus] = useState(null)
-  const [account, setAccount] = useState(null)
-  const [orgUrl, setOrgUrl] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const pollRef = useRef(null)
-
-  const loadStatus = useCallback(async () => {
-    if (!tenantId) return
-    try {
-      const r = await fetch(`${VULA_API}/v1/dynamics365/status/${tenantId}`)
-      const d = await r.json()
-      setStatus(d.status); setAccount(d)
-    } catch { setStatus('error') }
-  }, [tenantId])
-
-  useEffect(() => { loadStatus() }, [loadStatus])
-  useEffect(() => {
-    const onMsg = (e) => { if (e.data === 'dynamics365-connected') loadStatus() }
-    const onFocus = () => loadStatus()
-    window.addEventListener('message', onMsg); window.addEventListener('focus', onFocus)
-    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('focus', onFocus); if (pollRef.current) clearInterval(pollRef.current) }
-  }, [loadStatus])
-
-  const handleConnect = useCallback(async () => {
-    if (!orgUrl.trim()) { setError('Enter your Dynamics org URL first (e.g. https://yourorg.crm4.dynamics.com).'); return }
-    setLoading(true); setError(null)
-    try {
-      const r = await fetch(`${VULA_API}/v1/dynamics365/authorize-url?tenant_id=${encodeURIComponent(tenantId)}&org_url=${encodeURIComponent(orgUrl.trim())}`)
-      const d = await r.json()
-      if (!d.url) throw new Error(d.error || 'Dynamics 365 not configured.')
-      window.open(d.url, 'd365-oauth', 'width=520,height=680')
-      let ticks = 0
-      pollRef.current = setInterval(() => { loadStatus(); if (++ticks > 30) clearInterval(pollRef.current) }, 3000)
-    } catch (err) { setError(err.message) } finally { setLoading(false) }
-  }, [tenantId, orgUrl, loadStatus])
+  const { status, account, orgUrl, setOrgUrl, loading, error, handleConnect } = useDynamics365Connect(tenantId)
 
   return (
     <div style={styles.card}>
