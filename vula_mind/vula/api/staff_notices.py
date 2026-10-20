@@ -11,6 +11,11 @@ vula/api/staff_notices.py — a business's notices to its own staff (vula/staff_
     POST /v1/team/{tenant}/notices/{id}/send
     POST /v1/team/{tenant}/notices/{id}/cancel
     POST /v1/team/{tenant}/notices/{id}/ack         a staff member's "Got it" on the noticeboard
+    POST /v1/team/{tenant}/notices/polls            a poll (migration 219, vula/staff_polls.py)
+    GET  /v1/team/{tenant}/notices/polls/{id}       its results (who chose what only if not anonymous)
+    POST /v1/team/{tenant}/notices/polls/{id}/close
+    POST /v1/team/{tenant}/notices/ask-birthdays    Vula asks everyone without a birthday, once
+    GET  /v1/team/{tenant}/notices/birthday-suggestions   birthdays from ID numbers on file
 
 Writes need the owner or a manager (tenant_auth.require_tenant_admin), except ack, which any
 member makes for themselves (server.py's _SECTION_RULES lets that one path through).
@@ -57,6 +62,20 @@ class SettingsIn(BaseModel):
     holidays: Optional[bool] = None
     send_hour: Optional[int] = None
     holiday_note: Optional[str] = None
+    anniversaries: Optional[bool] = None
+    observances: Optional[list] = None          # sa_holidays.OBSERVANCES ids
+    observance_lines: Optional[dict] = None
+    company_days: Optional[list] = None         # [{name, date "MM-DD", line}]
+
+
+class PollIn(BaseModel):
+    question: str
+    options: list
+    anonymous: bool = False
+    closes_at: Optional[str] = None
+    audience: Optional[dict] = None
+    send_at: Optional[str] = None
+    send_now: bool = True
 
 
 def _member_of(scope: Optional[dict], tenant: str) -> Optional[dict]:
@@ -76,6 +95,7 @@ async def list_notices(tenant: str, authorization: str = Header(default="")) -> 
         log.debug("notices list skipped (run migration 218?): %s", exc)
         return {"notices": [], "full": bool((scope or {}).get("full"))}
     if scope and scope.get("full"):
+        _with_polls(tenant, rows)
         return {"notices": rows, "full": True}
     me = _member_of(scope, tenant)
     mine = []
@@ -89,9 +109,24 @@ async def list_notices(tenant: str, authorization: str = Header(default="")) -> 
     return {"notices": mine, "full": False}
 
 
+def _with_polls(tenant: str, rows: list) -> None:
+    """Attach each poll's results to its notice row (the dashboard's notices list)."""
+    try:
+        from vula import staff_polls
+        for r in rows:
+            if r.get("kind") == "poll":
+                p = staff_polls.for_notice(tenant, r["id"])
+                if p:
+                    r["poll"] = staff_polls.results(tenant, p["id"])
+    except Exception as exc:
+        log.debug("poll results skipped (run migration 219?): %s", exc)
+
+
 @router.get("/{tenant}/notices/settings")
 async def get_settings(tenant: str) -> dict:
-    return {"settings": sn.settings_for(tenant)}
+    from vula.sa_holidays import OBSERVANCES
+    return {"settings": sn.settings_for(tenant),
+            "observances": [{"id": i, "name": n, "line": t} for i, n, t in OBSERVANCES]}
 
 
 @router.put("/{tenant}/notices/settings")
@@ -192,3 +227,63 @@ async def ack_notice(tenant: str, notice_id: str, authorization: str = Header(de
     sn.acknowledge_member(tenant, me["id"], notice_id)
     mine = [r for r in sn.recipients(tenant, notice_id) if str(r.get("member_id")) == str(me["id"])]
     return {"acknowledged_at": (mine[0].get("acknowledged_at") if mine else None)}
+
+
+# ── polls, asking for birthdays, ID number suggestions (migration 219) ───────
+
+@router.post("/{tenant}/notices/polls")
+async def create_poll(tenant: str, body: PollIn,
+                      identity: dict = Depends(require_tenant_admin)) -> dict:
+    from vula import staff_polls
+    try:
+        poll = staff_polls.create(tenant, body.question, body.options, anonymous=body.anonymous,
+                                  closes_at=body.closes_at, audience_spec=body.audience,
+                                  send_at=None if body.send_now else body.send_at,
+                                  created_by=identity.get("email"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    merchant_audit.audit(tenant, identity, "staff_poll_created", poll_id=poll["id"],
+                         question=poll["question"], anonymous=poll["anonymous"])
+    result = None
+    if body.send_now:
+        result = await _send(tenant, poll["notice_id"], len(sn.audience(tenant, body.audience)))
+    return {"poll": staff_polls.results(tenant, poll["id"]), "result": result}
+
+
+@router.get("/{tenant}/notices/polls/{poll_id}")
+async def poll_results(tenant: str, poll_id: str,
+                       identity: dict = Depends(require_tenant_admin)) -> dict:
+    from vula import staff_polls
+    res = staff_polls.results(tenant, poll_id)
+    if res.get("error"):
+        raise HTTPException(status_code=404, detail=res["error"])
+    return res
+
+
+@router.post("/{tenant}/notices/polls/{poll_id}/close")
+async def close_poll(tenant: str, poll_id: str,
+                     identity: dict = Depends(require_tenant_admin)) -> dict:
+    from vula import staff_polls
+    closed = staff_polls.close(tenant, poll_id)
+    if closed:
+        merchant_audit.audit(tenant, identity, "staff_poll_closed", poll_id=poll_id)
+    return {"closed": closed, **staff_polls.results(tenant, poll_id)}
+
+
+@router.post("/{tenant}/notices/ask-birthdays")
+async def ask_birthdays(tenant: str, identity: dict = Depends(require_tenant_admin)) -> dict:
+    res = await sn.ask_birthdays(tenant)
+    merchant_audit.audit(tenant, identity, "staff_birthdays_asked", asked=res["asked"])
+    return res
+
+
+@router.get("/{tenant}/notices/birthday-suggestions")
+async def birthday_suggestions(tenant: str, identity: dict = Depends(require_tenant_admin)) -> dict:
+    """Birthdays worked out from ID numbers already on file — shown for the owner to accept;
+    nothing is saved here, and the ID number itself never leaves the server."""
+    out = []
+    for m in sn.members(tenant):
+        md = sn.suggest_birthday(tenant, m)
+        if md:
+            out.append({"member_id": m["id"], "name": m.get("name"), "birthday": md})
+    return {"suggestions": out}

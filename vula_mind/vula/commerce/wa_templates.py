@@ -376,6 +376,8 @@ STAFF_GOT_IT = "Got it ✅"
 STAFF_NOTICE_SUFFIX = "staff_notice"            # · business, the notice text
 STAFF_NOTICE_IMAGE_SUFFIX = "staff_notice_image"  # the same with a picture (a poster, a newsletter)
 STAFF_DAY_SUFFIX = "staff_day"                  # · first name, the birthday / holiday line, business
+STAFF_POLL_SUFFIX = "staff_poll_invite"         # · first name, business, the question (vula/staff_polls.py)
+STAFF_POLL_BODY = "Hi {{1}}, {{2}} would like your vote: {{3}} Tap Vote to see the choices."
 STAFF_NOTICE_BODY = ("📢 Notice from {{1}}:\n\n{{2}}\n\nTap Got it once you've read it, "
                      "or reply here with any questions.")
 STAFF_DAY_BODY = "Hi {{1}}, {{2}} From all of us at {{3}}."
@@ -395,6 +397,9 @@ def staff_templates(tenant_id: str) -> List[Dict[str, Any]]:
          "category": "UTILITY", "buttons": [{"type": "QUICK_REPLY", "text": "Thank you"}],
          "examples": ["Thandi", "tomorrow (Fri 16 Dec) is Day of Reconciliation, a public holiday.",
                       "DIGG"]},
+        {"name": template_name(tenant_id, STAFF_POLL_SUFFIX), "body": STAFF_POLL_BODY,
+         "category": "UTILITY", "buttons": [{"type": "QUICK_REPLY", "text": "Vote"}],
+         "examples": ["Thandi", "DIGG", "Which day suits you for the year-end function?"]},
     ]
 
 

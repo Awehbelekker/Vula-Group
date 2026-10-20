@@ -693,7 +693,11 @@ _OWNER_ADMIN_RE = re.compile(
     # A notice to the business's own staff — the staff_notice tool (20 Oct).
     r"\b(?:tell|inform|notify|remind|message|let)\s+(?:all\s+)?(?:(?:the|my|our)\s+)?"
     r"(?:staff|team|employees|workers)\b|\b(?:announce|announcement|notice)\s+(?:to|for)\s+"
-    r"(?:all\s+)?(?:(?:the|my|our)\s+)?(?:staff|team|employees|workers)\b",
+    r"(?:all\s+)?(?:(?:the|my|our)\s+)?(?:staff|team|employees|workers)\b|"
+    # ...or a poll of them (staff_poll)
+    r"\b(?:staff|team)\s+(?:poll|vote)\b|\bpoll\s+(?:the\s+)?(?:staff|team)\b|"
+    r"\b(?:ask|get)\s+(?:all\s+)?(?:(?:the|my|our)\s+)?(?:staff|team)\s+to\s+vote\b|"
+    r"\banonymous\s+(?:poll|vote)\b",
     re.IGNORECASE)
 
 

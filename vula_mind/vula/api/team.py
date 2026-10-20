@@ -47,6 +47,7 @@ class MemberIn(BaseModel):
     birthday: Optional[str] = None          # "MM-DD" (migration 218) — day and month only
     birthday_share: Optional[bool] = None
     notices_opt_out: Optional[bool] = None
+    start_date: Optional[str] = None        # "YYYY-MM-DD" (migration 219) — work anniversaries
 
 
 _BIRTHDAY_RE = re.compile(r"^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
@@ -55,9 +56,14 @@ _BIRTHDAY_RE = re.compile(r"^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
 def _clean_birthday(row: dict) -> dict:
     """Day and month only; "" clears it. New columns are only sent when set, so a business that
     hasn't run migration 218 can still add and edit people."""
-    for k in ("birthday", "birthday_share", "notices_opt_out"):
+    for k in ("birthday", "birthday_share", "notices_opt_out", "start_date"):
         if row.get(k) is None:
             row.pop(k, None)
+    if "start_date" in row:
+        sd = (row["start_date"] or "").strip()
+        if sd and not re.fullmatch(r"(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])", sd):
+            raise HTTPException(status_code=400, detail="Start date must be YYYY-MM-DD.")
+        row["start_date"] = sd or None
     if "birthday" in row:
         b = (row["birthday"] or "").strip()
         if b and not _BIRTHDAY_RE.match(b):
@@ -77,6 +83,7 @@ class MemberPatch(BaseModel):
     birthday: Optional[str] = None
     birthday_share: Optional[bool] = None
     notices_opt_out: Optional[bool] = None
+    start_date: Optional[str] = None
 
 
 @router.get("/{tenant}")
@@ -103,9 +110,22 @@ async def add_member(tenant: str, body: MemberIn,
         _team_index.invalidate(tenant)
         merchant_audit.audit(tenant, identity, "member_added",
                              name=row.get("name"), email=row.get("email"), role=row.get("role"))
-        return {"member": (res.data or [row])[0]}
+        member = (res.data or [row])[0]
+        await _ask_new_member_birthday(tenant, member)
+        return {"member": member}
     except Exception as exc:
         return {"error": f"{exc} (run migration 029?)"}
+
+
+async def _ask_new_member_birthday(tenant: str, member: dict) -> None:
+    """When the business has birthday messages on, a new person is asked theirs (once)."""
+    try:
+        from vula import staff_notices
+        if (member.get("id") and member.get("whatsapp") and not member.get("birthday")
+                and staff_notices.settings_for(tenant)["birthdays"]):
+            await staff_notices.ask_birthday(tenant, member)
+    except Exception as exc:
+        log.debug("new member birthday question skipped: %s", exc)
 
 
 async def _revoke_matching_login(tenant: str, member_id: str, identity: dict) -> bool:

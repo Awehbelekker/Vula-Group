@@ -58,6 +58,10 @@ function Birthday({ m, patch }) {
       {m.birthday && <Button size="sm" variant="secondary" onClick={() => patch(m.id, { birthday: "" })}>Clear</Button>}
       {m.birthday && <Chip label="Tell the team" on={m.birthday_share !== false} onClick={() => patch(m.id, { birthday_share: m.birthday_share === false })} />}
       {m.notices_opt_out && <StatusChip>Opted out of birthday &amp; holiday messages</StatusChip>}
+      <label className="vtm-start">Started
+        <Input type="date" defaultValue={m.start_date || ""} aria-label={`Start date for ${who}`}
+          onBlur={(e) => e.target.value !== (m.start_date || "") && patch(m.id, { start_date: e.target.value })} />
+      </label>
     </div>
   );
 }

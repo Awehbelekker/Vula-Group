@@ -9,12 +9,16 @@
  * sent to them, with a Got it button. Backend: vula/api/staff_notices.py.
  */
 import { useCallback, useEffect, useState } from "react";
-import { BellRing, CalendarClock, Megaphone, Send, TestTube2, XCircle } from "lucide-react";
+import { BellRing, Cake, CalendarClock, Lock, Megaphone, Plus, Send, TestTube2, Trash2, Vote, XCircle } from "lucide-react";
 import { VULA_API } from "../../lib/authFetch";
 import { Button, Card, EmptyState, Field, Input, Select, StatusChip, Textarea, toast } from "../ui/index.jsx";
 import { ROLE_LABELS, ROLES } from "./useTeam";
 
-const KIND_LABEL = { notice: "Notice", newsletter: "Newsletter", birthday: "Birthday", holiday: "Public holiday" };
+const KIND_LABEL = { notice: "Notice", newsletter: "Newsletter", birthday: "Birthday", holiday: "Public holiday",
+  poll: "Poll", anniversary: "Work anniversary", special_day: "Special day" };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const EMPTY_POLL = { question: "", options: ["", ""], anonymous: false, closes_at: "" };
+const fmtMD = (md) => (md ? `${Number(md.slice(3))} ${MONTHS[Number(md.slice(0, 2)) - 1]}` : "");
 const STATUS_TONE = { sent: "ok", scheduled: "info", sending: "info", draft: "muted", cancelled: "muted" };
 const EMPTY = { title: "", body: "", image_url: "", must_read: false, who: "all", roles: [], send_at: "" };
 
@@ -28,6 +32,10 @@ async function call(path, opts = {}) {
 export default function NoticesV2({ tenantId }) {
   const [data, setData] = useState({ notices: [], full: false });
   const [settings, setSettings] = useState(null);
+  const [catalogue, setCatalogue] = useState([]);
+  const [poll, setPoll] = useState(EMPTY_POLL);
+  const [suggest, setSuggest] = useState([]);
+  const [newDay, setNewDay] = useState({ name: "", day: "", month: "", line: "" });
   const [form, setForm] = useState(EMPTY);
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -39,6 +47,8 @@ export default function NoticesV2({ tenantId }) {
       setData(await call(base));
       const s = await call(`${base}/settings`);
       setSettings(s.settings);
+      setCatalogue(s.observances || []);
+      call(`${base}/birthday-suggestions`).then((x) => setSuggest(x.suggestions || [])).catch(() => {});
     } catch (e) { toast(e.message, "danger"); }
   }, [tenantId, base]);
   useEffect(() => { load(); }, [load]);
@@ -80,6 +90,45 @@ export default function NoticesV2({ tenantId }) {
       if (what === "send") toast(d.error || (d.status === "sending" ? "Sending…" : `Sent to ${d.sent || 0} of ${d.total || 0}.`), d.error ? "danger" : "ok");
       load();
     } catch (e) { toast(e.message, "danger"); }
+  };
+  const sendPoll = async () => {
+    const options = poll.options.map((o) => o.trim()).filter(Boolean);
+    if (!poll.question.trim() || options.length < 2) { toast("A poll needs a question and at least 2 choices.", "danger"); return; }
+    setBusy(true);
+    try {
+      const d = await call(`${base}/polls`, { method: "POST", body: JSON.stringify({ question: poll.question, options,
+        anonymous: poll.anonymous, closes_at: poll.closes_at ? new Date(poll.closes_at).toISOString() : null, send_now: true }) });
+      const r = d.result || {};
+      toast(r.status === "sending" ? `Sending to ${r.total} people…` : `Poll sent to ${r.sent || 0} of ${r.total || 0}.`);
+      setPoll(EMPTY_POLL); load();
+    } catch (e) { toast(e.message, "danger"); }
+    setBusy(false);
+  };
+  const closePoll = async (id) => {
+    try { await call(`${base}/polls/${id}/close`, { method: "POST" }); load(); } catch (e) { toast(e.message, "danger"); }
+  };
+  const askBirthdays = async () => {
+    try {
+      const d = await call(`${base}/ask-birthdays`, { method: "POST" });
+      toast(d.asked ? `Asked ${d.asked}: ${d.names.join(", ")}.` : "Everyone has a birthday on file or was asked before.");
+    } catch (e) { toast(e.message, "danger"); }
+  };
+  const useSuggestion = async (sug) => {
+    try {
+      await call(`/v1/team/${tenantId}/${sug.member_id}`, { method: "PATCH", body: JSON.stringify({ birthday: sug.birthday }) });
+      setSuggest(suggest.filter((x) => x.member_id !== sug.member_id));
+      toast(`Saved ${sug.name}'s birthday: ${fmtMD(sug.birthday)}.`);
+    } catch (e) { toast(e.message, "danger"); }
+  };
+  const addCompanyDay = () => {
+    if (!newDay.name.trim() || !newDay.day || !newDay.month) { toast("Give the day a name, a day and a month.", "danger"); return; }
+    saveSettings({ company_days: [...(settings.company_days || []),
+      { name: newDay.name, date: `${newDay.month}-${newDay.day}`, line: newDay.line }] });
+    setNewDay({ name: "", day: "", month: "", line: "" });
+  };
+  const toggleObs = (id) => {
+    const cur = settings.observances || [];
+    saveSettings({ observances: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
   };
   const saveSettings = async (patch) => {
     try { setSettings((await call(`${base}/settings`, { method: "PUT", body: JSON.stringify(patch) })).settings); }
@@ -152,6 +201,29 @@ export default function NoticesV2({ tenantId }) {
         )}
       </Card>
 
+      <Card className="vtm-block">
+        <h2 className="vtm-h"><Vote size={18} aria-hidden="true" />New poll</h2>
+        <p className="vtm-sub">Staff vote on WhatsApp with one tap. Up to 10 choices.</p>
+        <Field label="Question"><Input value={poll.question} maxLength={300} placeholder="Which day suits you for the year-end function?" onChange={(e) => setPoll({ ...poll, question: e.target.value })} /></Field>
+        <div className="vtm-poll-options">
+          {poll.options.map((o, i) => (
+            <div key={i} className="vtm-poll-option">
+              <Input value={o} maxLength={24} placeholder={`Choice ${i + 1}`} aria-label={`Choice ${i + 1}`}
+                onChange={(e) => setPoll({ ...poll, options: poll.options.map((x, j) => (j === i ? e.target.value : x)) })} />
+              {poll.options.length > 2 && <Button size="sm" variant="secondary" Icon={Trash2} aria-label={`Remove choice ${i + 1}`}
+                onClick={() => setPoll({ ...poll, options: poll.options.filter((_, j) => j !== i) })} />}
+            </div>
+          ))}
+          {poll.options.length < 10 && <Button size="sm" variant="secondary" Icon={Plus} onClick={() => setPoll({ ...poll, options: [...poll.options, ""] })}>Add a choice</Button>}
+        </div>
+        <label className="vtm-check"><input type="checkbox" checked={poll.anonymous} onChange={(e) => setPoll({ ...poll, anonymous: e.target.checked })} />
+          <span><Lock size={14} aria-hidden="true" /> Anonymous — you see the totals and who has voted, never who chose what. Staff are told their answer isn't shown to anyone at the business.</span></label>
+        <div className="vtm-notice-actions">
+          <Field label="Closes (optional)"><Input type="datetime-local" value={poll.closes_at} onChange={(e) => setPoll({ ...poll, closes_at: e.target.value })} /></Field>
+          <Button Icon={Send} disabled={busy} onClick={sendPoll}>Send poll to everyone</Button>
+        </div>
+      </Card>
+
       {settings && (
         <Card className="vtm-block">
           <h2 className="vtm-h"><BellRing size={18} aria-hidden="true" />Birthdays and public holidays</h2>
@@ -169,6 +241,59 @@ export default function NoticesV2({ tenantId }) {
             <Field label="Add to holiday reminders (optional)">
               <Input defaultValue={settings.holiday_note} placeholder="The office is closed." onBlur={(e) => e.target.value !== settings.holiday_note && saveSettings({ holiday_note: e.target.value })} />
             </Field>
+          </div>
+          <div className="vtm-notice-actions">
+            <Button variant="secondary" Icon={Cake} onClick={askBirthdays}>Ask everyone for their birthday</Button>
+            <span className="vtm-sub">Vula asks each person once on WhatsApp — day and month only. They can reply skip.</span>
+          </div>
+          {suggest.length > 0 && (
+            <div className="vtm-preview">
+              <p className="vtm-strong">From ID numbers already on file</p>
+              {suggest.map((x) => (
+                <div key={x.member_id} className="vtm-login">
+                  <span className="vtm-login-who">{x.name}: {fmtMD(x.birthday)}</span>
+                  <Button size="sm" onClick={() => useSuggestion(x)}>Use</Button>
+                </div>
+              ))}
+            </div>
+          )}
+          <label className="vtm-check"><input type="checkbox" checked={!!settings.anniversaries} onChange={(e) => saveSettings({ anniversaries: e.target.checked })} />
+            Work anniversaries — "3 years with us today" (add start dates on People; Vula also asks after the birthday)</label>
+
+          <h3 className="vtm-h3">Special days</h3>
+          {catalogue.map((o) => (
+            <div key={o.id} className="vtm-obs">
+              <label className="vtm-check"><input type="checkbox" checked={(settings.observances || []).includes(o.id)} onChange={() => toggleObs(o.id)} />{o.name}</label>
+              {(settings.observances || []).includes(o.id) && (
+                <Input defaultValue={(settings.observance_lines || {})[o.id] || ""} placeholder={o.line} aria-label={`Message for ${o.name}`}
+                  onBlur={(e) => saveSettings({ observance_lines: { ...(settings.observance_lines || {}), [o.id]: e.target.value } })} />
+              )}
+            </div>
+          ))}
+
+          <h3 className="vtm-h3">Your own yearly days</h3>
+          {(settings.company_days || []).map((d, i) => (
+            <div key={`${d.name}-${i}`} className="vtm-login">
+              <span className="vtm-login-who"><span className="vtm-strong">{d.name}</span><span className="vtm-sub">{fmtMD(d.date)}{d.line ? ` · ${d.line}` : ""}</span></span>
+              <Button size="sm" variant="secondary" Icon={Trash2} onClick={() => saveSettings({ company_days: settings.company_days.filter((_, j) => j !== i) })}>Remove</Button>
+            </div>
+          ))}
+          <div className="vtm-form">
+            <Field label="Name"><Input value={newDay.name} placeholder="DIGG's birthday" onChange={(e) => setNewDay({ ...newDay, name: e.target.value })} /></Field>
+            <Field label="Day">
+              <Select value={newDay.day} onChange={(e) => setNewDay({ ...newDay, day: e.target.value })}>
+                <option value="">Day</option>
+                {Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, "0")).map((d) => <option key={d} value={d}>{Number(d)}</option>)}
+              </Select>
+            </Field>
+            <Field label="Month">
+              <Select value={newDay.month} onChange={(e) => setNewDay({ ...newDay, month: e.target.value })}>
+                <option value="">Month</option>
+                {MONTHS.map((l, i) => { const v = String(i + 1).padStart(2, "0"); return <option key={v} value={v}>{l}</option>; })}
+              </Select>
+            </Field>
+            <Field label="Message (optional)"><Input value={newDay.line} placeholder="today DIGG turns 5 — thank you all! 🎉" onChange={(e) => setNewDay({ ...newDay, line: e.target.value })} /></Field>
+            <div className="vtm-go"><Button Icon={Plus} onClick={addCompanyDay}>Add</Button></div>
           </div>
         </Card>
       )}
@@ -191,8 +316,9 @@ export default function NoticesV2({ tenantId }) {
                 {(n.status === "draft" || n.status === "scheduled") && <Button size="sm" variant="secondary" Icon={XCircle} onClick={() => act(n.id, "cancel")}>Cancel</Button>}
               </span>
             </div>
-            <p className="vtm-notice-body">{n.body}</p>
-            {n.status === "sent" && (
+            {n.kind !== "poll" && <p className="vtm-notice-body">{n.body}</p>}
+            {n.poll && <PollResults res={n.poll} onClose={() => closePoll(n.poll.poll.id)} />}
+            {n.status === "sent" && n.kind !== "poll" && (
               <p className="vtm-sub">
                 Sent to {c.sent || 0}{c.failed ? ` (${c.failed} couldn't be reached)` : ""} · delivered {c.delivered || 0} · read {c.read || 0}
                 {n.must_read ? ` · confirmed ${c.acknowledged || 0}` : ""}
@@ -202,6 +328,27 @@ export default function NoticesV2({ tenantId }) {
           </Card>
         );
       })}
+    </div>
+  );
+}
+
+function PollResults({ res, onClose }) {
+  const total = Math.max(1, ...res.counts.map((c) => c.votes));
+  const open = res.poll.status === "open";
+  return (
+    <div className="vtm-poll">
+      <p className="vtm-strong">{res.poll.question} {res.poll.anonymous && <StatusChip><Lock size={12} aria-hidden="true" />Anonymous</StatusChip>}</p>
+      {res.counts.map((c) => (
+        <div key={c.option} className="vtm-poll-row">
+          <span className="vtm-poll-label">{c.option}</span>
+          <span className="vtm-poll-bar" aria-hidden="true"><span style={{ width: `${(c.votes / total) * 100}%` }} /></span>
+          <span className="vtm-poll-n">{c.votes}</span>
+        </div>
+      ))}
+      <p className="vtm-sub">{res.voted} of {res.reached} voted{res.not_voted?.length ? ` — not yet: ${res.not_voted.join(", ")}` : ""}.
+        {res.poll.closes_at && ` ${open ? "Closes" : "Closed"} ${new Date(res.poll.closes_at).toLocaleString("en-ZA")}.`}</p>
+      {res.by_person?.length > 0 && <p className="vtm-sub">{res.by_person.map((b) => `${b.name}: ${b.option}`).join(" · ")}</p>}
+      {open && <Button size="sm" variant="secondary" onClick={onClose}>Close the poll now</Button>}
     </div>
   );
 }

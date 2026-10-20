@@ -29,10 +29,13 @@ TTL = {
     "doc_project": timedelta(days=3),
     "pop_match": timedelta(days=3),
     "staff_notice": timedelta(days=7),
+    "staff_birthday": timedelta(days=14),
+    "staff_start": timedelta(days=14),
+    "staff_poll": timedelta(days=14),
 }
 # Kinds that don't hold back other questions: a must-read staff notice waits for "got it" for days,
 # and shouldn't delay "which project is this slip for?" by QUIET_FOR.
-_NOT_BLOCKING = {"staff_notice"}
+_NOT_BLOCKING = {"staff_notice", "staff_birthday", "staff_start", "staff_poll"}
 DEFAULT_TTL = timedelta(days=3)
 # An open question this fresh means the person is still on it — don't stack another on top.
 QUIET_FOR = timedelta(hours=2)
