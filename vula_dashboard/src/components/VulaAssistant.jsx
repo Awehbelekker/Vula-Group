@@ -6,48 +6,15 @@
  * sales, orders, stock, invoices, expenses, broadcast previews — and it takes
  * real actions via the admin tools.
  */
+import { SUGGESTIONS, useAssistantChat } from './assistant/useAssistantChat'
+import AssistantV2 from './assistant/AssistantV2'
 
-import { useState, useRef, useEffect } from 'react'
-import { VULA_API } from '../lib/authFetch'
+export default function VulaAssistant({ v2 = false, ...props }) {
+  return v2 ? <AssistantV2 {...props} /> : <VulaAssistantV1 {...props} />
+}
 
-
-const SUGGESTIONS = [
-  "What were today's sales?",
-  "Which orders need dispatching?",
-  "What's low on stock?",
-  "What invoices are outstanding?",
-]
-
-export default function VulaAssistant({ tenantId }) {
-  const [messages, setMessages] = useState([
-    { role: 'assistant', text: "Hi! I'm your Vula assistant. Ask me about sales, orders, stock, invoices or expenses — or tell me to update something." },
-  ])
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const sessionId = useRef(`${tenantId}-${Math.random().toString(36).slice(2, 9)}`)
-  const endRef = useRef(null)
-
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, sending])
-
-  async function send(text) {
-    const msg = (text ?? input).trim()
-    if (!msg || sending) return
-    setInput('')
-    setMessages(m => [...m, { role: 'user', text: msg }])
-    setSending(true)
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, session_id: sessionId.current }),
-      })
-      const d = await r.json()
-      setMessages(m => [...m, { role: 'assistant', text: d.answer || "Sorry, I couldn't process that." }])
-    } catch {
-      setMessages(m => [...m, { role: 'assistant', text: 'Connection error — please try again.' }])
-    } finally {
-      setSending(false)
-    }
-  }
+function VulaAssistantV1({ tenantId }) {
+  const { messages, input, setInput, sending, endRef, send } = useAssistantChat(tenantId)
 
   return (
     <div style={s.wrap}>
