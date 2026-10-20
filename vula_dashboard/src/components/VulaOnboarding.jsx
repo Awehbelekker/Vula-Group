@@ -1,46 +1,11 @@
 import { useState, useEffect } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { INDUSTRIES, PAIN_POINTS, TIER_INFO, useOnboardWizard } from "./onboard/useOnboardWizard";
+import OnboardWizardV2 from "./onboard/OnboardWizardV2";
 
-const TIERS = [
-  {
-    id: "starter",
-    name: "Starter",
-    label: "R1,500/mo",
-    desc: "1–2 users. Core AI modules. Ideal for sole traders and small practices.",
-    features: ["AI quote & proposal builder", "Invoice & billing", "Document intelligence (25 docs)", "Email drafting", "WhatsApp notifications"],
-    color: "#8B7355",
-    highlight: false,
-  },
-  {
-    id: "growth",
-    name: "Growth",
-    label: "R3,500/mo",
-    desc: "Up to 5 users. Full AI suite. Best for growing SMEs.",
-    features: ["Everything in Starter", "Unlimited document intelligence", "CRM & client tracking", "Custom AI persona", "Priority support (24hr)"],
-    color: "#C4922A",
-    highlight: true,
-  },
-  {
-    id: "business",
-    name: "Business",
-    label: "R7,500/mo",
-    desc: "Unlimited users. White-label ready. For established businesses.",
-    features: ["Everything in Growth", "White-label branding", "API access", "Dedicated Soul Box hardware", "Onsite setup & training"],
-    color: "var(--accent)",
-    highlight: false,
-  },
-];
+// The current look's own tier colours; the tiers themselves live in onboard/useOnboardWizard.js.
+const TIER_COLOR = { starter: "#8B7355", growth: "#C4922A", business: "var(--accent)" };
+const TIERS = TIER_INFO.map((t) => ({ ...t, color: TIER_COLOR[t.id] }));
 
-const INDUSTRIES = [
-  "Architecture & Property",
-  "Construction & Engineering",
-  "Managed Print & IT Services",
-  "Watersports & Lifestyle",
-  "Legal & Professional Services",
-  "Healthcare & Wellness",
-  "Retail & E-commerce",
-  "Other",
-];
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -264,14 +229,7 @@ function StepTraining({ data, onChange, onNext, onBack }) {
 
   const addFiles = (newFiles) => setFiles(prev => [...prev, ...newFiles].slice(0, 10));
 
-  const painPoints = [
-    "Writing proposals & quotes takes too long",
-    "Staff spend hours on emails and follow-ups",
-    "Hard to stay on top of client communications",
-    "Invoicing and cashflow is manual and slow",
-    "Can't find documents when I need them",
-    "No time to train new staff properly",
-  ];
+  const painPoints = PAIN_POINTS;
 
   return (
     <div>
@@ -489,66 +447,8 @@ function StepSuccess({ data, plan, workspaceUrl, paymentUrl }) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function VulaOnboarding() {
-  const [step, setStep] = useState(0);
-  const [plan, setPlan] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [workspaceUrl, setWorkspaceUrl] = useState("");
-  const [paymentUrl, setPaymentUrl] = useState("");
-  const [business, setBusiness] = useState({
-    companyName: "", industry: "", staffCount: "",
-    contactName: "", email: "", whatsapp: "", painPoints: [],
-  });
-
-  const updateBusiness = (key, val) => setBusiness(prev => ({ ...prev, [key]: val }));
-
-  const handleSubmit = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      // Absolute API URL so the global auth wrapper (lib/authFetch.js) attaches the master's
-      // token — the relative /api path skipped it and the backend answered 401.
-      const resp = await fetch(`${VULA_API}/v1/onboard`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company_name: business.companyName,
-          industry: business.industry,
-          staff_count: business.staffCount ? parseInt(business.staffCount, 10) : null,
-          contact_name: business.contactName,
-          email: business.email,
-          whatsapp: business.whatsapp || null,
-          pain_points: business.painPoints,
-          plan,
-        }),
-      });
-      if (!resp.ok) {
-        const err = await resp.json();
-        throw new Error(err.detail || `Server error ${resp.status}`);
-      }
-      const data = await resp.json();
-      const docs = business.files || [];
-      if (docs.length && data.workspace_slug) {
-        const fd = new FormData();
-        fd.append("tenant_id", data.workspace_slug);
-        docs.forEach(f => fd.append("files", f));
-        try {
-          const up = await fetch(`${VULA_API}/v1/onboard/documents`, { method: "POST", body: fd });
-          if (!up.ok) setError("Workspace created, but the documents didn't upload — add them from the Documents tab.");
-        } catch {
-          setError("Workspace created, but the documents didn't upload — add them from the Documents tab.");
-        }
-      }
-      setWorkspaceUrl(data.workspace_url);
-      if (data.payment_url) setPaymentUrl(data.payment_url);
-      setStep(5);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+function VulaOnboardingV1() {
+  const { step, setStep, plan, setPlan, loading, error, workspaceUrl, paymentUrl, business, updateBusiness, handleSubmit } = useOnboardWizard();
 
   return (
     <>
@@ -591,4 +491,8 @@ export default function VulaOnboarding() {
       </div>
     </>
   );
+}
+
+export default function VulaOnboarding({ v2 = false, ...props }) {
+  return v2 ? <OnboardWizardV2 {...props} /> : <VulaOnboardingV1 {...props} />;
 }
