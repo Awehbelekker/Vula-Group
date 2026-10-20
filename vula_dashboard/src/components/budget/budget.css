@@ -1,0 +1,28 @@
+/* budget.css — the redesigned Money › Budget (budget/BudgetV2.jsx). Tokens only; every text holder
+   min-width: 0. Spend by category is labelled bars, so no colour has to carry the meaning. */
+
+.vbg { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 900px; }
+.vbg-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vbg-due { border-color: var(--warn) !important; }
+.vbg-h { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vbg-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.vbg-muted svg { vertical-align: -2px; }
+.vbg-danger { color: var(--danger-text) !important; }
+.vbg-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vbg-row.vbg-bottom { align-items: flex-end; }
+.vbg-grow { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; color: var(--ink); }
+.vbg-end { align-self: end; }
+.vbg-trail { display: inline-flex; align-items: center; gap: var(--space-1); }
+.vbg-tiles { display: grid; gap: var(--space-2); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.vbg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vbg-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; }
+.vbg-item + .vbg-item { border-top: 1px solid var(--line); }
+.vbg-cats { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vbg-cats > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: var(--space-2); font-size: var(--fs-body); }
+.vbg-cats dt { color: var(--ink); overflow-wrap: anywhere; }
+.vbg-cats dd { margin: 0; display: flex; align-items: center; gap: var(--space-2); }
+.vbg-meter { flex: 1; height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.vbg-meter > span { display: block; height: 100%; border-radius: 4px; background: var(--brand); }
+.vbg-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vbg-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); align-items: end; }
+.vbg-h.vbg-grow { flex-direction: row; align-items: center; gap: var(--space-2); }
