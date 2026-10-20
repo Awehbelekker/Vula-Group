@@ -7,6 +7,7 @@
 import { useState } from 'react'
 import { ArrowLeft, Building2, Eye, EyeOff, KeyRound, LogIn, Mail, MessageCircle, QrCode, RotateCcw, Smartphone, UserPlus } from 'lucide-react'
 import { Button, Card, Field, IconButton, Input, Select } from '../ui/index.jsx'
+import VulaLogo, { PoweredByVula } from '../brand/VulaLogo.jsx'
 import { useLogin } from './useLogin'
 import { isPhone, useWhatsAppLogin } from './useWhatsAppLogin'
 import './login.css'
@@ -24,11 +25,11 @@ export default function LoginV2({ onSuccess }) {
             <>
               {b.logo_url ? <img src={b.logo_url} alt={b.name || ''} className="vlg-logo vula-login-logo" />
                 : <span className="vlg-name">{b.name}</span>}
-              <span className="vlg-over">Powered by Vula</span>
+              <PoweredByVula />
             </>
           ) : (
             <>
-              <span className="vlg-name">Vula</span>
+              <VulaLogo kind="lockup" height={48} title="Vula" />
               <span className="vlg-over">Business dashboard</span>
             </>
           )}

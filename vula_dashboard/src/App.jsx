@@ -27,6 +27,7 @@ import VulaMasterPanel from "./components/VulaMasterPanel";
 import { VULA_API, authFetch } from "./lib/authFetch";
 import { Button, promptDialog } from "./components/ui/index.jsx";
 import { ArrowLeft, Eye } from "lucide-react";
+import VulaLogo from "./components/brand/VulaLogo.jsx";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -416,7 +417,7 @@ export default function App() {
   return (
     <>
       <VulaShell
-        brand={{ logoEmoji: "◆", name: "Vula", sub: "Master · all tenants" }}
+        brand={{ logoEmoji: "◆", logo: <VulaLogo kind="mark" size={40} />, name: "Vula", sub: "Master · all tenants" }}
         zones={MASTER_ZONES}
         activeZoneId={masterZone}
         onZoneChange={setMasterZone}

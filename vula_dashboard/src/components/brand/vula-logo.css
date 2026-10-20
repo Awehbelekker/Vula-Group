@@ -1,0 +1,22 @@
+/* vula-logo.css — the Vula logo palette (logo set README): colour on light backgrounds,
+   colour-on-dark on dark ones. Only Vula's own logo uses these, never a tenant's brand. */
+:root {
+  --vula-logo-mark: #1F5A45;
+  --vula-logo-dot: #E8A93A;
+  --vula-logo-word: #1F5A45;
+}
+:root[data-theme="dark"] {
+  --vula-logo-mark: #5FBF95;
+  --vula-logo-dot: #F2BE5C;
+  --vula-logo-word: #F1F1EC;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --vula-logo-mark: #5FBF95;
+    --vula-logo-dot: #F2BE5C;
+    --vula-logo-word: #F1F1EC;
+  }
+}
+.vula-logo { display: block; flex: none; width: auto; }
+.vula-powered-by { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-caption); color: var(--muted); white-space: nowrap; }
+.vula-powered-by .vula-logo { display: inline-block; }
