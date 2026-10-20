@@ -8,52 +8,12 @@
  * sent to the rep's WhatsApp. Minutes can be typed or dictated (the phone's own speech-to-text).
  * Without a repPhone (an owner's Home) it shows the whole business's day.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import { VULA_API } from "../lib/authFetch";
-import { Button, Modal, Input, Textarea, Skeleton, ErrorCard, toast } from "./ui/index.jsx";
-
-const API = (t) => `${VULA_API}/v1/commerce/${t}/admin`;
-const todayLocal = () => new Date().toLocaleDateString("en-CA");        // YYYY-MM-DD
-
-function useDictation(onText) {
-  const rec = useRef(null);
-  const [on, setOn] = useState(false);
-  const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
-  const start = () => {
-    if (!SR) return;
-    const r = new SR();
-    r.lang = "en-ZA"; r.continuous = true; r.interimResults = false;
-    r.onresult = (e) => {
-      const text = Array.from(e.results).slice(e.resultIndex).map((x) => x[0].transcript).join(" ");
-      if (text.trim()) onText(text.trim());
-    };
-    r.onend = () => setOn(false);
-    r.onerror = () => setOn(false);
-    rec.current = r; r.start(); setOn(true);
-  };
-  const stop = () => { rec.current?.stop(); setOn(false); };
-  return { supported: !!SR, on, start, stop };
-}
+import { Button, Modal, Input, Textarea, Skeleton, ErrorCard } from "./ui/index.jsx";
+import { useAppointmentForm, useMinutesForm, useRepToday } from "./rep/useRepToday";
+import RepTodayV2 from "./rep/RepTodayV2";
 
 function MinutesModal({ open, onClose, tenantId, repPhone, appointment, onSaved }) {
-  const [notes, setNotes] = useState("");
-  const [contact, setContact] = useState("");
-  const [busy, setBusy] = useState(false);
-  const dict = useDictation((t) => setNotes((n) => (n ? n + " " : "") + t));
-  useEffect(() => { if (open) { setNotes(""); setContact(""); } }, [open]);
-  const save = async () => {
-    setBusy(true);
-    try {
-      const r = await fetch(`${API(tenantId)}/meetings`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes, rep_phone: repPhone, booking_id: appointment?.id, contact: contact || undefined }) });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast(d.detail || "Couldn't save the minutes.", "danger"); return; }
-      const n = (d.action_items || []).length;
-      toast(`Minutes saved${n ? ` · ${n} action item${n === 1 ? "" : "s"} set as reminders` : ""}${d.pdf_sent ? " · PDF sent to your WhatsApp" : ""}.`);
-      onSaved?.(); onClose();
-    } finally { setBusy(false); }
-  };
+  const { notes, setNotes, contact, setContact, busy, dict, save } = useMinutesForm({ open, onClose, tenantId, repPhone, appointment, onSaved });
   const who = appointment ? `${appointment.customer_name || "the client"} · ${appointment.start_local || ""}` : "";
   return (
     <Modal open={open} onClose={onClose} title={appointment ? "Meeting minutes" : "Notes for a meeting"} width={560}
@@ -76,22 +36,7 @@ function MinutesModal({ open, onClose, tenantId, repPhone, appointment, onSaved 
 }
 
 function AddAppointmentModal({ open, onClose, tenantId, repPhone, onSaved }) {
-  const blank = { customer_name: "", customer_phone: "", date: todayLocal(), time: "10:00", duration_min: 60, location: "", notes: "" };
-  const [f, setF] = useState(blank);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { if (open) setF(blank); }, [open]);  // eslint-disable-line
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const save = async () => {
-    setBusy(true);
-    try {
-      const r = await fetch(`${API(tenantId)}/rep/appointments`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...f, start: `${f.date}T${f.time}`, rep_phone: repPhone }) });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast(d.detail || "Couldn't book that.", "danger"); return; }
-      toast("Appointment added."); onSaved?.(); onClose();
-    } finally { setBusy(false); }
-  };
+  const { f, set, busy, save } = useAppointmentForm({ open, onClose, tenantId, repPhone, onSaved });
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 };
   return (
     <Modal open={open} onClose={onClose} title="New appointment" width={520}
@@ -114,28 +59,10 @@ function AddAppointmentModal({ open, onClose, tenantId, repPhone, onSaved }) {
   );
 }
 
-export default function VulaRepToday({ tenantId, repPhone }) {
-  const [data, setData] = useState(null);
-  const [failed, setFailed] = useState(false);
-  const [minutesFor, setMinutesFor] = useState(undefined);   // undefined = closed, null = unscheduled
-  const [adding, setAdding] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    setFailed(false);
-    try {
-      const q = repPhone ? `?rep_phone=${encodeURIComponent(repPhone)}` : "";
-      const r = await fetch(`${API(tenantId)}/rep/today${q}`);
-      if (!r.ok) throw new Error(String(r.status));
-      setData(await r.json());
-    } catch { setFailed(true); }
-  }, [tenantId, repPhone]);
-  useEffect(() => { load(); }, [load]);
+function VulaRepTodayV1({ tenantId, repPhone }) {
+  const { data, failed, load, aps, notes, now, minutesFor, setMinutesFor, adding, setAdding } = useRepToday(tenantId, repPhone);
 
   if (failed) return <ErrorCard what="today's appointments" onRetry={load} />;
-  const aps = data?.appointments || [];
-  const notes = data?.notes || [];
-  const now = new Date().toTimeString().slice(0, 5);
   const dayLabel = new Date().toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long" });
 
   return (
@@ -183,4 +110,8 @@ export default function VulaRepToday({ tenantId, repPhone }) {
       <AddAppointmentModal open={adding} onClose={() => setAdding(false)} tenantId={tenantId} repPhone={repPhone} onSaved={load} />
     </div>
   );
+}
+
+export default function VulaRepToday({ v2 = false, ...props }) {
+  return v2 ? <RepTodayV2 {...props} /> : <VulaRepTodayV1 {...props} />;
 }

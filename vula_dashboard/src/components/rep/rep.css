@@ -1,0 +1,31 @@
+/* rep.css — the redesigned sales rep screens (rep/*V2.jsx: Home, Today, Contacts, Call sheet,
+   Reminders, Claim sheet, CRM sync). Tokens only; every text holder min-width: 0. */
+
+.vrp { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 820px; }
+.vrp-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vrp-h { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vrp-overline { margin: var(--space-3) 0 0; font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vrp-sub { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.vrp-body { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
+.vrp-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.vrp-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vrp-warn { margin: 0; display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-body); color: var(--warn-text); }
+.vrp-overdue { color: var(--danger-text); }
+.vrp-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vrp-grow { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; color: var(--ink); }
+.vrp-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); align-items: start; }
+.vrp-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vrp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vrp-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; min-height: 56px; box-sizing: border-box; }
+.vrp-item + .vrp-item { border-top: 1px solid var(--line); }
+.vrp-time { flex: none; min-width: 96px; font: 500 var(--fs-body)/1.4 var(--font-mono); color: var(--ink); }
+.vrp-time--past { color: var(--muted); }
+.vrp-preview { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); background: var(--warn-soft); color: var(--ink); }
+.vrp-links { display: flex; flex-direction: column; }
+
+/* spend vs budget */
+.vrp-meter { height: 10px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
+.vrp-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
+.vrp-meter--warn > span { background: var(--warn); }
+.vrp-meter--over > span { background: var(--danger); }
+.vrp-money { margin: 0; font: 600 22px/1.2 var(--font-sans); color: var(--ink); font-variant-numeric: tabular-nums; }
