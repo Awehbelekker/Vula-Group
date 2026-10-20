@@ -209,7 +209,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
           {tab === 'operate' && <OperateSection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'operate')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
-          {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
+          {tab === 'estimating' && <EstimatingSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'estimating')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'team'      && <VulaTeam          tenantId={tenantId} v2={v2} />}
           {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} v2={v2} />}
@@ -366,16 +366,16 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
   )
 }
 
-function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+function EstimatingSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'qs' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'qs' && <VulaQS tenantId={tenantId} />}
-      {active === 'qspro' && <VulaQSPro tenantId={tenantId} />}
-      {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} />}
-      {active === 'draft' && <VulaDraft tenantId={tenantId} />}
+      {active === 'qs' && <VulaQS tenantId={tenantId} v2={v2} />}
+      {active === 'qspro' && <VulaQSPro tenantId={tenantId} v2={v2} />}
+      {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} v2={v2} />}
+      {active === 'draft' && <VulaDraft tenantId={tenantId} v2={v2} />}
     </div>
   )
 }

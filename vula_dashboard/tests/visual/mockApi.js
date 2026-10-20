@@ -153,6 +153,11 @@ function routes(role, modules = []) {
     r("GET", `^/v1/documents/${T}/filed`, (m) => ({ tenant_id: m[1], documents: F.filedDocs, count: F.filedDocs.length, total: F.filedDocs.length })),
     r("GET", `^/v1/documents/${T}/health`, () => F.docsHealth),
     r("GET", `^/v1/documents/${T}/projects`, () => F.docProjects),
+    // ── Estimating › Draft / Takeoff ──
+    r("POST", `^/v1/draft/generate`, () => F.draftResult),
+    r("GET", `^/takeoff/rates`, () => ({ rates: F.takeoffRates })),
+    r("POST", `^/takeoff/upload`, () => ({ job_id: "tj-1", filename: "plans.pdf" })),
+    r("GET", `^/takeoff/tj-1`, () => ({ status: "reading_plans" })),
     // ── Operate › Workspace / Field ops / Labour / QS rates ──
     r("GET", `${A}/reports/labour`, () => F.labourReport),
     r("POST", `${A}/workers`, () => ({ id: "wk-new" })),

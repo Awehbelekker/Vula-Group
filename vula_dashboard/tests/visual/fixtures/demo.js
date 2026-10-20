@@ -1140,3 +1140,13 @@ export const fieldDaily = { tasks: [
   { task_id: "ft-1", contractor_id: "fc-2", contractor_name: "Pieter Botha", title: "Install roof trusses", project_id: "pj-1" },
   { task_id: "ft-4", contractor_id: "fc-1", contractor_name: "Jane Dlamini", title: "Second-fix lights", project_id: "pj-1" },
 ] };
+
+// ── Estimating (Draft, Takeoff rates) ──
+export const draftResult = {
+  document_label: "Fee Proposal", word_count: 412, sources_used: 3,
+  content: "FEE PROPOSAL\nBay Events catering — Spring gala marquee\n\n1. Scope\nConcept to construction administration for a 450 m² temporary venue.\n\n2. Fee\nR 186 000 excl. VAT, in four stages.",
+};
+export const takeoffRates = [
+  { trade: "drywall", item: "Partition, single skin 70mm", unit: "m²", low: 420, mid: 550, high: 680, source: "Gyproc 2025", updated_at: "2026-10-12T08:00:00Z" },
+  { trade: "flooring", item: "LVT plank, laid", unit: "m²", low: 280, mid: 400, high: 520, source: "Polyflor SA 2025", updated_at: "2026-10-12T08:00:00Z" },
+];
