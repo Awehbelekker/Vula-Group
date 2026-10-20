@@ -23,7 +23,7 @@ async function check(page, ti, name, vp, viewport, scope) {
 const QR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21"><rect width="21" height="21" fill="#fff"/><rect x="1" y="1" width="7" height="7"/><rect x="13" y="1" width="7" height="7"/><rect x="1" y="13" width="7" height="7"/><rect x="10" y="10" width="3" height="3"/></svg>';
 
 /** Signed out, on the tenant's own address: the login wears its brand and offers a WhatsApp QR. */
-async function openLogin(page, { viewport, theme }, calls = []) {
+async function openLogin(page, { viewport, theme }, calls = [], { tenant = F.TENANT_ID } = {}) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
   await page.setViewportSize(viewport);
@@ -37,7 +37,7 @@ async function openLogin(page, { viewport, theme }, calls = []) {
     const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*" };
     if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
     calls.push({ path: url.pathname, body: req.postDataJSON?.() ?? null });
-    const body = url.pathname.endsWith("/by-domain") ? { tenant_id: F.TENANT_ID }
+    const body = url.pathname.endsWith("/by-domain") ? (tenant ? { tenant_id: tenant } : {})
       : url.pathname.endsWith("/start") ? { available: true, id: "wal-1", secret: "s-1", link: "https://wa.me/27820000000?text=Login%20K7F4QX", qr_svg: QR_SVG, code: "K7F4QX" }
       : url.pathname.endsWith("/status") ? { status: "pending" }
       : url.pathname.endsWith("/code") ? { id: "wac-1", secret: "s-2", message: "We sent a 6-digit code to your WhatsApp." }
@@ -57,7 +57,8 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
   for (const theme of THEMES) {
     test(`login ${vp} ${theme}`, async ({ page }, ti) => {
       const errors = await openLogin(page, { viewport, theme });
-      await expect(page.getByText("Powered by Vula")).toBeVisible();
+      await expect(page.locator(".vula-powered-by")).toContainText("Powered by");
+      await expect(page.locator(".vula-powered-by").getByRole("img", { name: "Vula" })).toBeVisible();
       await check(page, ti, "login", `${vp}-${theme}`, viewport, "main.vlg");
       await page.getByRole("button", { name: "Create an account" }).click();
       await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
@@ -65,6 +66,16 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
       expect(errors).toEqual([]);
     });
   }
+}
+
+for (const theme of THEMES) {
+  test(`login on Vula's own address ${theme}`, async ({ page }, ti) => {
+    const errors = await openLogin(page, { viewport: VIEWPORTS.mobile, theme }, [], { tenant: null });
+    await expect(page.locator(".vlg-brand").getByRole("img", { name: "Vula" })).toBeVisible();
+    await expect(page.getByText("Business dashboard")).toBeVisible();
+    await check(page, ti, "login-vula", `mobile-${theme}`, VIEWPORTS.mobile, "main.vlg");
+    expect(errors).toEqual([]);
+  });
 }
 
 test("login: the WhatsApp code path, reset and back make the same calls", async ({ page }) => {

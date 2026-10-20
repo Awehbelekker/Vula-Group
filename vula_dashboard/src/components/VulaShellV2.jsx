@@ -18,6 +18,7 @@ import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
 import { iconFor, houseGroups, flattenNav, ADD_ACTIONS } from "../navConfig";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import { IconButton, Sheet, ListRow, CommandPalette, useCommandPaletteHotkey, FloatingToolbar } from "./ui/index.jsx";
+import { PoweredByVula } from "./brand/VulaLogo.jsx";
 import "./VulaShellV2.css";
 
 const ADD_ICONS = { quote: FilePlus2, expense: Wallet, scan: ScanLine, contact: UserPlus, broadcast: Megaphone };
@@ -26,7 +27,7 @@ const MODES = [["auto", "Theme: follows your device", SunMoon], ["light", "Theme
 function BrandChip({ brand, compact }) {
   return (
     <div className="v2-brand">
-      {brand?.logoUrl
+      {brand?.logo ? brand.logo : brand?.logoUrl
         ? <img src={brand.logoUrl} alt="" className="v2-brand-logo" />
         : <span className="v2-brand-mark" aria-hidden="true">{brand?.logoEmoji || "V"}</span>}
       {!compact && (
@@ -143,7 +144,7 @@ export default function VulaShellV2({
     </div>
   );
   const select = (id) => { onSelect(id); setRailOpen(false); setMore(false); };
-  const powered = <div className="v2-powered">Powered by <b>Vula</b></div>;
+  const powered = <div className="v2-powered"><PoweredByVula /></div>;
 
   const sidebar = (rail, onClose) => (
     <aside className={`v2-side${rail ? " rail" : ""}`}>
