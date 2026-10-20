@@ -991,3 +991,18 @@ export const broadcastAnalytics = {
     { week: "2026-10-05", sent: 446, clicked: 81 }, { week: "2026-10-12", sent: 184, clicked: 37 }],
   best_performing: [{ id: "bc-0", name: "Braai pack launch", click_rate: 24.1 }, { id: "bc-2", name: "Weekly fish specials", click_rate: 20.1 }],
 };
+
+// ── Marketing: email, scheduling, copy, client onboarding ──
+export const emailCampaigns = [
+  { id: "em-1", name: "September newsletter", subject: "September newsletter", audience_filter: "all", status: "sent", created_at: at(16, "09:00"), sent_count: 212, failed_count: 3 },
+];
+export const scheduledJobs = {
+  approved_templates: ["weekly_specials", "promo_image"],
+  jobs: [
+    { job_type: "delivery_briefing", label: "Delivery briefing", description: "Tomorrow's deliveries, to the owner every evening.", kind: "daily", enabled: true, hour: 18, minute: 0, template_name: null, last_fired_at: "2026-10-16T16:00:00Z" },
+    { job_type: "weekly_specials", label: "Weekly specials reminder", description: "Reminds you to send this week's specials.", kind: "weekly", enabled: true, hour: 9, minute: 30, day_of_week: 3, template_name: "weekly_specials" },
+    { job_type: "unpaid_chase", label: "Unpaid-order chase", description: "Nudges customers with an unpaid order.", kind: "interval", enabled: false, interval_minutes: 60, template_name: null },
+  ],
+};
+export const marketingSaved = [{ id: "ms-1", kind: "promo", topic: "Braai packs", body: "Braai season is here! Our braai packs are R399 this weekend only." }];
+export const onboardingStats = { total: 312, invited: 180, awaiting_reply: 64, in_progress: 12, opted_in: 41, complete: 9, opted_out: 6 };

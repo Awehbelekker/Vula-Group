@@ -319,12 +319,12 @@ function MarketingSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendi
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} />}
+      {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} v2={v2} />}
       {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} v2={v2} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
-      {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} />}
-      {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} />}
-      {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} />}
-      {active === 'marketing' && <VulaMarketing tenantId={tenantId} onSendAsBroadcast={onSendAsBroadcast} />}
+      {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} v2={v2} />}
+      {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} v2={v2} />}
+      {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} v2={v2} />}
+      {active === 'marketing' && <VulaMarketing tenantId={tenantId} v2={v2} onSendAsBroadcast={onSendAsBroadcast} />}
     </div>
   )
 }
