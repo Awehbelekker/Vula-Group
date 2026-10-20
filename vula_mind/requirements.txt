@@ -58,7 +58,10 @@ python-dateutil>=2.9.0
 
 # ── Vector Store — run separately ───────────────────────────────────────────
 # docker run -p 6333:6333 qdrant/qdrant
-litellm>=1.40.0
+# Pinned (2026-10-20): litellm 1.106.0 routes every tool-calling completion through its MCP
+# handler, which imports the `mcp` package — not installed here — so all agent replies failed
+# in production with "No module named 'mcp'". tests/test_litellm_tool_calls.py guards upgrades.
+litellm==1.105.1
 pyyaml>=6.0             # evals/harness.py reads its YAML cases (Master panel model bake-off)
 orjson>=3.9            # litellm imports orjson on some paths; make it explicit so it's always present
 
