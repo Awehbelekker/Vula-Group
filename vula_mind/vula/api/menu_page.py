@@ -122,7 +122,7 @@ async def shop_home(request: Request) -> HTMLResponse:
 @router.get("/menu/{tenant_id}", response_class=HTMLResponse)
 async def photo_menu(tenant_id: str, request: Request = None) -> HTMLResponse:
     from vula.commerce import service as cs
-    from vula.commerce import shop_stats, web_basket
+    from vula.commerce import powered_by, shop_stats, web_basket
     if request is not None and not shop_stats.is_bot(request.headers.get("user-agent")):
         shop_stats.record(tenant_id, "shop_open")
 
@@ -158,6 +158,7 @@ async def photo_menu(tenant_id: str, request: Request = None) -> HTMLResponse:
     page = _SHOP_HTML.replace("{{TITLE}}", shop_name).replace("{{ACCENT}}", accent) \
         .replace("{{LOGO}}", f'<img class="logo" src="{logo_url}" alt="">' if logo_url else "") \
         .replace("{{LOGO_H}}", str(logo_h)).replace("{{LOGO_W}}", str(logo_w)) \
+        .replace("{{PB_CSS}}", powered_by.pill_css()).replace("{{PB}}", powered_by.pill_html()) \
         .replace("{{PLACEHOLDER}}", _PLACEHOLDER_IMG).replace("{{DATA}}", data)
     return HTMLResponse(page)
 
@@ -268,6 +269,7 @@ main{padding:14px 16px;display:grid;gap:14px;grid-template-columns:repeat(auto-f
 .toast{position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top));max-width:calc(100% - 32px);transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;z-index:11;pointer-events:none}
 .toast.show{opacity:.95}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+{{PB_CSS}}
 </style></head><body>
 <header>
   <div class="brand">{{LOGO}}<h1>{{TITLE}}</h1>
@@ -277,6 +279,7 @@ main{padding:14px 16px;display:grid;gap:14px;grid-template-columns:repeat(auto-f
   <div class="cats" id="cats"></div>
 </header>
 <main id="grid"></main>
+{{PB}}
 <div class="bar" id="bar"><div class="sum" id="sum"></div><button class="wa" id="go">Order on WhatsApp</button></div>
 <div class="sheet" id="sheet"><div class="panel" id="panel"></div></div>
 <div class="toast" id="toast"></div>

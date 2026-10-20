@@ -128,6 +128,7 @@ def _r(cents: int) -> str:
 def render(brand: dict, inv: dict, eft_details: Optional[str], card_url: Optional[str],
            result: str = "") -> str:
     """The page. Every value is escaped; every figure comes from the invoice row."""
+    from vula.commerce import powered_by
     e = html.escape
     name = e(brand.get("name") or "")
     accent = e(brand.get("accent_color") or "#2C5545")
@@ -166,5 +167,6 @@ box-shadow:0 2px 10px rgba(0,0,0,.06)}}
 padding:14px;border-radius:10px;font-weight:700}}
 .eft{{margin-top:22px;border-top:1px solid #e5e1d8;padding-top:14px}}
 pre{{white-space:pre-wrap;font-family:inherit;background:#f5f3ee;padding:10px;border-radius:8px}}
+{powered_by.pill_css(dark_mode=False)}
 </style></head><body><div class="card">{logo_html}
-<p class="muted">Invoice {number}</p>{body}</div></body></html>"""
+<p class="muted">Invoice {number}</p>{body}</div>{powered_by.pill_html()}</body></html>"""
