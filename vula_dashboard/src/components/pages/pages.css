@@ -1,0 +1,66 @@
+/* pages.css — the redesigned Storefront (pages/PagesV2.jsx): the page list, AI-draft, history and
+   refine around the Puck editor. Tokens only; the Puck canvas itself keeps its own look (it renders
+   the tenant's real site). Every text holder min-width: 0. */
+
+.vpg { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vpg a { color: var(--brand-text); }
+.vpg-list-wrap { max-width: 900px; }
+.vpg-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vpg-h { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.vpg-sub { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.vpg-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.vpg-ok { font-size: var(--fs-body); color: var(--ok-text); }
+.vpg-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vpg-danger { color: var(--danger-text) !important; }
+.vpg-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vpg-grow { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; color: var(--ink); }
+.vpg-form { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vpg-banner { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--brand-soft); color: var(--ink); }
+.vpg-banner > .vpg-grow { flex-basis: 260px; }
+.vpg-frame { border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface-2); height: 420px; }
+.vpg-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+.vpg-pages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vpg-page { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); min-height: 60px; box-sizing: border-box; }
+.vpg-page + .vpg-page { border-top: 1px solid var(--line); }
+.vpg-move { display: flex; flex-direction: column; }
+.vpg-move .vui-icon-btn { width: 36px; height: 28px; }
+.vpg-open { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-height: 44px; padding: var(--space-1) var(--space-2); border: none; border-radius: var(--radius-md); background: none; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.vpg-open:hover { background: var(--surface-2); }
+.vpg-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vpg-open b { overflow-wrap: anywhere; }
+.vpg-moods { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.vpg-actions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.vpg-actions .vui-btn { width: 100%; justify-content: flex-start; }
+.vpg-theme { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--brand-soft); color: var(--ink); font-size: var(--fs-body); }
+.vpg-swatch { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); flex: none; }
+/* Puck's own editor chrome is light-only, so the frame pins the light palette for what we add
+   inside it (toolbar icons, the SEO fields) in either theme — the same values as index.css's
+   light :root[data-ui="v2"], legacy aliases included (they resolve at :root otherwise). */
+.vpg-editor {
+  --ground: #F6F4EF; --surface: #FFFFFF; --surface-2: #EFEDE6; --line: #E3DFD3; --ink: #161816; --muted: #5E625C; --faint: #8A8E86;
+  --brand: var(--v2-brand, #1F5A45); --brand-strong: var(--v2-brand-strong, #174535); --brand-soft: var(--v2-brand-soft, #E3EEE8);
+  --on-brand: var(--v2-on-brand, #FFFFFF); --brand-text: var(--v2-brand-strong, #174535); --focus: #2463A8;
+  --bg: #F6F4EF; --surface-alt: #EFEDE6; --border: #E3DFD3; --border-soft: #E3DFD3; --text: #161816;
+  --accent: var(--v2-brand, #1F5A45); --accent-soft: var(--v2-brand-soft, #E3EEE8); --on-accent: var(--v2-on-brand, #FFFFFF);
+  color-scheme: light; color: var(--ink);
+  height: 74vh; min-height: 520px; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface);
+}
+.vpg-tools { display: inline-flex; align-items: center; gap: 2px; }
+.vpg-tools .vui-icon-btn[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-text); }
+.vpg-seo { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); background: var(--surface); }
+.vpg-versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vpg-versions li { display: flex; flex-direction: column; gap: var(--space-1); align-items: flex-start; padding: var(--space-3) 0; }
+.vpg-versions li + li { border-top: 1px solid var(--line); }
+.vpg-refine { position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: 1000; width: min(360px, calc(100vw - 2 * var(--space-4))); height: min(460px, 70vh); display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-float); overflow: hidden; }
+.vpg-refine-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); }
+.vpg-thread { list-style: none; margin: 0; flex: 1; overflow-y: auto; padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+.vpg-msg { max-width: 85%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); font-size: var(--fs-body); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vpg-msg--me { align-self: flex-end; background: var(--brand); color: var(--on-accent); border-bottom-right-radius: 4px; }
+.vpg-msg--vula { align-self: flex-start; background: var(--surface-2); color: var(--ink); border-bottom-left-radius: 4px; }
+.vpg-compose { display: flex; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); }
+.vpg-compose > input { flex: 1; min-width: 0; }
+.vpg-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 767px) {
+  .vpg-editor { height: 70vh; min-height: 420px; }
+  .vpg-frame { height: 320px; }
+}

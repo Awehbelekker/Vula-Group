@@ -1150,3 +1150,15 @@ export const takeoffRates = [
   { trade: "drywall", item: "Partition, single skin 70mm", unit: "m²", low: 420, mid: 550, high: 680, source: "Gyproc 2025", updated_at: "2026-10-12T08:00:00Z" },
   { trade: "flooring", item: "LVT plank, laid", unit: "m²", low: 280, mid: 400, high: 520, source: "Polyflor SA 2025", updated_at: "2026-10-12T08:00:00Z" },
 ];
+
+// ── Storefront pages (the Puck page builder) ──
+export const sitePages = [
+  { slug: "about", title: "About us", status: "published" },
+  { slug: "winter-specials", title: "Winter specials", status: "draft" },
+];
+export const sitePage = (slug) => ({
+  slug, title: slug === "about" ? "About us" : "Winter specials", status: slug === "about" ? "published" : "draft",
+  seo: { title: "About Harbour & Vine", description: "A family deli in Sea Point." },
+  puck_data: { content: [{ type: "Hero", props: { id: "Hero-1", title: "A family deli in Sea Point", subtitle: "Cheese, bread and catering since 2014.", image: "", overlayOpacity: 55, ctaText: "Order on WhatsApp", ctaHref: "/shop", ctaText2: "", ctaHref2: "" } }], root: { props: {} } },
+});
+export const sitePageVersions = [{ id: "pv-1", title: "About us", created_at: "2026-10-12T09:30:00Z" }];

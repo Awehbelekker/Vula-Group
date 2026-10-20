@@ -153,6 +153,16 @@ function routes(role, modules = []) {
     r("GET", `^/v1/documents/${T}/filed`, (m) => ({ tenant_id: m[1], documents: F.filedDocs, count: F.filedDocs.length, total: F.filedDocs.length })),
     r("GET", `^/v1/documents/${T}/health`, () => F.docsHealth),
     r("GET", `^/v1/documents/${T}/projects`, () => F.docProjects),
+    // ── Storefront › Pages ──
+    r("GET", `${A}/pages`, () => ({ pages: F.sitePages })),
+    r("POST", `${A}/pages/reorder`, () => ({ ok: true })),
+    r("POST", `${A}/pages/ai-draft`, (m, url, req) => ({ content: req.postDataJSON().content, theme: null })),
+    r("POST", `${A}/pages/ai-refine`, (m, url, req) => ({ content: req.postDataJSON().content })),
+    r("GET", `${A}/pages/${T}/versions`, () => ({ versions: F.sitePageVersions })),
+    r("POST", `${A}/pages/${T}/versions/${T}/restore`, () => ({ ok: true })),
+    r("GET", `${A}/pages/${T}`, (m) => F.sitePage(m[2])),
+    r("PUT", `${A}/pages/${T}`, () => ({ ok: true })),
+    r("DELETE", `${A}/pages/${T}`, () => ({ ok: true })),
     // ── Estimating › Draft / Takeoff ──
     r("POST", `^/v1/draft/generate`, () => F.draftResult),
     r("GET", `^/takeoff/rates`, () => ({ rates: F.takeoffRates })),
