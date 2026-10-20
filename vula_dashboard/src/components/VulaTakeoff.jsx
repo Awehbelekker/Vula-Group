@@ -1,6 +1,6 @@
 import { toast } from './ui/index.jsx'
-import { VULA_API } from "../lib/authFetch";
-import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import { MOCK_TAKEOFF, R, mid, net, pct, useTakeoff, useTakeoffRates } from "./estimating/useTakeoff";
+import TakeoffV2 from "./estimating/TakeoffV2";
 
 // Blueprint engineering aesthetic — dark navy, cyan grid lines, white annotations
 const C = {
@@ -39,63 +39,7 @@ const TRADES = {
   external:     { label: "External Works",           color: "#55EFC4", icon: "🌿", abbr: "EXT" },
 };
 
-// Demo data — shown when no real job is loaded
-const MOCK_TAKEOFF = {
-  projectName: "Sporty.TV Fitout — Phase 2 (DEMO)",
-  drawings: [
-    { sheet: "A001", title: "Site Plan", scale: "1:200", status: "read" },
-    { sheet: "A100", title: "Floor Plan — Level 1", scale: "1:100", status: "read" },
-    { sheet: "A101", title: "Floor Plan — Mezzanine", scale: "1:100", status: "read" },
-    { sheet: "A200", title: "Elevations", scale: "1:50", status: "read" },
-    { sheet: "A300", title: "Sections", scale: "1:50", status: "read" },
-    { sheet: "A500", title: "Door & Window Schedule", scale: "N/A", status: "read" },
-    { sheet: "M100", title: "HVAC Layout", scale: "1:100", status: "read" },
-    { sheet: "E100", title: "Electrical Layout", scale: "1:100", status: "read" },
-    { sheet: "P100", title: "Plumbing Layout", scale: "1:100", status: "read" },
-  ],
-  areas: { gross: 597, net: 528, mezzanine: 84 },
-  rooms: [
-    { name: "Open Plan Office", area: 210, floor: "lvt", ceiling: "acoustic_tile", walls: "painted_plaster" },
-    { name: "Commentators Studio", area: 48, floor: "epoxy", ceiling: "acoustic_treated", walls: "acoustic_panel" },
-    { name: "Server Room", area: 18, floor: "raised_access", ceiling: "standard", walls: "painted_plaster" },
-    { name: "Boardroom", area: 36, floor: "carpet", ceiling: "acoustic_tile", walls: "painted_plaster" },
-    { name: "Reception", area: 32, floor: "porcelain_tile", ceiling: "standard", walls: "feature_wall" },
-    { name: "Ablutions (Male)", area: 24, floor: "porcelain_tile", ceiling: "standard", walls: "porcelain_tile" },
-    { name: "Ablutions (Female)", area: 20, floor: "porcelain_tile", ceiling: "standard", walls: "porcelain_tile" },
-    { name: "Kitchen / Breakroom", area: 28, floor: "vinyl_lvt", ceiling: "standard", walls: "painted_plaster" },
-    { name: "Mezzanine Office", area: 84, floor: "carpet", ceiling: "exposed", walls: "painted_plaster" },
-    { name: "Green Screen Studio", area: 64, floor: "studio_floor", ceiling: "acoustic_treated", walls: "cyclorama" },
-    { name: "Corridors / Circulation", area: 33, floor: "vinyl_lvt", ceiling: "standard", walls: "painted_plaster" },
-  ],
-  items: [
-    { id: "d1", trade: "demolition", description: "Strip out existing fit-out — full scope", unit: "m²", qty: 597, rate: 0, rateRange: [120, 280], source: "AECOM 2025/26", confidence: 95 },
-    { id: "s1", trade: "concrete", description: "Mezzanine concrete slab — 150mm thk", unit: "m²", qty: 84, rate: 0, rateRange: [1850, 2600], source: "AfriSam 2025", confidence: 90 },
-    { id: "s2", trade: "concrete", description: "Steel mezzanine structure (erected)", unit: "tonne", qty: 3.2, rate: 0, rateRange: [38000, 55000], source: "AECOM 2025/26", confidence: 75, notes: "Estimate pending structural engineer BOQ" },
-    { id: "dry1", trade: "drywall", description: "Partition walls — single skin 70mm", unit: "m²", qty: 312, rate: 0, rateRange: [420, 680], source: "Gyproc 2025", confidence: 92 },
-    { id: "dry2", trade: "drywall", description: "Partition walls — acoustic double skin", unit: "m²", qty: 86, rate: 0, rateRange: [650, 980], source: "AECOM 2025/26", confidence: 88, notes: "Studio and boardroom boundaries" },
-    { id: "dry3", trade: "drywall", description: "Suspended ceiling — standard 600×600 grid", unit: "m²", qty: 298, rate: 0, rateRange: [380, 580], source: "Sky Ceilings 2025", confidence: 95 },
-    { id: "dry4", trade: "drywall", description: "Suspended ceiling — acoustic tile", unit: "m²", qty: 196, rate: 0, rateRange: [680, 1200], source: "AECOM 2025/26", confidence: 88 },
-    { id: "fl1", trade: "flooring", description: "Sand/cement screed 50mm — general", unit: "m²", qty: 485, rate: 0, rateRange: [95, 160], source: "AECOM 2025/26", confidence: 95 },
-    { id: "fl2", trade: "flooring", description: "LVT / Vinyl Plank — office & kitchen", unit: "m²", qty: 271, rate: 0, rateRange: [280, 520], source: "Polyflor SA 2025", confidence: 90 },
-    { id: "fl3", trade: "flooring", description: "Commercial carpet — boardroom & mezzanine", unit: "m²", qty: 120, rate: 0, rateRange: [220, 480], source: "Belgotex 2025", confidence: 88 },
-    { id: "til1", trade: "tiling", description: "Porcelain floor tiles 600×600 — reception", unit: "m²", qty: 32, rate: 0, rateRange: [380, 650], source: "Italtile 2025", confidence: 95 },
-    { id: "til2", trade: "tiling", description: "Porcelain floor tiles 600×600 — ablutions", unit: "m²", qty: 44, rate: 0, rateRange: [380, 650], source: "Italtile 2025", confidence: 95 },
-    { id: "joi1", trade: "joinery", description: "Solid core door — Type A (internal office)", unit: "no", qty: 14, rate: 0, rateRange: [3500, 6500], source: "AECOM 2025/26", confidence: 95 },
-    { id: "joi2", trade: "joinery", description: "Fire door 60-min rated — stairway & studio", unit: "no", qty: 4, rate: 0, rateRange: [12000, 22000], source: "AECOM 2025/26", confidence: 95 },
-    { id: "plb1", trade: "plumbing", description: "Bathroom fit-out — male (3 WC, 3 URI, 3 WHB)", unit: "no", qty: 1, rate: 0, rateRange: [45000, 85000], source: "AECOM 2025/26", confidence: 85 },
-    { id: "plb2", trade: "plumbing", description: "Bathroom fit-out — female (3 WC, 3 WHB)", unit: "no", qty: 1, rate: 0, rateRange: [35000, 65000], source: "AECOM 2025/26", confidence: 85 },
-    { id: "ele1", trade: "electrical", description: "DB board — 3-phase (main distribution)", unit: "no", qty: 1, rate: 0, rateRange: [12000, 22000], source: "AECOM 2025/26", confidence: 88 },
-    { id: "ele2", trade: "electrical", description: "Electrical fitout — office areas", unit: "m²", qty: 597, rate: 0, rateRange: [450, 900], source: "AECOM 2025/26", confidence: 85 },
-    { id: "hva1", trade: "hvac", description: "VRF HVAC system — office areas", unit: "kW", qty: 45, rate: 0, rateRange: [5500, 9000], source: "ExtraAir 2025", confidence: 88 },
-    { id: "fir1", trade: "fire", description: "Sprinkler system — office & mezzanine", unit: "m²", qty: 513, rate: 0, rateRange: [380, 650], source: "AECOM 2025/26", confidence: 88 },
-    { id: "pnt1", trade: "painting", description: "Interior paint — 2 coats walls & ceilings", unit: "m²", qty: 1840, rate: 0, rateRange: [65, 130], source: "Plascon / Dulux 2025", confidence: 95 },
-  ],
-};
 
-const R = n => `R ${Math.round(n).toLocaleString("en-ZA")}`;
-const pct = n => `${Number(n).toFixed(0)}%`;
-const mid = item => (item.rateRange[0] + item.rateRange[1]) / 2;
-const net = (item, markup) => mid(item) * item.qty * (1 + markup / 100);
 
 const mono = { fontFamily: "'DM Mono', monospace" };
 const sans = { fontFamily: "'DM Sans', sans-serif" };
@@ -253,28 +197,7 @@ function OrderSheet({ items, markup, selectedTrades, projectName }) {
 }
 
 function RatesView({ apiHost, tenantId }) {
-  const [rates, setRates] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [changedOnly, setChangedOnly] = useState(false);
-  const [error, setError] = useState(null);
-
-  const fetchRates = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const url = withTenant(`${apiHost}/takeoff/rates${changedOnly ? "?changed_only=true" : ""}`, tenantId);
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setRates(data.rates || []);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [apiHost, changedOnly]);
-
-  useEffect(() => { fetchRates(); }, [fetchRates]);
+  const { rates, loading, changedOnly, setChangedOnly, error, fetchRates } = useTakeoffRates({ apiHost, tenantId });
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
@@ -326,154 +249,9 @@ function RatesView({ apiHost, tenantId }) {
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
-// The API authorizes a signed-in member by the tenant a request names, and only shows that
-// tenant's jobs — every takeoff call carries ?tenant_id=.
-const withTenant = (url, tenantId) =>
-  tenantId ? `${url}${url.includes("?") ? "&" : "?"}tenant_id=${encodeURIComponent(tenantId)}` : url;
 
-export default function VulaTakeoff({ tenantId = "" }) {
-  const [tab, setTab] = useState("boq");
-  const [markup, setMarkup] = useState(15);
-  const [selectedTrades, setSelectedTrades] = useState(Object.keys(TRADES));
-
-  // Per-item rate overrides (keyed by item id)
-  const [itemRates, setItemRates] = useState(() =>
-    Object.fromEntries(MOCK_TAKEOFF.items.map(i => [i.id, String(Math.round(mid(i)))]))
-  );
-
-  // Live API state
-  // The real API (nothing ever set localStorage.vula_host, so production always hit
-  // localhost:7438, failed, and fell back to mock data). A local override still works.
-  const [apiHost] = useState(() => localStorage.getItem("vula_host") || VULA_API);
-  const [liveJob, setLiveJob] = useState(null); // { job_id, status, filename, boq }
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef();
-  const pollRef = useRef(null);
-
-  // ── Adapted items: real API data or mock fallback ──────────────────────────
-  const liveItems = useMemo(() => {
-    const boqItems = liveJob?.boq?.items;
-    if (!boqItems?.length) return null;
-    return boqItems.map((item, i) => ({
-      id: `live_${i}`,
-      trade: item.trade,
-      description: item.description,
-      unit: item.unit,
-      qty: item.qty,
-      rate: item.rate_used,
-      rateRange: [Math.round(item.rate_used * 0.9), Math.round(item.rate_used * 1.1)],
-      source: item.source || "Vula AI",
-      confidence: item.confidence || 75,
-      notes: item.notes,
-    }));
-  }, [liveJob?.boq]);
-
-  // Seed itemRates when live items first load
-  useEffect(() => {
-    if (!liveItems) return;
-    setItemRates(Object.fromEntries(liveItems.map(i => [i.id, String(Math.round(i.rate))])));
-  }, [liveItems]);
-
-  const displayItems = liveItems || MOCK_TAKEOFF.items;
-  // A real job shows its own rooms and areas (empty if the reader found none), never the demo's.
-  const liveRooms = liveJob?.project ? (liveJob.project.room_list || []) : null;
-  const rooms = liveRooms ?? MOCK_TAKEOFF.rooms;
-  const areas = liveJob?.project
-    ? { gross: Math.round(liveJob.project.gfa || 0),
-        net: Math.round((liveRooms || []).reduce((s, r) => s + (r.area || 0), 0)), mezzanine: "—" }
-    : MOCK_TAKEOFF.areas;
-  const isLive = !!liveItems;
-  const projectName = liveJob?.boq?.project_name || MOCK_TAKEOFF.projectName;
-
-  // ── Upload real plans ──────────────────────────────────────────────────────
-  const handleFileSelected = useCallback(async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("tenant_id", tenantId || "dashboard");
-      fd.append("markup", String(markup));
-      const resp = await fetch(withTenant(`${apiHost}/takeoff/upload`, tenantId), { method: "POST", body: fd });
-      if (!resp.ok) throw new Error(`Upload failed: HTTP ${resp.status}`);
-      const data = await resp.json();
-      setLiveJob({ job_id: data.job_id, status: "queued", filename: data.filename, boq: null });
-    } catch (err) {
-      toast(`Upload error: ${err.message}\nMake sure the Vula API is running on ${apiHost}`);
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  }, [apiHost, markup, tenantId]);
-
-  const handleUploadClick = useCallback(() => {
-    fileRef.current?.click();
-  }, []);
-
-  // ── Poll job status ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!liveJob?.job_id || liveJob.status === "complete" || liveJob.status === "failed") {
-      clearInterval(pollRef.current);
-      return;
-    }
-    clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const resp = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}`, tenantId));
-        const data = await resp.json();
-        if (data.status === "complete") {
-          const boqResp = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}/boq`, tenantId));
-          const boqData = await boqResp.json();
-          // project carries the rooms and floor area read from the plans (room schedule, cost/m²)
-          setLiveJob(j => ({ ...j, status: "complete", project: data.project, boq: boqData.boq }));
-        } else if (data.status === "failed") {
-          setLiveJob(j => ({ ...j, status: "failed", error: data.error }));
-        } else {
-          setLiveJob(j => ({ ...j, status: data.status, project: data.project || j.project }));
-        }
-      } catch { /* network error — keep polling */ }
-    }, 3000);
-    return () => clearInterval(pollRef.current);
-  }, [liveJob?.job_id, liveJob?.status, apiHost, tenantId]);
-
-  // ── Totals ─────────────────────────────────────────────────────────────────
-  const filtered = displayItems.filter(i => selectedTrades.includes(i.trade));
-
-  const totals = useMemo(() => {
-    const byTrade = {};
-    let total = 0;
-    for (const item of filtered) {
-      const r = parseFloat(itemRates[item.id]) || mid(item);
-      const line = r * item.qty;
-      const withMarkup = line * (1 + markup / 100);
-      byTrade[item.trade] = (byTrade[item.trade] || 0) + withMarkup;
-      total += withMarkup;
-    }
-    return { byTrade, total, profit: total * markup / (100 + markup) };
-  }, [filtered, itemRates, markup]);
-
-  const toggleTrade = key => setSelectedTrades(prev =>
-    prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-  );
-
-  const TABS = [
-    { id: "plans",  label: "Plans & Drawings" },
-    { id: "rooms",  label: "Room Schedule" },
-    { id: "boq",    label: "Bill of Quantities" },
-    { id: "order",  label: "Order Sheet" },
-    { id: "rates",  label: "Market Rates" },
-  ];
-
-  // ── Job status banner text ─────────────────────────────────────────────────
-  const statusLabel = {
-    queued:          "Queued — waiting to start…",
-    reading_plans:   "Reading plans (OCR)…",
-    generating_boq:  "Generating BOQ from drawings…",
-    building_orders: "Building order package…",
-    complete:        "Complete",
-    failed:          "Failed",
-  };
+function VulaTakeoffV1({ tenantId = "" }) {
+  const { tab, setTab, markup, setMarkup, selectedTrades, setSelectedTrades, itemRates, setItemRates, apiHost, liveJob, setLiveJob, uploading, fileRef, rooms, areas, isLive, projectName, handleFileSelected, handleUploadClick, filtered, totals, downloadExcel, copyTSV, toggleTrade, TABS, statusLabel } = useTakeoff({ tenantId });
 
   return (
     <>
@@ -614,27 +392,13 @@ export default function VulaTakeoff({ tenantId = "" }) {
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
                   {isLive && liveJob?.job_id && (
                     <button
-                      onClick={async () => {
-                        // Fetched rather than linked: a plain link can't carry the sign-in token.
-                        try {
-                          const r = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}/boq/excel`, tenantId));
-                          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                          const url = URL.createObjectURL(await r.blob());
-                          const a = document.createElement("a");
-                          a.href = url; a.download = `BOQ_${liveJob.job_id}.xlsx`; a.click();
-                          setTimeout(() => URL.revokeObjectURL(url), 5000);
-                        } catch (e) { toast(`Download failed: ${e.message}`); }
-                      }}
+                      onClick={downloadExcel}
                       style={{ padding: "4px 12px", background: C.green, border: "none", borderRadius: 4, color: C.navy, fontSize: 10, fontWeight: 700, cursor: "pointer", ...mono }}
                     >
                       ↓ Download Excel
                     </button>
                   )}
-                  <button onClick={() => {
-                    const lines = filtered.map(i => `${i.description}\t${i.qty}\t${i.unit}\t${R(parseFloat(itemRates[i.id]) || mid(i))}\t${R((parseFloat(itemRates[i.id]) || mid(i)) * i.qty * (1 + markup / 100))}`).join("\n");
-                    navigator.clipboard?.writeText(`BOQ — ${projectName}\nDescription\tQty\tUnit\tRate\tTotal\n${lines}`).catch(() => {});
-                    toast("Copied! Paste into Excel.");
-                  }} style={{ padding: "4px 12px", background: C.cyan, border: "none", borderRadius: 4, color: C.navy, fontSize: 10, fontWeight: 700, cursor: "pointer", ...mono }}>
+                  <button onClick={copyTSV} style={{ padding: "4px 12px", background: C.cyan, border: "none", borderRadius: 4, color: C.navy, fontSize: 10, fontWeight: 700, cursor: "pointer", ...mono }}>
                     Copy TSV
                   </button>
                 </div>
@@ -729,4 +493,8 @@ export default function VulaTakeoff({ tenantId = "" }) {
       </div>
     </>
   );
+}
+
+export default function VulaTakeoff({ v2 = false, ...props }) {
+  return v2 ? <TakeoffV2 {...props} /> : <VulaTakeoffV1 {...props} />;
 }

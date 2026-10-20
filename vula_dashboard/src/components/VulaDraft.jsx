@@ -1,60 +1,9 @@
-import { useState } from "react";
+import { DOC_TYPES, useDraft } from "./estimating/useDraft";
+import DraftV2 from "./estimating/DraftV2";
 
-import { VULA_API as API } from "../lib/authFetch";
 
-const DOC_TYPES = [
-  { id: "fee_proposal", label: "Fee Proposal" },
-  { id: "scope_of_works", label: "Scope of Works" },
-  { id: "appointment_letter", label: "Letter of Appointment" },
-  { id: "site_meeting_minutes", label: "Site Meeting Minutes" },
-  { id: "tender_invitation", label: "Tender Invitation" },
-  { id: "project_programme", label: "Project Programme" },
-  { id: "payment_certificate", label: "Payment Certificate" },
-];
-
-export default function VulaDraft({ tenantId: tenantIdProp }) {
-  const [tenantIdInput, setTenantIdInput] = useState("");
-  const tenantId = tenantIdProp || tenantIdInput;
-  const [docType, setDocType] = useState("fee_proposal");
-  const [brief, setBrief] = useState("");
-  const [projectName, setProjectName] = useState("");
-  const [clientName, setClientName] = useState("");
-  const [projectValue, setProjectValue] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-
-  async function generate() {
-    if (!brief.trim() || !tenantId) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    try {
-      const res = await fetch(`${API}/v1/draft/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tenant_id: tenantId,
-          document_type: docType,
-          brief,
-          project_name: projectName || undefined,
-          client_name: clientName || undefined,
-          project_value: projectValue ? Number(projectValue) : undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Generation failed");
-      setResult(data);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function copyToClipboard() {
-    if (result?.content) navigator.clipboard.writeText(result.content);
-  }
+function VulaDraftV1({ tenantId: tenantIdProp }) {
+  const { tenantIdInput, setTenantIdInput, tenantId, docType, setDocType, brief, setBrief, projectName, setProjectName, clientName, setClientName, projectValue, setProjectValue, loading, result, error, generate, copyToClipboard } = useDraft({ tenantId: tenantIdProp });
 
   return (
     <div style={{ padding: "24px", maxWidth: 900, margin: "0 auto" }}>
@@ -154,3 +103,7 @@ const btnStyle = (disabled) => ({
   padding: "12px 24px", fontSize: 15, fontWeight: 600,
   cursor: disabled ? "not-allowed" : "pointer", width: "100%",
 });
+
+export default function VulaDraft({ v2 = false, ...props }) {
+  return v2 ? <DraftV2 {...props} /> : <VulaDraftV1 {...props} />;
+}
