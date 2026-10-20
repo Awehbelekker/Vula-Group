@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { useState } from "react";
+import { useSignups } from "./master/useSignupsHQ";
+import SignupsV2 from "./master/SignupsV2";
 
 
 const COLORS = {
@@ -143,37 +144,8 @@ function StatCard({ label, value, sub, color = COLORS.green }) {
   );
 }
 
-export default function VulaAdmin() {
-  const [signups, setSignups] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [filter, setFilter] = useState("all");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const resp = await fetch(`${VULA_API}/v1/admin/signups?limit=50`);
-      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-      const data = await resp.json();
-      setSignups(data.signups || []);
-    } catch (e) {
-      setError(e.message);
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const filtered = filter === "all" ? signups : signups.filter(s => s.plan === filter || s.status === filter);
-
-  // Stats
-  const active = signups.filter(s => s.status === "active").length;
-  const mrr = signups.filter(s => s.status === "active").reduce((sum, s) => {
-    const prices = { starter: 1500, growth: 3500, business: 7500 };
-    return sum + (prices[s.plan] || 0);
-  }, 0);
-  const byPlan = signups.reduce((acc, s) => { acc[s.plan] = (acc[s.plan] || 0) + 1; return acc; }, {});
+function VulaAdminV1() {
+  const { signups, loading, error, filter, setFilter, load, filtered, active, mrr, byPlan } = useSignups();
 
   return (
     <>
@@ -295,4 +267,8 @@ export default function VulaAdmin() {
       </div>
     </>
   );
+}
+
+export default function VulaAdmin({ v2 = false, ...props }) {
+  return v2 ? <SignupsV2 {...props} /> : <VulaAdminV1 {...props} />;
 }
