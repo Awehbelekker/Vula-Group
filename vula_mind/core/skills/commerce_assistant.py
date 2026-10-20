@@ -1070,6 +1070,19 @@ class CommerceAssistantSkill(BaseSkill):
         }
         kb_context, sources = (await self._retrieve_kb(inp) if needs_knowledge(inp.question)
                                else ("", []))
+        # The owner's own approved answer to a similar question (learned from a handoff, a
+        # correction or their chat history) — up front, not only once the model asks the team.
+        if needs_knowledge(inp.question):
+            try:
+                from vula import escalation as _esc
+                approved = await _esc.find_learned_answer(inp.tenant_id, inp.question)
+                if approved:
+                    kb_context = (f"[The business's own approved answer to a similar question]: "
+                                  f"{approved}\n\n" + kb_context)
+                    sources = [{"type": "kb", "name": "learned_answer", "filename": "approved answer",
+                                "score": 1.0, "text": approved[:400]}] + sources
+            except Exception as exc:
+                logger.debug("approved-answer lookup skipped: %s", exc)
         # What we already know about this customer, so a repeat buyer isn't asked for their name
         # and address all over again (2026-09-01). Best-effort — never block a live order on it.
         profile = None
