@@ -25,7 +25,8 @@ import VulaReports from "./components/VulaReports";
 import VulaPayments from "./components/VulaPayments";
 import VulaMasterPanel from "./components/VulaMasterPanel";
 import { VULA_API, authFetch } from "./lib/authFetch";
-import { promptDialog } from "./components/ui/index.jsx";
+import { Button, promptDialog } from "./components/ui/index.jsx";
+import { ArrowLeft, Eye } from "lucide-react";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -170,7 +171,8 @@ export default function App() {
   // row of its own: it follows the build (2026-10-19), while "Open as tenant" follows that
   // tenant's own switch; ?ui=v1 still pins the current look on this device.
   const masterUi = activeTab === "merchant" ? masterTenantUiV2 : true;
-  const v2 = !isPublicRoute && uiV2For(role === "master" ? masterUi : tenantUiV2);
+  // Before sign-in there is no tenant yet: the login screen follows the build (2026-10-20).
+  const v2 = !isPublicRoute && uiV2For(!user ? true : role === "master" ? masterUi : tenantUiV2);
   useEffect(() => { applyUiMode(v2); }, [v2]);
   useEffect(() => {
     // Master HQ wears Vula's own brand; only "Open as tenant" takes on that tenant's brand
@@ -287,7 +289,7 @@ export default function App() {
 
   // Show login if not authenticated
   if (!user) {
-    return <VulaLogin onSuccess={() => {}} />;
+    return <VulaLogin onSuccess={() => {}} v2={v2} />;
   }
 
   // #/ui-kit — every shared component on demo data (2026-10-17, UX redesign). Master only: it
@@ -359,14 +361,22 @@ export default function App() {
             below is easy to miss once scrolled past the header; this stays pinned above
             everything for the whole visit. Shows the reason logged with master_impersonate_tenant
             (vula/api/master.py) when one was given. */}
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-          padding: "6px 12px", background: COLORS.amber, color: "#1A1200",
-          fontSize: 12, fontWeight: 600, textAlign: "center",
-        }}>
-          <span>👁 Master mode — viewing {mName}'s real workspace</span>
-          {impersonateReason && <span style={{ fontWeight: 400, opacity: 0.85 }}>— {impersonateReason}</span>}
-        </div>
+        {v2 ? (
+          <div className="v2-impersonate" role="status">
+            <Eye size={16} aria-hidden="true" />
+            <span>Master mode: viewing {mName}'s real workspace</span>
+            {impersonateReason && <span className="v2-impersonate-why">({impersonateReason})</span>}
+          </div>
+        ) : (
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+            padding: "6px 12px", background: COLORS.amber, color: "#1A1200",
+            fontSize: 12, fontWeight: 600, textAlign: "center",
+          }}>
+            <span>👁 Master mode — viewing {mName}'s real workspace</span>
+            {impersonateReason && <span style={{ fontWeight: 400, opacity: 0.85 }}>— {impersonateReason}</span>}
+          </div>
+        )}
         <VulaShell
           brand={{ logoUrl: brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
           groups={mGroups}
@@ -381,12 +391,18 @@ export default function App() {
             // Returns to Master (not "dashboard") — masterSubTab was never touched while
             // visiting the tenant, so this naturally restores whichever Master sub-tab
             // (Tenants/Health/Usage/...) the operator was on before "Open as tenant".
-            <button onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}
-              style={{ padding: "6px 12px", border: `1px solid ${COLORS.border}`, borderRadius: 6,
-                       background: COLORS.surface, color: "var(--text)", fontSize: 12,
-                       cursor: "pointer", fontWeight: 600 }}>
-              ← Master HQ
-            </button>
+            v2 ? (
+              <Button variant="secondary" size="sm" Icon={ArrowLeft} onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}>
+                Master HQ
+              </Button>
+            ) : (
+              <button onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}
+                style={{ padding: "6px 12px", border: `1px solid ${COLORS.border}`, borderRadius: 6,
+                         background: COLORS.surface, color: "var(--text)", fontSize: 12,
+                         cursor: "pointer", fontWeight: 600 }}>
+                ← Master HQ
+              </button>
+            )
           }
         >
           <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={mName} navGroups={mGroups}
