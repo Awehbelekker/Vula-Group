@@ -4,26 +4,10 @@
  * run a R5 test payment → go live. Nothing here needs a developer: the server keeps the on/off
  * switch, and "Go live" stays locked until a real test payment has been confirmed.
  */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { MODE_BADGE, STATUS_TONE, useTapToPay } from "./taptopay/useTapToPay";
+import TapToPayV2 from "./taptopay/TapToPayV2";
 import { T } from "../theme/tokens";
 import { Card, Button, Badge, SectionTitle, inputStyle } from "./ui";
-import { VULA_API } from "../lib/authFetch";
-
-const MODE_BADGE = { off: ["muted", "Off"], testing: ["warn", "Testing"], live: ["ok", "Live"] };
-const STATUS_TONE = { open: "muted", claimed: "warn", paid: "ok", cancelled: "muted", expired: "muted" };
-const RAND = /^\d{1,7}(\.\d{1,2})?$/;
-
-async function api(path, opts = {}) {
-  const r = await fetch(`${VULA_API}${path}`, {
-    ...opts,
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
-  let data = {};
-  try { data = await r.json(); } catch { /* empty body */ }
-  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Something went wrong — please try again.");
-  return data;
-}
 
 function Step({ n, title, done, children }) {
   return (
@@ -40,114 +24,12 @@ function Step({ n, title, done, children }) {
 
 const hint = { fontSize: 12.5, color: T.muted };
 
-export default function VulaTapToPay({ tenantId }) {
-  const [st, setSt] = useState(null);
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState("");
-  const [shares, setShares] = useState({});        // member id -> percent string
-  const [pf, setPf] = useState({ merchant_id: "", merchant_key: "", passphrase: "", mode: "test" });
-  const [editPf, setEditPf] = useState(false);
-  const [test, setTest] = useState(null);          // {url, qr, code}
-  const [testMember, setTestMember] = useState("");
-  const [bills, setBills] = useState([]);
-  const [nb, setNb] = useState({ member: "", desc: "", amount: "", phone: "" });
-  const [newCode, setNewCode] = useState("");
-  const [enrol, setEnrol] = useState(null);        // {id, name, code, expires_in_minutes, app_url}
-  const [devices, setDevices] = useState([]);
-  const [unpaid, setUnpaid] = useState([]);
-  const [closing, setClosing] = useState(null);     // bill id whose "paid another way" picker is open
-  const poll = useRef(null);
+export default function VulaTapToPay({ v2 = false, ...props }) {
+  return v2 ? <TapToPayV2 {...props} /> : <TapToPayV1 {...props} />;
+}
 
-  const load = useCallback(async () => {
-    try {
-      const s = await api(`/v1/tap/${tenantId}/setup`);
-      setSt(s);
-      setShares((cur) => {
-        const next = { ...cur };
-        s.staff.forEach((m) => { if (next[m.id] === undefined) next[m.id] = String(m.share_bp / 100); });
-        return next;
-      });
-      setTestMember((m) => m || s.staff.find((x) => x.tag)?.id || s.staff[0]?.id || "");
-      setNb((b) => ({ ...b, member: b.member || s.staff.find((x) => x.tag)?.id || "" }));
-      api(`/v1/tap/${tenantId}/unpaid`).then((d) => setUnpaid(d.unpaid || [])).catch(() => {});
-      api(`/v1/tap/${tenantId}/devices`).then((d) => setDevices(d.devices || [])).catch(() => {});
-      if (s.mode !== "off") {
-        const b = await api(`/v1/tap/${tenantId}/bills`).catch(() => ({ bills: [] }));
-        setBills(b.bills || []);
-      }
-    } catch (e) { setErr(e.message); }
-  }, [tenantId]);
-  useEffect(() => { load(); }, [load]);
-
-  // while a test payment is pending, check every 4 s so the tick appears by itself
-  useEffect(() => {
-    clearInterval(poll.current);
-    if (test && st && !st.tested) poll.current = setInterval(load, 4000);
-    return () => clearInterval(poll.current);
-  }, [test, st, load]);
-
-  const run = async (key, fn) => {
-    setBusy(key); setErr("");
-    try { await fn(); } catch (e) { setErr(e.message); } finally { setBusy(""); }
-  };
-
-  const connectPayfast = () => run("pf", async () => {
-    if (!pf.merchant_id.trim() || !pf.merchant_key.trim()) throw new Error("Enter your PayFast merchant ID and merchant key.");
-    const r = await api(`/v1/payments/${tenantId}/providers`, { method: "POST", body: {
-      provider: "payfast", mode: pf.mode, is_default: false,
-      credentials: { merchant_id: pf.merchant_id.trim(), merchant_key: pf.merchant_key.trim(), passphrase: pf.passphrase } } });
-    if (r.error) throw new Error(r.error);
-    setPf({ merchant_id: "", merchant_key: "", passphrase: "", mode: pf.mode });
-    setEditPf(false); await load();
-  });
-
-  const saveShares = () => run("shares", async () => {
-    const staff_shares = {};
-    for (const m of st.staff) {
-      const v = Number(shares[m.id] ?? 0);
-      if (!Number.isFinite(v) || v < 0 || v > 100) throw new Error(`${m.name}: enter a share between 0 and 100.`);
-      staff_shares[m.id] = Math.round(v * 100);
-    }
-    setSt(await api(`/v1/tap/${tenantId}/setup/shares`, { method: "PUT", body: { default_share_bp: 0, staff_shares } }));
-  });
-
-  const getTag = (id, rotate = false) => run(`tag-${id}`, async () => {
-    if (rotate && !window.confirm("Make a new tag? The old tag and QR code stop working straight away.")) return;
-    await api(`/v1/tap/${tenantId}/staff/${id}/tag${rotate ? "?rotate=true" : ""}`, { method: "POST" });
-    await load();
-  });
-
-  const startTest = () => run("test", async () => setTest(await api(`/v1/tap/${tenantId}/test/${testMember}`, { method: "POST" })));
-  const goLive = () => run("live", async () => setSt(await api(`/v1/tap/${tenantId}/go-live`, { method: "POST" })));
-  const pause = () => run("pause", async () => { setSt(await api(`/v1/tap/${tenantId}/pause`, { method: "POST" })); setBills([]); });
-
-  const createBill = () => run("bill", async () => {
-    if (!nb.desc.trim()) throw new Error("Say what the bill is for, for example “Beginner lesson”.");
-    if (!RAND.test(nb.amount)) throw new Error("Enter the amount in rands, for example 500 or 500.00.");
-    const tag = st.staff.find((m) => m.id === nb.member)?.tag;
-    if (!tag) throw new Error("Pick a team member who has a tag.");
-    const r = await api(`/v1/tap/${tenantId}/bills`, { method: "POST", body: {
-      amount_cents: Math.round(Number(nb.amount) * 100),
-      description: nb.desc.trim(), staff_id: nb.member, customer_phone: nb.phone.trim() || null } });
-    setNewCode(r.bill_code ? `Bill created. If the customer pays from a different phone, give them code ${r.bill_code}.` : "Bill created — the customer can tap now.");
-    setNb({ ...nb, desc: "", amount: "", phone: "" });
-    await load();
-  });
-  const getEnrolCode = (m) => run(`enrol-${m.id}`, async () => setEnrol({ id: m.id, ...(await api(`/v1/tap/${tenantId}/members/${m.id}/enrol-code`, { method: "POST" })) }));
-  const revokeDevice = (id) => run(`dev-${id}`, async () => {
-    if (!window.confirm("Sign this phone out? They'll need a new code to use the app again.")) return;
-    await api(`/v1/tap/${tenantId}/devices/${id}/revoke`, { method: "POST" }); await load();
-  });
-
-  const setReminders = (n) => run("rem", async () => { await api(`/v1/tap/${tenantId}/setup/reminders`, { method: "PUT", body: { max: n } }); await load(); });
-  const remind = (id) => run(`r-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/remind`, { method: "POST" }); await load(); setNewCode("Reminder sent."); });
-  const closeBill = (id, action, reason) => run(`c-${id}`, async () => {
-    if (action === "write_off" && !window.confirm("Write this bill off? Reminders stop and it leaves your unpaid list.")) return;
-    await api(`/v1/tap/${tenantId}/bills/${id}/close`, { method: "POST", body: { action, reason } }); setClosing(null); await load();
-  });
-  const when = (iso) => { try { return new Date(iso).toLocaleString("en-ZA", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg" }); } catch { return ""; } };
-
-  const billAction = (id, action) => run(`b-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/${action}`, { method: "POST" }); await load(); });
+function TapToPayV1({ tenantId }) {
+  const { st, err, busy, shares, setShares, pf, setPf, editPf, setEditPf, test, testMember, setTestMember, bills, nb, setNb, newCode, enrol, devices, unpaid, closing, setClosing, connectPayfast, saveShares, getTag, startTest, goLive, pause, createBill, getEnrolCode, revokeDevice, setReminders, remind, closeBill, when, billAction } = useTapToPay(tenantId);
 
   if (!st) return <div style={{ padding: 24, color: T.muted }}>{err || "Loading…"}</div>;
   const [tone, label] = MODE_BADGE[st.mode] || MODE_BADGE.off;
