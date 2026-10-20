@@ -1420,6 +1420,23 @@ async def _kb_maintenance_on_boot() -> None:
     await on_boot()
 
 
+async def _kb_customer_view_weekly_loop() -> None:
+    """Once a week, check customers can see only public documents; WhatsApp the operator if not
+    (2026-10-20, vula/kb_maintenance.weekly_guard). Checked hourly; the guard itself decides
+    whether a week has passed since the last completed check."""
+    import asyncio as _asyncio
+    from vula.kb_maintenance import weekly_guard
+    if not settings.kb_customer_view_weekly:
+        return
+    await _asyncio.sleep(900)  # settle on boot, after KB_MAINTENANCE's boot jobs
+    while True:
+        try:
+            await weekly_guard()
+        except Exception as exc:
+            log.warning("weekly customer-view guard tick failed: %s", exc)
+        await _asyncio.sleep(3600)
+
+
 async def _local_llm_watch_loop() -> None:
     """WhatsApp Ian when the local Ollama tunnel stops answering (2026-10-19) — the router falls
     back to the cloud silently, and a 3½-day outage went unnoticed. See vula/local_llm_watch.py."""
@@ -1582,6 +1599,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
+    # Weekly: customers see only public documents, or the operator hears about it (2026-10-20).
+    _scheduled_job_tasks.append(_asyncio.create_task(_kb_customer_view_weekly_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_pattern_rollup_loop()))
     # Tenant Mind Phase 2 — quietly re-check voice suggestions as new samples accumulate (163).

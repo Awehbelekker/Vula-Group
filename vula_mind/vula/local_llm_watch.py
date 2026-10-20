@@ -89,24 +89,8 @@ def up_message(down_since: float, now: float) -> str:
 
 
 async def _send(text: str) -> bool:
-    """WhatsApp platform_support_phone: the approved platform template first (works outside the
-    24-hour window), free-form text as a fallback."""
-    to = settings.platform_support_phone
-    if not to:
-        return False
-    tenant = settings.local_llm_alert_tenant or ""
-    from vula.api.whatsapp import _send_reply, _send_wa_template
-    from vula.integrations.platform_support import TEMPLATE_NAME
-    try:
-        if await _send_wa_template(tenant, to, TEMPLATE_NAME, text):
-            return True
-    except Exception as exc:  # noqa: BLE001
-        log.info("local-llm alert template send failed: %s", exc)
-    try:
-        return bool(await _send_reply(to, text, tenant_id=tenant))
-    except Exception as exc:  # noqa: BLE001
-        log.info("local-llm alert WhatsApp send failed: %s", exc)
-        return False
+    from vula.integrations.platform_support import alert_operator
+    return await alert_operator(text)
 
 
 def _record(outcome: str, why: str, down_since: float, now: float, sent: bool) -> None:

@@ -24,7 +24,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -153,6 +153,71 @@ async def _customer_view() -> Dict[str, Any]:
                                                        "by_audience": r["by_audience"]})
                       for r in rep["rows"]}
     return rep
+
+
+def guard_problems(summary: Dict[str, Any]) -> List[str]:
+    """Tenants whose customer view isn't clean, one short line each (counts only)."""
+    out = []
+    for t, v in sorted(summary.items()):
+        if not isinstance(v, dict):
+            out.append(f"{t}: check failed")
+        elif v.get("violations") or v.get("untagged_visible"):
+            out.append(f"{t}: {v.get('violations', 0)} private and {v.get('untagged_visible', 0)} "
+                       "untagged document chunks visible to customers")
+    return out
+
+
+def _last_done(job: str) -> Optional[datetime]:
+    from vula.commerce import service
+    rows = (service._client().table("vula_eval_reports").select("created_at")
+            .eq("model", "kb_maintenance").eq("skill", job).eq("status", "done")
+            .order("created_at", desc=True).limit(1).execute().data or [])
+    return datetime.fromisoformat(str(rows[0]["created_at"]).replace("Z", "+00:00")) if rows else None
+
+
+GUARD_EVERY_DAYS = 7
+
+
+async def weekly_guard(now: Optional[datetime] = None) -> Optional[List[str]]:
+    """The customer-view check, at most once a week (2026-10-20): customers must see only
+    documents marked public. Runs when the last completed check is a week old, so redeploys don't
+    re-run it. A tenant whose check errored is retried once before it counts. Any problem left is
+    WhatsApped to the platform operator. Returns the problems (empty = clean), or None if not due."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        last = await asyncio.to_thread(_last_done, "customer_view")
+    except Exception as exc:  # noqa: BLE001
+        log.info("weekly customer-view guard: last run unknown (%s) — skipping this tick", exc)
+        return None
+    if last and (now - last).total_seconds() < GUARD_EVERY_DAYS * 86400:
+        return None
+    rep = await run_job("customer_view", by="weekly")
+    if "error" in rep:
+        problems = [f"check failed: {str(rep['error'])[:120]}"]
+    else:
+        summary = dict(rep.get("summary") or {})
+        failed = [t for t, v in summary.items() if not isinstance(v, dict)]
+        if failed:
+            from evals import retrieval
+            await asyncio.sleep(60)
+            try:
+                retry = await retrieval.run_customer_view(failed)
+                for r in retry["rows"]:
+                    summary[r["tenant"]] = r.get("error") or {
+                        "violations": len(r["violations"]), "untagged_visible": r["legacy_untagged_visible"]}
+            except Exception as exc:  # noqa: BLE001
+                log.info("weekly customer-view guard: retry failed: %s", exc)
+        problems = guard_problems(summary)
+    if problems:
+        from vula.integrations.platform_support import alert_operator
+        sent = await alert_operator(
+            "Vula weekly customer-view check found a problem: " + "; ".join(problems)[:600]
+            + ". Customers may see documents they shouldn't: open Documents for that business and "
+              "set those documents to staff, or ask Claude to run the customer_view check again.")
+        log.warning("KB weekly customer-view guard: %d problem(s), alert sent=%s", len(problems), sent)
+    else:
+        log.info("KB weekly customer-view guard: clean")
+    return problems
 
 
 async def _retrieval_live() -> Dict[str, Any]:
