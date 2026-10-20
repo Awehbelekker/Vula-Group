@@ -31,3 +31,15 @@
 .vtm-summary .vtm-sub { margin: 0; }
 .vtm-audit-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); padding: 6px 0; border-top: 1px solid var(--line); font-size: var(--fs-body); }
 .vtm-audit-row .vtm-sub { margin: 0; min-width: 150px; }
+/* Notices (team/NoticesV2.jsx) and birthdays */
+.vtm-bday { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vtm-bday .vula-input { width: auto !important; min-width: 96px; }
+.vtm-check { display: flex; align-items: flex-start; gap: var(--space-2); margin: var(--space-2) 0; font-size: var(--fs-body); color: var(--ink); line-height: 1.4; }
+.vtm-check input { margin-top: 3px; min-width: 18px; min-height: 18px; }
+.vtm-notice-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+.vtm-schedule { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vtm-schedule .vula-input { width: auto !important; }
+.vtm-preview { margin-top: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); }
+.vtm-preview-text { white-space: pre-wrap; font: 400 var(--fs-body)/1.5 var(--font-sans); color: var(--ink); margin: var(--space-2) 0; }
+.vtm-notice-body { white-space: pre-wrap; margin: var(--space-2) 0; color: var(--ink); overflow-wrap: anywhere; }
+.vtm-notice-img { display: block; max-width: 100%; max-height: 320px; border-radius: var(--radius-md); margin: var(--space-2) 0; }

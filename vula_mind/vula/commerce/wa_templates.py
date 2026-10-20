@@ -369,6 +369,35 @@ def _promo_sample_image(tenant_id: str) -> Optional[str]:
         return None
 
 
+# A business's notices to its own staff (vula/staff_notices.py, migration 218). UTILITY, so they
+# reach staff who haven't messaged in the last 24 hours. Every one carries a "Got it" quick-reply
+# button — a tap comes back as the words "Got it ✅" and marks a must-read notice as read.
+STAFF_GOT_IT = "Got it ✅"
+STAFF_NOTICE_SUFFIX = "staff_notice"            # · business, the notice text
+STAFF_NOTICE_IMAGE_SUFFIX = "staff_notice_image"  # the same with a picture (a poster, a newsletter)
+STAFF_DAY_SUFFIX = "staff_day"                  # · first name, the birthday / holiday line, business
+STAFF_NOTICE_BODY = ("📢 Notice from {{1}}:\n\n{{2}}\n\nTap Got it once you've read it, "
+                     "or reply here with any questions.")
+STAFF_DAY_BODY = "Hi {{1}}, {{2}} From all of us at {{3}}."
+
+
+def staff_templates(tenant_id: str) -> List[Dict[str, Any]]:
+    from vula.commerce.job_config import template_name
+    got_it = [{"type": "QUICK_REPLY", "text": STAFF_GOT_IT}]
+    return [
+        {"name": template_name(tenant_id, STAFF_NOTICE_SUFFIX), "body": STAFF_NOTICE_BODY,
+         "category": "UTILITY", "buttons": got_it,
+         "examples": ["DIGG", "The office is closed on Friday for the year-end function."]},
+        {"name": template_name(tenant_id, STAFF_NOTICE_IMAGE_SUFFIX), "body": STAFF_NOTICE_BODY,
+         "category": "UTILITY", "buttons": got_it, "header_type": "IMAGE",
+         "examples": ["DIGG", "This month's newsletter is here — have a look at the picture."]},
+        {"name": template_name(tenant_id, STAFF_DAY_SUFFIX), "body": STAFF_DAY_BODY,
+         "category": "UTILITY", "buttons": [{"type": "QUICK_REPLY", "text": "Thank you"}],
+         "examples": ["Thandi", "tomorrow (Fri 16 Dec) is Day of Reconciliation, a public holiday.",
+                      "DIGG"]},
+    ]
+
+
 def standard_templates(tenant_id: str, modules: Optional[set] = None,
                        business_type: str = "") -> List[Dict[str, str]]:
     """The templates this business needs, named the way its jobs will look them up."""
@@ -440,6 +469,23 @@ async def submit_standard(tenant_id: str) -> Dict[str, Any]:
         res = await _create_raw(tenant_id, creds, auth_template_payload())
         (failed.append({"name": AUTH_TEMPLATE, "error": res["error"]}) if res.get("error")
          else submitted.append(AUTH_TEMPLATE))
+    for t in staff_templates(tenant_id):
+        if t["name"] in existing:
+            already.append(t["name"])
+            continue
+        sample = None
+        if t.get("header_type"):
+            sample = _promo_sample_image(tenant_id)
+            if not sample:
+                failed.append({"name": t["name"], "error": "Add your logo first — Meta reviews the "
+                               "picture notice against a sample image."})
+                continue
+        res = await create_template(tenant_id, t["name"], t["body"], category=t["category"],
+                                    example_params=t["examples"], header_type=t.get("header_type"),
+                                    header_example_url=sample, buttons=t["buttons"],
+                                    created_by="standard set")
+        (failed.append({"name": t["name"], "error": res["error"]}) if res.get("error")
+         else submitted.append(t["name"]))
     if mods & {"wa_shop", "orders", "products"}:
         promo = promo_template(tenant_id)
         if promo["name"] in existing:

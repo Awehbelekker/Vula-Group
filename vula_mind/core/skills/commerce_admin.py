@@ -396,6 +396,22 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "deposit_rands": {"type": "number"}, "deposit_pct": {"type": "number"},
             "balance": {"type": "boolean"}, "confirm": {"type": "boolean"}},
             "required": ["order_number"]}}},
+    {"type": "function", "function": {
+        "name": "staff_notice",
+        "description": "Send a notice to the business's OWN STAFF on WhatsApp (not customers) — "
+                       "e.g. 'tell all staff the office is closed Friday', 'let the team know the "
+                       "site starts at 6 tomorrow'. Pass the owner's message as written. Without "
+                       "confirm=true returns a preview (who gets it, the exact wording); only pass "
+                       "confirm=true after the owner confirmed.",
+        "parameters": {"type": "object", "properties": {
+            "message": {"type": "string", "description": "What the staff should be told."},
+            "title": {"type": "string", "description": "A short heading, if the owner gave one."},
+            "roles": {"type": "array", "items": {"type": "string"},
+                      "description": "Only these roles (e.g. ['staff','sales_rep']); omit for everyone."},
+            "must_read": {"type": "boolean",
+                          "description": "True when they must confirm they've read it."},
+            "confirm": {"type": "boolean"}},
+            "required": ["message"]}}},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -1470,6 +1486,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
+    "staff_notice": "team",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -2184,6 +2201,52 @@ class CommerceAdminSkill(BaseSkill):
         return _checked({"saved": True, "vat_registered": registered},
                         f"✅ Saved: the business is {summary}.\n\n{pos.get('text', '')}")
 
+    async def _staff_notice(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """A notice to the business's own staff (vula/staff_notices.py): preview who gets it and
+        the exact wording; on Confirm, send and report the count read back from the recipient
+        rows."""
+        from vula import staff_notices as sn
+        body = str(args.get("message") or "").strip()
+        if not body:
+            return {"status": "need_info", "message": "What should I tell the staff?"}
+        title = str(args.get("title") or "").strip() or " ".join(body.split()[:6]).rstrip(".,!?:;")
+        roles = [str(r).lower() for r in (args.get("roles") or []) if r]
+        spec = {"roles": roles} if roles else {"all": True}
+        must_read = bool(args.get("must_read"))
+        me = re.sub(r"\D", "", str(ctx.get("phone") or ""))
+        people = [m for m in sn.audience(tid, spec)
+                  if not me or re.sub(r"\D", "", m.get("whatsapp") or "")[-9:] != me[-9:]]
+        if not people:
+            return {"status": "need_info",
+                    "message": "There's nobody on the team list with a WhatsApp number to send it "
+                               "to — add them under Team in the dashboard first."}
+        sample = {"id": "preview", "kind": "notice", "title": title, "body": body, "must_read": must_read}
+        text = sn.message_text(sample, people[0], sn._business(tid))
+        names = ", ".join((m.get("name") or m["whatsapp"]).split()[0] for m in people[:12])
+        if len(people) > 12:
+            names += f" and {len(people) - 12} more"
+        if not args.get("confirm"):
+            return {"preview": True, "count": len(people),
+                    "message": f"Send this to {len(people)} staff ({names})?\n\n{text}"}
+        spec = {"ids": [m["id"] for m in people]}
+        try:
+            row = sn.create(tid, title, body, must_read=must_read, audience_spec=spec,
+                            created_by=str(ctx.get("phone") or "whatsapp"))
+            await sn.send(tid, row["id"])
+            t = sn.tally(sn.recipients(tid, row["id"]))
+        except Exception as exc:
+            logger.warning("staff_notice failed for %s: %s", tid, exc)
+            return _not_confirmed("I couldn't send the notice. Not sent.")
+        if not t["sent"]:
+            return _not_confirmed("The notice didn't reach anyone — the staff notice template may "
+                                  "not be approved yet (Settings › WhatsApp templates). Not sent.")
+        msg = f"✅ Sent to {t['sent']} of {len(people)} staff."
+        if t["failed"]:
+            msg += f" {t['failed']} couldn't be reached."
+        if must_read:
+            msg += " I'll remind anyone who hasn't confirmed in a day and tell you who."
+        return _checked({"sent": t["sent"], "notice_id": row["id"]}, msg)
+
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
@@ -2291,6 +2354,8 @@ class CommerceAdminSkill(BaseSkill):
                 return {**res, "reply_verbatim": res["text"]} if res.get("text") else res
             if name == "set_vat_registration":
                 return await self._set_vat_registration(tid, args, ctx)
+            if name == "staff_notice":
+                return await self._staff_notice(tid, args, ctx)
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),

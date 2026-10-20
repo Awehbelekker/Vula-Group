@@ -44,6 +44,26 @@ class MemberIn(BaseModel):
     access: list = []
     notify: list = []
     active: bool = True
+    birthday: Optional[str] = None          # "MM-DD" (migration 218) — day and month only
+    birthday_share: Optional[bool] = None
+    notices_opt_out: Optional[bool] = None
+
+
+_BIRTHDAY_RE = re.compile(r"^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
+
+
+def _clean_birthday(row: dict) -> dict:
+    """Day and month only; "" clears it. New columns are only sent when set, so a business that
+    hasn't run migration 218 can still add and edit people."""
+    for k in ("birthday", "birthday_share", "notices_opt_out"):
+        if row.get(k) is None:
+            row.pop(k, None)
+    if "birthday" in row:
+        b = (row["birthday"] or "").strip()
+        if b and not _BIRTHDAY_RE.match(b):
+            raise HTTPException(status_code=400, detail="Birthday must be month-day, e.g. 12-16.")
+        row["birthday"] = b or None
+    return row
 
 
 class MemberPatch(BaseModel):
@@ -54,6 +74,9 @@ class MemberPatch(BaseModel):
     access: Optional[list] = None
     notify: Optional[list] = None
     active: Optional[bool] = None
+    birthday: Optional[str] = None
+    birthday_share: Optional[bool] = None
+    notices_opt_out: Optional[bool] = None
 
 
 @router.get("/{tenant}")
@@ -70,7 +93,7 @@ async def list_members(tenant: str) -> dict:
 @router.post("/{tenant}")
 async def add_member(tenant: str, body: MemberIn,
                      identity: dict = Depends(require_tenant_admin)) -> dict:
-    row = body.model_dump()
+    row = _clean_birthday(body.model_dump())
     row["tenant_id"] = tenant
     if row.get("whatsapp"):
         row["whatsapp"] = _digits(row["whatsapp"])
@@ -111,7 +134,7 @@ async def _revoke_matching_login(tenant: str, member_id: str, identity: dict) ->
 @router.patch("/{tenant}/{member_id}")
 async def update_member(tenant: str, member_id: str, body: MemberPatch,
                         identity: dict = Depends(require_tenant_admin)) -> dict:
-    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    patch = _clean_birthday({k: v for k, v in body.model_dump().items() if v is not None})
     if patch.get("whatsapp"):
         patch["whatsapp"] = _digits(patch["whatsapp"])
     patch["updated_at"] = "now()"

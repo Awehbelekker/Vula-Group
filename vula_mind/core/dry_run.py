@@ -47,7 +47,7 @@ READ_ONLY = frozenset({
 # Tools that only preview unless called with confirm=true (checked in their own code): without
 # confirm they run for real, so the reply can quote the real audience size (benchmark, 1 Oct —
 # "Send all customers…" got no reach figure because the preview itself was blocked).
-PREVIEW_UNLESS_CONFIRMED = frozenset({"send_broadcast", "set_vat_registration"})
+PREVIEW_UNLESS_CONFIRMED = frozenset({"send_broadcast", "set_vat_registration", "staff_notice"})
 
 NOT_RUN = ("Benchmark dry run: this action was recorded but NOT performed. Don't say it's done — "
            "say what you would do and what you'd need to confirm.")
