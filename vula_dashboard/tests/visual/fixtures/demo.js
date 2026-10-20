@@ -884,3 +884,20 @@ export const stockMovements = [
   { id: "mv-2", reason: "receive", delta: 12, qty_after: 3, actor: "owner@harbourvine.example.test", created_at: at(3, "11:00") },
   { id: "mv-3", reason: "count", delta: -2, qty_after: 5, actor: "counter@harbourvine.example.test", created_at: at(16, "17:30") },
 ];
+
+// ── Suppliers + purchase orders (commerce.py suppliers / purchase-orders, P3.3) ──
+export const suppliers = [
+  { id: "sup-1", name: "Atlantic Dairy Co-op", payment_terms_days: 30, tax_id: "4123456789", contact_phone: "+27215550101",
+    contact_email: "orders@atlanticdairy.example.test", aliases: ["Atlantic Dairy", "ADC"], notes: "" },
+  { id: "sup-2", name: "Cape Charcuterie", payment_terms_days: 14, tax_id: "", contact_phone: "+27215550188", contact_email: "", aliases: [], notes: "" },
+];
+export const reorderSuggestions = [
+  { supplier_id: "sup-1", supplier_name: "Atlantic Dairy Co-op",
+    items: [{ product_id: "p-03", name: "Aged cheddar (250g)", stock_quantity: 3, suggested_qty: 12, unit_cost_cents: 6_200 }] },
+];
+export const supplierPurchaseOrders = [
+  { id: "po-3", po_number: "PO-0032", supplier_name: "Cape Charcuterie", status: "draft", total_cents: 96_000,
+    items: [{ name: "Charcuterie board for 4", quantity: 4 }] },
+  ...purchaseOrders.map((p) => ({ ...p, total_cents: p.id === "po-1" ? 93_000 : 0, sent_channel: p.status === "sent" ? "email" : null,
+    items: p.items.map((it) => ({ ...it, name: products.find((x) => x.id === it.product_id)?.name })) })),
+];

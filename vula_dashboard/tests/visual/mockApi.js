@@ -190,7 +190,14 @@ function routes(role, modules = []) {
     r("POST", `${A}/stock/counts/${T}/scans`, (m, url, req) => ({ results: (req.postDataJSON()?.scans || []).map((x) => ({ counted: x.set ?? x.add })) })),
     r("POST", `${A}/stock/counts/${T}/apply`, () => ({ applied: 3, failed: [] })),
     r("POST", `${A}/stock/counts/${T}/cancel`, () => ({ ok: true })),
-    r("GET", `${A}/purchase-orders`, () => ({ purchase_orders: F.purchaseOrders })),
+    r("GET", `${A}/purchase-orders`, () => ({ purchase_orders: F.supplierPurchaseOrders })),
+    r("POST", `${A}/purchase-orders`, () => ({ id: "po-new" })),
+    r("PATCH", `${A}/purchase-orders/${T}/status`, () => ({ ok: true })),
+    r("POST", `${A}/purchase-orders/${T}/send`, () => ({ sent_via: ["email"] })),
+    r("GET", `${A}/reorder-suggestions`, () => ({ groups: F.reorderSuggestions })),
+    r("GET", `${A}/suppliers`, () => ({ suppliers: F.suppliers })),
+    r("POST", `${A}/suppliers`, () => ({ ok: true })),
+    r("DELETE", `${A}/suppliers/${T}`, () => ({ ok: true })),
     r("GET", `${A}/products/lookup`, (m, url) => (url.searchParams.get("barcode") === "6001234500021"
       ? { product: F.products[1], variant: null }
       : { __raw: { status: 404, contentType: "application/json", body: '{"detail":"No product has that barcode."}' } })),

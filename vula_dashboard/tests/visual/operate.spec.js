@@ -132,6 +132,75 @@ test.describe("redesign", () => {
   });
 });
 
+const SUPPLIERS = { name: "suppliers", role: "owner", nav: "Operate", tab: "Suppliers", ready: "Atlantic Dairy Co-op" };
+
+test.describe("redesign: suppliers", () => {
+  test.skip(!V2, "the redesign runs with UI_V2=1");
+
+  for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+    for (const theme of THEMES) {
+      test(`suppliers ${vp} ${theme}`, async ({ page }, ti) => {
+        const errors = await openScreen(page, SUPPLIERS, { viewport, theme });
+        await expect(page.getByRole("list", { name: "Purchase orders" })).toBeVisible();
+        await check(page, ti, "suppliers", `${vp}-${theme}`, viewport);
+        await page.getByText("Cape Charcuterie", { exact: true }).locator("visible=true").first().click();
+        await expect(page.getByRole("dialog", { name: "Edit Cape Charcuterie" })).toBeVisible();
+        await check(page, ti, "suppliers-edit", `${vp}-${theme}`, viewport);
+        expect(errors).toEqual([]);
+      });
+    }
+  }
+
+  test("suppliers: add, edit, delete and purchase orders send the same calls", async ({ page }) => {
+    await openScreen(page, SUPPLIERS, { viewport: VIEWPORTS.mobile, theme: "light" });
+    const saved = capture(page, "POST", /\/admin\/suppliers$/);
+    const created = capture(page, "POST", /\/admin\/purchase-orders$/);
+    const sent = capture(page, "POST", /\/purchase-orders\/po-3\/send$/);
+    const moved = [];
+    page.on("request", (r) => { if (r.method() === "PATCH") moved.push([new URL(r.url()).pathname.split("/").at(-2), r.postDataJSON()]); });
+    const deleted = [];
+    page.on("request", (r) => { if (r.method() === "DELETE") deleted.push(new URL(r.url()).pathname); });
+
+    await page.getByRole("button", { name: "Add supplier" }).click();
+    const sheet = page.getByRole("dialog", { name: "Add supplier" });
+    await sheet.getByLabel("Supplier name").fill("  Overberg Mills ");
+    await sheet.getByLabel("Payment terms (days)").fill("7");
+    await sheet.getByLabel("Other names on their bills").fill("Overberg, OM Flour");
+    await page.getByRole("button", { name: "Add supplier" }).last().click();
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({ name: "Overberg Mills", payment_terms_days: 7, aliases: ["Overberg", "OM Flour"] });
+    expect(saved[0].id).toBeUndefined();
+
+    await page.getByText("Atlantic Dairy Co-op", { exact: true }).locator("visible=true").first().click();
+    const edit = page.getByRole("dialog", { name: "Edit Atlantic Dairy Co-op" });
+    await expect(edit.getByLabel("Other names on their bills")).toHaveValue("Atlantic Dairy, ADC");
+    await edit.getByLabel("Payment terms (days)").fill("45");
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect.poll(() => saved.length).toBe(2);
+    expect(saved[1]).toMatchObject({ id: "sup-1", name: "Atlantic Dairy Co-op", payment_terms_days: 45, aliases: ["Atlantic Dairy", "ADC"] });
+
+    await page.getByText("Cape Charcuterie", { exact: true }).locator("visible=true").first().click();
+    await page.getByRole("button", { name: "Delete supplier" }).click();
+    await page.getByRole("dialog").filter({ hasText: 'Delete supplier "Cape Charcuterie"?' }).getByRole("button", { name: "Yes" }).click();
+    await expect.poll(() => deleted).toEqual([`/v1/commerce/${F.TENANT_ID}/admin/suppliers/sup-2`]);
+    await expect(page.getByRole("dialog", { name: "Edit Cape Charcuterie" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Create PO" }).click();
+    await expect.poll(() => created.length).toBe(1);
+    expect(created[0]).toEqual({ supplier_id: "sup-1", supplier_name: "Atlantic Dairy Co-op",
+      items: [{ product_id: "p-03", name: "Aged cheddar (250g)", quantity: 12, unit_cost_cents: 6_200 }] });
+
+    await page.getByLabel("Send Cape Charcuterie by").selectOption("whatsapp");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => sent.length).toBe(1);
+    expect(sent[0]).toEqual({ channel: "whatsapp" });
+    await expect(page.getByText("Sent via email", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Mark received" }).click();
+    await expect.poll(() => moved.length).toBe(1);
+    expect(moved[0]).toEqual(["po-1", { status: "received" }]);
+  });
+});
+
 test("current look: Stock still counts a scan on the shared hooks", async ({ page }) => {
   test.skip(V2, "the current look runs without UI_V2");
   await openScreen(page, { ...STOCK, nav: "Sell" }, { viewport: VIEWPORTS.desktop, theme: "light" });
