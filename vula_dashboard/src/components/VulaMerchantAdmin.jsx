@@ -273,8 +273,8 @@ function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsum
       {active === 'bank' && <VulaBankRec tenantId={tenantId} v2={v2} />}
       {active === 'books' && <VulaAccounting tenantId={tenantId} v2={v2} />}
       {active === 'payments' && <VulaPayments tenantId={tenantId} v2={v2} />}
-      {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} />}
-      {active === 'budget' && <VulaBudget tenantId={tenantId} />}
+      {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} v2={v2} />}
+      {active === 'budget' && <VulaBudget tenantId={tenantId} v2={v2} />}
       {active === 'scanner' && <VulaSmartScanner tenantId={tenantId} products={products} v2={v2} />}
       {active === 'finances' && <FinancesSubsection tenantId={tenantId} v2={v2} />}
     </div>

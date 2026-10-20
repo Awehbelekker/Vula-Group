@@ -6,122 +6,20 @@
  * - Filter by month, export to CSV
  */
 
-import { confirmDialog } from './ui/index.jsx'
-import { useState, useEffect, useCallback } from 'react'
-import { VULA_API } from '../lib/authFetch'
-import { lastDayOfMonth, todaySA } from '../lib/dates'
-
-
-const CATEGORIES = ['stock', 'delivery', 'packaging', 'marketing', 'equipment', 'staff', 'rent', 'utilities', 'other']
+import { CATEGORIES, useBudget } from './budget/useBudget'
+import BudgetV2 from './budget/BudgetV2'
 
 const CAT_COLORS = {
   stock: '#2DAAB5', delivery: '#8b5cf6', packaging: 'var(--warn)', marketing: 'var(--danger)',
   equipment: '#0ea5e9', staff: 'var(--ok)', rent: '#6366f1', utilities: '#ec4899', other: 'var(--muted)',
 }
 
-export default function VulaBudget({ tenantId, stats }) {
-  const [expenses, setExpenses] = useState([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
-  const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ category: 'stock', description: '', amount: '', supplier: '', date: todaySA(), due_date: '' })
-  const [due, setDue] = useState(null) // { overdue, upcoming, *_total_cents }
-  const [recurring, setRecurring] = useState([])
-  const [showAddRecurring, setShowAddRecurring] = useState(false)
-  const [rForm, setRForm] = useState({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: todaySA() })
+export default function VulaBudget({ v2 = false, ...props }) {
+  return v2 ? <BudgetV2 {...props} /> : <BudgetV1 {...props} />
+}
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    // /admin/expenses now serves the expense-claims workflow (migration 060): it filters by
-    // since/until, not month, and doesn't return a total_cents summary — so filter and total
-    // here instead of trusting the server for those two things.
-    const [y, m] = month.split('-').map(Number)
-    const since = `${month}-01`
-    const until = lastDayOfMonth(y, m)
-    const [exp, dueResp] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses?since=${since}&until=${until}`).then(r => r.json()),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/due?days_ahead=30`).then(r => r.json()).catch(() => null),
-    ])
-    const rows = exp.expenses || []
-    setExpenses(rows)
-    setTotal(rows.reduce((sum, e) => sum + (e.amount_cents || 0), 0))
-    setDue(dueResp)
-    setLoading(false)
-  }, [tenantId, month])
-
-  useEffect(() => { load() }, [load])
-
-  const loadRecurring = useCallback(async () => {
-    const r = await fetch(`${VULA_API}/v1/recurring-bills/${tenantId}?status=active`).then(r => r.json()).catch(() => ({}))
-    setRecurring(r.bills || [])
-  }, [tenantId])
-
-  useEffect(() => { loadRecurring() }, [loadRecurring])
-
-  async function addRecurring(e) {
-    e.preventDefault()
-    const cents = Math.round(parseFloat(rForm.amount) * 100)
-    if (isNaN(cents) || cents <= 0 || !rForm.description) return
-    await fetch(`${VULA_API}/v1/recurring-bills/${tenantId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        description: rForm.description, supplier: rForm.supplier || null, category: rForm.category,
-        amount_cents: cents, cadence: rForm.cadence, next_due: rForm.next_due,
-      }),
-    })
-    setRForm({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: todaySA() })
-    setShowAddRecurring(false)
-    loadRecurring()
-  }
-
-  async function cancelRecurring(id) {
-    if (!(await confirmDialog('Stop this recurring bill? Past expenses it already created stay on the books.', { danger: true, confirmLabel: 'Yes' }))) return
-    await fetch(`${VULA_API}/v1/recurring-bills/${tenantId}/${id}/status`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'cancelled' }),
-    })
-    loadRecurring()
-  }
-
-  async function markPaid(id) {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/${id}/pay`, { method: 'PATCH' })
-    load()
-  }
-
-  async function addExpense(e) {
-    e.preventDefault()
-    const cents = Math.round(parseFloat(form.amount) * 100)
-    if (isNaN(cents) || cents <= 0) return
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        date: form.date, category: form.category,
-        description: form.description, amount_cents: cents, supplier: form.supplier,
-        due_date: form.due_date || null,
-      }),
-    })
-    setForm({ category: 'stock', description: '', amount: '', supplier: '', date: todaySA(), due_date: '' })
-    setShowAdd(false)
-    load()
-  }
-
-  async function deleteExpense(id) {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/${id}`, { method: 'DELETE' })
-    load()
-  }
-
-  function exportCSV() {
-    const rows = [['Date', 'Category', 'Description', 'Supplier', 'Amount (R)']]
-    expenses.forEach(e => rows.push([e.date, e.category, e.description, e.supplier || '', (e.amount_cents / 100).toFixed(2)]))
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `expenses-${month}.csv`; a.click()
-  }
+function BudgetV1({ tenantId, stats }) {
+  const { expenses, total, loading, month, setMonth, showAdd, setShowAdd, form, setForm, due, recurring, showAddRecurring, setShowAddRecurring, rForm, setRForm, addRecurring, cancelRecurring, markPaid, addExpense, deleteExpense, exportCSV } = useBudget(tenantId)
 
   const fmt = c => `R${(c / 100).toFixed(2)}`
   const revenue = stats?.today_revenue_cents != null ? stats.total_revenue_cents : 0

@@ -1006,3 +1006,35 @@ export const scheduledJobs = {
 };
 export const marketingSaved = [{ id: "ms-1", kind: "promo", topic: "Braai packs", body: "Braai season is here! Our braai packs are R399 this weekend only." }];
 export const onboardingStats = { total: 312, invited: 180, awaiting_reply: 64, in_progress: 12, opted_in: 41, complete: 9, opted_out: 6 };
+
+// ── Tap to Pay (vula/api/tap.py) ──
+const QR = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21"><rect width="21" height="21" fill="white"/><rect x="1" y="1" width="7" height="7"/><rect x="13" y="1" width="7" height="7"/><rect x="1" y="13" width="7" height="7"/></svg>')}`;
+export const tapSetup = (over = {}) => ({
+  mode: "testing", tested: true, can_go_live: true, blockers: [], reminders_max: 3,
+  payfast: { connected: true, mode: "test" }, whatsapp: { connected: true },
+  staff: [
+    { id: "tm-1", name: "Lerato (coach)", share_bp: 6000, whatsapp: "+27820000201", tag: { qr: QR, url: "https://pay.vula.test/t/ab12cd" } },
+    { id: "tm-2", name: "Sipho (coach)", share_bp: 5000, whatsapp: null, tag: null },
+  ],
+  ...over,
+});
+export const tapUnpaid = [
+  { id: "ub-1", description: "Beginner lesson", total_cents: 55_000, customer: "+27820000105", status: "abandoned", reminders_sent: 1, reminders_max: 3, next_reminder_at: "2026-10-18T07:00:00Z", opted_out: false, skipped: 0 },
+  { id: "ub-2", description: "Board hire", total_cents: 25_000, customer: null, status: "unpaid", reminders_sent: 3, reminders_max: 3, opted_out: false, skipped: 1 },
+];
+export const tapBills = [
+  { id: "tb-1", description: "Private lesson", subtotal_cents: 75_000, status: "claimed", is_test: false },
+  { id: "tb-2", description: "R5 test payment", subtotal_cents: 500, status: "paid", is_test: true },
+];
+export const tapDevices = [{ id: "dv-1", member_id: "tm-1", last_seen_at: "2026-10-16T09:20:00Z", revoked_at: null }];
+
+// ── Budget (expenses due + recurring bills) ──
+export const expensesDue = {
+  overdue: [{ id: "exp-due-1", description: "Fairview cheese account", supplier: "Fairview", due_date: "2026-10-10", amount_cents: 318_000 }],
+  upcoming: [{ id: "exp-due-2", description: "Rent", supplier: "Sea Point Properties", due_date: "2026-11-01", amount_cents: 2_150_000 }],
+  grand_total_cents: 2_468_000,
+};
+export const recurringBills = [
+  { id: "rb-1", description: "Rent", supplier: "Sea Point Properties", category: "rent", cadence: "monthly", next_due: "2026-11-01", amount_cents: 2_150_000 },
+  { id: "rb-2", description: "POS software", supplier: null, category: "utilities", cadence: "monthly", next_due: "2026-10-28", amount_cents: 49_900 },
+];

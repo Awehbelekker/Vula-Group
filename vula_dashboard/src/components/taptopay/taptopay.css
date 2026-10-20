@@ -1,0 +1,37 @@
+/* taptopay.css — the redesigned Money › Tap to Pay (taptopay/TapToPayV2.jsx). Tokens only; one
+   column up to 820px, every text holder min-width: 0. QR codes stay black on white in dark mode so
+   phone cameras can read them. */
+
+.vtp { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 820px; }
+.vtp-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vtp-step { margin: 0; display: flex; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vtp-n { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--line);
+  color: var(--muted); font-size: var(--fs-caption); font-weight: 700; }
+.vtp-n--done { background: var(--ok); border-color: var(--ok); color: var(--on-accent); }
+.vtp-h { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.vtp-h4 { margin: 0; font: 600 var(--fs-caption)/1.4 var(--font-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.vtp-sub { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--muted); }
+.vtp-muted { margin: 0; font-size: var(--fs-caption); line-height: 1.5; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.vtp-tip { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); font-size: var(--fs-caption); line-height: 1.5; color: var(--ink); }
+.vtp-ok { margin: 0; font-size: var(--fs-body); color: var(--ok-text); overflow-wrap: anywhere; }
+.vtp-warn { margin: 0; font-size: var(--fs-caption); color: var(--warn-text); }
+.vtp-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-body); }
+.vtp-danger { color: var(--danger-text) !important; }
+.vtp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vtp-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vtp-row.vtp-bottom { align-items: flex-end; }
+.vtp-grow { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+.vtp-end { align-self: end; }
+.vtp-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.vtp-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr)); align-items: end; }
+.vtp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vtp-member { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.vtp-name { flex: 1 1 140px; min-width: 0; align-self: center; color: var(--ink); overflow-wrap: anywhere; }
+.vtp-tag { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.vtp-qr { display: block; padding: 4px; border-radius: var(--radius-sm, 6px); background: white; }
+.vtp-links { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.vtp-link { display: inline-flex; align-items: center; gap: var(--space-1); min-height: 32px; color: var(--brand-text); font-size: var(--fs-body); overflow-wrap: anywhere; }
+.vtp-code { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); }
+.vtp-big { font: 700 var(--fs-display-md)/1.2 var(--font-mono); letter-spacing: .2em; color: var(--ink); }
+.vtp-bill { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.vtp-billrow { padding-top: var(--space-2); border-top: 1px solid var(--line); }
