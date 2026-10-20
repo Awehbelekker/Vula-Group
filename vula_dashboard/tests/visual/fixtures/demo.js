@@ -1038,3 +1038,18 @@ export const recurringBills = [
   { id: "rb-1", description: "Rent", supplier: "Sea Point Properties", category: "rent", cadence: "monthly", next_due: "2026-11-01", amount_cents: 2_150_000 },
   { id: "rb-2", description: "POS software", supplier: null, category: "utilities", cadence: "monthly", next_due: "2026-10-28", amount_cents: 49_900 },
 ];
+
+// ── Assistant hub (assistant / agent-activity / persona / automations / flows) ──
+export const agentEvents = [
+  { kind: "tool", tool: "update_order_status", narrated: "Marked order HV-1052 as dispatched", who: "admin", consequential: true, at: "2026-10-17T07:40:00Z" },
+  { kind: "tool", tool: "check_stock", args: { product: "Aged cheddar" }, who: "customer", consequential: false, at: "2026-10-17T07:10:00Z" },
+  { kind: "route", task: "customer_reply", escalated: false, at: "2026-10-17T06:55:00Z" },
+  { kind: "route", task: "document_extract", escalated: true, reason: "local GPU unreachable", at: "2026-10-16T15:20:00Z" },
+];
+export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name." };
+export const automations = [
+  { id: "au-1", name: "On its way", trigger_type: "order_status", trigger_config: { to_status: "dispatched" }, action_type: "whatsapp_customer", enabled: true, fire_count: 14, created_from: "form" },
+  { id: "au-2", name: "Cheddar running low", trigger_type: "low_stock", trigger_config: {}, action_type: "whatsapp_team", enabled: false, fire_count: 0, created_from: "conversation" },
+];
+export const automationFirings = [{ id: "fi-1", message: "Hi Thandi, your order HV-1052 is on its way!", action_type: "whatsapp_customer" }];
+export const flows = [{ id: "fl-1", name: "Book a tasting", trigger_phrases: ["book a tasting", "tasting"], steps: [{}, {}, {}], enabled: true, fire_count: 6 }];

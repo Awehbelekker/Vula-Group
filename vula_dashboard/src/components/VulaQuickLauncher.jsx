@@ -47,8 +47,8 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true, 
       {/* The redesign opens the action in its own Sheet primitive (2026-10-19) */}
       {v2 && (
         <Sheet open={!!ActiveComp} title={ACTIONS.find((a) => a.key === active)?.label || ""} onClose={() => setActive(null)}>
-          {/* only the scanner has a redesigned version that sits in a sheet; the rest render as before */}
-          {ActiveComp && (active === "scanner" ? <ActiveComp tenantId={tenantId} v2 inSheet /> : <ActiveComp tenantId={tenantId} />)}
+          {/* the scanner and the assistant have redesigned versions that sit in a sheet; the rest render as before */}
+          {ActiveComp && (active === "scanner" || active === "assistant" ? <ActiveComp tenantId={tenantId} v2 inSheet /> : <ActiveComp tenantId={tenantId} />)}
         </Sheet>
       )}
 
