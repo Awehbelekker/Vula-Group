@@ -16,110 +16,22 @@
  * seen, so a batch re-sent after a dropped reply never double-counts (migration 183).
  * Every change is recorded as a stock movement (migration 182).
  */
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState } from 'react'
 import { ClipboardList, PackagePlus, Pencil } from 'lucide-react'
-import { VULA_API } from '../lib/authFetch'
-import { useAuthStore } from '../store/auth'
-import { Card, Button, Badge, SectionTabs, EmptyState, inputStyle, toast, confirmDialog } from './ui/index.jsx'
+import { Card, Button, Badge, SectionTabs, EmptyState, inputStyle } from './ui/index.jsx'
 import { T } from '../theme/tokens'
+import { itemKey, itemName, REASON, useBarcodeCamera, useProductSearch, useStockTakes,
+  useCountSession, useReceive, useQuickAdjust, useStockProducts } from './stock/useStock'
+import StockV2 from './stock/StockV2'
 
-// Exact amounts (migration 210): 2.5 kg stays 2.5 — never rounded to a whole number.
-export const toQty = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? NaN : Math.round(n * 10000) / 10000 }
-
-const H = { 'Content-Type': 'application/json' }   // JWT attached by lib/authFetch
-
-async function api(tenantId, path, opts = {}) {
-  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin${path}`, { headers: H, ...opts })
-  let d = {}
-  try { d = await r.json() } catch { /* empty body */ }
-  if (!r.ok) { const e = new Error(d.detail || `Request failed (${r.status})`); e.status = r.status; throw e }
-  return d
-}
+export { toQty } from './stock/useStock'
 
 const rands = (cents) => cents == null ? '—' : `${cents < 0 ? '−' : ''}R${(Math.abs(cents) / 100).toFixed(2)}`
-const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
-const itemKey = (pid, vid) => `${pid}:${vid || ''}`
-const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } }
-const saveJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch { /* storage off */ } }
-
-function beep() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)()
-    const o = ctx.createOscillator(); const g = ctx.createGain()
-    o.frequency.value = 1100; g.gain.value = 0.08
-    o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.09)
-    o.onended = () => ctx.close()
-  } catch { /* no audio */ }
-  try { navigator.vibrate?.(60) } catch { /* no vibration */ }
-}
 
 // ── Camera barcode scanner ────────────────────────────────────────────────────
 
-const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code']
-
 function BarcodeScanner({ onCode, paused }) {
-  const videoRef = useRef(null)
-  const last = useRef({ code: '', at: 0 })
-  const pausedRef = useRef(paused)
-  const [on, setOn] = useState(false)
-  const [err, setErr] = useState('')
-  const [manual, setManual] = useState('')
-  pausedRef.current = paused
-
-  const emit = useCallback((code) => {
-    const now = Date.now()
-    // One item held in front of the camera is read many times a second — one count per 1.5s.
-    if (pausedRef.current || (code === last.current.code && now - last.current.at < 1500)) return
-    last.current = { code, at: now }
-    beep()
-    onCode(code)
-  }, [onCode])
-
-  useEffect(() => {
-    if (!on) return
-    let stream, timer, zxingControls, stopped = false
-    ;(async () => {
-      setErr('')
-      try {
-        if ('BarcodeDetector' in window) {
-          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-          if (stopped) return
-          videoRef.current.srcObject = stream
-          await videoRef.current.play()
-          const supported = await window.BarcodeDetector.getSupportedFormats?.() || FORMATS
-          const det = new window.BarcodeDetector({ formats: FORMATS.filter(f => supported.includes(f)) })
-          const tick = async () => {
-            if (stopped) return
-            try {
-              const found = await det.detect(videoRef.current)
-              if (found[0]?.rawValue) emit(found[0].rawValue)
-            } catch { /* frame not ready */ }
-            timer = setTimeout(tick, 200)
-          }
-          tick()
-        } else {
-          const { BrowserMultiFormatReader } = await import('@zxing/browser')
-          if (stopped) return
-          const reader = new BrowserMultiFormatReader()
-          zxingControls = await reader.decodeFromConstraints(
-            { video: { facingMode: 'environment' } }, videoRef.current,
-            (result) => { if (result) emit(result.getText()) })
-          if (stopped) zxingControls.stop()
-        }
-      } catch (e) {
-        setErr(e?.name === 'NotAllowedError'
-          ? 'Camera permission was refused — allow it in the browser, or type the barcode below.'
-          : 'Could not start the camera on this device — type the barcode below.')
-        setOn(false)
-      }
-    })()
-    return () => {
-      stopped = true
-      clearTimeout(timer)
-      zxingControls?.stop()
-      stream?.getTracks().forEach(t => t.stop())
-    }
-  }, [on, emit])
+  const { videoRef, on, setOn, err, manual, setManual, submitManual } = useBarcodeCamera({ onCode, paused })
 
   return (
     <Card pad={12} style={{ marginBottom: 12 }}>
@@ -133,7 +45,7 @@ function BarcodeScanner({ onCode, paused }) {
           {on ? 'Stop camera' : '📷 Start camera'}
         </Button>
         <form style={{ display: 'flex', gap: 6, flex: 1, minWidth: 200 }}
-              onSubmit={(e) => { e.preventDefault(); if (manual.trim()) { onCode(manual.trim()); setManual('') } }}>
+              onSubmit={submitManual}>
           <input value={manual} onChange={e => setManual(e.target.value)} placeholder="…or type / use a USB scanner"
                  inputMode="numeric" style={{ ...inputStyle, padding: '6px 10px' }} />
           <Button size="sm" variant="soft" type="submit">Add</Button>
@@ -147,12 +59,7 @@ function BarcodeScanner({ onCode, paused }) {
 // ── Product search + barcode resolution ───────────────────────────────────────
 
 function ProductPicker({ products, onPick, placeholder = 'Search products…' }) {
-  const [q, setQ] = useState('')
-  const hits = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    if (!s) return []
-    return products.filter(p => !p.archived && `${p.name} ${p.sku || ''} ${p.barcode || ''}`.toLowerCase().includes(s)).slice(0, 8)
-  }, [q, products])
+  const { q, setQ, hits } = useProductSearch(products)
   return (
     <div>
       <input value={q} onChange={e => setQ(e.target.value)} placeholder={placeholder} style={inputStyle} />
@@ -166,73 +73,34 @@ function ProductPicker({ products, onPick, placeholder = 'Search products…' })
   )
 }
 
-/** Turns a scanned code into {product, variant}; asks to link a code nothing carries. */
-function useResolver(tenantId, products) {
-  const [unknown, setUnknown] = useState(null)   // { code, resolve }
-  const cache = useRef({})
-  const resolve = useCallback(async (code) => {
-    if (cache.current[code]) return cache.current[code]
-    const local = products.find(p => p.barcode === code || p.sku === code)
-    if (local) return (cache.current[code] = { product: local, variant: null })
-    try {
-      const hit = await api(tenantId, `/products/lookup?barcode=${encodeURIComponent(code)}`)
-      return (cache.current[code] = hit)
-    } catch (e) {
-      if (e.status !== 404) throw e
-      return new Promise((res) => setUnknown({ code, resolve: res }))
-    }
-  }, [tenantId, products])
-
+/** The resolver's "link this unknown barcode" card. */
+function withLinker({ resolve, unknown, linkTo, skip, waiting }, products) {
   const linker = unknown && (
     <Card pad={14} style={{ marginBottom: 12, borderColor: T.warn }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>Barcode {unknown.code} isn't on any product yet</div>
       <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 8 }}>Pick the product it belongs to — next time it scans straight in.</div>
-      <ProductPicker products={products} onPick={async (p) => {
-        try {
-          const hit = await api(tenantId, `/products/${p.id}/barcode`, { method: 'POST', body: JSON.stringify({ barcode: unknown.code }) })
-          cache.current[unknown.code] = hit
-          unknown.resolve(hit)
-        } catch (e) { toast(e.message); unknown.resolve(null) }
-        setUnknown(null)
-      }} />
-      <Button size="sm" variant="ghost" style={{ marginTop: 8 }} onClick={() => { unknown.resolve(null); setUnknown(null) }}>Skip</Button>
+      <ProductPicker products={products} onPick={linkTo} />
+      <Button size="sm" variant="ghost" style={{ marginTop: 8 }} onClick={skip}>Skip</Button>
     </Card>
   )
-  return { resolve, linker, waiting: !!unknown }
-}
-
-const itemName = (hit) => {
-  const base = hit?.product?.name || 'Unknown product'
-  const opts = hit?.variant?.option_values
-  return opts && typeof opts === 'object' ? `${base} — ${Object.values(opts).join(' / ')}` : base
+  return { resolve, linker, waiting }
 }
 
 // ── Stock-take ────────────────────────────────────────────────────────────────
 
 function StockTake({ tenantId, products }) {
-  const full = useAuthStore(s => s.full)
-  const [counts, setCounts] = useState([])
-  const [countId, setCountId] = useState(null)
-  const [note, setNote] = useState('')
-  const [review, setReview] = useState(null)
-  const [msg, setMsg] = useState('')
-  const load = useCallback(() => api(tenantId, '/stock/counts').then(d => setCounts(d.counts || [])).catch(e => setMsg(e.message)), [tenantId])
-  useEffect(() => { load() }, [load])
+  const { full, counts, open, countId, setCountId, note, setNote, review, setReview, msg, start, close } = useStockTakes(tenantId)
 
   if (countId) return <CountSession tenantId={tenantId} products={products} countId={countId} full={full}
                                      review={review} setReview={setReview}
-                                     onClose={() => { setCountId(null); setReview(null); load() }} />
-  const open = counts.filter(c => c.status === 'open')
+                                     onClose={close} />
   return (
     <div>
       <Card pad={14} style={{ marginBottom: 12 }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>Start a stock-take</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input value={note} onChange={e => setNote(e.target.value)} placeholder="Name it, e.g. Month end — cold room" style={inputStyle} />
-          <Button onClick={async () => {
-            try { const c = await api(tenantId, '/stock/counts', { method: 'POST', body: JSON.stringify({ note }) }); setNote(''); setCountId(c.id) }
-            catch (e) { setMsg(e.message) }
-          }}>Start</Button>
+          <Button onClick={start}>Start</Button>
         </div>
         <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>Several people can count into the same stock-take from their own phones.</div>
       </Card>
@@ -256,91 +124,10 @@ function StockTake({ tenantId, products }) {
 }
 
 function CountSession({ tenantId, products, countId, full, review, setReview, onClose }) {
-  const qKey = `vula.stockq.${tenantId}.${countId}`
-  const tKey = `vula.stockt.${tenantId}.${countId}`
-  const [queue, setQueue] = useState(() => loadJSON(qKey, []))
-  const [tally, setTally] = useState(() => loadJSON(tKey, {}))   // itemKey → {name, counted}
-  const [status, setStatus] = useState('open')
-  const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
-  const syncing = useRef(false)
-  const { resolve, linker, waiting } = useResolver(tenantId, products)
+  const { queue, status, msg, busy, resolver, record, onCode, openReview, applyCount, cancelCount, setCount, lines } =
+    useCountSession({ tenantId, products, countId, setReview, onClose })
+  const { linker, waiting } = withLinker(resolver, products)
 
-  useEffect(() => { saveJSON(qKey, queue) }, [qKey, queue])
-  useEffect(() => { saveJSON(tKey, tally) }, [tKey, tally])
-
-  const flush = useCallback(async () => {
-    if (syncing.current || !navigator.onLine) return
-    const batch = loadJSON(qKey, [])
-    if (!batch.length) return
-    syncing.current = true
-    try {
-      const d = await api(tenantId, `/stock/counts/${countId}/scans`, { method: 'POST', body: JSON.stringify({ scans: batch }) })
-      const sent = new Set(batch.map(s => s.scan_id))
-      setQueue(q => q.filter(s => !sent.has(s.scan_id)))
-      setTally(t => {
-        const next = { ...t }
-        d.results.forEach((r, i) => {
-          const s = batch[i]; const k = itemKey(s.product_id, s.variant_id)
-          if (r.counted != null && next[k]) next[k] = { ...next[k], counted: r.counted }
-        })
-        return next
-      })
-      if (d.results.some(r => r.counted == null)) setMsg('Some scans were not accepted — this stock-take may have been applied or cancelled.')
-    } catch (e) {
-      if (e.status && e.status < 500) setMsg(e.message)   // network trouble: keep the queue and retry
-    } finally { syncing.current = false }
-  }, [tenantId, countId, qKey])
-
-  useEffect(() => {
-    const t = setInterval(flush, 4000)
-    window.addEventListener('online', flush)
-    return () => { clearInterval(t); window.removeEventListener('online', flush) }
-  }, [flush])
-
-  const record = useCallback((hit, { add, set } = {}) => {
-    if (!hit?.product) return
-    const pid = hit.product.id; const vid = hit.variant?.id || null; const k = itemKey(pid, vid)
-    setQueue(q => [...q, { scan_id: newId(), product_id: pid, variant_id: vid, ...(set != null ? { set } : { add: add ?? 1 }) }])
-    setTally(t => {
-      const cur = t[k]?.counted || 0
-      return { ...t, [k]: { name: itemName(hit), counted: set != null ? set : cur + (add ?? 1), pid, vid } }
-    })
-    setTimeout(flush, 300)
-  }, [flush])
-
-  const onCode = useCallback(async (code) => {
-    try { const hit = await resolve(code); if (hit) record(hit) } catch (e) { setMsg(e.message) }
-  }, [resolve, record])
-
-  async function openReview() {
-    setBusy(true); setMsg('')
-    await flush()
-    try { const r = await api(tenantId, `/stock/counts/${countId}`); setReview(r); setStatus(r.count.status) }
-    catch (e) { setMsg(e.message) }
-    setBusy(false)
-  }
-  // A finished (applied/cancelled) count opens straight on its review; an open one on the scanner.
-  useEffect(() => {
-    api(tenantId, `/stock/counts/${countId}`).then(r => {
-      setStatus(r.count.status)
-      if (r.count.status !== 'open') setReview(r)
-    }).catch(e => setMsg(e.message))
-  }, [tenantId, countId, setReview])
-
-  async function applyCount() {
-    if (!(await confirmDialog('Set stock to these counts? Items you did not count are left as they are.'))) return
-    setBusy(true)
-    try {
-      const r = await api(tenantId, `/stock/counts/${countId}/apply`, { method: 'POST' })
-      setMsg(`Applied ${r.applied} item${r.applied === 1 ? '' : 's'}${r.failed.length ? ` — ${r.failed.length} could not be updated` : ''}.`)
-      saveJSON(qKey, []); saveJSON(tKey, {})
-      await openReview()
-    } catch (e) { setMsg(e.message) }
-    setBusy(false)
-  }
-
-  const lines = Object.entries(tally).sort((a, b) => a[1].name.localeCompare(b[1].name))
   if (review) {
     return (
       <div>
@@ -354,10 +141,7 @@ function CountSession({ tenantId, products, countId, full, review, setReview, on
             </div>
             {review.count.status === 'open' && (full
               ? <div style={{ display: 'flex', gap: 8 }}>
-                  <Button variant="danger" size="sm" disabled={busy} onClick={async () => {
-                    if (!(await confirmDialog('Cancel this stock-take? Nothing will change.', { danger: true, confirmLabel: 'Yes' }))) return
-                    try { await api(tenantId, `/stock/counts/${countId}/cancel`, { method: 'POST' }); onClose() } catch (e) { setMsg(e.message) }
-                  }}>Cancel count</Button>
+                  <Button variant="danger" size="sm" disabled={busy} onClick={cancelCount}>Cancel count</Button>
                   <Button disabled={busy || !review.lines.length} onClick={applyCount}>Apply to stock</Button>
                 </div>
               : <Badge tone="info">The owner or a manager applies this count</Badge>)}
@@ -412,7 +196,7 @@ function CountSession({ tenantId, products, countId, full, review, setReview, on
               <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: `1px solid ${T.border}` }}>
                 <div style={{ flex: 1, fontSize: 13.5 }}>{l.name}</div>
                 <input type="number" min="0" step="any" value={l.counted} style={{ ...inputStyle, width: 80, padding: '5px 8px' }}
-                       onChange={e => { const v = toQty(e.target.value); if (!isNaN(v) && v >= 0) record({ product: { id: l.pid, name: l.name }, variant: l.vid ? { id: l.vid } : null }, { set: v }) }} />
+                       onChange={e => setCount(l, e.target.value)} />
               </div>))}
           </Card>)}
         <Button disabled={busy} onClick={openReview}>Review count</Button>
@@ -425,55 +209,8 @@ function CountSession({ tenantId, products, countId, full, review, setReview, on
 // ── Receive a delivery ────────────────────────────────────────────────────────
 
 function Receive({ tenantId, products }) {
-  const [pos, setPos] = useState([])
-  const [po, setPo] = useState(null)
-  const [lines, setLines] = useState({})   // itemKey → {pid, vid, name, qty, ordered, cost}
-  const [ref, setRef] = useState('')
-  const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
-  const { resolve, linker, waiting } = useResolver(tenantId, products)
-  useEffect(() => {
-    api(tenantId, '/purchase-orders').then(d => setPos((d.purchase_orders || []).filter(p => ['sent', 'draft'].includes(p.status)))).catch(() => {})
-  }, [tenantId])
-
-  function choosePo(id) {
-    const p = pos.find(x => x.id === id) || null
-    setPo(p)
-    const next = {}
-    for (const it of (p?.items || [])) {
-      if (!it.product_id) continue
-      const prod = products.find(x => x.id === it.product_id)
-      next[itemKey(it.product_id, it.variant_id)] = { pid: it.product_id, vid: it.variant_id || null,
-        name: prod?.name || it.name || 'Item', qty: 0, ordered: Number(it.quantity) || 0, cost: it.unit_cost_cents ?? null }
-    }
-    setLines(next)
-  }
-  const add = useCallback((hit, n = 1) => {
-    if (!hit?.product) return
-    const k = itemKey(hit.product.id, hit.variant?.id)
-    setLines(ls => ({ ...ls, [k]: { pid: hit.product.id, vid: hit.variant?.id || null, name: itemName(hit), ordered: null, cost: null,
-      ...ls[k], qty: (ls[k]?.qty || 0) + n } }))
-  }, [])
-  const onCode = useCallback(async (code) => {
-    try { const hit = await resolve(code); if (hit) add(hit) } catch (e) { setMsg(e.message) }
-  }, [resolve, add])
-
-  async function book() {
-    const body = { po_id: po?.id, reference: ref || po?.po_number || null,
-      lines: Object.values(lines).filter(l => l.qty > 0).map(l => ({ product_id: l.pid, variant_id: l.vid, quantity: l.qty,
-        ...(l.cost != null ? { unit_cost_cents: l.cost } : {}) })) }
-    if (!body.lines.length) { setMsg('Nothing received yet — scan or type the quantities.'); return }
-    setBusy(true)
-    try {
-      const r = await api(tenantId, '/stock/receive', { method: 'POST', body: JSON.stringify(body) })
-      setMsg(`Booked ${r.received} line${r.received === 1 ? '' : 's'} into stock${r.failed?.length ? ` — ${r.failed.length} failed` : ''}.`)
-      setLines({}); setPo(null); setRef('')
-      if (po) setPos(ps => ps.filter(p => p.id !== po.id))
-    } catch (e) { setMsg(e.message) }
-    setBusy(false)
-  }
-
-  const rows = Object.entries(lines)
+  const { pos, po, ref, setRef, msg, busy, resolver, choosePo, add, onCode, book, allAsOrdered, setQty, rows } = useReceive(tenantId, products)
+  const { linker, waiting } = withLinker(resolver, products)
   return (
     <div>
       <Card pad={14} style={{ marginBottom: 12, display: 'grid', gap: 8 }}>
@@ -492,13 +229,13 @@ function Receive({ tenantId, products }) {
       {rows.length > 0 && (
         <Card pad={0} style={{ marginBottom: 12 }}>
           {po && <div style={{ padding: '8px 12px', textAlign: 'right' }}>
-            <Button size="sm" variant="ghost" onClick={() => setLines(ls => Object.fromEntries(Object.entries(ls).map(([k, l]) => [k, { ...l, qty: l.ordered ?? l.qty }])))}>
+            <Button size="sm" variant="ghost" onClick={allAsOrdered}>
               Everything arrived as ordered</Button></div>}
           {rows.map(([k, l]) => (
             <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: `1px solid ${T.border}` }}>
               <div style={{ flex: 1, fontSize: 13.5 }}>{l.name}{l.ordered != null && <span style={{ color: T.muted }}> · ordered {l.ordered}</span>}</div>
               <input type="number" min="0" step="any" value={l.qty} style={{ ...inputStyle, width: 80, padding: '5px 8px' }}
-                     onChange={e => { const v = Math.max(0, toQty(e.target.value) || 0); setLines(ls => ({ ...ls, [k]: { ...ls[k], qty: v } })) }} />
+                     onChange={e => setQty(k, e.target.value)} />
             </div>))}
         </Card>)}
       <Button disabled={busy} onClick={book}>Book into stock</Button>
@@ -509,38 +246,9 @@ function Receive({ tenantId, products }) {
 
 // ── Quick adjust ──────────────────────────────────────────────────────────────
 
-const REASON = { count: 'Stock-take', receive: 'Received', adjust: 'Adjusted', sale: 'Sold', refund: 'Refunded', cancel: 'Cancelled', import: 'Imported' }
-
 function QuickAdjust({ tenantId, products }) {
-  const [hit, setHit] = useState(null)
-  const [qty, setQty] = useState(null)
-  const [moves, setMoves] = useState([])
-  const [val, setVal] = useState('')
-  const [msg, setMsg] = useState('')
-  const { resolve, linker, waiting } = useResolver(tenantId, products)
-
-  const show = useCallback(async (h) => {
-    if (!h?.product) return
-    setHit(h); setVal(''); setMsg('')
-    setQty((h.variant || h.product).stock_quantity ?? null)
-    const v = h.variant?.id ? `?variant_id=${h.variant.id}` : ''
-    api(tenantId, `/products/${h.product.id}/stock-movements${v}`).then(d => setMoves(d.movements || [])).catch(() => setMoves([]))
-  }, [tenantId])
-  const onCode = useCallback(async (code) => {
-    try { await show(await resolve(code)) } catch (e) { setMsg(e.message) }
-  }, [resolve, show])
-
-  async function save(kind) {
-    const n = toQty(val)
-    if (isNaN(n)) { setMsg('Type a number first.'); return }
-    try {
-      const r = await api(tenantId, '/stock/adjust', { method: 'POST', body: JSON.stringify({
-        product_id: hit.product.id, variant_id: hit.variant?.id || null, ...(kind === 'set' ? { set: n } : { add: kind === 'add' ? n : -n }) }) })
-      setQty(r.stock_quantity); setVal(''); setMsg(`Saved — stock is now ${r.stock_quantity}.`)
-      const v = hit.variant?.id ? `?variant_id=${hit.variant.id}` : ''
-      api(tenantId, `/products/${hit.product.id}/stock-movements${v}`).then(d => setMoves(d.movements || [])).catch(() => {})
-    } catch (e) { setMsg(e.message) }
-  }
+  const { hit, qty, moves, val, setVal, msg, resolver, show, onCode, save } = useQuickAdjust(tenantId, products)
+  const { linker, waiting } = withLinker(resolver, products)
 
   return (
     <div>
@@ -584,13 +292,13 @@ const MODES = [
   { id: 'adjust', icon: '✏️', Icon: Pencil, label: 'Quick adjust' },
 ]
 
-export default function VulaStock({ tenantId, products: initial = [] }) {
+export default function VulaStock({ v2 = false, ...props }) {
+  return v2 ? <StockV2 {...props} /> : <StockV1 {...props} />
+}
+
+function StockV1({ tenantId, products: initial = [] }) {
   const [mode, setMode] = useState('count')
-  const [products, setProducts] = useState(initial)
-  useEffect(() => {
-    if (!tenantId) return
-    api(tenantId, '/products').then(d => setProducts(d.products || [])).catch(() => {})
-  }, [tenantId, mode])
+  const products = useStockProducts(tenantId, initial, mode)
   if (!tenantId) return <EmptyState icon="📦" title="Choose a business first" />
   return (
     <div style={{ maxWidth: 760 }}>

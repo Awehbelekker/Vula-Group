@@ -184,6 +184,19 @@ function routes(role, modules = []) {
       ? { ok: true, message: "Booked R 1 842.50 from Atlantic Dairy Co-op as a bill, due 16 Nov.", record_type: "bill", kb_chunks_added: 0 }
       : F.scanCommitPreview)),
     r("POST", `${A}/scan/match-lines`, () => F.scanMatches),
+    r("GET", `${A}/stock/counts`, () => ({ counts: F.stockCounts })),
+    r("POST", `${A}/stock/counts`, () => ({ id: "sc-1" })),
+    r("GET", `${A}/stock/counts/${T}`, (m) => F.stockCountDetail(m[2])),
+    r("POST", `${A}/stock/counts/${T}/scans`, (m, url, req) => ({ results: (req.postDataJSON()?.scans || []).map((x) => ({ counted: x.set ?? x.add })) })),
+    r("POST", `${A}/stock/counts/${T}/apply`, () => ({ applied: 3, failed: [] })),
+    r("POST", `${A}/stock/counts/${T}/cancel`, () => ({ ok: true })),
+    r("GET", `${A}/purchase-orders`, () => ({ purchase_orders: F.purchaseOrders })),
+    r("GET", `${A}/products/lookup`, (m, url) => (url.searchParams.get("barcode") === "6001234500021"
+      ? { product: F.products[1], variant: null }
+      : { __raw: { status: 404, contentType: "application/json", body: '{"detail":"No product has that barcode."}' } })),
+    r("POST", `${A}/products/${T}/barcode`, (m) => ({ product: F.products.find((p) => p.id === m[2]), variant: null })),
+    r("GET", `${A}/products/${T}/stock-movements`, () => ({ movements: F.stockMovements })),
+    r("POST", `${A}/stock/adjust`, (m, url, req) => { const b = req.postDataJSON(); return { stock_quantity: b.set ?? 3 + b.add }; }),
     r("POST", `${A}/stock/receive`, (m, url, req) => ({ received: (req.postDataJSON()?.lines || []).length, failed: [] })),
     r("POST", `${A}/products/costs`, (m, url, req) => ({ updated: (req.postDataJSON()?.costs || []).length })),
     r("GET", `^/v1/master/usage`, () => F.masterUsage),

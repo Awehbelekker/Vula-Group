@@ -252,7 +252,7 @@ function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsume
       {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} v2={v2} />}
       {active === 'delivery' && (v2 ? <DeliveryV2 tenantId={tenantId} /> : <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>)}
       {active === 'bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
-      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
+      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} v2={v2} />}
       {active === 'costing' && <VulaCosting tenantId={tenantId} />}
       {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
       {active === 'import' && <VulaImport tenantId={tenantId} />}
@@ -340,7 +340,7 @@ function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onCons
       {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
       {active === 'documents' && <VulaDocuments tenantId={tenantId} v2={v2} />}
       {/* the redesign files Stock and Suppliers here (navConfig.withV2Moves) */}
-      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
+      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} v2={v2} />}
       {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
     </div>
   )

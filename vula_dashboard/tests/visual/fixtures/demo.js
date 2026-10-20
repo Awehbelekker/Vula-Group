@@ -857,3 +857,30 @@ export const scanMatches = { lines: [
   { description: "Aged cheddar 250g x 12", quantity: 12, unit_price_cents: 7_950, match: { product_id: "p-03", name: "Aged cheddar (250g)" }, suggestions: [] },
   { description: "Cream cheese tubs 500g", quantity: 6, unit_price_cents: 14_808, match: null, suggestions: [{ product_id: "p-01", name: "Smoked snoek pâté (200g)" }] },
 ] };
+
+// ── Stock (stock/useStock.js; commerce.py stock-take / receive / adjust, migrations 182–183) ──
+export const stockCounts = [
+  { id: "sc-1", note: "Month end — cold room", status: "open", started_by: "owner@harbourvine.example.test", created_at: at(0, "07:30") },
+  { id: "sc-2", note: "September close", status: "applied", started_by: "owner@harbourvine.example.test", created_at: at(16, "17:05") },
+];
+const countLine = (pid, expected, counted, cost) => {
+  const p = products.find((x) => x.id === pid);
+  return { product_id: pid, variant_id: null, name: p.name, expected, counted, variance: counted - expected,
+    variance_cents: cost == null ? null : (counted - expected) * cost };
+};
+export const stockCountDetail = (id) => ({
+  count: stockCounts.find((c) => c.id === id) || stockCounts[0],
+  lines: [countLine("p-03", 3, 2, 6_200), countLine("p-06", 9, 9.5, 14_000), countLine("p-02", 12, 12, null)],
+  variance_cents: -6_200 + 7_000, lines_without_cost: 1,
+  uncounted: [{ name: "Charcuterie board for 4", expected: 6 }, { name: "Rooibos & honey granola", expected: 30 }],
+});
+export const purchaseOrders = [
+  { id: "po-1", po_number: "PO-0031", supplier_name: "Atlantic Dairy Co-op", status: "sent",
+    items: [{ product_id: "p-03", quantity: 12, unit_cost_cents: 6_200 }, { product_id: "p-02", quantity: 6, unit_cost_cents: 3_100 }] },
+  { id: "po-2", po_number: "PO-0029", supplier_name: "Cape Charcuterie", status: "received", items: [] },
+];
+export const stockMovements = [
+  { id: "mv-1", reason: "sale", delta: -1, qty_after: 2, actor: "shop", created_at: at(0, "09:10") },
+  { id: "mv-2", reason: "receive", delta: 12, qty_after: 3, actor: "owner@harbourvine.example.test", created_at: at(3, "11:00") },
+  { id: "mv-3", reason: "count", delta: -2, qty_after: 5, actor: "counter@harbourvine.example.test", created_at: at(16, "17:30") },
+];
