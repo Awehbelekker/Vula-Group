@@ -77,7 +77,7 @@ export function useYocoConnect({ tenantId, tenantName, adminEmail }) {
       const resp = await fetch(`${VULA_API}/v1/yoco/test/${tenantId}`, { method: 'POST' })
       const data = await resp.json()
       if (!data.ok) setError(`Test failed: HTTP ${data.status_code}`)
-      else { setError(null); toast('✓ Yoco keys valid') }
+      else { setError(null); toast('Yoco keys valid') }
     } catch (err) {
       setError(err.message)
     } finally {
