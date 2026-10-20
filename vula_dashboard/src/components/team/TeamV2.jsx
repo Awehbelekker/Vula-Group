@@ -5,10 +5,11 @@
  * chips are grouped by menu section — the redesign's menu, so Stock and Suppliers sit under
  * Operate — and each is a toggle button (aria-pressed). Ids are the same as before.
  */
-import { useMemo } from "react";
-import { History, KeyRound, Plus, RotateCcw, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Cake, History, KeyRound, Plus, RotateCcw, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
 import { MERCHANT_GROUPS, withV2Moves } from "../../navConfig.jsx";
-import { Button, Card, EmptyState, Field, Input, PageHeader, Select, StatusChip } from "../ui/index.jsx";
+import { Button, Card, EmptyState, Field, Input, PageHeader, SectionTabs, Select, StatusChip } from "../ui/index.jsx";
+import NoticesV2 from "./NoticesV2";
 import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, toggle, useTeam } from "./useTeam";
 import "./team.css";
 
@@ -33,18 +34,57 @@ function useModuleGroups() {
   }, []);
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Birthday as day + month only ("MM-DD" on the server, migration 218) — never the year. */
+function Birthday({ m, patch }) {
+  const [mm, dd] = (m.birthday || "-").split("-");
+  const set = (month, day) => {
+    if (!month && !day) return patch(m.id, { birthday: "" });
+    if (month && day) patch(m.id, { birthday: `${month}-${day}` });
+  };
+  const who = m.name || m.whatsapp;
+  return (
+    <div className="vtm-bday">
+      <Cake size={16} aria-hidden="true" />
+      <Select value={dd || ""} aria-label={`Birthday day for ${who}`} onChange={(e) => set(mm, e.target.value)}>
+        <option value="">Day</option>
+        {Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, "0")).map((d) => <option key={d} value={d}>{Number(d)}</option>)}
+      </Select>
+      <Select value={mm || ""} aria-label={`Birthday month for ${who}`} onChange={(e) => set(e.target.value, dd)}>
+        <option value="">Month</option>
+        {MONTHS.map((l, i) => { const v = String(i + 1).padStart(2, "0"); return <option key={v} value={v}>{l}</option>; })}
+      </Select>
+      {m.birthday && <Button size="sm" variant="secondary" onClick={() => patch(m.id, { birthday: "" })}>Clear</Button>}
+      {m.birthday && <Chip label="Tell the team" on={m.birthday_share !== false} onClick={() => patch(m.id, { birthday_share: m.birthday_share === false })} />}
+      {m.notices_opt_out && <StatusChip>Opted out of birthday &amp; holiday messages</StatusChip>}
+    </div>
+  );
+}
+
 function Chip({ on, label, onClick }) {
   return <button type="button" className="vui-chip vtm-chip" aria-pressed={on} onClick={onClick}>{label}</button>;
 }
 
 export default function TeamV2({ tenantId }) {
+  const [tab, setTab] = useState("people");
+  return (
+    <div>
+      <PageHeader sub="Add people, give each their own WhatsApp, and choose what they see and get notified about. Send them notices, birthday wishes and public holiday reminders." />
+      <SectionTabs label="Team" active={tab} onChange={setTab}
+        tabs={[{ id: "people", label: "People" }, { id: "notices", label: "Notices" }]} />
+      {tab === "notices" ? <NoticesV2 tenantId={tenantId} /> : <People tenantId={tenantId} />}
+    </div>
+  );
+}
+
+function People({ tenantId }) {
   const t = useTeam(tenantId);
   const groups = useModuleGroups();
   const ok = t.msg && t.msg.includes("✓");
 
   return (
     <div>
-      <PageHeader sub="Add people, give each their own WhatsApp, and choose what they see and get notified about. Each member gets only what you select." />
 
       {/* ── Logins & passwords ── */}
       <Card className="vtm-block">
@@ -146,6 +186,9 @@ export default function TeamV2({ tenantId }) {
                 </span>
               </div>
             ))}
+
+            <h3 className="vtm-h3">Birthday</h3>
+            <Birthday m={m} patch={t.patch} />
 
             <h3 className="vtm-h3">Notify by WhatsApp</h3>
             <div className="vtm-chips" role="group" aria-label={`Notifications for ${m.name || m.whatsapp}`}>

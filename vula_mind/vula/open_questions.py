@@ -28,7 +28,11 @@ TTL = {
     "approval": timedelta(days=14),
     "doc_project": timedelta(days=3),
     "pop_match": timedelta(days=3),
+    "staff_notice": timedelta(days=7),
 }
+# Kinds that don't hold back other questions: a must-read staff notice waits for "got it" for days,
+# and shouldn't delay "which project is this slip for?" by QUIET_FOR.
+_NOT_BLOCKING = {"staff_notice"}
 DEFAULT_TTL = timedelta(days=3)
 # An open question this fresh means the person is still on it — don't stack another on top.
 QUIET_FOR = timedelta(hours=2)
@@ -68,7 +72,8 @@ def ask(tenant_id: str, phone: str, kind: str, ref_id: str, prompt: str = "") ->
 def _busy(tenant_id: str, phone: str) -> bool:
     """True while this person has an open question asked less than QUIET_FOR ago."""
     since = (_now() - QUIET_FOR).isoformat()
-    return any((q.get("asked_at") or "") >= since for q in open_for(tenant_id, phone))
+    return any((q.get("asked_at") or "") >= since and q.get("kind") not in _NOT_BLOCKING
+               for q in open_for(tenant_id, phone))
 
 
 async def ask_or_queue(tenant_id: str, phone: str, kind: str, ref_id: str, prompt: str,

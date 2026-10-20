@@ -91,8 +91,9 @@ def _month_end(y: int, m: int) -> date:
 
 
 def last_business_day(d: date) -> date:
-    """d, or the Friday before it if it's a weekend (public holidays aren't modelled)."""
-    while d.weekday() >= 5:
+    """d, or the last weekday before it that isn't a public holiday (vula/sa_holidays.py)."""
+    from vula.sa_holidays import is_business_day
+    while not is_business_day(d):
         d -= timedelta(days=1)
     return d
 

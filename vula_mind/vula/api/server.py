@@ -867,6 +867,23 @@ async def _owner_digest_loop() -> None:
         await _asyncio.sleep(900)
 
 
+async def _staff_notices_loop() -> None:
+    """Every minute: a business's staff notices that are due, the day's birthdays and tomorrow's
+    public holiday at its send hour, and the next-day reminder on must-read notices
+    (vula/staff_notices.py, migration 218)."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(240)
+    while True:
+        try:
+            from vula import staff_notices as _sn
+            res = await _sn.run_due()
+            if any(res.values()):
+                log.info("staff notices: %s", res)
+        except Exception as exc:
+            log.warning("staff notices loop error: %s", exc)
+        await _asyncio.sleep(60)
+
+
 async def _conversation_check_loop() -> None:
     """07:00–11:00 SAST daily: yesterday's replies checked for every tenant, emailed to
     TEAM_EMAIL (vula/conversation_check.py). Marked once per day in vula_admin_audit."""
@@ -1572,6 +1589,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_shopify_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_digest_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_staff_notices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
@@ -1800,7 +1818,9 @@ _SECTION_RULES = [
     (None, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/"), _MONEY_TABS),
     (None, re.compile(r"^/v1/users/[^/]+(?:/|$)"), frozenset()),
     (None, re.compile(r"^/v1/team/[^/]+/audit/?$"), frozenset()),
-    ({"POST", "PUT", "PATCH", "DELETE"}, re.compile(r"^/v1/team/[^/]+(?:/|$)"), frozenset()),
+    # ...except a staff member's own "Got it" on a notice (vula/api/staff_notices.py)
+    ({"POST", "PUT", "PATCH", "DELETE"},
+     re.compile(r"^/v1/team/[^/]+(?!/notices/[^/]+/ack/?$)(?:/|$)"), frozenset()),
 ]
 
 # Cross-tenant listings / platform-wide actions: master only.
@@ -1904,6 +1924,8 @@ app.include_router(field_ops_router, prefix="/v1/field", dependencies=[Depends(r
 app.include_router(clickup_router, prefix="/v1/clickup")
 app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(projects_router, prefix="/v1/projects")
+from vula.api.staff_notices import router as staff_notices_router  # noqa: E402
+app.include_router(staff_notices_router, prefix="/v1/team")   # before team's /{tenant}/{member_id}
 app.include_router(team_router, prefix="/v1/team")
 app.include_router(payments_router, prefix="/v1/payments")
 app.include_router(tenants_router, prefix="/v1/tenants")

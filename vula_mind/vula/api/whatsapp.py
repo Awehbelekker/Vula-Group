@@ -508,6 +508,12 @@ async def receive_message(
                     _asyncio.create_task(_mark_read_and_typing(msg_id, route_tenant))
 
                 try:
+                    if msg_type == "button":
+                        # A template's quick-reply tap ("Got it ✅" on a staff notice) — handled as
+                        # the words on the button, like the person had typed them.
+                        msg_type = "text"
+                        msg = {**msg, "text": {"body": (msg.get("button") or {}).get("text")
+                                               or (msg.get("button") or {}).get("payload") or ""}}
                     if msg_type == "text":
                         text = msg.get("text", {}).get("body", "").strip()
                         # "Login K7F4QX" from the dashboard's WhatsApp login (vula/api/wa_login.py) —
@@ -710,6 +716,11 @@ async def receive_message(
                         record_message_status(wamid, st, err)
                     except Exception as exc:
                         logger.debug("status update skipped: %s", exc)
+                    try:
+                        from vula import staff_notices as _notices
+                        _notices.record_status(wamid, st)
+                    except Exception as exc:
+                        logger.debug("staff notice status skipped: %s", exc)
                     # record_message_status only knows about BROADCAST recipients — it returns
                     # silently for anything else, which is every ordinary reply. Track those
                     # here so a message that failed after acceptance is not invisible.
@@ -3167,6 +3178,15 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
         nxt = doc_steps.next_question(tenant_id, phone, ref)
         await _send_reply(phone, reply + (f"\n{nxt}" if nxt else ""), tenant_id=tenant_id)
         return True
+    if kind == "staff_notice":
+        # "Got it ✅" on a must-read notice from the business (vula/staff_notices.py)
+        from vula import staff_notices
+        if not staff_notices.is_ack(text):
+            return False
+        staff_notices.acknowledge(tenant_id, phone, ref)
+        oq.close(q["id"], text)
+        await _send_reply(phone, "👍 Thanks — noted that you've read it.", tenant_id=tenant_id)
+        return True
     if kind == "payer_account":
         from vula.commerce import payers
         reply = payers.answer(tenant_id, ref, text, _business_label(tenant_id))
@@ -4872,6 +4892,15 @@ async def _handle_opt_out(phone: str, tenant_id: Optional[str]) -> None:
             paused = await subscriptions.pause_for_phone(tenant_id, phone)
         except Exception as exc:
             logger.debug("subscription pause on STOP skipped: %s", exc)
+    if tenant_id:
+        from vula import staff_notices as _sn
+        if _sn.set_opt_out(tenant_id, phone, True) is not None:
+            # A team member: their customer suppression is recorded above too, but what they
+            # get from the business is its notices (vula/staff_notices.py).
+            await _send_reply(phone, "✅ Done — no more birthday or public holiday messages. "
+                                     "Work notices from the business will still reach you. "
+                                     "Reply START to get them all again.", tenant_id)
+            return
     msg = "✅ Done — you won't get any more marketing or reminder messages from us."
     if paused:
         msg += f" Your repeat order{'s are' if paused > 1 else ' is'} paused too."
@@ -4889,6 +4918,8 @@ async def _handle_opt_in(phone: str, tenant_id: Optional[str]) -> None:
             record_opt_in(tenant_id, phone, source="start_keyword")
         except Exception as exc:
             logger.warning("opt-in failed for %s: %s", phone, exc)
+        from vula import staff_notices as _sn
+        _sn.set_opt_out(tenant_id, phone, False)
     await _send_reply(phone, "✅ You're opted back in — welcome back! Reply STOP any time to "
                              "stop messages.", tenant_id)
 
@@ -6648,6 +6679,50 @@ async def _alert_off_whatsapp(tenant_id: str, subject: str, body: str) -> bool:
         return False
 
 
+async def send_template_message(tenant_id: str, to: str, name: str, params: list,
+                                header_image_url: Optional[str] = None,
+                                lang: Optional[str] = None) -> Optional[str]:
+    """send_template with an optional image header, returning Meta's message id (wamid) so the
+    delivered / read ticks can be matched back (staff notices, vula/staff_notices.py). None when
+    it couldn't be sent — logged, never silent."""
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", to, f"[template {name}] " + " | ".join(str(p) for p in params)):
+        return "dry-run"
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds:
+        creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+                 if settings.whatsapp_token and settings.whatsapp_phone_id else None)
+    if not creds:
+        logger.error("template %s not sent to %s — no WhatsApp credentials for %s", name, to, tenant_id)
+        return None
+    number = _wa_number(to)
+    components: list = []
+    if header_image_url:
+        components.append({"type": "header", "parameters": [
+            {"type": "image", "image": {"link": header_image_url}}]})
+    if params:
+        components.append({"type": "body", "parameters": [
+            {"type": "text", "text": str(p)[:1000]} for p in params]})
+    payload = {"name": name, "language": {"code": lang or "en"}, "components": components}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json={"messaging_product": "whatsapp", "to": number, "type": "template",
+                      "template": payload})
+            resp.raise_for_status()
+        _record_outbound(resp, tenant_id, number, f"[template {name}]", kind="template")
+        try:
+            return ((resp.json().get("messages") or [{}])[0] or {}).get("id") or "sent"
+        except Exception:
+            return "sent"
+    except Exception as exc:
+        body = getattr(getattr(exc, "response", None), "text", "")[:400]
+        logger.error("template %s to %s failed: %s %s", name, to, exc, body)
+        return None
+
+
 async def send_template(tenant_id: str, to: str, name: str, params: list,
                         lang: Optional[str] = None) -> bool:
     """Send an approved Meta template with body parameters (works outside the 24-hour window).
@@ -7446,7 +7521,8 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
         await _forward_to_n8n_commerce(phone, text, msg_id, tenant_id)
 
 
-_ADMIN_AGENT_ROLES = ("owner", "operations", "staff", "admin", "sales_rep", "manager")
+# bookkeeper (20 Oct): a bookkeeper replying to a staff notice reached the customer shop assistant
+_ADMIN_AGENT_ROLES = ("owner", "operations", "staff", "admin", "sales_rep", "manager", "bookkeeper")
 
 
 async def _maybe_capture_review(phone: str, text: str, tenant_id: str) -> bool:

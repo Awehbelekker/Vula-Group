@@ -689,7 +689,11 @@ _OWNER_ADMIN_RE = re.compile(
     # corpus, 6 Oct) — debtors and bills are the admin agent's outstanding_invoices.
     r"\bwho owes\b|\bwho (?:do|must|should) (?:i|we) (?:still )?pay\b|\b(?:do|must) (?:i|we) owe\b|"
     r"\bowes? (?:me|us)\b|\bwhat(?:'s| is) (?:still )?(?:owed|outstanding)\b|\bdebtors?\b|"
-    r"\b(?:outstanding|unpaid|overdue) (?:invoices|bills|accounts)\b",
+    r"\b(?:outstanding|unpaid|overdue) (?:invoices|bills|accounts)\b|"
+    # A notice to the business's own staff — the staff_notice tool (20 Oct).
+    r"\b(?:tell|inform|notify|remind|message|let)\s+(?:all\s+)?(?:(?:the|my|our)\s+)?"
+    r"(?:staff|team|employees|workers)\b|\b(?:announce|announcement|notice)\s+(?:to|for)\s+"
+    r"(?:all\s+)?(?:(?:the|my|our)\s+)?(?:staff|team|employees|workers)\b",
     re.IGNORECASE)
 
 
