@@ -3674,7 +3674,8 @@ def _aggregate_line_items(rows: List[Dict[str, Any]],
     return (items[:cap] if cap else items), len(items)
 
 
-def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _filed_rows_result(rows: List[Dict[str, Any]],
+                       item_words: Optional[List[str]] = None) -> Dict[str, Any]:
     results = []
     total_cents, priced, refunds = 0, 0, 0
     for r in rows:
@@ -3695,6 +3696,9 @@ def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             }
             if refund:
                 entry["is_refund"] = True
+            lines = _matching_lines(fields, item_words) if item_words else []
+            if lines:
+                entry["matching_lines"] = lines
             results.append(entry)
     out: Dict[str, Any] = {
         "matches": results, "match_type": "filed_document", "status": "found",
@@ -3797,6 +3801,58 @@ _EXPORT_FILLER = _QUERY_FILLER | {
     "detailed", "business", "company", "suppliers", "supplier", "each", "per", "every", "up",
     "one", "copy", "format", "make", "create", "put", "together", "report",
 }
+
+
+# Other words owners use for an item on an invoice line (Afrikaans, and the common mix-up).
+_ITEM_SYNONYMS = {
+    "isolation": "insulation", "isolasie": "insulation", "insulasie": "insulation",
+    "insulate": "insulation", "insulated": "insulation", "insulating": "insulation",
+}
+
+
+_WHEN_WORDS = {"last", "this", "next", "past", "month", "months", "week", "weeks", "year",
+               "years", "today", "yesterday", "recent", "latest", "since", "until", "days"}
+
+
+def _item_words(query: str) -> List[str]:
+    """The words in `query` that could name something bought (an invoice line), with request
+    words and their typos dropped and synonyms mapped: "Please find and invoice with
+    Insulation Matirial on" → ["insulation"]."""
+    out: List[str] = []
+    for w in re.findall(r"[A-Za-z][A-Za-z-]*", query or ""):
+        w = w.lower().strip("-")
+        if len(w) < 4 or w in _EXPORT_FILLER or w in _WHEN_WORDS:
+            continue
+        if any(difflib.SequenceMatcher(None, w, f).ratio() >= 0.8 for f in _EXPORT_FILLER if len(f) >= 4):
+            continue
+        w = _ITEM_SYNONYMS.get(w, w)
+        if w not in out:
+            out.append(w)
+    return out
+
+
+def _filed_rows_by_line_item(tenant_id: str, words: List[str], category: Optional[str]):
+    """Documents with line items naming all of `words` (plain lowercase letters)."""
+    q = (_client().table("vula_filed_documents")
+         .select("id,filename,category,summary,fields,status,created_at,customer_phone")
+         .eq("tenant_id", tenant_id).order("created_at", desc=True))
+    if category:
+        q = q.eq("category", category)
+    # every word, in order ("green guard" → %green%guard%): one word of a name ("hammer" in
+    # "Jack Hammer") would pull in every claw hammer
+    q = q.ilike("fields->>line_items", "%" + "%".join(words) + "%")
+    return q.limit(_FILED_SEARCH_FETCH_CAP).execute().data or []
+
+
+def _matching_lines(fields: Dict[str, Any], words: List[str]) -> List[str]:
+    lines = []
+    for li in (fields or {}).get("line_items") or []:
+        desc = str((li or {}).get("description") or "") if isinstance(li, dict) else ""
+        if desc and any(w in desc.lower() for w in words):
+            qty, cents = _num(li.get("quantity")), _num(li.get("total_cents"))
+            lines.append(desc + (f" × {qty:g}" if qty else "")
+                         + (f" = R{cents / 100:,.2f}" if cents is not None else ""))
+    return lines[:5]
 
 
 def names_no_party(question: str) -> bool:
@@ -4038,6 +4094,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
         logger.warning("find_filed_document SQL query failed: %s", exc)
         return {"error": "Couldn't search documents right now."}
 
+
     # No hit names a counterparty or carries an amount (none at all, or e.g. only the "Jack
     # Hammer's COD account" application) — so it can't answer a spend question on its own. Try
     # to bridge to the real supplier first. The bridge documents are searched WITHOUT the
@@ -4060,8 +4117,27 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
                 _log_find(tenant_id, category, "bridge_sql", resolved["total_matches"])
                 return resolved
 
+    # Something bought, named only on an invoice's lines (after the account-name bridge above,
+    # so "Jack Hammer" never turns into every invoice with a hammer on it) — 2026-10-20, DIGG: "Please find and
+    # invoice with Insulation Matirial on" — 8 Solid Cape documents carry "GREEN GUARD
+    # INSULATION" lines, but only 2 summaries say insulation. Not for a query that names a
+    # counterparty (its word on another supplier's line would pull that bill into the total).
+    item_words = [] if aliases else _item_words(query)
+    if item_words and any(w in _norm_name(_party_of(r.get("fields") or {}) or "")
+                          for r in rows for w in item_words):
+        item_words = []
+    if item_words and rows:
+        try:
+            seen = {r.get("id") for r in rows}
+            more = [r for r in _filed_rows_by_line_item(tenant_id, item_words, category)
+                    if r.get("id") not in seen]
+            if more:
+                rows = sorted(rows + more, key=lambda r: r.get("created_at") or "", reverse=True)
+        except Exception as exc:
+            logger.debug("find_filed_document line-item search skipped: %s", exc)
+
     if rows:
-        out = _filed_rows_result(rows)
+        out = _filed_rows_result(rows, item_words=item_words)
         if aliases:
             out["resolved_supplier"] = aliases[0]
         _log_find(tenant_id, category, "alias" if aliases else "sql", len(rows))
@@ -4073,6 +4149,16 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     except Exception as exc:
         logger.debug("find_filed_document semantic fallback skipped: %s", exc)
         chunks = []
+    if not chunks and item_words:
+        # Nothing by name or in the knowledge base — the item may still be on an invoice line.
+        try:
+            by_line = list(_filed_rows_by_line_item(tenant_id, item_words, category) or [])
+        except Exception as exc:
+            logger.debug("find_filed_document line-item search skipped: %s", exc)
+            by_line = []
+        if by_line:
+            _log_find(tenant_id, category, "line_item", len(by_line))
+            return _filed_rows_result(by_line, item_words=item_words)
     if not chunks:
         _log_find(tenant_id, category, "not_found", 0)
         return {"status": "not_found_filed",

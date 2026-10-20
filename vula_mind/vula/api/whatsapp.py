@@ -1995,6 +1995,27 @@ _PRODUCT_DOC_RE = re.compile(
     re.IGNORECASE)
 
 
+_GENERIC_NAME_RE = re.compile(r"^(?:image|receipt|product|video)-|wamid|^\d+$", re.IGNORECASE)
+
+
+def _image_filename(caption: str, msg_id: str, mime_type: str) -> str:
+    """A photo's filename: its caption (a project or what it is), always with a real image
+    extension. 2026-10-20, DIGG: a slip captioned "Belladonna primer" was saved under exactly
+    that name with no extension, so nothing could read it ("No text extracted") and the slip
+    was lost; the same photo uncaptioned was read and booked."""
+    ext = {"image/png": "png", "image/webp": "webp", "video/mp4": "mp4"}.get(
+        (mime_type or "").split(";")[0].strip().lower(), "jpg")
+    name = re.sub(r"[^\w\- .,&()]+", " ", (caption or "").splitlines()[0] if caption else "")
+    name = " ".join(name.split())[:60].strip(" .")
+    return f"{name}.{ext}" if name else f"image-{msg_id}.{ext}"
+
+
+def _caption_hint(filename: str) -> str:
+    """The caption a photo was named after, or "" for a generated name."""
+    stem = (filename or "").rsplit(".", 1)[0].strip()
+    return "" if not stem or _GENERIC_NAME_RE.search(stem) else stem
+
+
 async def _handle_image_or_video(
     phone: str, msg_type: str, media_id: str, caption: str, mime_type: str, msg_id: str,
     route_mode: Optional[str], route_tenant: Optional[str], content_sha: Optional[str],
@@ -2096,7 +2117,7 @@ async def _handle_image_or_video(
                 ), route_tenant)
                 return
         if route_mode == "knowledge" or route_tenant or expense_intent:
-            fname = caption or f"image-{msg_id}.jpg"
+            fname = _image_filename(caption, msg_id, mime_type)
             await _handle_document_ingest(phone, media_id, fname, mime_type,
                                          route_tenant_id=route_tenant, content_sha=content_sha,
                                          route_mode=route_mode)
@@ -2431,7 +2452,8 @@ async def _handle_document_ingest(
                             # (who paid it, categorised, VAT split, allocated to a project).
                             expense_claim_img_ref = result.doc_id
                             scan_msg = await _log_expense_claim(
-                                tenant_id, phone, scan_data, result.doc_id)
+                                tenant_id, phone, {**scan_data, "caption": _caption_hint(filename)},
+                                result.doc_id)
                         elif doc_type in ("invoice", "delivery_note") and total > 0:
                             # Supplier invoice/delivery note → commit to books as before.
                             commit_resp = await client.post(
@@ -2596,6 +2618,7 @@ async def _handle_document_ingest(
                     img_ref = "img:" + hashlib.sha256(local_path.read_bytes()).hexdigest()[:40]
                     expense_claim_img_ref = img_ref
                     scan_msg = await _log_expense_claim(tenant_id, phone, {
+                        "caption": _caption_hint(filename),
                         "total_cents": round(total_r * 100),
                         "vat_cents": round(vat_r * 100),
                         "supplier": resolve_party_name(fin, order=("vendor", "supplier")),
@@ -2739,8 +2762,12 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         # learned-rules mechanism the document-filing path uses, including its 2026-08-08
         # cross-project-payee ambiguity fix), then fall back to loose text matching on the
         # receipt's own notes.
-        project = None
-        if supplier:
+        # A project named in the photo's caption ("Belladonna primer") is what they asked for.
+        caption = (scan_data.get("caption") or "").strip()
+        project = (expenses.match_project(tenant_id, caption) if caption else None) or None
+        # "Save both under X", said while this slip was still being read.
+        project = project or _batch_project_for(tenant_id, phone)
+        if supplier and not project:
             try:
                 from vula.integrations.doc_filing import lookup_learned_project
                 learned = lookup_learned_project(tenant_id, {"supplier": supplier})
@@ -2987,6 +3014,90 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
     return f"✅ Allocated that *R{amt:,.2f}* expense to *{proj}*."
 
 
+_BATCH_PROJECT_RE = re.compile(
+    r"^(?:please\s+)?(?:(?P<verb>save|file|put|allocate|assign|book|move|log|add|charge)\s+)?"
+    r"(?P<which>both|all(?:\s+of)?(?:\s+(?:them|these|those))?|these|those|them|the\s+(?:two|three|four|\d+))"
+    r"(?:\s+(?:invoices?|slips?|receipts?|bills?|docs?|documents?|photos?|pics?|ones?|expenses?))?"
+    r"(?:\s+(?:are|is|go|were))?"
+    r"\s+(?:under|to|for|on|in|against|as)\s+(?:the\s+)?(?:project\s+|site\s+)?(.+?)\s*[.!]*$",
+    re.IGNORECASE)
+# How far back "both / all of them" reaches, and how long it holds for slips still being read.
+_BATCH_WINDOW_S = 30 * 60
+_BATCH_PROJECT: dict = {}     # (tenant_id, digits) -> (project, expires monotonic)
+
+
+def _phone_digits(phone: str) -> str:
+    d = "".join(ch for ch in (phone or "") if ch.isdigit())
+    return "27" + d[1:] if d.startswith("0") and len(d) == 10 else d
+
+
+def _batch_project_for(tenant_id: str, phone: str) -> Optional[str]:
+    """The project this person just said "both / all of them" go under, while it still holds."""
+    hit = _BATCH_PROJECT.get((tenant_id, _phone_digits(phone)))
+    if hit and hit[1] > time.monotonic():
+        return hit[0]
+    return None
+
+
+async def _answer_batch_project(tenant_id: str, phone: str, text: str) -> bool:
+    """ "Save both invoices under belladonna" → every document and expense claim this person sent
+    in the last 30 minutes goes on that project, and any slip still being read follows.
+    2026-10-20, DIGG: Judy sent two slips and that message while the second was still being
+    read (5 minutes); it answered yesterday's "which project?" for an email PDF instead, and
+    neither slip got the project."""
+    m = _BATCH_PROJECT_RE.match((text or "").strip())
+    # "all invoices for Gardens" with no filing word is a question, not an instruction
+    if not m or (not m.group("verb") and m.group("which").lower().startswith("all")):
+        return False
+    from vula.commerce import expenses
+    project = expenses.match_project(tenant_id, m.group(m.lastindex))
+    if not project:
+        return False
+    from datetime import datetime, timedelta, timezone
+    from vula import open_questions as oq
+    from vula.commerce import service
+    digits = _phone_digits(phone)
+    who = list({phone, digits})
+    since = (datetime.now(timezone.utc) - timedelta(seconds=_BATCH_WINDOW_S)).isoformat()
+    db = service._client()
+    try:
+        docs = (db.table("vula_filed_documents").select("id,filename,project,status")
+                .eq("tenant_id", tenant_id).in_("filed_by", who).gte("created_at", since)
+                .execute().data or [])
+        claims = (db.table("commerce_expenses").select("id,amount_cents,supplier,project")
+                  .eq("tenant_id", tenant_id).in_("paid_by", who).gte("created_at", since)
+                  .execute().data or [])
+    except Exception as exc:
+        logger.warning("batch project lookup failed: %s", exc)
+        return False
+    _BATCH_PROJECT[(tenant_id, digits)] = (project, time.monotonic() + _BATCH_WINDOW_S)
+    done = []
+    for c in claims:
+        if c.get("project") != project:
+            expenses.assign(tenant_id, c["id"], project=project)
+        oq.close_for(tenant_id, c["id"], status="answered")
+        done.append(f"R{int(c.get('amount_cents') or 0)/100:,.2f}"
+                    + (f" {c['supplier']}" if c.get("supplier") else ""))
+    for d in docs:
+        if d.get("project") != project or d.get("status") == "pending_project":
+            db.table("vula_filed_documents").update({"project": project, "status": "filed"}) \
+                .eq("tenant_id", tenant_id).eq("id", d["id"]).execute()
+        oq.close_for(tenant_id, d["id"], status="answered")
+    n_docs = len(docs)
+    if done:
+        reply = f"✅ On *{project}*: " + ", ".join(done) + "."
+        others = n_docs - len(claims)
+        if others > 0:
+            reply += f" Plus {others} other document{'s' if others != 1 else ''} filed there."
+    elif n_docs:
+        reply = f"✅ Filed {n_docs} document{'s' if n_docs != 1 else ''} under *{project}*."
+    else:
+        reply = f"👍 Anything you've just sent goes on *{project}*."
+    reply += f" Anything still being read goes on *{project}* too."
+    await _send_reply(phone, reply, tenant_id=tenant_id)
+    return True
+
+
 async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
     """Match a reply to the questions this person was actually asked, newest first
     (vula/open_questions.py, migration 194). True when one of them took it — the old
@@ -2994,6 +3105,13 @@ async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
     test approval and "Atlantis Paarden Eiland" to an August expense claim, because each flow
     guessed on its own whether a short reply was for it."""
     from vula import open_questions as oq
+    try:
+        if await _answer_batch_project(tenant_id, phone, text):
+            from vula import turns
+            turns.note("batch_project")
+            return True
+    except Exception as exc:
+        logger.warning("batch project answer failed: %s", exc)
     for q in oq.open_for(tenant_id, phone):
         try:
             if await _try_open_question(tenant_id, phone, text, q):
@@ -3617,6 +3735,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # still auto-files with no added friction — only the weak fallback now asks.
         confident = bool(match and not match.get("ambiguous") and match.get("project")
                          and (match.get("confidence") or 0) >= 0.6)
+        _told = None if confident else _batch_project_for(tenant_id, phone)
+        if _told:   # "save both under X" arrived while this one was still being read
+            match = {"project": _told, "clickup_list_id": None, "confidence": 1.0, "ambiguous": False}
+            confident = True
         from vula.api.tenants import uses_projects
         resolved = None
         if not confident and uses_projects(tenant_id):
