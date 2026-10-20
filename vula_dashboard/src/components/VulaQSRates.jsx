@@ -10,66 +10,19 @@
  * (vula/commerce/price_book.py). Own rates always win; when the documents have moved more
  * than 10% from an own rate, it's flagged with an "Update" button — nothing changes by itself.
  */
-import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../lib/authFetch";
+import { KINDS, UNITS, blank, useQSRates } from "./construction/useQSRates";
+import QSRatesV2 from "./construction/QSRatesV2";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)",
   text: "var(--text)", muted: "var(--muted)", surfaceAlt: "var(--surface-alt)" };
 const inp = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, color: C.text, background: C.surface, boxSizing: "border-box" };
 const btn = { padding: "8px 14px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" };
 const link = { background: "none", border: "none", cursor: "pointer", fontSize: 12, padding: 0 };
-const UNITS = ["m2", "m3", "m", "each", "no", "kg", "item", "sum", "day", "hour", "bag", "litre"];
-const KINDS = [["", "All"], ["material", "Materials"], ["labour", "Labour"], ["plant", "Plant hire"], ["delivery", "Delivery"]];
-const blank = { id: null, description: "", unit: "m2", rate: "", code: "", category: "", source: "" };
 const zar = (n) => "R " + Number(n || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const cents = (c) => zar((c || 0) / 100);
 
-export default function VulaQSRates({ tenantId }) {
-  const [own, setOwn] = useState([]);
-  const [learned, setLearned] = useState([]);
-  const [q, setQ] = useState("");
-  const [kind, setKind] = useState("");
-  const [form, setForm] = useState(blank);
-  const [busy, setBusy] = useState(false);
-  const [showAll, setShowAll] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (kind) params.set("kind", kind);
-    try {
-      const r = await fetch(`${VULA_API}/v1/qs/rates/${tenantId}?${params}`);
-      const d = await r.json();
-      setOwn(d.own || d.rates || []);
-      setLearned(d.learned || []);
-    } catch { setOwn([]); setLearned([]); }
-  }, [tenantId, q, kind]);
-  useEffect(() => { load(); }, [load]);
-
-  const post = async (body) => {
-    setBusy(true);
-    try {
-      await fetch(`${VULA_API}/v1/qs/rates/${tenantId}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    } finally { setBusy(false); load(); }
-  };
-  const save = async () => {
-    if (!form.description.trim() || form.rate === "") return;
-    const { id, ...rest } = form;
-    await post({ ...rest, ...(id ? { id } : {}), rate: parseFloat(form.rate) });
-    setForm(blank);
-  };
-  const edit = (r) => setForm({ id: r.id, description: r.description || "", unit: r.unit || "m2", rate: r.rate ?? "",
-    code: r.code || "", category: r.category || "", source: r.source || "" });
-  const del = async (id) => { await fetch(`${VULA_API}/v1/qs/rates/${tenantId}/${id}`, { method: "DELETE" }); load(); };
-  const adopt = (r) => post({ description: r.description, unit: r.unit || "each", rate: r.rate,
-    category: r.kind === "material" ? "" : r.kind, source: r.source });
-  const updateToLearned = (r) => post({ id: r.id, description: r.description, unit: r.unit, rate: r.drift.learned_rate,
-    source: r.drift.source });
-
-  const shown = showAll ? learned : learned.slice(0, 60);
+function VulaQSRatesV1({ tenantId }) {
+  const { own, learned, q, setQ, kind, setKind, form, setForm, busy, showAll, setShowAll, save, edit, del, adopt, updateToLearned, shown } = useQSRates({ tenantId });
 
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto", padding: "24px 16px" }}>
@@ -149,4 +102,8 @@ export default function VulaQSRates({ tenantId }) {
       <p className="vula-powered" style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}>Powered by Vula</p>
     </div>
   );
+}
+
+export default function VulaQSRates({ v2 = false, ...props }) {
+  return v2 ? <QSRatesV2 {...props} /> : <VulaQSRatesV1 {...props} />;
 }
