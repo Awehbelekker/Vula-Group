@@ -608,7 +608,10 @@ export const bankAccounts = { vat_registered: true, accounts: [
   { code: "sales", name: "Sales" }, { code: "cost_of_sales", name: "Cost of sales" }, { code: "casual_labour", name: "Casual labour" },
   { code: "rent", name: "Rent" }, { code: "bank_charges", name: "Bank charges" }, { code: "motor_vehicle", name: "Motor vehicle" },
 ] };
-export const bankWorkers = [{ id: "wk-1", name: "Lwazi" }, { id: "wk-2", name: "Nomvula" }];
+export const bankWorkers = [
+  { id: "wk-1", name: "Lwazi", id_number: "9001015800087", bank_account: "62001234567", phone: "+27820000301", rate_cents: 45_000, rate_period: "daily", type: "casual", default_project: "Bay Events catering" },
+  { id: "wk-2", name: "Nomvula", id_number: "", bank_account: "", phone: "", rate_cents: 250_000, rate_period: "weekly", type: "subcontractor", default_project: "" },
+];
 export const bankTxns = [
   { id: "bt-1", direction: "in", amount_cents: 864_200, txn_date: day(1), description: "PAYMENT RECEIVED BAY EVENTS CO INV-0041", match_status: "unmatched", account_code: "sales", categorized_by: "rule", vat_cents: 112_722 },
   { id: "bt-2", direction: "out", amount_cents: 864_200, txn_date: day(2), description: "ATLANTIC DAIRY COOP DEBIT ORDER 0031", match_status: "unmatched", account_code: "cost_of_sales", categorized_by: "ai", vat_cents: 112_722 },
@@ -1087,3 +1090,53 @@ export const dynamicsResults = [
   { id: "d-1", fullname: "Lerato Khumalo", emailaddress1: "lerato@atlanticdairy.example.test", telephone1: "+27 21 555 0101", jobtitle: "Buyer" },
   { id: "d-2", fullname: "Johan Smit", jobtitle: "Head chef" },
 ];
+
+// ── Construction (Workspace, Field ops, Labour, QS rates) ──
+export const labourReport = {
+  total_cents: 315_000, payment_count: 6,
+  by_worker: [{ worker: "Lwazi", id_number: "9001015800087", total_cents: 225_000, payments: 5 }, { worker: "Nomvula", id_number: null, total_cents: 90_000, payments: 1 }],
+  by_project: [{ project: "Bay Events catering", total_cents: 270_000 }, { project: "Unassigned", total_cents: 45_000 }],
+};
+export const projectLabels = ["Bay_Events_catering", "Spring_market_stall"];
+export const wsThreads = [{ id: "th-1", title: "Gala budget" }, { id: "th-2", title: "Who still owes us" }];
+export const wsMessages = [
+  { role: "user", content: "How much of the gala budget is left?" },
+  { role: "assistant", content: "R 18 400 of R 64 000 left. Catering hire is the biggest open line." },
+];
+export const wsTasks = [
+  { id: "tk-1", title: "Confirm tent hire", status: "open", clickup_task_id: "cu-91" },
+  { id: "tk-2", title: "Send deposit invoice", status: "done", clickup_task_id: null },
+];
+export const qsRates = {
+  own: [
+    { id: "qr-1", description: "Drywall partition, 102mm", code: "DW-102", unit: "m2", rate: 485, source: "DIGG 2026",
+      drift: { learned_rate: 540, change_pct: 11.3, source: "3 invoices, Sep 2026" } },
+    { id: "qr-2", description: "Skim plaster", unit: "m2", rate: 95.5, source: "" },
+  ],
+  learned: [
+    { description: "Rhino board 6.4mm", unit: "each", kind: "material", rate_cents: 21_950, low_cents: 19_900, high_cents: 23_500, source: "4 invoices", latest_cents: 23_500, latest_supplier: "BuildIt Paarden Eiland", basis: "paid", projects: ["Bay Events catering"] },
+    { description: "General labourer", unit: "day", kind: "labour", rate_cents: 45_000, low_cents: 45_000, high_cents: 45_000, source: "5 labour payments", basis: "paid", projects: [] },
+    { description: "Scaffold hire", unit: "week", kind: "plant", rate_cents: 180_000, low_cents: 150_000, high_cents: 210_000, source: "2 quotes", basis: "quoted", projects: [] },
+  ],
+};
+export const fieldContractors = [
+  { id: "fc-1", name: "Jane Dlamini", phone: "+27820000401", trade: "electrician" },
+  { id: "fc-2", name: "Pieter Botha", phone: "+27820000402", trade: "carpenter" },
+];
+export const fieldStatus = {
+  tasks_complete: 4, tasks_in_progress: 2, tasks_awaiting_sign_off: 1, tasks_rejected: 0, completion_pct: 57, team_size: 3,
+  tasks: [
+    { id: "ft-1", title: "Install roof trusses", trade: "carpenter", due_date: "2026-10-18", status: "in_progress", evidence_count: 0 },
+    { id: "ft-2", title: "First-fix electrics", trade: "electrician", due_date: "2026-10-16", status: "awaiting_sign_off", evidence_count: 2 },
+    { id: "ft-3", title: "Foundation slab", trade: "builder", due_date: "2026-10-09", status: "complete", evidence_count: 3 },
+  ],
+};
+export const fieldTask = (id) => ({
+  id, notes: "Use the 2.5mm cable throughout; DB board on the north wall.",
+  evidence: [{ id: "ev-1", photo_url: "http://api.vula.test/media/evidence-1.png", caption: "DB board" }, { id: "ev-2", photo_url: "http://api.vula.test/media/evidence-2.png", caption: "" }],
+  sign_off: null,
+});
+export const fieldDaily = { tasks: [
+  { task_id: "ft-1", contractor_id: "fc-2", contractor_name: "Pieter Botha", title: "Install roof trusses", project_id: "pj-1" },
+  { task_id: "ft-4", contractor_id: "fc-1", contractor_name: "Jane Dlamini", title: "Second-fix lights", project_id: "pj-1" },
+] };

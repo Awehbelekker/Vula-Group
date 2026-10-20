@@ -336,10 +336,10 @@ function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onCons
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'projects' && <VulaProjects tenantId={tenantId} v2={v2} />}
-      {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
-      {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} />}
-      {active === 'labour' && <VulaLabour tenantId={tenantId} />}
-      {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
+      {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} v2={v2} />}
+      {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} v2={v2} />}
+      {active === 'labour' && <VulaLabour tenantId={tenantId} v2={v2} />}
+      {active === 'qsrates' && <VulaQSRates tenantId={tenantId} v2={v2} />}
       {active === 'documents' && <VulaDocuments tenantId={tenantId} v2={v2} />}
       {/* the redesign files Stock and Suppliers here (navConfig.withV2Moves) */}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} v2={v2} />}
