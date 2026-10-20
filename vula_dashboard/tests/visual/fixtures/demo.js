@@ -1053,3 +1053,37 @@ export const automations = [
 ];
 export const automationFirings = [{ id: "fi-1", message: "Hi Thandi, your order HV-1052 is on its way!", action_type: "whatsapp_customer" }];
 export const flows = [{ id: "fl-1", name: "Book a tasting", trigger_phrases: ["book a tasting", "tasting"], steps: [{}, {}, {}], enabled: true, fire_count: 6 }];
+
+// ── Sales rep (My Work: Home, Today, Contacts, Call sheet, Reminders, Claim sheet, CRM) ──
+export const repToday = {
+  appointments: [
+    { id: "bk-r1", start_local: "08:30", end_local: "09:30", customer_name: "Atlantic Dairy", location: "Paarden Eiland", service_name: "Meeting", notes: "new cheese range", has_minutes: true },
+    { id: "bk-r2", start_local: "14:00", end_local: "15:00", customer_name: "Bay Hotel kitchens", location: "Camps Bay", service_name: "Tasting", has_minutes: false },
+  ],
+  notes: [{ id: "mn-1", booking_id: null, summary: "Quick call with Fairview: sample box Thursday" }],
+};
+export const repReminders = [
+  { id: "rm-1", text: "Send Bay Hotel the wholesale price list", due_at: at(2, "09:00"), status: "open" },
+  { id: "rm-2", text: "Follow up with Atlantic Dairy on the cheese range", due_at: at(-2, "10:00"), status: "open" },
+  { id: "rm-3", text: "Book the Fairview tasting", due_at: null, status: "open" },
+  { id: "rm-4", text: "Drop samples at Harbour Fish", due_at: at(4, "11:00"), status: "done" },
+];
+export const repCallSheet = {
+  config: { call_sheet_recipient_email: "sales@harbourvine.example.test", call_sheet_day_of_week: 4, call_sheet_hour: 17, call_sheet_minute: 0, call_sheet_last_sent_at: at(7, "17:00") },
+  entries: [
+    { id: "cs-1", text: "Atlantic Dairy (Paarden Eiland): new cheese range, wants pricing by Friday", source: "meeting", created_at: at(0, "09:35") },
+    { id: "cs-2", text: "Fairview: sample box Thursday", source: "manual", created_at: at(1, "15:10") },
+  ],
+};
+export const repContacts = [
+  { id: "ct-1", name: "Lerato Khumalo", phone: "+27820000201", email: "lerato@atlanticdairy.example.test", company: "Atlantic Dairy", title: "Buyer", notes: "Prefers WhatsApp" },
+  { id: "ct-2", name: "Johan Smit", phone: "nophone-ct-2", email: "", company: "Bay Hotel", title: "Head chef", notes: "" },
+];
+export const repExpenseSheet = {
+  config: { expense_sheet_recipient_email: "accounts@harbourvine.example.test", expense_sheet_day_of_month: 25, expense_budget_cents: 300_000, expense_sheet_last_sent_at: null },
+  mtd_spend_cents: 278_450,
+};
+export const dynamicsResults = [
+  { id: "d-1", fullname: "Lerato Khumalo", emailaddress1: "lerato@atlanticdairy.example.test", telephone1: "+27 21 555 0101", jobtitle: "Buyer" },
+  { id: "d-2", fullname: "Johan Smit", jobtitle: "Head chef" },
+];

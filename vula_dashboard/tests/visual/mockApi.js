@@ -39,10 +39,30 @@ function routes(role, modules = []) {
     r("GET", `^/v1/team/${T}/audit`, () => ({ events: F.teamAudit })),
     r("GET", `^/v1/team/${T}`, () => ({ members: F.teamMembers })),
     r("GET", `^/v1/users/${T}/users`, () => ({ users: F.teamLogins })),
-    // a sales rep's own screens (VulaRepHome / VulaRepToday) — nothing due, nothing booked
-    r("GET", `${A}/reminders`, () => ({ reminders: [] })),
-    r("GET", `${A}/call-sheet`, () => ({ contacts: [], rows: [] })),
-    r("GET", `${A}/rep/today`, () => ({ bookings: [], notes: [] })),
+    // a sales rep's own screens (My Work) — filled for a rep's own login (created_by / rep_phone);
+    // an owner's Home (VulaRepToday with no rep phone) still gets nothing due, nothing booked
+    r("GET", `${A}/reminders`, (m, url) => {
+      if (!url.searchParams.get("created_by")) return { reminders: [] };
+      const st = url.searchParams.get("status") || "open";
+      return { reminders: st === "all" ? F.repReminders : F.repReminders.filter((x) => x.status === st) };
+    }),
+    r("PATCH", `${A}/reminders/${T}`, () => ({ ok: true })),
+    r("GET", `${A}/call-sheet`, (m, url) => (url.searchParams.get("rep_phone") ? F.repCallSheet : { config: {}, entries: [] })),
+    r("POST", `${A}/call-sheet/configure`, () => ({ saved: true })),
+    r("POST", `${A}/call-sheet/update`, (m, url, req) => (req.postDataJSON()?.confirm ? { applied: true } : { preview: true, change: "Atlantic Dairy entry: topic changed to self-levelling" })),
+    r("GET", `${A}/rep/today`, (m, url) => (url.searchParams.get("rep_phone") ? F.repToday : { appointments: [], notes: [] })),
+    r("POST", `${A}/rep/appointments`, () => ({ id: "bk-new" })),
+    r("POST", `${A}/meetings`, () => ({ action_items: ["Send pricing"], pdf_sent: true })),
+    r("GET", `${A}/contacts`, (m, url) => {
+      if (url.searchParams.get("created_by") === null) return {};   // Projects' client picker: as before
+      const q = (url.searchParams.get("search") || "").toLowerCase();
+      return { contacts: F.repContacts.filter((c) => !q || c.name.toLowerCase().includes(q)) };
+    }),
+    r("POST", `${A}/contacts`, () => ({ saved: true })),
+    r("GET", `${A}/expense-sheet`, () => F.repExpenseSheet),
+    r("POST", `${A}/expense-sheet/configure`, () => ({ saved: true })),
+    r("GET", `^/v1/dynamics365/status/${T}`, () => ({ status: "connected", org_url: "https://harbourvine.crm4.dynamics.com", email: "rep@harbourvine.example.test" })),
+    r("GET", `^/v1/dynamics365/${T}/search`, () => ({ results: F.dynamicsResults })),
     r("GET", `${C}/brand`, () => F.brand),
     r("GET", `${C}/manifest\\.webmanifest`, () => F.manifest),
     r("GET", `${C}/app-icon/\\d+\\.png`, () => ({ __raw: { status: 200, contentType: "image/png", body: PNG_1PX } })),
