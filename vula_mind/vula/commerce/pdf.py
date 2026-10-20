@@ -10,6 +10,7 @@ Usage:
 """
 from __future__ import annotations
 
+from vula.commerce import powered_by
 from vula.commerce.brand_sizes import logo_px as _logo_px
 import json
 import logging
@@ -370,6 +371,7 @@ _DOC_HTML = """<!DOCTYPE html>
 <div class="footer">
   {{ tenant_name }} &mdash; {{ tenant_address | replace("\\n", " | ") | safe }}<br>
   {{ footer_text if footer_text else "Thank you for your business." }}
+  {% if powered_by_badge %}<a href="{{ powered_by_url }}" style="display:block;margin-top:20px;"><img src="{{ powered_by_badge }}" alt="Powered by Vula" style="width:110px;height:auto;"></a>{% endif %}
 </div>
 </body>
 </html>"""
@@ -625,6 +627,10 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "logo_max_w": _logo_px("pdf", branding.get("logo_size"))[1],
         "logo_align": branding.get("logo_align") or "left",
         "ink_color": branding.get("ink_color") or "",
+        # The logo set's inline badge at the foot (vula/commerce/powered_by.py): 110px wide, one
+        # badge-height clear of the footer text; the tenant's own logo stays top-left.
+        "powered_by_badge": powered_by.inline_badge_data_uri(),
+        "powered_by_url": powered_by.VULA_URL,
         **_font_ctx(branding),
     }
 
