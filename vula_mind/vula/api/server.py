@@ -60,7 +60,6 @@ from __future__ import annotations
 import hmac
 import logging
 import re
-import sys
 import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -121,17 +120,20 @@ from vula.api.email_public import router as email_public_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
+from vula.log_streams import handlers as _log_handlers  # noqa: E402
+
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
     # 2026-09-11: no stream= meant Python's default (stderr) for EVERY log call, and Railway
     # tags a deploy's entire stderr stream as "error" regardless of actual level — an
     # @level:error filter in the Railway dashboard returned hundreds of routine INFO lines and
     # zero real signal. One stdout stream for everything; the `[%(levelname)s]` token already
     # in the format string above is how you tell warnings/errors apart in a search now (e.g.
     # search the raw logs for "[ERROR]"), instead of relying on Railway's stream-based severity.
-    stream=sys.stdout,
+    # (The format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s", %H:%M:%S.)
+    # 2026-10-20: ERROR and up now go to stderr so Railway labels real errors as errors too
+    # (vula/log_streams.py); everything below stays on stdout as before.
+    handlers=_log_handlers(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")),
 )
 # POPIA: mask customer phone numbers in the (retained, Railway-captured) logs. No-op under DEBUG.
 try:
