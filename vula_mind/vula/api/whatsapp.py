@@ -600,6 +600,13 @@ async def receive_message(
                                 # Owner tapping the "want this as a document too?" offer after a
                                 # web-researched reply — see _maybe_offer_research_writeup.
                                 await _handle_research_pdf_reply(phone, reply_id, route_tenant)
+                            elif phone and reply_id and (route_tenant or commerce_tenant) and reply_id.startswith("poll:"):
+                                # A staff member tapping a choice on a staff poll (vula/staff_polls.py)
+                                from vula import staff_polls as _polls
+                                _tid = route_tenant or commerce_tenant
+                                _pr = await _polls.vote_tap(_tid, phone, reply_id)
+                                if _pr:
+                                    await _send_reply(phone, _pr, tenant_id=_tid)
                             elif phone and reply_id and route_tenant and reply_id.startswith("admin_example:"):
                                 # Owner tapping an example from their first-contact capability menu
                                 # (_send_staff_capability_menu) — see _handle_admin_example_reply.
@@ -3186,6 +3193,24 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
         staff_notices.acknowledge(tenant_id, phone, ref)
         oq.close(q["id"], text)
         await _send_reply(phone, "👍 Thanks — noted that you've read it.", tenant_id=tenant_id)
+        return True
+    if kind in ("staff_birthday", "staff_start"):
+        # "When's your birthday?" / "When did you start?" (vula/staff_notices.py ask_birthdays)
+        from vula import staff_notices
+        reply = await staff_notices.answer(tenant_id, kind, ref, text)
+        if reply is None:
+            return False
+        if not reply.startswith("Please send"):
+            oq.close(q["id"], text)
+        await _send_reply(phone, reply, tenant_id=tenant_id)
+        return True
+    if kind == "staff_poll":
+        # a typed answer to a poll ("2", "Friday") — taps come through _handle_poll_tap
+        from vula import staff_polls
+        reply = await staff_polls.vote_text(tenant_id, phone, ref, text)
+        if reply is None:
+            return False
+        await _send_reply(phone, reply, tenant_id=tenant_id)
         return True
     if kind == "payer_account":
         from vula.commerce import payers

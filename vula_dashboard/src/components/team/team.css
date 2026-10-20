@@ -43,3 +43,16 @@
 .vtm-preview-text { white-space: pre-wrap; font: 400 var(--fs-body)/1.5 var(--font-sans); color: var(--ink); margin: var(--space-2) 0; }
 .vtm-notice-body { white-space: pre-wrap; margin: var(--space-2) 0; color: var(--ink); overflow-wrap: anywhere; }
 .vtm-notice-img { display: block; max-width: 100%; max-height: 320px; border-radius: var(--radius-md); margin: var(--space-2) 0; }
+.vtm-poll-options { display: flex; flex-direction: column; gap: var(--space-2); margin: var(--space-2) 0; }
+.vtm-poll-option { display: flex; gap: var(--space-2); align-items: center; }
+.vtm-poll-option .vula-input { flex: 1 1 auto; }
+.vtm-poll { margin: var(--space-2) 0; }
+.vtm-poll-row { display: grid; grid-template-columns: minmax(80px, 160px) minmax(0, 1fr) 32px; gap: var(--space-2); align-items: center; padding: 4px 0; }
+.vtm-poll-label { font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vtm-poll-bar { display: block; height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.vtm-poll-bar > span { display: block; height: 100%; background: var(--accent); }
+.vtm-poll-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.vtm-obs { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: var(--space-2); align-items: center; }
+@media (max-width: 600px) { .vtm-obs { grid-template-columns: minmax(0, 1fr); } }
+.vtm-start { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--fs-caption); color: var(--muted); }
+.vtm-start .vula-input { width: auto !important; }

@@ -64,3 +64,36 @@ def holiday_name(d: date) -> Optional[str]:
 
 def is_business_day(d: date) -> bool:
     return d.weekday() < 5 and holiday_name(d) is None
+
+
+# Days worth a message that aren't public holidays — each one off until a business switches it on
+# (vula/staff_notices.py). (id, name, default line); the date is worked out per year below.
+OBSERVANCES = [
+    ("valentines", "Valentine's Day", "happy Valentine's Day! ❤️"),
+    ("mothers_day", "Mother's Day", "happy Mother's Day to all the moms on the team! 💐"),
+    ("fathers_day", "Father's Day", "happy Father's Day to all the dads on the team! 👔"),
+    ("mandela_day", "Mandela Day", "it's Mandela Day — 67 minutes for a good cause. 🧡"),
+    ("spring_day", "Spring Day", "happy Spring Day! 🌸"),
+    ("christmas_eve", "Christmas Eve", "Merry Christmas — thank you for everything this year! 🎄"),
+    ("new_years_eve", "New Year's Eve", "happy New Year when it comes — see you in the new year! 🎉"),
+]
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    d = date(year, month, 1)
+    d += timedelta(days=(weekday - d.weekday()) % 7)
+    return d + timedelta(weeks=n - 1)
+
+
+def observances(year: int) -> Dict[date, tuple]:
+    """{date: (id, name, default line)} for `year`."""
+    when = {
+        "valentines": date(year, 2, 14),
+        "mothers_day": _nth_weekday(year, 5, 6, 2),     # 2nd Sunday of May
+        "fathers_day": _nth_weekday(year, 6, 6, 3),     # 3rd Sunday of June
+        "mandela_day": date(year, 7, 18),
+        "spring_day": date(year, 9, 1),
+        "christmas_eve": date(year, 12, 24),
+        "new_years_eve": date(year, 12, 31),
+    }
+    return {when[i]: (i, name, line) for i, name, line in OBSERVANCES}

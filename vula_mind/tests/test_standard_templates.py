@@ -67,7 +67,7 @@ async def test_only_names_not_already_on_the_account_are_submitted(monkeypatch):
                                      "seedleme_shop_promo",     # the picture promotion, with its photo
                                      # notices to the business's own staff (vula/staff_notices.py)
                                      "seedleme_staff_notice", "seedleme_staff_notice_image",
-                                     "seedleme_staff_day"}
+                                     "seedleme_staff_day", "seedleme_staff_poll_invite"}
     assert set(res["already_there"]) == {"vula_notification", "vula_owner_checkin_nudge", "supplier_po_notice"}
     assert sent == res["submitted"]
 

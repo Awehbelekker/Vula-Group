@@ -28,12 +28,20 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 SAST = timezone(timedelta(hours=2))
-DEFAULTS = {"birthdays": False, "holidays": False, "send_hour": 8, "holiday_note": ""}
+DEFAULTS = {"birthdays": False, "holidays": False, "send_hour": 8, "holiday_note": "",
+            # migration 219: special days (sa_holidays.OBSERVANCES ids, each with an optional own
+            # line), the business's own yearly days, and work anniversaries
+            "observances": [], "observance_lines": {}, "company_days": [], "anniversaries": False}
+# Messages about a day (not a notice): sent with the staff_day template, skipped for anyone who
+# opted out.
+DAY_KINDS = ("birthday", "holiday", "anniversary", "special_day")
 IN_WINDOW = timedelta(hours=23)          # free text is safe this long after their last message
 REMIND_AFTER = timedelta(hours=24)
 _PACE_S = 0.1                           # 10 a second, like the customer broadcasts
 _MEMBER_COLS = ("id,name,whatsapp,role,active,birthday,birthday_share,notices_opt_out,"
-                "last_message_at")
+                "last_message_at,start_date,birthday_asked_at")
+_MEMBER_COLS_218 = ("id,name,whatsapp,role,active,birthday,birthday_share,notices_opt_out,"
+                    "last_message_at")
 
 # "Got it ✅" (the template's button), or a short typed reply saying the same.
 _ACK_WORDS = {"got it", "gotit", "ok", "okay", "noted", "seen", "read", "read it", "received",
@@ -88,8 +96,30 @@ def save_settings(tenant_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
             new[k] = min(20, max(6, int(v)))
         elif k == "holiday_note":
             new[k] = str(v or "").strip()[:200]
+        elif k == "anniversaries":
+            new[k] = bool(v)
+        elif k == "observances":
+            from vula.sa_holidays import OBSERVANCES
+            known = {i for i, _, _ in OBSERVANCES}
+            new[k] = [str(i) for i in (v or []) if str(i) in known]
+        elif k == "observance_lines":
+            new[k] = {str(i): str(t).strip()[:200] for i, t in (v or {}).items() if str(t).strip()}
+        elif k == "company_days":
+            new[k] = [_clean_company_day(d) for d in (v or [])][:30]
+            new[k] = [d for d in new[k] if d]
     _client().table("vula_tenant_config").update({"staff_notices": new}).eq("tenant_id", tenant_id).execute()
     return settings_for(tenant_id)
+
+
+def _clean_company_day(d: Any) -> Optional[Dict[str, str]]:
+    """{name, date "MM-DD", line} — the business's own yearly day; None if it doesn't parse."""
+    if not isinstance(d, dict):
+        return None
+    name = str(d.get("name") or "").strip()[:60]
+    md = parse_day_month(str(d.get("date") or ""), stored=True)
+    if not name or not md:
+        return None
+    return {"name": name, "date": md, "line": str(d.get("line") or "").strip()[:200]}
 
 
 def _business(tenant_id: str) -> str:
@@ -104,8 +134,12 @@ def _business(tenant_id: str) -> str:
 # ── who it goes to ─────────────────────────────────────────────────────────────
 
 def members(tenant_id: str) -> List[Dict[str, Any]]:
-    return (_client().table("vula_team_members").select(_MEMBER_COLS)
-            .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+    q = lambda cols: (_client().table("vula_team_members").select(cols)  # noqa: E731
+                      .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+    try:
+        return q(_MEMBER_COLS)
+    except Exception:                    # migration 219 not applied yet
+        return q(_MEMBER_COLS_218)
 
 
 def audience(tenant_id: str, spec: Optional[Dict[str, Any]], kind: str = "notice",
@@ -121,7 +155,7 @@ def audience(tenant_id: str, spec: Optional[Dict[str, Any]], kind: str = "notice
     elif spec.get("roles"):
         roles = {str(r).lower() for r in spec["roles"]}
         rows = [m for m in rows if (m.get("role") or "staff").lower() in roles]
-    if kind in ("birthday", "holiday"):
+    if kind in DAY_KINDS:
         rows = [m for m in rows if not m.get("notices_opt_out")]
     return rows
 
@@ -162,7 +196,7 @@ def _first_name(m: Dict[str, Any]) -> str:
 
 def message_text(notice: Dict[str, Any], member: Dict[str, Any], business: str) -> str:
     """The plain-text version (for someone inside the 24-hour window, and the preview)."""
-    if notice.get("kind") in ("birthday", "holiday"):
+    if notice.get("kind") in DAY_KINDS:
         return f"Hi {_first_name(member)}, {notice['body']} From all of us at {business}."
     text = f"📢 *{notice['title']}*\n\n{notice['body']}"
     if notice.get("must_read"):
@@ -174,7 +208,7 @@ def _template_call(tenant_id: str, notice: Dict[str, Any], member: Dict[str, Any
                    business: str) -> tuple:
     from vula.commerce.job_config import template_name
     from vula.commerce import wa_templates as wt
-    if notice.get("kind") in ("birthday", "holiday"):
+    if notice.get("kind") in DAY_KINDS:
         return (template_name(tenant_id, wt.STAFF_DAY_SUFFIX),
                 [_first_name(member), _one_line(notice["body"]), business], None)
     suffix = wt.STAFF_NOTICE_IMAGE_SUFFIX if notice.get("image_url") else wt.STAFF_NOTICE_SUFFIX
@@ -197,6 +231,9 @@ async def _deliver(tenant_id: str, notice: Dict[str, Any], member: Dict[str, Any
                    business: str) -> tuple:
     """(wamid or "", error or None)."""
     from vula.api import whatsapp as wa
+    if notice.get("kind") == "poll":
+        from vula import staff_polls
+        return await staff_polls.deliver(tenant_id, notice, member, business)
     phone = member["whatsapp"]
     if _in_window(member) and not notice.get("image_url"):
         ok = await wa._send_reply(phone, message_text(notice, member, business), tenant_id,
@@ -400,7 +437,60 @@ async def daily_pass(tenant_id: str, today: date) -> List[str]:
                 h = create(tenant_id, title, line, kind="holiday", created_by="vula")
                 await send(tenant_id, h["id"])
                 made.append(title)
+    # Special days the business switched on, and its own yearly days (migration 219)
+    days: List[tuple] = []
+    if cfg["observances"]:
+        from vula.sa_holidays import observances
+        hit = observances(today.year).get(today)
+        if hit and hit[0] in cfg["observances"]:
+            days.append((hit[1], (cfg["observance_lines"] or {}).get(hit[0]) or hit[2]))
+    for d in cfg["company_days"] or []:
+        if d.get("date") == today.strftime("%m-%d"):
+            days.append((d["name"], d.get("line") or f"today is {d['name']}! 🎉"))
+    for name, line in days:
+        title = f"{name} {today.isoformat()}"
+        if _exists(tenant_id, title):
+            continue
+        n = create(tenant_id, title, line, kind="special_day", created_by="vula")
+        await send(tenant_id, n["id"])
+        made.append(title)
+    if cfg["anniversaries"]:
+        team = team if team is not None else members(tenant_id)
+        for m in team:
+            years = _years_today(m.get("start_date"), today)
+            if not years or m.get("notices_opt_out") or not m.get("whatsapp"):
+                continue
+            name = (m.get("name") or "").strip() or "a colleague"
+            title = f"Anniversary: {name} {today.isoformat()}"
+            if _exists(tenant_id, title):
+                continue
+            biz = _business(tenant_id)
+            span = f"{years} year{'s' if years != 1 else ''}"
+            wish = create(tenant_id, title, f"{span} with {biz} today — thank you! 🎉",
+                          kind="anniversary", audience_spec={"ids": [m["id"]]}, created_by="vula")
+            await send(tenant_id, wish["id"])
+            made.append(title)
+            if m.get("birthday_share", True):
+                others = [o["id"] for o in team if o["id"] != m["id"]]
+                if others:
+                    note = create(tenant_id, f"Team: {title}",
+                                  f"{name.split()[0]} has been with us {span} today 🎉",
+                                  kind="anniversary", audience_spec={"ids": others}, created_by="vula")
+                    await send(tenant_id, note["id"])
     return made
+
+
+def _years_today(start: Any, today: date) -> int:
+    """Whole years since `start` when today is its anniversary (0 otherwise, and in year one)."""
+    try:
+        d = start if isinstance(start, date) else date.fromisoformat(str(start)[:10])
+    except Exception:
+        return 0
+    same = (d.month, d.day) == (today.month, today.day) or (
+        (d.month, d.day) == (2, 29) and (today.month, today.day) == (2, 28)
+        and not __import__("calendar").isleap(today.year))
+    years = today.year - d.year
+    return years if same and years >= 1 else 0
 
 
 # ── a day later: one reminder, and the owner hears who hasn't read it ─────────
@@ -467,7 +557,8 @@ async def run_due(now: Optional[datetime] = None) -> Dict[str, int]:
         cfgs = []
     for c in cfgs:
         cfg = {**DEFAULTS, **(c.get("staff_notices") or {})}
-        if not (cfg.get("birthdays") or cfg.get("holidays")) or local.hour != int(cfg["send_hour"]):
+        if not any(cfg.get(k) for k in ("birthdays", "holidays", "anniversaries", "observances",
+                                         "company_days")) or local.hour != int(cfg["send_hour"]):
             continue
         try:
             out["daily"] += len(await daily_pass(c["tenant_id"], local.date()))
@@ -486,4 +577,191 @@ async def run_due(now: Optional[datetime] = None) -> Dict[str, int]:
             out["reminded"] += int(res.get("reminded") or 0)
         except Exception as exc:
             logger.warning("staff notice reminder %s failed: %s", n["id"], exc)
+    from vula import staff_polls
+    out.update(await staff_polls.run_due(now))
     return out
+
+
+# ── Vula asks for birthdays and start dates (migration 219) ───────────────────
+
+_MONTHS = {
+    "jan": 1, "january": 1, "januarie": 1, "feb": 2, "february": 2, "februarie": 2,
+    "mar": 3, "march": 3, "maart": 3, "apr": 4, "april": 4, "may": 5, "mei": 5,
+    "jun": 6, "june": 6, "junie": 6, "jul": 7, "july": 7, "julie": 7, "aug": 8, "august": 8,
+    "augustus": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10, "okt": 10,
+    "oktober": 10, "nov": 11, "november": 11, "dec": 12, "december": 12, "des": 12, "desember": 12,
+}
+_SKIP_RE = re.compile(r"^\s*(skip|no thanks?|rather not|pass|nee|no)\s*[.!]*\s*$", re.IGNORECASE)
+
+
+def _valid_md(month: int, day: int) -> Optional[str]:
+    try:
+        date(2024, month, day)               # a leap year, so 29 Feb is allowed
+    except ValueError:
+        return None
+    return f"{month:02d}-{day:02d}"
+
+
+def parse_day_month(text: str, stored: bool = False) -> Optional[str]:
+    """ "16 Dec", "16 December", "Dec 16", "16/12", "16-12", "16 Desember" → "12-16"; None when
+    it isn't a day and month. stored=True also takes "12-16" as already MM-DD (the dashboard's
+    own format) — never for a typed reply, where "05-06" means 5 June."""
+    t = (text or "").strip().lower().replace(",", " ")
+    if stored and re.fullmatch(r"(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])", t):
+        return _valid_md(int(t[:2]), int(t[3:]))
+    m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?([a-z]{3,9})\b", t)
+    if m and m.group(2) in _MONTHS:
+        return _valid_md(_MONTHS[m.group(2)], int(m.group(1)))
+    m = re.search(r"\b([a-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?\b", t)
+    if m and m.group(1) in _MONTHS:
+        return _valid_md(_MONTHS[m.group(1)], int(m.group(2)))
+    m = re.search(r"\b(\d{1,2})\s*[/.\-]\s*(\d{1,2})\b", t)
+    if m:                                     # South African order: day / month
+        return _valid_md(int(m.group(2)), int(m.group(1)))
+    return None
+
+
+def parse_start(text: str) -> Optional[str]:
+    """ "1 Mar 2021", "March 2021", "2021-03-01", "01/03/2021" → "2021-03-01"."""
+    t = (text or "").strip().lower().replace(",", " ")
+    m = re.search(r"\b(20\d{2}|19\d{2})-(\d{1,2})-(\d{1,2})\b", t)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        y_m = re.search(r"\b(19\d{2}|20\d{2})\b", t)
+        if not y_m:
+            return None
+        y = int(y_m.group(1))
+        rest = t.replace(y_m.group(1), " ")
+        md = parse_day_month(rest)
+        if md:
+            mo, d = int(md[:2]), int(md[3:])
+        else:
+            word = next((w for w in re.findall(r"[a-z]+", rest) if w in _MONTHS), None)
+            if not word:
+                return None
+            mo, d = _MONTHS[word], 1
+    try:
+        got = date(y, mo, d)
+    except ValueError:
+        return None
+    return got.isoformat() if got <= date.today() else None
+
+
+def _fmt_md(md: str) -> str:
+    return f"{int(md[3:])} {date(2024, int(md[:2]), 1).strftime('%b')}"
+
+
+async def _ask(tenant_id: str, m: Dict[str, Any], kind: str, text: str) -> bool:
+    """One question to one person: plain text inside their 24 hours, else the notice template."""
+    from vula.api import whatsapp as wa
+    from vula import open_questions
+    if _in_window(m):
+        ok = await wa._send_reply(m["whatsapp"], text, tenant_id, idem_key=f"{kind}:{m['id']}")
+    else:
+        from vula.commerce.job_config import template_name
+        from vula.commerce import wa_templates as wt
+        ok = bool(await wa.send_template_message(
+            tenant_id, m["whatsapp"], template_name(tenant_id, wt.STAFF_NOTICE_SUFFIX),
+            [_business(tenant_id), _one_line("Quick question — " + text)]))
+    if ok:
+        open_questions.ask(tenant_id, m["whatsapp"], kind, m["id"], text[:120])
+    return ok
+
+
+async def ask_birthday(tenant_id: str, m: Dict[str, Any]) -> bool:
+    """Ask one member for their birthday, once ever (birthday_asked_at)."""
+    if not m.get("whatsapp") or m.get("birthday") or m.get("birthday_asked_at") \
+            or m.get("notices_opt_out"):
+        return False
+    text = (f"Hi {_first_name(m)}, quick one from {_business(tenant_id)}: when's your birthday? "
+            "Day and month only, e.g. *16 Dec* — we only use it to wish you. Reply *skip* to "
+            "leave it out.")
+    if not await _ask(tenant_id, m, "staff_birthday", text):
+        return False
+    _client().table("vula_team_members").update({"birthday_asked_at": _now().isoformat()}) \
+        .eq("tenant_id", tenant_id).eq("id", m["id"]).execute()
+    return True
+
+
+async def ask_birthdays(tenant_id: str) -> Dict[str, Any]:
+    """Ask every active member with WhatsApp and no birthday, once each."""
+    asked, names = 0, []
+    for m in members(tenant_id):
+        if await ask_birthday(tenant_id, m):
+            asked += 1
+            names.append(m.get("name") or m["whatsapp"])
+            await asyncio.sleep(_PACE_S)
+    return {"asked": asked, "names": names}
+
+
+async def ask_start_date(tenant_id: str, m: Dict[str, Any]) -> bool:
+    text = (f"And when did you start at {_business(tenant_id)}? A month and year is fine, e.g. "
+            "*March 2021* — for your work anniversary. Reply *skip* to leave it out.")
+    return await _ask(tenant_id, m, "staff_start", text)
+
+
+async def answer(tenant_id: str, kind: str, member_id: str, text: str) -> Optional[str]:
+    """The reply to a staff_birthday / staff_start question, or None when `text` isn't an
+    answer to it (so the message goes on to the assistant)."""
+    t = (text or "").strip()
+    if _SKIP_RE.match(t):
+        return "👍 No problem — I won't ask again."
+    if kind == "staff_birthday":
+        md = parse_day_month(t)
+        if not md:
+            if is_ack(t) or len(t.split()) <= 3:
+                return "Please send the day and month, e.g. *16 Dec* — or *skip*."
+            return None
+        _client().table("vula_team_members").update({"birthday": md}) \
+            .eq("tenant_id", tenant_id).eq("id", member_id).execute()
+        reply = f"🎂 Saved — {_fmt_md(md)}. Thank you!"
+        if settings_for(tenant_id)["anniversaries"]:
+            m = next((x for x in members(tenant_id) if str(x["id"]) == str(member_id)), None)
+            if m and not m.get("start_date"):
+                await ask_start_date(tenant_id, m)
+        return reply
+    if kind == "staff_start":
+        d = parse_start(t)
+        if not d:
+            if is_ack(t) or len(t.split()) <= 3:
+                return "Please send the month and year you started, e.g. *March 2021* — or *skip*."
+            return None
+        _client().table("vula_team_members").update({"start_date": d}) \
+            .eq("tenant_id", tenant_id).eq("id", member_id).execute()
+        return f"👍 Saved — you started {date.fromisoformat(d).strftime('%B %Y')}."
+    return None
+
+
+# ── a birthday suggested from a South African ID number (never saved without the owner) ───
+
+def id_birthday(id_number: str) -> Optional[str]:
+    """MM-DD from a valid 13-digit SA ID number (YYMMDD… with a Luhn check digit), else None."""
+    n = re.sub(r"\D", "", id_number or "")
+    if len(n) != 13:
+        return None
+    total = 0
+    for i, ch in enumerate(reversed(n)):
+        d = int(ch)
+        if i % 2 == 1:
+            d = d * 2 - 9 if d > 4 else d * 2
+        total += d
+    if total % 10:
+        return None
+    return _valid_md(int(n[2:4]), int(n[4:6]))
+
+
+def suggest_birthday(tenant_id: str, member: Dict[str, Any]) -> Optional[str]:
+    """A birthday from the ID number on the same person's worker record (matched by phone)."""
+    if member.get("birthday") or not member.get("whatsapp"):
+        return None
+    try:
+        rows = (_client().table("commerce_workers").select("phone,id_number")
+                .eq("tenant_id", tenant_id).execute().data or [])
+    except Exception:
+        return None
+    me = _digits(member["whatsapp"])[-9:]
+    for r in rows:
+        if r.get("id_number") and _digits(r.get("phone") or "")[-9:] == me:
+            return id_birthday(r["id_number"])
+    return None

@@ -412,6 +412,21 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                           "description": "True when they must confirm they've read it."},
             "confirm": {"type": "boolean"}},
             "required": ["message"]}}},
+    {"type": "function", "function": {
+        "name": "staff_poll",
+        "description": "Ask the business's OWN STAFF to vote on WhatsApp — e.g. 'ask the staff to "
+                       "vote: Fri 5 Dec or Sat 6 Dec for the year-end', 'anonymous poll: are you "
+                       "happy with the new shifts? yes/no'. Use the owner's choices as written "
+                       "(2–10). Without confirm=true returns a preview; only pass confirm=true "
+                       "after the owner confirmed.",
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "string"}},
+            "anonymous": {"type": "boolean",
+                          "description": "True when the owner asked for it to be anonymous."},
+            "closes_in_days": {"type": "number", "description": "Only if the owner said when it closes."},
+            "confirm": {"type": "boolean"}},
+            "required": ["question", "options"]}}},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -1486,7 +1501,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
-    "staff_notice": "team",
+    "staff_notice": "team", "staff_poll": "team",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -2247,6 +2262,52 @@ class CommerceAdminSkill(BaseSkill):
             msg += " I'll remind anyone who hasn't confirmed in a day and tell you who."
         return _checked({"sent": t["sent"], "notice_id": row["id"]}, msg)
 
+    async def _staff_poll(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """A poll to the business's own staff (vula/staff_polls.py): preview, then on Confirm send
+        it and report how many it reached, read back from the recipient rows."""
+        from datetime import datetime, timedelta, timezone
+        from vula import staff_notices as sn
+        from vula import staff_polls
+        question = str(args.get("question") or "").strip()
+        options = staff_polls._clean_options(args.get("options") or [])
+        if not question or len(options) < 2:
+            return {"status": "need_info",
+                    "message": "What should the staff vote on, and what are the choices (2 to 10)?"}
+        anonymous = bool(args.get("anonymous"))
+        me = re.sub(r"\D", "", str(ctx.get("phone") or ""))
+        people = [m for m in sn.audience(tid, None)
+                  if not me or re.sub(r"\D", "", m.get("whatsapp") or "")[-9:] != me[-9:]]
+        if not people:
+            return {"status": "need_info",
+                    "message": "There's nobody on the team list with a WhatsApp number — add them "
+                               "under Team in the dashboard first."}
+        days = args.get("closes_in_days")
+        closes = None
+        if isinstance(days, (int, float)) and days > 0:
+            closes = (datetime.now(timezone.utc) + timedelta(days=float(days))).isoformat()
+        choices = "\n".join(f"{i + 1}. {o}" for i, o in enumerate(options))
+        if not args.get("confirm"):
+            return {"preview": True, "count": len(people),
+                    "message": (f"Send this poll to {len(people)} staff?\n\n🗳️ *{question}*\n{choices}"
+                                + ("\n\nAnonymous — you'll see the totals, not who chose what."
+                                   if anonymous else "\n\nYou'll see who chose what.")
+                                + (f"\nCloses in {days:g} day(s)." if closes else ""))}
+        try:
+            poll = staff_polls.create(tid, question, options, anonymous=anonymous, closes_at=closes,
+                                      audience_spec={"ids": [m["id"] for m in people]},
+                                      created_by=str(ctx.get("phone") or "whatsapp"))
+            await sn.send(tid, poll["notice_id"])
+            res = staff_polls.results(tid, poll["id"])
+        except Exception as exc:
+            logger.warning("staff_poll failed for %s: %s", tid, exc)
+            return _not_confirmed("I couldn't send the poll. Not sent.")
+        if not res.get("reached"):
+            return _not_confirmed("The poll didn't reach anyone — the staff poll template may not "
+                                  "be approved yet (Settings › WhatsApp templates). Not sent.")
+        return _checked({"poll_id": poll["id"], "reached": res["reached"]},
+                        f"✅ Poll sent to {res['reached']} of {len(people)} staff. I'll send you the "
+                        "result when it closes — or ask me 'how's the poll going?'.")
+
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
@@ -2356,6 +2417,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._set_vat_registration(tid, args, ctx)
             if name == "staff_notice":
                 return await self._staff_notice(tid, args, ctx)
+            if name == "staff_poll":
+                return await self._staff_poll(tid, args, ctx)
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),

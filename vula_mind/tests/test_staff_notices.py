@@ -80,6 +80,11 @@ class _Q:
             if self.name == "vula_staff_notice_recipients" and any(
                     r["notice_id"] == row["notice_id"] and r["member_id"] == row["member_id"] for r in rows):
                 raise Exception("duplicate key value violates unique constraint")
+            if self.name == "vula_staff_poll_voters" and any(
+                    r["poll_id"] == row["poll_id"] and r["member_id"] == row["member_id"] for r in rows):
+                raise Exception("duplicate key value violates unique constraint")
+            if self.name == "vula_staff_polls":
+                row.setdefault("status", "open")       # the table's default
             for k in ("sent_at", "failed", "wamid", "delivered_at", "read_at", "acknowledged_at",
                       "reminded_at", "summary_sent_at", "send_at"):
                 row.setdefault(k, None)
@@ -283,7 +288,8 @@ def test_staff_notice_is_a_confirm_first_tool():
 def test_staff_templates_carry_a_got_it_button():
     from vula.commerce import wa_templates as wt
     names = {t["name"]: t for t in wt.staff_templates("digg-demo")}
-    assert set(names) == {"digg_demo_staff_notice", "digg_demo_staff_notice_image", "digg_demo_staff_day"}
+    assert set(names) == {"digg_demo_staff_notice", "digg_demo_staff_notice_image", "digg_demo_staff_day",
+                          "digg_demo_staff_poll_invite"}
     assert names["digg_demo_staff_notice"]["buttons"] == [{"type": "QUICK_REPLY", "text": "Got it ✅"}]
     assert names["digg_demo_staff_notice"]["category"] == "UTILITY"
     assert names["digg_demo_staff_notice_image"]["header_type"] == "IMAGE"
