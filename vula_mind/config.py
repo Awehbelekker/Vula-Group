@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # Per-call timeout for local Ollama calls — below Cloudflare's 100 s tunnel limit, so a
     # stuck local call fails fast (and callers can retry on cloud) instead of surfacing a 524.
     local_call_timeout_s: int = 60
+    # End-to-end limits for one WhatsApp reply (whatsapp._run_with_holding_message): at
+    # reply_deadline_s the person is told it's taking longer; at reply_hard_cap_s the turn is
+    # stopped and they're told honestly it didn't finish — never silence, never a 5-minute wait.
+    reply_deadline_s: int = 75
+    reply_hard_cap_s: int = 180
     # Hard limit for PyMuPDF text extraction, which runs in a child process
     # (vula/ingestion/pdf_extract.py) so a pathological PDF can't hang or kill a web worker.
     pdf_extract_timeout_s: int = 120

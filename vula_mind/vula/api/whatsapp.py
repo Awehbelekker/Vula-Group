@@ -279,6 +279,11 @@ def _run_bg(coro, *, label: str, track: Optional[dict] = None, turn: Optional[di
                                kind=track.get("kind"), payload=track.get("payload"))
         try:
             await coro
+        except ReplyAbandoned:
+            # Already told the person; mark it handled so it isn't re-driven and answered twice.
+            if track:
+                await _a.to_thread(_track_inbound, track.get("msg_id"), status="done", payload=None)
+            return
         except Exception as exc:  # noqa: BLE001
             logger.error("background handler %s failed: %s: %s", label, type(exc).__name__, exc)
             if track:
@@ -7281,6 +7286,12 @@ async def _send_invoice_document(
         return False
 
 
+class ReplyAbandoned(BaseException):
+    """A WhatsApp turn ran past settings.reply_hard_cap_s and was stopped; the person has already
+    been told. A BaseException on purpose: the callers' `except Exception` fall-throughs (owner
+    question → knowledge path, and so on) must not start a second, equally slow answer."""
+
+
 async def _run_with_holding_message(phone: str, tenant_id: str, coro, *, delay: float = 10.0):
     """Await `coro`, but if it hasn't finished within `delay` seconds, send a quick "still
     with you" holding message once and keep waiting for the real reply — never replaces it,
@@ -7292,7 +7303,12 @@ async def _run_with_holding_message(phone: str, tenant_id: str, coro, *, delay: 
 
     asyncio.shield keeps `coro` running even though the outer wait_for times out — this awaits
     the SAME task twice, never starts a second one, so the real work is never duplicated or
-    cancelled by a slow-but-legitimate turn."""
+    cancelled by a slow-but-legitimate turn.
+
+    End-to-end limits (20 Oct audit, go-live blocker 6 — a slip once took 279 s): at
+    settings.reply_deadline_s the person hears it's taking longer; at reply_hard_cap_s the turn
+    is cancelled, they're told it didn't finish, and ReplyAbandoned ends the handler. Only on
+    WhatsApp (a phone to tell); the dashboard chat keeps waiting."""
     import asyncio as _asyncio
     task = _asyncio.ensure_future(coro)
     try:
@@ -7302,7 +7318,33 @@ async def _run_with_holding_message(phone: str, tenant_id: str, coro, *, delay: 
             await _send_reply(phone, "Just checking that for you…", tenant_id)
         except Exception as exc:
             logger.debug("holding message send skipped: %s", exc)
+    if not phone:
         return await task
+    deadline = max(float(settings.reply_deadline_s or 0), delay)
+    hard_cap = max(float(settings.reply_hard_cap_s or 0), deadline)
+    try:
+        return await _asyncio.wait_for(_asyncio.shield(task), timeout=deadline - delay)
+    except _asyncio.TimeoutError:
+        try:
+            await _send_reply(phone, "This is taking longer than it should — I'm still on it and "
+                                     "will reply as soon as it's done.", tenant_id)
+        except Exception as exc:
+            logger.debug("deadline message send skipped: %s", exc)
+    try:
+        return await _asyncio.wait_for(task, timeout=hard_cap - deadline)   # cancels on timeout
+    except _asyncio.TimeoutError:
+        logger.error("reply abandoned after %ss for %s (tenant %s)", int(hard_cap), phone[-4:], tenant_id)
+        try:
+            from vula import turns as _turns
+            _turns.note("reply_abandoned", seconds=int(hard_cap))
+        except Exception:
+            pass
+        try:
+            await _send_reply(phone, "Sorry — I couldn't finish that one. Please send it again in a "
+                                     "moment, or ask for the team and someone will help.", tenant_id)
+        except Exception as exc:
+            logger.debug("abandon message send skipped: %s", exc)
+        raise ReplyAbandoned(f"turn exceeded {int(hard_cap)}s")
 
 
 # ─── Commerce ordering flow ───────────────────────────────────────────────────

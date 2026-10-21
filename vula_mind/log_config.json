@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "filters": {"below_error": {"()": "vula.log_streams.BelowError"}},
+  "formatters": {
+    "default": {"()": "uvicorn.logging.DefaultFormatter", "fmt": "%(levelprefix)s %(message)s", "use_colors": false},
+    "access": {"()": "uvicorn.logging.AccessFormatter",
+               "fmt": "%(levelprefix)s %(client_addr)s - \"%(request_line)s\" %(status_code)s", "use_colors": false}
+  },
+  "handlers": {
+    "out": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "default", "filters": ["below_error"]},
+    "err": {"class": "logging.StreamHandler", "stream": "ext://sys.stderr", "formatter": "default", "level": "ERROR"},
+    "access": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "access"}
+  },
+  "loggers": {
+    "uvicorn": {"handlers": ["out", "err"], "level": "INFO", "propagate": false},
+    "uvicorn.error": {"level": "INFO"},
+    "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": false}
+  }
+}
