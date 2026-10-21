@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     # Weekly customer-view guard (vula/kb_maintenance.weekly_guard, 2026-10-20): re-check once a
     # week that customers see only public documents; WhatsApp platform_support_phone if not.
     kb_customer_view_weekly: bool = True
+    # Tenants the retrieval_diag maintenance job covers (evals/retrieval_diag.py, 2026-10-21).
+    kb_diag_tenants: str = "gerflor,digg-demo,off-the-hook"
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     # Meta only allows FREE-FORM WhatsApp text within 24 hours of the person's last inbound
     # message. Everything proactive Vula sends — an order alert, a document notification, an

@@ -8,7 +8,8 @@ Supabase, whose keys live only on the server. They run here, on the server, two 
     started by setting a Railway variable, and its one-line summary read back from the logs;
   * POST /v1/master/kb-maintenance {"jobs": [...]} from a master login.
 
-Jobs: stats, exposure, backfill_preview, backfill_apply, mark_public, customer_view, retrieval_live.
+Jobs: stats, exposure, backfill_preview, backfill_apply, mark_public, customer_view, retrieval_live,
+retrieval_diag.
 
 mark_public (2026-10-17) opens up a REVIEWED list of documents to customers: KB_MARK_PUBLIC is
 JSON {tenant_id: [filename, ...]} (spaces and underscores match each other, case ignored). Each
@@ -29,7 +30,7 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view",
-        "retrieval_live")
+        "retrieval_live", "retrieval_diag")
 
 
 async def _stats() -> Dict[str, Any]:
@@ -227,11 +228,23 @@ async def _retrieval_live() -> Dict[str, Any]:
     return rep
 
 
+async def _retrieval_diag() -> Dict[str, Any]:
+    """Where retrieval loses the right document, per stage (evals/retrieval_diag.py). Tenants from
+    KB_DIAG_TENANTS. The stored report has the questions; the log line has counts only."""
+    from config import settings
+    from evals import retrieval_diag
+    tenants = [t.strip() for t in (settings.kb_diag_tenants or "").split(",") if t.strip()]
+    rep = await retrieval_diag.run(tenants)
+    rep["summary_by_tenant"] = {t: {k: v[k] for k in ("cases", "causes", "recall@4", "seeded_recall@4")}
+                                for t, v in rep["by_tenant"].items()}
+    return rep
+
+
 async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
     fn = {"stats": _stats, "exposure": _exposure, "backfill_preview": lambda: _backfill(False),
           "backfill_apply": lambda: _backfill(True), "mark_public": _mark_public,
           "customer_view": _customer_view,
-          "retrieval_live": _retrieval_live}[job]
+          "retrieval_live": _retrieval_live, "retrieval_diag": _retrieval_diag}[job]
     from vula.commerce import service
     db = service._client()
     row_id = None
