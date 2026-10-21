@@ -164,6 +164,40 @@ def test_parse_json_array_rejects_non_list_json():
     assert _parse_json_array('{"label": "not a list"}') is None
 
 
+# 2026-10-21: the weekly update got nothing from 7 of 7 sources — the model wrote numbers with
+# thousands commas, and the queued calls to the one local Ollama box timed out with an empty
+# error message.
+
+def test_parse_json_array_repairs_thousands_commas():
+    raw = ('[\n  {"label": "Cement", "unit": "bags", "low": 5, "high": 11, "notes": "5.5 bags/m³ for 1:2:3 mix"},\n'
+           '  {"label": "Bricks", "unit": "no", "low": 12,500, "high": 14,000, "notes": "52 bricks/m², R1,200 each"}\n]')
+    items = _parse_json_array(raw)
+    assert [i["low"] for i in items] == [5, 12500]
+    assert items[1]["high"] == 14000 and items[1]["notes"] == "52 bricks/m², R1,200 each"
+    assert _parse_json_array('[{"label": "x", "low":1,200,000}]') == [{"label": "x", "low": 1200000}]
+
+
+@pytest.mark.asyncio
+async def test_extract_timeout_is_named_in_the_error(monkeypatch):
+    import httpx
+    from vula.takeoff import construction_rates_scraper as crs
+
+    extractor = crs.RateExtractor()
+    monkeypatch.setattr(extractor.fetcher, "fetch", AsyncMock(return_value="Cement R100 per bag"))
+
+    async def timed_out(*a, **k):
+        raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", timed_out)
+    cat = await extractor.extract_rates("https://example.test", "Cashbuild", "prices")
+    assert cat.status == "parse_failed" and cat.error.startswith("ReadTimeout")
+
+
+def test_sources_run_one_at_a_time_with_a_long_timeout():
+    from vula.takeoff import construction_rates_scraper as crs
+    assert crs.SCRAPE_CONCURRENCY == 1 and crs.EXTRACT_TIMEOUT_S >= 180
+
+
 # ── run_full_update: failed sources are tracked, not silently absorbed ─────────
 
 @pytest.mark.asyncio
