@@ -689,10 +689,13 @@ _SYNTH_PROMPT = (
     "Excerpt:\n{text}")
 
 
-async def synthesize(tenant_id: str, per_doc: int = 5, max_docs: int = 40) -> List[Dict[str, Any]]:
+async def synthesize(tenant_id: str, per_doc: int = 5, max_docs: int = 40,
+                     skip_audiences: tuple = ()) -> List[Dict[str, Any]]:
     """Read-only: scroll the tenant's collection, pick up to `per_doc` chunks spread through
     each document, and have the local-first model write one question per chunk, labelled with
-    the source document. Output is UNREVIEWED (synthetic: true, reviewed: false)."""
+    the source document. Output is UNREVIEWED (synthetic: true, reviewed: false).
+    skip_audiences (2026-10-21, evals/retrieval_diag.py): leave out chunks tagged with these
+    audiences — ("owner",) keeps bank statements and the like out of a stored report."""
     import litellm
     from core.llm_router import resolve_generation_route
     from vula.ingestion.pipeline import QdrantStore
@@ -712,6 +715,8 @@ async def synthesize(tenant_id: str, per_doc: int = 5, max_docs: int = 40) -> Li
             for p in res.get("points", []):
                 pl = p.get("payload") or {}
                 if pl.get("source_type") in ("conversation", "learned") or len(pl.get("text") or "") < 200:
+                    continue
+                if pl.get("audience") in skip_audiences:
                     continue
                 by_doc.setdefault(str(pl.get("doc_id")), []).append(pl)
             offset = res.get("next_page_offset")
@@ -737,5 +742,5 @@ async def synthesize(tenant_id: str, per_doc: int = 5, max_docs: int = 40) -> Li
                           "tenant": tenant_id, "question": question, "type": "lookup",
                           "expected_docs": [c.get("filename")], "language": "en",
                           "synthetic": True, "reviewed": False,
-                          "source_chunk": c.get("chunk_id")})
+                          "source_chunk": c.get("chunk_id"), "source_chars": len(c.get("text") or "")})
     return cases

@@ -1,0 +1,48 @@
+"""evals/retrieval_diag.py — per-stage ranks and a cause for each miss, run offline against the
+in-memory Qdrant and the real ingest + query path (stub embedder, no LLM rewrites)."""
+import pytest
+
+from evals import retrieval as r
+from evals import retrieval_diag as d
+
+
+def test_classify_each_cause():
+    th = 0.3
+    assert d.classify({"prod_rank": 1}, th) == "found"
+    assert d.classify({}, th) == "not_retrievable"
+    assert d.classify({"vec_rank": 2, "vec_score": 0.21}, th) == "below_threshold"
+    assert d.classify({"vec_rank": 9, "vec_score": 0.5}, th) == "ranked_low"
+    assert d.classify({"kw_rank": 1, "vec_rank": 12}, th) == "keyword_only"
+    assert d.classify({"vec_rank": 3, "vec_score": 0.5}, th) == "lost_in_merge"
+
+
+def test_summarize_counts_and_threshold_sweep():
+    rows = [
+        {"tenant": "t", "cause": "found", "prod_rank": 1, "deep_rank": 1, "vec_rank": 1, "vec_score": 0.5,
+         "top_score": 0.5, "source_chars": 500, "synthetic": True},
+        {"tenant": "t", "cause": "below_threshold", "vec_rank": 2, "vec_score": 0.22, "deep_rank": None,
+         "top_score": 0.25, "source_chars": 2500, "synthetic": True},
+        {"tenant": "t", "cause": "error"},
+    ]
+    s = d.summarize(rows)
+    assert s["cases"] == 3 and s["errors"] == 1
+    assert s["causes"]["found"] == 1 and s["causes"]["below_threshold"] == 1
+    assert s["recall@4"] == 0.5
+    assert s["vector_recall@4_no_threshold"] == 1.0
+    assert s["vector_recall@4_by_threshold"]["0.2"] == 1.0
+    assert s["vector_recall@4_by_threshold"]["0.3"] == 0.5
+    assert s["recall@4_chunk_0-900"] == 1.0 and s["recall@4_chunk_2000-up"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_diagnose_runs_every_stage_offline():
+    case = next(c for c in r.load_cases()
+                if c["tenant"] in r.load_fixture() and c.get("expected_docs") and c["type"] != "unanswerable")
+    with r.offline():
+        await r.build_fixture()
+        row = await d.diagnose(case)
+    assert row["cause"] in d.CAUSES, row
+    for k in ("vec_rank", "kw_rank", "prod_rank", "deep_rank", "vec_score", "top_score", "threshold"):
+        assert k in row
+    if row["prod_rank"]:
+        assert row["cause"] == "found"
