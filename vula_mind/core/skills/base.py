@@ -448,16 +448,24 @@ def _amount(s: str) -> Optional[float]:
         return None
 
 
-def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tools: set) -> List[str]:
+def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tools: set, *,
+                      strict: bool = False, also_trusted: str = "") -> List[str]:
     """Any R-prefixed price stated in `answer` whose numeric value doesn't match (as a rounded
     float, so "92.0" and "92.00" agree) any number appearing anywhere in the combined text of
     `sources` whose tool name is in `grounding_tools`. Returns [] when none of those tools were
     even called this turn — nothing to check a structured-tool answer against, and nothing to
     falsely flag. Compares parsed amounts rather than raw digit substrings so a source number
-    doesn't have to appear character-for-character the way the model chose to format it."""
+    doesn't have to appear character-for-character the way the model chose to format it.
+
+    strict=True (customer replies, 2026-10-22): a turn with no lookup is no longer waved
+    through — "Hake is R180/kg" with nothing behind it was never checked. Every price must then
+    match a source or `also_trusted` (facts the business set, the customer's own words, what
+    Vula already said earlier in the chat)."""
     relevant_text = " ".join(s.get("text", "") for s in sources
                              if s.get("name") in grounding_tools and s.get("text"))
-    if not relevant_text:
+    if strict:
+        relevant_text = f"{relevant_text} {also_trusted or ''}".strip()
+    if not relevant_text and not (strict and _PRICE_RE.search(answer or "")):
         return []
     source_amounts = {a for a in (_amount(n) for n in _NUM_RE.findall(relevant_text)) if a is not None}
     bad = []

@@ -353,8 +353,15 @@ async def get_order_settings_ep(tenant_id: str):
 
 @router.put("/{tenant_id}/admin/order-settings")
 async def put_order_settings_ep(tenant_id: str, body: dict):
-    from vula.commerce.order_workflow import upsert_order_settings
-    return {"settings": upsert_order_settings(tenant_id, body or {})}
+    from vula.commerce.order_workflow import get_order_settings, upsert_order_settings
+    old_hours = get_order_settings(tenant_id).get("business_hours")
+    settings_row = upsert_order_settings(tenant_id, body or {})
+    if settings_row.get("business_hours") != old_hours:
+        # The business profile's hours line comes from these hours — keep its KB copy in step.
+        from vula.commerce import business_profile
+        from vula.commerce.background_tasks import run_background
+        run_background(tenant_id, "profile_hours", business_profile.refresh_documents(tenant_id))
+    return {"settings": settings_row}
 
 
 @router.get("/{tenant_id}/settings")

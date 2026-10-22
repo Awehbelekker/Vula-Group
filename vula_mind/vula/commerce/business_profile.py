@@ -103,9 +103,31 @@ def get_answers(tenant_id: str) -> Dict[str, str]:
         return {}
 
 
+def structured_hours(tenant_id: str) -> str:
+    """The opening hours set in Settings (commerce_order_settings.business_hours) as one line,
+    or "" when they aren't set."""
+    try:
+        from vula.commerce.hours import describe
+        from vula.commerce.order_workflow import get_order_settings
+        return describe(get_order_settings(tenant_id).get("business_hours"))
+    except Exception:
+        return ""
+
+
+def effective_answers(tenant_id: str, answers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """The answers with the hours taken from Settings when they're set there. 2026-10-22: the
+    free-text "hours" answer and the structured hours check_business_hours reads could disagree,
+    so a customer got one answer from the KB and another from the hours check. One source now."""
+    answers = dict(get_answers(tenant_id) if answers is None else answers)
+    hours = structured_hours(tenant_id)
+    if hours:
+        answers["hours"] = hours
+    return answers
+
+
 def status(tenant_id: str) -> Dict[str, Any]:
     qs = questions(_business_type(tenant_id))
-    answers = get_answers(tenant_id)
+    answers = effective_answers(tenant_id)
     missing = [q for q in qs if not (answers.get(q["key"]) or "").strip()]
     return {"questions": qs, "answers": answers, "missing": [q["key"] for q in missing],
             "answered": len(qs) - len(missing), "total": len(qs),
@@ -114,7 +136,7 @@ def status(tenant_id: str) -> Dict[str, Any]:
 
 def next_question(tenant_id: str, skipped: Optional[set] = None) -> Optional[Dict[str, str]]:
     skipped = skipped or set()
-    answers = get_answers(tenant_id)
+    answers = effective_answers(tenant_id)
     for q in questions(_business_type(tenant_id)):
         if not (answers.get(q["key"]) or "").strip() and q["key"] not in skipped:
             return q
@@ -168,11 +190,20 @@ async def save_answers(tenant_id: str, updates: Dict[str, str], by: str = "",
             log.warning("business profile save failed for %s: %s", tenant_id, exc2)
             return {"saved": False, "error": "Couldn't save — has migration 189 been applied?"}
     keys = set(row.get("public_keys") if "public_keys" in row else get_public_keys(tenant_id))
-    ingested = await _write_documents(tenant_id, answers, keys)
+    ingested = await _write_documents(tenant_id, effective_answers(tenant_id, answers), keys)
     out = {"saved": True, "ingested": ingested, **status(tenant_id)}
     if warning:
         out["warning"] = warning
     return out
+
+
+async def refresh_documents(tenant_id: str) -> bool:
+    """Re-write the profile documents from the stored answers — e.g. after the opening hours
+    change in Settings, so the customer KB never keeps the old hours."""
+    answers = effective_answers(tenant_id)
+    if not answers:
+        return True
+    return await _write_documents(tenant_id, answers, set(get_public_keys(tenant_id)))
 
 
 async def _write_documents(tenant_id: str, answers: Dict[str, str], public: set) -> bool:

@@ -94,6 +94,19 @@ def match_products(products: List[Dict[str, Any]], search: str) -> List[Dict[str
     return [p for _, _, p in scored]
 
 
+def _price_facts_text(tenant_id: str) -> str:
+    """The money facts the business set itself (delivery fee, free-delivery threshold, minimum
+    order) — the prompt states these as hard facts, so a reply quoting them is grounded even
+    when no tool ran that turn."""
+    try:
+        from vula.commerce.order_workflow import get_order_settings
+        cfg = get_order_settings(tenant_id) or {}
+    except Exception:
+        return ""
+    keys = ("delivery_fee_cents", "free_delivery_over_cents", "min_order_cents")
+    return " ".join(f"R{cfg[k] / 100:.2f}" for k in keys if cfg.get(k) is not None)
+
+
 def _tenant_has_bookings(tenant_id: str) -> bool:
     """True if this tenant has the bookings module enabled (gates the appointment tools)."""
     try:
@@ -1108,8 +1121,10 @@ class CommerceAssistantSkill(BaseSkill):
                                           tool_names=[t["function"]["name"] for t in TOOL_SPECS])
             if _repeats_last_reply(answer, inp.conversation_history or ""):
                 answer = REPEAT_REPLY
+            built_from_data = False
             if contentless(answer) and not _THANKS_RE.search(inp.question or ""):
                 answer = await self._cart_status_reply(ctx)
+                built_from_data = True       # cart prices read straight from the DB, not the model
             confidence = 0.8 if kb_context else 0.7
             # 2026-09-26: this skill quotes prices straight to paying customers from KB context
             # (the storefront price list) but, unlike commerce_admin.py, never checked a stated
@@ -1121,8 +1136,14 @@ class CommerceAssistantSkill(BaseSkill):
             # calamari?" (which mentioned the real R160/kg from the catch tool) was replaced
             # wholesale with "couldn't confirm the exact price". Tool results now count, and only
             # the sentence carrying an unconfirmed price is dropped — the rest of the answer stays.
+            # 2026-10-22: strict — a price stated with NO lookup this turn used to pass unchecked.
+            # Trusted besides the tools: the business's own money facts, the customer's words,
+            # and what Vula already told this customer earlier in the chat.
             grounding = {"kb"} | {t["function"]["name"] for t in TOOL_SPECS}
-            bad_prices = unverified_prices(answer, sources, grounding)
+            trusted = " ".join([_price_facts_text(inp.tenant_id), inp.question or "",
+                                inp.conversation_history or ""])
+            bad_prices = ([] if built_from_data else
+                          unverified_prices(answer, sources, grounding, strict=True, also_trusted=trusted))
             if bad_prices:
                 logger.warning("commerce_assistant unverified price(s) in answer, tenant=%s: %s",
                                inp.tenant_id, bad_prices)
