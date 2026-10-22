@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_BASE = settings.ollama_base
 LLM_MODEL   = settings.model_worker
+# The local Ollama box answers one prompt at a time, so sources run one after another and each
+# gets a generous timeout. 2026-10-21: three at once with a 60s timeout left the queued calls
+# timing out — 5 of 7 sources produced nothing that week.
+EXTRACT_TIMEOUT_S = 180.0
+SCRAPE_CONCURRENCY = 1
 DB_PATH     = settings.data_dir / "construction_rates.db"  # persistent volume, not ~/.vula
 QDRANT_BASE = settings.qdrant_base
 COLLECTION  = "vula_digg_rates"
@@ -154,8 +159,18 @@ def _parse_json_array(raw: str) -> Optional[list]:
     try:
         obj, _end = json.JSONDecoder().raw_decode(raw[start:])
     except json.JSONDecodeError:
-        return None
+        # 2026-10-21: the model wrote `"low": 12,500` — a thousands comma inside a bare number
+        # isn't JSON. Drop those separators and try once more.
+        fixed = _THOUSANDS_RE.sub(lambda m: m.group(1) + m.group(2).replace(",", ""), raw[start:])
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(fixed)
+        except json.JSONDecodeError:
+            return None
     return obj if isinstance(obj, list) else None
+
+
+# A bare number with thousands commas as an object value: `"low": 12,500,` (group 2 = "12,500").
+_THOUSANDS_RE = re.compile(r"(:\s*)(\d{1,3}(?:,\d{3})+)(?=\s*[,}\]])")
 
 
 # ─── LLM extractor ───────────────────────────────────────────────────────────
@@ -185,7 +200,7 @@ class RateExtractor:
             # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
             # (same ones llm_router uses) or this direct call is blocked at the edge.
             from core.llm_router import _ollama_headers
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=EXTRACT_TIMEOUT_S) as client:
                 resp = await client.post(
                     f"{OLLAMA_BASE}/api/generate",
                     headers=_ollama_headers() or None,
@@ -215,8 +230,10 @@ class RateExtractor:
                                     rates=_rates_from_items(items, source_name))
 
         except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Rate extraction failed for {source_name}: {e}")
-            return ScrapedCatalogue(source_name=source_name, source_url=url, status="parse_failed", error=str(e))
+            # type name too: a timeout's str() is empty, which logged "failed for X: " and nothing else.
+            reason = f"{type(e).__name__}: {e}".rstrip(": ")
+            logger.error(f"Rate extraction failed for {source_name}: {reason}")
+            return ScrapedCatalogue(source_name=source_name, source_url=url, status="parse_failed", error=reason)
 
 
 def _num(value) -> Optional[float]:
@@ -471,8 +488,8 @@ class ConstructionRatesScraper:
         all_rates = []
         sources_scraped = []
 
-        # Scrape all sources concurrently (with limit)
-        semaphore = asyncio.Semaphore(3)
+        # One source at a time — see SCRAPE_CONCURRENCY.
+        semaphore = asyncio.Semaphore(SCRAPE_CONCURRENCY)
 
         async def scrape_one(source: dict) -> ScrapedCatalogue:
             async with semaphore:
