@@ -27,7 +27,7 @@ async def test_inbox_reply_reports_undelivered_send():
          patch("vula.api.whatsapp._send_reply", AsyncMock(return_value=False)), \
          patch.object(commerce.service, "append_message", AsyncMock()) as append:
         with pytest.raises(HTTPException) as exc:
-            await commerce.admin_reply("t1", "s1", commerce.AgentReplyRequest(message="hi"))
+            await commerce.admin_reply("t1", "s1", commerce.AgentReplyRequest(message="hi"), MagicMock())
     assert exc.value.status_code == 502
     append.assert_not_awaited()   # never logged as sent
 

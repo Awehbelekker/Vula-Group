@@ -53,7 +53,9 @@ async def test_answering_releases_the_oldest_waiting_question(db):
     _asked(db, "pop_match", "txn-1", minutes_ago=5)
     with patch.object(wa, "_send_reply", AsyncMock(return_value=True)):
         await oq.ask_or_queue(TID, PHONE, "doc_project", "doc-a", "p", "First waiting")
-        await oq.ask_or_queue(TID, PHONE, "doc_project", "doc-b", "p", "Second waiting")
+        # (two waiting "which project?" questions go out as one list — test_project_filing_1023;
+        # a different kind behind it keeps the one-at-a-time release)
+        await oq.ask_or_queue(TID, PHONE, "approval", "appr-b", "p", "Second waiting")
     db["vula_filed_documents"] = [{"id": "doc-a", "tenant_id": TID, "fields": {"supplier": "STE"}}]
     db["vula_open_questions"][0]["status"] = "answered"
     from datetime import datetime, timezone

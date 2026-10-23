@@ -93,6 +93,30 @@ _FRUSTRATION_WORDS = re.compile(
 )
 
 
+# The customer asking for a person (2026-10-22, EZContact brief). The fallback reply even says
+# "reply *speak to someone*", yet only the model's ask_team tool acted on it — sometimes. Same
+# starter-list caveat as above: short, unambiguous phrases in the five languages the escalation
+# lists already cover; Setswana, Sepedi and Xitsonga wait for a native-speaker review.
+_WANTS_HUMAN = re.compile(
+    r"\b(speak|talk|chat)\s+(to|with)\s+(a\s+|an\s+|the\s+|your\s+)?(someone|somebody|person|"
+    r"human|real person|agent|consultant|manager|owner|staff|team member|people)\b"
+    r"|\b(real|actual|live)\s+(person|human|agent)\b|\bhuman\s+(please|agent)\b"
+    r"|\b(can|could)\s+(someone|somebody)\s+(please\s+)?(call|phone|contact|help)\s+me\b"
+    r"|\bcall me\s+(back|please)\b|\bi\s+(want|need)\s+(a\s+)?(person|human)\b"
+    r"|\bpraat met (iemand|'n mens|'n persoon|die eienaar)\b|\bkan iemand my (bel|help)\b"
+    r"|\bregte persoon\b"
+    r"|ukukhuluma no(muntu|mphathi)"                                          # isiZulu
+    r"|ukuthetha no(mntu|mphathi)"                                            # isiXhosa
+    r"|ho bua le motho",                                                      # Sesotho
+    re.IGNORECASE,
+)
+
+
+def wants_human(text: str) -> bool:
+    """True when the customer asks to speak to a person — a hand-off, whatever the bot says."""
+    return bool(_WANTS_HUMAN.search(text or ""))
+
+
 def customer_seems_frustrated(text: str) -> bool:
     """Cheap heuristic on the customer's own message — no LLM call needed. Catches explicit
     complaint words, shouting (mostly-caps with real content, not a short "OK"/order number),
@@ -440,17 +464,25 @@ def _same_question(a: str, b: str) -> bool:
     return len(ta & tb) / min(len(ta), len(tb)) >= 0.5
 
 
-def helper_prompt(row: dict, question: str, frustrated: bool = False, context: str = "") -> str:
+def helper_prompt(row: dict, question: str, frustrated: bool = False, context: str = "",
+                  reason: str = "") -> str:
     """What the helper is sent — one wording for the ask_team tool and the phrase detector.
-    `context` (customer_context) says who is asking and what they were doing."""
+    `context` (customer_context) says who is asking and what they were doing. `reason`
+    ("asked_for_person" / "struggling") says why Vula handed over."""
     q = (question or "").strip()
     ctx = f"\n\n{context.strip()}" if (context or "").strip() else ""
     if row.get("also_waiting_on"):
         return (f"❓ The same customer also asked:\n\n\"{q}\"\n\n(Still waiting on: "
                 f"\"{row['also_waiting_on'].strip()}\"){ctx}\n\nReply to this message with the answer "
                 f"to both — I'll send it to them and remember it.")
-    prefix = ("😠 This customer sounds frustrated — please prioritise this one.\n\n"
-              if frustrated else "❓ ")
+    if frustrated:
+        prefix = "😠 This customer sounds frustrated — please prioritise this one.\n\n"
+    elif reason == "asked_for_person":
+        prefix = "🙋 This customer asked to speak to a person.\n\n"
+    elif reason == "struggling":
+        prefix = "⚠️ I couldn't give this customer a good answer twice in a row.\n\n"
+    else:
+        prefix = "❓ "
     return (f"{prefix}A customer asked:\n\n\"{q}\"{ctx}\n\nReply to this message with the answer — "
             f"I'll send it to them and remember it.")
 

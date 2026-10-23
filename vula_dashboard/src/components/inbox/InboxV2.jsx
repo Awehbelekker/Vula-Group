@@ -25,7 +25,8 @@ export default function InboxV2({ tenantId }) {
     return convos.filter(c =>
       (!q || `${c.customer_name || ''} ${c.customer_phone || ''}`.toLowerCase().includes(q)) &&
       (!chips.includes('waiting') || waitingPhones.has(c.customer_phone)) &&
-      (!chips.includes('mine') || c.paused))
+      (!chips.includes('mine') || c.paused) &&
+      (!chips.includes('vula') || !c.paused))
   }, [convos, query, chips, waitingPhones])
 
   const toggle = (id) => setChips(cur => (cur.includes(id) ? cur.filter(c => c !== id) : [...cur, id]))
@@ -40,7 +41,8 @@ export default function InboxV2({ tenantId }) {
           <FilterBar query={query} onQuery={setQuery} placeholder="Search by name or number" label="Show"
             chips={[
               { id: 'waiting', label: 'Waiting on you', count: escalations.length },
-              { id: 'mine', label: 'You took over', count: convos.filter(c => c.paused).length },
+              { id: 'mine', label: 'A person is handling', count: convos.filter(c => c.paused).length },
+              { id: 'vula', label: 'Vula is handling', count: convos.filter(c => !c.paused).length },
             ]}
             selected={chips} onToggle={toggle} />
 
@@ -69,7 +71,8 @@ export default function InboxV2({ tenantId }) {
                     detail={`${c.last_role === 'assistant' ? 'Vula: ' : c.last_role === 'agent' ? 'You: ' : ''}${c.last_message || '—'}`}
                     trailing={<>
                       {waitingPhones.has(c.customer_phone) && <StatusChip tone="warm">Waiting</StatusChip>}
-                      {c.paused && <StatusChip tone="warn">You</StatusChip>}
+                      {c.paused && <StatusChip tone="warn">{c.paused_by || 'Person'}</StatusChip>}
+                      {!c.paused && c.assigned_to && <StatusChip>{c.assigned_to}</StatusChip>}
                       <span>{since(c.last_at)}</span>
                     </>}
                     onClick={() => setActive(c.session_id)} />
@@ -144,7 +147,7 @@ function ThreadV2({ tenantId, sessionId, onBack }) {
       </header>
 
       {paused && (
-        <p className="vin-paused" role="status">You've taken over — Vula is quiet. Replies below go straight to the customer on WhatsApp.</p>
+        <p className="vin-paused" role="status">{data?.paused_by ? `${data.paused_by} has taken over` : "A person has taken over"} — Vula is quiet. Replies below go straight to the customer on WhatsApp.</p>
       )}
 
       {/* on a phone: folded away so the messages get the screen */}

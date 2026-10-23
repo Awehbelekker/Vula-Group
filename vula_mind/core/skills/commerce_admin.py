@@ -377,12 +377,19 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "in the owner's words (one or two sentences, no greeting — the customer's "
                        "name is added). product = the product whose photo to use (optional). "
                        "test=true sends it only to the owner's own phone. Without confirm=true "
-                       "returns a preview with how many customers it reaches.",
+                       "returns a preview with how many customers it reaches. Call "
+                       "recent_promotions first and match the business's own tone and layout.",
         "parameters": {"type": "object", "properties": {
             "message": {"type": "string"}, "product": {"type": "string"},
             "audience": {"type": "string", "enum": ["all", "active_30d", "high_value"]},
             "test": {"type": "boolean"}, "confirm": {"type": "boolean"}},
             "required": ["message"]}}},
+    {"type": "function", "function": {
+        "name": "recent_promotions",
+        "description": "The business's own recent promotions (posts the team forwarded into "
+                       "this WhatsApp line), newest first. Call before writing a promotion's "
+                       "message, and match their tone, emoji and layout.",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "order_payment",
         "description": "Ask a customer to pay a deposit or the balance on an EXISTING order — "
@@ -1246,7 +1253,7 @@ _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_
 # Tools in the always-on set that only mean something to a business that sells products
 # (Off the Hook), never to a project business (DIGG) or a rep (Gerflor) — see tenant_profile.
 _SHOP_ONLY_TOOLS = {"recent_orders", "update_order_status", "create_manual_order", "order_payment",
-                    "picture_promotion",
+                    "picture_promotion", "recent_promotions",
                     "stock_status",
                     "update_stock", "receive_stock", "preview_broadcast", "sales_summary"}
 
@@ -1492,7 +1499,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "reimbursement_balance": "finances", "add_expense": "finances",
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
-    "order_payment": "orders", "picture_promotion": "broadcast",
+    "order_payment": "orders", "picture_promotion": "broadcast", "recent_promotions": "broadcast",
     "cost_sheet": "manufacturing", "add_material": "manufacturing", "receive_material": "manufacturing",
     "set_recipe": "manufacturing", "log_batch": "manufacturing", "undo_last_batch": "manufacturing",
     "costing_settings": "manufacturing", "price_material": "manufacturing",
@@ -2352,6 +2359,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "create_manual_order": return await self._create_manual_order(tid, args)
             if name == "order_payment":       return await self._order_payment(tid, args)
             if name == "picture_promotion":   return await self._picture_promotion(tid, args, ctx.get("phone"))
+            if name == "recent_promotions":   return self._recent_promotions(tid)
             if name in _MFG_TOOL_NAMES:       return await self._manufacturing(name, tid, args, ctx.get("phone"))
             if name == "create_automation_rule": return await self._create_automation_rule(tid, args.get("description", ""), bool(args.get("confirm")))
             if name == "list_discount_codes": return await self._list_discount_codes(tid)
@@ -2883,7 +2891,8 @@ class CommerceAdminSkill(BaseSkill):
             return {"preview": True, "new_voice": persona_prompt[:300],
                     "message": "Confirm to change how Vula sounds to customers "
                                "(call again with confirm=true)."}
-        service._client().table("vula_tenant_config").update({
+        db = service._client()
+        db.table("vula_tenant_config").update({
             "persona_prompt": persona_prompt,
             "persona_prompt_suggested": None,
             "persona_prompt_suggested_at": None,
@@ -2893,7 +2902,12 @@ class CommerceAdminSkill(BaseSkill):
             _tenants.invalidate(tid)
         except Exception:
             pass
-        return {"applied": True, "persona_prompt": persona_prompt}
+        back = (db.table("vula_tenant_config").select("persona_prompt").eq("tenant_id", tid)
+                .limit(1).execute().data or [{}])[0].get("persona_prompt") or ""
+        if back.strip() != persona_prompt:
+            return {"error": "The new voice didn't save — nothing changed. Please try again."}
+        return _checked({"applied": True, "persona_prompt": persona_prompt},
+                        "✅ Done — Vula now sounds like this to your customers.")
 
     async def _create_invoice(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         raw = args.get("line_items") or []
@@ -3479,6 +3493,23 @@ class CommerceAdminSkill(BaseSkill):
         except CostingError as exc:
             return {"error": str(exc)}
         return {"error": f"unknown costing tool {name}"}
+
+    def _recent_promotions(self, tid: str) -> Dict[str, Any]:
+        from vula.commerce import promotions
+        found = promotions.examples(tid)
+        if not found:
+            return {"examples": [], "note": "No promotions saved yet — the team can forward their "
+                                            "past posts into this WhatsApp line."}
+        out = {"examples": [fence(f"PROMOTION_{i}", t) for i, t in enumerate(found, 1)]}
+        try:
+            from vula.api.tenants import get_config
+            from vula.commerce.voice_profile import persona_part
+            style = persona_part((get_config(tid) or {}).get("persona_prompt") or "", "promotions")
+            if style:
+                out["style"] = style
+        except Exception:
+            pass
+        return out
 
     async def _picture_promotion(self, tid: str, args: Dict[str, Any], phone: Optional[str]) -> Dict[str, Any]:
         from vula.commerce import promo

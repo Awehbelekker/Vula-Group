@@ -7725,14 +7725,26 @@ class HandoffRequest(BaseModel):
     paused: bool
 
 
+async def _takeover_name(request: Request, tenant_id: str) -> Optional[str]:
+    """Who is taking over a chat — their team name, else their login email — for the inbox
+    list ("Thandi is handling this"). None when it can't be told."""
+    try:
+        from vula.api.tenant_auth import member_scope
+        scope = await member_scope(request.headers.get("authorization", ""), tenant_id) or {}
+        return (scope.get("member") or {}).get("name") or scope.get("email") or None
+    except Exception:
+        return None
+
+
 @router.post("/{tenant_id}/admin/conversations/{session_id}/handoff")
-async def admin_handoff(tenant_id: str, session_id: str, body: HandoffRequest):
+async def admin_handoff(tenant_id: str, session_id: str, body: HandoffRequest, request: Request):
     """Toggle human handoff on a session.
 
     paused=true  → bot goes quiet; human replies via the /reply endpoint.
     paused=false → bot resumes handling messages.
     """
-    updated = await service.set_session_paused(tenant_id, session_id, body.paused)
+    who = await _takeover_name(request, tenant_id) if body.paused else None
+    updated = await service.set_session_paused(tenant_id, session_id, body.paused, paused_by=who)
     if not updated:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"ok": True, "session_id": session_id, "paused": body.paused}
@@ -7743,7 +7755,7 @@ class AgentReplyRequest(BaseModel):
 
 
 @router.post("/{tenant_id}/admin/conversations/{session_id}/reply")
-async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest):
+async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest, request: Request):
     """Send a manual WhatsApp reply from the human agent and log it in the thread.
 
     Automatically takes over the session (sets paused=true) if not already paused,
@@ -7763,7 +7775,8 @@ async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest):
 
     # Auto-pause if not already — agent replied, so bot should stay quiet.
     if not thread.get("paused"):
-        await service.set_session_paused(tenant_id, session_id, True)
+        await service.set_session_paused(tenant_id, session_id, True,
+                                         paused_by=await _takeover_name(request, tenant_id))
 
     # Send via WhatsApp.
     try:

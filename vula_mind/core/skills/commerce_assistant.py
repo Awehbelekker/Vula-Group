@@ -154,7 +154,8 @@ _STOREFRONT_PERSONAS: Dict[str, Dict[str, str]] = {
                 "and check out",
         "highlight_tools": (
             "- On first contact or when asked what's good/fresh/special, call get_daily_catch "
-            "to show today's highlights before anything else.\n"
+            "to show today's highlights before anything else. When they ask what's on special "
+            "or about a promotion, also call current_specials.\n"
             "- When a customer mentions a dish, ingredient, or asks what to cook, call "
             "suggest_recipe — it returns a recipe AND shows which ingredients are in stock.\n"
             "- After suggesting a recipe, offer to add the available ingredients to their cart.\n"
@@ -174,7 +175,8 @@ _STOREFRONT_PERSONAS: Dict[str, Dict[str, str]] = {
                 "and colours, build their cart, and check out",
         "highlight_tools": (
             "- If a customer asks what's new, on special, or in a category, call list_products "
-            "to show REAL options — never invent an item that isn't in the catalogue.\n"
+            "to show REAL options — never invent an item that isn't in the catalogue. For "
+            "\"what's on special\" or a promotion, also call current_specials.\n"
         ),
     },
     "trades": {
@@ -352,6 +354,14 @@ _HOW_TO_ORDER_RE = re.compile(
     r"(?![^?.!]*\b(track|cancel|refund|return|change)\b)|"
     r"\bhow\s+(does|do)\s+(ordering|the\s+cart|this|it)\s+work\b",
     re.IGNORECASE)
+# A customer forwarded a post into the chat (WhatsApp's context.forwarded flag). 2026-10-23: the
+# model read a forwarded promotion as an order and added 2 × Hake Fillets.
+FORWARDED_NOTE = (
+    "\n\nTHIS MESSAGE WAS FORWARDED: the customer forwarded a post (often one of our own "
+    "promotions). Answer about it — call current_specials to see whether it's still current — "
+    "and ask what they'd like. Add nothing to the cart from a forwarded post's text."
+)
+
 HOW_TO_ORDER_REPLY = (
     "Easy — just tell me what you'd like and how much, e.g. \"2kg hake and 1kg prawns\". "
     "I'll add it to your cart and show you the total. Say \"view cart\" anytime to check it, "
@@ -656,6 +666,20 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "Return today's fresh catch highlights and any specials. Call this when a "
                 "customer asks what's fresh, what's good today, what the special is, or "
                 "when greeting and you want to proactively inspire them."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "current_specials",
+            "description": (
+                "The business's own promotions from the last 7 days, each with the date it was "
+                "posted. Call this when a customer asks what's on special, about a sale or a "
+                "promotion, or sends you a promotion. Mention the date (\"from the 21 Oct "
+                "promotion\"). Prices are left out on purpose — a promotion's price may be out "
+                "of date, so quote a price only from list_products."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -1080,6 +1104,7 @@ class CommerceAssistantSkill(BaseSkill):
             "booking_focused": _is_booking_focused(inp.tenant_id),
             "current_message": inp.question,
             "language": _expected_language(inp.metadata.get("preferred_language"), inp.question),
+            "forwarded": bool(inp.metadata.get("forwarded")),
         }
         kb_context, sources = (await self._retrieve_kb(inp) if needs_knowledge(inp.question)
                                else ("", []))
@@ -1107,6 +1132,9 @@ class CommerceAssistantSkill(BaseSkill):
         system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"),
                                          booking_focused=ctx["booking_focused"],
                                          customer_profile=profile)
+        if ctx["forwarded"]:
+            # 2026-10-23 (Off the Hook): a forwarded post put 2 × Hake Fillets in a cart.
+            system_msg += FORWARDED_NOTE
 
         try:
             # `sources` already holds this turn's KB chunks (from _retrieve_kb above) — passing
@@ -1263,7 +1291,8 @@ class CommerceAssistantSkill(BaseSkill):
         persona_block = ""
         try:
             from vula.api.tenants import get_config
-            persona = (get_config(tenant_id) or {}).get("persona_prompt")
+            from vula.commerce.voice_profile import persona_part
+            persona = persona_part((get_config(tenant_id) or {}).get("persona_prompt") or "", "chat")
             if persona:
                 persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
@@ -1668,6 +1697,8 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_resend_invoice(tid, phone, args)
         if name == "get_daily_catch":
             return await self._exec_get_daily_catch(tid)
+        if name == "current_specials":
+            return self._exec_current_specials(tid)
         if name == "check_delivery_area":
             return self._exec_check_delivery_area(tid, args)
         if name == "check_business_hours":
@@ -1954,6 +1985,10 @@ class CommerceAssistantSkill(BaseSkill):
         self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any],
         ctx: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        if ctx and ctx.get("forwarded"):
+            return {"status": "not_added",
+                    "instruction": "The customer forwarded a post — ask what they'd like; add "
+                                   "nothing yet."}
         name = (args.get("product") or "").strip()
         product = None
         if re.match(r"^[a-z0-9-]+$", name):
@@ -2186,6 +2221,14 @@ class CommerceAssistantSkill(BaseSkill):
                 "instruction_to_assistant": "The PDF was just sent as a separate WhatsApp "
                                             "document message — just confirm briefly, don't "
                                             "repeat the invoice details in your text reply."}
+
+    def _exec_current_specials(self, tenant_id: str) -> Dict[str, Any]:
+        from vula.commerce import promotions
+        text = promotions.for_customers(tenant_id)
+        if not text:
+            return {"specials": "", "message": "No promotions posted in the last 7 days."}
+        return {"specials": fence("BUSINESS_PROMOTIONS", text),
+                "note": "Prices are left out on purpose: quote prices only from list_products."}
 
     async def _exec_get_daily_catch(self, tenant_id: str) -> Dict[str, Any]:
         """Return products flagged as today's catch + any fresh fish in stock."""

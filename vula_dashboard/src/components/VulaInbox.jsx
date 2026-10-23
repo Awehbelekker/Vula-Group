@@ -62,7 +62,7 @@ function InboxV1({ tenantId }) {
                   {c.last_message || '—'}
                 </div>
               </div>
-              {c.paused && <span style={s.pausedBadge}>🧑 You</span>}
+              {c.paused && <span style={s.pausedBadge}>🧑 {c.paused_by || 'Person'}</span>}
             </button>
           ))}
         </div>
