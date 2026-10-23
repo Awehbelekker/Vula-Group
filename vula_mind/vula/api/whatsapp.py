@@ -1398,9 +1398,32 @@ async def _voice_the_relay(tenant_id: str, question: str, answer: str) -> str:
 _STOCK_WORD_RE = re.compile(r"\b(?:stock|in stock|available|availability|how many|price|cost)\b", re.I)
 
 
+# Consecutive weak replies per customer (2026-10-22): one shaky answer is normal, two in a row
+# means Vula is struggling and a person should step in. {(tenant, phone): (count, last_seen)}.
+_WEAK_STREAK: Dict[tuple, tuple] = {}
+_WEAK_CONF = 0.45          # commerce: 0.4 = a price dropped, 0.3 = wrong maths, 0.45 = fallback
+_WEAK_TTL_S = 1800.0
+
+
+def _weak_streak(tenant_id: str, phone: str, confidence: Optional[float]) -> int:
+    """Count this reply into the customer's run of weak replies; returns the run length."""
+    key = (tenant_id, phone)
+    now = time.monotonic()
+    if confidence is None or confidence > _WEAK_CONF:
+        _WEAK_STREAK.pop(key, None)
+        return 0
+    count, seen = _WEAK_STREAK.get(key, (0, 0.0))
+    count = count + 1 if now - seen < _WEAK_TTL_S else 1
+    if len(_WEAK_STREAK) > 5000:
+        _WEAK_STREAK.clear()
+    _WEAK_STREAK[key] = (count, now)
+    return count
+
+
 async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
                                     reply: str, confidence: Optional[float] = None,
-                                    caller_role: Optional[str] = None) -> str:
+                                    caller_role: Optional[str] = None,
+                                    streak_confidence: Optional[float] = None) -> str:
     """If `reply` shows the agent couldn't answer, reuse a learned answer, else ask a
     human helper on WhatsApp and hold the customer with a friendly note.
 
@@ -1419,6 +1442,25 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
     """
     try:
         from vula import escalation as esc
+        # 2026-10-22: a customer asking for a person always reaches one — before any stored
+        # answer, and whatever the bot's own reply says.
+        if not _is_insider(caller_role) and esc.wants_human(text):
+            _WEAK_STREAK.pop((tenant_id, phone), None)
+            row = esc.create_escalation(tenant_id, phone, text)
+            if row:
+                if not row.get("deduped"):
+                    await _send_reply(
+                        row["helper_phone"],
+                        esc.helper_prompt(row, text, esc.customer_seems_frustrated(text),
+                                          await esc.customer_context(tenant_id, phone, exclude=text),
+                                          reason="asked_for_person"),
+                        tenant_id=tenant_id,
+                    )
+                return ("Sure — I've asked someone from the team to get back to you here. "
+                        "They'll reply as soon as they can. 🙏")
+        weak_run = (0 if _is_insider(caller_role) else
+                    _weak_streak(tenant_id, phone,
+                                 streak_confidence if streak_confidence is not None else confidence))
         # 2026-09-30: an owner-approved answer is used whenever the question matches — not only
         # when the fresh reply admits it doesn't know. A confidently WRONG answer the owner
         # corrected used to be regenerated next time, because this lookup only ran on
@@ -1429,7 +1471,8 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             learned = await esc.find_learned_answer(tenant_id, text)
             if learned:
                 return learned
-        if not esc.should_escalate(reply, confidence, customer_text=text):
+        struggling = weak_run >= 2
+        if not struggling and not esc.should_escalate(reply, confidence, customer_text=text):
             return reply
         learned = await esc.find_learned_answer(tenant_id, text)
         if learned:
@@ -1440,6 +1483,7 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             return reply
         row = esc.create_escalation(tenant_id, phone, text)
         if row:
+            _WEAK_STREAK.pop((tenant_id, phone), None)
             # Flag it to the helper when the customer's OWN message reads frustrated — a
             # confidently-wrong-or-unhelpful reply to an upset customer used to never surface
             # this to staff at all, since escalation only looked at the bot's own confidence.
@@ -1447,7 +1491,8 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
                 await _send_reply(
                     row["helper_phone"],
                     esc.helper_prompt(row, text, esc.customer_seems_frustrated(text),
-                                      await esc.customer_context(tenant_id, phone, exclude=text)),
+                                      await esc.customer_context(tenant_id, phone, exclude=text),
+                                      reason="struggling" if struggling else ""),
                     tenant_id=tenant_id,
                 )
             return "Thanks for your question! Let me check with the team and get right back to you. 🙏"
@@ -8477,7 +8522,8 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     # question outside the catalog — delivery areas, custom orders, opening hours it
     # doesn't know), ask the tenant's human helper on WhatsApp and hold the customer
     # with a friendly note, instead of guessing. Same loop as the knowledge path.
-    reply = await _maybe_escalate_and_learn(tenant_id, phone, text, output.answer)
+    reply = await _maybe_escalate_and_learn(tenant_id, phone, text, output.answer,
+                                            streak_confidence=output.confidence)
 
     # After-hours banner (migration 158, pre-go-live brief "polish" item) — once per phone per
     # _local_media_claim window (4h: long enough not to repeat every message in one

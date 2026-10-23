@@ -1373,11 +1373,15 @@ async def append_message(tenant_id: str, session_id: str, role: str, content: st
         pass
 
 
-async def set_session_paused(tenant_id: str, session_id: str, paused: bool) -> dict:
-    """Toggle the human-handoff flag on a session. Returns the updated row."""
+async def set_session_paused(tenant_id: str, session_id: str, paused: bool,
+                             paused_by: Optional[str] = None) -> dict:
+    """Toggle the human-handoff flag on a session. Returns the updated row. `paused_by` is who
+    took over (shown in the inbox list) — before 2026-10-22 it was never written."""
     update: dict = {"paused": paused, "updated_at": _now()}
     if paused:
         update["paused_at"] = _now()
+        if paused_by:
+            update["paused_by"] = paused_by[:120]
     else:
         update["paused_by"] = None
         update["paused_at"] = None
@@ -1419,7 +1423,7 @@ async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
     try:
         result = (
             _client().table("commerce_conversation_sessions")
-            .select(base + ",assigned_to,agent_note,tags")
+            .select(base + ",assigned_to,agent_note,tags,paused_by")
             .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
         )
     except Exception:
@@ -1458,6 +1462,7 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
         "customer": session.get("customer_name") or session.get("customer_phone") or session.get("session_key"),
         "phone": session.get("customer_phone") or session.get("session_key"),
         "paused": bool(session.get("paused")),
+        "paused_by": session.get("paused_by"),
         "assigned_to": session.get("assigned_to"),
         "agent_note": session.get("agent_note"),
         "tags": session.get("tags") or [],
