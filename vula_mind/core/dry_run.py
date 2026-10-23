@@ -31,11 +31,13 @@ READ_ONLY = frozenset({
     "list_storefront_pages", "list_subscriptions", "list_suppliers", "lookup_business_info",
     "find_product_document",
     "outstanding_invoices", "preview_broadcast", "price_advice", "project_profit", "recent_orders",
+    "recent_promotions",
     "tax_estimate", "vat_position", "tax_calendar", "cost_sheet",
     "reimbursement_balance", "reorder_suggestions", "sales_summary", "stock_status",
     "view_call_sheet",
     # commerce_assistant
-    "check_business_hours", "check_delivery_area", "get_daily_catch", "list_availability",
+    "check_business_hours", "check_delivery_area", "current_specials", "get_daily_catch",
+    "list_availability",
     "list_my_subscriptions", "list_products", "research_product", "review_order",
     "suggest_recipe", "track_order", "view_cart",
     # email_admin / finance_admin / calculations / clickup / drives / mail

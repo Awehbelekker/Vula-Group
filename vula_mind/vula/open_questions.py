@@ -34,6 +34,7 @@ TTL = {
     "staff_poll": timedelta(days=14),
     "doc_project_list": timedelta(days=7),
     "new_project": timedelta(days=1),
+    "promo_scope": timedelta(days=1),
     "new_project_name": timedelta(hours=6),
 }
 # At most this many documents in one "still need a project" list; the rest wait for the next.

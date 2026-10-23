@@ -98,6 +98,9 @@ _ROUTE_TTL = 120.0
 # Last agent confidence for the current request (set in _rag_reply, read for escalation).
 import contextvars as _contextvars
 _LAST_CONF = _contextvars.ContextVar("vula_last_conf", default=1.0)
+# The customer forwarded this message (WhatsApp's context.forwarded flag) — read by
+# _run_commerce_assistant so a forwarded post never fills a cart.
+_FORWARDED = _contextvars.ContextVar("vula_wa_forwarded", default=False)
 
 
 # WhatsApp's own business-notification account ("WhatsApp Business", +1 646 589 4168) messages a
@@ -214,6 +217,122 @@ async def verify_webhook(
 # ─── Inbound message handler ─────────────────────────────────────────────────
 
 _bg_tasks: set = set()
+
+# One message at a time per (tenant, sender) on a shop line. 2026-10-23: Ian forwarded 20 posts in
+# under a minute; all 20 ran at once on the local model and each took 135–170 s instead of ~10 s.
+# [lock, holders+waiters]; the entry is dropped when nobody holds or waits on it.
+_SENDER_LOCKS: Dict[tuple, list] = {}
+
+
+async def _one_at_a_time(tenant_id: Optional[str], phone: str, coro, *, forwarded: bool = False) -> None:
+    import asyncio as _a
+    key = (tenant_id or "", phone)
+    entry = _SENDER_LOCKS.get(key)
+    if entry is None:
+        entry = _SENDER_LOCKS[key] = [_a.Lock(), 0]
+    entry[1] += 1
+    try:
+        async with entry[0]:
+            token = _FORWARDED.set(forwarded)
+            try:
+                await coro
+            finally:
+                _FORWARDED.reset(token)
+    finally:
+        entry[1] -= 1
+        if entry[1] <= 0 and _SENDER_LOCKS.get(key) is entry:
+            _SENDER_LOCKS.pop(key, None)
+
+
+# Promotions the team forwards into a shop line (vula/commerce/promotions.py, migration 220):
+# saved without a model, then ONE acknowledgement per burst, sent once the forwards stop.
+_PROMO_ACK_DELAY_S = 20.0
+_PROMO_BURSTS: Dict[tuple, dict] = {}
+
+
+def _forwarded_flag(msg: dict) -> bool:
+    ctx = msg.get("context") or {}
+    return bool(ctx.get("forwarded") or ctx.get("frequently_forwarded"))
+
+
+def _promo_burst_open(tenant_id: str, phone: str) -> dict:
+    return _PROMO_BURSTS.setdefault((tenant_id, phone), {
+        "ids": [], "dupes": 0, "skipped": 0, "failed": 0, "task": None})
+
+
+async def _save_forwarded_promo(tenant_id: str, phone: str, body: str,
+                                media_id: Optional[str] = None, mime: Optional[str] = None) -> None:
+    import asyncio as _a
+    from vula.commerce import promotions
+    b = _promo_burst_open(tenant_id, phone)
+    if (body or "").strip():
+        row = await _a.to_thread(promotions.save, tenant_id, body, media_id, mime, phone)
+        if row is None:
+            b["failed"] += 1
+        elif row.get("duplicate"):
+            b["dupes"] += 1
+        else:
+            b["ids"].append(row["id"])
+    else:
+        b["skipped"] += 1      # a picture with no words — nothing to keep
+    if b["task"] is not None:
+        b["task"].cancel()
+    b["task"] = _a.create_task(_promo_burst_ack(tenant_id, phone))
+
+
+def _promo_ack_text(b: dict) -> str:
+    n, d, k, f = len(b["ids"]), b["dupes"], b["skipped"], b["failed"]
+    parts = []
+    if n:
+        parts.append(f"📣 Saved {n} promotion{'s' if n != 1 else ''} — I'll use them as examples "
+                     "when you ask me to write a promotion, and to answer \"what's on special\" "
+                     "for the next 7 days.")
+    if d:
+        parts.append(f"{d} {'was' if d == 1 else 'were'} already saved.")
+    if k:
+        parts.append(f"{k} picture{'s' if k != 1 else ''} had no text, so there was nothing to keep.")
+    if f:
+        parts.append(f"I couldn't save {f} — please send {'it' if f == 1 else 'them'} again later.")
+    text = " ".join(parts) or "📣 Nothing new to save."
+    if n:
+        text += ("\n\nIf these are old posts, reply *examples only* and customers won't be shown "
+                 "them. Reply *undo* to remove them.")
+    return text
+
+
+async def _promo_burst_ack(tenant_id: str, phone: str) -> None:
+    import asyncio as _a
+    await _a.sleep(_PROMO_ACK_DELAY_S)
+    b = _PROMO_BURSTS.pop((tenant_id, phone), None)
+    if not b:
+        return
+    if b["ids"]:
+        from vula import open_questions as oq
+        oq.ask(tenant_id, phone, "promo_scope", ",".join(b["ids"]), prompt="Promotions saved")
+    await _send_reply(phone, _promo_ack_text(b), tenant_id)
+
+
+_PROMO_EXAMPLES_RE = re.compile(r"^\s*(?:examples?\s*only|just\s+examples?|old\s+posts?|(?:they'?re|these\s+are)\s+old)\b", re.I)
+_PROMO_UNDO_RE = re.compile(r"^\s*(?:undo|remove\s+them|delete\s+them|not\s+promotions?)\b", re.I)
+
+
+async def _answer_promo_scope(tenant_id: str, phone: str, text: str, q: dict) -> bool:
+    from vula import open_questions as oq
+    from vula.commerce import promotions
+    ids = [i for i in (q.get("ref_id") or "").split(",") if i]
+    if _PROMO_EXAMPLES_RE.match(text or ""):
+        n = promotions.set_source(tenant_id, ids, "example")
+        reply = (f"Done — {n} kept as examples only. Customers won't be shown them."
+                 if n else "I couldn't change them just now — please try again.")
+    elif _PROMO_UNDO_RE.match(text or ""):
+        n = promotions.set_source(tenant_id, ids, "removed")
+        reply = (f"Done — removed {n}. I won't use them." if n
+                 else "I couldn't remove them just now — please try again.")
+    else:
+        return False
+    oq.close(q["id"])
+    await _send_reply(phone, reply, tenant_id=tenant_id)
+    return True
 
 
 def _durable_dedup_claim(msg_id: str) -> bool:
@@ -513,6 +632,27 @@ async def receive_message(
                     _asyncio.create_task(_mark_read_and_typing(msg_id, route_tenant))
 
                 try:
+                    # A forwarded post on a shop line (WhatsApp's context.forwarded flag). From the
+                    # team it's a promotion to keep, not a chat: saved without a model, no customer
+                    # reply. From a customer it's answered, but never turned into a cart.
+                    fwd_customer = False
+                    if (_forwarded_flag(msg) and route_mode == "commerce" and route_tenant and phone
+                            and msg_type in ("text", "image", "video")):
+                        _media = msg.get(msg_type) or {}
+                        _body = (_media.get("body") if msg_type == "text" else _media.get("caption")) or ""
+                        if _is_team(route_tenant, phone):
+                            if _body.strip() or (route_tenant, phone) in _PROMO_BURSTS:
+                                _promo_burst_open(route_tenant, phone)
+                                _run_bg(_save_forwarded_promo(
+                                    route_tenant, phone, _body,
+                                    None if msg_type == "text" else _media.get("id"),
+                                    None if msg_type == "text" else _media.get("mime_type")),
+                                    label="forwarded_promo", turn={
+                                        "tenant_id": route_tenant, "phone": phone, "kind": "forwarded",
+                                        "text": _body[:500], "wamid": msg_id})
+                                continue
+                        else:
+                            fwd_customer = True
                     if msg_type == "button":
                         # A template's quick-reply tap ("Got it ✅" on a staff notice) — handled as
                         # the words on the button, like the person had typed them.
@@ -542,7 +682,10 @@ async def receive_message(
                                 pass  # tap-to-pay "PAY <token>" / typed tip or amount — handled
                             elif route_mode == "commerce":
                                 # Number is a shop line → ordering flow
-                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message",
+                                _run_bg(_one_at_a_time(route_tenant, phone,
+                                                       _handle_commerce_message(phone, text, msg_id, route_tenant),
+                                                       forwarded=fwd_customer),
+                                        label="commerce_message",
                                         track=_text_track(msg_id, route_tenant, phone, text, route_mode))
                             elif route_mode == "knowledge":
                                 # Number is a tenant's assistant line → that tenant's model
@@ -697,10 +840,14 @@ async def receive_message(
                         caption = media.get("caption", "")
                         mime_type = media.get("mime_type", "image/jpeg")
                         if phone and media_id:
-                            _run_bg(_handle_image_or_video(
+                            _media_coro = _handle_image_or_video(
                                 phone, msg_type, media_id, caption, mime_type, msg_id,
                                 route_mode, route_tenant, media.get("sha256") or None,
-                            ), label="image_video", turn={
+                            )
+                            if route_mode == "commerce":
+                                _media_coro = _one_at_a_time(route_tenant, phone, _media_coro,
+                                                             forwarded=fwd_customer)
+                            _run_bg(_media_coro, label="image_video", turn={
                                 "tenant_id": route_tenant, "phone": phone, "kind": msg_type,
                                 "text": caption, "wamid": msg_id})
                 except Exception as _dispatch_exc:
@@ -3461,6 +3608,8 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
         return True
     if kind in ("new_project", "new_project_name"):
         return await _answer_new_project_question(tenant_id, phone, text, q)
+    if kind == "promo_scope":
+        return await _answer_promo_scope(tenant_id, phone, text, q)
     if kind == "doc_project_list":
         return await _answer_doc_project_list(tenant_id, phone, text, q)
     if kind == "doc_project":
@@ -8756,7 +8905,8 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
                 tenant_id=tenant_id,
                 conversation_history=history,
                 metadata={"session_id": phone, "customer_phone": phone,
-                          "preferred_language": preferred_language},
+                          "preferred_language": preferred_language,
+                          "forwarded": _FORWARDED.get()},
             )
         ),
     )
