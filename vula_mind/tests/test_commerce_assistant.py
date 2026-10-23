@@ -297,7 +297,9 @@ async def test_run_keeps_answer_when_kb_price_is_verified():
 
 
 @pytest.mark.asyncio
-async def test_run_does_not_flag_a_price_with_no_kb_context_at_all():
+async def test_run_drops_a_price_stated_with_no_lookup_at_all():
+    # 2026-10-22: this used to assert the price went through — a turn with no KB and no tool
+    # call wasn't checked at all. A customer price now needs a lookup behind it.
     skill = CommerceAssistantSkill()
     inp = SkillInput(question="what's the snoek price?", tenant_id=TENANT, metadata=CTX)
     with (
@@ -305,7 +307,7 @@ async def test_run_does_not_flag_a_price_with_no_kb_context_at_all():
         patch.object(skill, "_agent_loop", new=AsyncMock(return_value="Snoek is R185.00 per kg.")),
     ):
         out = await skill.run(inp)
-    assert "R185.00" in out.answer
+    assert "R185.00" not in out.answer and "ask me and I'll check" in out.answer
 
 
 @pytest.mark.asyncio

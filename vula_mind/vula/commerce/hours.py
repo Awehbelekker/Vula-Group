@@ -62,3 +62,33 @@ def hours_verdict(business_hours: Optional[dict], now: Optional[datetime] = None
         label = {0: "today", 1: "tomorrow"}.get(offset, d.strftime("%A"))
         return {"open": False, "today": today, "next_open": {"day": label, "time": cfg["open"]}}
     return {"open": False, "today": today, "next_open": None}
+
+
+_DAY_NAMES = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat",
+              "sun": "Sun"}
+
+
+def describe(business_hours: Optional[dict]) -> str:
+    """The week in one line — "Mon–Fri 08:00–17:00 · Sat 09:00–13:00 · Sun closed" — or "" when
+    hours aren't set. 2026-10-22: the business profile's free-text "hours" answer could disagree
+    with these structured hours; the profile now shows this line instead when they're set."""
+    if not business_hours:
+        return ""
+
+    def slot(day: str) -> str:
+        cfg = business_hours.get(day) or {}
+        o, c = _parse_hm(cfg.get("open")), _parse_hm(cfg.get("close"))
+        return f"{o[0]:02d}:{o[1]:02d}–{c[0]:02d}:{c[1]:02d}" if o and c else "closed"
+
+    runs: list[list] = []          # [first_day, last_day, slot]
+    for day in _DAY_KEYS:
+        s = slot(day)
+        if runs and runs[-1][2] == s:
+            runs[-1][1] = day
+        else:
+            runs.append([day, day, s])
+    parts = []
+    for first, last, s in runs:
+        days = _DAY_NAMES[first] if first == last else f"{_DAY_NAMES[first]}–{_DAY_NAMES[last]}"
+        parts.append(f"{days} {s}")
+    return " · ".join(parts)
