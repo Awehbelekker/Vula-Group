@@ -695,6 +695,32 @@ def project_question(tenant_id: str, doc: dict) -> str:
     return head + q
 
 
+def project_list_message(tenant_id: str, docs: list) -> str:
+    """Several documents waiting on "which project?" in one message, numbered (2026-10-23, DIGG:
+    eleven separate questions over three days reached Judy one at a time and sat unanswered).
+    Answers are read by whatsapp._answer_doc_project_list."""
+    ex = project_examples(tenant_id)
+    lines = [f"📂 *{len(docs)} documents still need a project:*"]
+    for i, doc in enumerate(docs, 1):
+        f = doc.get("fields") or {}
+        what = " — ".join(x for x in ((f.get("supplier") or "").strip(),
+                                       _money(f.get("total_cents"))) if x)
+        guess = ""
+        try:
+            from vula.integrations.project_resolver import resolve
+            r = resolve(tenant_id, f, f"{doc.get('filename') or ''} {doc.get('summary') or ''}") or {}
+            if r.get("project"):
+                guess = f" → *{r['project']}*?"
+        except Exception as exc:
+            logger.debug("project suggestion skipped: %s", exc)
+        name = (doc.get("filename") or "Document")[:60]
+        lines.append(f"{i}. {name}" + (f" ({what})" if what else "") + guess)
+    example = ex[0] if ex else "Belladonna"
+    lines.append(f"\nReply with the number and the project, one per line — e.g. *1 {example}*, "
+                 f"*2-3 {example}* or *4 none*. A project I don't know yet, I'll offer to add.")
+    return "\n".join(lines)
+
+
 def mark_asked(tenant_id: str, doc: dict, phone: str) -> None:
     """Remember who was asked about `doc` and when, so their reply files THIS document — not
     whichever pending one happens to be newest."""

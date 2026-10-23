@@ -3107,38 +3107,179 @@ def _batch_project_for(tenant_id: str, phone: str) -> Optional[str]:
     return None
 
 
+# "Please log in Atlantic Paarden Island" / "file it under Belladonna" / "save this to HPC" — a
+# filing word, at most "it/this/the invoice", then the project. 2026-10-23, DIGG: Ian sent an
+# invoice then "Please log in Atlantic Paarden Island"; only "both/all of them" was understood,
+# so it went to web search ("I couldn't find any information about Atlantic Paarden Island").
+_FILE_UNDER_RE = re.compile(
+    r"^(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?"
+    r"(?P<verb>save|file|put|allocate|assign|book|move|log|add|charge|keep)\s+"
+    r"(?:(?:it|this|that|this\s+one|that\s+one|the\s+(?:invoice|slip|receipt|bill|doc|document|"
+    r"quote|pdf|photo|pic|file|one)s?)\s+)?"
+    r"(?:under|to|for|on|in|into|against)\s+(?:the\s+)?(?:project\s+|site\s+|job\s+)?"
+    r"(?P<name>[^?]+?)\s*[.!]*$",
+    re.IGNORECASE)
+# "It's for a new project we started" / "new project called Hillside".
+_NEW_PROJECT_RE = re.compile(
+    r"\bnew\s+(?:project|job|site)\b(?:\s+(?:called|named|is|:)\s*(?P<name>[^.?!]{2,60}))?",
+    re.IGNORECASE)
+
+
+def _is_team(tenant_id: str, phone: str) -> bool:
+    """A member of this business's team (never a customer)."""
+    try:
+        from vula.integrations.notify import team_member_for_phone
+        if team_member_for_phone(tenant_id, phone):
+            return True
+    except Exception:
+        pass
+    try:
+        return _is_tenant_owner(tenant_id, phone)
+    except Exception:
+        return False
+
+
+def _recent_upload(tenant_id: str, phone: str) -> dict:
+    """What this person sent in the last 30 minutes: {"docs": filed rows, "sent": True when a
+    document or photo came in at all — even one that failed to read, so it has no row}."""
+    from datetime import datetime, timedelta, timezone
+    from vula.commerce import service
+    digits = _phone_digits(phone)
+    since = (datetime.now(timezone.utc) - timedelta(seconds=_BATCH_WINDOW_S)).isoformat()
+    out = {"docs": [], "sent": False}
+    db = service._client()
+    try:
+        out["docs"] = (db.table("vula_filed_documents").select("id")
+                       .eq("tenant_id", tenant_id).in_("filed_by", list({phone, digits}))
+                       .gte("created_at", since).execute().data or [])
+    except Exception:
+        pass
+    try:
+        out["sent"] = bool(out["docs"]) or bool(
+            db.table("vula_turns").select("id").eq("tenant_id", tenant_id)
+            .in_("phone", list({phone, digits})).in_("kind", ["document", "image"])
+            .gte("started_at", since).limit(1).execute().data)
+    except Exception:
+        out["sent"] = bool(out["docs"])
+    return out
+
+
+def _clean_project_name(name: str) -> str:
+    name = re.sub(r"^(?:to|into|in|under|for|on)\s+", "", (name or "").strip(" '\"*_"), flags=re.I)
+    return re.sub(r"\s+", " ", name).strip(" .!'\"*_")
+
+
+async def _offer_new_project(tenant_id: str, phone: str, name: str, ref: str = "recent") -> bool:
+    """No project by that name: ask before adding it (a project is a new record — the person
+    confirms). `ref` is "recent" (what they've just sent) or comma-joined document ids."""
+    name = _clean_project_name(name)
+    if not name or len(name) > 60 or len(name.split()) > 6:
+        return False
+    from vula import open_questions as oq
+    oq.ask(tenant_id, phone, "new_project", ref, f"New project: {name}")
+    await _send_reply(phone, (
+        f"There's no project called *{name}* yet. Reply *yes* to add it — I'll file what you've "
+        f"sent there — or send the right project name."), tenant_id=tenant_id)
+    return True
+
+
+def _create_project(tenant_id: str, name: str) -> Optional[str]:
+    """Add `name` to the project register (unless it's already there) and read it back."""
+    from vula.commerce import service
+    key = service.project_key(name)
+    for r in service.registered_projects(tenant_id):
+        if key in (service.project_key(r.get("name")),
+                   *(service.project_key(a) for a in r.get("aliases") or [])):
+            return r["name"]
+    db = service._client()
+    try:
+        db.table("vula_projects").insert({"tenant_id": tenant_id, "name": name,
+                                          "status": "active"}).execute()
+        rows = (db.table("vula_projects").select("name").eq("tenant_id", tenant_id)
+                .eq("name", name).limit(1).execute().data or [])
+        return rows[0]["name"] if rows else None
+    except Exception as exc:
+        logger.warning("add project %r failed for %s: %s", name, tenant_id, exc)
+        return None
+
+
+async def _answer_new_project_mention(tenant_id: str, phone: str, text: str) -> bool:
+    """ "It's for a new project we started" right after sending something → ask its name (or,
+    with "new project called X", offer to add X). Team only, and only with something to file."""
+    t = (text or "").strip()
+    m = _NEW_PROJECT_RE.search(t)
+    if not m or len(t.split()) > 15 or t.endswith("?") or not _is_team(tenant_id, phone):
+        return False
+    from vula import open_questions as oq
+    pending_q = any(q.get("kind") in ("doc_project", "doc_project_list")
+                    for q in oq.open_for(tenant_id, phone))
+    if not (pending_q or _recent_upload(tenant_id, phone)["sent"]):
+        return False
+    if m.group("name"):
+        return await _offer_new_project(tenant_id, phone, m.group("name"))
+    oq.ask(tenant_id, phone, "new_project_name", "recent", "New project name")
+    await _send_reply(phone, "What's the new project called? I'll add it and file what you've "
+                             "sent there.", tenant_id=tenant_id)
+    return True
+
+
 async def _answer_batch_project(tenant_id: str, phone: str, text: str) -> bool:
     """ "Save both invoices under belladonna" → every document and expense claim this person sent
     in the last 30 minutes goes on that project, and any slip still being read follows.
     2026-10-20, DIGG: Judy sent two slips and that message while the second was still being
     read (5 minutes); it answered yesterday's "which project?" for an email PDF instead, and
-    neither slip got the project."""
-    m = _BATCH_PROJECT_RE.match((text or "").strip())
+    neither slip got the project. 2026-10-23: also "log/file/save (it) in/under X" from the team,
+    and a name Vula doesn't know is offered as a new project instead of falling through."""
+    t = (text or "").strip()
+    m = _BATCH_PROJECT_RE.match(t)
     # "all invoices for Gardens" with no filing word is a question, not an instruction
-    if not m or (not m.group("verb") and m.group("which").lower().startswith("all")):
-        return False
+    if m and not (not m.group("verb") and m.group("which").lower().startswith("all")):
+        name = m.group(m.lastindex)
+    else:
+        f = _FILE_UNDER_RE.match(t)
+        if not f or not _is_team(tenant_id, phone):
+            return False
+        name = f.group("name")
     from vula.commerce import expenses
-    project = expenses.match_project(tenant_id, m.group(m.lastindex))
+    project = expenses.match_project(tenant_id, _clean_project_name(name))
     if not project:
+        if _is_team(tenant_id, phone) and _recent_upload(tenant_id, phone)["sent"]:
+            return await _offer_new_project(tenant_id, phone, name)
         return False
+    await _file_recent_under(tenant_id, phone, project)
+    return True
+
+
+async def _file_recent_under(tenant_id: str, phone: str, project: str,
+                             doc_ids: Optional[list] = None) -> None:
+    """File what this person sent in the last 30 minutes (or exactly `doc_ids`) under `project`,
+    hold the project for slips still being read, and say what was done."""
     from datetime import datetime, timedelta, timezone
     from vula import open_questions as oq
-    from vula.commerce import service
+    from vula.commerce import expenses, service
     digits = _phone_digits(phone)
     who = list({phone, digits})
     since = (datetime.now(timezone.utc) - timedelta(seconds=_BATCH_WINDOW_S)).isoformat()
     db = service._client()
     try:
-        docs = (db.table("vula_filed_documents").select("id,filename,project,status")
-                .eq("tenant_id", tenant_id).in_("filed_by", who).gte("created_at", since)
-                .execute().data or [])
-        claims = (db.table("commerce_expenses").select("id,amount_cents,supplier,project")
-                  .eq("tenant_id", tenant_id).in_("paid_by", who).gte("created_at", since)
-                  .execute().data or [])
+        if doc_ids:
+            docs = (db.table("vula_filed_documents").select("id,filename,project,status")
+                    .eq("tenant_id", tenant_id).in_("id", list(doc_ids)).execute().data or [])
+            claims = []
+        else:
+            docs = (db.table("vula_filed_documents").select("id,filename,project,status")
+                    .eq("tenant_id", tenant_id).in_("filed_by", who).gte("created_at", since)
+                    .execute().data or [])
+            claims = (db.table("commerce_expenses").select("id,amount_cents,supplier,project")
+                      .eq("tenant_id", tenant_id).in_("paid_by", who).gte("created_at", since)
+                      .execute().data or [])
     except Exception as exc:
         logger.warning("batch project lookup failed: %s", exc)
-        return False
-    _BATCH_PROJECT[(tenant_id, digits)] = (project, time.monotonic() + _BATCH_WINDOW_S)
+        await _send_reply(phone, f"I couldn't file that under *{project}* just now — please try "
+                                 "again in a moment.", tenant_id=tenant_id)
+        return
+    if not doc_ids:
+        _BATCH_PROJECT[(tenant_id, digits)] = (project, time.monotonic() + _BATCH_WINDOW_S)
     done = []
     for c in claims:
         if c.get("project") != project:
@@ -3159,11 +3300,106 @@ async def _answer_batch_project(tenant_id: str, phone: str, text: str) -> bool:
             reply += f" Plus {others} other document{'s' if others != 1 else ''} filed there."
     elif n_docs:
         reply = f"✅ Filed {n_docs} document{'s' if n_docs != 1 else ''} under *{project}*."
+    elif not doc_ids and _recent_upload(tenant_id, phone)["sent"]:
+        reply = (f"👍 Got it — *{project}*. Your last document hasn't finished reading or didn't "
+                 f"come through; if you don't hear back about it in a few minutes, please send it "
+                 f"again.")
     else:
-        reply = f"👍 Anything you've just sent goes on *{project}*."
-    reply += f" Anything still being read goes on *{project}* too."
+        reply = f"👍 Anything you send in the next 30 minutes goes on *{project}*."
+    if not doc_ids:
+        reply += f" Anything still being read goes on *{project}* too."
     await _send_reply(phone, reply, tenant_id=tenant_id)
-    return True
+
+
+async def _answer_new_project_question(tenant_id: str, phone: str, text: str, q: dict) -> bool:
+    """The answer to "add project X?" (new_project) or "what's it called?" (new_project_name)."""
+    from vula import open_questions as oq
+    from vula.commerce import expenses
+    from vula.integrations.doc_filing import looks_like_project_answer
+    low = (text or "").strip().lower().rstrip(".!")
+    ref = q.get("ref_id") or "recent"
+    doc_ids = None if ref == "recent" else [d for d in ref.split(",") if d]
+    if q.get("kind") == "new_project":
+        name = (q.get("prompt") or "").split(":", 1)[-1].strip()
+        if low in _YES_WORDS:
+            created = _create_project(tenant_id, name)
+            oq.close(q["id"], text)
+            if not created:
+                await _send_reply(phone, f"I couldn't add *{name}* just now — please add it under "
+                                         "Projects, or try again.", tenant_id=tenant_id)
+                return True
+            await _send_reply(phone, f"➕ Added the project *{created}*.", tenant_id=tenant_id)
+            await _file_recent_under(tenant_id, phone, created, doc_ids)
+            return True
+        if low in _NO_WORDS:
+            oq.close(q["id"], text)
+            await _send_reply(phone, "👍 Not added. Send the right project name and I'll file it "
+                                     "there.", tenant_id=tenant_id)
+            return True
+    if not looks_like_project_answer(text) or low in _YES_WORDS or low in _NO_WORDS:
+        return False
+    oq.close(q["id"], text)
+    project = expenses.match_project(tenant_id, _clean_project_name(text))
+    if project:
+        await _file_recent_under(tenant_id, phone, project, doc_ids)
+        return True
+    return await _offer_new_project(tenant_id, phone, text, ref)
+
+
+_LIST_ANSWER_RE = re.compile(r"^\s*(?P<nums>\d+(?:\s*(?:,|&|and|-|to|\s)\s*\d+)*)\s*[:.)-]?\s+(?P<proj>\S.*?)\s*$",
+                             re.IGNORECASE)
+
+
+def _list_numbers(spec: str) -> list:
+    """ "1, 3-5 and 7" → [1, 3, 4, 5, 7]."""
+    out: list = []
+    for a, b in re.findall(r"(\d+)\s*(?:(?:-|to)\s*(\d+))?", spec or ""):
+        lo, hi = int(a), int(b or a)
+        out.extend(range(lo, min(hi, lo + 50) + 1))
+    return out
+
+
+async def _answer_doc_project_list(tenant_id: str, phone: str, text: str, q: dict) -> bool:
+    """The answer to the list of documents waiting for a project: "1 Belladonna", "2-3 Sporty TV",
+    "4 none" — one per line, any number of lines."""
+    from vula import open_questions as oq
+    from vula.integrations.doc_filing import resolve_pending_document
+    ids = [d for d in (q.get("ref_id") or "").split(",") if d]
+    lines = [ln for ln in re.split(r"[\n;]+", text or "") if ln.strip()]
+    parsed = [(_LIST_ANSWER_RE.match(ln), ln) for ln in lines]
+    if not ids or not parsed or not all(m for m, _ in parsed):
+        return False
+    done, unknown = [], {}
+    for m, _ln in parsed:
+        proj = m.group("proj").strip()
+        for n in _list_numbers(m.group("nums")):
+            if not 1 <= n <= len(ids):
+                continue
+            res = await resolve_pending_document(tenant_id, phone, proj, doc_id=ids[n - 1])
+            if res is None:
+                continue                    # already filed some other way
+            if res.get("unmatched"):
+                unknown.setdefault(_clean_project_name(proj), []).append(ids[n - 1])
+            else:
+                done.append(_pending_doc_reply(res))
+    left = [d for d in ids if not _doc_still_pending(tenant_id, d)]
+    if len(left) == len(ids):
+        oq.close(q["id"], text)
+    if done:
+        await _send_reply(phone, "\n".join(done), tenant_id=tenant_id)
+    for name, doc_ids in unknown.items():
+        await _offer_new_project(tenant_id, phone, name, ",".join(doc_ids))
+    return bool(done or unknown)
+
+
+def _doc_still_pending(tenant_id: str, doc_id: str) -> bool:
+    from vula.commerce import service
+    try:
+        rows = (service._client().table("vula_filed_documents").select("status")
+                .eq("tenant_id", tenant_id).eq("id", doc_id).limit(1).execute().data or [])
+        return bool(rows) and rows[0].get("status") == "pending_project"
+    except Exception:
+        return True
 
 
 async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
@@ -3180,6 +3416,13 @@ async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
             return True
     except Exception as exc:
         logger.warning("batch project answer failed: %s", exc)
+    try:
+        if await _answer_new_project_mention(tenant_id, phone, text):
+            from vula import turns
+            turns.note("new_project_mention")
+            return True
+    except Exception as exc:
+        logger.warning("new project mention failed: %s", exc)
     for q in oq.open_for(tenant_id, phone):
         try:
             if await _try_open_question(tenant_id, phone, text, q):
@@ -3216,6 +3459,10 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
             oq.close(q["id"], status="expired")      # already decided elsewhere
             return False
         return True
+    if kind in ("new_project", "new_project_name"):
+        return await _answer_new_project_question(tenant_id, phone, text, q)
+    if kind == "doc_project_list":
+        return await _answer_doc_project_list(tenant_id, phone, text, q)
     if kind == "doc_project":
         from vula.integrations.doc_filing import resolve_pending_document
         res = await resolve_pending_document(tenant_id, phone, text, doc_id=ref)
