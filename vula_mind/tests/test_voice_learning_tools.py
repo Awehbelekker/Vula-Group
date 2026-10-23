@@ -69,6 +69,9 @@ async def test_apply_voice_persona_updates_tenant_config(skill):
 
     mock_db = MagicMock()
     mock_db.table.return_value.update.return_value.eq.return_value.execute.return_value = None
+    # The new voice is read back before it's reported as done.
+    mock_db.table.return_value.select.return_value.eq.return_value.limit.return_value.execute \
+        .return_value = MagicMock(data=[{"persona_prompt": "Warm and casual, short replies."}])
 
     with (
         patch.object(ca.service, "_client", return_value=mock_db),
@@ -78,7 +81,8 @@ async def test_apply_voice_persona_updates_tenant_config(skill):
         assert preview["preview"] is True and not mock_db.table.called
         res = await skill._apply_voice_persona(TID, "Warm and casual, short replies.", confirm=True)
 
-    assert res == {"applied": True, "persona_prompt": "Warm and casual, short replies."}
+    assert res["applied"] is True and res["persona_prompt"] == "Warm and casual, short replies."
+    assert res["verified"] and "now sounds like this" in res["reply_verbatim"]
     mock_db.table.assert_called_with("vula_tenant_config")
     update_call = mock_db.table.return_value.update.call_args[0][0]
     assert update_call["persona_prompt"] == "Warm and casual, short replies."

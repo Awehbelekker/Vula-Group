@@ -2891,7 +2891,8 @@ class CommerceAdminSkill(BaseSkill):
             return {"preview": True, "new_voice": persona_prompt[:300],
                     "message": "Confirm to change how Vula sounds to customers "
                                "(call again with confirm=true)."}
-        service._client().table("vula_tenant_config").update({
+        db = service._client()
+        db.table("vula_tenant_config").update({
             "persona_prompt": persona_prompt,
             "persona_prompt_suggested": None,
             "persona_prompt_suggested_at": None,
@@ -2901,7 +2902,12 @@ class CommerceAdminSkill(BaseSkill):
             _tenants.invalidate(tid)
         except Exception:
             pass
-        return {"applied": True, "persona_prompt": persona_prompt}
+        back = (db.table("vula_tenant_config").select("persona_prompt").eq("tenant_id", tid)
+                .limit(1).execute().data or [{}])[0].get("persona_prompt") or ""
+        if back.strip() != persona_prompt:
+            return {"error": "The new voice didn't save — nothing changed. Please try again."}
+        return _checked({"applied": True, "persona_prompt": persona_prompt},
+                        "✅ Done — Vula now sounds like this to your customers.")
 
     async def _create_invoice(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         raw = args.get("line_items") or []
@@ -3494,7 +3500,16 @@ class CommerceAdminSkill(BaseSkill):
         if not found:
             return {"examples": [], "note": "No promotions saved yet — the team can forward their "
                                             "past posts into this WhatsApp line."}
-        return {"examples": [fence(f"PROMOTION_{i}", t) for i, t in enumerate(found, 1)]}
+        out = {"examples": [fence(f"PROMOTION_{i}", t) for i, t in enumerate(found, 1)]}
+        try:
+            from vula.api.tenants import get_config
+            from vula.commerce.voice_profile import persona_part
+            style = persona_part((get_config(tid) or {}).get("persona_prompt") or "", "promotions")
+            if style:
+                out["style"] = style
+        except Exception:
+            pass
+        return out
 
     async def _picture_promotion(self, tid: str, args: Dict[str, Any], phone: Optional[str]) -> Dict[str, Any]:
         from vula.commerce import promo

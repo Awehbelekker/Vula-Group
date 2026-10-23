@@ -118,17 +118,93 @@ async def _email_excerpts(tenant_id: str) -> List[str]:
     return [r["excerpt"].strip() for r in rows if (r.get("excerpt") or "").strip()]
 
 
-async def _gather_samples(tenant_id: str) -> List[str]:
+async def _promotions(tenant_id: str) -> List[str]:
+    """The business's own promotions, forwarded into its WhatsApp line (migration 220) — the
+    clearest sample of how it talks to customers. Prices are masked: they're not tone."""
+    try:
+        from vula.commerce import promotions
+        return [t[:600] for t in promotions.examples(tenant_id, n=_PER_SOURCE_LIMIT)]
+    except Exception as exc:
+        log.debug("voice_profile: promotions source skipped: %s", exc)
+        return []
+
+
+def audience(tenant_id: str) -> str:
+    """"customer" for a shop: its voice is learned only from what it writes to customers.
+    2026-10-23 (Off the Hook): the owner's own commands to Vula ("stock hake 5") made up most of
+    the samples, so customers got "concise, 👍, no full stops" instead of OTH's warm,
+    emoji-rich voice. Every other business keeps all sources ("all")."""
+    try:
+        from vula.api.tenants import tenant_profile
+        prof = tenant_profile(tenant_id)
+        return "customer" if prof.get("known") and prof.get("sells_products") else "all"
+    except Exception:
+        return "all"
+
+
+async def _gather_samples(tenant_id: str, audience_: str = "all") -> List[str]:
+    sources = ((_promotions, _whatsapp_agent_replies, _email_excerpts) if audience_ == "customer"
+               else (_whatsapp_agent_replies, _whatsapp_self_chat, _meeting_notes, _email_excerpts))
     texts: List[str] = []
-    for fn in (_whatsapp_agent_replies, _whatsapp_self_chat, _meeting_notes, _email_excerpts):
+    for fn in sources:
         texts.extend(await fn(tenant_id))
-    return [_redact(t) for t in texts[:SAMPLE_LIMIT]]
+    texts = [_redact(t) for t in texts[:SAMPLE_LIMIT]]
+    if audience_ == "customer":
+        from vula.commerce.promotions import mask_prices
+        texts = [mask_prices(t) for t in texts]
+    return texts
 
 
 async def sample_count(tenant_id: str) -> int:
     """How many owner-authored samples exist across every source (for the "not enough data
     yet" guard)."""
-    return len(await _gather_samples(tenant_id))
+    return len(await _gather_samples(tenant_id, audience(tenant_id)))
+
+
+# A customer voice is stored as two headed parts: how to sound in chat, and how promotions look.
+_CHAT_HEAD, _PROMO_HEAD = "Chat replies:", "Promotions:"
+_PART_RE = re.compile(r"^\s*(chat replies|promotions|example)\s*:\s*", re.I | re.M)
+
+
+def _parts(text: str) -> Dict[str, str]:
+    marks = list(_PART_RE.finditer(text or ""))
+    out: Dict[str, str] = {}
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        out[m.group(1).lower()] = text[m.end():end].strip()
+    return out
+
+
+def persona_part(persona: str, part: str) -> str:
+    """The "chat" or "promotions" part of a stored voice. A voice without parts (written by
+    hand, or learned before parts existed) is used whole for chat and not at all for promotions."""
+    parts = _parts(persona or "")
+    if not parts:
+        return (persona or "").strip() if part == "chat" else ""
+    return parts.get("chat replies" if part == "chat" else "promotions", "")
+
+
+_CUSTOMER_PROMPT = (
+    "Below are real messages a small business wrote to its customers — WhatsApp promotions it "
+    "posted, replies its staff sent, and emails. Describe how this business talks to its "
+    "customers. Answer in exactly three labelled parts:\n"
+    "Chat replies: 2-3 sentences of direct instructions for an AI assistant answering a "
+    "customer's WhatsApp message in this voice — warmth, greetings, sign-offs, emoji they really "
+    "use, sentence length, recurring phrases. Chat replies stay short; no capital-letter "
+    "headlines.\n"
+    "Promotions: 2-3 sentences on how their promotions look — headline style, emoji, line "
+    "layout, call to action.\n"
+    "Example: a reply in that chat voice to a customer who wrote \"Thanks, I'll place my order "
+    "tomorrow\" — no products, prices, dates or opening hours.\n"
+    "Do not invent traits you don't see evidence for. No preamble.\n\nMessages:\n"
+)
+
+
+def has_pending_suggestion(cfg: Dict[str, Any]) -> bool:
+    """A suggestion the owner hasn't reviewed yet. One identical to the voice already in use
+    isn't pending (Off the Hook had one sitting there, which stopped any re-learning)."""
+    sug = (cfg.get("persona_prompt_suggested") or "").strip()
+    return bool(sug) and sug != (cfg.get("persona_prompt") or "").strip()
 
 
 async def due_for_recheck(tenant_id: str, min_growth: int = MIN_GROWTH_FOR_RECHECK) -> bool:
@@ -141,10 +217,10 @@ async def due_for_recheck(tenant_id: str, min_growth: int = MIN_GROWTH_FOR_RECHE
     here should skip a tenant this tick, never crash the loop that calls it for everyone."""
     try:
         rows = (_client().table("vula_tenant_config")
-                .select("persona_prompt_suggested,voice_last_checked_sample_count")
+                .select("persona_prompt,persona_prompt_suggested,voice_last_checked_sample_count")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
         cfg = rows[0] if rows else {}
-        if (cfg.get("persona_prompt_suggested") or "").strip():
+        if has_pending_suggestion(cfg):
             return False  # an unreviewed suggestion is already pending — don't pile on
         current = await sample_count(tenant_id)
         if current < MIN_SAMPLE:
@@ -160,9 +236,10 @@ async def analyze_voice(tenant_id: str) -> Dict[str, Any]:
     """Analyse the tenant's own authored text (WhatsApp, meeting notes, sent email) and store
     a suggested persona_prompt.
 
-    Returns {"suggested": str, "sample_count": int} or {"error": str}.
-    """
-    texts = await _gather_samples(tenant_id)
+    Returns {"suggested": str, "sample_count": int} or {"error": str}. A shop's customer voice
+    (see audience) also returns "example": a sample reply written in it, shown to the owner."""
+    aud = audience(tenant_id)
+    texts = await _gather_samples(tenant_id, aud)
     if len(texts) < MIN_SAMPLE:
         return {"error": (
             f"Not enough data yet — Vula found {len(texts)} of your own messages/notes/emails "
@@ -174,7 +251,7 @@ async def analyze_voice(tenant_id: str) -> Dict[str, Any]:
     from core.llm_router import resolve_generation_route
 
     sample_block = "\n".join(f"- {t}" for t in texts)
-    prompt = (
+    prompt = _CUSTOMER_PROMPT + sample_block if aud == "customer" else (
         "Below are real messages, notes, and emails a small-business owner personally wrote — "
         "some to customers on WhatsApp, some to their own AI assistant, some meeting notes, "
         "some sent emails. Describe how they write — tone, formality, emoji use, typical "
@@ -202,6 +279,16 @@ async def analyze_voice(tenant_id: str) -> Dict[str, Any]:
 
     if not suggested:
         return {"error": "Empty response — please try again."}
+    example = ""
+    if aud == "customer":
+        parts = _parts(suggested)
+        if not parts.get("chat replies"):
+            return {"error": "Could not describe your voice clearly — please try again."}
+        example = parts.get("example", "")
+        suggested = f"{_CHAT_HEAD} {parts['chat replies']}"
+        if parts.get("promotions"):
+            suggested += f"\n{_PROMO_HEAD} {parts['promotions']}"
+        suggested = suggested[:2500]
 
     try:
         _client().table("vula_tenant_config").update({
@@ -222,4 +309,4 @@ async def analyze_voice(tenant_id: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    return {"suggested": suggested, "sample_count": len(texts)}
+    return {"suggested": suggested, "sample_count": len(texts), "example": example}

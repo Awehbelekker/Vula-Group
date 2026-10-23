@@ -310,6 +310,40 @@ async def _promo_burst_ack(tenant_id: str, phone: str) -> None:
         from vula import open_questions as oq
         oq.ask(tenant_id, phone, "promo_scope", ",".join(b["ids"]), prompt="Promotions saved")
     await _send_reply(phone, _promo_ack_text(b), tenant_id)
+    if b["ids"]:
+        _run_bg(_propose_customer_voice(tenant_id, phone), label="propose_voice")
+
+
+_VOICE_MIN_PROMOS = 5
+
+
+async def _propose_customer_voice(tenant_id: str, phone: str) -> bool:
+    """Learn how the business talks to customers from its promotions and real replies, and ask
+    the person who forwarded them whether Vula should sound like that. Nothing changes until
+    they tap *Use this voice* (apply_voice_persona, read back); *Keep current* drops it."""
+    from vula.api.tenants import get_config
+    from vula.commerce import promotions, voice_profile
+    if voice_profile.audience(tenant_id) != "customer":
+        return False
+    if voice_profile.has_pending_suggestion(get_config(tenant_id, fresh=True) or {}):
+        return False
+    if len(promotions.examples(tenant_id, n=_VOICE_MIN_PROMOS)) < _VOICE_MIN_PROMOS:
+        return False
+    res = await voice_profile.analyze_voice(tenant_id)
+    if "error" in res:
+        logger.info("customer voice not proposed for %s: %s", tenant_id, res["error"])
+        return False
+    text = ("🗣️ From your promotions and replies, this is how your business talks to customers:\n\n"
+            + res["suggested"])
+    if res.get("example"):
+        text += f"\n\nA reply in this voice:\n\"{res['example']}\""
+    await _send_reply(phone, text, tenant_id)
+    await _ask_admin_confirm(phone, tenant_id, "apply_voice_persona",
+                             {"persona_prompt": res["suggested"]}, {},
+                             caller_role=_staff_role(tenant_id, phone),
+                             summary="Should Vula sound like this to your customers?",
+                             labels=("Use this voice", "Keep current"))
+    return True
 
 
 _PROMO_EXAMPLES_RE = re.compile(r"^\s*(?:examples?\s*only|just\s+examples?|old\s+posts?|(?:they'?re|these\s+are)\s+old)\b", re.I)
@@ -1510,7 +1544,8 @@ async def _voice_the_relay(tenant_id: str, question: str, answer: str) -> str:
         persona = ""
         try:
             from vula.api.tenants import get_config
-            persona = (get_config(tenant_id) or {}).get("persona_prompt") or ""
+            from vula.commerce.voice_profile import persona_part
+            persona = persona_part((get_config(tenant_id) or {}).get("persona_prompt") or "", "chat")
         except Exception:
             persona = ""
 
@@ -5912,13 +5947,14 @@ async def _maybe_project_setup(phone: str, text: str, tenant_id: str) -> bool:
 
 
 async def _ask_admin_confirm(phone: str, tenant_id: str, tool_name: str, args: dict,
-                             preview: dict, caller_role: Optional[str] = None) -> None:
+                             preview: dict, caller_role: Optional[str] = None,
+                             summary: Optional[str] = None, labels: tuple = ()) -> None:
     """Store a commerce_admin tool call as a pending confirmation (migration 146) and send the
     Confirm/Cancel buttons — the same row and buttons the agent's own previews use, so the tap
     re-dispatches exactly this call through _handle_admin_confirm_reply."""
     from core.skills.commerce_admin import _preview_summary
     from vula.commerce import service as commerce_service
-    summary = _preview_summary(preview)
+    summary = summary or _preview_summary(preview)
     row = {"tenant_id": tenant_id, "phone": phone, "skill_name": "commerce_admin",
            "tool_name": tool_name, "summary": summary,
            "tool_args": {**args, "_caller": {"role": caller_role, "name": None}}}
@@ -5932,7 +5968,10 @@ async def _ask_admin_confirm(phone: str, tenant_id: str, tool_name: str, args: d
         await _send_reply(phone, summary + "\n\nI couldn't set up the Confirm button just now — "
                                            "please try again in a moment.", tenant_id)
         return
-    await _send_confirm_request(phone, tenant_id, {"id": pending_id, "summary": summary})
+    cr = {"id": pending_id, "summary": summary}
+    if labels:
+        cr["confirm_label"], cr["cancel_label"] = labels
+    await _send_confirm_request(phone, tenant_id, cr)
 
 
 def _staff_role(tenant_id: str, phone: str) -> Optional[str]:
@@ -8649,6 +8688,17 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         return
 
     if action == "admin_cancel":
+        if row.get("tool_name") == "apply_voice_persona":
+            # "Keep current": the suggestion is dropped too, so it doesn't sit there pending and
+            # stop the voice from ever being re-learned (voice_profile.due_for_recheck).
+            try:
+                db.table("vula_tenant_config").update({
+                    "persona_prompt_suggested": None, "persona_prompt_suggested_at": None,
+                }).eq("tenant_id", tenant_id).execute()
+            except Exception as exc:
+                logger.debug("voice suggestion not cleared: %s", exc)
+            await _send_reply(phone, "OK — Vula keeps its current voice.", tenant_id)
+            return
         await _send_reply(phone, "Cancelled — nothing was changed.", tenant_id)
         return
 

@@ -102,6 +102,8 @@ async def test_one_acknowledgement_for_a_burst(monkeypatch):
     sent, asked = [], []
     monkeypatch.setattr(wa, "_send_reply", AsyncMock(side_effect=lambda p, m, *a, **k: sent.append(m) or True))
     monkeypatch.setattr("vula.open_questions.ask", lambda t, p, k, ref, prompt="": asked.append((k, ref)))
+    proposed = AsyncMock(return_value=False)
+    monkeypatch.setattr(wa, "_propose_customer_voice", proposed)
     for body in (CHICKEN, SWORDFISH, CHICKEN, "", "FRESH TUNA – LIMITED STOCK!"):
         await wa._save_forwarded_promo("off-the-hook", "27645755210", body)
     await asyncio.sleep(0.1)
@@ -109,6 +111,7 @@ async def test_one_acknowledgement_for_a_burst(monkeypatch):
     assert "Saved 3 promotions" in sent[0] and "1 was already saved" in sent[0]
     assert "1 picture had no text" in sent[0] and "*examples only*" in sent[0]
     assert asked == [("promo_scope", "p1,p2,p3")]
+    proposed.assert_called_once_with("off-the-hook", "27645755210")   # then the voice is offered
     assert not wa._PROMO_BURSTS
 
 

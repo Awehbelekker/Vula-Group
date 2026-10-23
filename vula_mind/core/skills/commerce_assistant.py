@@ -1291,7 +1291,8 @@ class CommerceAssistantSkill(BaseSkill):
         persona_block = ""
         try:
             from vula.api.tenants import get_config
-            persona = (get_config(tenant_id) or {}).get("persona_prompt")
+            from vula.commerce.voice_profile import persona_part
+            persona = persona_part((get_config(tenant_id) or {}).get("persona_prompt") or "", "chat")
             if persona:
                 persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
