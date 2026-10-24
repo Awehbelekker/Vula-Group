@@ -320,6 +320,13 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
 .vshell-top { -webkit-backdrop-filter: saturate(160%) blur(10px); backdrop-filter: saturate(160%) blur(10px); background: color-mix(in srgb, var(--surface) 86%, transparent); }
 .vshell-signout { padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--r-input); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; font-family: var(--font-body); }
 .vshell-content { padding: 0; min-width: 0; }
+/* The tenant screens' page padding (VulaMerchantAdmin). On a phone the old design keeps 12px
+   sides so a 360px screen isn't squeezed; the redesign's shell already pads its content
+   (.v2-content), so the screen adds none there — that stacked to 40px a side (mobile pass,
+   24 Oct 2026). */
+.vma-content { padding: 20px 24px; }
+@media (max-width: 600px) { .vma-content { padding: 16px 12px; } }
+.v2-shell--mobile .vma-content { padding: 0; }
 .vula-master { padding: 16px 24px; max-width: 1400px; }
 @media (max-width: 600px) { .vula-master { padding: 12px 12px; } }
 .vshell-burger { display: none; }

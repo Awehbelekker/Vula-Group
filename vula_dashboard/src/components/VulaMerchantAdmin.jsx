@@ -178,7 +178,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             wrapper by tenantId forces a full remount of whichever tab is active on every tenant
             switch, so no component can carry stale state across tenants — not a perf concern,
             this only remounts the one currently-visible tab, not the whole dashboard shell. */}
-        <div key={tenantId} style={styles.contentBare}>
+        <div key={tenantId} className="vma-content" style={styles.contentBare}>
           {/* A restricted sales_rep login gets their own summary here instead of the tenant-wide
               owner overview — 'overview' itself stays always-visible (merchantVisible's own
               rule), only WHAT renders on it differs for this one role. */}
@@ -2465,7 +2465,7 @@ const styles = {
   subtitle:     { fontSize:12, color:'var(--muted)', margin:'2px 0 0' },
   closeBtn:     { background:'transparent', border:'none', fontSize:28, cursor:'pointer', color:'var(--muted)', lineHeight:1 },
   content:      { padding:'20px 28px', flex:1, overflowY:'auto' },
-  contentBare:  { padding:'20px 24px', flex:1, minWidth:0 },  // shell mode — shell owns chrome
+  contentBare:  { flex:1, minWidth:0 },  // shell mode — shell owns chrome; padding: .vma-content (index.css)
   loading:      { color:'var(--muted)', fontSize:13},
   empty:        { color:'var(--muted)', fontSize:13, padding:'24px 0', textAlign:'center' },
   error:        { color:'var(--danger)', fontSize:13},
