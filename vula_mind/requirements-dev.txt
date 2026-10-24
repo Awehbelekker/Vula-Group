@@ -5,3 +5,7 @@ pytest>=8.0
 pytest-asyncio>=0.24        # asyncio_mode="auto" is set in pyproject.toml
 ruff>=0.6
 hypothesis>=6.100       # property tests for tap-to-pay money maths (tests/test_tap_core.py)
+pytest-timeout>=2.3     # per-test wall-clock cap — the tool that found 2026-10-24's real-Ollama-
+                        # call bugs: a test that lets a real network/LLM call through hangs
+                        # rather than failing fast on a clean CI runner, so without this a stuck
+                        # test just burns the whole job's timeout instead of naming itself

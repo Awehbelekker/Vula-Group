@@ -76,6 +76,44 @@ def _no_real_whatsapp_creds_by_default(monkeypatch):
     team_index.invalidate()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_llm_calls_by_default(monkeypatch):
+    """No test should be able to reach a REAL LLM — local Ollama or cloud — just by exercising a
+    code path that forgot to mock litellm.acompletion.
+
+    2026-10-24: a full suite run on THIS specific developer machine made real, unmocked
+    litellm.acompletion calls to the local Ollama instance that ALSO serves a live trading bot's
+    inference on the same GPU. config.py defaults OLLAMA_BASE to http://localhost:11434 — on a
+    clean CI runner nothing listens there, so an accidentally-unmocked call just fails safely with
+    a connection error, which is why this went unnoticed for a long time. But on a machine that
+    happens to run a real local Ollama for other reasons, that exact same "safety net" becomes the
+    mechanism of harm: the call actually succeeds, loading whatever MODEL_WORKER the local .env
+    configures at litellm's default num_ctx (131072 for several models) — the very memory-eviction
+    bug core/llm_router.py's install_ollama_auth wrapper exists to cap — repeatedly evicting
+    whatever else that GPU had resident. Same shape of bug _no_real_whatsapp_creds_by_default above
+    already guards against for WhatsApp; this is the equivalent for litellm. A test that
+    deliberately wants to exercise the real acompletion path (most of them do, correctly — they
+    patch it explicitly, typically with unittest.mock.patch("litellm.acompletion", ...)) overrides
+    this default for the scope of its own patch, same as test_typing_indicator.py already does for
+    the WhatsApp guard; nothing about that pattern changes here.
+    """
+    try:
+        import litellm
+    except Exception:
+        return
+
+    async def _guard(*args, **kwargs):
+        raise AssertionError(
+            "A test made a REAL litellm.acompletion call instead of mocking it — "
+            f"model={kwargs.get('model')!r} api_base={kwargs.get('api_base')!r}. On this machine "
+            "that could hit a real local Ollama shared with other live infrastructure (or a real "
+            "cloud provider, if a real API key happens to be set). Mock litellm.acompletion, or "
+            "whatever resolves the generation route, in this test."
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", _guard)
+
+
 @pytest.fixture
 def sample_goal() -> str:
     return "What is the capital of South Africa?"
