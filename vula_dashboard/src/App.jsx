@@ -97,10 +97,32 @@ const savedMasterTenant = () => { try { return localStorage.getItem(MASTER_TENAN
 // shared support-ticket link lands on the right screen instead of the regular dashboard.
 const initialTab = () => window.location.hash.startsWith("#/master/tenant/") ? "master" : "dashboard";
 
+// A link from WhatsApp straight to one page: #/go/{page} (a navConfig id — #/go/invoices,
+// #/go/stock, #/go/team). It survives the login (a Google or email-link sign-in replaces the
+// address, so it is kept for this tab), then opens once the business's menu is known — and only
+// if this login may see that page (mobile pass, 24 Oct 2026).
+const GO_KEY = "vula.go";
+const goInHash = () => (window.location.hash.match(/^#\/go\/([a-z0-9-]+)/) || [])[1] || "";
+const keepGoLink = () => { try { const g = goInHash(); if (g) sessionStorage.setItem(GO_KEY, g); } catch { /* private mode */ } };
+keepGoLink();
+
+function OpenLinkedPage({ ready, tick, open }) {
+  useEffect(() => {
+    if (!ready) return;
+    let leaf = goInHash();
+    try { leaf = leaf || sessionStorage.getItem(GO_KEY) || ""; sessionStorage.removeItem(GO_KEY); } catch { /* private mode */ }
+    if (!leaf) return;
+    if (goInHash()) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    open(leaf);
+  }, [ready, tick]);  // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [merchTab, setMerchTab] = useState("overview");
   const [route, setRoute] = useState(window.location.hash);
+  const [goTick, setGoTick] = useState(0);   // a #/go/ link opened while already signed in
   const [masterTenant, setMasterTenant] = useState(savedMasterTenant);
   const [masterTenants, setMasterTenants] = useState([]);
   const [impersonateReason, setImpersonateReason] = useState(""); // shown in the "viewing as tenant" banner
@@ -149,7 +171,10 @@ export default function App() {
 
   // Track hash changes for public legal routes
   useEffect(() => {
-    const onHash = () => setRoute(window.location.hash);
+    const onHash = () => {
+      setRoute(window.location.hash);
+      if (goInHash()) { keepGoLink(); setGoTick((n) => n + 1); }
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -343,6 +368,7 @@ export default function App() {
             access={access} full={full} teamRole={teamRole} teamPhone={teamPhone} activeTab={merchTab} onTabChange={setMerchTab}
             navRequest={navRequest} v2={v2} />
         </VulaShell>
+        <OpenLinkedPage ready={tenantModules !== null} tick={goTick} open={navigateIn(groups)} />
         <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} v2={v2} />
       </div>
     );

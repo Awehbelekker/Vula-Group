@@ -127,7 +127,7 @@ async def test_plus_n_adds_to_whatever_is_there_at_confirm(env, monkeypatch):
 async def test_unknown_barcode_points_to_linking_it(env, monkeypatch):
     _photo(monkeypatch, {"kind": "barcode_label", "barcodes": ["5000000000001"]})
     await wa._handle_stock_photo(PHONE, "m1", "stock", TID)
-    assert "5000000000001" in env["replies"][0] and "Sell › Stock" in env["replies"][0]
+    assert "5000000000001" in env["replies"][0] and "/#/go/stock" in env["replies"][0]
     assert await wa._maybe_stock_followup(PHONE, "4", TID) is False
 
 

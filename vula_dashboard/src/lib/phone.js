@@ -20,3 +20,16 @@ export function toWhatsAppNumber(phone) {
 export function whatsAppLink(phone) {
   return `https://wa.me/${toWhatsAppNumber(phone)}`;
 }
+
+/** Open a WhatsApp chat (or WhatsApp's share sheet when there's no phone) with `text` typed in.
+ * On a phone the same tab hands straight over to the WhatsApp app, so nothing is left behind
+ * — a new tab left a blank page behind (mobile pass, 24 Oct 2026); on a computer it opens
+ * WhatsApp Web in a new tab, as before. */
+export const onPhone = () => /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+
+export function openWhatsApp(phone, text = '') {
+  const to = phone ? toWhatsAppNumber(phone) : '';
+  const url = `https://wa.me/${to}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
+  if (onPhone()) window.location.href = url;
+  else window.open(url, '_blank', 'noopener');
+}

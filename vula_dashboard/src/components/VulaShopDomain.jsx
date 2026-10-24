@@ -9,6 +9,7 @@
  */
 import { Badge, Button, Field, Input } from './ui/index.jsx'
 import { copy, useShopDomain } from './settings/connect/useShopDomain'
+import { openWhatsApp } from '../lib/phone'
 
 const STATE = {
   waiting_dns: ['warn', 'Waiting for the DNS records'],
@@ -71,7 +72,7 @@ export default function VulaShopDomain({ tenantId }) {
           {info.instructions && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Button size="sm" onClick={() => copy(info.instructions)}>Copy instructions for my web person</Button>
-              <Button size="sm" variant="ghost" onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(info.instructions)}`, '_blank')}>
+              <Button size="sm" variant="ghost" onClick={() => openWhatsApp('', info.instructions)}>
                 Send on WhatsApp
               </Button>
             </div>

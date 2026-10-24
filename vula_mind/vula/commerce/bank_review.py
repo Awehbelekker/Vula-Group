@@ -350,8 +350,10 @@ async def _apply_supplier_bill_match(tenant_id: str, txn: dict, bill: dict) -> s
     except Exception:
         back = {}
     if back.get("status") != "paid":
+        from vula.api.tenants import dashboard_link
         return (f"⚠️ I tried to mark {label} paid with that R{amt:,.2f}, but it didn't save. "
-                f"Please mark it paid under Invoices in the dashboard.")
+                f"Please mark it paid under Invoices in the dashboard: "
+                f"{dashboard_link(tenant_id, 'invoices')}")
     open_questions.close_for(tenant_id, txn["id"], status="answered")
     return f"✅ R{amt:,.2f} → {label} — marked paid."
 

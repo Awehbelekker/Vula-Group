@@ -7,9 +7,9 @@
       "hscroll": false
     },
     "inbox": {
-      "scrollWidth": 452,
+      "scrollWidth": 390,
       "clientWidth": 390,
-      "hscroll": true
+      "hscroll": false
     },
     "customers": {
       "scrollWidth": 390,
@@ -22,9 +22,9 @@
       "hscroll": false
     },
     "invoices": {
-      "scrollWidth": 412,
+      "scrollWidth": 390,
       "clientWidth": 390,
-      "hscroll": true
+      "hscroll": false
     },
     "documents": {
       "scrollWidth": 390,

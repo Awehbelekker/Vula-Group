@@ -131,3 +131,12 @@ async def test_the_welcome_carries_the_business_own_address(welcome, monkeypatch
     _cfg(monkeypatch, ["seedleme.vula-ai.com"])
     await whatsapp._maybe_welcome_new_owner("seedleme", "27662545068")
     assert "https://seedleme.vula-ai.com" in sent[0]
+
+
+def test_a_link_from_whatsapp_opens_one_page_of_the_businesss_own_dashboard(monkeypatch):
+    """#/go/<page>: the dashboard keeps it through the login and opens that page (mobile pass)."""
+    from vula.api.tenants import dashboard_link
+    _cfg(monkeypatch, ["seedleme.vula-ai.com"])
+    assert dashboard_link("seedleme", "invoices") == "https://seedleme.vula-ai.com/#/go/invoices"
+    _cfg(monkeypatch, [])
+    assert dashboard_link("off-the-hook", "stock") == "https://admin.offthehook.co.za/#/go/stock"

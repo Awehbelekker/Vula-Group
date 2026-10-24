@@ -10,7 +10,7 @@
 import { toast, confirmDialog, promptDialog } from './ui/index.jsx'
 import { uploadBrandImage } from '../lib/brandUpload'
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { toWhatsAppNumber } from '../lib/phone'
+import { onPhone, openWhatsApp, toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
 import { FONT_PAIRINGS } from '../theme/tokens'
 import { VULA_API } from '../lib/authFetch'
@@ -241,17 +241,23 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   // messaged the business recently; outside that window a manual send is the only option).
   // reason (optional) explains WHY the automatic send didn't happen — shown up front rather
   // than silently swapping to the manual link with no context.
-  function whatsAppLinkFallback(inv, reason) {
+  async function whatsAppLinkFallback(inv, reason) {
     if (reason) toast(`Couldn't send automatically (${reason}) — opening WhatsApp for you to send it yourself.`, 'danger')
-    const phone = toWhatsAppNumber(inv.customer_phone)
     // The customer has no login, so the link is the public pay page (invoice / pro-forma), never
     // the admin PDF route — that one needs a signed-in member once ENFORCE_TENANT_AUTH is on.
     const payable = ['invoice', 'proforma'].includes(inv.doc_type || 'invoice')
     const pageUrl = `${VULA_API}/v1/commerce/${tenantId}/pay/${inv.id}`
     const msg = `Hi ${inv.customer_name}, here's your ${(inv.doc_type || 'invoice').replace('_', ' ')} ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
       (inv.due_date ? `Due ${inv.due_date}. ` : '') + (payable ? `View and pay: ${pageUrl}` : '')
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank')
-    if (inv.status === 'draft') setStatus(inv, 'sent', { sent_channel: 'manual' })
+    // On a phone this tab hands over to WhatsApp, so the status is saved first; on a computer
+    // WhatsApp Web opens in a new tab straight away (a pop-up must follow the click directly).
+    if (onPhone()) {
+      if (inv.status === 'draft') await setStatus(inv, 'sent', { sent_channel: 'manual' })
+      openWhatsApp(inv.customer_phone, msg)
+    } else {
+      openWhatsApp(inv.customer_phone, msg)
+      if (inv.status === 'draft') setStatus(inv, 'sent', { sent_channel: 'manual' })
+    }
   }
 
   async function sendWhatsApp(inv) {
