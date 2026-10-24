@@ -80,3 +80,23 @@ async def test_run_saves_after_each_tenant_and_reuses_finished_ones(monkeypatch)
     assert saved == [["a"], ["a", "b"]]
     assert rep["synthesized"] == {"a": "reused", "b": 1}
     assert rep["summary"]["cases"] == 2
+
+
+@pytest.mark.asyncio
+async def test_replay_reruns_an_earlier_reports_questions(monkeypatch):
+    async def no_synth(*a, **k):
+        raise AssertionError("a replay must not synthesize")
+
+    seen = []
+
+    async def fake_diag(c):
+        seen.append((c["question"], c["expected_docs"]))
+        return {"tenant": c["tenant"], "cause": "found", "prod_rank": 1}
+
+    monkeypatch.setattr(d, "synthesize", no_synth)
+    monkeypatch.setattr(d, "diagnose", fake_diag)
+    old = [{"tenant": "a", "question": "q1", "expected": ["x.pdf"], "cause": "ranked_low"},
+           {"tenant": "z", "question": "other", "expected": ["y.pdf"]}]
+    rep = await d.run(["a"], replay=old)
+    assert seen == [("q1", ["x.pdf"])]
+    assert rep["synthesized"] == {"a": "replayed"}

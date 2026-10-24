@@ -816,6 +816,13 @@ def _salient_terms(question: str) -> List[str]:
     # would drop it. "How stocks creations" must keep "creations" even though "stocks" has
     # seven synonyms.
     out: List[str] = []
+    # Identifiers first (2026-10-24): an account, invoice or VAT number is the most decisive term
+    # there is, and the word pattern below never saw one ("account number 3999960" searched for
+    # "account" and "number"). A bare year is in every document, so it is not one.
+    for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9\-/]*\d[A-Za-z0-9\-/]*", question or ""):
+        low = t.lower().strip("-/")
+        if len(low) >= 4 and not re.fullmatch(r"(19|20)\d\d", low) and low not in out and len(out) < 3:
+            out.append(low)
     for t in toks[:4]:
         low = t.lower()
         if low not in out:
@@ -903,6 +910,57 @@ def _chunk_key(hit: dict) -> str:
             return str(hit[k])
     text = (hit.get("text") or "")[:200]
     return f"{hit.get('doc_id') or hit.get('source') or ''}:{hashlib.sha1(text.encode()).hexdigest()[:16]}"
+
+
+# Rank fusion (2026-10-24). Similarity scores from different query wordings are not comparable:
+# a short, generic rewrite scores higher against boilerplate than the real question scores
+# against the answer, and keyword hits have no score at all. Ranking the pooled hits by raw
+# score dropped the right document in 19 of 75 diagnostic cases even though one of the
+# searches had it in its top 4. So each list contributes by RANK: weight / (_RRF_K + rank).
+# K is small because only a handful of slots exist: with K=10 a rewrite's best hit can displace
+# the original question's 4th (0.8/11 > 1/14) but not its 3rd (1/13), and a strong literal match at
+# #1 lands second. A chunk several lists agree on adds up. Rewrites count by their best rank
+# (not summed), so three rewrites agreeing with each other cannot outvote the question asked.
+_RRF_K = 10
+_W_ORIGINAL, _W_REWRITE, _W_KEYWORD = 1.0, 0.8, 1.0
+
+
+def _fuse(original: List[dict], rewrites: List[List[dict]], keyword: List[dict]) -> List[dict]:
+    """One ranked list from the original question's hits, the rewrites' and the literal pass's.
+    Each chunk appears once, carrying its best similarity score."""
+    fused: Dict[str, float] = {}
+    best: Dict[str, dict] = {}
+    in_original: Dict[str, int] = {}
+
+    def _keep(h: dict) -> str:
+        k = _chunk_key(h)
+        prev = best.get(k)
+        if prev is None or (h.get("score") or 0) > (prev.get("score") or 0):
+            best[k] = h
+        return k
+
+    for rank, h in enumerate(original, 1):
+        k = _keep(h)
+        if k not in in_original:
+            in_original[k] = rank
+            fused[k] = fused.get(k, 0.0) + _W_ORIGINAL / (_RRF_K + rank)
+    rewrite_best: Dict[str, float] = {}
+    for hits in rewrites:
+        for rank, h in enumerate(hits, 1):
+            k = _keep(h)
+            rewrite_best[k] = max(rewrite_best.get(k, 0.0), _W_REWRITE / (_RRF_K + rank))
+    for k, v in rewrite_best.items():
+        fused[k] = fused.get(k, 0.0) + v
+    seen_kw = set()
+    for rank, h in enumerate(keyword, 1):
+        k = _keep(h)
+        if k not in seen_kw:
+            seen_kw.add(k)
+            fused[k] = fused.get(k, 0.0) + _W_KEYWORD / (_RRF_K + rank)
+    # Ties go to what the original question found, then to the higher similarity.
+    order = sorted(fused, key=lambda k: (-fused[k], in_original.get(k, 10**6),
+                                         -(best[k].get("score") or 0)))
+    return [best[k] for k in order]
 
 
 # Words a rewrite may legitimately introduce — grammar and question scaffolding only. Anything
@@ -1883,11 +1941,13 @@ class VulaIngestionPipeline:
                 variants.append(syn)
             variants += await expand_query(question, self.tenant_id)
 
+        depth = max(top_k * 2, 8)
+
         async def _one(q: str) -> List[dict]:
             try:
                 emb = await self.embedder.embed(q)
                 return await self.store.search(
-                    self.tenant_id, emb, limit=top_k,
+                    self.tenant_id, emb, limit=depth,
                     score_threshold=threshold, exclude_source_types=exclude, category=category,
                     audience=audience)
             except Exception as exc:
@@ -1896,68 +1956,29 @@ class VulaIngestionPipeline:
 
         runs = await asyncio.gather(*[_one(v) for v in variants])
 
-        # The ORIGINAL question's results are always in the pool, so expansion can only add.
-        merged: dict = {}
-        for hits in runs:
-            for h in hits:
-                k = _chunk_key(h)
-                prev = merged.get(k)
-                if prev is None or (h.get("score") or 0) > (prev.get("score") or 0):
-                    merged[k] = h
-
-        # A literal-term pass for what vector search is worst at: a product name typed in a
-        # hurry. Runs whenever the semantic side is thin OR the question names specific terms,
-        # because those are precisely the questions a pure-vector search answers badly.
+        # The literal-term pass runs whenever the question has terms worth matching: an
+        # identifier, a name or a product. Until 2026-10-24 it ran only for a thin or terse
+        # search, and the retrieval diagnostic found it was the ONLY stage holding the right
+        # document in 12 of 75 cases (a VAT number, an account number, an invoice reference).
         terms = _salient_terms(question)
         keyword_hits: List[dict] = []
-        if terms and (len(merged) < top_k or _is_terse(question)):
+        if terms:
             try:
                 keyword_hits = await self.store.keyword_search(
-                    self.tenant_id, terms, limit=max(2, top_k // 2), audience=audience,
+                    self.tenant_id, terms, limit=max(4, top_k), audience=audience,
                     exclude_source_types=exclude)
             except Exception as exc:
                 logger.debug("keyword pass failed: %s", exc)
+        # Only literal matches worth a slot: several query terms, or an identifier (a number or
+        # code is decisive on its own). A chunk sharing one common word pushed real Creation
+        # results out once ("Access Corners"). With nothing from the semantic side, anything.
+        idents = [t for t in terms if any(ch.isdigit() for ch in t)]
+        if any(runs):
+            keyword_hits = [h for h in keyword_hits if h.get("_overlap", 0) >= 2
+                            or any(i in (h.get("text") or "").lower() for i in idents)]
 
-        ranked = sorted(merged.values(), key=lambda h: h.get("score") or 0, reverse=True)
-
-        # Keyword hits carry no similarity score, so ranking them alongside vector hits would
-        # always lose — which is exactly what happened on the first live run: real "Creation"
-        # chunks were displaced by generic boilerplate that merely scored higher. They get
-        # reserved slots instead, interleaved ahead of the weakest semantic results.
-        # Reserve slots for literal matches ONLY when they are worth the space: a chunk hitting
-        # several query terms, or nothing at all from the semantic side. An earlier version
-        # reserved slots unconditionally and pushed real Creation Collection results (0.344,
-        # 0.317) out in favour of "Access Corners" and a stain-removal page that merely
-        # contained one common word. A weak literal match is worse than a decent semantic one.
-        strong_keyword = [h for h in keyword_hits if h.get("_overlap", 0) >= 2]
-        if not ranked:
-            strong_keyword = keyword_hits
-        keyword_hits = strong_keyword
-
-        out: List[dict] = []
-        seen = set()
-        reserved = min(len(keyword_hits), max(1, top_k // 2)) if keyword_hits else 0
-        for h in ranked[:top_k - reserved]:
-            k = _chunk_key(h)
-            if k not in seen:
-                seen.add(k)
-                out.append(h)
-        for h in keyword_hits:
-            if len(out) >= top_k:
-                break
-            k = _chunk_key(h)
-            if k not in seen:
-                seen.add(k)
-                out.append(h)
-        # Backfill from whatever semantic results are left if the keyword side under-delivered.
-        for h in ranked:
-            if len(out) >= top_k:
-                break
-            k = _chunk_key(h)
-            if k not in seen:
-                seen.add(k)
-                out.append(h)
-        return _without_placeholders(out[:top_k])
+        fused = _fuse(runs[0], runs[1:], keyword_hits)
+        return _without_placeholders(fused[:top_k])
 
     async def answer(
         self,

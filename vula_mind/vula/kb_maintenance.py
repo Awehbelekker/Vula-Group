@@ -249,7 +249,10 @@ async def _retrieval_diag() -> Dict[str, Any]:
         prev = (db.table("vula_eval_reports").select("id,report").eq("model", "kb_maintenance")
                 .eq("skill", "retrieval_diag").neq("status", "done").gte("created_at", since)
                 .order("created_at", desc=True).limit(5).execute().data or [])
-        done_rows = retrieval_diag.finished_rows([p.get("report") for p in prev], tenants)
+        # Only a cut-off run of the same kind: a replay resumes a replay of the same report.
+        same = [p.get("report") for p in prev
+                if ((p.get("report") or {}).get("replay_of") or "") == (settings.kb_diag_replay or "")]
+        done_rows = retrieval_diag.finished_rows(same, tenants)
     except Exception as exc:  # noqa: BLE001
         log.info("retrieval_diag: no earlier partial run read (%s)", exc)
     row_id = _CURRENT_ROW.get(None)
@@ -258,12 +261,22 @@ async def _retrieval_diag() -> Dict[str, Any]:
         if not row_id:
             return
         try:
+            partial["replay_of"] = settings.kb_diag_replay or None
             await asyncio.to_thread(lambda: db.table("vula_eval_reports").update(
                 {"report": json.loads(json.dumps(partial, default=str))}).eq("id", row_id).execute())
         except Exception as exc:  # noqa: BLE001
             log.info("retrieval_diag: partial report not saved: %s", exc)
 
-    rep = await retrieval_diag.run(tenants, done_rows=done_rows, on_tenant=save)
+    replay = None
+    if settings.kb_diag_replay:
+        try:
+            got = (db.table("vula_eval_reports").select("report").eq("id", settings.kb_diag_replay)
+                   .limit(1).execute().data or [])
+            replay = ((got[0].get("report") or {}).get("rows") or []) if got else None
+        except Exception as exc:  # noqa: BLE001
+            log.warning("retrieval_diag: replay report %s not read: %s", settings.kb_diag_replay, exc)
+    rep = await retrieval_diag.run(tenants, done_rows=done_rows, on_tenant=save, replay=replay)
+    rep["replay_of"] = settings.kb_diag_replay or None
     rep["summary_by_tenant"] = {t: {k: v[k] for k in ("cases", "causes", "recall@4", "seeded_recall@4")}
                                 for t, v in rep["by_tenant"].items()}
     return rep
