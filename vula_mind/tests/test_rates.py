@@ -298,11 +298,24 @@ def test_rates_endpoint_returns_list():
 
 
 def test_rates_update_endpoint_queues_job():
-    resp = client.post("/takeoff/rates/update")
+    # 2026-10-24: this test let the REAL ConstructionRatesScraper run — Starlette's TestClient
+    # awaits FastAPI BackgroundTasks synchronously within client.post() itself, so the endpoint
+    # returning quickly never meant the background job wasn't genuinely scraping every real
+    # source (AECOM, Rand Tools SA, Builders Warehouse, Cashbuild, Italtile, SA Construction Cost
+    # Index — confirmed, Crawl4AI's own log output showed it hitting a real URL) and then making
+    # a genuine LLM extraction call against whatever MODEL_WORKER the local .env configures. This
+    # test's own name only promises "queues a job", not "the real scrape succeeds" — that's
+    # covered by the scraper's own unit tests elsewhere in this file against controlled fixtures.
+    with patch("vula.takeoff.api.ConstructionRatesScraper") as MockScraper:
+        MockScraper.return_value.run_full_update = AsyncMock(return_value=UpdateResult(
+            total_rates=0, updated=0, new=0, unchanged=0, sources_scraped=[],
+            duration_s=0.0, summary="mocked"))
+        resp = client.post("/takeoff/rates/update")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "started"
     assert "background" in data["message"].lower()
+    MockScraper.return_value.run_full_update.assert_awaited_once()
 
 
 def test_rates_changed_only_filter():

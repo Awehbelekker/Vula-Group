@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vula.api.server import app
+from vula.training.seeder import SeedResult
 
 client = TestClient(app)
 
@@ -222,17 +223,28 @@ def test_training_topics_endpoint():
 
 
 def test_training_seed_endpoint():
-    resp = client.post("/v1/training/seed")
+    # 2026-10-24: let the REAL seed_training_kb run as a genuine FastAPI background task —
+    # Starlette's TestClient awaits it synchronously inside client.post() itself, so this was
+    # really ingesting every shared training document for real on every test run (same shape of
+    # bug as test_rates.py's endpoint test, found the same day). This test's own name only
+    # promises "the endpoint responds and queues the job", not "a real seed succeeds".
+    with patch("vula.api.training.seed_training_kb", new=AsyncMock(
+            return_value=SeedResult(total_documents=0, total_chunks=0, failed=[], duration_s=0.0))) as mock_seed:
+        resp = client.post("/v1/training/seed")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "started"
     assert "background" in data["message"].lower() or "seeding" in data["message"].lower()
+    mock_seed.assert_awaited_once_with(force=False)
 
 
 def test_training_seed_force_param():
-    resp = client.post("/v1/training/seed?force=true")
+    with patch("vula.api.training.seed_training_kb", new=AsyncMock(
+            return_value=SeedResult(total_documents=0, total_chunks=0, failed=[], duration_s=0.0))) as mock_seed:
+        resp = client.post("/v1/training/seed?force=true")
     assert resp.status_code == 200
     assert resp.json()["force"] is True
+    mock_seed.assert_awaited_once_with(force=True)
 
 
 def test_training_status_endpoint():

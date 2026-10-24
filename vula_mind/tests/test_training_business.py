@@ -195,11 +195,18 @@ def test_business_training_topics_endpoint():
 
 
 def test_business_training_seed_endpoint():
-    resp = client.post("/v1/training/business/seed")
+    # 2026-10-24: same unmocked-background-task bug found in test_training.py/test_rates.py the
+    # same day — Starlette's TestClient awaits FastAPI BackgroundTasks synchronously inside
+    # client.post(), so this was really seeding the business KB for real on every test run.
+    from vula.training.seeder import SeedResult
+    with patch("vula.api.training.seed_business_kb", new=AsyncMock(
+            return_value=SeedResult(total_documents=0, total_chunks=0, failed=[], duration_s=0.0))) as mock_seed:
+        resp = client.post("/v1/training/business/seed")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "started"
     assert "background" in data["message"].lower() or "seeding" in data["message"].lower()
+    mock_seed.assert_awaited_once_with(force=False)
 
 
 def test_business_training_status_endpoint():
