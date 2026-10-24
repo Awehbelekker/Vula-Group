@@ -37,9 +37,9 @@ test("inbox: search and chips filter the list; back returns to it on a phone", a
   await openScreen(page, INBOX, { viewport: VIEWPORTS.mobile, theme: "light" });
   const rows = page.locator(".vin-list [role=listitem]");
   await expect(rows).toHaveCount(8);
-  await page.getByRole("button", { name: /You took over/ }).click();
+  await page.getByRole("button", { name: /A person is handling/ }).click();
   await expect(rows).toHaveCount(1);
-  await page.getByRole("button", { name: /You took over/ }).click();
+  await page.getByRole("button", { name: /A person is handling/ }).click();
   await page.getByRole("button", { name: /Waiting on you/ }).click();
   await expect(rows).toHaveCount(3);
   await page.getByRole("button", { name: /Waiting on you/ }).click();
