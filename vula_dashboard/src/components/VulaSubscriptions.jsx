@@ -1,5 +1,6 @@
 import { useSubscriptions } from "./master/useSignupsHQ";
 import SubscriptionsV2 from "./master/SubscriptionsV2";
+import { sidePad } from "../lib/layout";
 
 
 const C = {
@@ -182,7 +183,7 @@ function VulaSubscriptionsV1() {
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap');`}</style>
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px"}}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: `32px ${sidePad(24)}` }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 28 }}>

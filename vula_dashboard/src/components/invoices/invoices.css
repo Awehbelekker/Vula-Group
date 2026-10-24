@@ -13,6 +13,8 @@
 .vin2-num--link { all: unset; font: 600 var(--fs-body)/1.3 var(--font-mono); color: var(--brand-text); cursor: pointer;
   text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; white-space: nowrap; }
 .vin2-num--link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* a 32px-tall target on a phone without moving anything: padding, cancelled by margin */
+@media (max-width: 760px) { .vin2-num--link { padding: 7px 0; margin: -7px 0; } }
 .vin2-who { display: flex; flex-direction: column; min-width: 0; }
 .vin2-who-line { font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
 .vin2-sub { font-size: var(--fs-caption); color: var(--muted); }

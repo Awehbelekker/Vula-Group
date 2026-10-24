@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useSignups } from "./master/useSignupsHQ";
 import SignupsV2 from "./master/SignupsV2";
+import { sidePad } from "../lib/layout";
 
 
 const COLORS = {
@@ -153,7 +154,7 @@ function VulaAdminV1() {
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap');
       `}</style>
 
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px"}}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: `32px ${sidePad(24)}` }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 28 }}>

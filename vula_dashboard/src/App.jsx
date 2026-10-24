@@ -446,7 +446,7 @@ export default function App() {
           </select>
         ) : null}
       >
-        <div style={{ padding: "4px 0 24px" }}>
+        <div className="v1-page" style={{ padding: "4px 0 24px" }}>
           <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} v2={v2}
             onOpenTenant={async (tid) => {
               // An optional support reason for the audit trail (vula_admin_audit + the tenant's

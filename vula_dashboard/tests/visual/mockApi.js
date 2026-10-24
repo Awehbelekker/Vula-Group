@@ -37,6 +37,9 @@ function routes(role, modules = []) {
     r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? (modules.length ? { ...F.tenant, modules: [...F.tenant.modules, ...modules] } : F.tenant) : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
     r("GET", `^/v1/team/${T}/me`, () => F.teamMeFor(role)),
     r("GET", `^/v1/team/${T}/audit`, () => ({ events: F.teamAudit })),
+    r("GET", `^/v1/team/${T}/notices/settings`, () => ({ settings: { birthdays: true, holidays: true, send_hour: 8 }, observances: [] })),
+    r("GET", `^/v1/team/${T}/notices/birthday-suggestions`, () => ({ suggestions: [] })),
+    r("GET", `^/v1/team/${T}/notices`, () => ({ notices: [], full: role !== "rep" && role !== "staff" })),
     r("GET", `^/v1/team/${T}`, () => ({ members: F.teamMembers })),
     r("GET", `^/v1/users/${T}/users`, () => ({ users: F.teamLogins })),
     // a sales rep's own screens (My Work) — filled for a rep's own login (created_by / rep_phone);

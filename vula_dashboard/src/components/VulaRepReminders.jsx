@@ -4,6 +4,7 @@
  */
 import { useRepReminders } from "./rep/useRepReminders";
 import RepRemindersV2 from "./rep/RepRemindersV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
@@ -11,7 +12,7 @@ function VulaRepRemindersV1({ tenantId, repPhone }) {
   const { reminders, status, setStatus, complete, isOverdue } = useRepReminders(tenantId, repPhone);
 
   return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
+    <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
       <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>My Reminders</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 16px" }}>
         Set via WhatsApp ("remind me to follow up with X Friday") — logged meetings also create

@@ -1,5 +1,6 @@
 import { KBS, useTraining } from "./master/useTraining";
 import TrainingV2 from "./master/TrainingV2";
+import { sidePad } from "../lib/layout";
 
 
 const C = {
@@ -52,7 +53,7 @@ function VulaTrainingV1() {
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap');`}</style>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px"}}>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: `32px ${sidePad(24)}` }}>
 
         {/* Header */}
         <div style={{ marginBottom: 28 }}>

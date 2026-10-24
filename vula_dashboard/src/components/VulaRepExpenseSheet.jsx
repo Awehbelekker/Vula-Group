@@ -6,6 +6,7 @@
  */
 import { useRepExpenseSheet } from "./rep/useRepExpenseSheet";
 import RepExpenseSheetV2 from "./rep/RepExpenseSheetV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)",
             amber: "var(--warn)", text: "var(--text)", muted: "var(--muted)" };
@@ -19,7 +20,7 @@ function VulaRepExpenseSheetV1({ tenantId, repPhone }) {
   const barColor = pct >= 100 ? C.red : pct >= 90 ? C.amber : C.green;
 
   return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
+    <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
       <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>My Expense Sheet</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 16px" }}>
         Every receipt you scan on WhatsApp is added automatically. A compiled workbook with the

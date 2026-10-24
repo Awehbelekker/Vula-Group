@@ -5,6 +5,7 @@
 import { useLedger } from "./finances/useFinances";
 import VulaJobCosting from "./VulaJobCosting";
 import VulaCrossCheck from "./VulaCrossCheck";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const rand = (n) => "R" + (Number(n) || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
@@ -29,29 +30,31 @@ export default function VulaFinances({ tenantId }) {
   } = useLedger(tenantId);
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
+    <div style={{ maxWidth: 1000, margin: "0 auto", padding: `24px ${sidePad(24)}` }}>
       <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Finances</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Money in/out per project — built from invoices & payments Vula files. Payments are matched to invoices, not guessed.</p>
 
       <VulaJobCosting tenantId={tenantId} />
       <VulaCrossCheck tenantId={tenantId} />
 
-      <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
-        <div style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+        <div style={{ flex: "1 1 140px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 12, color: C.muted }}>Money in</div>
           <div style={{ fontSize: 24, fontWeight: 700, color: C.green }}>{rand(data.total_in)}</div>
         </div>
-        <div style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
+        <div style={{ flex: "1 1 140px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 12, color: C.muted }}>Money out</div>
           <div style={{ fontSize: 24, fontWeight: 700, color: C.red }}>{rand(data.total_out)}</div>
         </div>
-        <div style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
+        <div style={{ flex: "1 1 140px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 12, color: C.muted }}>Net</div>
           <div style={{ fontSize: 24, fontWeight: 700, color: C.text }}>{rand(data.total_in - data.total_out)}</div>
         </div>
       </div>
 
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
+      {/* the tables scroll sideways on a phone rather than squashing (mobile pass, 24 Oct 2026) */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflowX: "auto", marginBottom: 20 }}>
+        <div style={{ minWidth: 520 }}>
         <div style={{ padding: "10px 16px", display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr 1.2fr", gap: 8, fontSize: 11, color: C.muted, textTransform: "uppercase", background: C.alt }}>
           <span>Project</span><span>In</span><span>Out</span><span>Budget</span><span>Remaining</span>
         </div>
@@ -150,10 +153,12 @@ export default function VulaFinances({ tenantId }) {
             )}
           </div>
         ))}
+        </div>
       </div>
 
       <h3 style={{ fontSize: 14, color: C.text, margin: "0 0 8px" }}>Recent transactions</h3>
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflowX: "auto" }}>
+        <div style={{ minWidth: 480 }}>
         {data.transactions.slice(0, 25).map((t) => (
           <div key={t.id} style={{ padding: "9px 16px", borderTop: `1px solid ${C.alt}`, display: "grid", gridTemplateColumns: "70px 1.4fr 1fr 90px 70px", gap: 8, alignItems: "center", fontSize: 12.5 }}>
             <span style={{ color: t.direction === "in" ? C.green : t.direction === "out" ? C.red : C.muted, fontWeight: 600 }}>{t.direction === "in" ? "▲ in" : t.direction === "out" ? "▼ out" : "•"}</span>
@@ -163,6 +168,7 @@ export default function VulaFinances({ tenantId }) {
             <span style={{ fontSize: 10, color: t.reconciled ? 'var(--ok)' : C.muted }}>{t.reconciled ? "✓ matched" : t.kind}</span>
           </div>
         ))}
+        </div>
       </div>
       <div style={{ marginTop: 20 }}>
         <span onClick={toggleTrialBalance} style={{ fontSize: 12, color: C.muted, cursor: "pointer", borderBottom: `1px dotted ${C.muted}` }}>

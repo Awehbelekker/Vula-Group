@@ -7,6 +7,7 @@ import { T } from "../theme/tokens";
 import { Card, Button, Badge, SectionTitle, inputStyle } from "./ui";
 import { FIELD_LABEL, META, isSecret, usePayments } from "./payments/usePayments";
 import PaymentsV2 from "./payments/PaymentsV2";
+import { sidePad } from "../lib/layout";
 
 export default function VulaPayments({ tenantId, v2 = false }) {
   if (v2) return <PaymentsV2 tenantId={tenantId} />;
@@ -17,7 +18,7 @@ function PaymentsV1({ tenantId }) {
   const { data, connected, openId, form, setForm, mode, setMode, saving, connect, makeDefault, disconnect, open: openGateway, close } = usePayments(tenantId);
 
   return (
-    <div style={{ maxWidth: 880, margin: "0 auto", padding: 24 }}>
+    <div style={{ maxWidth: 880, margin: "0 auto", padding: `24px ${sidePad(24)}` }}>
       <SectionTitle sub="Connect the gateways you use — pay-links & checkout use your default. Your secret keys are stored securely and never shown back.">Payments</SectionTitle>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(380px,1fr))", gap: 14 }}>
