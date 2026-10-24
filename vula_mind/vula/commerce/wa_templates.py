@@ -354,6 +354,26 @@ def promo_template(tenant_id: str) -> Dict[str, Any]:
                          "url": f"{(settings.public_base_url or '').rstrip('/')}/l/{{{{1}}}}"}]}
 
 
+# The business's own post layout (2026-10-24, Off the Hook): a headline, a short description and a
+# call to action, each on its own line. Meta refuses a newline inside a parameter, so the layout
+# lives in the template and each part is one parameter. Starts and ends with fixed text (Meta rule).
+STORY_SUFFIX = "shop_story"
+STORY_BODY = ("Hi {{1}}! 👋\n\n*{{2}}*\n\n{{3}}\n\n👉 {{4}}\n\n"
+              "Tap Shop now or reply here to order. Reply STOP if you'd rather not get offers.")
+STORY_EXAMPLE = ["Thandi", "🐟 FRESH TUNA – LIMITED STOCK! 🐟",
+                 "Big Eye and Yellowfin tuna just landed — perfect for steaks and sashimi.",
+                 "Order before 12pm for delivery tomorrow."]
+
+
+def story_template(tenant_id: str) -> Dict[str, Any]:
+    from config import settings
+    from vula.commerce.job_config import template_name
+    return {"name": template_name(tenant_id, STORY_SUFFIX), "body": STORY_BODY, "category": "MARKETING",
+            "header_type": "IMAGE",
+            "buttons": [{"type": "URL", "text": "Shop now",
+                         "url": f"{(settings.public_base_url or '').rstrip('/')}/l/{{{{1}}}}"}]}
+
+
 def _promo_sample_image(tenant_id: str) -> Optional[str]:
     """A photo for Meta to review the promotion's design against: a product photo, else the logo."""
     try:
@@ -492,18 +512,19 @@ async def submit_standard(tenant_id: str) -> Dict[str, Any]:
         (failed.append({"name": t["name"], "error": res["error"]}) if res.get("error")
          else submitted.append(t["name"]))
     if mods & {"wa_shop", "orders", "products"}:
-        promo = promo_template(tenant_id)
-        if promo["name"] in existing:
-            already.append(promo["name"])
-        elif not (sample := _promo_sample_image(tenant_id)):
-            failed.append({"name": promo["name"],
-                           "error": "Add a product photo or your logo first — Meta reviews the picture "
-                                    "promotion against a sample image."})
-        else:
-            res = await create_template(tenant_id, promo["name"], promo["body"], category="MARKETING",
-                                        example_params=["Thandi", "20% off all basins this weekend only!"],
-                                        header_type="IMAGE", header_example_url=sample,
-                                        buttons=promo["buttons"], created_by="standard set")
-            (failed.append({"name": promo["name"], "error": res["error"]}) if res.get("error")
-             else submitted.append(promo["name"]))
+        for promo, examples in ((promo_template(tenant_id), ["Thandi", "20% off all basins this weekend only!"]),
+                                (story_template(tenant_id), STORY_EXAMPLE)):
+            if promo["name"] in existing:
+                already.append(promo["name"])
+            elif not (sample := _promo_sample_image(tenant_id)):
+                failed.append({"name": promo["name"],
+                               "error": "Add a product photo or your logo first — Meta reviews the picture "
+                                        "promotion against a sample image."})
+            else:
+                res = await create_template(tenant_id, promo["name"], promo["body"], category="MARKETING",
+                                            example_params=examples,
+                                            header_type="IMAGE", header_example_url=sample,
+                                            buttons=promo["buttons"], created_by="standard set")
+                (failed.append({"name": promo["name"], "error": res["error"]}) if res.get("error")
+                 else submitted.append(promo["name"]))
     return {"submitted": submitted, "already_there": already, "failed": failed}

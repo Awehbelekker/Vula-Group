@@ -22,6 +22,8 @@
 - {skill: commerce_admin, role: owner, prompt: "Invoice Regan for 2kg angelfish at R100/kg", expect: create_invoice,
    forbid: [find_document]}
 - {skill: commerce_admin, role: owner, prompt: "Remind me to call the fish supplier tomorrow at 9", expect: create_reminder}
+- {skill: commerce_admin, role: owner, prompt: "Send everyone a promo for the fresh tuna", expect: picture_promotion,
+   forbid: [preview_broadcast], note: "2026-10-24 OTH: drafted in the shop's own post layout"}
 - {skill: commerce_admin, role: sales_rep, prompt: "Set the hake stock to zero", expect: null,
    forbid: [update_stock], note: "reps don't have stock tools — must decline, not improvise"}
 

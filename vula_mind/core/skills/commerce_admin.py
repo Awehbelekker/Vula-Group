@@ -377,13 +377,17 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "in the owner's words (one or two sentences, no greeting — the customer's "
                        "name is added). product = the product whose photo to use (optional). "
                        "test=true sends it only to the owner's own phone. Without confirm=true "
-                       "returns a preview with how many customers it reaches. Call "
-                       "recent_promotions first and match the business's own tone and layout.",
+                       "returns a preview with how many customers it reaches. brief = what to "
+                       "promote in the owner's words; Vula drafts it in the business's own post "
+                       "layout (headline, body, cta). Only pass headline/body/cta when the owner "
+                       "gives or changes those exact words.",
         "parameters": {"type": "object", "properties": {
             "message": {"type": "string"}, "product": {"type": "string"},
+            "brief": {"type": "string"}, "headline": {"type": "string"},
+            "body": {"type": "string"}, "cta": {"type": "string"},
             "audience": {"type": "string", "enum": ["all", "active_30d", "high_value"]},
             "test": {"type": "boolean"}, "confirm": {"type": "boolean"}},
-            "required": ["message"]}}},
+            "required": []}}},
     {"type": "function", "function": {
         "name": "set_product_photo",
         "description": "Make a real photo the website picture of a product. Only used from the "
@@ -3546,17 +3550,40 @@ class CommerceAdminSkill(BaseSkill):
         if test and not phone:
             return {"error": "I can only send a test to the phone you're messaging from."}
         live = bool(args.get("confirm")) or test
+        parts = await self._promotion_parts(tid, args)
+        if parts and parts.get("error"):
+            return {"error": parts["error"]}
+        if parts:
+            # The draft rides in the tool's own args, so Confirm sends exactly what was previewed.
+            args.update(parts)
         res = await promo.send(tid, args.get("message") or "", product_hint=args.get("product") or None,
                                audience=args.get("audience") or "all",
-                               test_phone=phone if test else None, dry_run=not live)
+                               test_phone=phone if test else None, dry_run=not live, parts=parts)
         if res.get("error"):
             return {"error": res["error"]}
         pic = f"the {res['product']} photo" if res.get("product") else "your first product photo"
         if not live:
             ready = res.get("template_status") == "APPROVED"
-            return {"preview": True, "reaches": res.get("recipient_count"),
+            if res.get("story"):
+                text = (f"Hi <name>! 👋\n\n*{parts['headline']}*\n\n{parts['body']}\n\n👉 {parts['cta']}"
+                        "\n\nTap Shop now or reply here to order.")
+            else:
+                text = f"Hi <name>! {res['text']} Tap Shop now to have a look."
+            notes = []
+            if parts and not res.get("story"):
+                notes.append("Your own layout (headline, description, call to action) goes out once "
+                             "Meta approves it — until then it's sent as one line.")
+            if res.get("ai_picture"):
+                notes.append(f"{pic.capitalize()} is still an AI picture — send a real photo captioned "
+                             f"\"photo {res.get('product') or '<product>'}\" first if you'd rather.")
+            uninvited = promo.uninvited_count(tid)
+            if uninvited:
+                notes.append(f"{uninvited} imported contacts haven't been invited to get offers yet, "
+                             "so they won't receive it.")
+            return {"preview": True, "message_customers_get": text,
+                    "reaches": res.get("recipient_count"),
                     "opted_out_left_out": res.get("suppressed_count"), "picture": pic,
-                    "text": f"Hi <name>! {res['text']} Tap Shop now to have a look.",
+                    "notes": " ".join(notes),
                     "template_status": res.get("template_status"),
                     "message": ("Confirm to send (confirm=true), or test=true to send it to yourself first."
                                 if ready else "The promotion template isn't approved by Meta yet — "
@@ -3575,6 +3602,24 @@ class CommerceAdminSkill(BaseSkill):
                     + (f" ({res.get('failed')} failed)" if res.get("failed") else "") + ".")
         return _checked({"broadcast_id": res.get("broadcast_id"), "recipients": res.get("recipient_count"),
                          "sent": res.get("sent")}, line)
+
+    async def _promotion_parts(self, tid: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """{headline, body, cta} in the business's own layout: the owner's exact words when given,
+        else a draft from the brief (promo.draft). None for an old-style one-line message."""
+        from vula.commerce import promo
+        given = {k: (args.get(k) or "").strip() for k in ("headline", "body", "cta")}
+        if given["headline"] and given["body"]:
+            owner_words = " ".join(given.values()) + " " + (args.get("brief") or "")
+            return promo.check_parts(given, brief=owner_words, trusted="")
+        brief = (args.get("brief") or "").strip()
+        if not brief:
+            return None
+        product = None
+        if args.get("product"):
+            from core.skills.commerce_assistant import _match_product
+            product = _match_product(args["product"], await service.list_products(
+                tid, in_stock_only=False, statuses={"active"}))
+        return await promo.draft(tid, brief, product)
 
     async def _order_payment(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         match = await self._find_order_by_display_id(tid, args.get("order_number") or "")
