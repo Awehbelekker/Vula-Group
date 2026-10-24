@@ -158,7 +158,7 @@ def render(brand: dict, inv: dict, eft_details: Optional[str], card_url: Optiona
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Invoice {number} · {name}</title><style>
-body{{margin:0;background:#f5f3ee;font-family:system-ui,-apple-system,sans-serif;color:#2a2a2a}}
+body{{margin:0;padding:0 12px;background:#f5f3ee;font-family:system-ui,-apple-system,sans-serif;color:#2a2a2a}}
 .card{{max-width:440px;margin:32px auto;background:#fff;border-radius:14px;padding:28px 24px;
 box-shadow:0 2px 10px rgba(0,0,0,.06)}}
 .logo{{max-height:56px;max-width:200px}}.muted{{color:#6e6a63;margin:16px 0 4px}}
