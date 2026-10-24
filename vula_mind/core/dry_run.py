@@ -50,7 +50,7 @@ READ_ONLY = frozenset({
 # confirm they run for real, so the reply can quote the real audience size (benchmark, 1 Oct —
 # "Send all customers…" got no reach figure because the preview itself was blocked).
 PREVIEW_UNLESS_CONFIRMED = frozenset({"send_broadcast", "set_vat_registration", "staff_notice",
-                                       "staff_poll"})
+                                       "staff_poll", "set_product_photo"})
 
 NOT_RUN = ("Benchmark dry run: this action was recorded but NOT performed. Don't say it's done — "
            "say what you would do and what you'd need to confirm.")

@@ -109,7 +109,7 @@ async def test_one_acknowledgement_for_a_burst(monkeypatch):
     await asyncio.sleep(0.1)
     assert len(sent) == 1
     assert "Saved 3 promotions" in sent[0] and "1 was already saved" in sent[0]
-    assert "1 picture had no text" in sent[0] and "*examples only*" in sent[0]
+    assert "couldn't fetch 1 picture" in sent[0] and "*examples only*" in sent[0]
     assert asked == [("promo_scope", "p1,p2,p3")]
     proposed.assert_called_once_with("off-the-hook", "27645755210")   # then the voice is offered
     assert not wa._PROMO_BURSTS
