@@ -1,0 +1,6 @@
+/* share.css — the "Shared with Vula" sheet (share/ShareSheet.jsx). Tokens only. */
+.vsh-muted { color: var(--muted); font-size: var(--fs-caption); margin: 0; }
+.vsh-files { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.vsh-files li { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.vsh-name { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }

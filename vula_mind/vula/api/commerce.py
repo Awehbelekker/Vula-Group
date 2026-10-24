@@ -4926,20 +4926,51 @@ async def public_app_icon(tenant_id: str, size: int):
     return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
+def _dashboard_origin(tenant_id: str, app: Optional[str]) -> Optional[str]:
+    """The dashboard address the installed app runs on, as the dashboard reports it (?app=), when
+    it's one of Vula's dashboard hosts: this business's own, the shared one, or *.vula-ai.com.
+    Anything else is ignored."""
+    from urllib.parse import urlparse
+    from config import settings as _settings
+    from vula.api.tenants import dashboard_url_for
+    u = urlparse(app or "")
+    if u.scheme not in ("https", "http") or not u.hostname or u.path not in ("", "/"):
+        return None
+    if u.scheme == "http" and u.hostname not in ("localhost", "127.0.0.1"):
+        return None
+    known = {urlparse(dashboard_url_for(tenant_id)).hostname, urlparse(_settings.dashboard_url).hostname}
+    if u.hostname in known or u.hostname.endswith(".vula-ai.com") or u.hostname in ("localhost", "127.0.0.1"):
+        return f"{u.scheme}://{u.netloc}"
+    return None
+
+
 @router.get("/{tenant_id}/manifest.webmanifest")
-async def public_manifest(tenant_id: str):
+async def public_manifest(tenant_id: str, app: Optional[str] = None):
+    """The installed app's manifest in the business's own name, colour and icon. It's served from
+    the API's address, so the app's own address comes from the dashboard (?app=its origin): a
+    relative start_url would point at the API, and the phone's Share sheet target (photos and
+    PDFs shared into Vula — public/sw.js) must be on the dashboard's address."""
     from fastapi.responses import JSONResponse
     from config import settings as _settings
     brand = await public_brand(tenant_id)
     name = brand.get("name") or tenant_id
     base = f"{(_settings.public_base_url or '').rstrip('/')}/v1/commerce/{tenant_id}/app-icon"
-    return JSONResponse({
+    origin = _dashboard_origin(tenant_id, app)
+    root = f"{origin}/" if origin else "/"
+    manifest = {
         "name": name, "short_name": name[:12], "description": brand.get("tagline") or f"{name} — run by Vula",
-        "start_url": "/", "scope": "/", "display": "standalone",
+        "start_url": root, "scope": root, "display": "standalone",
         "background_color": "#F7F4EE", "theme_color": brand.get("accent_color") or "#2C5545",
         "icons": [{"src": f"{base}/192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
                   {"src": f"{base}/512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
-    }, media_type="application/manifest+json", headers={"Cache-Control": "public, max-age=3600"})
+    }
+    if origin:
+        manifest["share_target"] = {
+            "action": f"{origin}/share-target", "method": "POST", "enctype": "multipart/form-data",
+            "params": {"title": "title", "text": "text", "files": [
+                {"name": "files", "accept": ["image/*", "application/pdf", ".pdf", ".docx", ".xlsx", ".csv"]}]}}
+    return JSONResponse(manifest, media_type="application/manifest+json",
+                        headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.post("/{tenant_id}/admin/brand/suggest")

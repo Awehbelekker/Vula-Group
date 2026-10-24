@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { takeHandOff } from "../../lib/sharedFiles";
 
 export const EXT_ICON = {
   ".pdf": "PDF", ".docx": "DOC", ".doc": "DOC",
@@ -402,6 +403,12 @@ export function useKbUpload(tenantId) {
     }));
     setQueue((q) => [...q, ...items]);
   };
+  // Files shared into Vula from the phone (share/ShareSheet.jsx) join the queue; Upload still sends them.
+  const [fromShare, setFromShare] = useState(false);
+  useEffect(() => {
+    const shared = takeHandOff("documents");
+    if (shared?.length) { onFiles(shared); setFromShare(true); }
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const uploadAll = async () => {
     if (!tenantId.trim() || uploading) return;
@@ -460,5 +467,5 @@ export function useKbUpload(tenantId) {
   const bumpLibrary = () => setLibraryKey((k) => k + 1);
   const clearQueue = () => setQueue([]);
   const pendingCount = queue.filter((q) => q.status === "pending").length;
-  return { docs, loading, error, load, queue, uploading, libraryKey, bumpLibrary, forCustomers, setForCustomers, onFiles, uploadAll, clearQueue, pendingCount };
+  return { fromShare, docs, loading, error, load, queue, uploading, libraryKey, bumpLibrary, forCustomers, setForCustomers, onFiles, uploadAll, clearQueue, pendingCount };
 }

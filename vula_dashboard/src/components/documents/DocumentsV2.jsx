@@ -5,7 +5,7 @@
  * store media, Google Drive, your website), Tidy up (waiting for a project, health, re-read, learn)
  * and What customers see (who can see each document, a customer's-eye search, the KB files).
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BookOpen, Cloud, Eye, FileUp, FolderInput, Globe, HeartPulse, Image as ImageIcon, RefreshCw, ShoppingBag, Upload, X,
 } from "lucide-react";
@@ -38,6 +38,7 @@ const Note = ({ children, tone }) => (children ? <p className={`vdc-note${tone ?
 export default function DocumentsV2({ tenantId = "default", defaultFiledBy }) {
   const [tab, setTab] = useState("library");
   const kb = useKbUpload(tenantId);
+  useEffect(() => { if (kb.fromShare) setTab("add"); }, [kb.fromShare]);   // files shared from the phone wait here
   return (
     <div className="vdc">
       <PageHeader sub="Everything Vula has filed for you, and what it uses to answer questions."
