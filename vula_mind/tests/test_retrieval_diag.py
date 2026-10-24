@@ -46,3 +46,37 @@ async def test_diagnose_runs_every_stage_offline():
         assert k in row
     if row["prod_rank"]:
         assert row["cause"] == "found"
+
+
+def test_finished_rows_takes_each_tenant_from_the_newest_partial():
+    newer = {"rows": [{"tenant": "a", "id": "a2"}]}
+    older = {"rows": [{"tenant": "a", "id": "a1"}, {"tenant": "b", "id": "b1"}, {"tenant": "x", "id": "x1"}]}
+    got = d.finished_rows([None, newer, older], ["a", "b", "c"])
+    assert got == {"a": [{"tenant": "a", "id": "a2"}], "b": [{"tenant": "b", "id": "b1"}]}
+
+
+@pytest.mark.asyncio
+async def test_run_saves_after_each_tenant_and_reuses_finished_ones(monkeypatch):
+    calls = []
+
+    async def fake_synth(t, **kw):
+        calls.append(t)
+        return [{"tenant": t, "question": "q", "expected_docs": ["x.pdf"], "synthetic": True}]
+
+    async def fake_diag(c):
+        return {"tenant": c["tenant"], "cause": "found", "prod_rank": 1}
+
+    monkeypatch.setattr(d, "load_cases", lambda: [])
+    monkeypatch.setattr(d, "synthesize", fake_synth)
+    monkeypatch.setattr(d, "diagnose", fake_diag)
+    saved = []
+
+    async def on_tenant(rep):
+        saved.append(sorted(rep["by_tenant"]))
+
+    rep = await d.run(["a", "b"], done_rows={"a": [{"tenant": "a", "cause": "found", "prod_rank": 2}]},
+                      on_tenant=on_tenant)
+    assert calls == ["b"]                       # a was reused, not redone
+    assert saved == [["a"], ["a", "b"]]
+    assert rep["synthesized"] == {"a": "reused", "b": 1}
+    assert rep["summary"]["cases"] == 2

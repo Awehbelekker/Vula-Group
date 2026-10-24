@@ -24,10 +24,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+# The vula_eval_reports row of the job now running, for jobs that save progress as they go.
+_CURRENT_ROW: ContextVar = ContextVar("kb_maintenance_row", default=None)
 
 JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view",
         "retrieval_live", "retrieval_diag")
@@ -230,11 +234,36 @@ async def _retrieval_live() -> Dict[str, Any]:
 
 async def _retrieval_diag() -> Dict[str, Any]:
     """Where retrieval loses the right document, per stage (evals/retrieval_diag.py). Tenants from
-    KB_DIAG_TENANTS. The stored report has the questions; the log line has counts only."""
+    KB_DIAG_TENANTS. The stored report has the questions; the log line has counts only.
+    Saves the report after each tenant, and picks up the tenants an earlier run (cut off by a
+    restart within the last day) already finished."""
+    from datetime import timedelta
     from config import settings
     from evals import retrieval_diag
+    from vula.commerce import service
     tenants = [t.strip() for t in (settings.kb_diag_tenants or "").split(",") if t.strip()]
-    rep = await retrieval_diag.run(tenants)
+    db = service._client()
+    done_rows: Dict[str, List[Dict[str, Any]]] = {}
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        prev = (db.table("vula_eval_reports").select("id,report").eq("model", "kb_maintenance")
+                .eq("skill", "retrieval_diag").neq("status", "done").gte("created_at", since)
+                .order("created_at", desc=True).limit(5).execute().data or [])
+        done_rows = retrieval_diag.finished_rows([p.get("report") for p in prev], tenants)
+    except Exception as exc:  # noqa: BLE001
+        log.info("retrieval_diag: no earlier partial run read (%s)", exc)
+    row_id = _CURRENT_ROW.get(None)
+
+    async def save(partial: Dict[str, Any]) -> None:
+        if not row_id:
+            return
+        try:
+            await asyncio.to_thread(lambda: db.table("vula_eval_reports").update(
+                {"report": json.loads(json.dumps(partial, default=str))}).eq("id", row_id).execute())
+        except Exception as exc:  # noqa: BLE001
+            log.info("retrieval_diag: partial report not saved: %s", exc)
+
+    rep = await retrieval_diag.run(tenants, done_rows=done_rows, on_tenant=save)
     rep["summary_by_tenant"] = {t: {k: v[k] for k in ("cases", "causes", "recall@4", "seeded_recall@4")}
                                 for t, v in rep["by_tenant"].items()}
     return rep
@@ -254,6 +283,7 @@ async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
                   .execute().data or [{}])[0].get("id")
     except Exception as exc:  # noqa: BLE001
         log.warning("kb maintenance %s: report row not created: %s", job, exc)
+    token = _CURRENT_ROW.set(row_id)
     try:
         rep = await fn()
         log.info("KB maintenance %s: %s", job, json.dumps(rep.get("summary") or rep.get("summary_by_tenant"),
@@ -264,6 +294,8 @@ async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
         log.exception("KB maintenance %s failed", job)
         rep = {"error": f"{type(exc).__name__}: {exc}"}
         upd = {"status": "failed", "error": rep["error"][:300], "finished_at": datetime.now(timezone.utc).isoformat()}
+    finally:
+        _CURRENT_ROW.reset(token)
     if row_id:
         try:
             db.table("vula_eval_reports").update(upd).eq("id", row_id).execute()
