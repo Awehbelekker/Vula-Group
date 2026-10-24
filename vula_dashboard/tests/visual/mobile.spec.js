@@ -41,6 +41,7 @@ async function boot(page, { role, modules }, width) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
   page.setDefaultTimeout(8000);           // a control that never appears is a finding, not a hang
+  page.setDefaultNavigationTimeout(60000); // the dev server compiles on the first load
   // a browser alert/confirm freezes the page (and every measurement): note it and close it
   page.on("dialog", (d) => { errors.push(`unexpected ${d.type()} dialog: ${d.message().slice(0, 80)}`); d.dismiss().catch(() => {}); });
   await page.setViewportSize({ width, height: HEIGHT[width] });
