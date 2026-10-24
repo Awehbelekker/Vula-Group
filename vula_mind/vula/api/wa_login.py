@@ -49,6 +49,8 @@ MAX_STARTS_PER_IP = 20           # per 10 minutes
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"     # no 0/O/1/I
 LOGIN_RE = re.compile(r"^\s*(?:log\s*in|login|sign\s*in)\s*[:#-]?\s*([A-Za-z0-9]{6})\s*[.!]?\s*$", re.I)
 AUTH_TEMPLATE = "vula_login_code"
+MAX_SEND_NUMBERS = 4             # business numbers tried for one code
+WINDOW = timedelta(hours=23, minutes=30)   # WhatsApp's 24-hour reply window, with a margin
 SYNTHETIC_EMAIL_DOMAIN = "users.vula-ai.com"
 
 
@@ -119,6 +121,31 @@ def _memberships(phone: str, tenant_id: Optional[str] = None) -> List[Dict[str, 
     rows = (_db().table("vula_team_members").select("id,tenant_id,name,whatsapp,role,email")
             .eq("active", True).execute().data or [])
     return [r for r in rows if _digits(r.get("whatsapp") or "") == target]
+
+
+def _by_recent_chat(members: List[Dict[str, Any]], host_tenant: Optional[str]) -> List[Dict[str, Any]]:
+    """This person's teams, best first: the business this address belongs to, then the ones whose
+    WhatsApp number they messaged most recently (vula_team_members.last_message_at, stamped on
+    every inbound message), then the rest. Each row gains `last_message_at`."""
+    ids = [m["id"] for m in members if m.get("id")]
+    seen: Dict[str, Any] = {}
+    if ids:
+        try:
+            rows = (_db().table("vula_team_members").select("id,last_message_at").in_("id", ids)
+                    .execute().data or [])
+            seen = {r["id"]: r.get("last_message_at") for r in rows}
+        except Exception as exc:
+            log.debug("last chat lookup failed: %s", exc)
+    out = [{**m, "last_message_at": seen.get(m.get("id")) or m.get("last_message_at")} for m in members]
+    out.sort(key=lambda m: str(m.get("last_message_at") or ""), reverse=True)
+    out.sort(key=lambda m: m.get("tenant_id") != host_tenant)
+    return out
+
+
+def _window_open(member: Dict[str, Any]) -> bool:
+    """They messaged this business's number recently enough for plain text to reach them."""
+    last = member.get("last_message_at")
+    return bool(last) and _now() - _parse_ts(last) < WINDOW
 
 
 def _qr_svg(link: str) -> str:
@@ -396,7 +423,7 @@ async def send_code(body: CodeIn, request: Request) -> Dict[str, Any]:
             _recent_count("phone", phone, 15, kind="code") >= MAX_CODES_PER_PHONE:
         raise HTTPException(status_code=429, detail="Too many codes — wait 15 minutes and try again.")
     tenant_id = tenant_for_host(body.host or "") if body.host else None
-    members = _memberships(phone, tenant_id)
+    members = _by_recent_chat(_memberships(phone, tenant_id), tenant_id)
     secret = secrets.token_urlsafe(32)
     row = _db().table(_TABLE).insert({
         "kind": "code", "tenant_id": (members[0]["tenant_id"] if members else tenant_id), "phone": phone,
@@ -406,32 +433,61 @@ async def send_code(body: CodeIn, request: Request) -> Dict[str, Any]:
     if members:
         code = f"{secrets.randbelow(1_000_000):06d}"
         _set(row["id"], {"otp_hash": _h(row["id"], code)})
-        if not await _deliver_code(members[0]["tenant_id"], phone, code):
-            log.warning("WA login code not delivered to %s on %s", phone[-4:], members[0]["tenant_id"])
+        if not await _deliver_code(members, phone, code):
+            log.warning("WA login code may not reach %s: no approved template and no open chat on "
+                        "%s", phone[-4:], ", ".join(m["tenant_id"] for m in members))
     return {**_SENT, "id": row["id"], "secret": secret, "expires_in": int(CODE_TTL.total_seconds())}
 
 
-async def _deliver_code(tenant_id: str, phone: str, code: str) -> bool:
-    """The approved authentication template (works any time); plain text if it isn't approved
-    yet and the person messaged in the last 24 hours."""
+async def _deliver_code(members: List[Dict[str, Any]], phone: str, code: str) -> bool:
+    """Get the code to them from one of their businesses' WhatsApp numbers (best first).
+
+    Someone on several teams chats with some of those numbers and not others, and Meta only lets
+    plain text through within 24 hours of their last message to that number. Worse, Meta accepts
+    an out-of-window text and fails it afterwards (131047, 24 Oct 2026: the code went out from a
+    number not used for weeks, while one used daily sat idle). So: the approved authentication
+    template from any of their numbers (refused at once if not approved); else plain text from a
+    number they messaged in the last 24 hours. False when neither is possible; a last-chance
+    text then goes from the first number anyway."""
+    tries = members[:MAX_SEND_NUMBERS]
+    for m in tries:
+        if await _send_code_template(m["tenant_id"], phone, code):
+            return True
+    open_chat = next((m for m in tries if _window_open(m)), None)
+    if open_chat:
+        return await _send_code_text(open_chat["tenant_id"], phone, code)
+    if tries:
+        await _send_code_text(tries[0]["tenant_id"], phone, code)
+    return False
+
+
+async def _send_code_template(tenant_id: str, phone: str, code: str) -> bool:
+    """The approved authentication template (works any time). Meta refuses it straight away when
+    this account has no approved copy."""
     from vula.api import whatsapp as wa
     creds = await wa._get_tenant_wa_creds(tenant_id)
-    if creds:
-        import httpx
-        payload = {"messaging_product": "whatsapp", "to": wa._wa_number(phone), "type": "template",
-                   "template": {"name": AUTH_TEMPLATE, "language": {"code": "en"}, "components": [
-                       {"type": "body", "parameters": [{"type": "text", "text": code}]},
-                       {"type": "button", "sub_type": "url", "index": "0",
-                        "parameters": [{"type": "text", "text": code}]}]}}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
-                                         headers={"Authorization": f"Bearer {creds['token']}"}, json=payload)
-            if resp.is_success:
-                return True
-            log.info("login code template not sent (%s) — trying plain text", resp.text[:160])
-        except Exception as exc:
-            log.info("login code template failed: %s", exc)
+    if not creds:
+        return False
+    import httpx
+    payload = {"messaging_product": "whatsapp", "to": wa._wa_number(phone), "type": "template",
+               "template": {"name": AUTH_TEMPLATE, "language": {"code": "en"}, "components": [
+                   {"type": "body", "parameters": [{"type": "text", "text": code}]},
+                   {"type": "button", "sub_type": "url", "index": "0",
+                    "parameters": [{"type": "text", "text": code}]}]}}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                                     headers={"Authorization": f"Bearer {creds['token']}"}, json=payload)
+        if resp.is_success:
+            return True
+        log.info("login code template not sent from %s (%s)", tenant_id, resp.text[:160])
+    except Exception as exc:
+        log.info("login code template failed from %s: %s", tenant_id, exc)
+    return False
+
+
+async def _send_code_text(tenant_id: str, phone: str, code: str) -> bool:
+    from vula.api import whatsapp as wa
     return await wa._send_reply(phone, f"{code} is your Vula login code. It expires in 5 minutes — "
                                        "don't share it with anyone.", tenant_id)
 

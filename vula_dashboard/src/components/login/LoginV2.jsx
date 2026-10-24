@@ -5,11 +5,11 @@
  * Wears the tenant's brand on its own dashboard address (logo or name, "Powered by Vula").
  */
 import { useState } from 'react'
-import { ArrowLeft, Building2, Eye, EyeOff, KeyRound, LogIn, Mail, MessageCircle, QrCode, RotateCcw, Smartphone, UserPlus } from 'lucide-react'
+import { ArrowLeft, Building2, Eye, EyeOff, KeyRound, LogIn, Mail, MessageCircle, QrCode, RotateCcw, Send, Smartphone, UserPlus } from 'lucide-react'
 import { Button, Card, Field, IconButton, Input, Select } from '../ui/index.jsx'
 import VulaLogo, { PoweredByVula } from '../brand/VulaLogo.jsx'
 import { useLogin } from './useLogin'
-import { isPhone, useWhatsAppLogin } from './useWhatsAppLogin'
+import { isPhone, NO_CODE_HINT, useWhatsAppLogin } from './useWhatsAppLogin'
 import './login.css'
 
 export default function LoginV2({ onSuccess }) {
@@ -208,6 +208,7 @@ function WhatsAppPanel({ onUser }) {
               onChange={(e) => w.setCode(e.target.value.replace(/\D/g, ''))} autoComplete="one-time-code" />
           </Field>
           <Button size="lg" Icon={LogIn} disabled={w.busy || w.code.length !== 6} className="vlg-wide">{w.busy ? 'Checking…' : 'Log in'}</Button>
+          <p className="vlg-muted">{NO_CODE_HINT}</p>
         </form>
       )}
 
@@ -216,6 +217,8 @@ function WhatsAppPanel({ onUser }) {
       <p className="vlg-links">
         {scanning && <Button variant="quiet" size="sm" type="button" Icon={Smartphone}
           onClick={() => { w.stop(); w.setErr(''); w.setMsg(''); w.setState('code_phone') }}>Send me a code instead</Button>}
+        {w.state === 'code_enter' && <Button variant="quiet" size="sm" type="button" Icon={Send}
+          disabled={w.busy} onClick={w.resend}>Resend code</Button>}
         {w.state === 'code_enter' && <Button variant="quiet" size="sm" type="button" Icon={RotateCcw}
           onClick={() => { w.setCode(''); w.setState('code_phone') }}>Use a different number</Button>}
         {(w.state === 'code_phone' || w.state === 'code_enter') && w.qr && <Button variant="quiet" size="sm" type="button" Icon={QrCode}

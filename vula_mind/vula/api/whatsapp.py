@@ -754,6 +754,8 @@ async def receive_message(
                 if msg_id and route_tenant:
                     import asyncio as _asyncio
                     _asyncio.create_task(_mark_read_and_typing(msg_id, route_tenant))
+                    if phone:
+                        _asyncio.create_task(_asyncio.to_thread(_stamp_member_window, route_tenant, phone))
 
                 try:
                     # A forwarded post on a shop line (WhatsApp's context.forwarded flag). From the
@@ -3399,6 +3401,25 @@ _FILE_UNDER_RE = re.compile(
 _NEW_PROJECT_RE = re.compile(
     r"\bnew\s+(?:project|job|site)\b(?:\s+(?:called|named|is|:)\s*(?P<name>[^.?!]{2,60}))?",
     re.IGNORECASE)
+
+
+def _stamp_member_window(tenant_id: str, phone: str) -> None:
+    """A team member just messaged this business's number: their 24-hour window with it is open
+    (vula_team_members.last_message_at, migration 112). Read by the keep-window-open nudge and by
+    the WhatsApp login code (vula/api/wa_login.py), which picks a number the member can still be
+    reached on. Every inbound message on a business line comes through here, owners and staff
+    included; customers aren't on the team, so they cost no write. Best-effort."""
+    try:
+        from datetime import datetime, timezone
+        from vula.team_index import member_for_phone
+        member = member_for_phone(tenant_id, phone)
+        if not member:
+            return
+        from vula.commerce import service as _cs_stamp
+        _cs_stamp._client().table("vula_team_members").update(
+            {"last_message_at": datetime.now(timezone.utc).isoformat()}).eq("id", member["id"]).execute()
+    except Exception as exc:
+        logger.debug("last_message_at stamp skipped: %s", exc)
 
 
 def _is_team(tenant_id: str, phone: str) -> bool:
@@ -8035,20 +8056,9 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     except Exception:
         pass
 
-    # Stamp last_message_at for a recognized team member (keep-window-open nudge, migration 112) —
-    # ANY reply resets their 24h window, so this is what lets the nudge check (see whatsapp.py's
-    # scheduled poller hook) know a member is still reachable via free text and skip nudging them.
-    # Best-effort, never blocks the actual reply logic below.
-    try:
-        from datetime import datetime, timezone
-        _digits = "".join(c for c in (phone or "") if c.isdigit())
-        _digits = "27" + _digits[1:] if _digits.startswith("0") else _digits
-        from vula.commerce import service as _cs_stamp
-        _cs_stamp._client().table("vula_team_members").update(
-            {"last_message_at": datetime.now(timezone.utc).isoformat()}
-        ).eq("tenant_id", tenant_id).eq("whatsapp", _digits).eq("active", True).execute()
-    except Exception as exc:
-        logger.debug("last_message_at stamp skipped (run migration 112?): %s", exc)
+    # A team member's message also opens their 24-hour window (keep-window-open nudge, login code).
+    # receive_message already stamps every line's inbound; this covers callers that come straight here.
+    _stamp_member_window(tenant_id, phone)
 
     # Review capture: a bare 1–5 (or stars) right after we asked for a rating
     # becomes a real review — recorded, thanked, done.

@@ -98,6 +98,14 @@ test("login: the WhatsApp code path, reset and back make the same calls", async 
   await expect(page.getByLabel("6-digit code")).toHaveValue("1234");
   await page.getByLabel("6-digit code").fill("123456");
   await expect(page.getByRole("button", { name: "Log in", exact: true })).toBeEnabled();
+  // no code: the page says how to open the chat, and Resend asks for another to the same number
+  await expect(page.getByText(/No code after a minute\? Send “hi” to your business's WhatsApp number/)).toBeVisible();
+  await page.getByRole("button", { name: "Resend code" }).click();
+  await expect(page.getByText("A new code is on its way.")).toBeVisible();
+  const codeCalls = calls.filter((c) => c.path.endsWith("/wa/code"));
+  expect(codeCalls).toHaveLength(2);
+  expect(codeCalls[1].body).toEqual({ phone: "082 000 0001", host: "localhost" });
+  await expect(page.getByLabel("6-digit code")).toHaveValue("");
   // the password can be shown to check for a typo, and hidden again
   const pw = page.getByRole("textbox", { name: "Password" }).or(page.locator("input[autocomplete=current-password]")).first();
   await page.locator("input[autocomplete=current-password]").fill("not-a-real-one");

@@ -186,8 +186,8 @@ async def test_expired_codes_and_unknown_addresses(env):
 async def test_six_digit_code(env, monkeypatch):
     codes = []
 
-    async def deliver(tid, phone, code):
-        codes.append((tid, phone, code))
+    async def deliver(members, phone, code):
+        codes.append((members[0]["tenant_id"], phone, code))
         return True
     monkeypatch.setattr(wl, "_deliver_code", deliver)
     d = await wl.send_code(wl.CodeIn(phone="066 254 5068"), _req())
@@ -240,3 +240,109 @@ def test_auth_template_is_metas_shape():
     assert p["category"] == "AUTHENTICATION" and p["name"] == "vula_login_code"
     assert {"type": "BODY", "add_security_recommendation": True} in p["components"]
     assert p["components"][2]["buttons"][0]["otp_type"] == "COPY_CODE"
+
+
+# ── which business's number the code goes out from (24 Oct 2026) ────────────────────────────
+# Ian is on four teams. The code went out as plain text from DIGG's number, which he hadn't
+# messaged in weeks; Meta accepted it and then failed it (131047), while Off the Hook's number,
+# used daily, sat idle.
+
+def _member(tid, last=None):
+    return {"id": f"m-{tid}", "tenant_id": tid, "name": "Ian", "whatsapp": "27820005210", "role": "owner",
+            "last_message_at": last}
+
+
+def _ago(**kw):
+    return (datetime.now(timezone.utc) - timedelta(**kw)).isoformat()
+
+
+class _Sends(list):
+    approved: set = set()
+
+
+@pytest.fixture
+def sends(monkeypatch):
+    log = _Sends()
+
+    async def template(tid, phone, code):
+        log.append(("template", tid))
+        return tid in log.approved
+
+    async def text(tid, phone, code):
+        log.append(("text", tid))
+        return True
+    monkeypatch.setattr(wl, "_send_code_template", template)
+    monkeypatch.setattr(wl, "_send_code_text", text)
+    return log
+
+
+@pytest.mark.asyncio
+async def test_plain_text_goes_from_the_number_they_chat_with(sends):
+    members = wl._by_recent_chat([_member("digg-demo", _ago(days=47)), _member("off-the-hook", _ago(hours=2))], None)
+    assert [m["tenant_id"] for m in members] == ["off-the-hook", "digg-demo"]
+    assert await wl._deliver_code(members, "27820005210", "123456")
+    assert sends[-1] == ("text", "off-the-hook")
+
+
+@pytest.mark.asyncio
+async def test_an_approved_template_from_any_number_wins_over_text(sends):
+    sends.approved = {"gerflor"}
+    members = [_member("off-the-hook", _ago(hours=2)), _member("gerflor")]
+    assert await wl._deliver_code(members, "27820005210", "123456")
+    assert ("template", "gerflor") in sends and not any(k == "text" for k, _ in sends)
+
+
+@pytest.mark.asyncio
+async def test_no_template_and_no_open_chat_is_reported_not_claimed(sends):
+    members = [_member("digg-demo", _ago(days=47)), _member("awake-sa")]
+    assert not await wl._deliver_code(members, "27820005210", "123456")
+    assert sends[-1] == ("text", "digg-demo")          # a last-chance try, but not counted as sent
+
+
+def test_the_business_this_address_belongs_to_comes_first():
+    members = wl._by_recent_chat([_member("off-the-hook", _ago(hours=1)), _member("gerflor")], "gerflor")
+    assert [m["tenant_id"] for m in members] == ["gerflor", "off-the-hook"]
+
+
+@pytest.mark.asyncio
+async def test_the_login_lands_on_the_business_they_chat_with_most_recently(env, monkeypatch):
+    team = [_member("digg-demo", _ago(days=47)), _member("off-the-hook", _ago(hours=2))]
+    monkeypatch.setattr(wl, "_memberships", lambda phone, tid=None: [dict(m) for m in team])
+    got = []
+
+    async def deliver(members, phone, code):
+        got.append([m["tenant_id"] for m in members])
+        return True
+    monkeypatch.setattr(wl, "_deliver_code", deliver)
+    d = await wl.send_code(wl.CodeIn(phone="082 000 5210"), _req(ip="7.7.7.7"))
+    assert d["message"] == wl._SENT["message"]
+    assert got == [["off-the-hook", "digg-demo"]]
+    assert env.db.tables["vula_wa_login_requests"][-1]["tenant_id"] == "off-the-hook"
+
+
+def test_any_message_from_a_team_member_opens_their_window(monkeypatch):
+    """Owners and staff go through the role-gated admin path, which never stamped their window,
+    so the login code couldn't tell which number they chat with."""
+    from vula.api import whatsapp as wa
+    from vula.commerce import service
+    writes = []
+
+    class Q:
+        def update(self, vals):
+            writes.append(vals)
+            return self
+
+        def eq(self, col, val):
+            writes.append((col, val))
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+    monkeypatch.setattr(service, "_client", lambda: SimpleNamespace(table=lambda name: Q()))
+    monkeypatch.setattr("vula.team_index.member_for_phone",
+                        lambda tid, phone: {"id": "m-oth"} if phone.endswith("5210") else None)
+    wa._stamp_member_window("off-the-hook", "27820005210")
+    assert "last_message_at" in writes[0] and writes[1] == ("id", "m-oth")
+    writes.clear()
+    wa._stamp_member_window("off-the-hook", "27829999999")     # a customer: no write
+    assert writes == []
