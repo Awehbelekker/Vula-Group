@@ -5,6 +5,7 @@
  */
 import { MODULES, EVENTS, ROLES, ROLE_LABELS, AUDIT_LABELS, toggle, useTeam } from "./team/useTeam";
 import TeamV2 from "./team/TeamV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 
@@ -27,7 +28,7 @@ function TeamV1({ tenantId }) {
   );
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
+    <div style={{ maxWidth: 1000, margin: "0 auto", padding: `24px ${sidePad(24)}` }}>
       <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Team</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Add people, give each their own WhatsApp, and choose what they see and get notified about.</p>
 

@@ -4,6 +4,7 @@
  */
 import { useRepContacts } from "./rep/useRepContacts";
 import RepContactsV2 from "./rep/RepContactsV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
@@ -11,7 +12,7 @@ function VulaRepCrmContactsV1({ tenantId, repPhone }) {
   const { contacts, search, setSearch, form, setForm, msg, save } = useRepContacts(tenantId, repPhone);
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: 20 }}>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
       <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>My Contacts</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 16px" }}>
         Contacts you've saved via WhatsApp (log_meeting, create_contact) or added here.

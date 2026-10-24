@@ -4,6 +4,7 @@
  */
 import { daysWaiting, useFollowups } from "./followups/useFollowups";
 import FollowupsV2 from "./followups/FollowupsV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const REASON = { schedule: { label: "📅 Schedule", color: "var(--info)" }, request: { label: "✋ Request", color: "var(--warn)" }, question: { label: "❓ Question", color: "#6B5B95" } };
@@ -20,7 +21,7 @@ function FollowupsV1({ tenantId }) {
   const days = daysWaiting;
 
   return (
-    <div style={{ maxWidth: 920, margin: "0 auto", padding: 24 }}>
+    <div style={{ maxWidth: 920, margin: "0 auto", padding: `24px ${sidePad(24)}` }}>
       <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Follow-ups</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Emails Vula thinks are waiting on you — you'll get a WhatsApp nudge daily until they're cleared.</p>
 

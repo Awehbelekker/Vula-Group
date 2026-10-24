@@ -1,5 +1,6 @@
 import { AECOM_RATES, R, pct, useQuickCost } from "./estimating/useQuickCost";
 import QuickCostV2 from "./estimating/QuickCostV2";
+import { sidePad } from "../lib/layout";
 
 
 
@@ -86,7 +87,7 @@ function VulaQSV1({ tenantId }) {
           <div style={{ marginLeft: "auto", fontSize: 11, color: "rgba(255,255,255,0.5)", fontFamily: "'DM Mono', monospace" }}>AECOM 2025/26 · SACAP BN672</div>
         </div>
 
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: `24px ${sidePad(20)}`, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 1fr))", gap: 20 }}>
 
           {/* LEFT COL */}
           <div>

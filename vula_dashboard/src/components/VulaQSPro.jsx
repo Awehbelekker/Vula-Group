@@ -1,5 +1,6 @@
 import { MATERIAL_RATES, R, pct, useQSPro, useQuoteCompare } from "./estimating/useQSPro";
 import QSProV2 from "./estimating/QSProV2";
+import { sidePad } from "../lib/layout";
 
 // ─── DESIGN ──────────────────────────────────────────────────────────────────
 // Aesthetic: precision instrument — graph paper grid, monospace data, blueprint blue
@@ -248,7 +249,7 @@ function VulaQSProV1({ tenantId }) {
           </div>
         </div>
 
-        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "20px 20px" }}>
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
 
           {/* Global markup */}
           <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, padding: "12px 16px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 7 }}>

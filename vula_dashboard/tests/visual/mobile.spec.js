@@ -151,18 +151,23 @@ function measure() {
   for (const el of controls) {
     const r = el.getBoundingClientRect();
     if (el.tagName === "A" && getComputedStyle(el).display === "inline") continue;     // a link inside a sentence
-    if (el.matches("input[type=checkbox], input[type=radio]")) continue;              // their label is the target
+    if (el.matches("input[type=checkbox], input[type=radio], input[type=range]")) continue;   // label / thumb is the target
     if ((r.height < 32 || r.width < 32) && once(`s${where(el)}`))
       small.push({ at: where(el), label: (el.getAttribute("aria-label") || el.textContent || el.getAttribute("name") || "").trim().slice(0, 30), w: Math.round(r.width), h: Math.round(r.height) });
   }
-  // the page's side gutters: where its leftmost and rightmost visible text sits
+  // the page's side gutters: where its blocks (cards, sections, fields) start and end
   let gl = W, gr = W;
-  const walk2 = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  while (walk2.nextNode()) {
-    const el = walk2.currentNode.parentElement;
-    if (!walk2.currentNode.textContent.trim() || !el || !shown(el) || el.getBoundingClientRect().width <= 2) continue;
-    const range = document.createRange(); range.selectNodeContents(walk2.currentNode);
-    for (const r of range.getClientRects()) if (r.width > 0) { gl = Math.min(gl, r.left); gr = Math.min(gr, W - r.right); }
+  for (const el of root.querySelectorAll("*")) {
+    if (!shown(el) || getComputedStyle(el).position === "fixed") continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < W * 0.5 || r.width >= W - 1 || r.left < 0 || r.right > W) continue;
+    let scrolled = false;
+    for (let p = el.parentElement; p && p !== root; p = p.parentElement) {
+      const ox = getComputedStyle(p).overflowX;
+      if (ox === "auto" || ox === "scroll") { scrolled = true; break; }
+    }
+    if (scrolled) continue;
+    gl = Math.min(gl, r.left); gr = Math.min(gr, W - r.right);
   }
   // after scrolling to the end, nothing the user can tap may sit under a bottom overlay
   window.scrollTo(0, document.documentElement.scrollHeight);
@@ -172,10 +177,17 @@ function measure() {
     const r = el.getBoundingClientRect();
     return r.bottom >= H - 40 && r.top > H / 2 && r.height < H / 2;
   }).map((el) => ({ el, r: el.getBoundingClientRect() }));
+  const inBox = (el) => {        // inside its own scroll area (a list, a table): out of view there, not under the toolbar
+    for (let p = el.parentElement; p && p !== root; p = p.parentElement) {
+      const cs = getComputedStyle(p);
+      if (/auto|scroll/.test(cs.overflowY) || /auto|scroll/.test(cs.overflowX)) return true;
+    }
+    return false;
+  };
   const hidden = [];
   for (const el of controls) {
     const r = el.getBoundingClientRect();
-    if (r.bottom <= 0 || r.top >= H) continue;
+    if (r.bottom <= 0 || r.top >= H || inBox(el)) continue;
     const o = overlays.find(({ r: q }) => r.bottom > q.top + 2 && r.right > q.left && r.left < q.right);
     if (o && once(`h${where(el)}`)) hidden.push({ at: where(el), label: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 30), under: where(o.el) });
   }

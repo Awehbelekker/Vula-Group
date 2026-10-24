@@ -5,6 +5,7 @@
 import VulaDynamics365Connect from "./VulaDynamics365Connect";
 import { KINDS, useRepCrmLookup } from "./rep/useRepCrmLookup";
 import RepCrmLookupV2 from "./rep/RepCrmLookupV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
@@ -14,7 +15,7 @@ function VulaRepCrmLookupV1({ tenantId }) {
   if (connected === null) return null;
   if (!connected) {
     return (
-      <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
+      <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
         <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 12px" }}>Dynamics 365</h2>
         <VulaDynamics365Connect tenantId={tenantId} />
       </div>
@@ -22,7 +23,7 @@ function VulaRepCrmLookupV1({ tenantId }) {
   }
 
   return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
+    <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
       <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>Dynamics 365</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 16px" }}>Search your real CRM data.</p>
 

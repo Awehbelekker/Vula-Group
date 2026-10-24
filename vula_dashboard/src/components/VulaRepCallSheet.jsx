@@ -5,6 +5,7 @@
  */
 import { DAYS, useRepCallSheet } from "./rep/useRepCallSheet";
 import RepCallSheetV2 from "./rep/RepCallSheetV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
@@ -14,7 +15,7 @@ function VulaRepCallSheetV1({ tenantId, repPhone }) {
   if (!repPhone) return <div style={{ padding: 20, color: C.muted, fontSize: 13 }}>Couldn't identify your rep phone number.</div>;
 
   return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
+    <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
       <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>My Call Sheet</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 16px" }}>
         Every meeting you log via WhatsApp lands here automatically. Correct or add to it below,

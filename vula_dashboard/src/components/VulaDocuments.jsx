@@ -5,6 +5,7 @@ import {
   useReread, useSortProjects, useLearn, useWebsiteImport, useKbUpload,
 } from "./documents/useDocuments";
 import DocumentsV2 from "./documents/DocumentsV2";
+import { sidePad } from "../lib/layout";
 
 
 const C = {
@@ -642,7 +643,7 @@ function DocumentsV1({ tenantId: propTenantId, defaultFiledBy }) {
     useKbUpload(tenantId);
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: `32px ${sidePad(24)}` }}>
       <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>
         Document Library
       </h1>

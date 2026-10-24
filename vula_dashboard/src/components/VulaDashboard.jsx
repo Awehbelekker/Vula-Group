@@ -510,8 +510,8 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
         <div style={{
           background: COLORS.surface,
           borderBottom: `1px solid ${COLORS.border}`,
-          padding: "16px 24px",
-          display: "flex", alignItems: "center", gap: 16,
+          padding: "16px clamp(12px, 4vw, 24px)",
+          display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16,
           position: "sticky", top: 0, zIndex: 100,
         }}>
           <div style={{
@@ -531,7 +531,7 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
             </div>
           </div>
 
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ marginLeft: "auto", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{
                 width: 8, height: 8, borderRadius: "50%",
@@ -566,7 +566,7 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
         )}
 
         {/* Main content */}
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 24px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px clamp(12px, 4vw, 24px)" }}>
           {/* Hero */}
           <div style={{ marginBottom: 36, textAlign: "center" }}>
             <h1 style={{
@@ -583,7 +583,8 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
           </div>
 
           {/* Grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {/* two columns on a computer, one on a phone (mobile pass, 24 Oct 2026) */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 440px), 1fr))", gap: 20 }}>
             <UploadZone tenantId={tenantId} onUploaded={() => {
               fetch(`${VULA_API}/documents/${tenantId}`).then(r => r.json()).then(d => setDocCount(d.kb_chunks || d.count || 0)).catch(() => {});
             }} />

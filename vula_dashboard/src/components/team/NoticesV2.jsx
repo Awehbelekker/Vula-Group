@@ -44,9 +44,10 @@ export default function NoticesV2({ tenantId }) {
   const load = useCallback(async () => {
     if (!tenantId) return;
     try {
-      setData(await call(base));
+      const d = await call(base);
+      setData({ ...d, notices: d?.notices || [] });     // never let one odd reply take the screen down
       const s = await call(`${base}/settings`);
-      setSettings(s.settings);
+      setSettings(s.settings || {});
       setCatalogue(s.observances || []);
       call(`${base}/birthday-suggestions`).then((x) => setSuggest(x.suggestions || [])).catch(() => {});
     } catch (e) { toast(e.message, "danger"); }

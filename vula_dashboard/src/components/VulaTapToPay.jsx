@@ -8,6 +8,7 @@ import { MODE_BADGE, STATUS_TONE, useTapToPay } from "./taptopay/useTapToPay";
 import TapToPayV2 from "./taptopay/TapToPayV2";
 import { T } from "../theme/tokens";
 import { Card, Button, Badge, SectionTitle, inputStyle } from "./ui";
+import { sidePad } from "../lib/layout";
 
 function Step({ n, title, done, children }) {
   return (
@@ -37,7 +38,7 @@ function TapToPayV1({ tenantId }) {
   const staffWithTag = st.staff.filter((m) => m.tag);
 
   return (
-    <div style={{ maxWidth: 820, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ maxWidth: 820, margin: "0 auto", padding: `24px ${sidePad(24)}`, display: "flex", flexDirection: "column", gap: 14 }}>
       <SectionTitle sub="Customers tap a tag or scan a QR code, choose a tip, pay with PayFast and get their slip on WhatsApp. No card machine.">
         Tap to Pay <Badge tone={tone} style={{ marginLeft: 8 }}>{label}</Badge>
       </SectionTitle>

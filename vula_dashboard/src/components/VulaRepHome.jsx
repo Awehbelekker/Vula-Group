@@ -6,6 +6,7 @@
 import VulaRepToday from './VulaRepToday'
 import { useRepHome } from "./rep/useRepHome";
 import RepHomeV2 from "./rep/RepHomeV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
@@ -22,7 +23,7 @@ function VulaRepHomeV1({ tenantId, repPhone, onNavigate }) {
   };
 
   return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
+    <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
       <h2 className="vula-display" style={{ fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: "0 0 4px" }}>Today</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Your own contacts, call sheet, reminders, and bookings — nothing tenant-wide.</p>
 

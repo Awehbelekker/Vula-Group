@@ -5,6 +5,7 @@
  */
 import { useContacts } from "./contacts/useContacts";
 import ContactsV2 from "./contacts/ContactsV2";
+import { sidePad } from "../lib/layout";
 
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", surfaceAlt: "var(--surface-alt)" };
 const KIND = { internal: { label: "Co-worker", color: "var(--accent)" }, supplier: { label: "Supplier", color: "var(--warn)" }, client: { label: "Client", color: "var(--info)" }, external: { label: "External", color: "var(--muted)" } };
@@ -21,7 +22,7 @@ function ContactsV1({ tenantId }) {
   const { contacts, rows, counts, q, setQ, tab, setTab, syncing, importing, msg, fileRef, syncNow, retag, importCsv, exportCsv } = useContacts(tenantId);
 
   return (
-    <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
+    <div style={{ maxWidth: 980, margin: "0 auto", padding: `24px ${sidePad(24)}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div>
           <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Contacts</h1>

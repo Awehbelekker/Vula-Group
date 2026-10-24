@@ -1,6 +1,7 @@
 import { toast } from './ui/index.jsx'
 import { MOCK_TAKEOFF, R, mid, net, pct, useTakeoff, useTakeoffRates } from "./estimating/useTakeoff";
 import TakeoffV2 from "./estimating/TakeoffV2";
+import { sidePad } from "../lib/layout";
 
 // Blueprint engineering aesthetic — dark navy, cyan grid lines, white annotations
 const C = {
@@ -330,7 +331,7 @@ function VulaTakeoffV1({ tenantId = "" }) {
           </div>
         )}
 
-        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "20px" }}>
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
 
           {/* Summary row */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>

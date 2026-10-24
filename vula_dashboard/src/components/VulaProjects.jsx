@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { FiledLibrary } from "./VulaDocuments";
 import { PROJECT_TABS as TABS, fetchBoq, saveBoqTotal, fetchFinancials, moneyRows, uploadToProject, useProjects } from "./projects/useProjects";
 import ProjectsV2 from "./projects/ProjectsV2";
+import { sidePad } from "../lib/layout";
 
 
 const C = {
@@ -43,7 +44,7 @@ function ProjectsV1({ tenantId }) {
   } = useProjects(tenantId);
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px" }}>
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: `24px ${sidePad(24)}` }}>
       <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>Projects</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 20px" }}>Your clients' projects and their phases — each with its own documents, BOQ and money.</p>
       <datalist id="vp-clients">{allClients.map((c) => <option key={c} value={c} />)}</datalist>
