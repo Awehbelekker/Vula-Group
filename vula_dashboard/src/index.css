@@ -327,6 +327,17 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
 .vma-content { padding: 20px 24px; }
 @media (max-width: 600px) { .vma-content { padding: 16px 12px; } }
 .v2-shell--mobile .vma-content { padding: 0; }
+/* Older screens (the old design, and Master's own screens in either shell) are laid out with
+   inline styles that assume a wide window: rows of buttons that never wrap and fixed-column
+   tables, which pushed whole pages sideways on a phone. On a phone their rows wrap, and their
+   tables and column grids scroll sideways inside their own box instead of the page. */
+@media (max-width: 600px) {
+  .vshell-content [style*="display: flex"]:not([style*="flex-direction: column"]),
+  .v1-page [style*="display: flex"]:not([style*="flex-direction: column"]) { flex-wrap: wrap; }
+  .vshell-content table, .v1-page table { display: block; overflow-x: auto; max-width: 100%; }
+  .vshell-content div:has(> [style*="grid-template-columns"]),
+  .v1-page div:has(> [style*="grid-template-columns"]) { overflow-x: auto; max-width: 100%; }
+}
 .vula-master { padding: 16px 24px; max-width: 1400px; }
 @media (max-width: 600px) { .vula-master { padding: 12px 12px; } }
 .vshell-burger { display: none; }

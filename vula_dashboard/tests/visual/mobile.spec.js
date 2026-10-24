@@ -31,7 +31,8 @@ const ROLES = [
   { role: "rep", modules: [] },
   { role: "master", modules: [] },
 ];
-const outDir = (ti) => path.join(ti.project.testDir, ".results", "mobile");
+// beside .results, not in it: Playwright empties .results at the start of every run
+const outDir = (ti) => path.join(ti.project.testDir, ".results-mobile");
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 test.describe.configure({ mode: "parallel" });
