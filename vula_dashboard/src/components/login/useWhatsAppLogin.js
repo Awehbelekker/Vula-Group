@@ -8,6 +8,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { VULA_API } from '../../lib/authFetch'
 
+export const NO_CODE_HINT = "No code after a minute? Send “hi” to your business's WhatsApp number, then tap Resend code."
+
 export const isPhone = () => /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '')
 
 async function post(path, body) {
@@ -76,6 +78,17 @@ export function useWhatsAppLogin({ onUser }) {
     setBusy(false)
   }
 
+  // No code? A text only reaches them on a number they messaged in the last 24 hours, so
+  // "send hi, then resend" opens that window (vula_mind/vula/api/wa_login.py::_deliver_code).
+  async function resend() {
+    setErr(''); setCode(''); setBusy(true)
+    try {
+      const d = await post('/code', { phone, host: window.location.hostname })
+      setCodeReq(d); setMsg('A new code is on its way.')
+    } catch (e2) { setErr(e2.message) }
+    setBusy(false)
+  }
+
   async function verify(e) {
     e.preventDefault(); setErr(''); setBusy(true)
     try {
@@ -85,5 +98,5 @@ export function useWhatsAppLogin({ onUser }) {
     setBusy(false)
   }
 
-  return { qr, state, setState, msg, setMsg, err, setErr, phone, setPhone, code, setCode, codeReq, busy, stop, startQr, sendCode, verify }
+  return { qr, state, setState, msg, setMsg, err, setErr, phone, setPhone, code, setCode, codeReq, busy, stop, startQr, sendCode, resend, verify }
 }

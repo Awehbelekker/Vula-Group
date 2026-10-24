@@ -6,10 +6,10 @@
  * person to Approve on WhatsApp and this page signs in. Anywhere else — or if they'd rather — they
  * type their WhatsApp number and get a 6-digit code. No password either way.
  */
-import { isPhone, useWhatsAppLogin } from './login/useWhatsAppLogin'
+import { isPhone, NO_CODE_HINT, useWhatsAppLogin } from './login/useWhatsAppLogin'
 
 export default function WhatsAppLogin({ onUser, styles: s }) {
-  const { qr, state, setState, msg, setMsg, err, setErr, phone, setPhone, code, setCode, busy, stop, startQr, sendCode, verify } = useWhatsAppLogin({ onUser })
+  const { qr, state, setState, msg, setMsg, err, setErr, phone, setPhone, code, setCode, busy, stop, startQr, sendCode, resend, verify } = useWhatsAppLogin({ onUser })
 
   const box = { border: '1px solid var(--border)', borderRadius: 14, padding: 16, display: 'flex',
                 flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center' }
@@ -57,6 +57,7 @@ export default function WhatsAppLogin({ onUser, styles: s }) {
                  placeholder="6-digit code" style={{ ...s.input, textAlign: 'center', letterSpacing: 6, fontSize: 20 }}
                  autoComplete="one-time-code" />
           <button disabled={busy || code.length !== 6} style={s.btn}>{busy ? 'Checking…' : 'Log in'}</button>
+          <div style={{ fontSize: 12.5, textAlign: 'center' }}>{NO_CODE_HINT}</div>
         </form>
       )}
 
@@ -64,6 +65,7 @@ export default function WhatsAppLogin({ onUser, styles: s }) {
 
       <div style={{ fontSize: 12.5 }}>
         {(state === 'qr' || state === 'waiting') && link('Send me a code instead', () => { stop(); setErr(''); setMsg(''); setState('code_phone') })}
+        {state === 'code_enter' && <>{link('Resend code', resend)}{' · '}</>}
         {state === 'code_enter' && link('Use a different number', () => { setCode(''); setState('code_phone') })}
         {(state === 'code_phone' || state === 'code_enter') && qr && <> {' · '}{link('Scan a QR code instead', startQr)}</>}
       </div>
