@@ -152,6 +152,9 @@ class Settings(BaseSettings):
     kb_customer_view_weekly: bool = True
     # Tenants the retrieval_diag maintenance job covers (evals/retrieval_diag.py, 2026-10-21).
     kb_diag_tenants: str = "gerflor,digg-demo,off-the-hook"
+    # A finished retrieval_diag report id: rerun ITS questions instead of synthesizing new ones,
+    # so a retrieval change is measured on the same cases (before/after).
+    kb_diag_replay: str = ""
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     # Meta only allows FREE-FORM WhatsApp text within 24 hours of the person's last inbound
     # message. Everything proactive Vula sends — an order alert, a document notification, an

@@ -148,10 +148,11 @@ def finished_rows(reports: List[Optional[Dict[str, Any]]], tenants: List[str]) -
 
 async def run(tenants: List[str], per_doc: int = 1, max_docs: int = 25,
               done_rows: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-              on_tenant=None) -> Dict[str, Any]:
+              on_tenant=None, replay: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Tenant by tenant. done_rows holds rows of tenants already diagnosed by an earlier, cut-off
     run (reused, not redone); on_tenant(partial_report) is awaited after each tenant so a restart
-    loses at most one tenant's work (2026-10-24: a deploy killed a 9-hour run that saved nothing)."""
+    loses at most one tenant's work (2026-10-24: a deploy killed a 9-hour run that saved nothing).
+    replay: the rows of an earlier report, whose questions are rerun instead of synthesizing."""
     yaml_cases = [c for c in load_cases() if c.get("expected_docs") and c.get("type") != "unanswerable"]
     rows: List[Dict[str, Any]] = []
     synth_counts: Dict[str, Any] = {}
@@ -160,6 +161,11 @@ async def run(tenants: List[str], per_doc: int = 1, max_docs: int = 25,
         if done_rows.get(t):
             rows += done_rows[t]
             synth_counts[t] = "reused"
+        elif replay is not None:
+            cases = [{**r, "expected_docs": r.get("expected") or []} for r in replay if r.get("tenant") == t]
+            synth_counts[t] = "replayed"
+            for c in cases:
+                rows.append(await diagnose(c))
         else:
             cases = [c for c in yaml_cases if c["tenant"] == t]
             try:

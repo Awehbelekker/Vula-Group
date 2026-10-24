@@ -210,22 +210,58 @@ async def test_a_chunk_found_twice_appears_once_at_its_best_score():
 
 
 @pytest.mark.asyncio
-async def test_results_come_back_best_first():
+async def test_a_rewrite_fills_a_gap_but_does_not_outrank_the_question_asked():
+    """2026-10-24: scores from different wordings aren't comparable. Ranking by raw score let a
+    rewrite's 0.62 bump the original's own top result; fusion ranks by position instead."""
     p, _ = _pipeline([
         [{"chunk_id": "low", "score": 0.31}],
         [{"chunk_id": "high", "score": 0.62}],
     ])
     with patch.object(pl, "expand_query", AsyncMock(return_value=["r"])):
         out = await p.query("creation")
-    assert [h["chunk_id"] for h in out] == ["high", "low"]
+    assert [h["chunk_id"] for h in out] == ["low", "high"]
 
 
 @pytest.mark.asyncio
-async def test_the_keyword_pass_only_runs_when_the_semantic_side_is_thin():
+async def test_rewrites_scoring_higher_do_not_push_out_the_originals_top_results():
+    """The diagnostic's lost_in_merge: the original had the answer 3rd, three rewrites returned
+    four generic chunks each at 0.8, and the answer fell out of the top 4."""
+    original = [{"chunk_id": c, "score": 0.5} for c in ("a", "b", "answer", "c")]
+    rewrites = [[{"chunk_id": f"g{j}{i}", "score": 0.8} for i in range(4)] for j in range(3)]
+    p, _ = _pipeline([original] + rewrites)
+    with patch.object(pl, "expand_query", AsyncMock(return_value=["r1", "r2"])), \
+         patch.object(pl, "_synonym_variant", lambda q: "syn"):
+        out = await p.query("Who is the contractor for the Cape Town High Performance Centre project?",
+                            top_k=4)
+    assert "answer" in [h["chunk_id"] for h in out]
+
+
+@pytest.mark.asyncio
+async def test_the_keyword_pass_runs_whenever_the_question_has_terms():
+    """It used to run only for a thin or terse search, and so missed an account number that only
+    the literal pass could find (12 of 75 diagnostic misses)."""
     p, _ = _pipeline([[{"chunk_id": f"c{i}", "score": 0.5} for i in range(5)]])
     with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
-        await p.query("creation", top_k=5)
-    p.store.keyword_search.assert_not_awaited()
+        await p.query("What is the bank account number of Atlantis Seafood Distributors?", top_k=5)
+    p.store.keyword_search.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_identifier_match_takes_a_slot_from_full_semantic_results():
+    p, _ = _pipeline(
+        [[{"chunk_id": f"c{i}", "score": 0.6} for i in range(4)]],
+        keyword_results=[{"chunk_id": "acct", "text": "Customer account 3999960", "score": 0.0,
+                          "match": "keyword", "_overlap": 1}],
+    )
+    with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
+        out = await p.query("Is the customer account number 3999960 up to date?", top_k=4)
+    assert [h["chunk_id"] for h in out][:2] == ["c0", "acct"]
+
+
+def test_identifiers_are_salient_but_a_bare_year_is_not():
+    terms = pl._salient_terms("Pay invoice INV-003901 to account 3999960 by March 2026")
+    assert terms[:2] == ["inv-003901", "3999960"]
+    assert "2026" not in terms
 
 
 @pytest.mark.asyncio
