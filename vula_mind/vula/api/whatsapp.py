@@ -124,9 +124,10 @@ def _resolve_number_route(phone_number_id: str) -> tuple[str | None, str | None]
     try:
         from vula.commerce import service as cs
         rows = (cs._client().table("vula_whatsapp_accounts")
-                .select("tenant_id,route_mode").eq("phone_number_id", phone_number_id)
+                .select("tenant_id,route_mode,status").eq("phone_number_id", phone_number_id)
                 .limit(1).execute().data or [])
-        if rows:
+        # A disconnected number belongs to no one: its messages aren't routed to the business.
+        if rows and rows[0].get("status") != "disconnected":
             resolved = (rows[0]["tenant_id"], rows[0].get("route_mode") or "commerce")
             _ROUTE_CACHE[phone_number_id] = (_t.time(), resolved)
             return resolved
@@ -6922,15 +6923,33 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
 # ─── Outbound send (reused by field_ops API too) ──────────────────────────────
 
 _wa_creds_cache: dict[str, dict] = {}
+# When each entry was cached. 2026-10-24 (EZContact brief, PR 4): entries never expired, so a
+# reconnected number kept sending with the old token until a restart — and with two workers,
+# clearing one worker's cache leaves the other's. Five minutes bounds that.
+_WA_CREDS_AT: dict[str, float] = {}
+_WA_CREDS_TTL = 300.0
+
+
+def _forget_wa_number(tenant_id: str, phone_number_id: Optional[str] = None) -> None:
+    """Drop what this worker cached about a business's number (credentials, route). Called when
+    a number is connected, linked or disconnected."""
+    _wa_creds_cache.pop(tenant_id, None)
+    _WA_CREDS_AT.pop(tenant_id, None)
+    if phone_number_id:
+        _ROUTE_CACHE.pop(phone_number_id, None)
+    for pnid, (_, (tid, _mode)) in list(_ROUTE_CACHE.items()):
+        if tid == tenant_id:
+            _ROUTE_CACHE.pop(pnid, None)
 
 
 async def _get_tenant_wa_creds(tenant_id: str) -> dict | None:
     """
     Fetch WhatsApp credentials for a tenant from Supabase.
-    Falls back to env vars for backwards compatibility.
-    Results cached in-process (invalidated on next startup).
+    Falls back to env vars for a business with no number row yet (initial setup) — never for one
+    whose number was disconnected. Cached in-process for _WA_CREDS_TTL.
     """
-    if tenant_id in _wa_creds_cache:
+    import time as _t
+    if tenant_id in _wa_creds_cache and (_t.time() - _WA_CREDS_AT.get(tenant_id, _t.time())) < _WA_CREDS_TTL:
         return _wa_creds_cache[tenant_id]
 
     try:
@@ -6939,30 +6958,37 @@ async def _get_tenant_wa_creds(tenant_id: str) -> dict | None:
             settings.supabase_url,
             settings.supabase_service_role_key or settings.supabase_service_key,
         )
-        result = (
+        rows = (
             client.table("vula_whatsapp_accounts")
             .select("phone_number_id,access_token,status")
             .eq("tenant_id", tenant_id)
-            .eq("status", "connected")
-            .maybe_single()
+            .limit(1)
             .execute()
-        )
-        if result.data and result.data.get("access_token"):
+        ).data or []
+        row = rows[0] if rows else None
+        if row and row.get("status") != "connected":
+            # Disconnected: nothing is sent for this business — not even from Vula's own number,
+            # which would answer its customers from someone else's line.
+            _forget_wa_number(tenant_id)
+            return None
+        if row and row.get("access_token"):
             from vula.email_imap.credentials import decrypt_secret
             creds = {
-                "token": decrypt_secret(result.data["access_token"]),
-                "phone_id": result.data["phone_number_id"],
+                "token": decrypt_secret(row["access_token"]),
+                "phone_id": row["phone_number_id"],
             }
             _wa_creds_cache[tenant_id] = creds
+            _WA_CREDS_AT[tenant_id] = _t.time()
             return creds
         # 2026-10-13 (SeedleMe): a number added straight to Vula's own WhatsApp Business Account
         # (WhatsApp Manager, or Master › Link WhatsApp number) carries no token of its own — the
         # server's system-user token covers every number on that account. It must still send
         # from ITS number: the default-number fallback below would have answered SeedleMe's
         # customers from Vula's own line.
-        if result.data and result.data.get("phone_number_id") and settings.whatsapp_token:
-            creds = {"token": settings.whatsapp_token, "phone_id": result.data["phone_number_id"]}
+        if row and row.get("phone_number_id") and settings.whatsapp_token:
+            creds = {"token": settings.whatsapp_token, "phone_id": row["phone_number_id"]}
             _wa_creds_cache[tenant_id] = creds
+            _WA_CREDS_AT[tenant_id] = _t.time()
             return creds
     except Exception as exc:
         logger.debug("Supabase WA creds lookup failed for %s: %s", tenant_id, exc)

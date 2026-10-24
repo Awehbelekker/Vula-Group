@@ -19,7 +19,7 @@
  * Flow: settings/connect/useWhatsAppConnect.js (shared with the redesign's WhatsAppConnectV2).
  */
 
-import { FB_APP_ID, useWhatsAppConnect } from './settings/connect/useWhatsAppConnect'
+import { FB_APP_ID, FB_CONFIG_ID, useWhatsAppConnect } from './settings/connect/useWhatsAppConnect'
 
 export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   const { status, account, loading, error, handleConnect, handleDisconnect } = useWhatsAppConnect({ tenantId, tenantName, adminEmail })
@@ -74,11 +74,16 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
               ⚠ VITE_FB_APP_ID not set. Create the Vula Facebook App first.
             </div>
           )}
+          {FB_APP_ID && !FB_CONFIG_ID && (
+            <div style={styles.warningBox}>
+              ⚠ WhatsApp signup isn&apos;t set up on this dashboard yet (VITE_FB_CONFIG_ID) — ask Vula to link the number for you.
+            </div>
+          )}
 
           <button
             onClick={handleConnect}
-            disabled={loading || !FB_APP_ID}
-            style={loading || !FB_APP_ID ? styles.btnDisabled : styles.btn}
+            disabled={loading || !FB_APP_ID || !FB_CONFIG_ID}
+            style={loading || !FB_APP_ID || !FB_CONFIG_ID ? styles.btnDisabled : styles.btn}
           >
             {loading ? 'Connecting…' : '🔗 Connect WhatsApp'}
           </button>

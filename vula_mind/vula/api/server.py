@@ -1787,7 +1787,7 @@ _TENANT_GUARD_RES = [
     re.compile(r"^/v1/field/(?:contractors|daily-tasks)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/email/(?:status|set-primary|sync|backfill|contacts|followups|disconnect)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/clickup/(?:status|lists|sync-kb)/([^/]+)(?:/|$)"),
-    re.compile(r"^/v1/whatsapp/(?:connect/status|disconnect)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/whatsapp/(?:connect/status|disconnect|health)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/yoco/(?:status|test|disconnect)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/(?:google|microsoft|dynamics365)/status/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/(?:google|dynamics365)/(?!authorize-url|oauth|status)([^/]+)/"),

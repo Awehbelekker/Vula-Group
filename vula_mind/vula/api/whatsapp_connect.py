@@ -212,6 +212,10 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         "connected_at": "now()",
     }
     db.table("vula_whatsapp_accounts").upsert(record, on_conflict="tenant_id").execute()
+    # The new token is used from the next message on, not after a restart.
+    from vula.api import whatsapp as wa
+    wa._forget_wa_number(body.tenant_id, phone_number_id)
+    _HEALTH_CACHE.pop(body.tenant_id, None)
 
     log.info(
         "WhatsApp connected: tenant=%s phone=%s waba=%s",
@@ -272,12 +276,89 @@ async def list_whatsapp_accounts():
 
 @router.delete("/disconnect/{tenant_id}")
 async def disconnect_whatsapp(tenant_id: str):
-    """Disconnect WhatsApp for a tenant (marks as disconnected, keeps record)."""
+    """Disconnect WhatsApp for a tenant (marks as disconnected, keeps record). Messages stop at
+    once on this worker; within _WA_CREDS_TTL on the other (whatsapp._get_tenant_wa_creds)."""
     db = _supabase()
+    rows = (db.table("vula_whatsapp_accounts").select("phone_number_id")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
     db.table("vula_whatsapp_accounts").update(
         {"status": "disconnected", "access_token": None}
     ).eq("tenant_id", tenant_id).execute()
+    from vula.api import whatsapp as wa
+    wa._forget_wa_number(tenant_id, (rows[0].get("phone_number_id") if rows else None))
+    _HEALTH_CACHE.pop(tenant_id, None)
     return {"tenant_id": tenant_id, "status": "disconnected"}
+
+
+# ── Number health (2026-10-24, EZContact brief PR 4) ──────────────────────────
+# What Meta says about the number: quality, how many new customers a day it may message, whether
+# the display name is approved, and whether it's registered to send at all. Read with the
+# business's own credentials, cached briefly; the token never leaves the server.
+
+_HEALTH_CACHE: dict = {}
+_HEALTH_TTL = 600.0
+_HEALTH_FIELDS = ("display_phone_number,verified_name,quality_rating,messaging_limit_tier,"
+                  "name_status,status,platform_type,code_verification_status,throughput")
+_LIMITS = {"TIER_50": "50", "TIER_250": "250", "TIER_1K": "1,000", "TIER_10K": "10,000",
+           "TIER_100K": "100,000", "TIER_UNLIMITED": "unlimited"}
+
+
+def health_summary(meta: dict) -> dict:
+    """Plain-language rows from Meta's phone-number fields. Missing fields are left out."""
+    rows = []
+    q = (meta.get("quality_rating") or "").upper()
+    if q:
+        rows.append({"label": "Quality", "value": {"GREEN": "Green — good", "YELLOW": "Yellow — some customers "
+                     "blocked or reported recent messages", "RED": "Red — messages may be limited soon"}
+                     .get(q, q.title()), "tone": {"GREEN": "ok", "YELLOW": "warn", "RED": "danger"}.get(q, "warn")})
+    tier = meta.get("messaging_limit_tier") or ""
+    if tier:
+        n = _LIMITS.get(tier, tier.replace("TIER_", ""))
+        rows.append({"label": "Daily limit", "value": ("No limit on new customers a day" if n == "unlimited"
+                     else f"{n} new customers a day"), "tone": "ok"})
+    name = (meta.get("name_status") or "").upper()
+    if name:
+        ok = name in ("APPROVED", "AVAILABLE_WITHOUT_REVIEW")
+        rows.append({"label": "Display name", "value": ("Approved" if ok else
+                     {"PENDING_REVIEW": "Waiting for Meta's review", "DECLINED": "Declined by Meta — change it in "
+                      "WhatsApp Manager", "EXPIRED": "Expired"}.get(name, name.replace("_", " ").title())),
+                     "tone": "ok" if ok else "warn"})
+    if meta.get("platform_type"):
+        reg = meta.get("platform_type") == "CLOUD_API"
+        rows.append({"label": "Sending", "value": "Registered to send" if reg else
+                     "Not registered to send yet — ask Vula to finish setting up the number",
+                     "tone": "ok" if reg else "danger"})
+    return {"rows": rows, "number": meta.get("display_phone_number") or "",
+            "name": meta.get("verified_name") or "", "status": meta.get("status") or ""}
+
+
+@router.get("/health/{tenant_id}")
+async def whatsapp_health(tenant_id: str):
+    import time as _t
+    hit = _HEALTH_CACHE.get(tenant_id)
+    if hit and _t.time() - hit[0] < _HEALTH_TTL:
+        return hit[1]
+    from vula.api import whatsapp as wa
+    creds = await wa._get_tenant_wa_creds(tenant_id)
+    rows = (_supabase().table("vula_whatsapp_accounts").select("status,phone_number_id")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    if not creds or not rows or rows[0].get("status") != "connected":
+        return {"tenant_id": tenant_id, "connected": False, "rows": []}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{GRAPH_BASE}/{creds['phone_id']}", params={"fields": _HEALTH_FIELDS},
+                                    headers={"Authorization": f"Bearer {creds['token']}"})
+        if not resp.is_success:
+            log.info("number health read failed for %s: HTTP %s", tenant_id, resp.status_code)
+            return {"tenant_id": tenant_id, "connected": True, "rows": [],
+                    "error": "Meta didn't answer just now — try again in a minute."}
+        out = {"tenant_id": tenant_id, "connected": True, **health_summary(resp.json())}
+    except httpx.HTTPError as exc:
+        log.info("number health read failed for %s: %s", tenant_id, type(exc).__name__)
+        return {"tenant_id": tenant_id, "connected": True, "rows": [],
+                "error": "Meta didn't answer just now — try again in a minute."}
+    _HEALTH_CACHE[tenant_id] = (_t.time(), out)
+    return out
 
 
 # ── A number added straight to Vula's own WhatsApp Business Account ───────────
@@ -348,8 +429,7 @@ async def link_existing_number(tenant_id: str, phone_number_id: str, pin: Option
     db.table("vula_whatsapp_accounts").upsert(record, on_conflict="tenant_id").execute()
     # Forget anything cached about this number or tenant so the next message routes and replies right.
     from vula.api import whatsapp as wa
-    wa._ROUTE_CACHE.pop(pnid, None)
-    wa._wa_creds_cache.pop(tenant_id, None)
+    wa._forget_wa_number(tenant_id, pnid)
     log.info("WhatsApp number %s linked to %s (waba %s, mode %s)", pnid, tenant_id, found_waba, mode)
     return {"tenant_id": tenant_id, "phone_number_id": pnid, "waba_id": found_waba,
             "phone_number": record["phone_number"], "verified_name": record["verified_name"],
