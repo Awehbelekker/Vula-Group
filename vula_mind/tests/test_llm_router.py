@@ -1,4 +1,6 @@
 """Tests for the local-first generation router (core/llm_router)."""
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +17,7 @@ from core.llm_router import (
     DEGENERATE_OUTPUT_FALLBACK,
     compute_confidence,
     escalate_to_cloud,
+    install_ollama_auth,
     _task_label,
     _log_decision,
 )
@@ -578,3 +581,65 @@ def test_cloud_model_per_task(monkeypatch):
     assert route[0] == "openrouter/anthropic/claude-sonnet-5"
     monkeypatch.setattr(settings, "cloud_model_by_task", "{not json")
     assert llm_router.cloud_model_for("commerce_admin") == "meta-llama/llama-3.3-70b-instruct"
+
+
+# ── install_ollama_auth: num_ctx cap (2026-10-24 live incident) ───────────────
+# litellm's Ollama provider defaults num_ctx to the model's registered max_input_tokens when the
+# caller doesn't set one — for llama3.1:8b that's 131072, which Ollama translates into a ~41GB
+# memory request on a 32GB-RAM/11GB-VRAM box: confirmed live, 112/116 Railway calls failing with
+# a 120s timeout while Ollama repeatedly evicted whatever else was loaded trying to satisfy it.
+# install_ollama_auth's wrapper is the one choke point every Ollama-bound litellm.acompletion
+# call already passes through (for the CF-Access headers) — these tests drive it directly against
+# a fake litellm module rather than the real package, so they don't depend on litellm's actual
+# installed version/behavior (already verified separately, live, against the real package).
+
+@pytest.fixture()
+def _fake_litellm(monkeypatch):
+    """A minimal stand-in for the litellm module, wrapped by install_ollama_auth exactly like
+    the real one — isolated per test via a fresh module object and by resetting the wrap-once
+    guard. Returns the ORIGINAL (pre-wrap) acompletion mock: install_ollama_auth replaces
+    litellm.acompletion with its own wrapper, so asserting on litellm.acompletion itself after
+    wrapping would just inspect the wrapper function, not what it was actually called with —
+    the original mock is what the wrapper forwards the (possibly modified) kwargs to."""
+    fake = types.ModuleType("litellm")
+    orig_mock = AsyncMock(return_value="ok")
+    fake.acompletion = orig_mock
+    monkeypatch.setitem(sys.modules, "litellm", fake)
+    monkeypatch.setattr(llm_router, "_ollama_auth_installed", False)
+    install_ollama_auth()
+    return orig_mock
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_capped_when_caller_omits_it(_fake_litellm):
+    import litellm
+    await litellm.acompletion(model="ollama/llama3.1:8b", api_base="http://localhost:11434",
+                              messages=[{"role": "user", "content": "hi"}])
+    _fake_litellm.assert_awaited_once()
+    assert _fake_litellm.call_args.kwargs["num_ctx"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_not_overridden_when_caller_sets_it(_fake_litellm):
+    import litellm
+    await litellm.acompletion(model="ollama/llama3.1:8b", api_base="http://localhost:11434",
+                              messages=[{"role": "user", "content": "hi"}], num_ctx=4096)
+    assert _fake_litellm.call_args.kwargs["num_ctx"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_not_injected_for_non_ollama_base(_fake_litellm):
+    import litellm
+    await litellm.acompletion(model="meta-llama/llama-3.3-70b-instruct",
+                              api_base="https://openrouter.ai/api/v1",
+                              messages=[{"role": "user", "content": "hi"}])
+    assert "num_ctx" not in _fake_litellm.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_not_injected_when_no_api_base_given(_fake_litellm):
+    """No api_base at all (can't tell it's Ollama) must fail open — never guess."""
+    import litellm
+    await litellm.acompletion(model="ollama/llama3.1:8b",
+                              messages=[{"role": "user", "content": "hi"}])
+    assert "num_ctx" not in _fake_litellm.call_args.kwargs
