@@ -92,12 +92,24 @@ def install_ollama_auth() -> None:
     _orig = litellm.acompletion
 
     async def _wrapped(*args, **kwargs):
-        hdrs = _ollama_headers()
         base = kwargs.get("api_base") or ""
-        if hdrs and base and _host(base) == _host(settings.ollama_base):
+        is_ollama = bool(base) and _host(base) == _host(settings.ollama_base)
+        hdrs = _ollama_headers()
+        if hdrs and is_ollama:
             merged = dict(kwargs.get("extra_headers") or {})
             merged.update(hdrs)
             kwargs["extra_headers"] = merged
+        # 2026-10-24, live incident: litellm's Ollama provider defaults num_ctx to the model's
+        # registered max_input_tokens when the caller doesn't set one — for llama3.1:8b that's
+        # 131072, which Ollama translates into a ~41GB memory request on this 32GB-RAM/11GB-VRAM
+        # box. Confirmed in %LOCALAPPDATA%\Ollama\server.log: "model predicted to exceed available
+        # memory, evicting" every ~2min, 112/116 Railway calls failing with a 120s timeout (499).
+        # This tier (model_worker_cheap_local) never legitimately needs anywhere near that —
+        # local_complexity_token_cap (the ceiling for staying local at all) is 8000 — so cap it
+        # here, the one choke point every Ollama-bound call already passes through for auth
+        # headers, rather than touching every call site. Never overrides an explicit caller value.
+        if is_ollama and "num_ctx" not in kwargs:
+            kwargs["num_ctx"] = 8192
         return await _orig(*args, **kwargs)
 
     litellm.acompletion = _wrapped
