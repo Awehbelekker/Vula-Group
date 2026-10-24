@@ -5,6 +5,7 @@ import VulaPrivacy from "./components/VulaPrivacy";
 const VulaPageRender = lazy(() => import("./components/VulaPageRender"));
 const VulaInvoiceApproval = lazy(() => import("./components/VulaInvoiceApproval"));
 const VulaUiKit = lazy(() => import("./components/VulaUiKit")); // #/ui-kit, master only (UX redesign)
+const ShareSheet = lazy(() => import("./components/share/ShareSheet")); // #/share, from the phone's Share sheet
 import { useAuthStore } from "./store/auth";
 import VulaDashboard from "./components/VulaDashboard";
 import VulaQS from "./components/VulaQS";
@@ -219,7 +220,8 @@ export default function App() {
           if (!l) { l = document.createElement("link"); l.rel = rel; document.head.appendChild(l); }
           l.href = href;
         };
-        setLink("manifest", `${VULA_API}/v1/commerce/${tid}/manifest.webmanifest`);
+        // ?app: the manifest is served from the API, so it learns the app's own address (start page, Share target)
+        setLink("manifest", `${VULA_API}/v1/commerce/${tid}/manifest.webmanifest?app=${encodeURIComponent(window.location.origin)}`);
         setLink("apple-touch-icon", `${VULA_API}/v1/commerce/${tid}/app-icon/180.png`);
         if (b.name) document.title = b.name;
       })
@@ -369,6 +371,12 @@ export default function App() {
             navRequest={navRequest} v2={v2} />
         </VulaShell>
         <OpenLinkedPage ready={tenantModules !== null} tick={goTick} open={navigateIn(groups)} />
+        {route === "#/share" && tenantModules !== null && (
+          <Suspense fallback={null}>
+            <ShareSheet canOpen={(id) => flattenNav(groups).some((p) => p.id === id)} open={navigateIn(groups)}
+              onClose={() => { window.history.replaceState(null, "", window.location.pathname + window.location.search); setRoute(""); }} />
+          </Suspense>
+        )}
         <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} v2={v2} />
       </div>
     );

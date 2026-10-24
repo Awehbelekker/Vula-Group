@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { VULA_API } from '../../lib/authFetch'
+import { takeHandOff } from '../../lib/sharedFiles'
 
 const H = { 'Content-Type': 'application/json' }  // JWT attached by lib/authFetch
 
@@ -31,6 +32,13 @@ export function useSmartScanner({ tenantId, onExpenseCreated, onStockUpdated }) 
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`, { headers: H })
       .then(r => r.json()).then(d => setSuppliers(d.suppliers || [])).catch(() => {})
   }, [tenantId])
+
+  // A photo shared into Vula from the phone (share/ShareSheet.jsx): read it as if just taken.
+  // Reading books nothing — the person still checks it and taps to save.
+  useEffect(() => {
+    const shared = takeHandOff('scan')
+    if (shared?.[0]) handleImage({ target: { files: [shared[0]] } })
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleImage(e) {
     const file = e.target.files?.[0]
