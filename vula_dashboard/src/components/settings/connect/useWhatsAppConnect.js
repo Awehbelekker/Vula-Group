@@ -10,13 +10,16 @@ import { VULA_API } from '../../../lib/authFetch'
 import { confirmDialog } from '../../ui/index.jsx'
 
 export const FB_APP_ID = import.meta.env.VITE_FB_APP_ID || ''
-const FB_CONFIG_ID = import.meta.env.VITE_FB_CONFIG_ID || ''
+// Meta's Embedded Signup configuration. Without it FB.login opens nothing useful and the button
+// used to hang on "Connecting…" — so Connect stays off and the card says why (2026-10-24).
+export const FB_CONFIG_ID = import.meta.env.VITE_FB_CONFIG_ID || ''
 
 export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   const [status, setStatus] = useState(null)   // null | 'connected' | 'pending' | 'error'
   const [account, setAccount] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [health, setHealth] = useState(null)   // { rows: [{label, value, tone}], error? }
 
   // Load current connection status
   useEffect(() => {
@@ -29,6 +32,15 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
       })
       .catch(() => setStatus('error'))
   }, [tenantId])
+
+  // What Meta says about the connected number: quality, daily limit, display name, registered.
+  useEffect(() => {
+    if (!tenantId || status !== 'connected') { setHealth(null); return }
+    fetch(`${VULA_API}/v1/whatsapp/health/${tenantId}`)
+      .then(r => r.json())
+      .then(setHealth)
+      .catch(() => setHealth({ rows: [], error: "Couldn't read the number's health just now." }))
+  }, [tenantId, status])
 
   // Embedded Signup (sessionInfoVersion 2) posts the WhatsApp account + number the owner picked
   // as a window message. Sending those to the backend connects THAT number — before, the first
@@ -68,6 +80,10 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   }, [])
 
   const handleConnect = useCallback(() => {
+    if (!FB_CONFIG_ID) {
+      setError("WhatsApp signup isn't set up on this dashboard yet — ask Vula to link the number for you.")
+      return
+    }
     if (!window.FB) {
       setError('Facebook SDK not loaded. Please refresh and try again.')
       return
@@ -135,5 +151,5 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
     setLoading(false)
   }
 
-  return { status, account, loading, error, handleConnect, handleDisconnect }
+  return { status, account, health, loading, error, handleConnect, handleDisconnect }
 }
