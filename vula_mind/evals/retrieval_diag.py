@@ -133,20 +133,50 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-async def run(tenants: List[str], per_doc: int = 2, max_docs: int = 30) -> Dict[str, Any]:
+def finished_rows(reports: List[Optional[Dict[str, Any]]], tenants: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """Rows per tenant from earlier partial reports (newest first). A partial report is saved only
+    after a tenant finishes, so a tenant's rows in one are complete; the newest report wins."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for rep in reports:
+        for t in tenants:
+            if t not in out:
+                rows = [r for r in (rep or {}).get("rows") or [] if r.get("tenant") == t]
+                if rows:
+                    out[t] = rows
+    return out
+
+
+async def run(tenants: List[str], per_doc: int = 1, max_docs: int = 25,
+              done_rows: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+              on_tenant=None) -> Dict[str, Any]:
+    """Tenant by tenant. done_rows holds rows of tenants already diagnosed by an earlier, cut-off
+    run (reused, not redone); on_tenant(partial_report) is awaited after each tenant so a restart
+    loses at most one tenant's work (2026-10-24: a deploy killed a 9-hour run that saved nothing)."""
     yaml_cases = [c for c in load_cases() if c.get("expected_docs") and c.get("type") != "unanswerable"]
     rows: List[Dict[str, Any]] = []
     synth_counts: Dict[str, Any] = {}
+    done_rows = done_rows or {}
     for t in tenants:
-        cases = [c for c in yaml_cases if c["tenant"] == t]
-        try:
-            synth = await synthesize(t, per_doc=per_doc, max_docs=max_docs, skip_audiences=("owner",))
-        except Exception as exc:  # noqa: BLE001
-            synth, synth_counts[t] = [], f"{type(exc).__name__}: {str(exc)[:120]}"
+        if done_rows.get(t):
+            rows += done_rows[t]
+            synth_counts[t] = "reused"
         else:
-            synth_counts[t] = len(synth)
-        for c in cases + synth:
-            rows.append(await diagnose(c))
+            cases = [c for c in yaml_cases if c["tenant"] == t]
+            try:
+                synth = await synthesize(t, per_doc=per_doc, max_docs=max_docs, skip_audiences=("owner",))
+            except Exception as exc:  # noqa: BLE001
+                synth, synth_counts[t] = [], f"{type(exc).__name__}: {str(exc)[:120]}"
+            else:
+                synth_counts[t] = len(synth)
+            for c in cases + synth:
+                rows.append(await diagnose(c))
+        if on_tenant:
+            await on_tenant(_report(rows, [x for x in tenants if any(r["tenant"] == x for r in rows)],
+                                    synth_counts))
+    return _report(rows, tenants, synth_counts)
+
+
+def _report(rows: List[Dict[str, Any]], tenants: List[str], synth_counts: Dict[str, Any]) -> Dict[str, Any]:
     by_tenant = {t: summarize([r for r in rows if r["tenant"] == t]) for t in tenants}
     return {"layer": "retrieval_diag", "summary": summarize(rows), "by_tenant": by_tenant,
-            "synthesized": synth_counts, "rows": rows}
+            "synthesized": dict(synth_counts), "rows": rows}
