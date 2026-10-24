@@ -65,6 +65,7 @@ async def test_only_names_not_already_on_the_account_are_submitted(monkeypatch):
                                      "seedleme_sales_summary",
                                      "seedleme_delivery_briefing", "seedleme_low_stock_alert",
                                      "seedleme_shop_promo",     # the picture promotion, with its photo
+                                     "seedleme_shop_story",     # the same in the shop's own post layout
                                      # notices to the business's own staff (vula/staff_notices.py)
                                      "seedleme_staff_notice", "seedleme_staff_notice_image",
                                      "seedleme_staff_day", "seedleme_staff_poll_invite"}
