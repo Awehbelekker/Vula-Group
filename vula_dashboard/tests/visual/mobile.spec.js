@@ -87,7 +87,7 @@ async function menu(page) {
     if (z) await page.locator(".vshell-zone-btn", { hasText: z }).first().click();
     items[z || ""] = (await page.locator(".vshell-it .vshell-lb").allInnerTexts()).map((t) => t.trim()).filter(Boolean);
   }
-  if (await burger.isVisible()) await page.keyboard.press("Escape");
+  if (await page.locator(".vshell-side.open").count()) await burger.click();
   return items;
 }
 
@@ -101,7 +101,9 @@ async function go(page, zone, label) {
     await sheet.waitFor({ state: "hidden" }).catch(() => page.keyboard.press("Escape"));
   } else {
     const burger = page.locator("button.vshell-burger");
-    if (await burger.isVisible()) { await burger.click(); await page.locator(".vshell-side.open").waitFor(); }
+    if (await burger.isVisible() && !(await page.locator(".vshell-side.open").count())) {
+      await burger.click(); await page.locator(".vshell-side.open").waitFor();
+    }
     if (zone) await page.locator(".vshell-zone-btn", { hasText: zone }).first().click();
     await page.locator(".vshell-it", { has: page.locator(".vshell-lb", { hasText: exact }) }).first().click();
   }

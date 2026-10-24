@@ -334,9 +334,15 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
 @media (max-width: 600px) {
   .vshell-content [style*="display: flex"]:not([style*="flex-direction: column"]),
   .v1-page [style*="display: flex"]:not([style*="flex-direction: column"]) { flex-wrap: wrap; }
+  .vshell-content [style*="display: flex"] > :is(input, select, textarea),
+  .v1-page [style*="display: flex"] > :is(input, select, textarea) { min-width: 0; max-width: 100%; }
   .vshell-content table, .v1-page table { display: block; overflow-x: auto; max-width: 100%; }
   .vshell-content div:has(> [style*="grid-template-columns"]),
   .v1-page div:has(> [style*="grid-template-columns"]) { overflow-x: auto; max-width: 100%; }
+  /* the old shell's Master screens had no side margin at all; and every page ends clear of the
+     floating menu and Vula AI buttons (58px, 20px from the bottom) */
+  .vshell .v1-page { padding-left: 12px !important; padding-right: 12px !important; }
+  .vshell-content { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 }
 .vula-master { padding: 16px 24px; max-width: 1400px; }
 @media (max-width: 600px) { .vula-master { padding: 12px 12px; } }
