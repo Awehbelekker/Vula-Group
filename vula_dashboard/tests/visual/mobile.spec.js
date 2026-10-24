@@ -11,6 +11,7 @@
 //   edge     text closer than 12px to the screen edge
 //   small    a button, link or field smaller than 32px either way
 //   hidden   the page's last control sits under the floating toolbar / home bar after scrolling
+//   gutter   the side margins on a phone are wider than 24px (space the screen can't spare)
 // Findings go to .results/mobile/<design>-<role>-<width>.json with a screenshot per screen, and
 // the test FAILS on hscroll, wide, edge and hidden (small is reported only).
 import { test, expect } from "@playwright/test";
@@ -39,6 +40,9 @@ test.setTimeout(15 * 60 * 1000);
 async function boot(page, { role, modules }, width) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
+  page.setDefaultTimeout(8000);           // a control that never appears is a finding, not a hang
+  // a browser alert/confirm freezes the page (and every measurement): note it and close it
+  page.on("dialog", (d) => { errors.push(`unexpected ${d.type()} dialog: ${d.message().slice(0, 80)}`); d.dismiss().catch(() => {}); });
   await page.setViewportSize({ width, height: HEIGHT[width] });
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
   await page.clock.setFixedTime(new Date(NOW_ISO));
@@ -51,9 +55,10 @@ async function boot(page, { role, modules }, width) {
 }
 
 async function settle(page) {
-  await page.waitForLoadState("networkidle").catch(() => {});
+  // the app polls (inbox, today), so "network idle" may never come: give it a moment instead
+  await page.waitForLoadState("networkidle", { timeout: 1500 }).catch(() => {});
   await page.evaluate(() => document.fonts.ready);
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(300);
 }
 
 /** The menu's items (and Master's zones), as the phone shows them. */
@@ -110,7 +115,7 @@ function measure() {
     return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity) !== 0;
   };
   const clipped = (el) => {
-    for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+    for (let p = el; p && p !== document.documentElement; p = p.parentElement) {
       const ox = getComputedStyle(p).overflowX;
       if (ox === "auto" || ox === "scroll" || ox === "hidden" || ox === "clip") return true;
     }
@@ -136,6 +141,7 @@ function measure() {
   while (walk.nextNode()) {
     const t = walk.currentNode, el = t.parentElement;
     if (!t.textContent.trim() || !el || !shown(el) || clipped(el)) continue;
+    if (el.getBoundingClientRect().width <= 2) continue;                  // screen-reader-only text
     const range = document.createRange(); range.selectNodeContents(t);
     const r = [...range.getClientRects()].find((x) => x.width > 0);
     if (r && (r.left < 12 || r.right > W - 12) && once(`e${where(el)}`))
@@ -148,6 +154,15 @@ function measure() {
     if (el.matches("input[type=checkbox], input[type=radio]")) continue;              // their label is the target
     if ((r.height < 32 || r.width < 32) && once(`s${where(el)}`))
       small.push({ at: where(el), label: (el.getAttribute("aria-label") || el.textContent || el.getAttribute("name") || "").trim().slice(0, 30), w: Math.round(r.width), h: Math.round(r.height) });
+  }
+  // the page's side gutters: where its leftmost and rightmost visible text sits
+  let gl = W, gr = W;
+  const walk2 = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walk2.nextNode()) {
+    const el = walk2.currentNode.parentElement;
+    if (!walk2.currentNode.textContent.trim() || !el || !shown(el) || el.getBoundingClientRect().width <= 2) continue;
+    const range = document.createRange(); range.selectNodeContents(walk2.currentNode);
+    for (const r of range.getClientRects()) if (r.width > 0) { gl = Math.min(gl, r.left); gr = Math.min(gr, W - r.right); }
   }
   // after scrolling to the end, nothing the user can tap may sit under a bottom overlay
   window.scrollTo(0, document.documentElement.scrollHeight);
@@ -165,7 +180,7 @@ function measure() {
     if (o && once(`h${where(el)}`)) hidden.push({ at: where(el), label: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 30), under: where(o.el) });
   }
   window.scrollTo(0, 0);
-  return { hscroll: Math.max(0, document.documentElement.scrollWidth - W), wide, edge, small, hidden };
+  return { hscroll: Math.max(0, document.documentElement.scrollWidth - W), gutter: [Math.round(gl), Math.round(gr)], wide, edge, small, hidden };
 }
 
 for (const who of ROLES) {
@@ -175,10 +190,15 @@ for (const who of ROLES) {
       const dir = outDir(ti);
       fs.mkdirSync(path.join(dir, "shots"), { recursive: true });
       const report = [];
+      let t0 = Date.now();
       const check = async (name) => {
-        const m = await page.evaluate(measure);
+        const t1 = Date.now();
+        const m = await Promise.race([page.evaluate(measure),
+          new Promise((_, no) => setTimeout(() => no(new Error("measuring took over 20s")), 20000))]);
+        const t2 = Date.now();
         await page.screenshot({ path: path.join(dir, "shots", `${DESIGN}-${who.role}-${width}-${slug(name)}.png`), fullPage: true });
-        report.push({ screen: name, ...m });
+        report.push({ screen: name, ms: { open: t1 - t0, measure: t2 - t1, shot: Date.now() - t2 }, ...m });
+        t0 = Date.now();
       };
       await check("home");
       const items = await menu(page);
@@ -187,12 +207,12 @@ for (const who of ROLES) {
           if (/^(sign out|log out)$/i.test(label)) continue;
           try { await go(page, zone || null, label); } catch (e) { report.push({ screen: `${zone} ${label}`, error: String(e).slice(0, 200) }); continue; }
           const name = `${zone ? `${zone} › ` : ""}${label}`;
-          await check(name);
-          const tabs = page.locator(V2 ? ".v2-content [role=tab]" : "main [role=tab], .vshell-main [role=tab]");
+          try { await check(name); } catch (e) { report.push({ screen: name, error: String(e).slice(0, 200) }); continue; }
+          const tabs = page.locator(V2 ? ".v2-content [role=tablist]" : ".vshell-main [role=tablist]").first().getByRole("tab");
           const names = (await tabs.allInnerTexts()).map((t) => t.trim()).filter(Boolean);
           for (const tab of names.slice(1)) {
             try {
-              await tabs.filter({ hasText: tab }).first().click();
+              await tabs.filter({ hasText: tab }).first().click({ timeout: 4000 });
               await settle(page);
               await check(`${name} › ${tab}`);
             } catch (e) { report.push({ screen: `${name} › ${tab}`, error: String(e).slice(0, 200) }); }
@@ -200,9 +220,11 @@ for (const who of ROLES) {
         }
       }
       fs.writeFileSync(path.join(dir, `${DESIGN}-${who.role}-${width}.json`), JSON.stringify(report, null, 2));
-      const bad = report.filter((r) => r.hscroll || r.wide?.length || r.edge?.length || r.hidden?.length)
+      const roomy = (r) => r.gutter && (r.gutter[0] > 24 || r.gutter[1] > 24) && r.gutter[0] < width / 2;
+      const bad = report.filter((r) => r.hscroll || r.wide?.length || r.edge?.length || r.hidden?.length || roomy(r))
         .map((r) => `${r.screen}: ${[r.hscroll && `scrolls sideways ${r.hscroll}px`, r.wide?.length && `${r.wide.length} too wide`,
-          r.edge?.length && `${r.edge.length} at the edge`, r.hidden?.length && `${r.hidden.length} under the toolbar`].filter(Boolean).join(", ")}`);
+          r.edge?.length && `${r.edge.length} at the edge`, r.hidden?.length && `${r.hidden.length} under the toolbar`,
+          roomy(r) && `gutters ${r.gutter.join("/")}px`].filter(Boolean).join(", ")}`);
       expect.soft(errors).toEqual([]);
       expect(bad).toEqual([]);
     });

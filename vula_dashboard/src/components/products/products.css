@@ -48,13 +48,14 @@
 .vpr-edit { display: flex; flex-direction: column; gap: var(--space-2); }
 
 @media (max-width: 760px) {
-  /* photo + name, then price and the actions on one line under it */
-  .vpr-row { grid-template-columns: 44px max-content minmax(0, 1fr); grid-template-areas: "thumb main main" ". price actions"; }
+  /* photo + name, then price and the actions on one line under it, using the row's full width
+     (indenting it under the name squeezed Edit to 20px on a 360px phone) */
+  .vpr-row { grid-template-columns: 44px max-content minmax(0, 1fr); grid-template-areas: "thumb main main" "price price actions"; }
   .vpr-thumb { grid-area: thumb; } .vpr-main { grid-area: main; } .vpr-price { grid-area: price; }
   .vpr-actions { grid-area: actions; justify-content: flex-end; flex-wrap: nowrap; }
   .vpr-switch-label { display: none; }
   .vpr-switch { padding-right: 4px; }
   .vpr-price .vula-input { width: 84px !important; }
   .vpr-unit, .vpr-edit-label { display: none; }
-  .vpr-edit-btn { padding: 0 !important; width: 40px; justify-content: center; gap: 0 !important; }
+  .vpr-edit-btn { padding: 0 !important; width: 40px; flex: none; justify-content: center; gap: 0 !important; }
 }
