@@ -345,8 +345,10 @@ class ClickUpAdminSkill(BaseSkill):
         except Exception as exc:
             logger.warning("clickup tool %s failed: %s", name, exc)
             if service.looks_refused(exc) and await service.verify_or_flag(tid) is False:
+                from vula.api.tenants import dashboard_link
                 return {"error": "ClickUp has stopped accepting Vula's sign-in — it needs "
-                                 "reconnecting in the dashboard (Settings › ClickUp). Say so "
-                                 "plainly; nothing was read or changed in ClickUp."}
+                                 "reconnecting in the dashboard (Settings › ClickUp): "
+                                 f"{dashboard_link(tid, 'settings')}. Say so plainly, and pass "
+                                 "on that link as it is; nothing was read or changed in ClickUp."}
             return {"error": str(exc)}
         return {"error": f"unknown tool {name}"}

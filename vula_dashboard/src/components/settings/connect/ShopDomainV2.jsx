@@ -7,6 +7,7 @@
 import { Check, Copy, ExternalLink, Globe, MessageCircle, Trash2 } from 'lucide-react'
 import { Button, Card, Field, Input, Skeleton, StatusChip } from '../../ui/index.jsx'
 import { copy, useShopDomain } from './useShopDomain'
+import { openWhatsApp } from '../../../lib/phone'
 import '../settings.css'
 
 const STATE = {
@@ -67,7 +68,7 @@ export default function ShopDomainV2({ tenantId }) {
           {info.instructions && (
             <div className="vst-row">
               <Button size="sm" Icon={Copy} onClick={() => copy(info.instructions)}>Copy instructions for my web person</Button>
-              <Button size="sm" variant="secondary" Icon={MessageCircle} onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(info.instructions)}`, '_blank')}>Send on WhatsApp</Button>
+              <Button size="sm" variant="secondary" Icon={MessageCircle} onClick={() => openWhatsApp('', info.instructions)}>Send on WhatsApp</Button>
             </div>
           )}
         </>

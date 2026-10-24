@@ -417,6 +417,14 @@ def dashboard_url_for(tenant_id: str) -> str:
     return _KNOWN_DASHBOARDS.get(tenant_id) or settings.dashboard_url.rstrip("/")
 
 
+def dashboard_link(tenant_id: str, page: str) -> str:
+    """A link from WhatsApp straight to one page of this business's dashboard, e.g. its Invoices:
+    https://<dashboard>/#/go/invoices. `page` is a dashboard page id (vula_dashboard/src/
+    navConfig.jsx). The dashboard keeps it through the login and opens it if this person may see
+    that page. Sent as a raw URL — WhatsApp doesn't render markdown links."""
+    return f"{dashboard_url_for(tenant_id)}/#/go/{page}"
+
+
 @router.get("/by-domain")
 async def get_tenant_by_domain(host: str) -> dict:
     """Public: the tenant a dashboard hostname belongs to (no secrets — just the id), for a

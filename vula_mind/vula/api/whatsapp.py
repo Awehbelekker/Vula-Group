@@ -6106,8 +6106,8 @@ async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id
     read = await _read_stock_photo(media_id)
     if not read:
         await _send_reply(phone, "I couldn't read that photo. Try again closer up and in good "
-                                 "light — or use Sell › Stock in the dashboard to scan with the "
-                                 "phone camera.", tenant_id)
+                                 "light — or scan it with the phone camera in the dashboard's "
+                                 f"Stock: {_dashboard_link(tenant_id, 'stock')}", tenant_id)
         return True
     kind = str(read.get("kind") or "").lower()
     lines = [ln for ln in (read.get("lines") or []) if isinstance(ln, dict) and ln.get("description")]
@@ -6152,8 +6152,9 @@ async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id
         if not hit or not hit.get("product"):
             shown = ", ".join(c for c in codes if c) or (read.get("product_text") or "the label")
             await _send_reply(phone, f"I read {shown}, but it isn't linked to a product in your shop "
-                                     "yet. In the dashboard, open Sell › Stock, scan it and pick the "
-                                     "product — after that a photo finds it.", tenant_id)
+                                     "yet. Open Stock in the dashboard, scan it and pick the product — "
+                                     f"after that a photo finds it: {_dashboard_link(tenant_id, 'stock')}",
+                              tenant_id)
             return True
         prod, var = hit["product"], hit.get("variant")
         name = prod.get("name") or "That product"
@@ -6168,7 +6169,8 @@ async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id
 
     await _send_reply(phone, "I can read barcodes, labels and delivery notes, but I won't guess how "
                              "many items are in a photo. Send the count (e.g. \"hake 12\"), a photo "
-                             "of the barcode, or use Sell › Stock in the dashboard to scan items.",
+                             "of the barcode, or scan items in the dashboard's Stock: "
+                             f"{_dashboard_link(tenant_id, 'stock')}",
                       tenant_id)
     return True
 
@@ -8318,6 +8320,12 @@ def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
 def _dashboard_url(tenant_id: str) -> str:
     from vula.api.tenants import dashboard_url_for
     return dashboard_url_for(tenant_id)
+
+
+def _dashboard_link(tenant_id: str, page: str) -> str:
+    """Straight to one dashboard page (vula/api/tenants.py::dashboard_link)."""
+    from vula.api.tenants import dashboard_link
+    return dashboard_link(tenant_id, page)
 
 
 def _profile_invite(tenant_id: str, role: Optional[str]) -> str:

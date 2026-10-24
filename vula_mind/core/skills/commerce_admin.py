@@ -68,6 +68,12 @@ _PAID_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered"}
 _VALID_ORDER_STATUS = {"paid", "confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
 
 
+
+def _team_link(tid: str) -> str:
+    """Straight to the dashboard's Team page (vula/api/tenants.py::dashboard_link)."""
+    from vula.api.tenants import dashboard_link
+    return dashboard_link(tid, "team")
+
 def _readback_gate(tid: str, tool: str, ok: bool, expected: Dict[str, Any],
                    observed: Dict[str, Any]) -> None:
     """Record the deterministic 'verified done' outcome of a state-mutating admin tool: after
@@ -2255,7 +2261,8 @@ class CommerceAdminSkill(BaseSkill):
         if not people:
             return {"status": "need_info",
                     "message": "There's nobody on the team list with a WhatsApp number to send it "
-                               "to — add them under Team in the dashboard first."}
+                               "to — add them under Team in the dashboard first: "
+                               f"{_team_link(tid)}"}
         sample = {"id": "preview", "kind": "notice", "title": title, "body": body, "must_read": must_read}
         text = sn.message_text(sample, people[0], sn._business(tid))
         names = ", ".join((m.get("name") or m["whatsapp"]).split()[0] for m in people[:12])
@@ -2301,7 +2308,7 @@ class CommerceAdminSkill(BaseSkill):
         if not people:
             return {"status": "need_info",
                     "message": "There's nobody on the team list with a WhatsApp number — add them "
-                               "under Team in the dashboard first."}
+                               f"under Team in the dashboard first: {_team_link(tid)}"}
         days = args.get("closes_in_days")
         closes = None
         if isinstance(days, (int, float)) and days > 0:

@@ -157,5 +157,6 @@ def handle_preference_command(tenant_id: str, phone: str, text: str) -> Optional
 
     labels = ", ".join(k.replace("_", " ") for k in matched)
     verb = "off" if off else "on"
+    from vula.api.tenants import dashboard_link
     return (f"Got it — turned {verb} *{labels}* notifications for you. "
-            "Reply anytime to change this, or manage it in the dashboard under Team.")
+            f"Reply anytime to change this, or manage it under Team: {dashboard_link(tenant_id, 'team')}")

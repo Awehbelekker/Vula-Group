@@ -204,10 +204,11 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "",
     if approval["entity_type"] == "invoice":
         # Say what actually happened, not "Delivering now" before trying.
         sent = await _deliver_invoice(approval)
+        from vula.api.tenants import dashboard_link
         await _send_reply(phone, (
             f"✅ *{title}* is approved and has been sent to the client." if sent else
             f"✅ *{title}* is approved, but I couldn't send it to the client. Open it under "
-            f"Invoices in the dashboard and press Send."), tenant_id)
+            f"Invoices in the dashboard and press Send: {dashboard_link(tenant_id, 'invoices')}"), tenant_id)
     elif approval["entity_type"] == "inbound_invoice":
         await _on_approved(approval)
         name = (approval.get("meta") or {}).get("candidate_supplier_name") or "that supplier"
