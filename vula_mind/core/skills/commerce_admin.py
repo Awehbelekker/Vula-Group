@@ -385,6 +385,15 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "test": {"type": "boolean"}, "confirm": {"type": "boolean"}},
             "required": ["message"]}}},
     {"type": "function", "function": {
+        "name": "set_product_photo",
+        "description": "Make a real photo the website picture of a product. Only used from the "
+                       "Use photo button after the team sent or forwarded the photo — never "
+                       "call it yourself.",
+        "parameters": {"type": "object", "properties": {
+            "product_id": {"type": "string"}, "product": {"type": "string"},
+            "image_url": {"type": "string"}, "confirm": {"type": "boolean"}},
+            "required": ["product_id", "image_url"]}}},
+    {"type": "function", "function": {
         "name": "recent_promotions",
         "description": "The business's own recent promotions (posts the team forwarded into "
                        "this WhatsApp line), newest first. Call before writing a promotion's "
@@ -1253,7 +1262,7 @@ _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_
 # Tools in the always-on set that only mean something to a business that sells products
 # (Off the Hook), never to a project business (DIGG) or a rep (Gerflor) — see tenant_profile.
 _SHOP_ONLY_TOOLS = {"recent_orders", "update_order_status", "create_manual_order", "order_payment",
-                    "picture_promotion", "recent_promotions",
+                    "picture_promotion", "recent_promotions", "set_product_photo",
                     "stock_status",
                     "update_stock", "receive_stock", "preview_broadcast", "sales_summary"}
 
@@ -1500,6 +1509,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
     "order_payment": "orders", "picture_promotion": "broadcast", "recent_promotions": "broadcast",
+    "set_product_photo": "products",
     "cost_sheet": "manufacturing", "add_material": "manufacturing", "receive_material": "manufacturing",
     "set_recipe": "manufacturing", "log_batch": "manufacturing", "undo_last_batch": "manufacturing",
     "costing_settings": "manufacturing", "price_material": "manufacturing",
@@ -2360,6 +2370,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "order_payment":       return await self._order_payment(tid, args)
             if name == "picture_promotion":   return await self._picture_promotion(tid, args, ctx.get("phone"))
             if name == "recent_promotions":   return self._recent_promotions(tid)
+            if name == "set_product_photo":   return await self._set_product_photo(tid, args)
             if name in _MFG_TOOL_NAMES:       return await self._manufacturing(name, tid, args, ctx.get("phone"))
             if name == "create_automation_rule": return await self._create_automation_rule(tid, args.get("description", ""), bool(args.get("confirm")))
             if name == "list_discount_codes": return await self._list_discount_codes(tid)
@@ -3493,6 +3504,24 @@ class CommerceAdminSkill(BaseSkill):
         except CostingError as exc:
             return {"error": str(exc)}
         return {"error": f"unknown costing tool {name}"}
+
+    async def _set_product_photo(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """A real photo the team sent becomes the product's website picture (2026-10-24, OTH:
+        AI pictures that didn't look like the real fish). Preview unless confirmed; read back."""
+        pid, url = (args.get("product_id") or "").strip(), (args.get("image_url") or "").strip()
+        if not pid or not url.startswith("https://"):
+            return {"error": "No product or photo given."}
+        if not args.get("confirm"):
+            return {"preview": True, "product": args.get("product") or pid,
+                    "message": "Confirm to use this photo as the website picture."}
+        from vula.commerce import promo_photos
+        back = await promo_photos.set_photo(tid, pid, url)
+        if back.get("error"):
+            return back
+        if back.get("image_url") != url:
+            return {"error": "The picture didn't change — nothing was saved. Please try again."}
+        return _checked({"saved": True, "product": back.get("name")},
+                        f"✅ *{back.get('name')}* now shows your own photo on the website.")
 
     def _recent_promotions(self, tid: str) -> Dict[str, Any]:
         from vula.commerce import promotions

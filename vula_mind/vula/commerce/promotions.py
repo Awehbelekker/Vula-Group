@@ -37,13 +37,24 @@ def _norm(text: str) -> str:
 
 
 def save(tenant_id: str, body: str, media_id: Optional[str] = None, mime: Optional[str] = None,
-         by: Optional[str] = None) -> Optional[dict]:
+         by: Optional[str] = None, image_url: Optional[str] = None) -> Optional[dict]:
     """Keep one forwarded promotion. The same text forwarded again within 30 days is not stored
-    twice (returns the existing row with "duplicate": True). Returns None on failure."""
+    twice (returns the existing row with "duplicate": True). A picture with no words is kept
+    when its picture was stored (image_url, migration 221). Returns None on failure."""
     body = (body or "").strip()[:MAX_BODY]
-    if not tenant_id or not body:
+    if not tenant_id or not (body or image_url):
         return None
     db = _client()
+    if not body:
+        try:
+            out = db.table("vula_promotions").insert({
+                "tenant_id": tenant_id, "body": "", "media_id": media_id, "mime": mime,
+                "source": "forwarded", "added_by": by, "image_url": image_url,
+            }).execute().data or []
+            return out[0] if out else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("promotion picture not saved for %s (migration 221?): %s", tenant_id, exc)
+            return None
     since = (datetime.now(timezone.utc) - timedelta(days=DEDUPE_DAYS)).isoformat()
     try:
         rows = (db.table("vula_promotions").select("id,body,created_at")
@@ -53,10 +64,11 @@ def save(tenant_id: str, body: str, media_id: Optional[str] = None, mime: Option
         for r in rows:
             if _norm(r.get("body") or "") == key:
                 return {**r, "duplicate": True}
-        out = db.table("vula_promotions").insert({
-            "tenant_id": tenant_id, "body": body, "media_id": media_id, "mime": mime,
-            "source": "forwarded", "added_by": by,
-        }).execute().data or []
+        row = {"tenant_id": tenant_id, "body": body, "media_id": media_id, "mime": mime,
+               "source": "forwarded", "added_by": by}
+        if image_url:
+            row["image_url"] = image_url
+        out = db.table("vula_promotions").insert(row).execute().data or []
         return out[0] if out else None
     except Exception as exc:  # noqa: BLE001
         logger.warning("promotion not saved for %s (migration 220?): %s", tenant_id, exc)

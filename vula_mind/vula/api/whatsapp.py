@@ -257,7 +257,20 @@ def _forwarded_flag(msg: dict) -> bool:
 
 def _promo_burst_open(tenant_id: str, phone: str) -> dict:
     return _PROMO_BURSTS.setdefault((tenant_id, phone), {
-        "ids": [], "dupes": 0, "skipped": 0, "failed": 0, "task": None})
+        "ids": [], "dupes": 0, "skipped": 0, "failed": 0, "photos": [], "task": None})
+
+
+async def _keep_post_picture(tenant_id: str, media_id: str, mime: Optional[str]) -> tuple:
+    """Download a forwarded post's picture and store it (product-images is public: it may become
+    a website picture). Returns (stored link or None, the bytes)."""
+    import asyncio as _a
+    import time as _time
+    data = await _download_media_bytes(media_id)
+    if not data:
+        return None, None
+    path = f"{tenant_id}/promotions/{int(_time.time() * 1000)}-{re.sub(r'[^A-Za-z0-9]', '', media_id)[-16:]}.jpg"
+    url = await _a.to_thread(_upload_to_storage, "product-images", path, data, mime or "image/jpeg")
+    return url, data
 
 
 async def _save_forwarded_promo(tenant_id: str, phone: str, body: str,
@@ -265,8 +278,10 @@ async def _save_forwarded_promo(tenant_id: str, phone: str, body: str,
     import asyncio as _a
     from vula.commerce import promotions
     b = _promo_burst_open(tenant_id, phone)
-    if (body or "").strip():
-        row = await _a.to_thread(promotions.save, tenant_id, body, media_id, mime, phone)
+    image_url, image_bytes = (await _keep_post_picture(tenant_id, media_id, mime)
+                              if media_id else (None, None))
+    if (body or "").strip() or image_url:
+        row = await _a.to_thread(promotions.save, tenant_id, body, media_id, mime, phone, image_url)
         if row is None:
             b["failed"] += 1
         elif row.get("duplicate"):
@@ -274,7 +289,16 @@ async def _save_forwarded_promo(tenant_id: str, phone: str, body: str,
         else:
             b["ids"].append(row["id"])
     else:
-        b["skipped"] += 1      # a picture with no words — nothing to keep
+        b["skipped"] += 1      # a picture that couldn't be fetched, with no words
+    if image_url and image_bytes:
+        # A real photo of a product whose website picture is AI-made → offered after the burst.
+        try:
+            from vula.commerce import promo_photos
+            m = await promo_photos.match(tenant_id, body, image_bytes)
+            if m and all(x["product"]["id"] != m["product"]["id"] for x in b["photos"]):
+                b["photos"].append({**m, "image_url": image_url})
+        except Exception as exc:  # noqa: BLE001
+            logger.info("post picture not matched: %s", type(exc).__name__)
     if b["task"] is not None:
         b["task"].cancel()
     b["task"] = _a.create_task(_promo_burst_ack(tenant_id, phone))
@@ -290,7 +314,7 @@ def _promo_ack_text(b: dict) -> str:
     if d:
         parts.append(f"{d} {'was' if d == 1 else 'were'} already saved.")
     if k:
-        parts.append(f"{k} picture{'s' if k != 1 else ''} had no text, so there was nothing to keep.")
+        parts.append(f"I couldn't fetch {k} picture{'s' if k != 1 else ''} with no text.")
     if f:
         parts.append(f"I couldn't save {f} — please send {'it' if f == 1 else 'them'} again later.")
     text = " ".join(parts) or "📣 Nothing new to save."
@@ -310,8 +334,73 @@ async def _promo_burst_ack(tenant_id: str, phone: str) -> None:
         from vula import open_questions as oq
         oq.ask(tenant_id, phone, "promo_scope", ",".join(b["ids"]), prompt="Promotions saved")
     await _send_reply(phone, _promo_ack_text(b), tenant_id)
+    if b["photos"]:
+        _run_bg(_offer_product_photos(tenant_id, phone, b["photos"]), label="offer_product_photos")
     if b["ids"]:
         _run_bg(_propose_customer_voice(tenant_id, phone), label="propose_voice")
+
+
+_PHOTO_OFFERS_PER_BURST = 5
+
+
+async def _offer_product_photo(tenant_id: str, phone: str, product: dict, image_url: str) -> None:
+    """Show the photo, then *Use photo* / *Skip* — set_product_photo runs only on the tap."""
+    creds = await _get_tenant_wa_creds(tenant_id)
+    if creds:
+        await _send_wa_image(creds, _wa_number(phone), image_url)
+    current = "now an AI picture" if product.get("image_url") else "no picture yet"
+    await _ask_admin_confirm(
+        phone, tenant_id, "set_product_photo",
+        {"product_id": product["id"], "product": product.get("name") or "", "image_url": image_url},
+        {}, caller_role=_staff_role(tenant_id, phone),
+        summary=f"📸 Use this as the website picture for *{product.get('name')}*? ({current})",
+        labels=("Use photo", "Skip"))
+
+
+async def _offer_product_photos(tenant_id: str, phone: str, photos: list) -> None:
+    from vula.commerce import promo_photos
+    for m in photos[:_PHOTO_OFFERS_PER_BURST]:
+        await _offer_product_photo(tenant_id, phone, m["product"], m["image_url"])
+    left = await promo_photos.still_ai(tenant_id)
+    offered = {m["product"].get("name") for m in photos[:_PHOTO_OFFERS_PER_BURST]}
+    left = [n for n in left if n not in offered]
+    if left:
+        more = (f" ({len(photos) - _PHOTO_OFFERS_PER_BURST} more photo matches next time.)"
+                if len(photos) > _PHOTO_OFFERS_PER_BURST else "")
+        await _send_reply(phone, (
+            "Still AI pictures on your website: " + ", ".join(left) + "." + more +
+            "\nSend a photo captioned with the product name (e.g. *photo Hake Fillets*) to "
+            "replace one."), tenant_id)
+
+
+# "photo Hake Fillets" / "website picture for Hake Fillets" — a team member's photo for a product.
+_PRODUCT_PHOTO_RE = re.compile(
+    r"^\s*(?:(?:website|product|shop)\s+)?(?:photo|picture|pic|image)\s+(?:for\s+|of\s+)?(?P<name>.{3,80}?)\s*$",
+    re.IGNORECASE)
+
+
+async def _maybe_product_photo(tenant_id: str, phone: str, media_id: str, caption: str,
+                               mime: Optional[str]) -> bool:
+    m = _PRODUCT_PHOTO_RE.match(caption or "")
+    if not m or not _is_team(tenant_id, phone):
+        return False
+    from core.skills.commerce_assistant import _match_product, _suggest_products
+    from vula.commerce import service as _cs
+    products = await _cs.list_products(tenant_id, in_stock_only=False, statuses={"active"})
+    name = m.group("name").strip().rstrip(".!")
+    product = _match_product(name, products)
+    if not product:
+        maybe = _suggest_products(name, products)
+        await _send_reply(phone, f"I couldn't find a product called *{name}*." + (
+            f" Did you mean: {', '.join(maybe)}? Send the photo again with that name." if maybe
+            else " Send the photo again with the name as it is on your website."), tenant_id)
+        return True
+    url, _ = await _keep_post_picture(tenant_id, media_id, mime)
+    if not url:
+        await _send_reply(phone, "I couldn't fetch that photo — please send it again.", tenant_id)
+        return True
+    await _offer_product_photo(tenant_id, phone, product, url)
+    return True
 
 
 _VOICE_MIN_PROMOS = 5
@@ -2279,6 +2368,10 @@ async def _handle_image_or_video(
     if (msg_type == "image" and route_tenant and _recently_asked_about_signature(phone)
             and (_is_tenant_owner(route_tenant, phone) or await _sender_is_sales_rep(phone, route_tenant))):
         await _handle_signature_capture(phone, media_id, route_tenant)
+        return
+    # "photo Hake Fillets" from the team on a shop line → offered as that product's website picture.
+    if (msg_type == "image" and route_mode == "commerce" and route_tenant and caption.strip()
+            and await _maybe_product_photo(route_tenant, phone, media_id, caption, mime_type)):
         return
     # sales_rep captioning a photo with an instruction → the CAPTION is the request; give the
     # agent both the caption and a vision description of the photo.
@@ -8688,6 +8781,9 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         return
 
     if action == "admin_cancel":
+        if row.get("tool_name") == "set_product_photo":
+            await _send_reply(phone, "OK — skipped. The website picture stays as it is.", tenant_id)
+            return
         if row.get("tool_name") == "apply_voice_persona":
             # "Keep current": the suggestion is dropped too, so it doesn't sit there pending and
             # stop the voice from ever being re-learned (voice_profile.due_for_recheck).
