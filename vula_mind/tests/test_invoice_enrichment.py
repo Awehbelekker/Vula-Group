@@ -141,4 +141,4 @@ async def test_nightly_enriches_before_labelling(monkeypatch):
     monkeypatch.setattr(km, "run_job", run_job)
     monkeypatch.setattr(km, "_last_done", lambda job: None)
     await km.context_nightly(datetime(2026, 10, 25, 23, tzinfo=timezone.utc))
-    assert jobs == ["enrich_documents", "contextualize"]
+    assert jobs == ["enrich_documents", "supplier_details", "contextualize"]

@@ -2756,6 +2756,25 @@ async def commit_inbound_document(
         except Exception as sig_exc:
             logger.warning("Failed to learn supplier signature for %s: %s", record_id, sig_exc)
 
+    # The supplier's own bill fills what their record is missing (VAT number, phone, email, bank
+    # details), and different bank details are flagged, never applied (2026-10-25,
+    # vula/commerce/supplier_details.py). Supplier bills only: not our own invoices.
+    supplier_update: Dict[str, Any] = {}
+    if supplier_row and is_invoice and direction == "inbound":
+        try:
+            from vula.commerce import supplier_details
+            supplier_update = supplier_details.apply_document_details(
+                tenant_id, supplier_row, extracted, filed_document_id)
+            if supplier_update.get("bank_change"):
+                await supplier_details.alert_bank_change(
+                    tenant_id, supplier_row.get("name") or supplier_name,
+                    supplier_update["bank_change"], filed_document_id, total_cents)
+                if filed_document_id:
+                    db.table("vula_filed_documents").update({"needs_review": True}) \
+                        .eq("id", filed_document_id).execute()
+        except Exception as det_exc:
+            logger.warning("supplier details update skipped for %s: %s", record_id, det_exc)
+
     if filed_document_id:
         try:
             db.table("vula_filed_documents").update({
@@ -2850,7 +2869,7 @@ async def commit_inbound_document(
         "record_id": record_id, "record": committed_record,
         "supplier_match": preview["supplier_match"], "needs_review": needs_review,
         "preview": preview, "kb_chunks_added": kb_chunks, "catalog_items_added": catalog_items_added,
-        "message": msg,
+        "message": msg, "supplier_update": supplier_update,
     }
 
 
