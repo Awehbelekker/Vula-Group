@@ -27,7 +27,7 @@ class _Echo(BaseSkill):
 @pytest.mark.asyncio
 async def test_a_turn_records_the_message_its_steps_and_the_full_reply(saved, monkeypatch):
     from vula.api import whatsapp as wa
-    monkeypatch.setattr(wa, "_get_tenant_wa_creds", lambda t: _none())
+    monkeypatch.setattr(wa, "_get_tenant_wa_creds", lambda t, *a, **k: _none())
     monkeypatch.setattr(wa.settings, "whatsapp_token", "")
 
     async def handle():

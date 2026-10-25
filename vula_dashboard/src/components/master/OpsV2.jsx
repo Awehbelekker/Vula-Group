@@ -80,13 +80,15 @@ export function HealthV2({ onError, onViewDetail }) {
 
       <h3 className="vms-h"><Smartphone size={16} aria-hidden="true" className="vms-ic" />WhatsApp lines</h3>
       <Card pad={0}>
-        <DataTable caption="WhatsApp lines" rows={lines.map(w => ({ ...w, id: w.tenant_id }))} empty="No WhatsApp lines." columns={[
+        {/* One row per number — a business can have several (2026-10-25) */}
+        <DataTable caption="WhatsApp lines" rows={lines.map(w => ({ ...w, id: w.phone_number_id || `${w.tenant_id}:${w.phone_number}` }))} empty="No WhatsApp lines." columns={[
           { key: 'tenant_id', label: 'Tenant', render: (w) => <TenantLink id={w.tenant_id} onViewDetail={onViewDetail} /> },
-          { key: 'phone_number', label: 'Number', render: (w) => <span className="vms-mono">{w.phone_number}</span> },
+          { key: 'phone_number', label: 'Number', render: (w) => <span className="vms-mono">{w.phone_number}{w.is_primary ? ' ★' : ''}</span> },
+          { key: 'purpose', label: 'For', render: (w) => w.purpose_label || '—' },
           { key: 'status', label: 'Status', render: (w) => <StatusChip tone={w.status === 'connected' ? 'ok' : 'danger'}>{w.status}</StatusChip> },
           { key: 'webhook', label: 'Webhook', render: (w) => <StatusChip tone={w.webhook_registered ? 'ok' : 'warn'}>{w.webhook_registered ? 'Registered' : 'Not registered'}</StatusChip> },
           { key: 'last_error', label: 'Last error', render: (w) => w.last_error ? <span className="vms-danger">{String(w.last_error).slice(0, 60)}</span> : '—' },
-        ]} stack={{ title: (w) => w.tenant_id, detail: (w) => `${w.phone_number} · ${w.status}${w.webhook_registered ? '' : ' · webhook not registered'}` }} />
+        ]} stack={{ title: (w) => w.tenant_id, detail: (w) => `${w.phone_number}${w.is_primary ? ' (main)' : ''} · ${w.purpose_label ? `${w.purpose_label} · ` : ''}${w.status}${w.webhook_registered ? '' : ' · webhook not registered'}` }} />
       </Card>
 
       <LoginTemplateCard onError={onError} />

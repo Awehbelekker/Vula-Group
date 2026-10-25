@@ -531,10 +531,19 @@ async def master_health():
     out: dict[str, Any] = {}
 
     try:
+        from vula import whatsapp_numbers as _nums
+        _wa_rows = db.table("vula_whatsapp_accounts").select("*").execute().data or []
+        _by_tenant: dict[str, list] = {}
+        for r in _wa_rows:
+            _by_tenant.setdefault(r.get("tenant_id") or "", []).append(r)
+        _mains = {t: (_nums.main_row(rs) or {}).get("phone_number_id") for t, rs in _by_tenant.items()}
         out["whatsapp"] = [
-            {k: r.get(k) for k in ("tenant_id", "phone_number", "status", "last_error",
-                                   "webhook_registered", "verified_name")}
-            for r in (db.table("vula_whatsapp_accounts").select("*").execute().data or [])]
+            {**{k: r.get(k) for k in ("tenant_id", "phone_number", "phone_number_id", "status", "last_error",
+                                      "webhook_registered", "verified_name")},
+             "purpose": _nums.purpose_of(r), "purpose_label": _nums.PURPOSE_LABELS[_nums.purpose_of(r)],
+             "is_primary": r.get("phone_number_id") == _mains.get(r.get("tenant_id") or ""),
+             "on_vula_account": not r.get("access_token")}
+            for r in _wa_rows]
     except Exception as exc:
         out["whatsapp"] = {"error": str(exc)}
 
@@ -837,7 +846,8 @@ async def master_link_whatsapp_number(tenant_id: str, body: dict, identity: dict
     try:
         res = await link_existing_number(tenant_id, (body or {}).get("phone_number_id") or "",
                                          (body or {}).get("pin") or None,
-                                         linked_by=identity.get("email") if isinstance(identity, dict) else None)
+                                         linked_by=identity.get("email") if isinstance(identity, dict) else None,
+                                         purpose=(body or {}).get("purpose") or None)
     except LinkNumberError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     audit(identity, "whatsapp_number_linked", tenant_id, phone_number_id=res["phone_number_id"],

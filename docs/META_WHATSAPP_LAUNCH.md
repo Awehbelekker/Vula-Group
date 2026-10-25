@@ -75,6 +75,23 @@ In Settings → WhatsApp number, the owner picks one of two buttons:
 - **Connect a new number**: the usual Embedded Signup. The number must not be on WhatsApp
   yet. Meta sends a code by SMS or call, and Vula registers it.
 
+### 2f. Several numbers per business, each with a purpose
+Settings → WhatsApp number lists every number with what it's for:
+- **Customers: shop and orders**
+- **Customers: bookings**: bookings first
+- **Assistant: answers from your documents**
+- **Team only**: the team is answered; customers are pointed to the main number
+
+**Add a number** asks what the new one is for, then connects it either of the two ways above. One number is the **main number**:
+- Vula's own messages (order updates, reminders, login codes) go from it.
+- A reply always goes from the number the person wrote to.
+
+Numbers count toward the WhatsApp account they sit on:
+- Vula's account: 20 once verified.
+- A business's own account: 2 until its business is verified.
+
+Needs migration `225_whatsapp_numbers.sql`, applied only after the code is deployed (it drops the one-number-per-business constraint the old code relies on).
+
 Needs migration `223_whatsapp_coexistence.sql` applied (Supabase SQL editor). Until it is,
 connecting still works, but the dashboard can't show "Shared with" on the number.
 

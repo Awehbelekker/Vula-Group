@@ -4,6 +4,10 @@
  * Facebook SDK, takes the WABA + number the owner picked from the signup's window message, sends
  * the code to POST /v1/whatsapp/connect; status from /v1/whatsapp/connect/status, disconnect via
  * DELETE /v1/whatsapp/disconnect.
+ *
+ * 2026-10-25: a business can have several numbers, each with a purpose (status's `numbers`):
+ * change one's purpose or make it the main number (PATCH /v1/whatsapp/numbers), disconnect one,
+ * or add another — Connect then sends the purpose chosen for it.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { VULA_API } from '../../../lib/authFetch'
@@ -14,6 +18,28 @@ export const FB_APP_ID = import.meta.env.VITE_FB_APP_ID || ''
 // used to hang on "Connecting…" — so Connect stays off and the card says why (2026-10-24).
 export const FB_CONFIG_ID = import.meta.env.VITE_FB_CONFIG_ID || ''
 
+// What a number can be for (vula_mind/vula/whatsapp_numbers.py).
+export const PURPOSES = [
+  ['shop', 'Customers: shop and orders'],
+  ['bookings', 'Customers: bookings'],
+  ['assistant', 'Assistant: answers from your documents'],
+  ['team', 'Team only'],
+]
+export const PURPOSE_HINTS = {
+  shop: 'Customers browse, order and pay here.',
+  bookings: 'Customers book, move and cancel appointments here first.',
+  assistant: 'Answers questions from your documents and price lists.',
+  team: 'Only your team is answered here; customers are pointed to your main number.',
+}
+
+/** The status payload's numbers; an older backend sends only the one number at the top level. */
+export function numbersOf(account) {
+  if (!account) return []
+  if (Array.isArray(account.numbers)) return account.numbers
+  return account.phone_number_id || account.phone_number ? [{ ...account, is_primary: true,
+    purpose: account.purpose || 'shop' }] : []
+}
+
 export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   const [status, setStatus] = useState(null)   // null | 'connected' | 'pending' | 'error'
   const [account, setAccount] = useState(null)
@@ -21,10 +47,12 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   const [error, setError] = useState(null)
   const [health, setHealth] = useState(null)   // { rows: [{label, value, tone}], error? }
 
+  const [busyNumber, setBusyNumber] = useState(null)
+
   // Load current connection status
-  useEffect(() => {
-    if (!tenantId) return
-    fetch(`${VULA_API}/v1/whatsapp/connect/status/${tenantId}`)
+  const reload = useCallback(() => {
+    if (!tenantId) return Promise.resolve()
+    return fetch(`${VULA_API}/v1/whatsapp/connect/status/${tenantId}`)
       .then(r => r.json())
       .then(data => {
         setStatus(data.status)
@@ -32,6 +60,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
       })
       .catch(() => setStatus('error'))
   }, [tenantId])
+  useEffect(() => { reload() }, [reload])
 
   // What Meta says about the connected number: quality, daily limit, display name, registered.
   useEffect(() => {
@@ -88,7 +117,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   // mode 'app': keep the WhatsApp Business app number the business already uses (Meta's
   // coexistence: the app stays on the owner's phone, Vula answers on the same number). mode 'new':
   // a number that isn't on WhatsApp yet.
-  const handleConnect = useCallback((mode = 'app') => {
+  const handleConnect = useCallback((mode = 'app', purpose = null) => {
     if (!FB_CONFIG_ID) {
       setError("WhatsApp signup isn't set up on this dashboard yet — ask Vula to link the number for you.")
       return
@@ -124,6 +153,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
               ...(sessionInfo.current || {}),
               // Meta's own finish event says which it was; the chosen option only when it didn't say
               coexistence: sessionInfo.current ? Boolean(sessionInfo.current.coexistence) : mode === 'app',
+              ...(purpose ? { purpose } : {}),
             }),
           })
 
@@ -135,6 +165,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
           const data = await result.json()
           setAccount(data)
           setStatus('connected')
+          reload()                                  // the full list, with the new number in it
         } catch (err) {
           setError(err.message)
           setStatus('error')
@@ -155,7 +186,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
         },
       }
     )
-  }, [tenantId, adminEmail])
+  }, [tenantId, adminEmail, reload])
 
   const handleDisconnect = async () => {
     if (!(await confirmDialog(`Disconnect WhatsApp for ${tenantName}? Ordering will stop immediately.`, { danger: true, confirmLabel: 'Yes' }))) return
@@ -166,5 +197,37 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
     setLoading(false)
   }
 
-  return { status, account, health, loading, error, handleConnect, handleDisconnect }
+  // One number: what it's for, its name, or make it the main one.
+  const updateNumber = async (pnid, patch) => {
+    setBusyNumber(pnid)
+    setError(null)
+    try {
+      const r = await fetch(`${VULA_API}/v1/whatsapp/numbers/${tenantId}/${pnid}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Couldn't save that just now.")
+      await reload()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusyNumber(null)
+    }
+  }
+
+  const disconnectNumber = async (n) => {
+    const others = numbersOf(account).filter(m => m.phone_number_id !== n.phone_number_id && m.status === 'connected')
+    const msg = others.length
+      ? `Disconnect ${n.phone_number} from Vula? Messages to it stop being answered.${n.is_primary ? ' Another of your numbers becomes the main one.' : ''}`
+      : `Disconnect WhatsApp for ${tenantName}? Ordering will stop immediately.`
+    if (!(await confirmDialog(msg, { danger: true, confirmLabel: 'Yes' }))) return
+    setBusyNumber(n.phone_number_id || 'all')
+    const q = n.phone_number_id ? `?phone_number_id=${encodeURIComponent(n.phone_number_id)}` : ''
+    await fetch(`${VULA_API}/v1/whatsapp/disconnect/${tenantId}${q}`, { method: 'DELETE' })
+    setBusyNumber(null)
+    if (others.length) { await reload(); return }
+    setStatus('not_connected')
+    setAccount(null)
+  }
+
+  return { status, account, numbers: numbersOf(account), health, loading, error, busyNumber,
+    handleConnect, handleDisconnect, updateNumber, disconnectNumber }
 }

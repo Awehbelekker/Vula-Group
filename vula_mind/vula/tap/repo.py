@@ -387,8 +387,11 @@ class SupabaseRepo:
         return name.split(" ")[0] or None
 
     def tenant_wa_number(self, tenant_id: str) -> Optional[str]:
-        r = self._one(self.db.table("vula_whatsapp_accounts").select("phone_number")
-                      .eq("tenant_id", tenant_id).eq("status", "connected"))
+        from vula import whatsapp_numbers   # its main number, when it has several
+        try:
+            r = whatsapp_numbers.main_row(whatsapp_numbers.rows_for(tenant_id, self.db))
+        except Exception:
+            return None
         return (r or {}).get("phone_number")
 
     def team_phones(self, tenant_id, staff_id) -> list[str]:

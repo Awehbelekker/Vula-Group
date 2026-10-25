@@ -99,13 +99,13 @@ def _business_number(tenant_id: Optional[str]) -> Optional[str]:
     """The WhatsApp number people message this business on (digits), for the wa.me link."""
     if not tenant_id:
         return None
-    try:
-        rows = (_db().table("vula_whatsapp_accounts").select("phone_number").eq("tenant_id", tenant_id)
-                .eq("status", "connected").limit(1).execute().data or [])
+    from vula import whatsapp_numbers
+    try:   # its main number, when it has several (vula/whatsapp_numbers.py)
+        row = whatsapp_numbers.main_row(whatsapp_numbers.rows_for(tenant_id, _db()))
     except Exception as exc:
         log.debug("business number lookup failed for %s: %s", tenant_id, exc)
         return None
-    n = _digits((rows[0].get("phone_number") if rows else "") or "")
+    n = _digits(((row or {}).get("phone_number")) or "")
     return n or None
 
 
