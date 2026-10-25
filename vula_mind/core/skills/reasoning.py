@@ -66,6 +66,19 @@ class ReasoningSkill(BaseSkill):
         # Retrieve KB context if tenant has one
         kb_context = ""
         sources = []
+        answer_docs: list = []
+        # A staff member's knowledge question is recorded (vula/kb_learning.py): what was found,
+        # and whether Vula answered, asked which document was meant, or found nothing.
+        from vula import kb_learning
+        role = inp.metadata.get("caller_role")
+        who = inp.metadata.get("customer_phone") or ""
+        pinned = inp.metadata.get("kb_doc_id") or None
+        found: list = []
+
+        def _record(outcome: str, candidates=None, answer_docs=()) -> None:
+            kb_learning.record_turn(inp.tenant_id, who, role=role, question=inp.question,
+                                    outcome=outcome, skill=self.name, answer_docs=answer_docs,
+                                    candidates=candidates if candidates is not None else found)
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
@@ -74,12 +87,33 @@ class ReasoningSkill(BaseSkill):
             # results that never mention the product asked about (benchmark, 1 Oct).
             is_spec = looks_like_spec_question(inp.question)
             chunks = await pipeline.query(inp.question, top_k=max(inp.top_k, 8) if is_spec else inp.top_k,
-                                          authoritative_only=True)
+                                          authoritative_only=True,
+                                          **({"doc_id": pinned} if pinned else {}))
             if is_spec and chunks and spec_product_missing(inp.question, chunks):
                 chunks = []
+            if chunks and kb_learning.is_insider(role) and who:
+                info = kb_learning.describe_docs(inp.tenant_id, [c.get("doc_id") for c in chunks])
+                first: dict = {}
+                for c in chunks:
+                    if c.get("doc_id"):
+                        first.setdefault(str(c["doc_id"]), c)
+                found = [{"doc_id": did, "label": (info.get(did) or {}).get("label") or c.get("filename") or ""}
+                         for did, c in first.items()]
+                # Two or more look-alike money documents and nothing in the question saying which:
+                # ask, rather than answer from whichever the search ranked first.
+                options = [] if pinned else kb_learning.ambiguous(inp.tenant_id, inp.question, chunks, info)
+                if options:
+                    _record("clarify", candidates=options)
+                    return SkillOutput(
+                        answer=kb_learning.clarify_message(options), skill_name=self.name,
+                        confidence=0.9,
+                        sources=[{"type": "database", "text": o["label"]} for o in options],
+                        verification={"verifier": "deterministic.kb_clarify", "outcome": "accepted",
+                                      "escalated": False, "extra": {"options": len(options)}})
             if chunks:
                 # The excerpts the model sees are also what the verifier grounds on (sources[].text).
                 chunks = fit_kb_chunks(chunks)
+                answer_docs = [c.get("doc_id") for c in chunks]
                 kb_context = await format_kb_chunks(inp.tenant_id, chunks)
                 sources = [
                     {"type": "kb", "filename": c.get("filename", "?"),
@@ -102,6 +136,7 @@ class ReasoningSkill(BaseSkill):
         spec = looks_like_spec_question(inp.question)
         if spec and not kb_context:
             from core.skills.base import SPEC_NOT_FOUND
+            _record("no_doc")
             return SkillOutput(
                 answer=SPEC_NOT_FOUND,
                 skill_name=self.name,
@@ -110,6 +145,7 @@ class ReasoningSkill(BaseSkill):
             )
 
         if not kb_context and looks_like_tenant_data_question(inp.question):
+            _record("no_doc")
             return SkillOutput(
                 answer=("I don't have a document on file for that, so I don't want to guess at "
                         "a figure or confirm something happened without seeing it. Could you "
@@ -351,6 +387,7 @@ class ReasoningSkill(BaseSkill):
             except Exception:
                 pass
 
+            _record("answered", answer_docs=answer_docs)
             return SkillOutput(
                 answer=answer,
                 skill_name=self.name,

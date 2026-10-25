@@ -6668,6 +6668,29 @@ def _kb_audience_for(tenant_id: str, phone: str, caller_role: Optional[str]) -> 
     return "public"
 
 
+async def _kb_pick_reply(tenant_id: str, phone: str, text: str, caller_name: Optional[str],
+                         caller_role: Optional[str], history: str = "") -> Optional[str]:
+    """A staff member's reply to "Which one?" (vula/kb_learning.py): the answer to their original
+    question from the document they picked, or None when the message isn't a pick. Any other
+    message is checked for "that's wrong" / "thanks" about the last answer, then routed normally."""
+    if not (phone and _is_insider(caller_role)):
+        return None
+    try:
+        from vula import kb_learning
+        pick = kb_learning.take_pick(tenant_id, phone, text)
+        if not pick:
+            kb_learning.note_feedback(tenant_id, phone, text)
+            return None
+        out = await _run_with_holding_message(phone, tenant_id, kb_learning.answer_pinned(
+            tenant_id, pick, {"customer_phone": phone, "session_id": f"admin:{phone}",
+                              "caller_name": caller_name, "caller_role": caller_role},
+            conversation_history=history))
+        return out.answer if out.success and out.answer else None
+    except Exception as exc:
+        logger.warning("kb pick reply fell through: %s", exc)
+        return None
+
+
 async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — see _rag_reply_inner. Every KB search made while answering an outsider
@@ -6697,6 +6720,13 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
     # 0. The business teaching a supplier nickname ("Jack Hammer is an alias for Gardens
     # Handiman") — handled deterministically, never by a model, and only for insiders.
     if _is_insider(caller_role):
+        # "Which one?" answered: the original question, from the picked document.
+        picked = await _kb_pick_reply(tenant_id, phone, question, caller_name, caller_role,
+                                      conversation_history)
+        if picked:
+            _LAST_CONF.set(0.9)
+            _note_route("kb_pick", skill="reasoning")
+            return picked
         if (caller_role or "").lower() in ("owner", "manager", "admin") and phone:
             try:
                 from vula.commerce.business_profile import handle_interview
@@ -8728,6 +8758,19 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         link_context += _esc.handoff_context(phone, tenant_id)
     except Exception as exc:
         logger.debug("handoff context skipped: %s", exc)
+
+    # "Which one?" answered: the original question, from the picked document (vula/kb_learning.py).
+    picked = await _kb_pick_reply(tenant_id, phone, text, caller_name, caller_role, history)
+    if picked:
+        await _send_reply(phone, picked, tenant_id)
+        if session_id:
+            try:
+                await commerce_service.append_message(tenant_id, session_id, "user", text)
+                await commerce_service.append_message(tenant_id, session_id, "assistant",
+                                                      strip_caveat(picked))
+            except Exception:
+                pass
+        return True
 
     skill = get_skill("commerce_admin")
     # 2026-09-22: a turn that falls back to a live mailbox search (find_document miss ->
