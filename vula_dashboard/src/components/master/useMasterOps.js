@@ -34,6 +34,32 @@ export function useMasterHealth({ onError }) {
   return { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql }
 }
 
+/** Vula's WhatsApp login-code template on each WhatsApp account (Meta's review status), and
+ * submitting it where it's missing — only that template (GET/POST /v1/master/wa-login-template). */
+export function useLoginTemplate({ onError }) {
+  const [t, setT] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const load = () => authFetch('/v1/master/wa-login-template').then(setT).catch(e => onError(e.message))
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  const missing = (t?.accounts || []).filter(a => a.status === 'missing')
+  const submit = async () => {
+    const n = missing.length
+    if (!n || !(await confirmDialog(`Send Vula's login-code template to Meta for review on ${n} WhatsApp account${n === 1 ? '' : 's'}? Only this template is sent.`,
+      { title: 'Submit login template', confirmLabel: 'Submit' }))) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await authFetch('/v1/master/wa-login-template', { method: 'POST' })
+      const done = (r.submitted || []).map(a => a.account)
+      const bad = (r.failed || []).map(a => `${a.account}: ${a.error}`)
+      setMsg([done.length ? `Sent for review on ${done.join(', ')}. Meta usually decides within a few hours.` : '',
+        bad.length ? `Not sent: ${bad.join('; ')}` : ''].filter(Boolean).join(' ') || 'Nothing needed sending.')
+      await load()
+    } catch (e) { onError(e.message) } finally { setBusy(false) }
+  }
+  return { t, busy, msg, missing, submit }
+}
+
 export function useWeeklyDigest({ onError }) {
   const [text, setText] = useState(null)
   const [msg, setMsg] = useState('')

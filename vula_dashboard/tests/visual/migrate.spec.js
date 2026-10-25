@@ -644,6 +644,26 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
   }
 }
 
+test("master health: the login-code template is sent only where it's missing, after asking", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("tab", { name: "Health" }).click();
+  const card = page.locator(".vms-form", { has: page.getByRole("heading", { name: "Login code template" }) });
+  await expect(card.getByText("Approved", { exact: true })).toBeVisible();
+  await expect(card.getByText("Not submitted", { exact: true })).toBeVisible();
+  await expect(card.getByText("No WhatsApp account on record for demo-shop-rep")).toBeVisible();
+  const posts = [];
+  page.on("request", (r) => { if (r.method() === "POST" && /\/v1\/master\/wa-login-template$/.test(new URL(r.url()).pathname)) posts.push(r); });
+  await card.getByRole("button", { name: "Submit login template" }).click();
+  const ask = page.getByRole("dialog", { name: "Submit login template" });
+  await expect(ask.getByText(/on 1 WhatsApp account\? Only this template is sent\./)).toBeVisible();
+  await ask.getByRole("button", { name: "Cancel" }).click();
+  expect(posts).toHaveLength(0);                                    // Cancel sends nothing
+  await card.getByRole("button", { name: "Submit login template" }).click();
+  await page.getByRole("dialog", { name: "Submit login template" }).getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(card.getByText(/Sent for review on …8607/)).toBeVisible();
+  expect(posts).toHaveLength(1);
+});
+
 test("master ops: backup, digest, new login and password reset make the same calls", async ({ page }) => {
   await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.getByRole("tab", { name: "Health" }).click();
