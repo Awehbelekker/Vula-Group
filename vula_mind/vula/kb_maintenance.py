@@ -34,6 +34,8 @@ log = logging.getLogger(__name__)
 _CURRENT_ROW: ContextVar = ContextVar("kb_maintenance_row", default=None)
 
 JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view", "kb_learning",
+        "contextualize_preview", "contextualize", "contextualize_revert", "retrieval_diag_ctx",
+        "enrich_documents",
         "retrieval_live", "retrieval_diag")
 
 
@@ -261,7 +263,62 @@ async def _retrieval_live() -> Dict[str, Any]:
     return rep
 
 
-async def _retrieval_diag() -> Dict[str, Any]:
+def _ctx_baseline() -> str:
+    from config import settings
+    return settings.kb_ctx_baseline or ""
+
+
+def _ctx_tenants() -> List[str]:
+    from config import settings
+    return [t.strip() for t in (settings.kb_ctx_tenants or "").split(",") if t.strip()]
+
+
+async def _contextualize(revert: bool = False, dry_run: bool = False) -> Dict[str, Any]:
+    """Each stored piece re-embedded with its document's label (vula/kb_context.py)."""
+    from vula import kb_context
+    return await kb_context.run(_ctx_tenants(), revert=revert, dry_run=dry_run)
+
+
+async def _enrich_documents() -> Dict[str, Any]:
+    """Filed invoices and quotes read once more for the details the read didn't ask for before
+    (document number, customer, order number, VAT numbers, bank details) — vula/commerce/reread.py."""
+    from config import settings
+    from vula.commerce import reread
+    by: Dict[str, Any] = {}
+    for t in _ctx_tenants():
+        try:
+            by[t] = await reread.enrich_details(t, limit=int(settings.kb_enrich_per_night or 0))
+        except Exception as exc:  # noqa: BLE001
+            by[t] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+    return {"by_tenant": by, "summary": by}
+
+
+async def context_nightly(now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """Once a night (01:00–05:00 SAST), label any pieces not yet labelled — the first night is
+    the whole knowledge base, later nights only new uploads — then, when anything changed and a
+    baseline report is set (KB_CTX_BASELINE), re-run that report's questions to measure it."""
+    from config import settings
+    now = now or datetime.now(timezone.utc)
+    if not settings.kb_context_nightly or now.hour not in (23, 0, 1, 2):
+        return None
+    try:
+        last = await asyncio.to_thread(_last_done, "contextualize")
+    except Exception as exc:  # noqa: BLE001
+        log.info("nightly labelling: last run unknown (%s) — skipping this tick", exc)
+        return None
+    if last and (now - last).total_seconds() < 20 * 3600:
+        return None
+    if settings.kb_enrich_per_night:
+        await run_job("enrich_documents", by="nightly")   # first, so tonight's labels carry the numbers
+    rep = await run_job("contextualize", by="nightly")
+    changed = sum((v or {}).get("done", 0) for v in (rep.get("by_tenant") or {}).values()
+                  if isinstance(v, dict))
+    if changed and settings.kb_ctx_baseline:
+        await run_job("retrieval_diag_ctx", by="nightly")
+    return rep
+
+
+async def _retrieval_diag(replay_id: Optional[str] = None) -> Dict[str, Any]:
     """Where retrieval loses the right document, per stage (evals/retrieval_diag.py). Tenants from
     KB_DIAG_TENANTS. The stored report has the questions; the log line has counts only.
     Saves the report after each tenant, and picks up the tenants an earlier run (cut off by a
@@ -271,6 +328,7 @@ async def _retrieval_diag() -> Dict[str, Any]:
     from evals import retrieval_diag
     from vula.commerce import service
     tenants = [t.strip() for t in (settings.kb_diag_tenants or "").split(",") if t.strip()]
+    replay_id = replay_id if replay_id is not None else (settings.kb_diag_replay or None)
     db = service._client()
     done_rows: Dict[str, List[Dict[str, Any]]] = {}
     try:
@@ -280,7 +338,7 @@ async def _retrieval_diag() -> Dict[str, Any]:
                 .order("created_at", desc=True).limit(5).execute().data or [])
         # Only a cut-off run of the same kind: a replay resumes a replay of the same report.
         same = [p.get("report") for p in prev
-                if ((p.get("report") or {}).get("replay_of") or "") == (settings.kb_diag_replay or "")]
+                if ((p.get("report") or {}).get("replay_of") or "") == (replay_id or "")]
         done_rows = retrieval_diag.finished_rows(same, tenants)
     except Exception as exc:  # noqa: BLE001
         log.info("retrieval_diag: no earlier partial run read (%s)", exc)
@@ -290,27 +348,27 @@ async def _retrieval_diag() -> Dict[str, Any]:
         if not row_id:
             return
         try:
-            partial["replay_of"] = settings.kb_diag_replay or None
+            partial["replay_of"] = replay_id or None
             await asyncio.to_thread(lambda: db.table("vula_eval_reports").update(
                 {"report": json.loads(json.dumps(partial, default=str))}).eq("id", row_id).execute())
         except Exception as exc:  # noqa: BLE001
             log.info("retrieval_diag: partial report not saved: %s", exc)
 
     replay = None
-    if settings.kb_diag_replay:
+    if replay_id:
         try:
-            got = (db.table("vula_eval_reports").select("report").eq("id", settings.kb_diag_replay)
+            got = (db.table("vula_eval_reports").select("report").eq("id", replay_id)
                    .limit(1).execute().data or [])
             replay = ((got[0].get("report") or {}).get("rows") or []) if got else None
         except Exception as exc:  # noqa: BLE001
-            log.warning("retrieval_diag: replay report %s not read: %s", settings.kb_diag_replay, exc)
+            log.warning("retrieval_diag: replay report %s not read: %s", replay_id, exc)
     real = None
     if replay is None:
         from vula import kb_learning
         real = await asyncio.to_thread(kb_learning.confirmed_cases, tenants)
     rep = await retrieval_diag.run(tenants, done_rows=done_rows, on_tenant=save, replay=replay,
                                    real=real)
-    rep["replay_of"] = settings.kb_diag_replay or None
+    rep["replay_of"] = replay_id or None
     rep["summary_by_tenant"] = {t: {k: v[k] for k in ("cases", "causes", "recall@4", "seeded_recall@4")}
                                 for t, v in rep["by_tenant"].items()}
     return rep
@@ -321,7 +379,12 @@ async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
           "backfill_apply": lambda: _backfill(True), "mark_public": _mark_public,
           "customer_view": _customer_view,
           "retrieval_live": _retrieval_live, "retrieval_diag": _retrieval_diag,
-          "kb_learning": _kb_learning}[job]
+          "kb_learning": _kb_learning,
+          "contextualize_preview": lambda: _contextualize(dry_run=True),
+          "contextualize": _contextualize,
+          "contextualize_revert": lambda: _contextualize(revert=True),
+          "retrieval_diag_ctx": lambda: _retrieval_diag(replay_id=_ctx_baseline()),
+          "enrich_documents": _enrich_documents}[job]
     from vula.commerce import service
     db = service._client()
     row_id = None

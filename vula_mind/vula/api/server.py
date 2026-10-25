@@ -1444,8 +1444,9 @@ async def _kb_customer_view_weekly_loop() -> None:
     (2026-10-20, vula/kb_maintenance.weekly_guard). Checked hourly; the guard itself decides
     whether a week has passed since the last completed check."""
     import asyncio as _asyncio
-    from vula.kb_maintenance import learning_weekly, weekly_guard
-    if not (settings.kb_customer_view_weekly or settings.kb_learning_weekly):
+    from vula.kb_maintenance import context_nightly, learning_weekly, weekly_guard
+    if not (settings.kb_customer_view_weekly or settings.kb_learning_weekly
+            or settings.kb_context_nightly):
         return
     await _asyncio.sleep(900)  # settle on boot, after KB_MAINTENANCE's boot jobs
     while True:
@@ -1460,6 +1461,11 @@ async def _kb_customer_view_weekly_loop() -> None:
                 await learning_weekly()
             except Exception as exc:
                 log.warning("weekly knowledge report tick failed: %s", exc)
+        # Label new document pieces overnight (2026-10-25, vula/kb_context.py).
+        try:
+            await context_nightly()
+        except Exception as exc:
+            log.warning("nightly labelling tick failed: %s", exc)
         await _asyncio.sleep(3600)
 
 

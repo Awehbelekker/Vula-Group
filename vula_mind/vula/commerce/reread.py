@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from vula.commerce import service
 
@@ -378,3 +378,84 @@ async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[
         st["error"] = str(exc)
     st["running"] = False
     return dict(st)
+
+
+# ── Richer details for documents already filed (2026-10-25) ───────────────────
+# Ian: "get as much info of the invoice accurately so the data is rich and accessible." Invoices
+# and quotes filed before the read asked for them have no document number, customer, order
+# number, customer VAT number or supplier bank details (13–22% had a number, ~0% bank details).
+# enrich_details() reads each once more and adds ONLY those details — never the supplier, date,
+# total, VAT or line items already filed and booked, and only when the re-read is plainly the
+# same document (same kind; same total when both have one). Every identifier it adds has passed
+# extraction_quality.verify_identifiers (on the page, well-formed).
+
+ENRICH_KEYS = ("document_number", "customer", "customer_vat_number", "order_number", "payment_terms",
+               "supplier_phone", "supplier_email", "supplier_bank", "subtotal_cents")
+FILL_IF_MISSING = ("tax_id", "due_date")
+
+
+def enrich_candidates(tenant_id: str, limit: int = 100) -> List[dict]:
+    rows = (service._client().table("vula_filed_documents")
+            .select("id,category,filename,file_url,fields,summary,doc_id,created_at")
+            .eq("tenant_id", tenant_id).in_("category", list(_MONEY))
+            .order("created_at", desc=True).limit(3000).execute().data or [])
+    return [r for r in rows
+            if r.get("file_url") and (r.get("filename") or "").lower().endswith(".pdf")
+            and not (r.get("fields") or {}).get("_enriched_at")][:limit]
+
+
+def enrichment(row: dict, analysis: Optional[dict]) -> Dict[str, Any]:
+    """The details a re-read adds to a filed document ({} when it isn't plainly the same one)."""
+    if not analysis or analysis.get("category") != row.get("category"):
+        return {}
+    old, new = row.get("fields") or {}, analysis.get("fields") or {}
+    try:
+        if old.get("total_cents") not in (None, "") and new.get("total_cents") not in (None, "") \
+                and int(old["total_cents"]) != int(new["total_cents"]):
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    add = {k: new[k] for k in ENRICH_KEYS if new.get(k) not in (None, "", {}, []) and old.get(k) in (None, "")}
+    add.update({k: new[k] for k in FILL_IF_MISSING if new.get(k) not in (None, "") and old.get(k) in (None, "")})
+    if new.get("_dropped_identifiers"):
+        add["_dropped_identifiers"] = new["_dropped_identifiers"]
+    return add
+
+
+async def enrich_details(tenant_id: str, limit: int = 100) -> Dict[str, Any]:
+    from datetime import datetime, timezone
+
+    from vula.api.whatsapp import _analyze_document
+    rows = enrich_candidates(tenant_id, limit)
+    out: Dict[str, Any] = {"tenant": tenant_id, "candidates": len(rows), "enriched": 0, "unchanged": 0,
+                           "failed": 0, "added": {}}
+    for row in rows:
+        try:
+            data = await _download(row["file_url"])
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / Path(row["filename"]).name
+                path.write_bytes(data)
+                from vula.ingestion.pipeline import VulaIngestionPipeline
+                pages = await VulaIngestionPipeline(tenant_id=tenant_id).parser.parse(path)
+                text = "\n".join(t for _, t in (pages or [])).strip()
+                analysis = await _analyze_document(tenant_id, row["filename"], path, text=text or None)
+            add = enrichment(row, analysis)
+            stamp = datetime.now(timezone.utc).isoformat()
+            (service._client().table("vula_filed_documents")
+             .update({"fields": {**(row.get("fields") or {}), **add, "_enriched_at": stamp}})
+             .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
+            real = [k for k in add if not k.startswith("_")]
+            if real:
+                out["enriched"] += 1
+                for k in real:
+                    out["added"][k] = out["added"].get(k, 0) + 1
+                if row.get("doc_id"):
+                    # Its stored pieces get relabelled with the new number on the next night.
+                    from vula import kb_context
+                    await kb_context.forget_labels(tenant_id, str(row["doc_id"]))
+            else:
+                out["unchanged"] += 1
+        except Exception as exc:
+            log.warning("enrich of document %s failed: %s", row.get("id"), type(exc).__name__)
+            out["failed"] += 1
+    return out

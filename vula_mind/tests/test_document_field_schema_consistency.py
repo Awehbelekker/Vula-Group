@@ -36,9 +36,15 @@ from vula.ingestion import payment_notice
 _MONEY_KEY_RE = re.compile(r'["\']([a-zA-Z_]*(?:amount|total)[a-zA-Z_]*)["\']\s*:')
 
 
+# Money fields that are deliberately NOT a document's amount. subtotal_cents (2026-10-25) is the
+# total before VAT: reading it as "the amount" when total_cents is missing would understate every
+# VAT invoice by 15%, so _document_amount must never fall back to it.
+_NOT_THE_AMOUNT = {"subtotal_cents"}
+
+
 def _declared_money_keys(src: str) -> set:
     return {k for k in _MONEY_KEY_RE.findall(src)
-            if k.endswith("_cents") or k in ("amount", "total")}
+            if (k.endswith("_cents") or k in ("amount", "total")) and k not in _NOT_THE_AMOUNT}
 
 
 def test_extraction_sources_declare_the_expected_money_keys():

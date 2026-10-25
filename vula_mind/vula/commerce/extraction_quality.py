@@ -139,3 +139,80 @@ def lines_short_cents(ex: Dict[str, Any], tolerance_cents: int = 100) -> int:
     if abs(round(lines * 1.15) - total) <= tolerance_cents:
         return 0
     return total - lines
+
+
+# ── Identifiers: on the page, and well-formed (2026-10-25) ────────────────────────────────────
+# Ian: "get as much info of the invoice accurately so the data is rich and accessible." The read
+# now also returns the document number, both VAT numbers, the customer's order number and the
+# supplier's bank details. A misread account or VAT number is worse than none — it gets quoted
+# back, or paid into — so each one must appear verbatim (ignoring spaces and punctuation) in the
+# source text, and a VAT number must look like one (SA: 10 digits starting with 4). Anything else
+# is dropped and listed in _dropped_identifiers, never stored as fact.
+
+IDENTIFIER_KEYS = ("document_number", "tax_id", "supplier_vat_number", "customer_vat_number",
+                   "order_number", "supplier_phone")
+BANK_KEYS = ("account_number", "branch_code")
+_VAT_KEYS = ("tax_id", "supplier_vat_number", "customer_vat_number")
+
+
+def _alnum(s: Any) -> str:
+    return re.sub(r"[^0-9a-z]", "", str(s or "").lower())
+
+
+def valid_sa_vat(v: Any) -> bool:
+    d = re.sub(r"\D", "", str(v or ""))
+    return len(d) == 10 and d.startswith("4")
+
+
+def verify_identifiers(fields: Dict[str, Any], source_text: str) -> Dict[str, Any]:
+    """`fields` with every identifier that isn't on the page (or isn't a valid VAT number)
+    removed, and `_dropped_identifiers` listing what went and why. Without source text (a photo
+    with no text layer) only the VAT format check applies."""
+    f = dict(fields or {})
+    page = _alnum(source_text)
+    dropped: List[Dict[str, str]] = []
+
+    def on_page(v: Any) -> bool:
+        a = _alnum(v)
+        return not page or (len(a) >= 3 and a in page)
+
+    for k in IDENTIFIER_KEYS:
+        v = f.get(k)
+        if v in (None, ""):
+            continue
+        if k in _VAT_KEYS and not valid_sa_vat(v):
+            dropped.append({"field": k, "why": "not a valid SA VAT number"})
+            f.pop(k)
+        elif not on_page(v):
+            dropped.append({"field": k, "why": "not in the document"})
+            f.pop(k)
+    bank = f.get("supplier_bank")
+    if isinstance(bank, dict):
+        bank = dict(bank)
+        for k in BANK_KEYS:
+            if bank.get(k) not in (None, "") and not on_page(bank[k]):
+                dropped.append({"field": f"supplier_bank.{k}", "why": "not in the document"})
+                bank.pop(k)
+        # Without an account number a bank name alone is no use to anyone.
+        f["supplier_bank"] = bank if bank.get("account_number") else None
+        if f["supplier_bank"] is None:
+            f.pop("supplier_bank")
+    elif bank is not None:
+        f.pop("supplier_bank", None)
+    # The same VAT number as both supplier and customer is a misread of one of them.
+    sup_vat = f.get("tax_id") or f.get("supplier_vat_number")
+    if sup_vat and _alnum(sup_vat) == _alnum(f.get("customer_vat_number")):
+        dropped.append({"field": "customer_vat_number", "why": "same as the supplier's"})
+        f.pop("customer_vat_number")
+    if dropped:
+        f["_dropped_identifiers"] = dropped
+    return f
+
+
+def totals_disagree(fields: Dict[str, Any], tolerance_cents: int = 100) -> bool:
+    """Subtotal + VAT doesn't make the total (by more than R1) — worth a person's look."""
+    try:
+        sub, vat, tot = (int(fields[k]) for k in ("subtotal_cents", "vat_cents", "total_cents"))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return abs(sub + vat - tot) > tolerance_cents

@@ -4781,7 +4781,9 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         logger.debug("Doc analyze: deterministic parse skipped for %s: %s", filename, exc)
 
     full_text = text
-    text = text[:6000]
+    # Bank details and the supplier's VAT number usually sit at the foot of the last page: a
+    # long document keeps its start and its end (2026-10-25), not just its first 6000 characters.
+    text = text if len(text or "") <= 6000 else text[:4600] + "\n…\n" + text[-1400:]
 
     # 2. One LLM call → category + summary + structured fields
     try:
@@ -4804,11 +4806,24 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     "Bill of Quantities (BOQ), fields MUST use this exact shape: "
                     '{"supplier": string|null, "tax_id": string|null, "date": "YYYY-MM-DD"|null, '
                     '"due_date": "YYYY-MM-DD"|null, "total_cents": integer|null, '
-                    '"vat_cents": integer|null, "amounts_exclude_vat": boolean, '
+                    '"vat_cents": integer|null, "subtotal_cents": integer|null, '
+                    '"amounts_exclude_vat": boolean, "document_number": string|null, '
+                    '"customer": string|null, "customer_vat_number": string|null, '
+                    '"order_number": string|null, "payment_terms": string|null, '
+                    '"supplier_phone": string|null, "supplier_email": string|null, '
+                    '"supplier_bank": {"bank_name": string|null, "account_name": string|null, '
+                    '"account_number": string|null, "branch_code": string|null}|null, '
                     '"confidence": "high"|"medium"|"low", '
                     '"line_items": [{"description": string, "quantity": number, '
                     '"unit": string|null, "unit_price_cents": integer|null, '
-                    '"total_cents": integer|null, "section": string|null}]} — unit as written '
+                    '"total_cents": integer|null, "section": string|null}]} — tax_id = the '
+                    "VAT number of the SUPPLIER who issued it (never the customer's — that "
+                    "goes in customer_vat_number); document_number = the invoice/quote number "
+                    "as printed; customer = who it is billed to; order_number = the customer's "
+                    "order/PO/reference number; supplier_bank = the supplier's banking details "
+                    "for payment as printed; copy every number exactly as printed and use null "
+                    "for anything not on the document — never guess; "
+                    'unit as written '
                     '(m2, m, each, day, bag…), section = the BOQ/trade heading the line sits '
                     'under (null on an invoice); total_cents = the final total payable '
                     'INCLUDING VAT when the document shows one; when it only gives a total '
@@ -4920,7 +4935,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         result = None
         try:
             resp = await litellm.acompletion(model=model, messages=_msgs, temperature=0.1,
-                max_tokens=900, api_key=api_key, api_base=api_base)
+                max_tokens=1400, api_key=api_key, api_base=api_base)
             result = _parse(resp)
         except Exception as exc:
             logger.debug("Doc analyze cheap pass failed: %s", exc)
@@ -4935,7 +4950,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     logger.info("Doc analyze: cheap weak — escalating %s to 70B", filename)
                     _cm, _ck, _cb = cloud
                     resp = await litellm.acompletion(model=_cm, messages=_msgs, temperature=0.1,
-                        max_tokens=900, api_key=_ck, api_base=_cb)
+                        max_tokens=1400, api_key=_ck, api_base=_cb)
                     cloud_result = _parse(resp)
                     # Keep the cloud result if it's usable at all — even one that still fails
                     # the arithmetic check is a better fallback than a totally empty local read.
@@ -4966,7 +4981,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                                 "content": f"Filename: {filename}\n\nDocument:{fence('DOCUMENT', md_text[:6000])}\nJSON:",
                             }]
                             resp = await litellm.acompletion(model=_cm, messages=docling_msgs,
-                                temperature=0.1, max_tokens=900, api_key=_ck, api_base=_cb)
+                                temperature=0.1, max_tokens=1400, api_key=_ck, api_base=_cb)
                             docling_result = _parse(resp)
                             if docling_result and not _needs_escalation(docling_result):
                                 result = docling_result
@@ -4985,6 +5000,14 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 logger.warning("Doc analyze: %s has %d figure(s) not found in its text: %s",
                                filename, len(missing), [m["rand"] for m in missing])
                 result.setdefault("fields", {})["_unverified_figures"] = missing
+        # Every identifier must be on the page and well-formed; anything else is dropped, never
+        # stored as fact (extraction_quality.verify_identifiers). Checked against the whole text.
+        if result and result.get("category") in _FINANCIAL_DOC_CATEGORIES:
+            from vula.commerce.extraction_quality import totals_disagree, verify_identifiers
+            checked = verify_identifiers(result.get("fields") or {}, full_text or text)
+            if totals_disagree(checked):
+                checked["_check"] = "subtotal + VAT does not make the total"
+            result["fields"] = checked
         if result and result.get("category") == "Bill of Quantities (BOQ)":
             result = await _complete_boq_lines(result, local_path, full_text, filename)
         elif result and result.get("category") == _PRICE_LIST:
