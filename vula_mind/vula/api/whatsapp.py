@@ -677,6 +677,13 @@ async def receive_message(
                 change.get("field", ""), _pnid,
                 len(messages), len(value.get("statuses", [])),
             )
+            # A number shared with the owner's WhatsApp Business app (coexistence): the owner's
+            # own replies, shared chat history and contacts (vula/api/whatsapp_coexist.py).
+            from vula.api import whatsapp_coexist as _coexist
+            if change.get("field") in _coexist.COEXIST_FIELDS:
+                _ct, _ = _resolve_number_route(_pnid)
+                _run_bg(_coexist.handle(change["field"], _ct, value), label=f"coexist_{change['field']}")
+                continue
             for msg in messages:
                 phone = msg.get("from", "")
                 msg_id = msg.get("id", "")
@@ -813,6 +820,9 @@ async def receive_message(
                                                        forwarded=fwd_customer),
                                         label="commerce_message",
                                         track=_text_track(msg_id, route_tenant, phone, text, route_mode))
+                            elif route_mode == "knowledge" and not _is_team(route_tenant, phone) \
+                                    and await _coexist.owner_is_handling(route_tenant, phone, text):
+                                pass  # someone took this chat over (Inbox, or the owner's phone)
                             elif route_mode == "knowledge":
                                 # Number is a tenant's assistant line → that tenant's model
                                 _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message",

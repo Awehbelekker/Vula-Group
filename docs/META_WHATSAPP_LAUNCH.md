@@ -39,19 +39,44 @@ Add the **WhatsApp** product if not present.
 WhatsApp → Configuration → Webhook:
 - **Callback URL:** `https://vula-group-production.up.railway.app/v1/whatsapp/webhook`
 - **Verify token:** the value of `WHATSAPP_VERIFY_TOKEN` (already set on Railway)
-- **Subscribe to field:** `messages`
+- **Subscribe to fields:** `messages`, plus three that only fire on a number shared with the
+  WhatsApp Business app ("coexistence", see 2e): `smb_message_echoes` (the owner replied from
+  their phone, so Vula goes quiet in that chat), `history` (the chats they chose to share) and
+  `smb_app_state_sync` (their contacts' names). Without these three, a shared number still
+  works, but Vula would talk over the owner.
 
-### 2c. Embedded Signup configuration
-WhatsApp → **Embedded Signup** → Create configuration.
-- Name: "Vula Commerce Onboarding"
-- Grant: `whatsapp_business_management`, `whatsapp_business_messaging`
-- Copy the **Configuration ID** → send to Ian's dev → set as `VITE_FB_CONFIG_ID` on Vercel.
+### 2c. Embedded Signup configuration (v4)
+Meta retired Embedded Signup v2 and v3 on 15 Oct 2026. The version comes from the
+configuration, so an old Configuration ID has to be replaced with a new one.
+
+Facebook Login for Business → **Configurations** → Create configuration.
+- Name: "Vula Onboarding v4"
+- Login variation: **WhatsApp Embedded Signup**
+- Assets: WhatsApp accounts; permissions `whatsapp_business_management`, `whatsapp_business_messaging`
+- Tick **WhatsApp Business app onboarding** (coexistence) so owners can bring the number they already use
+- Copy the **Configuration ID** → set as `VITE_FB_CONFIG_ID` on Vercel → redeploy the dashboard.
 
 ### 2d. App settings
 - App Domains: `vula-ai.com`, `vuladashboard.vercel.app`
 - Privacy Policy URL: `https://vuladashboard.vercel.app/#/privacy`
 - Data Deletion URL: `https://vuladashboard.vercel.app/#/data-deletion`
 - Category: Business
+
+### 2e. Coexistence: a business keeps its WhatsApp Business app number
+In Settings → WhatsApp number, the owner picks one of two buttons:
+- **Use my WhatsApp Business number**: Meta's window asks them to scan a code in the
+  WhatsApp Business app (Settings → Linked devices / Business platform) and choose whether to
+  share chats and contacts. They keep using the app on their phone.
+  Vula does **not** call `/register` on this number. Right after connecting it asks Meta for
+  the contacts and history (`POST /{phone_number_id}/smb_app_data`; Meta only sends them if
+  asked within 24 hours). History is imported into each chat's thread, the last 50 messages
+  per chat, text only. When the owner replies from the phone, Vula goes quiet in that chat.
+  It picks the chat up again after 2 hours of silence, the same as an Inbox handoff.
+- **Connect a new number**: the usual Embedded Signup. The number must not be on WhatsApp
+  yet. Meta sends a code by SMS or call, and Vula registers it.
+
+Needs migration `223_whatsapp_coexistence.sql` applied (Supabase SQL editor). Until it is,
+connecting still works, but the dashboard can't show "Shared with" on the number.
 
 ---
 
@@ -87,7 +112,7 @@ Request **Advanced Access** for both:
 ### Demo video script (Meta requires a screencast showing the permissions in use)
 Record this flow (≤ 3 min, screen recording):
 1. Log into the Vula dashboard as a merchant owner.
-2. Go to **Settings → WhatsApp** and click **Connect WhatsApp**.
+2. Go to **Settings → WhatsApp number** and click **Use my WhatsApp Business number** (or **Connect a new number**).
 3. Show the Meta Embedded Signup popup: log in, select the WhatsApp Business
    Account, select/verify the phone number, finish.
 4. Back in Vula, show the status flips to **Connected** with the number + webhook registered.

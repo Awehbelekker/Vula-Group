@@ -47,6 +47,12 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
             <span style={styles.label}>Business name</span>
             <span style={styles.value}>{account.verified_name}</span>
           </div>
+          {account.coexistence && (
+            <div style={styles.infoRow}>
+              <span style={styles.label}>Shared with</span>
+              <span style={styles.value}>Your WhatsApp Business app</span>
+            </div>
+          )}
           <div style={styles.infoRow}>
             <span style={styles.label}>Webhook</span>
             <span style={{ ...styles.value, color: account.webhook_registered ? 'var(--ok)' : 'var(--warn)' }}>
@@ -65,8 +71,10 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
       {status !== 'connected' ? (
         <div>
           <p style={styles.description}>
-            Connect {tenantName}&apos;s WhatsApp Business account. The client will be guided through
-            a secure Meta-hosted flow — no API keys or developer access required.
+            Keep the WhatsApp number your customers already know: carry on using the WhatsApp Business
+            app on your phone, and Vula answers on the same number. You need the WhatsApp Business app
+            (updated) and your phone nearby to approve the link. When you reply from your phone, Vula goes
+            quiet in that chat for 2 hours.
           </p>
 
           {!FB_APP_ID && (
@@ -81,11 +89,18 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
           )}
 
           <button
-            onClick={handleConnect}
+            onClick={() => handleConnect('app')}
             disabled={loading || !FB_APP_ID || !FB_CONFIG_ID}
             style={loading || !FB_APP_ID || !FB_CONFIG_ID ? styles.btnDisabled : styles.btn}
           >
-            {loading ? 'Connecting…' : '🔗 Connect WhatsApp'}
+            {loading ? 'Connecting…' : '📱 Use my WhatsApp Business number'}
+          </button>
+          <button
+            onClick={() => handleConnect('new')}
+            disabled={loading || !FB_APP_ID || !FB_CONFIG_ID}
+            style={{ ...(loading || !FB_APP_ID || !FB_CONFIG_ID ? styles.btnDisabled : styles.btn), marginTop: 8, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}
+          >
+            🔗 Connect a new number
           </button>
 
           <p style={styles.hint}>
