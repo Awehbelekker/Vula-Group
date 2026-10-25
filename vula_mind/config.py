@@ -150,6 +150,8 @@ class Settings(BaseSettings):
     # Weekly customer-view guard (vula/kb_maintenance.weekly_guard, 2026-10-20): re-check once a
     # week that customers see only public documents; WhatsApp platform_support_phone if not.
     kb_customer_view_weekly: bool = True
+    # Weekly report of staff knowledge questions (vula/kb_learning.py), WhatsApped to the operator.
+    kb_learning_weekly: bool = True
     # Tenants the retrieval_diag maintenance job covers (evals/retrieval_diag.py, 2026-10-21).
     kb_diag_tenants: str = "gerflor,digg-demo,off-the-hook"
     # A finished retrieval_diag report id: rerun ITS questions instead of synthesizing new ones,

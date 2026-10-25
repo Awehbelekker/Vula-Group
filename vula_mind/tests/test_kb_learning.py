@@ -108,6 +108,13 @@ class _FakeTable:
         self.filters.append((k, v))
         return self
 
+    def gte(self, *_):
+        return self
+
+    def in_(self, k, vals):
+        self.filters.append((k, ("__in__", tuple(vals))))
+        return self
+
     def order(self, *a, **k):
         return self
 
@@ -115,7 +122,9 @@ class _FakeTable:
         return self
 
     def execute(self):
-        rows = [r for r in self.db if all(r.get(k) == v for k, v in self.filters)]
+        def ok(r, k, v):
+            return r.get(k) in v[1] if isinstance(v, tuple) and v and v[0] == "__in__" else r.get(k) == v
+        rows = [r for r in self.db if all(ok(r, k, v) for k, v in self.filters)]
         if self.op == "insert":
             row = {"id": f"t{len(self.db) + 1}", "created_at": datetime.now(timezone.utc).isoformat(),
                    "picked_doc": None, "feedback": None, **self.payload}
@@ -243,3 +252,39 @@ async def test_whatsapp_answers_a_pick_and_checks_other_messages_for_feedback():
         assert await wa._kb_pick_reply(T, "27820000000", "no, that's wrong", "Staci", "owner") is None
     fb.assert_called_once()
     assert await wa._kb_pick_reply(T, "27820000000", "2", None, None) is None   # a customer
+
+
+# ── The weekly report and real test questions ───────────────────────────────────────────────
+
+def _turn(db, tenant, outcome, **kw):
+    kl.record_turn(tenant, kw.pop("who", "27820000000"), role="owner", question=kw.pop("q", "q"),
+                   outcome=outcome, **{k: v for k, v in kw.items() if k in ("candidates", "answer_docs")})
+    db[-1].update({k: v for k, v in kw.items() if k in ("picked_doc", "feedback")})
+
+
+def test_weekly_report_counts_and_lists_what_needs_a_look(db):
+    _turn(db, T, "answered", answer_docs=["a"], feedback="corrected", q="Total on Atlantis?")
+    _turn(db, T, "answered", answer_docs=["b"], feedback="confirmed")
+    _turn(db, T, "answered")
+    _turn(db, T, "clarify", candidates=OPTS, picked_doc="a")
+    _turn(db, T, "clarify", candidates=OPTS, q="Which receipt?")
+    _turn(db, T, "no_doc", q="Where is the lease?")
+    _turn(db, "digg-demo", "answered")
+    rep = kl.weekly_report()
+    s = rep["tenants"][T]
+    assert (s["questions"], s["answered"], s["asked_which"], s["picked"], s["nothing_found"],
+            s["said_wrong"], s["said_right"]) == (6, 3, 2, 1, 1, 1, 1)
+    assert s["right_first_time"] == round(2 / 6, 3)
+    assert {i["why"] for i in rep["review"][T]} == {"said wrong", "which one? not answered", "nothing found"}
+    line = kl.weekly_line(rep)
+    assert "\n" not in line and "off-the-hook: 6 questions, 3 answered (1 called wrong)" in line
+
+
+def test_only_confirmed_answers_from_one_or_two_documents_become_test_questions(db):
+    _turn(db, T, "answered", answer_docs=["a"], feedback="confirmed", q="VAT number of Atlantis?")
+    _turn(db, T, "answered", answer_docs=["a"], feedback="corrected")
+    _turn(db, T, "answered", answer_docs=["a", "b", "c"], feedback="confirmed")
+    _turn(db, T, "clarify", candidates=OPTS, picked_doc="a")
+    cases = kl.confirmed_cases([T])
+    assert [(c["question"], c["expected_doc_ids"], c["real"]) for c in cases] == \
+        [("VAT number of Atlantis?", ["a"], True)]

@@ -336,3 +336,81 @@ async def answer_pinned(tenant_id: str, pick: Dict[str, str], metadata: Dict[str
     return await get_skill("reasoning")(SkillInput(
         question=pick["question"], tenant_id=tenant_id,
         conversation_history=conversation_history, metadata=meta))
+
+
+# ── What the records say, weekly ─────────────────────────────────────────────────────────────
+
+def summarize_turns(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Counts for one tenant's turns. "right_first_time" is answered and not then called wrong —
+    an upper bound, since most people don't say either way."""
+    n = len(rows)
+    answered = [r for r in rows if r.get("outcome") == "answered"]
+    asked = [r for r in rows if r.get("outcome") == "clarify"]
+    out = {
+        "questions": n,
+        "answered": len(answered),
+        "asked_which": len(asked),
+        "picked": sum(1 for r in asked if r.get("picked_doc")),
+        "nothing_found": sum(1 for r in rows if r.get("outcome") == "no_doc"),
+        "said_wrong": sum(1 for r in answered if r.get("feedback") == "corrected"),
+        "said_right": sum(1 for r in answered if r.get("feedback") == "confirmed"),
+    }
+    out["right_first_time"] = (round((out["answered"] - out["said_wrong"]) / n, 3) if n else None)
+    return out
+
+
+def weekly_report(days: int = 7, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Per tenant: the counts, plus the questions worth a person's look — answers called wrong,
+    "which one?" left unanswered, and nothing found. Staff questions only (that's all there is)."""
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).isoformat()
+    rows = (_client().table("vula_kb_turns")
+            .select("tenant_id,question,outcome,picked_doc,feedback,candidates,answer_docs,created_at")
+            .gte("created_at", since).order("created_at", desc=True).limit(5000).execute().data or [])
+    by: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by.setdefault(r["tenant_id"], []).append(r)
+    review: Dict[str, List[Dict[str, Any]]] = {}
+    for t, rs in by.items():
+        items = []
+        for r in rs:
+            why = ("said wrong" if r.get("feedback") == "corrected"
+                   else "which one? not answered" if r.get("outcome") == "clarify" and not r.get("picked_doc")
+                   else "nothing found" if r.get("outcome") == "no_doc" else None)
+            if why:
+                items.append({"why": why, "question": r["question"][:200], "at": r["created_at"]})
+        review[t] = items[:25]
+    return {"days": days, "since": since,
+            "tenants": {t: summarize_turns(rs) for t, rs in sorted(by.items())},
+            "review": review}
+
+
+def weekly_line(rep: Dict[str, Any]) -> str:
+    """One line (it goes into a WhatsApp template parameter, which can't hold newlines)."""
+    parts = []
+    for t, s in rep.get("tenants", {}).items():
+        parts.append(f"{t}: {s['questions']} questions, {s['answered']} answered "
+                     f"({s['said_wrong']} called wrong), {s['asked_which']} asked which "
+                     f"({s['picked']} picked), {s['nothing_found']} nothing found")
+    return ("Vula knowledge questions, last 7 days — " + "; ".join(parts)) if parts else ""
+
+
+def confirmed_cases(tenants: Iterable[str], days: int = 90) -> List[Dict[str, Any]]:
+    """Real test questions: staff questions whose answer the person confirmed ("thanks", "that's
+    it"), with the document(s) it came from. Picks are left out on purpose: they come from
+    questions that didn't say which document, so they can't test whether search finds the right
+    one — only whether Vula asked."""
+    tenants = [t for t in tenants if t]
+    if not tenants:
+        return []
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        rows = (_client().table("vula_kb_turns").select("id,tenant_id,question,answer_docs")
+                .in_("tenant_id", tenants).eq("outcome", "answered").eq("feedback", "confirmed")
+                .gte("created_at", since).limit(500).execute().data or [])
+    except Exception as exc:
+        logger.debug("confirmed cases not read: %s", exc)
+        return []
+    return [{"id": f"real-{r['id']}", "tenant": r["tenant_id"], "question": r["question"],
+             "expected_doc_ids": list(r.get("answer_docs") or []), "synthetic": False, "real": True}
+            for r in rows if 0 < len(r.get("answer_docs") or []) <= 2]

@@ -100,3 +100,20 @@ async def test_replay_reruns_an_earlier_reports_questions(monkeypatch):
     rep = await d.run(["a"], replay=old)
     assert seen == [("q1", ["x.pdf"])]
     assert rep["synthesized"] == {"a": "replayed"}
+
+
+def test_real_cases_are_ranked_by_document_id():
+    hits = [{"doc_id": "x", "filename": "Invoice.pdf", "score": 0.7},
+            {"doc_id": "x", "filename": "Invoice.pdf", "score": 0.6},
+            {"doc_id": "y", "filename": "Invoice.pdf", "score": 0.5}]
+    assert d._rank_ids(hits, ["y"]) == 2
+    assert d._best_score(hits, ["y"], by_id=True) == 0.5
+    assert d._rank_ids(hits, ["z"]) is None
+
+
+def test_summary_reports_real_questions_separately():
+    rows = [{"tenant": "t", "cause": "found", "prod_rank": 1, "real": True},
+            {"tenant": "t", "cause": "ranked_low", "real": True},
+            {"tenant": "t", "cause": "found", "prod_rank": 2, "synthetic": True}]
+    s = d.summarize(rows)
+    assert s["real_cases"] == 2 and s["real_recall@4"] == 0.5

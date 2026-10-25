@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 # The vula_eval_reports row of the job now running, for jobs that save progress as they go.
 _CURRENT_ROW: ContextVar = ContextVar("kb_maintenance_row", default=None)
 
-JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view",
+JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view", "kb_learning",
         "retrieval_live", "retrieval_diag")
 
 
@@ -225,6 +225,35 @@ async def weekly_guard(now: Optional[datetime] = None) -> Optional[List[str]]:
     return problems
 
 
+async def _kb_learning() -> Dict[str, Any]:
+    """The week's staff knowledge questions (vula/kb_learning.py): answered, asked which document,
+    picked, nothing found, called wrong / right — and the questions worth a look."""
+    from vula import kb_learning
+    rep = await asyncio.to_thread(kb_learning.weekly_report)
+    rep["summary"] = rep["tenants"]
+    return rep
+
+
+async def learning_weekly(now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """The knowledge-question report, at most once a week (2026-10-25), WhatsApped to the platform
+    operator as one line. Returns the report, or None if not due."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        last = await asyncio.to_thread(_last_done, "kb_learning")
+    except Exception as exc:  # noqa: BLE001
+        log.info("weekly knowledge report: last run unknown (%s) — skipping this tick", exc)
+        return None
+    if last and (now - last).total_seconds() < GUARD_EVERY_DAYS * 86400:
+        return None
+    rep = await run_job("kb_learning", by="weekly")
+    from vula import kb_learning
+    line = kb_learning.weekly_line(rep) if "error" not in rep else ""
+    if line:
+        from vula.integrations.platform_support import alert_operator
+        await alert_operator(line[:900])
+    return rep
+
+
 async def _retrieval_live() -> Dict[str, Any]:
     from evals import retrieval
     rep = await retrieval.run_live()
@@ -275,7 +304,12 @@ async def _retrieval_diag() -> Dict[str, Any]:
             replay = ((got[0].get("report") or {}).get("rows") or []) if got else None
         except Exception as exc:  # noqa: BLE001
             log.warning("retrieval_diag: replay report %s not read: %s", settings.kb_diag_replay, exc)
-    rep = await retrieval_diag.run(tenants, done_rows=done_rows, on_tenant=save, replay=replay)
+    real = None
+    if replay is None:
+        from vula import kb_learning
+        real = await asyncio.to_thread(kb_learning.confirmed_cases, tenants)
+    rep = await retrieval_diag.run(tenants, done_rows=done_rows, on_tenant=save, replay=replay,
+                                   real=real)
     rep["replay_of"] = settings.kb_diag_replay or None
     rep["summary_by_tenant"] = {t: {k: v[k] for k in ("cases", "causes", "recall@4", "seeded_recall@4")}
                                 for t, v in rep["by_tenant"].items()}
@@ -286,7 +320,8 @@ async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
     fn = {"stats": _stats, "exposure": _exposure, "backfill_preview": lambda: _backfill(False),
           "backfill_apply": lambda: _backfill(True), "mark_public": _mark_public,
           "customer_view": _customer_view,
-          "retrieval_live": _retrieval_live, "retrieval_diag": _retrieval_diag}[job]
+          "retrieval_live": _retrieval_live, "retrieval_diag": _retrieval_diag,
+          "kb_learning": _kb_learning}[job]
     from vula.commerce import service
     db = service._client()
     row_id = None

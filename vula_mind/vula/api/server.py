@@ -1444,15 +1444,22 @@ async def _kb_customer_view_weekly_loop() -> None:
     (2026-10-20, vula/kb_maintenance.weekly_guard). Checked hourly; the guard itself decides
     whether a week has passed since the last completed check."""
     import asyncio as _asyncio
-    from vula.kb_maintenance import weekly_guard
-    if not settings.kb_customer_view_weekly:
+    from vula.kb_maintenance import learning_weekly, weekly_guard
+    if not (settings.kb_customer_view_weekly or settings.kb_learning_weekly):
         return
     await _asyncio.sleep(900)  # settle on boot, after KB_MAINTENANCE's boot jobs
     while True:
-        try:
-            await weekly_guard()
-        except Exception as exc:
-            log.warning("weekly customer-view guard tick failed: %s", exc)
+        if settings.kb_customer_view_weekly:
+            try:
+                await weekly_guard()
+            except Exception as exc:
+                log.warning("weekly customer-view guard tick failed: %s", exc)
+        # The week's staff knowledge questions — answered, asked which, called wrong (2026-10-25).
+        if settings.kb_learning_weekly:
+            try:
+                await learning_weekly()
+            except Exception as exc:
+                log.warning("weekly knowledge report tick failed: %s", exc)
         await _asyncio.sleep(3600)
 
 
