@@ -42,17 +42,23 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
       .catch(() => setHealth({ rows: [], error: "Couldn't read the number's health just now." }))
   }, [tenantId, status])
 
-  // Embedded Signup (sessionInfoVersion 2) posts the WhatsApp account + number the owner picked
-  // as a window message. Sending those to the backend connects THAT number — before, the first
-  // number found on any of the owner's businesses was used.
+  // Embedded Signup posts the WhatsApp account + number the owner picked as a window message.
+  // Sending those to the backend connects THAT number — before, the first number found on any of
+  // the owner's businesses was used. A WhatsApp Business app number (coexistence) finishes with
+  // its own event; a cancel says at which step, so the card can say what happened.
   const sessionInfo = useRef(null)
+  const cancelled = useRef(null)
   useEffect(() => {
     const onMessage = (event) => {
       try {
         if (!/facebook\.com$/.test(new URL(event.origin).hostname)) return
         const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
-        if (msg?.type === 'WA_EMBEDDED_SIGNUP' && msg.event === 'FINISH' && msg.data) {
-          sessionInfo.current = { waba_id: msg.data.waba_id, phone_number_id: msg.data.phone_number_id }
+        if (msg?.type !== 'WA_EMBEDDED_SIGNUP') return
+        if (String(msg.event || '').startsWith('FINISH') && msg.data) {
+          sessionInfo.current = { waba_id: msg.data.waba_id, phone_number_id: msg.data.phone_number_id,
+            ...(msg.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING' ? { coexistence: true } : {}) }
+        } else if (msg.event === 'CANCEL') {
+          cancelled.current = msg.data?.error_message || msg.data?.current_step || null
         }
       } catch { /* not a signup message */ }
     }
@@ -79,7 +85,10 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
     }
   }, [])
 
-  const handleConnect = useCallback(() => {
+  // mode 'app': keep the WhatsApp Business app number the business already uses (Meta's
+  // coexistence: the app stays on the owner's phone, Vula answers on the same number). mode 'new':
+  // a number that isn't on WhatsApp yet.
+  const handleConnect = useCallback((mode = 'app') => {
     if (!FB_CONFIG_ID) {
       setError("WhatsApp signup isn't set up on this dashboard yet — ask Vula to link the number for you.")
       return
@@ -91,12 +100,14 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
 
     setLoading(true)
     setError(null)
+    sessionInfo.current = null
+    cancelled.current = null
 
     window.FB.login(
       async (response) => {
         if (!response.authResponse) {
           setLoading(false)
-          setError('Connection cancelled.')
+          setError(cancelled.current ? `Connection stopped: ${cancelled.current}` : 'Connection cancelled.')
           return
         }
 
@@ -111,6 +122,8 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
               code,
               connected_by: adminEmail,
               ...(sessionInfo.current || {}),
+              // Meta's own finish event says which it was; the chosen option only when it didn't say
+              coexistence: sessionInfo.current ? Boolean(sessionInfo.current.coexistence) : mode === 'app',
             }),
           })
 
@@ -133,10 +146,12 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
         config_id: FB_CONFIG_ID,
         response_type: 'code',
         override_default_response_type: true,
+        // Embedded Signup v4 (v2 and v3 were retired on 15 Oct 2026): the version and products
+        // come from the configuration (VITE_FB_CONFIG_ID); the extras pick the flow.
         extras: {
           setup: {},
-          featureType: '',
-          sessionInfoVersion: '2',
+          featureType: mode === 'app' ? 'whatsapp_business_app_onboarding' : '',
+          sessionInfoVersion: '3',
         },
       }
     )

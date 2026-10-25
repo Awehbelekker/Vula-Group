@@ -61,6 +61,10 @@ class ConnectRequest(BaseModel):
     # token's businesses was used — the wrong one for an owner with several.
     waba_id: Optional[str] = None
     phone_number_id: Optional[str] = None
+    # The owner linked the WhatsApp Business app number they already use (Meta's coexistence,
+    # Embedded Signup's WhatsApp Business app onboarding): they keep the app on their phone and
+    # Vula answers on the same number (vula/api/whatsapp_coexist.py).
+    coexistence: bool = False
 
 
 class ConnectResponse(BaseModel):
@@ -71,6 +75,7 @@ class ConnectResponse(BaseModel):
     verified_name: str
     status: str
     webhook_registered: bool
+    coexistence: bool = False
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -174,7 +179,10 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         # Signup can't send until it is). Behind a flag until tested live: registering sets the
         # number's two-step PIN, so it needs WHATSAPP_REGISTRATION_PIN, and fails harmlessly on
         # a number that's already registered with a different PIN.
-        if settings.whatsapp_register_on_connect and settings.whatsapp_registration_pin:
+        # Never for a number shared with the WhatsApp Business app: it's already registered, and
+        # registering it for the Cloud API alone would take it off the owner's phone.
+        if (settings.whatsapp_register_on_connect and settings.whatsapp_registration_pin
+                and not body.coexistence):
             reg = await client.post(f"{GRAPH_BASE}/{phone_number_id}/register", headers=auth_headers,
                                     json={"messaging_product": "whatsapp",
                                           "pin": settings.whatsapp_registration_pin})
@@ -195,6 +203,13 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         else:
             log.warning("Webhook registration failed (non-fatal): %s", webhook_resp.text)
 
+    # Step 3b — a shared app number: ask Meta for the app's contacts and the chat history the
+    # owner chose to share (Meta only sends them when asked within 24 hours).
+    history_sync = None
+    if body.coexistence:
+        from vula.api.whatsapp_coexist import request_app_sync
+        history_sync = await request_app_sync(phone_number_id, access_token)
+
     # Step 4 — save credentials to Supabase
     from vula.email_imap.credentials import encrypt_secret
     db = _supabase()
@@ -211,7 +226,13 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         "connected_by": body.connected_by,
         "connected_at": "now()",
     }
-    db.table("vula_whatsapp_accounts").upsert(record, on_conflict="tenant_id").execute()
+    try:
+        db.table("vula_whatsapp_accounts").upsert(
+            {**record, "coexistence": body.coexistence, "history_sync": history_sync},
+            on_conflict="tenant_id").execute()
+    except Exception as exc:       # migration 223 not applied yet: connect anyway
+        log.warning("coexistence columns missing (run migration 223): %s", exc)
+        db.table("vula_whatsapp_accounts").upsert(record, on_conflict="tenant_id").execute()
     # The new token is used from the next message on, not after a restart.
     from vula.api import whatsapp as wa
     wa._forget_wa_number(body.tenant_id, phone_number_id)
@@ -239,6 +260,7 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         verified_name=verified_name or "",
         status="connected",
         webhook_registered=webhook_registered,
+        coexistence=body.coexistence,
     )
 
 
@@ -258,7 +280,12 @@ async def whatsapp_status(tenant_id: str):
     rows = result.data or []
     if not rows:
         return {"tenant_id": tenant_id, "status": "not_connected"}
-    return rows[0]
+    try:   # whether the number is shared with the WhatsApp Business app (migration 223)
+        extra = (db.table("vula_whatsapp_accounts").select("coexistence").eq("tenant_id", tenant_id)
+                 .limit(1).execute().data or [])
+    except Exception:
+        extra = []
+    return {**rows[0], "coexistence": bool(extra and extra[0].get("coexistence"))}
 
 
 @router.get("/accounts")
