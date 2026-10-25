@@ -7,13 +7,37 @@
 import { CalendarClock, ClipboardCopy, Database, Eye, KeyRound, Mail, Plus, Send, ShieldCheck, Smartphone, Trash2, Waypoints } from 'lucide-react'
 import { Button, Card, DataTable, EmptyState, Field, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatCard, StatusChip } from '../ui/index.jsx'
 import { when } from './TenantDetailV2'
-import { useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './useMasterOps'
+import { useLoginTemplate, useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './useMasterOps'
 import './master.css'
 
 const loading = <Card><Skeleton lines={4} /></Card>
 const TenantLink = ({ id, onViewDetail }) => (onViewDetail
   ? <button type="button" className="vms-link vms-mono" onClick={(e) => { e.stopPropagation(); onViewDetail(id) }}>{id}</button>
   : <span className="vms-mono">{id}</span>)
+
+/* ── The WhatsApp login-code template, per WhatsApp account ── */
+const TPL_TONE = { APPROVED: 'ok', PENDING: 'warn', IN_APPEAL: 'warn', REJECTED: 'danger', PAUSED: 'danger', DISABLED: 'danger', missing: 'danger', unknown: 'muted' }
+const TPL_WORD = { APPROVED: 'Approved', PENDING: 'Meta is reviewing', IN_APPEAL: 'In appeal', REJECTED: 'Rejected', PAUSED: 'Paused', DISABLED: 'Disabled', missing: 'Not submitted', unknown: "Couldn't read" }
+function LoginTemplateCard({ onError }) {
+  const x = useLoginTemplate({ onError })
+  if (!x.t) return null
+  return (
+    <Card className="vms-form">
+      <div className="vms-head">
+        <h3 className="vms-h vms-title-sm"><KeyRound size={16} aria-hidden="true" className="vms-ic" />Login code template</h3>
+        {x.missing.length > 0 && <Button size="sm" Icon={Send} disabled={x.busy} onClick={x.submit}>{x.busy ? 'Submitting…' : 'Submit login template'}</Button>}
+      </div>
+      <p className="vms-muted">The WhatsApp login code reaches someone who hasn't messaged the business in 24 hours only once this template is approved. One approved copy covers every business on that WhatsApp account.</p>
+      {x.msg && <p className="vms-ok" role="status">{x.msg}</p>}
+      <ul className="vms-plain">
+        {x.t.accounts.map(a => (
+          <li key={a.account}><span className="vms-mono">{a.account}</span> {a.tenants.join(', ')}{' '}
+            <StatusChip tone={TPL_TONE[a.status] || 'muted'}>{TPL_WORD[a.status] || a.status}</StatusChip></li>))}
+        {x.t.no_account.length > 0 && <li className="vms-muted">No WhatsApp account on record for {x.t.no_account.join(', ')}</li>}
+      </ul>
+    </Card>
+  )
+}
 
 /* ── Health ── */
 export function HealthV2({ onError, onViewDetail }) {
@@ -64,6 +88,8 @@ export function HealthV2({ onError, onViewDetail }) {
           { key: 'last_error', label: 'Last error', render: (w) => w.last_error ? <span className="vms-danger">{String(w.last_error).slice(0, 60)}</span> : '—' },
         ]} stack={{ title: (w) => w.tenant_id, detail: (w) => `${w.phone_number} · ${w.status}${w.webhook_registered ? '' : ' · webhook not registered'}` }} />
       </Card>
+
+      <LoginTemplateCard onError={onError} />
 
       <div className="vms-head">
         <h3 className="vms-h"><CalendarClock size={16} aria-hidden="true" className="vms-ic" />Scheduler</h3>

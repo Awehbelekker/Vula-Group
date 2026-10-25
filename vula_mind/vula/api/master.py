@@ -193,6 +193,25 @@ def _billing_row_not_found(tenant_id: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found in vula_tenants")
 
 
+@router.get("/wa-login-template")
+async def master_login_template_status() -> dict:
+    """Vula's WhatsApp login-code template on each WhatsApp account, with Meta's review status
+    and the businesses on it (vula/commerce/wa_templates.py::login_template_accounts)."""
+    from vula.commerce import wa_templates
+    return await wa_templates.login_template_accounts()
+
+
+@router.post("/wa-login-template")
+async def master_submit_login_template(identity: dict = Depends(require_master)) -> dict:
+    """Send the login-code template to Meta for review on every account that hasn't got it — only
+    that template, never the businesses' other ones."""
+    from vula.commerce import wa_templates
+    res = await wa_templates.submit_login_template()
+    audit(identity, "wa_login_template_submitted",
+          submitted=[r["account"] for r in res["submitted"]], failed=res["failed"])
+    return res
+
+
 @router.post("/tenants/{tenant_id}/mark-paid")
 async def master_mark_paid(tenant_id: str, identity: dict = Depends(require_master)) -> dict:
     """Manual payment confirmation (EFT, correction) — PayFast's ITN webhook does this

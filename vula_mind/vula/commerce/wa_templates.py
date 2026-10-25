@@ -459,6 +459,77 @@ async def _waba_template_names(creds: Dict[str, str]) -> Optional[set]:
     return names
 
 
+# ── The login-code template, once per WhatsApp account (Master › Health, 2026-10-25) ──────
+# The dashboard's WhatsApp login code (vula/api/wa_login.py) goes out as Meta's authentication
+# template; without it the code is plain text, which only reaches someone who messaged that number
+# in the last 24 hours. Templates are shared by name across a WhatsApp Business Account, so one
+# approved copy covers every business on that account. Submitted alone (not with the standard
+# set) from Master.
+
+async def login_template_status(creds: Dict[str, str]) -> Optional[str]:
+    """Meta's review status of vula_login_code on this account (APPROVED, PENDING, REJECTED…),
+    "missing" when it isn't there, or None when Meta can't be read."""
+    from vula.api.wa_login import AUTH_TEMPLATE
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(f"{GRAPH_BASE}/{creds['waba_id']}/message_templates",
+                                    headers={"Authorization": f"Bearer {creds['token']}"},
+                                    params={"name": AUTH_TEMPLATE, "fields": "name,status"})
+        if not resp.is_success:
+            return None
+        hit = next((t for t in resp.json().get("data", []) if t.get("name") == AUTH_TEMPLATE), None)
+        return (hit.get("status") or "PENDING") if hit else "missing"
+    except Exception as exc:
+        log.debug("login template status failed: %s", exc)
+        return None
+
+
+def _accounts() -> Dict[str, Any]:
+    """Connected WhatsApp numbers grouped by their account: {waba_id: [tenant, …]}, plus the
+    businesses whose number has no account id on record."""
+    rows = (_client().table("vula_whatsapp_accounts").select("tenant_id,waba_id")
+            .eq("status", "connected").execute().data or [])
+    by_waba: Dict[str, List[str]] = {}
+    loose: List[str] = []
+    for r in rows:
+        if r.get("waba_id"):
+            by_waba.setdefault(r["waba_id"], []).append(r["tenant_id"])
+        else:
+            loose.append(r["tenant_id"])
+    return {"by_waba": {w: sorted(t) for w, t in by_waba.items()}, "no_account": sorted(loose)}
+
+
+async def login_template_accounts() -> Dict[str, Any]:
+    """Each WhatsApp account with the businesses on it and its login template's status."""
+    acc = _accounts()
+    out = []
+    for waba, tenants in sorted(acc["by_waba"].items(), key=lambda kv: kv[1]):
+        creds = await _waba_creds(tenants[0])
+        status = (await login_template_status(creds) if creds else None) or "unknown"
+        out.append({"account": f"…{waba[-4:]}", "tenants": tenants, "status": status})
+    return {"accounts": out, "no_account": acc["no_account"]}
+
+
+async def submit_login_template() -> Dict[str, Any]:
+    """Submit vula_login_code to every WhatsApp account that doesn't have it yet. An account that
+    already has it (in any state) is left alone, so running it twice never duplicates."""
+    from vula.api.wa_login import auth_template_payload
+    submitted, already, failed = [], [], []
+    for waba, tenants in sorted(_accounts()["by_waba"].items(), key=lambda kv: kv[1]):
+        label = f"…{waba[-4:]}"
+        creds = await _waba_creds(tenants[0])
+        status = await login_template_status(creds) if creds else None
+        if status is None:
+            failed.append({"account": label, "error": "Couldn't read this WhatsApp account's templates."})
+        elif status != "missing":
+            already.append({"account": label, "status": status})
+        else:
+            res = await _create_raw(tenants[0], creds, auth_template_payload())
+            (failed.append({"account": label, "error": res["error"]}) if res.get("error")
+             else submitted.append({"account": label, "status": res.get("status") or "PENDING"}))
+    return {"submitted": submitted, "already_there": already, "failed": failed}
+
+
 async def submit_standard(tenant_id: str) -> Dict[str, Any]:
     """Submit the standard set for this business — only names not already on its WhatsApp
     account, so running it twice (or for a second business) never duplicates or fails."""
