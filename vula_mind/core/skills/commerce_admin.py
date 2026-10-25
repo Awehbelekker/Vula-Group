@@ -2421,7 +2421,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "configure_expense_sheet": return await self._configure_expense_sheet(tid, args, ctx)
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
-            if name == "lookup_business_info": return await self._lookup_business_info(tid, args)
+            if name == "lookup_business_info": return await self._lookup_business_info(tid, args, ctx)
             if name == "find_product_document": return self._find_product_document(tid, args)
             if name == "calculate": return self._calculate(args)
             if name in ("remember_rule", "list_rules", "forget_rule"):
@@ -4646,7 +4646,8 @@ class CommerceAdminSkill(BaseSkill):
              "link": signed(r.get("file_url"), SHARE_TTL)} for r in top],
             "note": "Paste the link as-is (raw URL) — WhatsApp doesn't render markdown links."}
 
-    async def _lookup_business_info(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _lookup_business_info(self, tid: str, args: Dict[str, Any],
+                                    ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Real fix for the gerflor incident (2026-08-27): commerce_admin had no path to the
         tenant's own KB at all, for either owner/staff or sales_rep — the model's only
         "lookup" tool was competitor_check, a generic web search, which is how a flooring
@@ -4692,6 +4693,26 @@ class CommerceAdminSkill(BaseSkill):
                 titles = titles_for(tid, [c.get("doc_id") for c in chunks])
             except Exception:
                 titles = {}
+            # Look-alike money documents and nothing in the question saying which: ask, don't
+            # pick one (vula/kb_learning.py). The pick ("2") is answered from that document.
+            ctx = ctx or {}
+            if not spec:
+                try:
+                    from vula import kb_learning
+                    asked = ctx.get("message") or query
+                    if kb_learning.is_insider(ctx.get("caller_role")) and ctx.get("phone"):
+                        options = kb_learning.ambiguous(tid, asked, chunks)
+                        if options:
+                            kb_learning.record_turn(tid, ctx["phone"], role=ctx.get("caller_role"),
+                                                    question=asked, outcome="clarify",
+                                                    candidates=options, skill=self.name)
+                            return {"found": True, "needs_clarification": True,
+                                    "instruction": "Several documents fit and the question doesn't say "
+                                                   "which. Do not answer from any of them: reply with "
+                                                   "exactly this question and nothing else.",
+                                    "reply": kb_learning.clarify_message(options)}
+                except Exception as exc:
+                    logger.debug("lookup_business_info clarify check skipped: %s", exc)
             from core.skills.base import spec_product_missing
             if spec and spec_product_missing(query, chunks, titles):
                 return {"found": False, "spec_question": True,

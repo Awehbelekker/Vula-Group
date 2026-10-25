@@ -47,9 +47,24 @@ def _rank(docs: List[str], expected: List[str]) -> Optional[int]:
     return None
 
 
-def _best_score(hits: List[Dict[str, Any]], expected: List[str]) -> Optional[float]:
-    s = [h.get("score") or 0.0 for h in hits if any(_matches(str(h.get("filename") or ""), e) for e in expected)]
+def _best_score(hits: List[Dict[str, Any]], expected: List[str], by_id: bool = False) -> Optional[float]:
+    s = [h.get("score") or 0.0 for h in hits
+         if (str(h.get("doc_id") or "") in expected if by_id
+             else any(_matches(str(h.get("filename") or ""), e) for e in expected))]
     return round(max(s), 4) if s else None
+
+
+def _rank_ids(hits: List[Dict[str, Any]], ids: List[str]) -> Optional[int]:
+    """Rank of the first expected document among the distinct documents, matched by doc_id (a
+    real staff question's answer is known by document id, not a filename pattern)."""
+    seen: List[str] = []
+    for h in hits or []:
+        d = str(h.get("doc_id") or "")
+        if d and d not in seen:
+            seen.append(d)
+            if d in ids:
+                return len(seen)
+    return None
 
 
 def classify(row: Dict[str, Any], threshold: float, top_k: int = PROD_TOP_K) -> str:
@@ -71,8 +86,10 @@ async def diagnose(case: Dict[str, Any]) -> Dict[str, Any]:
     from vula.ingestion.pipeline import QdrantStore, VulaIngestionPipeline, _salient_terms, kb_score_threshold
     tid, q = case["tenant"], case["question"]
     expected = list(case.get("expected_docs") or [])
-    row: Dict[str, Any] = {k: case.get(k) for k in ("id", "tenant", "question", "synthetic", "source_chars")}
-    row["expected"] = expected
+    row: Dict[str, Any] = {k: case.get(k) for k in ("id", "tenant", "question", "synthetic", "source_chars",
+                                                     "real")}
+    ids = [str(i) for i in case.get("expected_doc_ids") or []]
+    row["expected"] = expected or ids
     pipe, store = VulaIngestionPipeline(tenant_id=tid), QdrantStore()
     exclude = pipe._NON_AUTHORITATIVE
     threshold = kb_score_threshold(True)
@@ -87,11 +104,16 @@ async def diagnose(case: Dict[str, Any]) -> Dict[str, Any]:
         row.update(error=f"{type(exc).__name__}: {str(exc)[:200]}", cause="error")
         return row
     row["top_score"] = round(vec[0].get("score") or 0.0, 4) if vec else None
-    row["vec_rank"] = _rank(ranked_docs(vec), expected)
-    row["vec_score"] = _best_score(vec, expected)
-    row["kw_rank"] = _rank(ranked_docs(kw), expected)
-    row["prod_rank"] = _rank(ranked_docs(prod), expected)
-    row["deep_rank"] = _rank(ranked_docs(deep), expected)
+    if ids:
+        row["vec_rank"], row["vec_score"] = _rank_ids(vec, ids), _best_score(vec, ids, by_id=True)
+        row["kw_rank"], row["prod_rank"] = _rank_ids(kw, ids), _rank_ids(prod, ids)
+        row["deep_rank"] = _rank_ids(deep, ids)
+    else:
+        row["vec_rank"] = _rank(ranked_docs(vec), expected)
+        row["vec_score"] = _best_score(vec, expected)
+        row["kw_rank"] = _rank(ranked_docs(kw), expected)
+        row["prod_rank"] = _rank(ranked_docs(prod), expected)
+        row["deep_rank"] = _rank(ranked_docs(deep), expected)
     if case.get("source_chunk"):
         ids = [h.get("chunk_id") for h in vec]
         row["chunk_rank"] = ids.index(case["source_chunk"]) + 1 if case["source_chunk"] in ids else None
@@ -130,6 +152,9 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     seeded = [r for r in ok if not r.get("synthetic")]
     out["seeded_cases"] = len(seeded)
     out["seeded_recall@4"] = _share(seeded, lambda r: r.get("prod_rank") is not None)
+    real = [r for r in ok if r.get("real")]
+    out["real_cases"] = len(real)
+    out["real_recall@4"] = _share(real, lambda r: r.get("prod_rank") is not None)
     return out
 
 
@@ -148,11 +173,13 @@ def finished_rows(reports: List[Optional[Dict[str, Any]]], tenants: List[str]) -
 
 async def run(tenants: List[str], per_doc: int = 1, max_docs: int = 25,
               done_rows: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-              on_tenant=None, replay: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+              on_tenant=None, replay: Optional[List[Dict[str, Any]]] = None,
+              real: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Tenant by tenant. done_rows holds rows of tenants already diagnosed by an earlier, cut-off
     run (reused, not redone); on_tenant(partial_report) is awaited after each tenant so a restart
     loses at most one tenant's work (2026-10-24: a deploy killed a 9-hour run that saved nothing).
-    replay: the rows of an earlier report, whose questions are rerun instead of synthesizing."""
+    replay: the rows of an earlier report, whose questions are rerun instead of synthesizing.
+    real: confirmed staff questions (vula/kb_learning.confirmed_cases), run beside the others."""
     yaml_cases = [c for c in load_cases() if c.get("expected_docs") and c.get("type") != "unanswerable"]
     rows: List[Dict[str, Any]] = []
     synth_counts: Dict[str, Any] = {}
@@ -174,7 +201,7 @@ async def run(tenants: List[str], per_doc: int = 1, max_docs: int = 25,
                 synth, synth_counts[t] = [], f"{type(exc).__name__}: {str(exc)[:120]}"
             else:
                 synth_counts[t] = len(synth)
-            for c in cases + synth:
+            for c in cases + synth + [r for r in real or [] if r.get("tenant") == t]:
                 rows.append(await diagnose(c))
         if on_tenant:
             await on_tenant(_report(rows, [x for x in tenants if any(r["tenant"] == x for r in rows)],

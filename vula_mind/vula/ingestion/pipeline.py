@@ -1334,6 +1334,7 @@ class QdrantStore:
         category: Optional[str] = None,
         source_type: Optional[str] = None,
         audience: Optional[str] = None,
+        doc_id: Optional[str] = None,
     ) -> List[dict]:
         """Semantic search across tenant's knowledge base.
 
@@ -1355,6 +1356,9 @@ class QdrantStore:
 
         `audience` (2026-10-16): who is asking — "public" for a customer, which applies
         audience_filter() and never falls back to an unfiltered search. None = unrestricted.
+
+        `doc_id` (2026-10-24): only this one document — the one a staff member picked after Vula
+        asked which document they meant (vula/kb_learning.py).
         """
         name = self._collection_name(tenant_id)
         body: dict = {
@@ -1367,6 +1371,8 @@ class QdrantStore:
         must = [{"key": "category", "match": {"value": category}}] if category else []
         if source_type:
             must.append({"key": "source_type", "match": {"value": source_type}})
+        if doc_id:
+            must.append({"key": "doc_id", "match": {"value": doc_id}})
         aud = audience_filter(audience)
         must += aud.get("must", [])
         must_not += aud.get("must_not", [])
@@ -1900,7 +1906,8 @@ class VulaIngestionPipeline:
 
     async def query(self, question: str, top_k: int = 5,
                     authoritative_only: bool = False, category: str | None = None,
-                    expand: bool = True, audience: str | None = None) -> List[dict]:
+                    expand: bool = True, audience: str | None = None,
+                    doc_id: str | None = None) -> List[dict]:
         """
         Semantic search across this tenant's knowledge base.
         Returns relevant document chunks for RAG.
@@ -1926,9 +1933,13 @@ class VulaIngestionPipeline:
 
         audience (2026-10-16): "public" for anything a customer will see — every customer-facing
         caller MUST pass it (see audience_filter). Applies to the keyword pass too.
+
+        doc_id (2026-10-24): search inside this one document only (a staff member's pick after
+        "which one did you mean?" — vula/kb_learning.py).
         """
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
-        threshold = kb_score_threshold(authoritative_only)
+        # Inside one picked document every chunk is a candidate: the person already said which.
+        threshold = 0.0 if doc_id else kb_score_threshold(authoritative_only)
         audience = effective_audience(audience)
 
         variants = [question]
@@ -1949,7 +1960,7 @@ class VulaIngestionPipeline:
                 return await self.store.search(
                     self.tenant_id, emb, limit=depth,
                     score_threshold=threshold, exclude_source_types=exclude, category=category,
-                    audience=audience)
+                    audience=audience, **({"doc_id": doc_id} if doc_id else {}))
             except Exception as exc:
                 logger.debug("query variant failed (%r): %s", q[:40], exc)
                 return []
@@ -1972,6 +1983,8 @@ class VulaIngestionPipeline:
         # Only literal matches worth a slot: several query terms, or an identifier (a number or
         # code is decisive on its own). A chunk sharing one common word pushed real Creation
         # results out once ("Access Corners"). With nothing from the semantic side, anything.
+        if doc_id:
+            keyword_hits = [h for h in keyword_hits if str(h.get("doc_id") or "") == doc_id]
         idents = [t for t in terms if any(ch.isdigit() for ch in t)]
         if any(runs):
             keyword_hits = [h for h in keyword_hits if h.get("_overlap", 0) >= 2
