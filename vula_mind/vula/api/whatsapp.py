@@ -4475,12 +4475,18 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 # A figure that survived escalation and STILL isn't anywhere in the document's
                 # text doesn't get booked automatically — stage it (auto_commit=False just
                 # returns the preview) and flag the filed row for owner review instead.
-                await commerce_service.commit_inbound_document(
+                committed = await commerce_service.commit_inbound_document(
                     tenant_id, commit_fields, auto_commit=not unverified, source=source,
                     filed_document_id=row.get("id") if row else None,
                     project=match["project"] if confident else None,
                     is_boq=(category == "Bill of Quantities (BOQ)"),
                 )
+                # Different bank details from the ones on file: say so to whoever sent it, too.
+                change = ((committed or {}).get("supplier_update") or {}).get("bank_change")
+                if change:
+                    from vula.commerce.supplier_details import bank_change_message
+                    note = (note + "\n" if note else "") + bank_change_message(
+                        (fields or {}).get("supplier") or "this supplier", change)
                 if unverified and row and row.get("id"):
                     commerce_service._client().table("vula_filed_documents").update(
                         {"needs_review": True}).eq("id", row["id"]).execute()

@@ -35,7 +35,7 @@ _CURRENT_ROW: ContextVar = ContextVar("kb_maintenance_row", default=None)
 
 JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view", "kb_learning",
         "contextualize_preview", "contextualize", "contextualize_revert", "retrieval_diag_ctx",
-        "enrich_documents",
+        "enrich_documents", "supplier_details_preview", "supplier_details",
         "retrieval_live", "retrieval_diag")
 
 
@@ -293,6 +293,19 @@ async def _enrich_documents() -> Dict[str, Any]:
     return {"by_tenant": by, "summary": by}
 
 
+async def _supplier_details(apply: bool = True) -> Dict[str, Any]:
+    """Suppliers' blank VAT number / phone / email / bank details filled from their own filed
+    invoices (vula/commerce/supplier_details.py). No alerts; nothing on a record is overwritten."""
+    from vula.commerce import supplier_details
+    by: Dict[str, Any] = {}
+    for t in _ctx_tenants():
+        try:
+            by[t] = await asyncio.to_thread(supplier_details.backfill, t, apply)
+        except Exception as exc:  # noqa: BLE001
+            by[t] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+    return {"by_tenant": by, "summary": by}
+
+
 async def context_nightly(now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     """Once a night (01:00–05:00 SAST), label any pieces not yet labelled — the first night is
     the whole knowledge base, later nights only new uploads — then, when anything changed and a
@@ -310,6 +323,7 @@ async def context_nightly(now: Optional[datetime] = None) -> Optional[Dict[str, 
         return None
     if settings.kb_enrich_per_night:
         await run_job("enrich_documents", by="nightly")   # first, so tonight's labels carry the numbers
+        await run_job("supplier_details", by="nightly")   # suppliers' blanks from what was just read
     rep = await run_job("contextualize", by="nightly")
     changed = sum((v or {}).get("done", 0) for v in (rep.get("by_tenant") or {}).values()
                   if isinstance(v, dict))
@@ -384,7 +398,9 @@ async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
           "contextualize": _contextualize,
           "contextualize_revert": lambda: _contextualize(revert=True),
           "retrieval_diag_ctx": lambda: _retrieval_diag(replay_id=_ctx_baseline()),
-          "enrich_documents": _enrich_documents}[job]
+          "enrich_documents": _enrich_documents,
+          "supplier_details_preview": lambda: _supplier_details(apply=False),
+          "supplier_details": _supplier_details}[job]
     from vula.commerce import service
     db = service._client()
     row_id = None
