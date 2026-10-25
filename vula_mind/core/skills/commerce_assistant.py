@@ -133,7 +133,17 @@ def _tenant_business_type(tenant_id: str) -> str:
 
 
 def _is_booking_focused(tenant_id: str) -> bool:
-    return _tenant_has_bookings(tenant_id) and _tenant_business_type(tenant_id) in _BOOKING_FOCUSED_TYPES
+    if not _tenant_has_bookings(tenant_id):
+        return False
+    # A number the business set aside for bookings (Settings › WhatsApp numbers, purpose
+    # "bookings") is bookings-first whatever the business type.
+    try:
+        from vula.whatsapp_numbers import inbound_purpose
+        if inbound_purpose() == "bookings":
+            return True
+    except Exception:
+        pass
+    return _tenant_business_type(tenant_id) in _BOOKING_FOCUSED_TYPES
 
 
 # 2026-08-28: real incident — this skill's single hardcoded storefront default assumed every

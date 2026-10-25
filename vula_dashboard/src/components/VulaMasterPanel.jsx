@@ -346,11 +346,12 @@ function HealthPanel({ onError, onViewDetail }) {
       <div style={card}>
         <h4 style={h4}>📱 WhatsApp lines</h4>
         {(Array.isArray(h.whatsapp) ? h.whatsapp : []).map(w => (
-          <div key={w.tenant_id} style={{ display: 'flex', gap: 10, fontSize: 12.5, padding: '4px 0', flexWrap: 'wrap' }}>
+          <div key={w.phone_number_id || w.tenant_id + w.phone_number} style={{ display: 'flex', gap: 10, fontSize: 12.5, padding: '4px 0', flexWrap: 'wrap' }}>
             {onViewDetail
               ? <button onClick={() => onViewDetail(w.tenant_id)} style={{ ...miniBtn, minWidth: 110, textAlign: 'left', fontWeight: 700 }}>{w.tenant_id}</button>
               : <b style={{ minWidth: 110 }}>{w.tenant_id}</b>}
-            <span style={{ fontFamily: 'monospace' }}>{w.phone_number}</span>
+            <span style={{ fontFamily: 'monospace' }}>{w.phone_number}{w.is_primary ? ' ★' : ''}</span>
+            {w.purpose_label && <span style={{ color: C.muted }}>{w.purpose_label}</span>}
             <span style={{ color: w.status === 'connected' ? 'var(--ok)' : C.red, fontWeight: 600 }}>{w.status}</span>
             <span style={{ color: C.muted }}>{w.webhook_registered ? 'webhook ✓' : 'webhook ✗'}</span>
             {w.last_error && <span style={{ color: C.red }}>{String(w.last_error).slice(0, 60)}</span>}

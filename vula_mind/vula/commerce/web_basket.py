@@ -84,13 +84,13 @@ def session_id(code: str) -> str:
 
 def wa_number(tenant_id: str) -> str:
     """The shop's own WhatsApp number, digits only ('' when it has none connected)."""
+    from vula import whatsapp_numbers
     from vula.commerce import service
-    try:
-        rows = (service._client().table("vula_whatsapp_accounts").select("phone_number")
-                .eq("tenant_id", tenant_id).eq("status", "connected").limit(1).execute().data or [])
+    try:   # its main number, when it has several (vula/whatsapp_numbers.py)
+        row = whatsapp_numbers.main_row(whatsapp_numbers.rows_for(tenant_id, service._client()))
     except Exception:
         return ""
-    return re.sub(r"\D", "", (rows[0].get("phone_number") if rows else "") or "")
+    return re.sub(r"\D", "", ((row or {}).get("phone_number")) or "")
 
 
 def order_message(code: str) -> str:

@@ -34,9 +34,10 @@ async def _waba_creds(tenant_id: str) -> Optional[Dict[str, str]]:
     """(waba_id, token) for a tenant — resolved from vula_whatsapp_accounts, the same table
     _get_tenant_wa_creds reads phone_id/token from. Never hardcode a WABA id."""
     try:
-        row = (_client().table("vula_whatsapp_accounts")
-               .select("waba_id,access_token").eq("tenant_id", tenant_id)
-               .eq("status", "connected").limit(1).execute().data or [None])[0]
+        # The main number's account, when the business has several numbers (templates are
+        # per WhatsApp Business Account, vula/whatsapp_numbers.py).
+        from vula import whatsapp_numbers
+        row = whatsapp_numbers.main_row(whatsapp_numbers.rows_for(tenant_id, _client()))
         if row and row.get("waba_id") and row.get("access_token"):
             from vula.email_imap.credentials import decrypt_secret
             return {"waba_id": row["waba_id"], "token": decrypt_secret(row["access_token"])}

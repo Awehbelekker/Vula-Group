@@ -94,6 +94,8 @@ _NUMBER_ROUTING: dict[str, tuple[str, str]] = {
 
 _ROUTE_CACHE: dict[str, tuple[float, tuple[str, str]]] = {}
 _ROUTE_TTL = 120.0
+# The purpose of each number seen (vula/whatsapp_numbers.py), filled with _ROUTE_CACHE.
+_ROUTE_PURPOSE: dict[str, str] = {}
 
 # Last agent confidence for the current request (set in _rag_reply, read for escalation).
 import contextvars as _contextvars
@@ -111,29 +113,34 @@ _META_SYSTEM_SENDERS = frozenset({"16465894168"})
 def _resolve_number_route(phone_number_id: str) -> tuple[str | None, str | None]:
     """Resolve (tenant_id, mode) for the number a message came in on.
 
-    Static map first (hot path for known numbers), then DB (vula_whatsapp_accounts)
-    so a NEW tenant's number routes with no code change — cached to keep it off the
-    per-message hot path."""
-    route = _NUMBER_ROUTING.get(phone_number_id)
-    if route:
-        return route
+    DB (vula_whatsapp_accounts) first, cached to keep it off the per-message hot path, so a
+    business's own choice of purpose for the number (Settings › WhatsApp numbers) takes effect;
+    the static map is the fallback for its numbers when the DB has no row or can't be read."""
     import time as _t
     hit = _ROUTE_CACHE.get(phone_number_id)
     if hit and (_t.time() - hit[0]) < _ROUTE_TTL:
         return hit[1]
     try:
         from vula.commerce import service as cs
+        # "*": purpose (migration 225) is read when it's there, and nothing breaks when it isn't.
         rows = (cs._client().table("vula_whatsapp_accounts")
-                .select("tenant_id,route_mode,status").eq("phone_number_id", phone_number_id)
+                .select("*").eq("phone_number_id", phone_number_id)
                 .limit(1).execute().data or [])
         # A disconnected number belongs to no one: its messages aren't routed to the business.
         if rows and rows[0].get("status") != "disconnected":
+            from vula import whatsapp_numbers as _nums
             resolved = (rows[0]["tenant_id"], rows[0].get("route_mode") or "commerce")
             _ROUTE_CACHE[phone_number_id] = (_t.time(), resolved)
+            _ROUTE_PURPOSE[phone_number_id] = _nums.purpose_of(rows[0])
             return resolved
+        if rows:
+            return (None, None)
     except Exception as exc:
         logger.debug("number route DB lookup skipped: %s", exc)
-    return (None, None)
+    static = _NUMBER_ROUTING.get(phone_number_id)
+    if static:
+        _ROUTE_CACHE[phone_number_id] = (_t.time(), static)
+    return static or (None, None)
 
 # Commerce order keywords — triggers seafood ordering flow
 _ORDER_RE = re.compile(
@@ -190,6 +197,45 @@ def _should_warn_sender(tenant_id: str, phone: str, now: float | None = None) ->
         return False
     _sender_warned_at[key] = now
     return True
+
+
+# ─── A team-only number (vula/whatsapp_numbers.py, purpose "team") ────────────
+_POINTED_AT: dict[tuple[str, str], float] = {}
+_POINT_EVERY_SECS = 12 * 3600
+
+
+def _team_line_mode(tenant_id: str, phone: str) -> str:
+    """How a team member is answered on a team-only number: as on the business's main number —
+    the admin assistant on a shop business for its admin roles, the knowledge assistant
+    otherwise (which hands admin questions to the admin assistant itself)."""
+    from vula import whatsapp_numbers as _nums
+    main = _nums.main_number(tenant_id) or {}
+    if (main.get("route_mode") or "commerce") == "commerce" and _is_tenant_owner(tenant_id, phone):
+        return "commerce"
+    return "knowledge"
+
+
+def _should_point_to_main(tenant_id: str, phone: str, now: float | None = None) -> bool:
+    """At most one "message our main number instead" reply per sender per _POINT_EVERY_SECS."""
+    import time as _time
+    now = _time.monotonic() if now is None else now
+    key = (tenant_id or "", phone)
+    if now - _POINTED_AT.get(key, -1e9) < _POINT_EVERY_SECS:
+        return False
+    _POINTED_AT[key] = now
+    return True
+
+
+def _team_line_pointer(tenant_id: str) -> str:
+    from vula import whatsapp_numbers as _nums
+    from vula.api import tenants as _tenants
+    name = _tenants.display_name(tenant_id) or "this business"
+    main = _nums.main_number(tenant_id) or {}
+    digits = re.sub(r"\D", "", main.get("phone_number") or "")
+    if digits and _nums.purpose_of(main) != "team":
+        return (f"This WhatsApp number is for {name}'s team. To order or ask us something, please "
+                f"message our main number instead: https://wa.me/{digits}")
+    return f"This WhatsApp number is only for {name}'s team, so messages here aren't answered."
 
 
 # ─── Meta verification handshake ─────────────────────────────────────────────
@@ -542,8 +588,11 @@ def _run_bg(coro, *, label: str, track: Optional[dict] = None, turn: Optional[di
 
 
 def _text_track(msg_id: str, tenant_id: Optional[str], phone: str, text: str, route_mode: Optional[str]) -> dict:
+    from vula import whatsapp_numbers as _nums
+    # pnid: a re-driven message is answered from the number it came in on, like the first try.
     return {"msg_id": msg_id, "tenant_id": tenant_id, "phone": phone, "kind": "text",
-            "payload": {"text": text, "route_mode": route_mode}}
+            "payload": {"text": text, "route_mode": route_mode,
+                        "pnid": (_nums.INBOUND.get() or {}).get("pnid")}}
 
 
 _REDRIVE_AFTER_MIN = 5       # a normal run finishes well inside this
@@ -558,6 +607,7 @@ async def redrive_stuck_inbound() -> int:
     to resend instead (same give-up policy as vula/voice_retry.py). Returns rows re-driven."""
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     from vula.commerce import service as _cs
+    from vula import whatsapp_numbers as _nums
     db = _cs._client()
     now = _dt.now(_tz.utc)
     try:
@@ -574,6 +624,10 @@ async def redrive_stuck_inbound() -> int:
     for r in rows:
         msg_id, attempts = r["msg_id"], int(r.get("attempts") or 0)
         tenant_id, phone = r.get("tenant_id") or "", r.get("phone") or ""
+        # Answered from the number the message came in on (vula/whatsapp_numbers.py).
+        _pnid = (r.get("payload") or {}).get("pnid")
+        _nums.INBOUND.set({"pnid": _pnid, "purpose": _ROUTE_PURPOSE.get(_pnid), "from": phone}
+                          if _pnid else None)
         try:
             seen = _dt.fromisoformat(str(r.get("seen_at")).replace("Z", "+00:00"))
         except ValueError:
@@ -716,6 +770,11 @@ async def receive_message(
                 # Route by the number the person messaged → (tenant, mode)
                 phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
                 route_tenant, route_mode = _resolve_number_route(phone_number_id)
+                # Replies go from the number this message came in on (a business can have several,
+                # vula/whatsapp_numbers.py) — every task started while handling it inherits this.
+                from vula import whatsapp_numbers as _nums
+                _nums.INBOUND.set({"pnid": phone_number_id, "purpose": _ROUTE_PURPOSE.get(phone_number_id),
+                                   "from": phone})
                 commerce_tenant = route_tenant if route_mode == "commerce" else None
 
                 # Suspended tenant (master's Suspend action, vula_tenant_config.active=false) —
@@ -733,6 +792,18 @@ async def receive_message(
                     logger.info("WA notice from Meta (%s) to %s, not replied to: %.120s",
                                 phone, route_tenant, (msg.get("text") or {}).get("body") or msg.get("type"))
                     continue
+
+                # A team-only number: the business's own people are answered as on its main number;
+                # anyone else is pointed to the main number once in a while and not answered here.
+                if route_mode == "team" and route_tenant:
+                    if _is_team(route_tenant, phone):
+                        route_mode = _team_line_mode(route_tenant, phone)
+                        commerce_tenant = route_tenant if route_mode == "commerce" else None
+                    else:
+                        if _should_point_to_main(route_tenant, phone):
+                            _run_bg(_send_reply(phone, _team_line_pointer(route_tenant), route_tenant),
+                                    label="team_line_pointer")
+                        continue
 
                 # Flood guard — after dedup (a Meta redelivery isn't a new message) and the
                 # suspended check; the business's own team is never limited.
@@ -1370,7 +1441,7 @@ async def ask_document_kind(tenant_id: str, invoice_id: str, supplier: str,
             f"you.\n\nWhich is it?")
     sent_any = False
     for a in approvers[:2]:                      # the owner, not the whole team
-        creds = await _get_tenant_wa_creds(tenant_id)
+        creds = await _get_tenant_wa_creds(tenant_id, to=a["phone"])
         if not creds:
             break
         sent = await _send_wa_buttons(creds, a["phone"], body, [
@@ -1430,7 +1501,7 @@ async def ask_merchant_account(tenant_id: str, merchant_key: str, display_name: 
     }
     sent_any = False
     for a in approvers[:2]:
-        creds = await _get_tenant_wa_creds(tenant_id)
+        creds = await _get_tenant_wa_creds(tenant_id, to=a["phone"])
         if not creds:
             break
         sent = await _send_wa_buttons(creds, a["phone"], body, [
@@ -7049,61 +7120,59 @@ def _forget_wa_number(tenant_id: str, phone_number_id: Optional[str] = None) -> 
     _WA_CREDS_AT.pop(tenant_id, None)
     if phone_number_id:
         _ROUTE_CACHE.pop(phone_number_id, None)
+        _ROUTE_PURPOSE.pop(phone_number_id, None)
     for pnid, (_, (tid, _mode)) in list(_ROUTE_CACHE.items()):
         if tid == tenant_id:
             _ROUTE_CACHE.pop(pnid, None)
+            _ROUTE_PURPOSE.pop(pnid, None)
 
 
-async def _get_tenant_wa_creds(tenant_id: str) -> dict | None:
+async def _get_tenant_wa_creds(tenant_id: str, phone_number_id: Optional[str] = None,
+                               to: Optional[str] = None) -> dict | None:
     """
     Fetch WhatsApp credentials for a tenant from Supabase.
     Falls back to env vars for a business with no number row yet (initial setup) — never for one
-    whose number was disconnected. Cached in-process for _WA_CREDS_TTL.
+    whose numbers are all disconnected. The business's number rows are cached in-process for
+    _WA_CREDS_TTL.
+
+    A business can have several numbers (vula/whatsapp_numbers.py): this sends from the one asked
+    for, else the one the message being handled came in on, else the business's main number
+    (`to`, the recipient, matters on a team-only number — see whatsapp_numbers.pick).
     """
     import time as _t
-    if tenant_id in _wa_creds_cache and (_t.time() - _WA_CREDS_AT.get(tenant_id, _t.time())) < _WA_CREDS_TTL:
-        return _wa_creds_cache[tenant_id]
+    from vula import whatsapp_numbers as _nums
+    rows = _wa_creds_cache.get(tenant_id)
+    if not (isinstance(rows, list) and (_t.time() - _WA_CREDS_AT.get(tenant_id, 0)) < _WA_CREDS_TTL):
+        rows = None
+        try:
+            from supabase import create_client
+            client = create_client(
+                settings.supabase_url,
+                settings.supabase_service_role_key or settings.supabase_service_key,
+            )
+            rows = [dict(r) for r in _nums.rows_for(tenant_id, client)]
+            _wa_creds_cache[tenant_id] = rows
+            _WA_CREDS_AT[tenant_id] = _t.time()
+        except Exception as exc:
+            logger.debug("Supabase WA creds lookup failed for %s: %s", tenant_id, exc)
 
-    try:
-        from supabase import create_client
-        client = create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key or settings.supabase_service_key,
-        )
-        rows = (
-            client.table("vula_whatsapp_accounts")
-            .select("phone_number_id,access_token,status")
-            .eq("tenant_id", tenant_id)
-            .limit(1)
-            .execute()
-        ).data or []
-        row = rows[0] if rows else None
-        if row and row.get("status") != "connected":
+    if rows:
+        row = _nums.pick(rows, phone_number_id, to)
+        if row is None:
             # Disconnected: nothing is sent for this business — not even from Vula's own number,
             # which would answer its customers from someone else's line.
-            _forget_wa_number(tenant_id)
             return None
-        if row and row.get("access_token"):
+        if row.get("access_token"):
             from vula.email_imap.credentials import decrypt_secret
-            creds = {
-                "token": decrypt_secret(row["access_token"]),
-                "phone_id": row["phone_number_id"],
-            }
-            _wa_creds_cache[tenant_id] = creds
-            _WA_CREDS_AT[tenant_id] = _t.time()
-            return creds
+            return {"token": decrypt_secret(row["access_token"]), "phone_id": row["phone_number_id"]}
         # 2026-10-13 (SeedleMe): a number added straight to Vula's own WhatsApp Business Account
         # (WhatsApp Manager, or Master › Link WhatsApp number) carries no token of its own — the
         # server's system-user token covers every number on that account. It must still send
         # from ITS number: the default-number fallback below would have answered SeedleMe's
         # customers from Vula's own line.
-        if row and row.get("phone_number_id") and settings.whatsapp_token:
-            creds = {"token": settings.whatsapp_token, "phone_id": row["phone_number_id"]}
-            _wa_creds_cache[tenant_id] = creds
-            _WA_CREDS_AT[tenant_id] = _t.time()
-            return creds
-    except Exception as exc:
-        logger.debug("Supabase WA creds lookup failed for %s: %s", tenant_id, exc)
+        if row.get("phone_number_id") and settings.whatsapp_token:
+            return {"token": settings.whatsapp_token, "phone_id": row["phone_number_id"]}
+        return None
 
     # Fallback: env vars (used during initial setup before Embedded Signup is configured)
     if settings.whatsapp_token and settings.whatsapp_phone_id:
@@ -7122,7 +7191,7 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, str(template)):   # capability benchmark
         return True
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
     if not creds:
         if settings.whatsapp_token and settings.whatsapp_phone_id:
             creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
@@ -7429,7 +7498,7 @@ async def send_template_message(tenant_id: str, to: str, name: str, params: list
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, f"[template {name}] " + " | ".join(str(p) for p in params)):
         return "dry-run"
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
     if not creds:
         creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
                  if settings.whatsapp_token and settings.whatsapp_phone_id else None)
@@ -7468,7 +7537,7 @@ async def send_template(tenant_id: str, to: str, name: str, params: list,
                         lang: Optional[str] = None) -> bool:
     """Send an approved Meta template with body parameters (works outside the 24-hour window).
     False when it couldn't be sent — logged as an error, never silently."""
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
     if not creds:
         creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
                  if settings.whatsapp_token and settings.whatsapp_phone_id else None)
@@ -7731,7 +7800,10 @@ async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
     """
     if not message_id:
         return
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    # The number the message came in on — a message is marked read by the number it was sent to.
+    from vula import whatsapp_numbers as _nums
+    creds = (await _get_tenant_wa_creds(tenant_id, (_nums.INBOUND.get() or {}).get("pnid"))
+             if tenant_id else None)
     if not creds:
         if settings.whatsapp_token and settings.whatsapp_phone_id:
             creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
@@ -7822,7 +7894,7 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
     message = _sanitize_outbound(message)
     from vula import turns as _turns
     _turns.reply(message, to=to)
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
     if not creds:
         # Try global env var fallback
         if settings.whatsapp_token and settings.whatsapp_phone_id:
@@ -7929,7 +8001,7 @@ async def _send_invoice_document(
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, f"[document {filename}] {caption}"):   # capability benchmark
         return True
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
     if not creds:
         if settings.whatsapp_token and settings.whatsapp_phone_id:
             creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
@@ -8564,7 +8636,7 @@ async def _send_staff_capability_menu(phone: str, tenant_id: str) -> bool:
     "admin_example:" branch in the interactive-message webhook dispatch), so it's a real
     shortcut, not just a static hint."""
     try:
-        creds = await _resolve_wa(tenant_id)
+        creds = await _resolve_wa(tenant_id, to=phone)
         if not creds:
             return False
         try:
@@ -8879,7 +8951,7 @@ async def _send_confirm_request(phone: str, tenant_id: str, cr: dict) -> None:
     core.skills.commerce_admin.ConfirmationRequired / _send_wa_buttons. cr = {id, summary,
     confirm_label?, cancel_label?}; a tap lands in _handle_admin_confirm_reply."""
     number = _wa_number(phone)
-    creds = await _get_tenant_wa_creds(tenant_id)
+    creds = await _get_tenant_wa_creds(tenant_id, to=phone)
     sent = False
     if creds:
         sent = await _send_wa_buttons(
@@ -9482,8 +9554,8 @@ async def _send_wa_image(creds: dict, number: str, image_url: str, caption: str 
         return False
 
 
-async def _resolve_wa(tenant_id: str) -> Optional[dict]:
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+async def _resolve_wa(tenant_id: str, to: Optional[str] = None) -> Optional[dict]:
+    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
     if not creds and settings.whatsapp_token and settings.whatsapp_phone_id:
         creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
     return creds

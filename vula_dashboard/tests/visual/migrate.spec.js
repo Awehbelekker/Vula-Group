@@ -948,8 +948,58 @@ test("settings: a number shared with the WhatsApp Business app says so", async (
   await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "dark" });
   await page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson({ ...F.whatsappStatus, coexistence: true }));
   await settingsSection(page, "WhatsApp number");
-  await expect(page.locator(".vst-page").getByText("Shared with")).toBeVisible();
+  await expect(page.locator(".vst-page").getByText("Shared with", { exact: true })).toBeVisible();
   await expect(page.locator(".vst-page").getByText(/reply from your phone any time/)).toBeVisible();
+});
+
+const NUMBERS = { ...F.whatsappStatus, purpose: "shop", numbers: [
+  { phone_number_id: "P1", phone_number: "+27 82 000 0001", verified_name: "Harbour & Vine Deli", status: "connected",
+    purpose: "shop", purpose_label: "Customers: shop and orders", is_primary: true, on_vula_account: false },
+  { phone_number_id: "P2", phone_number: "+27 82 000 0002", verified_name: "Harbour & Vine Bookings", status: "connected",
+    purpose: "bookings", purpose_label: "Customers: bookings", is_primary: false, on_vula_account: true },
+  { phone_number_id: "P3", phone_number: "+27 82 000 0003", verified_name: "Harbour & Vine Team", status: "connected",
+    purpose: "team", purpose_label: "Team only", is_primary: false, label: "Stores", on_vula_account: false },
+] };
+
+test("settings: several WhatsApp numbers — what each is for, the main one, and adding one", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson(NUMBERS));
+  await settingsSection(page, "WhatsApp number");
+  const list = page.getByRole("list", { name: "Your WhatsApp numbers" });
+  await expect(list.getByRole("listitem")).toHaveCount(3);
+  await expect(list.getByRole("listitem").first()).toContainText("Main number");
+  await expect(list.getByRole("listitem").nth(2)).toContainText("Stores");
+  // the main number can't be team-only; a team line can't be made main
+  await expect(page.getByLabel("What +27 82 000 0001 is for").locator('option[value="team"]')).toHaveAttribute("disabled", "");
+  await expect(page.getByRole("button", { name: "Make +27 82 000 0003 the main number" })).toHaveCount(0);
+
+  await page.route(/\/v1\/whatsapp\/numbers\/[^/]+\/[^/]+$/, okJson({ phone_number_id: "P3", purpose: "assistant" }));
+  const patch = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/whatsapp\/numbers\/[^/]+\/P3$/.test(new URL(r.url()).pathname));
+  await page.getByLabel("What +27 82 000 0003 is for").selectOption("assistant");
+  expect((await patch).postDataJSON()).toEqual({ purpose: "assistant" });
+
+  const main = page.waitForRequest((r) => r.method() === "PATCH" && /\/P2$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: "Make +27 82 000 0002 the main number" }).click();
+  expect((await main).postDataJSON()).toEqual({ is_primary: true });
+
+  await page.getByRole("button", { name: "Add a number" }).click();
+  await expect(page.getByLabel("What the new number is for")).toHaveValue("team");
+  await expect(page.locator(".vcn-token").getByText(/Only your team is answered here/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use my WhatsApp Business number" })).toBeDisabled();   // no VITE_FB_CONFIG_ID in tests
+  await check(page, test.info(), "settings-wa-numbers", "mobile-light", VIEWPORTS.mobile);
+});
+
+test("settings: disconnecting one of several numbers asks about that number only", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.tablet, theme: "dark" });
+  await page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson(NUMBERS));
+  await settingsSection(page, "WhatsApp number");
+  await page.getByRole("button", { name: "Disconnect +27 82 000 0001" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Disconnect +27 82 000 0001 from Vula?");
+  await expect(page.getByRole("dialog")).toContainText("Another of your numbers becomes the main one.");
+  const del = page.waitForRequest((r) => r.method() === "DELETE" && /\/v1\/whatsapp\/disconnect\/[^/]+$/.test(new URL(r.url()).pathname));
+  await page.getByRole("dialog").getByRole("button", { name: "Yes" }).click();
+  expect(new URL((await del).url()).searchParams.get("phone_number_id")).toBe("P1");
+  await expect(page.getByRole("list", { name: "Your WhatsApp numbers" })).toBeVisible();      // still connected
 });
 
 test("settings: Yoco — update keys sends the same body; test uses the same call", async ({ page }) => {

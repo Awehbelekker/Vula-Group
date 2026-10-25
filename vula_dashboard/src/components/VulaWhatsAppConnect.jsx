@@ -19,10 +19,15 @@
  * Flow: settings/connect/useWhatsAppConnect.js (shared with the redesign's WhatsAppConnectV2).
  */
 
-import { FB_APP_ID, FB_CONFIG_ID, useWhatsAppConnect } from './settings/connect/useWhatsAppConnect'
+import { useState } from 'react'
+import { FB_APP_ID, FB_CONFIG_ID, PURPOSES, PURPOSE_HINTS, useWhatsAppConnect } from './settings/connect/useWhatsAppConnect'
 
 export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
-  const { status, account, loading, error, handleConnect, handleDisconnect } = useWhatsAppConnect({ tenantId, tenantName, adminEmail })
+  const x = useWhatsAppConnect({ tenantId, tenantName, adminEmail })
+  const { status, account, loading, error, handleConnect } = x
+  const [adding, setAdding] = useState(false)
+  const [newPurpose, setNewPurpose] = useState('team')
+  const off = loading || !FB_APP_ID || !FB_CONFIG_ID
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -40,7 +45,7 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
       {status === 'connected' && account && (
         <div style={styles.connectedInfo}>
           <div style={styles.infoRow}>
-            <span style={styles.label}>Number</span>
+            <span style={styles.label}>Main number</span>
             <span style={styles.value}>{account.phone_number}</span>
           </div>
           <div style={styles.infoRow}>
@@ -109,13 +114,60 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
           </p>
         </div>
       ) : (
-        <button
-          onClick={handleDisconnect}
-          disabled={loading}
-          style={styles.btnDanger}
-        >
-          {loading ? 'Disconnecting…' : 'Disconnect'}
-        </button>
+        <div>
+          {/* Every number, what it's for, the main one (2026-10-25) */}
+          <ul aria-label="Your WhatsApp numbers" style={styles.list}>
+            {x.numbers.map(n => (
+              <li key={n.phone_number_id || n.phone_number} style={styles.item}>
+                <div style={styles.infoRow}>
+                  <span style={styles.value}>{n.phone_number}</span>
+                  {n.is_primary && <span style={{ ...styles.badge, color: 'var(--ok)', background: 'rgba(34,197,94,0.15)' }}>Main number</span>}
+                </div>
+                <label style={styles.label}>
+                  What it’s for
+                  <select aria-label={`What ${n.phone_number} is for`} value={n.purpose || 'shop'} style={styles.select}
+                    disabled={x.busyNumber === n.phone_number_id || !n.phone_number_id}
+                    onChange={e => x.updateNumber(n.phone_number_id, { purpose: e.target.value })}>
+                    {PURPOSES.map(([k, label]) => (
+                      <option key={k} value={k} disabled={k === 'team' && n.is_primary}>{label}</option>))}
+                  </select>
+                </label>
+                <p style={styles.hint}>{PURPOSE_HINTS[n.purpose]}</p>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {!n.is_primary && n.purpose !== 'team' && n.phone_number_id && (
+                    <button style={styles.btnGhost} disabled={x.busyNumber === n.phone_number_id}
+                      onClick={() => x.updateNumber(n.phone_number_id, { is_primary: true })}
+                      aria-label={`Make ${n.phone_number} the main number`}>Make main</button>)}
+                  <button onClick={() => x.disconnectNumber(n)} disabled={loading || x.busyNumber === n.phone_number_id}
+                    style={styles.btnDanger} aria-label={`Disconnect ${n.phone_number}`}>Disconnect</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p style={styles.hint}>Replies go from the number the person wrote to; Vula’s own messages from your main number.</p>
+          {!adding ? (
+            <button style={{ ...styles.btnGhost, width: '100%' }} onClick={() => setAdding(true)}>➕ Add a number</button>
+          ) : (
+            <div style={styles.connectedInfo}>
+              <label style={styles.label}>
+                What the new number is for
+                <select aria-label="What the new number is for" value={newPurpose} style={styles.select}
+                  onChange={e => setNewPurpose(e.target.value)}>
+                  {PURPOSES.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+              </label>
+              <p style={styles.hint}>{PURPOSE_HINTS[newPurpose]}</p>
+              <button onClick={() => handleConnect('app', newPurpose)} disabled={off} style={off ? styles.btnDisabled : styles.btn}>
+                {loading ? 'Connecting…' : '📱 Use my WhatsApp Business number'}
+              </button>
+              <button onClick={() => handleConnect('new', newPurpose)} disabled={off}
+                style={{ ...(off ? styles.btnDisabled : styles.btn), marginTop: 8, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}>
+                🔗 Connect a new number
+              </button>
+              <button style={{ ...styles.btnGhost, marginTop: 8 }} onClick={() => setAdding(false)}>Cancel</button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
@@ -225,4 +277,12 @@ const styles = {
     cursor: 'pointer',
   },
   hint: { color: 'var(--muted)', fontSize: 12, marginTop: 10, textAlign: 'center' },
+  list: { listStyle: 'none', margin: '0 0 8px', padding: 0, display: 'flex', flexDirection: 'column', gap: 12 },
+  item: { border: '1px solid var(--border)', borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 6 },
+  select: { display: 'block', width: '100%', marginTop: 4, minHeight: 40, padding: '8px 10px', borderRadius: 6,
+    border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14 },
+  btnGhost: {
+    background: 'transparent', color: 'var(--ink)', border: '1px solid var(--border)', borderRadius: 6,
+    padding: '8px 16px', fontSize: 13, cursor: 'pointer', minHeight: 40,
+  },
 }

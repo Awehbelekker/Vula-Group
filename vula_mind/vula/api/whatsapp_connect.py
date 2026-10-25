@@ -65,6 +65,9 @@ class ConnectRequest(BaseModel):
     # Embedded Signup's WhatsApp Business app onboarding): they keep the app on their phone and
     # Vula answers on the same number (vula/api/whatsapp_coexist.py).
     coexistence: bool = False
+    # What the number is for (vula/whatsapp_numbers.py: shop | bookings | assistant | team).
+    # None keeps a reconnected number's purpose; a new one gets the business's usual kind.
+    purpose: Optional[str] = None
 
 
 class ConnectResponse(BaseModel):
@@ -226,17 +229,12 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         "connected_by": body.connected_by,
         "connected_at": "now()",
     }
-    try:
-        db.table("vula_whatsapp_accounts").upsert(
-            {**record, "coexistence": body.coexistence, "history_sync": history_sync},
-            on_conflict="tenant_id").execute()
-    except Exception as exc:       # migration 223 not applied yet: connect anyway
-        log.warning("coexistence columns missing (run migration 223): %s", exc)
-        db.table("vula_whatsapp_accounts").upsert(record, on_conflict="tenant_id").execute()
+    save_number(db, body.tenant_id, phone_number_id, record, purpose=body.purpose,
+                extra={"coexistence": body.coexistence, "history_sync": history_sync})
     # The new token is used from the next message on, not after a restart.
     from vula.api import whatsapp as wa
     wa._forget_wa_number(body.tenant_id, phone_number_id)
-    _HEALTH_CACHE.pop(body.tenant_id, None)
+    _forget_health(body.tenant_id)
 
     log.info(
         "WhatsApp connected: tenant=%s phone=%s waba=%s",
@@ -266,26 +264,22 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
 
 @router.get("/connect/status/{tenant_id}")
 async def whatsapp_status(tenant_id: str):
-    """Check WhatsApp connection status for a tenant."""
-    db = _supabase()
-    # .limit(1) (not .maybe_single) — maybe_single 406s on zero rows in this
-    # supabase-py version, which would show a fresh tenant as 'error'.
-    result = (
-        db.table("vula_whatsapp_accounts")
-        .select("tenant_id,phone_number,phone_number_id,waba_id,verified_name,status,webhook_registered,connected_at")
-        .eq("tenant_id", tenant_id)
-        .limit(1)
-        .execute()
-    )
-    rows = result.data or []
+    """A business's WhatsApp numbers. The top level is its main number, as before (older
+    dashboards read only that); `numbers` lists every number with its purpose."""
+    from vula import whatsapp_numbers as nums
+    rows = nums.rows_for(tenant_id, _supabase())
     if not rows:
-        return {"tenant_id": tenant_id, "status": "not_connected"}
-    try:   # whether the number is shared with the WhatsApp Business app (migration 223)
-        extra = (db.table("vula_whatsapp_accounts").select("coexistence").eq("tenant_id", tenant_id)
-                 .limit(1).execute().data or [])
-    except Exception:
-        extra = []
-    return {**rows[0], "coexistence": bool(extra and extra[0].get("coexistence"))}
+        return {"tenant_id": tenant_id, "status": "not_connected", "numbers": []}
+    main = nums.main_row(rows)
+    head = main or sorted(rows, key=lambda r: str(r.get("connected_at") or ""))[-1]
+    keys = ("tenant_id", "phone_number", "phone_number_id", "waba_id", "verified_name", "status",
+            "webhook_registered", "connected_at")
+    main_pnid = (main or {}).get("phone_number_id")
+    listed = [nums.public(r, main_pnid) for r in rows if r.get("status") != "disconnected"]
+    listed.sort(key=lambda n: (not n["is_primary"], n["connected_at"] or ""))
+    return {**{k: head.get(k) for k in keys}, "tenant_id": tenant_id,
+            "coexistence": bool(head.get("coexistence")), "purpose": nums.purpose_of(head),
+            "numbers": listed}
 
 
 @router.get("/accounts")
@@ -302,19 +296,133 @@ async def list_whatsapp_accounts():
 
 
 @router.delete("/disconnect/{tenant_id}")
-async def disconnect_whatsapp(tenant_id: str):
-    """Disconnect WhatsApp for a tenant (marks as disconnected, keeps record). Messages stop at
-    once on this worker; within _WA_CREDS_TTL on the other (whatsapp._get_tenant_wa_creds)."""
+async def disconnect_whatsapp(tenant_id: str, phone_number_id: Optional[str] = None):
+    """Disconnect one of a business's numbers (phone_number_id), or all of them (marks them
+    disconnected, keeps the record). Messages stop at once on this worker; within _WA_CREDS_TTL
+    on the other (whatsapp._get_tenant_wa_creds). When the main number goes, another customer
+    number becomes the main one."""
+    from vula import whatsapp_numbers as nums
     db = _supabase()
-    rows = (db.table("vula_whatsapp_accounts").select("phone_number_id")
-            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
-    db.table("vula_whatsapp_accounts").update(
-        {"status": "disconnected", "access_token": None}
-    ).eq("tenant_id", tenant_id).execute()
+    rows = nums.rows_for(tenant_id, db)
+    q = db.table("vula_whatsapp_accounts").update({"status": "disconnected", "access_token": None}) \
+        .eq("tenant_id", tenant_id)
+    if phone_number_id:
+        if not any(r.get("phone_number_id") == phone_number_id for r in rows):
+            raise HTTPException(status_code=404, detail="That number isn't one of this business's.")
+        q = q.eq("phone_number_id", phone_number_id)
+    q.execute()
     from vula.api import whatsapp as wa
-    wa._forget_wa_number(tenant_id, (rows[0].get("phone_number_id") if rows else None))
-    _HEALTH_CACHE.pop(tenant_id, None)
-    return {"tenant_id": tenant_id, "status": "disconnected"}
+    for r in rows:
+        wa._forget_wa_number(tenant_id, r.get("phone_number_id"))
+    _forget_health(tenant_id)
+    left = [r for r in rows if r.get("status") == "connected" and phone_number_id
+            and r.get("phone_number_id") != phone_number_id]
+    was_main = (nums.main_row(rows) or {}).get("phone_number_id") == phone_number_id
+    if left and was_main:
+        _make_main(db, tenant_id, nums.main_row([{**r, "is_primary": False} for r in left])["phone_number_id"])
+    return {"tenant_id": tenant_id, "status": "connected" if left else "disconnected",
+            "phone_number_id": phone_number_id}
+
+
+class NumberUpdate(BaseModel):
+    purpose: Optional[str] = None
+    is_primary: Optional[bool] = None
+    label: Optional[str] = None
+
+
+@router.patch("/numbers/{tenant_id}/{phone_number_id}")
+async def update_number(tenant_id: str, phone_number_id: str, body: NumberUpdate):
+    """Change what one of a business's numbers is for, its name, or make it the main number.
+    Takes effect from the next message (both workers within the route cache's 2 minutes)."""
+    from vula import whatsapp_numbers as nums
+    db = _supabase()
+    rows = nums.rows_for(tenant_id, db)
+    row = next((r for r in rows if r.get("phone_number_id") == phone_number_id
+                and r.get("status") == "connected"), None)
+    if not row:
+        raise HTTPException(status_code=404, detail="That number isn't connected to this business.")
+    main_pnid = (nums.main_row(rows) or {}).get("phone_number_id")
+    becomes_main = body.is_primary is True or main_pnid == phone_number_id
+    purpose = body.purpose if body.purpose is not None else nums.purpose_of(row)
+    if purpose not in nums.PURPOSES:
+        raise HTTPException(status_code=422, detail=f"Purpose must be one of: {', '.join(nums.PURPOSES)}.")
+    if purpose == "team" and becomes_main:
+        raise HTTPException(status_code=409, detail="Customers get Vula's own messages (order updates, "
+                            "reminders) from the main number, so it can't be team-only. Make another "
+                            "number the main one first.")
+    patch: dict = {}
+    if body.purpose is not None:
+        patch.update({"purpose": purpose, "route_mode": nums.PURPOSES[purpose]})
+    if body.label is not None:
+        patch["label"] = body.label.strip()[:60] or None
+    try:
+        if patch:
+            db.table("vula_whatsapp_accounts").update(patch).eq("tenant_id", tenant_id) \
+                .eq("phone_number_id", phone_number_id).execute()
+        if body.is_primary is True and main_pnid != phone_number_id:
+            _make_main(db, tenant_id, phone_number_id)
+    except Exception as exc:
+        log.warning("number update failed (migration 225 applied?): %s", exc)
+        raise HTTPException(status_code=503, detail="Couldn't save that just now — try again in a minute.")
+    from vula.api import whatsapp as wa
+    wa._forget_wa_number(tenant_id, phone_number_id)
+    log.info("WhatsApp number %s of %s updated: %s%s", phone_number_id, tenant_id, patch,
+             " (now main)" if body.is_primary else "")
+    fresh = nums.rows_for(tenant_id, db)
+    new_main = (nums.main_row(fresh) or {}).get("phone_number_id")
+    out = next((r for r in fresh if r.get("phone_number_id") == phone_number_id), row)
+    return nums.public(out, new_main)
+
+
+def _make_main(db, tenant_id: str, phone_number_id: str) -> None:
+    """At most one main number per business (migration 225's partial unique index): clear the
+    business's mark, then set it on this number."""
+    db.table("vula_whatsapp_accounts").update({"is_primary": False}).eq("tenant_id", tenant_id).execute()
+    db.table("vula_whatsapp_accounts").update({"is_primary": True}).eq("tenant_id", tenant_id) \
+        .eq("phone_number_id", phone_number_id).execute()
+
+
+def _default_purpose(tenant_id: str) -> str:
+    """A new number's purpose when none was chosen: the business's usual kind of line."""
+    try:
+        from vula.api.tenants import _effective_modules, get_config
+        return "shop" if "orders" in _effective_modules(get_config(tenant_id, fresh=True) or {}) else "assistant"
+    except Exception:
+        return "shop"
+
+
+def save_number(db, tenant_id: str, phone_number_id: str, record: dict, *, purpose: Optional[str] = None,
+                extra: Optional[dict] = None) -> None:
+    """Store a connected number as one of the business's numbers (one row per phone_number_id).
+    A new number gets `purpose` (else the business's usual kind) and becomes the main number when
+    the business has no other connected number; a reconnected one keeps its purpose unless a new
+    one is given. Before migration 225 (one number per business) it is stored the old way."""
+    from vula import whatsapp_numbers as nums
+    rows = nums.rows_for(tenant_id, db)
+    existing = next((r for r in rows if r.get("phone_number_id") == phone_number_id), None)
+    others = [r for r in rows if r.get("phone_number_id") != phone_number_id]
+    if purpose not in nums.PURPOSES:
+        purpose = None
+    if purpose is None and not existing:
+        purpose = _default_purpose(tenant_id)
+    if purpose == "team" and not nums.connected(others):
+        purpose = _default_purpose(tenant_id)      # a business's only number serves its customers
+    full = {**record, **(extra or {})}
+    if purpose:
+        full.update({"purpose": purpose, "route_mode": nums.PURPOSES[purpose]})
+    try:
+        db.table("vula_whatsapp_accounts").upsert(full, on_conflict="phone_number_id").execute()
+        if not nums.connected(others):
+            _make_main(db, tenant_id, phone_number_id)
+        return
+    except Exception as exc:
+        log.warning("number stored the one-per-business way (migration 225 not applied?): %s", exc)
+    legacy = {**record, **({"route_mode": full["route_mode"]} if "route_mode" in full else {})}
+    try:
+        db.table("vula_whatsapp_accounts").upsert({**legacy, **(extra or {})}, on_conflict="tenant_id").execute()
+    except Exception as exc:       # migration 223 not applied either
+        log.warning("coexistence columns missing (run migration 223): %s", exc)
+        db.table("vula_whatsapp_accounts").upsert(legacy, on_conflict="tenant_id").execute()
 
 
 # ── Number health (2026-10-24, EZContact brief PR 4) ──────────────────────────
@@ -359,17 +467,27 @@ def health_summary(meta: dict) -> dict:
             "name": meta.get("verified_name") or "", "status": meta.get("status") or ""}
 
 
+def _forget_health(tenant_id: str) -> None:
+    for key in [k for k in _HEALTH_CACHE if k == tenant_id or (isinstance(k, tuple) and k[0] == tenant_id)]:
+        _HEALTH_CACHE.pop(key, None)
+
+
 @router.get("/health/{tenant_id}")
-async def whatsapp_health(tenant_id: str):
+async def whatsapp_health(tenant_id: str, phone_number_id: Optional[str] = None):
+    """What Meta says about one of the business's numbers (phone_number_id), else its main one."""
     import time as _t
-    hit = _HEALTH_CACHE.get(tenant_id)
+    key = (tenant_id, phone_number_id or "")
+    hit = _HEALTH_CACHE.get(key)
     if hit and _t.time() - hit[0] < _HEALTH_TTL:
         return hit[1]
+    from vula import whatsapp_numbers as nums
     from vula.api import whatsapp as wa
-    creds = await wa._get_tenant_wa_creds(tenant_id)
-    rows = (_supabase().table("vula_whatsapp_accounts").select("status,phone_number_id")
-            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
-    if not creds or not rows or rows[0].get("status") != "connected":
+    rows = nums.rows_for(tenant_id, _supabase())
+    row = nums.pick(rows, phone_number_id) if (phone_number_id or rows) else None
+    if phone_number_id and row and row.get("phone_number_id") != phone_number_id:
+        row = None
+    creds = await wa._get_tenant_wa_creds(tenant_id, (row or {}).get("phone_number_id"))
+    if not creds or not row:
         return {"tenant_id": tenant_id, "connected": False, "rows": []}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -384,7 +502,7 @@ async def whatsapp_health(tenant_id: str):
         log.info("number health read failed for %s: %s", tenant_id, type(exc).__name__)
         return {"tenant_id": tenant_id, "connected": True, "rows": [],
                 "error": "Meta didn't answer just now — try again in a minute."}
-    _HEALTH_CACHE[tenant_id] = (_t.time(), out)
+    _HEALTH_CACHE[key] = (_t.time(), out)
     return out
 
 
@@ -400,7 +518,7 @@ class LinkNumberError(ValueError):
 
 
 async def link_existing_number(tenant_id: str, phone_number_id: str, pin: Optional[str] = None,
-                               linked_by: Optional[str] = None) -> dict:
+                               linked_by: Optional[str] = None, purpose: Optional[str] = None) -> dict:
     """Link a number already on one of Vula's WhatsApp Business Accounts to a tenant. Registers it
     for the Cloud API when Meta says it isn't yet and a two-step PIN is given (the PIN is passed
     to Meta and never stored or logged)."""
@@ -441,11 +559,9 @@ async def link_existing_number(tenant_id: str, phone_number_id: str, pin: Option
             if not reg.is_success:
                 err = ((reg.json() if reg.content else {}).get("error") or {}).get("message") or reg.text[:200]
                 raise LinkNumberError(f"Meta refused to register the number: {err}")
-    try:
-        from vula.api.tenants import _effective_modules, get_config
-        mode = "commerce" if "orders" in _effective_modules(get_config(tenant_id, fresh=True) or {}) else "knowledge"
-    except Exception:
-        mode = "commerce"
+    from vula import whatsapp_numbers as nums
+    purpose = purpose if purpose in nums.PURPOSES else _default_purpose(tenant_id)
+    mode = nums.PURPOSES[purpose]
     from datetime import datetime, timezone
     record = {"tenant_id": tenant_id, "waba_id": found_waba, "phone_number_id": pnid,
               "phone_number": phone.get("display_phone_number") or "",
@@ -453,7 +569,7 @@ async def link_existing_number(tenant_id: str, phone_number_id: str, pin: Option
               "token_type": "system", "status": "connected", "route_mode": mode,
               "webhook_registered": True, "connected_by": linked_by,
               "connected_at": datetime.now(timezone.utc).isoformat()}
-    db.table("vula_whatsapp_accounts").upsert(record, on_conflict="tenant_id").execute()
+    save_number(db, tenant_id, pnid, record, purpose=purpose)
     # Forget anything cached about this number or tenant so the next message routes and replies right.
     from vula.api import whatsapp as wa
     wa._forget_wa_number(tenant_id, pnid)

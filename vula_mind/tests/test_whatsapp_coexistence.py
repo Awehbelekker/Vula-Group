@@ -258,18 +258,15 @@ async def test_a_new_number_is_registered_as_before_and_nothing_is_synced(db, me
 
 @pytest.mark.asyncio
 async def test_connect_still_works_before_migration_223(db, meta):
-    db.refuse["vula_whatsapp_accounts"] = 'column "coexistence" does not exist'
-    calls = {"n": 0}
     real = _Q.execute
+    new_cols = ("coexistence", "history_sync", "purpose", "is_primary")
 
-    def once(self):                          # the first write (with the new columns) is refused
-        if self.table == "vula_whatsapp_accounts" and self.op == "upsert":
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError(db.refuse[self.table])
-            db.refuse.pop(self.table, None)
+    def old_table(self):                     # a write naming a column the table lacks is refused
+        if self.table == "vula_whatsapp_accounts" and self.op in ("upsert", "update") \
+                and any(c in (self.payload or {}) for c in new_cols):
+            raise RuntimeError('column "coexistence" does not exist')
         return real(self)
-    _Q.execute = once
+    _Q.execute = old_table
     try:
         out = await whatsapp_connect.connect_whatsapp(whatsapp_connect.ConnectRequest(
             tenant_id=SHOP, code="c", waba_id="W1", phone_number_id="P1", coexistence=True))
