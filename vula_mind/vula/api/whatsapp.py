@@ -6681,6 +6681,14 @@ async def _kb_pick_reply(tenant_id: str, phone: str, text: str, caller_name: Opt
         if not pick:
             kb_learning.note_feedback(tenant_id, phone, text)
             return None
+        # A field of a money document ("when is it due?") is read off the filed record.
+        from vula import kb_records
+        exact = kb_records.answer_for_doc(tenant_id, pick["question"], pick["doc_id"])
+        if exact:
+            kb_learning.record_turn(tenant_id, phone, role=caller_role, question=pick["question"],
+                                    outcome="answered", answer_docs=[pick["doc_id"]],
+                                    skill="filed_records")
+            return exact
         out = await _run_with_holding_message(phone, tenant_id, kb_learning.answer_pinned(
             tenant_id, pick, {"customer_phone": phone, "session_id": f"admin:{phone}",
                               "caller_name": caller_name, "caller_role": caller_role},
@@ -6798,6 +6806,18 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
                         return out.answer
                 except Exception as exc:
                     logger.warning("follow-up to %s fell through: %s", sticky, exc)
+        # 0b'. One field of one money document ("When is the Solid Cape invoice due?", "Atlantis's
+        # VAT number") — read off the filed record, or "Which one?" (vula/kb_records.py).
+        try:
+            from vula import kb_records
+            record_reply = await kb_records.answer(tenant_id, question, who=phone, role=caller_role)
+        except Exception as exc:
+            logger.debug("filed-record answer skipped: %s", exc)
+            record_reply = None
+        if record_reply:
+            _LAST_CONF.set(0.95)
+            _note_route("filed_records")
+            return record_reply
         # 0c. "Is there stock of X?" against the distributor stock sheet (Gerflor) — from the rows.
         from core.skills.commerce_admin import _stock_sheet_answer
         stock = _stock_sheet_answer(tenant_id, question)
@@ -8761,6 +8781,13 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
 
     # "Which one?" answered: the original question, from the picked document (vula/kb_learning.py).
     picked = await _kb_pick_reply(tenant_id, phone, text, caller_name, caller_role, history)
+    if not picked and _is_insider(caller_role):
+        # One field of one money document, read off the filed record (vula/kb_records.py).
+        try:
+            from vula import kb_records
+            picked = await kb_records.answer(tenant_id, text, who=phone, role=caller_role)
+        except Exception as exc:
+            logger.debug("filed-record answer skipped: %s", exc)
     if picked:
         await _send_reply(phone, picked, tenant_id)
         if session_id:
