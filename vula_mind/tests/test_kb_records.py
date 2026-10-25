@@ -135,3 +135,8 @@ def test_a_pick_is_answered_from_that_documents_fields():
     with patch("vula.commerce.service._client", return_value=MagicMock(table=lambda n: q)):
         assert kr.answer_for_doc(T, "What's the total on the Solid Cape invoice?", "sc2") == \
             "Invoice 00097493 from SOLID CAPE (PTY) LTD, 15 Oct 2026: total R11 259.31."
+
+
+def test_an_upload_timestamp_is_not_a_document_number():
+    row = _row("u", "Invoice - DIY 20261020-0724.jpg", "Invoice", "DIY", "2026-10-20", 186980)
+    assert kr.describe(row) == "Invoice from DIY, 20 Oct 2026"

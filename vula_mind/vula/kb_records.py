@@ -145,6 +145,8 @@ def _filename_number(filename: str) -> Optional[str]:
     """"Invoice_DO_IT_YOURSELF_HARDWARE_INV782520.PDF" -> "INV782520", "00097750.pdf" -> "00097750".
     Most extractions leave invoice_no empty; the number is usually in the file's name."""
     stem = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", filename or "")
+    # A WhatsApp upload is filed as "<Kind> - <Party> 20261019-0947": that's the upload time.
+    stem = re.sub(r"\b20\d{6}-\d{4}\b", " ", stem)
     nums = re.findall(r"[A-Za-z]{0,4}\d[\d\-]{3,}", stem)
     return nums[-1] if nums else None
 
