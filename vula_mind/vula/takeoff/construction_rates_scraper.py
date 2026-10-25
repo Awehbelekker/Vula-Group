@@ -208,7 +208,9 @@ class RateExtractor:
                         "model": LLM_MODEL,
                         "prompt": extraction_prompt,
                         "stream": False,
-                        "options": {"temperature": 0.1, "num_predict": 2048},
+                        # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx
+                        # cap (core/llm_router.py) — set it explicitly here too.
+                        "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 8192},
                     },
                 )
                 resp.raise_for_status()

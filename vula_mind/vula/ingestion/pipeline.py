@@ -235,7 +235,11 @@ class OCRProcessor:
             "prompt": prompt,
             "images": [image_b64],
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 4096},
+            # 2026-10-25: this call bypasses litellm entirely (raw httpx to Ollama's own API), so
+            # it was NOT covered by core/llm_router.py's install_ollama_auth num_ctx cap — it
+            # silently inherited whatever OLLAMA_CONTEXT_LENGTH the Ollama app's own settings had
+            # (observed at 262144 in the 2026-10-24 eviction incident). Set it explicitly here too.
+            "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
         }
 
         local_text = ""
@@ -712,7 +716,11 @@ class EmbeddingEngine:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{self.ollama_base}/api/embeddings",
-                json={"model": self.model, "prompt": text},
+                # 2026-10-25: raw httpx to Ollama, bypassing litellm's install_ollama_auth num_ctx
+                # cap — same gap as process_image's OCR call above. chunk_size (512) never needs
+                # anywhere near 8192, but set it explicitly so this never depends on the Ollama
+                # app's own context-length setting either.
+                json={"model": self.model, "prompt": text, "options": {"num_ctx": 8192}},
             )
             resp.raise_for_status()
             embedding = resp.json().get("embedding", [])
@@ -2023,12 +2031,14 @@ class VulaIngestionPipeline:
             )
             raw = resp.choices[0].message.content or ""
         except Exception:
-            # Fallback to direct Ollama HTTP if litellm fails
+            # Fallback to direct Ollama HTTP if litellm fails — bypasses install_ollama_auth's
+            # num_ctx cap same as the other raw-httpx Ollama calls in this file, so set it here too.
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
                     f"{OLLAMA_BASE}/api/generate",
                     json={"model": settings.model_worker, "prompt": f"{system_msg}\n\n{user_msg}",
-                          "stream": False, "options": {"temperature": 0.3, "num_predict": 1024}},
+                          "stream": False,
+                          "options": {"temperature": 0.3, "num_predict": 1024, "num_ctx": 8192}},
                 )
                 r.raise_for_status()
                 raw = r.json().get("response", "")
