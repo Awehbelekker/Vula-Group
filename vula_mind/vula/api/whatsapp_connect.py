@@ -68,6 +68,10 @@ class ConnectRequest(BaseModel):
     # What the number is for (vula/whatsapp_numbers.py: shop | bookings | assistant | team).
     # None keeps a reconnected number's purpose; a new one gets the business's usual kind.
     purpose: Optional[str] = None
+    # Moving a number from Vula's own WhatsApp Business Account to the business's own (Meta moves
+    # it when the owner enters it in Embedded Signup; it keeps working throughout, with its
+    # display name, quality and limits): the phone_number_id of the number on Vula's account.
+    move_phone_number_id: Optional[str] = None
 
 
 class ConnectResponse(BaseModel):
@@ -79,6 +83,8 @@ class ConnectResponse(BaseModel):
     status: str
     webhook_registered: bool
     coexistence: bool = False
+    moved: Optional[bool] = None          # set when this connect was a move
+    move_note: Optional[str] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -94,6 +100,17 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
     """
     app_id = settings.vula_fb_app_id
     app_secret = settings.vula_fb_app_secret
+
+    # A move: the number must be this business's and on Vula's own account (no token of its own).
+    moving = None
+    if body.move_phone_number_id:
+        from vula import whatsapp_numbers as nums
+        moving = next((r for r in nums.rows_for(body.tenant_id, _supabase())
+                       if r.get("phone_number_id") == body.move_phone_number_id
+                       and r.get("status") == "connected" and not r.get("access_token")), None)
+        if not moving:
+            raise HTTPException(status_code=400, detail="Only a number on Vula's WhatsApp account can be "
+                                "moved to yours, and this one isn't.")
 
     if not app_id or not app_secret:
         raise HTTPException(
@@ -178,17 +195,27 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
                        "Please verify the phone number in Meta Business Manager first.",
             )
 
+        # A move must end with the number the owner meant: Meta connects whatever was entered.
+        if moving and _digits(phone_number) != _digits(moving.get("phone_number")):
+            raise HTTPException(status_code=409, detail=(
+                f"Meta connected {phone_number or 'a different number'}, not {moving.get('phone_number')}, "
+                f"so nothing was moved. Start again and enter {moving.get('phone_number')} in the Meta window."))
+
         # Step 2c — register the number for Cloud API messaging (a number added through Embedded
         # Signup can't send until it is). Behind a flag until tested live: registering sets the
         # number's two-step PIN, so it needs WHATSAPP_REGISTRATION_PIN, and fails harmlessly on
         # a number that's already registered with a different PIN.
         # Never for a number shared with the WhatsApp Business app: it's already registered, and
         # registering it for the Cloud API alone would take it off the owner's phone.
-        if (settings.whatsapp_register_on_connect and settings.whatsapp_registration_pin
+        # A moved number is always registered: that is what completes Meta's move (until then
+        # it keeps sending from Vula's account).
+        registered = None
+        if (((settings.whatsapp_register_on_connect or moving) and settings.whatsapp_registration_pin)
                 and not body.coexistence):
             reg = await client.post(f"{GRAPH_BASE}/{phone_number_id}/register", headers=auth_headers,
                                     json={"messaging_product": "whatsapp",
                                           "pin": settings.whatsapp_registration_pin})
+            registered = reg.is_success
             if reg.is_success:
                 log.info("Registered phone %s for Cloud API", phone_number_id)
             else:
@@ -229,8 +256,51 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         "connected_by": body.connected_by,
         "connected_at": "now()",
     }
-    save_number(db, body.tenant_id, phone_number_id, record, purpose=body.purpose,
+    from vula import whatsapp_numbers as nums
+    purpose = nums.purpose_of(moving) if moving else body.purpose
+    if moving and moving.get("label"):
+        record["label"] = moving["label"]
+    save_number(db, body.tenant_id, phone_number_id, record, purpose=purpose,
                 extra={"coexistence": body.coexistence, "history_sync": history_sync})
+    moved, move_note = None, None
+    if moving:
+        old_pnid = moving["phone_number_id"]
+        if old_pnid != phone_number_id:
+            # Meta gave the moved number a new id: the Vula-account row is retired, and the new one
+            # takes over its place as the main number when it was.
+            was_main = (nums.main_row(nums.rows_for(body.tenant_id, db)) or {}).get("phone_number_id") == old_pnid
+            db.table("vula_whatsapp_accounts").update({"status": "disconnected", "access_token": None}) \
+                .eq("tenant_id", body.tenant_id).eq("phone_number_id", old_pnid).execute()
+            if was_main:
+                try:
+                    _make_main(db, body.tenant_id, phone_number_id)
+                except Exception as exc:       # before migration 225: one row per business anyway
+                    log.info("main number not marked (migration 225?): %s", exc)
+            wa_forget = old_pnid
+        else:
+            wa_forget = None
+        moved = registered is True
+        if moved:
+            move_note = "Moved: the number is on your own Meta account now, and nothing changed for your customers."
+        else:
+            told = False
+            try:
+                from vula.integrations.platform_support import alert_operator
+                told = await alert_operator(
+                    f"WhatsApp move not finished: {moving.get('phone_number')} ({body.tenant_id}) is on their own "
+                    f"account (WABA {waba_id}, number id {phone_number_id}) but isn't registered there yet"
+                    f"{'' if settings.whatsapp_registration_pin else ' — WHATSAPP_REGISTRATION_PIN is not set'}.")
+            except Exception as exc:  # noqa: BLE001
+                log.info("move alert not sent: %s", exc)
+            move_note = ("The number is on your own Meta account, but Meta hasn't finished switching it over yet. "
+                         + ("Vula has been told and will finish it for you. " if told else
+                            "Please tell Vula so it can finish it. ")
+                         + "Until then it keeps working as before.")
+        log.info("WhatsApp number %s moved to %s's own account (waba %s, new id %s, registered %s)",
+                 moving.get("phone_number"), body.tenant_id, waba_id, phone_number_id, registered)
+        if wa_forget:
+            from vula.api import whatsapp as _wa
+            _wa._forget_wa_number(body.tenant_id, wa_forget)
     # The new token is used from the next message on, not after a restart.
     from vula.api import whatsapp as wa
     wa._forget_wa_number(body.tenant_id, phone_number_id)
@@ -259,6 +329,8 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         status="connected",
         webhook_registered=webhook_registered,
         coexistence=body.coexistence,
+        moved=moved,
+        move_note=move_note,
     )
 
 
@@ -380,6 +452,10 @@ def _make_main(db, tenant_id: str, phone_number_id: str) -> None:
     db.table("vula_whatsapp_accounts").update({"is_primary": False}).eq("tenant_id", tenant_id).execute()
     db.table("vula_whatsapp_accounts").update({"is_primary": True}).eq("tenant_id", tenant_id) \
         .eq("phone_number_id", phone_number_id).execute()
+
+
+def _digits(v) -> str:
+    return "".join(ch for ch in str(v or "") if ch.isdigit())
 
 
 def _default_purpose(tenant_id: str) -> str:

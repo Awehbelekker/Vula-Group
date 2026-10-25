@@ -989,6 +989,20 @@ test("settings: several WhatsApp numbers — what each is for, the main one, and
   await check(page, test.info(), "settings-wa-numbers", "mobile-light", VIEWPORTS.mobile);
 });
 
+test("settings: a number on Vula's account can be moved to the owner's own Meta account", async ({ page }) => {
+  await openScreen(page, SETTINGS, { viewport: VIEWPORTS.mobile, theme: "dark" });
+  await page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson(NUMBERS));
+  await settingsSection(page, "WhatsApp number");
+  // only P2 is on Vula's own account
+  await expect(page.getByRole("button", { name: /to my own Meta account/ })).toHaveCount(1);
+  await page.getByRole("button", { name: "Move +27 82 000 0002 to my own Meta account" }).click();
+  const steps = page.getByRole("list", { name: "Before you move +27 82 000 0002" });
+  await expect(steps.getByRole("listitem")).toHaveCount(4);
+  await expect(steps).toContainText("two-step PIN");
+  await expect(page.getByRole("button", { name: "Start the move" })).toBeDisabled();   // no VITE_FB_CONFIG_ID in tests
+  await check(page, test.info(), "settings-wa-move", "mobile-dark", VIEWPORTS.mobile);
+});
+
 test("settings: disconnecting one of several numbers asks about that number only", async ({ page }) => {
   await openScreen(page, SETTINGS, { viewport: VIEWPORTS.tablet, theme: "dark" });
   await page.route(/\/v1\/whatsapp\/connect\/status\/[^/]+$/, okJson(NUMBERS));

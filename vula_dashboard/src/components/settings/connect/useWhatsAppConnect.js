@@ -48,6 +48,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   const [health, setHealth] = useState(null)   // { rows: [{label, value, tone}], error? }
 
   const [busyNumber, setBusyNumber] = useState(null)
+  const [notice, setNotice] = useState(null)   // what a move to the owner's own Meta account did
 
   // Load current connection status
   const reload = useCallback(() => {
@@ -117,7 +118,8 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   // mode 'app': keep the WhatsApp Business app number the business already uses (Meta's
   // coexistence: the app stays on the owner's phone, Vula answers on the same number). mode 'new':
   // a number that isn't on WhatsApp yet.
-  const handleConnect = useCallback((mode = 'app', purpose = null) => {
+  // extra: { move_phone_number_id } to move a number from Vula's WhatsApp account to the owner's own.
+  const handleConnect = useCallback((mode = 'app', purpose = null, extra = null) => {
     if (!FB_CONFIG_ID) {
       setError("WhatsApp signup isn't set up on this dashboard yet — ask Vula to link the number for you.")
       return
@@ -129,6 +131,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
 
     setLoading(true)
     setError(null)
+    setNotice(null)
     sessionInfo.current = null
     cancelled.current = null
 
@@ -154,6 +157,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
               // Meta's own finish event says which it was; the chosen option only when it didn't say
               coexistence: sessionInfo.current ? Boolean(sessionInfo.current.coexistence) : mode === 'app',
               ...(purpose ? { purpose } : {}),
+              ...(extra || {}),
             }),
           })
 
@@ -165,6 +169,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
           const data = await result.json()
           setAccount(data)
           setStatus('connected')
+          if (data.move_note) setNotice(data.move_note)
           reload()                                  // the full list, with the new number in it
         } catch (err) {
           setError(err.message)
@@ -228,6 +233,6 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
     setAccount(null)
   }
 
-  return { status, account, numbers: numbersOf(account), health, loading, error, busyNumber,
+  return { status, account, numbers: numbersOf(account), health, loading, error, notice, busyNumber,
     handleConnect, handleDisconnect, updateNumber, disconnectNumber }
 }

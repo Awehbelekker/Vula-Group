@@ -27,6 +27,7 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
   const { status, account, loading, error, handleConnect } = x
   const [adding, setAdding] = useState(false)
   const [newPurpose, setNewPurpose] = useState('team')
+  const [moving, setMoving] = useState(null)
   const off = loading || !FB_APP_ID || !FB_CONFIG_ID
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -72,6 +73,7 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
           {error}
         </div>
       )}
+      {x.notice && <div role="status" style={{ ...styles.warningBox, color: 'var(--ink)' }}>{x.notice}</div>}
 
       {status !== 'connected' ? (
         <div>
@@ -138,9 +140,24 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
                     <button style={styles.btnGhost} disabled={x.busyNumber === n.phone_number_id}
                       onClick={() => x.updateNumber(n.phone_number_id, { is_primary: true })}
                       aria-label={`Make ${n.phone_number} the main number`}>Make main</button>)}
+                  {n.on_vula_account && n.phone_number_id && (
+                    <button style={styles.btnGhost} onClick={() => setMoving(moving === n.phone_number_id ? null : n.phone_number_id)}
+                      aria-expanded={moving === n.phone_number_id}
+                      aria-label={`Move ${n.phone_number} to my own Meta account`}>Move to my Meta account</button>)}
                   <button onClick={() => x.disconnectNumber(n)} disabled={loading || x.busyNumber === n.phone_number_id}
                     style={styles.btnDanger} aria-label={`Disconnect ${n.phone_number}`}>Disconnect</button>
                 </div>
+                {moving === n.phone_number_id && (
+                  <div style={styles.connectedInfo}>
+                    <p style={{ ...styles.description, margin: '0 0 8px' }}>
+                      {n.phone_number} is on Vula’s WhatsApp account. To make it yours: your business must be verified in Meta
+                      with a payment method; ask Vula to switch off the number’s two-step PIN; keep the SIM nearby for Meta’s
+                      code; then enter {n.phone_number} in the Meta window. It keeps working the whole time.
+                    </p>
+                    <button onClick={() => handleConnect('new', null, { move_phone_number_id: n.phone_number_id })} disabled={off}
+                      style={off ? styles.btnDisabled : styles.btn}>{loading ? 'Moving…' : 'Start the move'}</button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
