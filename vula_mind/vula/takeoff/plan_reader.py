@@ -207,7 +207,9 @@ class PDFReader:
             ),
             "images": [img_b64],
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 4096},
+            # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx cap
+            # (core/llm_router.py) — set it explicitly here too.
+            "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
         }
         try:
             async with httpx.AsyncClient(timeout=90.0) as client:
@@ -549,8 +551,10 @@ class DrawingIntelligence:
             async with httpx.AsyncClient(timeout=90.0) as client:
                 resp = await client.post(
                     f"{OLLAMA_BASE}/api/generate",
+                    # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx cap
+                    # (core/llm_router.py) — set it explicitly here too.
                     json={"model": model, "prompt": prompt, "stream": False,
-                          "options": {"temperature": 0.1, "num_predict": 2048}},
+                          "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 8192}},
                 )
                 resp.raise_for_status()
                 raw = resp.json().get("response", "")
