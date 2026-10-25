@@ -178,3 +178,18 @@ async def run(tenants: List[str], revert: bool = False, dry_run: bool = False) -
     return {"by_tenant": by,
             "summary": {t: {k: v.get(k) for k in ("points", "todo", "done", "failed", "error", "stopped")
                             if v.get(k) is not None} for t, v in by.items()}}
+
+
+async def forget_labels(tenant_id: str, doc_id: str) -> None:
+    """Clear one document's label markers so the next night relabels it (its details changed)."""
+    from vula.ingestion.pipeline import QdrantStore
+    store = QdrantStore()
+    name = store._collection_name(tenant_id)
+    try:
+        async with httpx.AsyncClient(timeout=30.0, headers=store._headers()) as client:
+            await client.post(f"{store.base}/collections/{name}/points/payload/delete",
+                              params={"wait": "true"},
+                              json={"keys": ["ctx_v"],
+                                    "filter": {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("forget_labels skipped for %s: %s", doc_id, exc)

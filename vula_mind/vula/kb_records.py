@@ -60,14 +60,27 @@ _GENERIC_PARTY = {
     "general", "store", "stores", "shop", "sales", "projects", "construction", "products", "cape",
     "town", "johannesburg", "durban", "seafood", "fishing", "foods",
 }
-_ID_KEYS = ("invoice_no", "invoice_number", "tax_invoice_number", "quote_no", "document_no", "doc_no",
+_ID_KEYS = ("document_number", "invoice_no", "invoice_number", "tax_invoice_number", "quote_no", "document_no", "doc_no",
             "reference", "order_number", "order_no", "delivery_note_no", "delivery_note_number",
             "customer_ref", "statement_number", "payment_reference")
 _DUE_KEYS = ("due_date", "payment_due_date", "due_by")
 _DATE_KEYS = ("invoice_date", "date", "quote_date", "document_date", "doc_date", "payment_date",
               "delivery_date")
-_VAT_KEYS = ("vat_number", "vat_no", "vat_reg_no", "supplier_vat_number", "vendor_vat_number",
+_VAT_KEYS = ("tax_id", "supplier_vat_number", "vat_number", "vat_no", "vat_reg_no", "vendor_vat_number",
              "supplier_vat_reg_no", "vendor_vat", "vendor_vat_no")
+
+
+def own_vat_numbers(rows: List[Dict[str, Any]]) -> set:
+    """VAT numbers on the invoices of 3+ different suppliers: the business's own (its number is
+    printed as the customer's), which older reads sometimes stored as the supplier's."""
+    seen: Dict[str, set] = {}
+    for r in rows:
+        f = r.get("fields") or {}
+        for k in _VAT_KEYS:
+            v = re.sub(r"\D", "", str(f.get(k) or ""))
+            if v:
+                seen.setdefault(v, set()).add(_norm(_party(f)))
+    return {v for v, parties in seen.items() if len(parties - {""}) >= 3}
 _PARTY_KEYS = ("supplier", "supplier_name", "vendor", "vendor_name", "payee_name", "payee",
                "customer", "client")
 
@@ -205,7 +218,7 @@ def match_documents(rows: List[Dict[str, Any]], question: str,
     return rows
 
 
-def field_reply(row: Dict[str, Any], field: str) -> Optional[str]:
+def field_reply(row: Dict[str, Any], field: str, own_vats: Optional[set] = None) -> Optional[str]:
     """The asked field of one document, worded by code — or None when the record doesn't hold it."""
     from vula.commerce.service import _document_amount_cents
     f = row.get("fields") or {}
@@ -230,7 +243,8 @@ def field_reply(row: Dict[str, Any], field: str) -> Optional[str]:
         num = _first(f, _ID_KEYS)
         return f"{src}: number {num}." if num else None
     if field == "vat_no":
-        v = _first(f, _VAT_KEYS)
+        v = next((f[k] for k in _VAT_KEYS if f.get(k) not in (None, "")
+                  and re.sub(r"\D", "", str(f[k])) not in (own_vats or set())), None)
         return f"{_party(f) or src}: VAT number {v} (from {src})." if v else None
     if field == "bank":
         b = _bank(f)
@@ -240,6 +254,11 @@ def field_reply(row: Dict[str, Any], field: str) -> Optional[str]:
 
 
 def _bank(f: Dict[str, Any]) -> Optional[str]:
+    sb = f.get("supplier_bank")
+    if isinstance(sb, dict) and sb.get("account_number") and sb.get("bank_name"):
+        out = f"{sb['bank_name']}, account {sb['account_number']}"
+        out += f" ({sb['account_name']})" if sb.get("account_name") else ""
+        return out + (f", branch code {sb['branch_code']}" if sb.get("branch_code") else "")
     acct = f.get("supplier_bank_account_number") or f.get("bank_account_number") or f.get("accountNo")
     bank = f.get("supplier_bank_name") or f.get("bank_name") or f.get("bank")
     if not acct and bank and f.get("account_number"):
@@ -286,7 +305,8 @@ async def answer(tenant_id: str, question: str, who: str = "", role: Optional[st
         return None
     if not docs:
         return None
-    replies = [(d, field_reply(d, field)) for d in docs]
+    own = own_vat_numbers(rows) if field == "vat_no" else set()
+    replies = [(d, field_reply(d, field, own)) for d in docs]
     replies = [(d, r) for d, r in replies if r]
     if not replies:
         return None

@@ -148,7 +148,7 @@ async def test_nightly_runs_once_in_the_window_and_measures_when_something_chang
     monkeypatch.setattr(km, "_last_done", lambda job: None)
     assert await km.context_nightly(datetime(2026, 10, 25, 14, tzinfo=timezone.utc)) is None   # daytime
     await km.context_nightly(datetime(2026, 10, 25, 23, 30, tzinfo=timezone.utc))
-    assert jobs == ["contextualize", "retrieval_diag_ctx"]
+    assert jobs == ["enrich_documents", "contextualize", "retrieval_diag_ctx"]
     monkeypatch.setattr(km, "_last_done", lambda job: datetime(2026, 10, 25, 23, 31, tzinfo=timezone.utc))
     assert await km.context_nightly(datetime(2026, 10, 26, 0, 30, tzinfo=timezone.utc)) is None
 
