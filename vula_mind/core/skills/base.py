@@ -698,7 +698,7 @@ _OWNER_ADMIN_RE = re.compile(
     # "Can you track all payment for Rudolf on the statements" went to a document search (26 Oct)
     # — anything about payments on the bank statements is the admin agent's bank_payments.
     r"\bpayments?\b.{0,40}\b(?:state?ments?|bank)\b|\b(?:on|in) the (?:bank )?state?ments?\b|"
-    r"\btrack (?:all )?(?:the )?payments?\b|\bwhat (?:has|have|did)\s+\w+(?:\s\w+)?\s+paid\b|"
+    r"\btrack (?:all )?(?:the )?payments?\b|\b(?:move|re-?file|put)\b.{0,50}\b(?:bill|invoice|document|doc|slip|receipt|quote|boq)\b.{0,40}\b(?:to|under|on)\b|\b(?:move|re-?file)\s+[a-z]{2,5}-(?:bill|inv|qte)-\d+|\bwhat (?:has|have|did)\s+\w+(?:\s\w+)?\s+paid\b|"
     r"\bwho owes\b|\bwho (?:do|must|should) (?:i|we) (?:still )?pay\b|\b(?:do|must) (?:i|we) owe\b|"
     r"\bowes? (?:me|us)\b|\bwhat(?:'s| is) (?:still )?(?:owed|outstanding)\b|\bdebtors?\b|"
     r"\b(?:outstanding|unpaid|overdue) (?:invoices|bills|accounts)\b|"

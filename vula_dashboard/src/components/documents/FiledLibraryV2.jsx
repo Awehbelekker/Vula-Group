@@ -2,7 +2,8 @@
  * FiledLibraryV2.jsx — the redesigned filed-documents library (2026-10-19, UX redesign Phase F).
  * Same data and actions as VulaDocuments' FiledLibrary (documents/useDocuments.js useFiledLibrary):
  * search + category / project / customer / date filters, a grid of tiles (photos open in a Sheet,
- * other files in a new tab), "File under…" for documents waiting on a project, and Load more.
+ * other files in a new tab), "File under…" for documents waiting on a project, "Move to…" for one
+ * filed under the wrong project (2026-10-26), and Load more.
  * Used by Documents, a project's Documents tab and a customer's page under the redesign.
  */
 import { CalendarDays, FileText, FolderInput, ListChecks, User } from "lucide-react";
@@ -54,12 +55,13 @@ export default function FiledLibraryV2({ tenantId, customerPhone, defaultFiledBy
         </div>
       )}
 
+      {x.moveMsg && <p className="vdc-sub vdc-pad" role="status">{x.moveMsg}</p>}
       {loading && !docs.length && <div className="vdc-pad"><Skeleton lines={3} /></div>}
       {!loading && docs.length === 0 && <p className="vdc-empty">No documents match{customerPhone ? " this customer" : ""} yet.</p>}
 
       {docs.length > 0 && (
         <ul className="vdc-grid" aria-label={title}>
-          {docs.map((doc) => <DocTile key={doc.id} doc={doc} projects={x.projects} onAssign={x.assign} onOpenImage={x.setLightboxDoc} />)}
+          {docs.map((doc) => <DocTile key={doc.id} doc={doc} projects={x.projects} onAssign={x.assign} onMove={x.move} onOpenImage={x.setLightboxDoc} />)}
         </ul>
       )}
 
@@ -76,7 +78,7 @@ export default function FiledLibraryV2({ tenantId, customerPhone, defaultFiledBy
   );
 }
 
-function DocTile({ doc, projects, onAssign, onOpenImage }) {
+function DocTile({ doc, projects, onAssign, onMove, onOpenImage }) {
   const ext = extOf(doc.filename);
   const isImage = isImageDoc(doc);
   const open = () => (isImage ? onOpenImage(doc) : doc.file_url && window.open(doc.file_url, "_blank"));
@@ -102,6 +104,15 @@ function DocTile({ doc, projects, onAssign, onOpenImage }) {
           <Select defaultValue="" aria-label={`File ${doc.filename} under a project`} onChange={(e) => onAssign(doc.id, e.target.value)}>
             <option value="" disabled>File under…</option>
             {projects.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+          </Select>
+        </label>
+      )}
+      {!needsProject(doc) && doc.project && !doc.fields?.page_of && (
+        <label className="vdc-assign"><FolderInput size={16} aria-hidden="true" />
+          <Select value="" aria-label={`Move ${doc.filename} to another project`}
+            onChange={(e) => window.confirm(`Move ${doc.filename} from ${doc.project} to ${e.target.value}? Its bill and expense move too.`) && onMove(doc.id, e.target.value)}>
+            <option value="" disabled>{doc.project} · Move to…</option>
+            {projects.filter((p) => p.label !== doc.project).map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
           </Select>
         </label>
       )}
