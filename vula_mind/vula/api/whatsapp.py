@@ -2874,6 +2874,7 @@ async def _handle_document_ingest(
         # NULL: the claim is created here, BEFORE the storage upload below produces a real URL,
         # and nothing ever linked them back — confirmed live 2026-08-26 against real claims).
         expense_claim_img_ref = None
+        first_page = None        # the filed document this one is a later page of, if any
         if role == "admin" and local_path.suffix.lower() == ".pdf":
             try:
                 import base64, httpx as _httpx
@@ -2890,6 +2891,11 @@ async def _handle_document_ingest(
                     )
                     if scan_resp.status_code == 200:
                         scan_data = scan_resp.json().get("extracted", {})
+                        # A later page of a document already on file is joined to it after the
+                        # deep read below, never booked here as a bill of its own (2026-10-26).
+                        from vula.integrations import doc_pages as _doc_pages
+                        if _doc_pages.find_first_page(tenant_id, scan_data):
+                            scan_data = {}
                         doc_type = scan_data.get("doc_type", "")
                         total = scan_data.get("total_cents", 0) or 0
 
@@ -3036,7 +3042,10 @@ async def _handle_document_ingest(
             # ONE strong vision call reads the actual image (the OCR-text → small-model path
             # hallucinated totals). Delivery notes are filed, never booked as money.
             is_img = local_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
-            if not scan_msg and is_img:
+            if doc_category in _FINANCIAL_DOC_CATEGORIES and not already_committed:
+                from vula.integrations import doc_pages as _doc_pages
+                first_page = _doc_pages.find_first_page(tenant_id, fields)
+            if not scan_msg and is_img and not first_page:
                 fin = await _scan_financial_photo(str(local_path))
                 dtp = (fin or {}).get("doc_type")
                 total_r = _num((fin or {}).get("total"))
@@ -3115,11 +3124,15 @@ async def _handle_document_ingest(
         # File the document: durable copy + project link + ClickUp attachment. Also books it
         # via the shared commit path (same as email/Smart Scanner) unless the vision-scan
         # shortcut above already committed it.
-        file_note, filed_row = await _file_uploaded_document(
-            tenant_id, phone, result, local_path, mime_type,
-            doc_category, summary, fields, already_committed=already_committed,
-            project=_project_named_in_caption(tenant_id, filename),
-        )
+        if first_page:
+            file_note, filed_row = await _join_to_first_page(
+                tenant_id, phone, result, local_path, mime_type, doc_category, fields, first_page)
+        else:
+            file_note, filed_row = await _file_uploaded_document(
+                tenant_id, phone, result, local_path, mime_type,
+                doc_category, summary, fields, already_committed=already_committed,
+                project=_project_named_in_caption(tenant_id, filename),
+            )
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
 
@@ -4418,6 +4431,93 @@ async def _backfill_receipt_url(tenant_id: str, receipt_doc_id: str, filed_row: 
         ).eq("tenant_id", tenant_id).eq("receipt_doc_id", receipt_doc_id).execute()
     except Exception as exc:
         logger.debug("receipt_url backfill skipped for %s: %s", receipt_doc_id, exc)
+
+
+async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, category,
+                              fields, first):
+    """A later page of a document already on file (vula/integrations/doc_pages.py, 2026-10-26:
+    Bathroom Bizarre's 2-page invoice came as two photos). The page keeps its own filed copy, its
+    lines and totals go onto the first page's record, and what was booked from the first page is
+    brought up to the whole document — the bill if one was booked, else the expense from the
+    photo, else a new bill now the document is complete. Returns (note, row) like
+    _file_uploaded_document."""
+    try:
+        from vula.integrations import doc_pages
+        from vula.integrations.doc_filing import file_document
+        from vula.commerce import service as cs
+        db = cs._client()
+        first_fields = first.get("fields") or {}
+        merged = doc_pages.merge(first_fields, fields or {})
+        n = merged["pages"]
+        label = " ".join(str(x) for x in (merged.get("supplier"), merged.get("document_number")) if x)
+        row = await file_document(
+            tenant_id, filename=result.filename, data=local_path.read_bytes(),
+            content_type=mime_type or "application/octet-stream", category=category,
+            summary=f"Page {n} of {first.get('filename')}", doc_id=result.doc_id,
+            fields={"page_of": first["id"], "page": n, "supplier": merged.get("supplier"),
+                    "document_number": merged.get("document_number")},
+            source="whatsapp", filed_by=phone, project=first.get("project"), status="filed")
+        db.table("vula_filed_documents").update({"fields": merged}) \
+            .eq("tenant_id", tenant_id).eq("id", first["id"]).execute()
+
+        where = f" under *{first['project']}*" if first.get("project") else ""
+        note = (f"📄 That's page {n} of {label} — joined to the first page{where}. "
+                f"{len(merged.get('line_items') or [])} lines now")
+        total, vat = cs.vat_inclusive(int(merged.get("total_cents") or 0),
+                                      int(merged.get("vat_cents") or 0),
+                                      bool(merged.get("amounts_exclude_vat")))
+        note += f", total R{total / 100:,.2f}." if total else "."
+        if merged.get("_unverified_figures") or not total:
+            return note + " I've not booked the total — please check it in your Invoices tab.", row
+
+        lines = cs._coerce_line_items(merged.get("line_items"))
+        if first.get("commerce_invoice_id"):
+            inv = (db.table("commerce_invoices").select("id,invoice_number,status,total_cents")
+                   .eq("tenant_id", tenant_id).eq("id", first["commerce_invoice_id"])
+                   .limit(1).execute().data or [None])[0]
+            if inv and inv.get("status") in ("paid", "cancelled", "void"):
+                note += (f" Its bill {inv['invoice_number']} is already {inv['status']} at "
+                         f"R{int(inv.get('total_cents') or 0) / 100:,.2f} — please check it.")
+            elif inv and int(inv.get("total_cents") or 0) != total:
+                db.table("commerce_invoices").update({
+                    "total_cents": total, "vat_cents": vat, "subtotal_cents": total - vat,
+                    "line_items": lines}).eq("tenant_id", tenant_id).eq("id", inv["id"]).execute()
+                back = (db.table("commerce_invoices").select("total_cents").eq("tenant_id", tenant_id)
+                        .eq("id", inv["id"]).limit(1).execute().data or [{}])[0]
+                if int(back.get("total_cents") or 0) == total:
+                    note += f" Bill {inv['invoice_number']} updated to the full R{total / 100:,.2f}."
+            return note, row
+        exp = None
+        if first.get("file_url"):
+            exp = (db.table("commerce_expenses").select("id,status,amount_cents")
+                   .eq("tenant_id", tenant_id).eq("receipt_url", first["file_url"])
+                   .neq("status", "cancelled").limit(1).execute().data or [None])[0]
+        if exp:
+            if exp.get("status") in ("paid", "reimbursed"):
+                note += (f" The first page's expense is already {exp['status']} at "
+                         f"R{int(exp.get('amount_cents') or 0) / 100:,.2f} — please check it.")
+            elif int(exp.get("amount_cents") or 0) != total:
+                db.table("commerce_expenses").update({
+                    "amount_cents": total, "vat_cents": vat, "line_items": lines}) \
+                    .eq("tenant_id", tenant_id).eq("id", exp["id"]).execute()
+                back = (db.table("commerce_expenses").select("amount_cents").eq("tenant_id", tenant_id)
+                        .eq("id", exp["id"]).limit(1).execute().data or [{}])[0]
+                if int(back.get("amount_cents") or 0) == total:
+                    note += f" The expense is updated to the full R{total / 100:,.2f}."
+            return note, row
+        if category in _FINANCIAL_DOC_CATEGORIES:
+            commit_fields = {k: v for k, v in merged.items() if not k.startswith("_")}
+            commit_fields.setdefault("doc_type", _CATEGORY_TO_DOC_TYPE.get(category, "invoice"))
+            committed = await cs.commit_inbound_document(
+                tenant_id, commit_fields, source="whatsapp", filed_document_id=first["id"],
+                project=first.get("project"), is_boq=(category == "Bill of Quantities (BOQ)"))
+            rec = (committed or {}).get("record") or {}
+            if (committed or {}).get("committed") and rec.get("invoice_number"):
+                note += f" Booked as {rec['invoice_number']}."
+        return note, row
+    except Exception as exc:
+        logger.warning("joining page to %s failed: %s", (first or {}).get("id"), exc)
+        return "", None
 
 
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
