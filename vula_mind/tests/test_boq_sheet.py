@@ -230,3 +230,74 @@ def test_a_read_total_that_is_no_columns_sum_is_kept(tmp_path):
     _sheet(p)
     fields = boq_sheet.apply_to_fields({"line_items": [], "total_cents": 9500000}, boq_sheet.parse(p))
     assert fields["total_cents"] == 9500000
+
+
+# ── HPC's PC No. 10, read in full (26 Oct; figures made up, layout as the certificate's) ──
+
+PC_HEAD = [["BILLS OF QUANTITIES", None, None, None, None, "CONTRACT BOQ", None, None,
+            "CUMALATIVE AMOUNT CERTIFIED TO DATE"],
+           [None] * 9,                                        # a blank row under the group headings
+           ["ITEM NO", None, "DESCRIPTION", None, None, "QUANTITY", "RATE", "AMOUNT", "QUANTITY", "AMOUNT"]]
+
+
+def _pc_rows(title):
+    return [[title]] + PC_HEAD + [
+        [None, None, "BILL NO 6 - FLOOR COVERINGS", None, None, None, None, 600, None, 1000],
+        [None, None, None, None, None, None, None, None, None, None, True],   # a check cell
+        [7.0, None, "Timber skirtings", None, "m", 4, 100, 400, 4, 400],
+        [8.0, None, "Aluminium skirting", None, "m", 2, 100, 200, 2, 200],
+        [None, None, "Sealant", None, None, 64, 0, 0, None, 400],             # extra, certified
+        ["NEW", None, "New rate skirting", None, "m", 1, 50, 50, None, None],  # a variation
+        [None, None, "BILL NO 12 - PROVISIONAL SUMS, ETC", None, None, None, None, 1000],
+        ["NEW"],                                                             # a code alone
+        [1.0, None, "Provide the amount of R1,000 for electrical, etc", None, "Item", 1, 1000, 1000],
+        [2.0, None, "Profit on the above item", None, "%IT", "0%", 1000, "R-"],
+        [None, None, "QUOTE WITHOUT EXTRAS", None, None, None, None, 950],     # a breakdown note
+        [None, None, "Construction Contingency", None, "%", 0.11, 1600, 176],  # the recap
+    ]
+
+
+def _pc_book(path):
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active.title = "Complete"
+    for r in _pc_rows("Complete HPC BILLS OF QUANTITIES"):
+        wb.active.append(r)
+    area = wb.create_sheet("Bio")                      # an area tab: the same items again
+    for r in _pc_rows("BIO HPC BILLS OF QUANTITIES"):
+        area.append(r)
+    summary = wb.create_sheet("BOQ Summary")
+    for r in [["COST SPLIT"], ["DESCRIPTION", None, "AMOUNT"], ["Floor coverings", None, 600],
+              ["Electrical Installation, Etc", None, 1000]]:
+        summary.append(r)
+    wb.save(path)
+
+
+def test_a_payment_certificate_counts_each_contract_item_once(tmp_path):
+    p = tmp_path / "PC No. 10.xlsx"
+    _pc_book(p)
+    lines = boq_sheet.parse(p)
+    assert boq_sheet.section_budgets(lines) == [
+        {"section": "FLOOR COVERINGS", "budget_cents": 60000, "certified_cents": 100000,
+         "variation_cents": 45000},
+        {"section": "PROVISIONAL SUMS, ETC", "budget_cents": 100000, "certified_cents": 0,
+         "variation_cents": 0}]
+
+
+def test_variations_are_kept_apart_from_the_contract(tmp_path):
+    p = tmp_path / "PC No. 10.xlsx"
+    _pc_book(p)
+    var = {li["description"]: li for li in boq_sheet.parse(p) if li.get("variation")}
+    assert set(var) == {"Sealant", "New rate skirting"}
+    assert var["Sealant"]["total_cents"] is None and var["Sealant"]["variation_cents"] == 40000
+    assert var["New rate skirting"]["variation_cents"] == 5000
+
+
+def test_a_newer_read_of_the_cells_replaces_an_older_one(tmp_path):
+    p = tmp_path / "PC No. 10.xlsx"
+    _pc_book(p)
+    old = {"line_items_source": "sheet", "line_items": [{"description": "x"}] * 9, "total_cents": 1}
+    fields = boq_sheet.apply_to_fields(old, boq_sheet.parse(p))
+    assert len(fields["line_items"]) == 5 and fields["sections"][0]["budget_cents"] == 60000
+    llm = {"line_items": [{"description": "x"}] * 9}
+    assert boq_sheet.apply_to_fields(llm, boq_sheet.parse(p)) == llm   # an LLM list: only by more
