@@ -11,7 +11,7 @@ When an invoice from a known supplier is filed, apply_document_details():
     record is ever overwritten by a document.
   * flags different bank details: an invoice paying into an account other than the one on file
     is the most common invoice fraud. The record is not changed; the finance team is told
-    (notify "bank_review"), with only the last 4 digits of each account in the message.
+    (notify "bank_details_changed" — the owner when nobody subscribed), with only the last 4 digits of each account in the message.
 """
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def bank_change_message(supplier_name: str, change: Dict[str, Any], amount_cents
 async def alert_bank_change(tenant_id: str, supplier_name: str, change: Dict[str, Any],
                             filed_document_id: Optional[str], amount_cents: Optional[int] = None) -> int:
     from vula.integrations.notify import notify_team
-    return await notify_team(tenant_id, "bank_review", bank_change_message(supplier_name, change, amount_cents),
+    return await notify_team(tenant_id, "bank_details_changed", bank_change_message(supplier_name, change, amount_cents),
                              idem_key=f"bank-change:{filed_document_id or supplier_name}")
 
 

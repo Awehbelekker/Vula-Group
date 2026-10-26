@@ -328,7 +328,6 @@ class Settings(BaseSettings):
     # ── Vula Commerce ────────────────────────────────────────────────────────
     # Supabase service role key alias (commerce service uses this name)
     supabase_service_role_key: str = ""
-    n8n_webhook_base: str = ""           # e.g. https://n8n.vula.co.za/webhook
     # Per-tenant store URLs for Yoco redirect URLs (JSON string)
     # e.g. '{"off-the-hook": "https://offthehook.co.za"}'
     store_urls_json: str = '{"off-the-hook": "https://offthehook.co.za", "awake-sa": "https://awakesa.co.za"}'

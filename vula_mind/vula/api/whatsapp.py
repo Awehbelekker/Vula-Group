@@ -8356,8 +8356,8 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
 
     handled = await _run_commerce_assistant(phone, text, tenant_id, detected_lang=detected_lang)
     if not handled:
-        # Skill unavailable/failed — fall back to n8n, then a holding reply.
-        await _forward_to_n8n_commerce(phone, text, msg_id, tenant_id)
+        # Skill unavailable/failed — a person on the team takes it from here.
+        await _hand_to_team(phone, text, msg_id, tenant_id)
 
 
 # bookkeeper (20 Oct): a bookkeeper replying to a staff notice reached the customer shop assistant
@@ -9398,7 +9398,7 @@ async def _handle_commerce_interactive(
     if reply_id.startswith("prod_"):
         await _handle_commerce_message(phone, f"I'd like to order {reply_title}", msg_id, tenant_id)
         return
-    await _forward_to_n8n_commerce(phone, reply_id, msg_id, tenant_id, reply_title=reply_title)
+    await _hand_to_team(phone, reply_id, msg_id, tenant_id, reply_title=reply_title)
 
 
 # Friendly labels for common category keys (fallback = title-cased key).
@@ -10132,27 +10132,26 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
         await _send_reply(phone, _text_menu, tenant_id=tenant_id)
 
 
-async def _forward_to_n8n_commerce(
+async def _hand_to_team(
     phone: str, text: str, msg_id: str, tenant_id: str, reply_title: str = ""
 ) -> None:
-    """Forward message to n8n for AI-powered order processing."""
-    n8n_base = getattr(settings, "n8n_webhook_base", None)
-    if not n8n_base:
-        await _send_reply(phone, "On it! Our team will be in touch shortly.", tenant_id)
-        return
+    """The shop assistant couldn't answer a customer: tell them honestly, and WhatsApp the team
+    (notify "customer_unanswered" — the owner when nobody subscribed) so a person replies.
 
+    2026-10-26: this used to forward the message to an n8n webhook and tell the customer "We'll
+    be in touch in a few minutes". That n8n had stopped answering long before (every call failed
+    its TLS check), so five Off the Hook customers on 23–24 Oct got that promise and nobody was
+    ever told. Once per message (idem key)."""
+    said = (reply_title or text or "").strip().replace("\n", " ")[:300]
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                f"{n8n_base}/whatsapp-inbound",
-                json={
-                    "phone": phone,
-                    "text": text,
-                    "reply_title": reply_title,
-                    "msg_id": msg_id,
-                    "tenant_id": tenant_id,
-                },
-            )
+        from vula.integrations.notify import notify_team
+        await notify_team(
+            tenant_id, "customer_unanswered",
+            f"A customer on WhatsApp (+{_digits_za(phone)}) wasn't answered automatically — please "
+            f"reply to them. They wrote: \"{said}\"",
+            idem_key=f"unanswered:{msg_id or phone}")
     except Exception as exc:
-        logger.warning("n8n commerce forward failed (non-fatal): %s", exc)
-        await _send_reply(phone, "Got it! We'll be in touch in a few minutes.", tenant_id)
+        logger.warning("unanswered-customer alert failed: %s", exc)
+    await _send_reply(phone, "Sorry, I couldn't sort that out automatically. I've passed your "
+                             "message to the team and someone will reply to you here shortly.",
+                      tenant_id)

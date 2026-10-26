@@ -146,7 +146,6 @@ vula_dashboard/   React/Vite tenant + master admin (PWA), white-labeled per tena
 vula_mobile/      Expo / React Native thin client
 off_the_hook/     Next.js storefront for the Off the Hook tenant (Yoco + WhatsApp ordering)
 infrastructure/   Shared infra config
-n8n_workflows/    Workflow automation (briefings, follow-ups)
 ```
 
 Database migrations live in `vula_mind/migrations/` and are applied manually in the Supabase SQL

@@ -14,7 +14,7 @@ vula_dashboard/   React 18 + Vite tenant + master-admin PWA (white-labeled per t
 vula_storefront/  (submodule) multi-tenant storefront hosting app
 off_the_hook/     (submodule) Next.js storefront for the Off the Hook tenant
 vula_mobile/      Expo / React Native thin client
-n8n_workflows/, infrastructure/, kelp/   automation + infra (kelp has its own CLAUDE.md)
+infrastructure/, kelp/   infra (kelp has its own CLAUDE.md)
 ```
 
 **Gotcha — nested working directory.** Claude Code sessions for this project are configured with primary working directory `C:\Users\Ian\Vula-Group\Vula-Group\` — a git-untracked scratch folder *inside* the repo, not the code. All real work is one level up. Use absolute paths under `C:\Users\Ian\Vula-Group\` (or `cd` into `vula_mind` / `vula_dashboard`). This CLAUDE.md at the repo root is auto-loaded from the nested dir via parent-directory walk.
