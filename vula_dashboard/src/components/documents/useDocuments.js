@@ -104,7 +104,24 @@ export function useFiledLibrary({ tenantId, customerPhone, defaultFiledBy, proje
     load(false);
   };
 
-  return { docs, projects, customers, categories, loading, total, lightboxDoc, setLightboxDoc, filters, setFilter, loadMore, assign };
+  // Filed under the wrong project (by Vula or by hand): move it, with its bill, expense and
+  // pages (2026-10-26). The reply says what moved, from the server's read-back.
+  const [moveMsg, setMoveMsg] = useState("");
+  const move = async (docId, label) => {
+    if (!label) return;
+    setMoveMsg("");
+    try {
+      const r = await fetch(`${VULA_API}/v1/documents/${docId}/move-project`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenant_id: tenantId.trim(), project: label }),
+      });
+      const d = await r.json();
+      setMoveMsg(d.message || d.error || (r.ok ? "Moved." : "Couldn't move it."));
+    } catch { setMoveMsg("Couldn't move it — please try again."); }
+    load(false);
+  };
+
+  return { docs, projects, customers, categories, loading, total, lightboxDoc, setLightboxDoc, filters, setFilter, loadMore, assign, move, moveMsg };
 }
 
 /** "Just store this" — a photo/form/file with nothing to extract, no OCR/KB-ingest attempted. */

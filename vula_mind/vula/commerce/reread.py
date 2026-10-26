@@ -232,10 +232,26 @@ async def _reread_boq(tenant_id: str, row: dict) -> bool:
     (service._client().table("vula_filed_documents").update({"fields": new_fields})
      .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
     row["fields"] = new_fields
-    if row.get("project") and new_fields.get("sections"):
+    if (row.get("project") and new_fields.get("sections")
+            and (name.endswith(boq_sheet.SHEET_SUFFIXES) or not _has_sheet_boq(tenant_id, row["project"]))):
         service.upsert_project_boq(tenant_id, row["project"], int(new_fields.get("total_cents") or 0),
                                    sections=new_fields["sections"])
     return True
+
+
+def _has_sheet_boq(tenant_id: str, project: str) -> bool:
+    """Whether the project has a BOQ filed as a spreadsheet. Its cells are the budget; a PDF of
+    the same bill never replaces it. 2026-10-26, DIGG: re-reading Judy's Belladonna PDF (columns
+    scrambled, P&G read as R4,800 for R48,000) wrote its rooms over the project's budget."""
+    from vula.ingestion import boq_sheet
+    try:
+        rows = (service._client().table("vula_filed_documents").select("filename")
+                .eq("tenant_id", tenant_id).eq("project", project).eq("category", _BOQ)
+                .limit(200).execute().data or [])
+    except Exception as exc:
+        log.debug("sheet BOQ check skipped: %s", exc)
+        return False
+    return any((r.get("filename") or "").lower().endswith(boq_sheet.SHEET_SUFFIXES) for r in rows)
 
 
 async def _file_text(tenant_id: str, row: dict, path: Path) -> str:

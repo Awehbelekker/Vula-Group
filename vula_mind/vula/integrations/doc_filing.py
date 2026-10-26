@@ -320,6 +320,139 @@ def learn_filing_rule(tenant_id: str, fields: dict, project: str) -> int:
     return n
 
 
+def move_to_project(tenant_id: str, project: str, *, doc_id: Optional[str] = None,
+                    invoice_id: Optional[str] = None) -> dict:
+    """Move a filed document or a supplier bill to another project, and everything tied to it
+    with it (2026-10-26, Ian: "the tenant can change the allocated invoice to a project if Vula
+    filed it incorrectly or even the tenant mistakenly allocated"). Start from either one:
+
+    - the document, its later pages (fields.page_of) and its prices;
+    - the bill booked from it (commerce_invoice_id) and the expense booked from its photo
+      (receipt_url);
+    - the project finances posted from it, and its BOQ budget when the new project has none
+      (the old project's BOQ is never removed — the reply says so);
+    - the filing rule: the old project's rule for this supplier is dropped, the new one learned.
+
+    Every read and write is scoped to the tenant, and the result is read back. Returns
+    {"ok", "from", "to", "moved": {table: n}, ...} or {"ok": False, "error"}."""
+    from vula.commerce.service import canonical_project, project_key, upsert_project_boq
+    from vula.commerce import expenses as _exp
+    db = _client()
+    to = canonical_project(tenant_id, project) or (project or "").strip()
+    if not to or project_key(to) not in {project_key(p) for p in _exp.known_projects(tenant_id)}:
+        return {"ok": False, "error": f"There's no project called “{project}”."}
+
+    doc, bill = None, None
+    if doc_id:
+        doc = (db.table("vula_filed_documents").select("*").eq("tenant_id", tenant_id)
+               .eq("id", doc_id).limit(1).execute().data or [None])[0]
+        if not doc:
+            return {"ok": False, "error": "Document not found."}
+        if (doc.get("fields") or {}).get("page_of"):          # a later page: move the whole document
+            return move_to_project(tenant_id, project, doc_id=doc["fields"]["page_of"])
+    if invoice_id or (doc and doc.get("commerce_invoice_id")):
+        bill = (db.table("commerce_invoices").select("id,invoice_number,project,total_cents,supplier")
+                .eq("tenant_id", tenant_id).eq("id", invoice_id or doc["commerce_invoice_id"])
+                .limit(1).execute().data or [None])[0]
+        if invoice_id and not bill:
+            return {"ok": False, "error": "Bill not found."}
+    if bill and not doc:
+        doc = (db.table("vula_filed_documents").select("*").eq("tenant_id", tenant_id)
+               .eq("commerce_invoice_id", bill["id"]).limit(1).execute().data or [None])[0]
+
+    old = (doc or {}).get("project") or (bill or {}).get("project")
+    moved: dict = {}
+    if doc:
+        db.table("vula_filed_documents").update({"project": to, "status": "filed"}) \
+            .eq("tenant_id", tenant_id).eq("id", doc["id"]).execute()
+        pages = (db.table("vula_filed_documents").select("id").eq("tenant_id", tenant_id)
+                 .eq("fields->>page_of", doc["id"]).execute().data or [])
+        for p in pages:
+            db.table("vula_filed_documents").update({"project": to}) \
+                .eq("tenant_id", tenant_id).eq("id", p["id"]).execute()
+        moved["vula_filed_documents"] = 1 + len(pages)
+        from vula import open_questions
+        open_questions.close_for(tenant_id, doc["id"])
+        try:
+            from vula.commerce.price_book import set_project
+            for d in [doc["id"]] + [p["id"] for p in pages]:
+                set_project(tenant_id, d, to)
+        except Exception as exc:
+            logger.debug("price book move skipped: %s", exc)
+    if bill:
+        db.table("commerce_invoices").update({"project": to}) \
+            .eq("tenant_id", tenant_id).eq("id", bill["id"]).execute()
+        moved["commerce_invoices"] = 1
+    if doc and doc.get("file_url"):
+        exps = (db.table("commerce_expenses").select("id").eq("tenant_id", tenant_id)
+                .eq("receipt_url", doc["file_url"]).neq("status", "cancelled").execute().data or [])
+        for e in exps:
+            db.table("commerce_expenses").update({"project": to}) \
+                .eq("tenant_id", tenant_id).eq("id", e["id"]).execute()
+        if exps:
+            moved["commerce_expenses"] = len(exps)
+
+    fields = (doc or {}).get("fields") or ({"supplier": bill.get("supplier")} if bill else {})
+    boq_note = None
+    if doc and (doc.get("category") or "") == "Bill of Quantities (BOQ)" and fields.get("total_cents"):
+        has_boq = (db.table("vula_project_boq").select("project").eq("tenant_id", tenant_id)
+                   .eq("project", to).limit(1).execute().data or [])
+        if not has_boq:
+            upsert_project_boq(tenant_id, to, int(fields["total_cents"]),
+                               sections=fields.get("sections") or None)
+        if old:
+            boq_note = f"{old} still holds the budget from this BOQ — change it in Projects if it shouldn't."
+    if doc:
+        try:
+            from vula.integrations.finances import post_finance_from_doc
+            post_finance_from_doc(tenant_id, to, fields, doc.get("doc_id"), doc.get("filename") or "",
+                                  doc.get("summary") or "", doc.get("category") or "")
+        except Exception as exc:
+            logger.debug("finance post (move) skipped: %s", exc)
+    if old and project_key(old) != project_key(to):
+        try:
+            signals = [v for _, v in _signals_from(fields, tenant_id)]
+            if signals:
+                (db.table("vula_filing_rules").delete().eq("tenant_id", tenant_id)
+                 .eq("project", old).in_("signal", signals).execute())
+        except Exception as exc:
+            logger.debug("old filing rule drop skipped: %s", exc)
+    learn_filing_rule(tenant_id, fields, to)
+
+    # Read back: every moved row carries the new project.
+    ok = True
+    if doc:
+        back = (db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id)
+                .eq("id", doc["id"]).limit(1).execute().data or [{}])[0]
+        ok = ok and back.get("project") == to
+    if bill:
+        back = (db.table("commerce_invoices").select("project").eq("tenant_id", tenant_id)
+                .eq("id", bill["id"]).limit(1).execute().data or [{}])[0]
+        ok = ok and back.get("project") == to
+    return {"ok": ok, "from": old, "to": to, "moved": moved, "boq_note": boq_note,
+            "document": (doc or {}).get("filename"), "bill": (bill or {}).get("invoice_number"),
+            **({} if ok else {"error": "The move didn't read back — please check it."})}
+
+
+def move_summary(res: dict) -> str:
+    """'Moved to Belladonna: the bill, the document (2 pages) and 1 expense.'"""
+    if not res.get("ok"):
+        return res.get("error") or "Couldn't move it."
+    m = res.get("moved") or {}
+    parts = []
+    if m.get("commerce_invoices"):
+        parts.append(f"bill {res.get('bill')}" if res.get("bill") else "the bill")
+    if m.get("vula_filed_documents"):
+        n = m["vula_filed_documents"]
+        parts.append("the document" + (f" ({n} pages)" if n > 1 else ""))
+    if m.get("commerce_expenses"):
+        n = m["commerce_expenses"]
+        parts.append(f"{n} expense" + ("s" if n > 1 else ""))
+    what = ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + (parts[-1] if parts else "nothing")
+    out = f"Moved to {res['to']}" + (f" (from {res['from']})" if res.get("from") else "") + f": {what}."
+    return out + (f" {res['boq_note']}" if res.get("boq_note") else "")
+
+
 def lookup_learned_project(tenant_id: str, fields: dict) -> Optional[dict]:
     """If a learned rule matches this doc's signals, return its project (high confidence).
 

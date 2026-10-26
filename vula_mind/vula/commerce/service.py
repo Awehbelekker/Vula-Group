@@ -2441,6 +2441,15 @@ def project_key(name: Optional[str]) -> str:
     return re.sub(r"[\W_]+", " ", (name or "").lower()).strip()
 
 
+def close_spelling(word: str, name_word: str) -> bool:
+    """`word` is `name_word` give or take a typo (2026-10-26: DIGG's bank lines say "Beladona"
+    and "Belladona" for Belladonna). Only for name words of 6+ letters, at ≥0.88 — about one
+    letter dropped or doubled — so "atlantic" is not "atlantis" and short words never match."""
+    if len(name_word) < 6 or abs(len(word) - len(name_word)) > 2:
+        return False
+    return difflib.SequenceMatcher(None, word, name_word).ratio() >= 0.88
+
+
 def registered_projects(tenant_id: str) -> List[Dict[str, Any]]:
     """The project register (vula_projects): name, number and aliases (migration 190 — read
     without it until that's applied)."""
@@ -2641,7 +2650,8 @@ async def commit_inbound_document(
     doc_date = today
     if extracted.get("date"):
         try:
-            doc_date = date.fromisoformat(extracted["date"])
+            from vula.commerce.expenses import fresh_slip_date
+            doc_date = date.fromisoformat(fresh_slip_date(str(extracted["date"])[:10], today))
         except ValueError:
             pass
     due_date = None

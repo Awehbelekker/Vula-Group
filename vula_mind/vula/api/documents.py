@@ -207,6 +207,24 @@ async def assign_project(doc_id: str, body: AssignIn, request: Request) -> dict:
             "learned_signals": learned}
 
 
+class MoveIn(BaseModel):
+    project: str
+    tenant_id: Optional[str] = None
+
+
+@router.post("/{doc_id}/move-project", dependencies=[Depends(require_auth)])
+async def move_project(doc_id: str, body: MoveIn, request: Request) -> dict:
+    """Move a filed document to another project — with its pages, the bill and expense booked
+    from it, and its prices (doc_filing.move_to_project). For a document Vula, or someone,
+    filed under the wrong project."""
+    scope = authorized_tenant(request) or body.tenant_id
+    if not scope:
+        return {"error": "Document not found."}
+    from vula.integrations.doc_filing import move_to_project, move_summary
+    res = move_to_project(scope, body.project, doc_id=doc_id)
+    return {**res, "message": move_summary(res)}
+
+
 @router.post("/{tenant_id}/media")
 async def upload_media(
     tenant_id: str, file: UploadFile = File(...),

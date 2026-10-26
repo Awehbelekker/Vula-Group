@@ -25,7 +25,7 @@ _STATE: ContextVar[Optional[Dict[str, Any]]] = ContextVar("vula_dry_run", defaul
 # mailbox, filing, pulling a drive file into the knowledge base — is recorded, not run.
 READ_ONLY = frozenset({
     # commerce_admin
-    "booking_availability", "calculate", "cash_summary", "competitor_check", "customer_lookup",
+    "bank_payments", "booking_availability", "calculate", "cash_summary", "competitor_check", "customer_lookup",
     "dynamics_lookup", "email_thread_summary", "finance_insights", "find_document", "list_bookings",
     "list_discount_codes", "list_purchase_orders", "list_quotes", "list_reminders", "list_rules",
     "list_storefront_pages", "list_subscriptions", "list_suppliers", "lookup_business_info",
@@ -50,7 +50,7 @@ READ_ONLY = frozenset({
 # confirm they run for real, so the reply can quote the real audience size (benchmark, 1 Oct —
 # "Send all customers…" got no reach figure because the preview itself was blocked).
 PREVIEW_UNLESS_CONFIRMED = frozenset({"send_broadcast", "set_vat_registration", "staff_notice",
-                                       "staff_poll", "set_product_photo"})
+                                       "staff_poll", "set_product_photo", "move_to_project"})
 
 NOT_RUN = ("Benchmark dry run: this action was recorded but NOT performed. Don't say it's done — "
            "say what you would do and what you'd need to confirm.")

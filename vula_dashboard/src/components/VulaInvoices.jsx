@@ -44,6 +44,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   const [supplierFilter, setSupplierFilter] = useState(initialSupplierId)
   const [matchResults, setMatchResults] = useState({})  // { [invId]: result }
   const [matchingId, setMatchingId] = useState(null)     // id currently matching
+  const [projects, setProjects] = useState([])           // project labels a bill can move to
   const [settings, setSettings] = useState(null)         // commerce_invoice_settings row
   const [showSettings, setShowSettings] = useState(false)
   const [showRecurring, setShowRecurring] = useState(false)
@@ -91,6 +92,29 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }, [tenantId, docType, direction, supplierFilter])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/documents/${tenantId}/projects`)
+      .then(r => r.json()).then(d => setProjects((d.projects || []).map(p => p.label))).catch(() => {})
+  }, [tenantId])
+
+  // A supplier bill filed under the wrong project — by Vula or by hand — moves with its document,
+  // pages and expense (2026-10-26). The toast is the server's read-back of what moved.
+  async function moveProject(inv, project) {
+    if (!project || project === inv.project) return
+    if (!(await confirmDialog(`Move ${inv.invoice_number} from ${inv.project || 'no project'} to ${project}? Its document and expense move too.`, { confirmLabel: 'Move' }))) return
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/move-project`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project }),
+      })
+      const d = await r.json()
+      if (r.ok) toast(d.message)
+      else toast(d.detail || "Couldn't move it.", 'danger')
+    } catch {
+      toast("Couldn't move it — please try again.", 'danger')
+    }
+    load()
+  }
 
   // Quotes converted before migration 134 (invoiced_cents) have converted_invoice_id set but
   // invoiced_cents still 0 — that single old-system conversion was always for the full total,
@@ -453,6 +477,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       emailConfigured, matchingId, matchResults, quoteInvoicedCents,
       convertToInvoice, setStatus, markPaid, del, recordPayment, cancelInvoice, sendWhatsApp, matchSupplier,
       requestSupplierApproval, downloadPdf, openFiledDocument, creditNote, payLink, emailInvoice,
+      projects, moveProject,
     }} />
   }
 
@@ -569,6 +594,13 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       </button>
                       {inv.status !== 'paid' && (
                         <button onClick={() => markPaid(inv)} style={s.actPaid}>✓ Mark paid</button>
+                      )}
+                      {projects.length > 0 && (
+                        <select value="" aria-label={`Move ${inv.invoice_number} to another project`}
+                          onChange={e => moveProject(inv, e.target.value)} style={s.actMatch}>
+                          <option value="" disabled>📍 {inv.project || 'No project'} · Move to…</option>
+                          {projects.filter(p => p !== inv.project).map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
                       )}
                     </>
                   ) : (

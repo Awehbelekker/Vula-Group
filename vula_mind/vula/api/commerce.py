@@ -4323,6 +4323,17 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
         "discount_cents", "deposit_cents", "sent_channel", "requires_approval",
     }
     update = {k: v for k, v in body.items() if k in allowed}
+    # The edit form sends the project too — it used to be dropped here without a word. A project
+    # change moves the bill's document and expense with it (2026-10-26).
+    moved = None
+    if body.get("project"):
+        from vula.integrations.doc_filing import move_to_project
+        moved = move_to_project(tenant_id, body["project"], invoice_id=invoice_id)
+        if not moved.get("ok"):
+            raise HTTPException(status_code=400, detail=moved.get("error") or "Couldn't move it.")
+        if not update:
+            return (db.table("commerce_invoices").select("*").eq("tenant_id", tenant_id)
+                    .eq("id", invoice_id).limit(1).execute().data or [{}])[0]
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields")
     # A sent invoice is never edited — its amounts are what the customer was issued (and, for a
@@ -4358,6 +4369,17 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
     result = db.table("commerce_invoices").update(update) \
         .eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
     return result.data[0] if result.data else {}
+
+
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/move-project")
+async def admin_move_invoice_project(tenant_id: str, invoice_id: str, body: dict):
+    """Move a supplier bill to another project — its document, pages, expense and prices follow
+    (doc_filing.move_to_project)."""
+    from vula.integrations.doc_filing import move_to_project, move_summary
+    res = move_to_project(tenant_id, (body or {}).get("project") or "", invoice_id=invoice_id)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "Couldn't move it.")
+    return {**res, "message": move_summary(res)}
 
 
 _ISSUED = ("sent", "overdue", "part_paid", "paid")

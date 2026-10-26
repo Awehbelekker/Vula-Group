@@ -49,10 +49,17 @@ def expense_step(tenant_id: str, claim: dict) -> Optional[str]:
     from vula.commerce import expenses
     if claim.get("status") == "unconfirmed":
         return "expense_confirm"
+    if claim.get("status") == "cancelled":       # e.g. the client paid it: nothing left to ask
+        return None
     if claim.get("project") is None and (claim["needs_project"] if "needs_project" in claim
                                          else bool(expenses.known_projects(tenant_id))):
         return "expense_project"
-    if claim.get("paid_with") is None and expenses.list_cards(tenant_id):
+    # A card slip whose card isn't registered (or a business that registered its cards) —
+    # resolve_paid_with left it unknown rather than assume "personal" (2026-10-26, DIGG).
+    # 2026-10-26 (Ian): a staff member's slip always asks who paid — Vula used to assume their own
+    # money. `reimbursable` on an unanswered claim is the sender-role default (staff, not owner).
+    if claim.get("paid_with") is None and (claim.get("card_last4") or claim.get("reimbursable")
+                                           or expenses.list_cards(tenant_id)):
         return "expense_paid_with"
     if not claim.get("purpose_category"):
         return "expense_purpose"
@@ -63,7 +70,8 @@ def expense_step(tenant_id: str, claim: dict) -> Optional[str]:
 
 _EXPENSE_PROMPTS = {
     "expense_project": "📍 Which project/site is this for? Reply with the site name, or 'none'.",
-    "expense_paid_with": "💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'.",
+    "expense_paid_with": ("💳 Who paid for this? Reply *1* company card / EFT · *2* my own money · "
+                          "*3* the client paid · *4* petty cash."),
     "expense_purpose": "🗂️ What was this for — fuel, a client visit/meal, or accommodation? "
                        "Reply with the category.",
     "expense_odometer": "🚗 What's the odometer reading at this fill-up? Reply with the number.",

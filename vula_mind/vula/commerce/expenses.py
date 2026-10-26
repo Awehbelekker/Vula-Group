@@ -112,7 +112,12 @@ def match_project(tenant_id: str, text: str, projects: Optional[List[str]] = Non
         score = len(want & toks(p))
         if score > best_score:
             best, best_score = p, score
-    return best if best_score >= 1 else None
+    if best_score >= 1:
+        return best
+    # A typo ("Beladona" for Belladonna, 2026-10-26) — one project's word, and only one.
+    from vula.commerce.service import close_spelling
+    close = [p for p in projects if any(close_spelling(w, pw) for w in want for pw in toks(p))]
+    return close[0] if len(close) == 1 else None
 
 
 _PROJ_STOP = {"the", "for", "site", "project", "job", "this", "that", "on", "at", "to"}
@@ -293,17 +298,65 @@ def resolve_paid_with(tenant_id: str, *, card_last4: Optional[str] = None,
     Suffix-tolerant: Capitec prints 'Card 572' (3 digits) while slips may show 4."""
     digits = re.sub(r"\D", "", card_last4 or "")[-4:]
     if len(digits) >= 3:
-        for c in list_cards(tenant_id):
+        cards = list_cards(tenant_id)
+        for c in cards:
             reg = (c.get("last4") or "")
             if reg.endswith(digits) or digits.endswith(reg[-3:]):
                 return "company_card"
-        return "personal"
+        # Only "personal" when the business HAS registered its cards and this isn't one. With
+        # none registered we can't tell (2026-10-26, DIGG: its own Visa Debit slip was booked
+        # "personal card, owed back to you") — return None so the next question asks.
+        return "personal" if cards else None
     if (payment_method or "").lower() == "cash":
         return "cash"
     return None
 
 
 # ── Create a claim ─────────────────────────────────────────────────────────────
+
+def fresh_slip_date(value: str, today: Optional[Any] = None) -> str:
+    """A just-sent slip's date with a misread year put right. 2026-10-26, DIGG: three slips sent
+    that afternoon came back as 2015-10-26, 2020-10-20 and 2022-04-11. When the year is two or
+    more years out but the same day and month fell in the last 120 days, that is the date;
+    a genuinely old document (no recent day/month match) keeps its own date."""
+    from datetime import date as _dt
+    today = today or _dt.today()
+    try:
+        d = _dt.fromisoformat((value or "")[:10])
+    except ValueError:
+        return value
+    if abs(d.year - today.year) < 2:
+        return value
+    for year in (today.year, today.year - 1):
+        try:
+            cand = d.replace(year=year)
+        except ValueError:                      # 29 Feb in a non-leap year
+            continue
+        if 0 <= (today - cand).days <= 120:
+            return cand.isoformat()
+    return value
+
+
+_LABOUR_CODES = {"casual_labour", "wages", "subcontractors"}
+_MATERIALS_RE = re.compile(
+    r"\b(materials?|tiles?|tiling adhesive|adhesive|grout|mosaic|paint|primer|filler|cement|"
+    r"sand|stone|bricks?|plaster|board|timber|hardware|sanitary ?ware|toilet|basin|taps?|"
+    r"geberit|mapei|cistern|fittings?|glass|aluminium|insulation|isoboard)\b", re.IGNORECASE)
+_LABOUR_RE = re.compile(r"\b(labou?r|wages?|day ?rate|installation|install|fitting fee|"
+                        r"workers?|subcontract\w*)\b", re.IGNORECASE)
+
+
+def _materials_not_labour(account_code: Optional[str], text: str,
+                          accounts: List[dict]) -> Optional[str]:
+    """A slip that reads as materials (tiles, grout, sanitaryware…) and says nothing about
+    labour never lands on a labour account. 2026-10-26, DIGG: Pudlo tile and grout slips were
+    booked as "Casual labour" because earlier payments to Pudlo had been."""
+    if (account_code in _LABOUR_CODES and _MATERIALS_RE.search(text or "")
+            and not _LABOUR_RE.search(text or "")
+            and any(a.get("code") == "cost_of_sales" for a in accounts)):
+        return "cost_of_sales"
+    return account_code
+
 
 async def create_claim(
     tenant_id: str,
@@ -343,6 +396,7 @@ async def create_claim(
     _d = (date or "").strip()[:10]
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", _d):
         _d = _now()[:10]
+    _d = fresh_slip_date(_d)
 
     # Duplicate guard. The strongest key is the source receipt/media id: the SAME inbound photo
     # (Meta redelivers webhooks, and workers don't share memory) must only ever book once — and
@@ -381,6 +435,7 @@ async def create_claim(
         except Exception as exc:
             log.warning("expense categorize failed: %s", exc)
             account_code = None
+    account_code = _materials_not_labour(account_code, txn["description"], accounts)
     acct = next((a for a in accounts if a["code"] == account_code), None)
     category = category or (acct.get("name") if acct else "other")
 

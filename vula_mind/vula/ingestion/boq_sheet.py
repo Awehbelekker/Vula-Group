@@ -67,10 +67,20 @@ def _num(v: Any) -> Optional[float]:
         return None
 
 
+# A heading's unit is not part of its name: "Budget (R)", "Actual (ZAR)", "Spent to date R".
+_UNIT_SUFFIX = re.compile(r"\s*(?:\((?:r|zar|rand|incl\.? vat|excl\.? vat)\)|\br\b)\s*$", re.IGNORECASE)
+# Wordings DIGG-style cost statements use for the same columns (2026-10-26).
+_ALIASES = {"budget allowance": "budget", "allowance": "budget", "budgeted": "budget",
+            "spent to date": "actual", "actual to date": "actual", "actual spend to date": "actual",
+            "work item": "description", "item / description": "description",
+            "item/description": "description", "description of item": "description"}
+
+
 def _header_map(row: List[Any]) -> Optional[Dict[str, int]]:
     cols: Dict[str, int] = {}
     for i, cell in enumerate(row):
-        label = _clean(cell).lower().rstrip(":")
+        label = _UNIT_SUFFIX.sub("", _clean(cell).lower().rstrip(":")).strip()
+        label = _ALIASES.get(label, label)
         for key, pat in _HEADERS.items():
             if key not in cols and pat.match(label):
                 cols[key] = i
@@ -142,6 +152,20 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
     return out
 
 
+def _log_unrecognised(filename: str, sheet: str, rows: List[List[Any]]) -> None:
+    """Say which headings a sheet had when no header row was recognised, so the reason is in the
+    log instead of a silent "0 lines" (2026-10-26, DIGG's Belladonna project bill). Only short
+    text cells from the first rows — headings, not figures or descriptions."""
+    labels = []
+    for row in rows[:15]:
+        for cell in row or []:
+            v = _clean(cell)
+            if v and len(v) <= 30 and re.search(r"[A-Za-z]", v) and v not in labels:
+                labels.append(v)
+    log.info("BOQ sheet %s / %s: no header row recognised; first labels: %s",
+             filename, sheet, "; ".join(labels[:20]) or "(none)")
+
+
 def parse(path: Path) -> List[Dict[str, Any]]:
     """Every priced line of a BOQ workbook/CSV. [] when no sheet has a recognisable header."""
     path = Path(path)
@@ -155,7 +179,11 @@ def parse(path: Path) -> List[Dict[str, Any]]:
             wb = load_workbook(path, data_only=True, read_only=True)
             lines: List[Dict[str, Any]] = []
             for ws in wb.worksheets:
-                lines.extend(parse_rows([list(r) for r in ws.iter_rows(values_only=True)], ws.title))
+                rows = [list(r) for r in ws.iter_rows(values_only=True)]
+                got = parse_rows(rows, ws.title)
+                if not got:
+                    _log_unrecognised(path.name, ws.title, rows)
+                lines.extend(got)
             wb.close()
             return lines
     except Exception as exc:

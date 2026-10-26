@@ -248,6 +248,25 @@ def post_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
           source_type="expense", source_id=expense.get("id"), lines=lines)
 
 
+def reverse_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
+    """Take a posted expense back out of the books — the mirror of post_expense, posted once
+    (unique on source). 2026-10-26: a slip the CLIENT paid directly is not the business's cost."""
+    amount = int(expense.get("amount_cents") or 0)
+    if amount <= 0:
+        return
+    vat = max(0, min(int(expense.get("vat_cents") or 0), amount))
+    account_code = expense.get("account_code") or "other_expense"
+    lines = [{"account_code": "bank_cash", "debit_cents": amount, "credit_cents": 0}]
+    if vat > 0:
+        lines.append({"account_code": account_code, "debit_cents": 0, "credit_cents": amount - vat})
+        lines.append({"account_code": "vat_input", "debit_cents": 0, "credit_cents": vat})
+    else:
+        lines.append({"account_code": account_code, "debit_cents": 0, "credit_cents": amount})
+    _post(tenant_id, entry_date=expense.get("date") or _today(),
+          description=f"Reversed: {expense.get('description') or expense.get('supplier') or 'expense'}",
+          source_type="expense_reversal", source_id=expense.get("id"), lines=lines)
+
+
 def _all_pages(make_query, page: int = 1000) -> List[Dict[str, Any]]:
     """Run a PostgREST query page by page (it caps each response at 1000 rows)."""
     out: List[Dict[str, Any]] = []

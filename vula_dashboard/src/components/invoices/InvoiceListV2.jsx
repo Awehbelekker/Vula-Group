@@ -12,7 +12,7 @@ import {
   Paperclip, Plus, ReceiptText, Repeat, Scissors, Send, Settings, Trash2, Undo2, X,
 } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
-import { Button, Card, DataTable, EmptyState, IconButton, ListRow, PageHeader, PillTabs, Sheet, Skeleton, StatusChip } from '../ui/index.jsx'
+import { Button, Card, DataTable, EmptyState, IconButton, ListRow, PageHeader, PillTabs, Select, Sheet, Skeleton, StatusChip } from '../ui/index.jsx'
 import './invoices.css'
 
 const STATUS = {
@@ -71,6 +71,12 @@ function Actions({ inv, api, onMore }) {
           {api.matchingId === inv.id ? 'Matching…' : 'Match supplier'}
         </Button>
         {inv.status !== 'paid' && <Button size="sm" Icon={Check} onClick={() => api.markPaid(inv)}>Mark paid</Button>}
+        {api.projects?.length > 0 && (
+          <Select value="" aria-label={`Move ${inv.invoice_number} to another project`} onChange={(e) => api.moveProject(inv, e.target.value)}>
+            <option value="" disabled>{inv.project || 'No project'} · Move to…</option>
+            {api.projects.filter((p) => p !== inv.project).map((p) => <option key={p} value={p}>{p}</option>)}
+          </Select>
+        )}
       </span>
     )
   }

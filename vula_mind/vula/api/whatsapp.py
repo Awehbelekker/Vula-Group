@@ -1034,10 +1034,13 @@ async def receive_message(
                         if phone and media_id:
                             # Background — document processing takes far longer than Meta's
                             # webhook timeout; blocking here is what causes the retry storm.
-                            _run_bg(_handle_document_ingest(
+                            # One sender's documents/photos run one after another on every
+                            # line, so each sees what the previous one booked (2026-10-26, DIGG:
+                            # 3 photos of one Pudlo slip ran at once and it was booked twice).
+                            _run_bg(_one_at_a_time(route_tenant, phone, _handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
                                 content_sha=doc.get("sha256") or None, route_mode=route_mode,
-                            ), label="document_ingest", turn={
+                            )), label="document_ingest", turn={
                                 "tenant_id": route_tenant, "phone": phone, "kind": "document",
                                 "text": filename, "wamid": msg_id})
 
@@ -1051,9 +1054,8 @@ async def receive_message(
                                 phone, msg_type, media_id, caption, mime_type, msg_id,
                                 route_mode, route_tenant, media.get("sha256") or None,
                             )
-                            if route_mode == "commerce":
-                                _media_coro = _one_at_a_time(route_tenant, phone, _media_coro,
-                                                             forwarded=fwd_customer)
+                            _media_coro = _one_at_a_time(route_tenant, phone, _media_coro,
+                                                         forwarded=fwd_customer if route_mode == "commerce" else False)
                             _run_bg(_media_coro, label="image_video", turn={
                                 "tenant_id": route_tenant, "phone": phone, "kind": msg_type,
                                 "text": caption, "wamid": msg_id})
@@ -2433,6 +2435,23 @@ def _image_filename(caption: str, msg_id: str, mime_type: str) -> str:
     return f"{name}.{ext}" if name else f"image-{msg_id}.{ext}"
 
 
+def _project_named_in_caption(tenant_id: str, filename: str) -> Optional[str]:
+    """The project a photo's caption names ("Belladonna and DIGG had to topup the amount on the
+    slip"), or None. 2026-10-26, DIGG: that caption was dropped before the project was chosen,
+    so the Bathroom Bizarre invoice was filed with no project. Only a project actually NAMED
+    counts (project_resolver's strict match), never a loose shared word."""
+    caption = _caption_hint(filename)
+    if not caption or not tenant_id:
+        return None
+    try:
+        from vula.integrations.project_resolver import resolve
+        r = resolve(tenant_id, {}, caption)
+        return r["project"] if r and r.get("kind") == "named" else None
+    except Exception as exc:
+        logger.debug("caption project check skipped: %s", exc)
+        return None
+
+
 def _caption_hint(filename: str) -> str:
     """The caption a photo was named after, or "" for a generated name."""
     stem = (filename or "").rsplit(".", 1)[0].strip()
@@ -2855,6 +2874,7 @@ async def _handle_document_ingest(
         # NULL: the claim is created here, BEFORE the storage upload below produces a real URL,
         # and nothing ever linked them back — confirmed live 2026-08-26 against real claims).
         expense_claim_img_ref = None
+        first_page = None        # the filed document this one is a later page of, if any
         if role == "admin" and local_path.suffix.lower() == ".pdf":
             try:
                 import base64, httpx as _httpx
@@ -2871,6 +2891,11 @@ async def _handle_document_ingest(
                     )
                     if scan_resp.status_code == 200:
                         scan_data = scan_resp.json().get("extracted", {})
+                        # A later page of a document already on file is joined to it after the
+                        # deep read below, never booked here as a bill of its own (2026-10-26).
+                        from vula.integrations import doc_pages as _doc_pages
+                        if _doc_pages.find_first_page(tenant_id, scan_data):
+                            scan_data = {}
                         doc_type = scan_data.get("doc_type", "")
                         total = scan_data.get("total_cents", 0) or 0
 
@@ -3017,7 +3042,10 @@ async def _handle_document_ingest(
             # ONE strong vision call reads the actual image (the OCR-text → small-model path
             # hallucinated totals). Delivery notes are filed, never booked as money.
             is_img = local_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
-            if not scan_msg and is_img:
+            if doc_category in _FINANCIAL_DOC_CATEGORIES and not already_committed:
+                from vula.integrations import doc_pages as _doc_pages
+                first_page = _doc_pages.find_first_page(tenant_id, fields)
+            if not scan_msg and is_img and not first_page:
                 fin = await _scan_financial_photo(str(local_path))
                 dtp = (fin or {}).get("doc_type")
                 total_r = _num((fin or {}).get("total"))
@@ -3096,10 +3124,15 @@ async def _handle_document_ingest(
         # File the document: durable copy + project link + ClickUp attachment. Also books it
         # via the shared commit path (same as email/Smart Scanner) unless the vision-scan
         # shortcut above already committed it.
-        file_note, filed_row = await _file_uploaded_document(
-            tenant_id, phone, result, local_path, mime_type,
-            doc_category, summary, fields, already_committed=already_committed,
-        )
+        if first_page:
+            file_note, filed_row = await _join_to_first_page(
+                tenant_id, phone, result, local_path, mime_type, doc_category, fields, first_page)
+        else:
+            file_note, filed_row = await _file_uploaded_document(
+                tenant_id, phone, result, local_path, mime_type,
+                doc_category, summary, fields, already_committed=already_committed,
+                project=_project_named_in_caption(tenant_id, filename),
+            )
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
 
@@ -3194,12 +3227,14 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         project = (expenses.match_project(tenant_id, caption) if caption else None) or None
         # "Save both under X", said while this slip was still being read.
         project = project or _batch_project_for(tenant_id, phone)
+        guessed_from_supplier = False
         if supplier and not project:
             try:
                 from vula.integrations.doc_filing import lookup_learned_project
                 learned = lookup_learned_project(tenant_id, {"supplier": supplier})
                 if learned and not learned.get("ambiguous"):
                     project = learned.get("project")
+                    guessed_from_supplier = bool(project)
             except Exception:
                 pass
         if not project:
@@ -3263,20 +3298,29 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
                 logger.warning("expense confirm buttons failed: %s", exc)
         if claim.get("vat_cents"):
             msg += f" (incl. VAT R{claim['vat_cents']/100:,.2f})"
-        if claim.get("project"):
+        if claim.get("project") and guessed_from_supplier:
+            # 2026-10-26, DIGG: a Belladonna grout slip went to HPC Bokaap because earlier Pudlo
+            # payments were HPC's — said as fact. It's a guess from the supplier's history.
+            msg += f", on *{claim['project']}* (where {supplier}'s slips usually go)"
+        elif claim.get("project"):
             msg += f", on *{claim['project']}*"
         if paid_with == "company_card":
             msg += " — paid on the *company card* (I'll match it to the bank statement)."
         elif paid_with == "personal":
             msg += f" — paid on a *personal card*, so it's owed back to {name or 'you'}. 👛"
-        elif claim.get("reimbursable"):
+        elif claim.get("reimbursable") and paid_with is not None:
             msg += f" — marked to reimburse {name or 'you'}. 👛"
         else:
             msg += "."
         # One question at a time, in the receipt's fixed order (vula/doc_steps.py): project →
         # company card or own money → purpose → odometer. Each answer asks the next. Until
         # 6 Oct all of them went out in one message and a single reply had to untangle them.
-        if not confirm_first:
+        if not confirm_first and guessed_from_supplier and claim.get("id"):
+            from vula import open_questions
+            open_questions.ask(tenant_id, phone, "expense_project", claim["id"],
+                               f"expense_project: R{total / 100:,.2f} receipt (guessed)")
+            msg += "\n📍 Is that right? Reply *OK*, or the project it's really for."
+        elif not confirm_first:
             from vula import doc_steps
             nxt = doc_steps.next_question(tenant_id, phone, claim.get("id") or "",
                                           claim={**claim, "paid_with": claim.get("paid_with", paid_with)})
@@ -3420,25 +3464,64 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
                                       detail=None if cat else t)
         return f"👍 Logged that *R{amt:,.2f}* as *{(cat or 'other').title()}*."
     if kind == "expense_paid_with":
-        if not re.search(r"\b(company|own|personal|my card|my money|cash)\b", low):
+        paid_with = paid_with_answer(low)
+        if not paid_with:
             return None
-        is_company = bool(re.search(r"\bcompany\b", low))
-        paid_with = "company_card" if is_company else ("cash" if re.search(r"\bcash\b", low) else "personal")
-        service._client().table("commerce_expenses").update(
-            {"paid_with": paid_with, "reimbursable": not is_company, "updated_at": service._now()}
+        db = service._client()
+        if paid_with == "client":
+            # The client paid the supplier directly: not the business's cost. The slip stays filed
+            # on the project as the record; the claim leaves the books (2026-10-26, Bathroom Bizarre).
+            db.table("commerce_expenses").update(
+                {"paid_with": "client", "reimbursable": False, "status": "cancelled",
+                 "notes": "Paid directly by the client — not a business cost.",
+                 "updated_at": service._now()}).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
+            if claim.get("status") != "unconfirmed":
+                from vula.commerce import ledger
+                ledger.reverse_expense(tenant_id, claim)
+            where = f" on *{claim['project']}*" if claim.get("project") else ""
+            return (f"👍 Noted — the client paid that *R{amt:,.2f}* directly, so it's not booked as "
+                    f"your cost. The slip stays filed{where}.")
+        reimbursable = paid_with in ("personal", "cash")
+        db.table("commerce_expenses").update(
+            {"paid_with": paid_with, "reimbursable": reimbursable, "updated_at": service._now()}
         ).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
-        if is_company:
-            return (f"👍 Noted — that *R{amt:,.2f}* was on the company card. "
+        if paid_with == "company_card":
+            return (f"👍 Noted — that *R{amt:,.2f}* was paid by the company. "
                     "I'll match it against the bank statement.")
+        if paid_with == "petty_cash":
+            return f"👍 Noted — *R{amt:,.2f}* came out of petty cash."
         return f"👍 Noted — *R{amt:,.2f}* was your own money, so it's marked to be paid back to you. 👛"
     if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
         expenses.assign(tenant_id, claim_id, project="")
         return "👍 Noted — no project. It's in your books."
+    if claim.get("project") and low.rstrip(".!") in ("ok", "okay", "yes", "y", "correct", "right",
+                                                      "that's right", "thats right", "ja"):
+        return f"👍 Kept on *{claim['project']}*."
     proj = expenses.match_project(tenant_id, t)
     if not proj:
         return None
     expenses.assign(tenant_id, claim_id, project=proj)
     return f"✅ Allocated that *R{amt:,.2f}* expense to *{proj}*."
+
+
+def paid_with_answer(low: str) -> Optional[str]:
+    """'1'…'4' or the words for them → company_card | personal | client | petty_cash (plain
+    'cash' stays the sender's own cash, as before). None when the reply isn't an answer."""
+    low = (low or "").strip().lower()
+    num = re.match(r"^\(?([1-4])\)?(?:\b|$)", low)
+    if num:
+        return {"1": "company_card", "2": "personal", "3": "client", "4": "petty_cash"}[num.group(1)]
+    if re.search(r"\b(client|customer)\b", low):
+        return "client"
+    if re.search(r"\bpetty\b", low):
+        return "petty_cash"
+    if re.search(r"\b(company|business|eft)\b", low):
+        return "company_card"
+    if re.search(r"\b(own|personal|my card|my money|myself)\b", low):
+        return "personal"
+    if re.search(r"\bcash\b", low):
+        return "cash"
+    return None
 
 
 _BATCH_PROJECT_RE = re.compile(
@@ -4386,6 +4469,93 @@ async def _backfill_receipt_url(tenant_id: str, receipt_doc_id: str, filed_row: 
         logger.debug("receipt_url backfill skipped for %s: %s", receipt_doc_id, exc)
 
 
+async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, category,
+                              fields, first):
+    """A later page of a document already on file (vula/integrations/doc_pages.py, 2026-10-26:
+    Bathroom Bizarre's 2-page invoice came as two photos). The page keeps its own filed copy, its
+    lines and totals go onto the first page's record, and what was booked from the first page is
+    brought up to the whole document — the bill if one was booked, else the expense from the
+    photo, else a new bill now the document is complete. Returns (note, row) like
+    _file_uploaded_document."""
+    try:
+        from vula.integrations import doc_pages
+        from vula.integrations.doc_filing import file_document
+        from vula.commerce import service as cs
+        db = cs._client()
+        first_fields = first.get("fields") or {}
+        merged = doc_pages.merge(first_fields, fields or {})
+        n = merged["pages"]
+        label = " ".join(str(x) for x in (merged.get("supplier"), merged.get("document_number")) if x)
+        row = await file_document(
+            tenant_id, filename=result.filename, data=local_path.read_bytes(),
+            content_type=mime_type or "application/octet-stream", category=category,
+            summary=f"Page {n} of {first.get('filename')}", doc_id=result.doc_id,
+            fields={"page_of": first["id"], "page": n, "supplier": merged.get("supplier"),
+                    "document_number": merged.get("document_number")},
+            source="whatsapp", filed_by=phone, project=first.get("project"), status="filed")
+        db.table("vula_filed_documents").update({"fields": merged}) \
+            .eq("tenant_id", tenant_id).eq("id", first["id"]).execute()
+
+        where = f" under *{first['project']}*" if first.get("project") else ""
+        note = (f"📄 That's page {n} of {label} — joined to the first page{where}. "
+                f"{len(merged.get('line_items') or [])} lines now")
+        total, vat = cs.vat_inclusive(int(merged.get("total_cents") or 0),
+                                      int(merged.get("vat_cents") or 0),
+                                      bool(merged.get("amounts_exclude_vat")))
+        note += f", total R{total / 100:,.2f}." if total else "."
+        if merged.get("_unverified_figures") or not total:
+            return note + " I've not booked the total — please check it in your Invoices tab.", row
+
+        lines = cs._coerce_line_items(merged.get("line_items"))
+        if first.get("commerce_invoice_id"):
+            inv = (db.table("commerce_invoices").select("id,invoice_number,status,total_cents")
+                   .eq("tenant_id", tenant_id).eq("id", first["commerce_invoice_id"])
+                   .limit(1).execute().data or [None])[0]
+            if inv and inv.get("status") in ("paid", "cancelled", "void"):
+                note += (f" Its bill {inv['invoice_number']} is already {inv['status']} at "
+                         f"R{int(inv.get('total_cents') or 0) / 100:,.2f} — please check it.")
+            elif inv and int(inv.get("total_cents") or 0) != total:
+                db.table("commerce_invoices").update({
+                    "total_cents": total, "vat_cents": vat, "subtotal_cents": total - vat,
+                    "line_items": lines}).eq("tenant_id", tenant_id).eq("id", inv["id"]).execute()
+                back = (db.table("commerce_invoices").select("total_cents").eq("tenant_id", tenant_id)
+                        .eq("id", inv["id"]).limit(1).execute().data or [{}])[0]
+                if int(back.get("total_cents") or 0) == total:
+                    note += f" Bill {inv['invoice_number']} updated to the full R{total / 100:,.2f}."
+            return note, row
+        exp = None
+        if first.get("file_url"):
+            exp = (db.table("commerce_expenses").select("id,status,amount_cents")
+                   .eq("tenant_id", tenant_id).eq("receipt_url", first["file_url"])
+                   .neq("status", "cancelled").limit(1).execute().data or [None])[0]
+        if exp:
+            if exp.get("status") in ("paid", "reimbursed"):
+                note += (f" The first page's expense is already {exp['status']} at "
+                         f"R{int(exp.get('amount_cents') or 0) / 100:,.2f} — please check it.")
+            elif int(exp.get("amount_cents") or 0) != total:
+                db.table("commerce_expenses").update({
+                    "amount_cents": total, "vat_cents": vat, "line_items": lines}) \
+                    .eq("tenant_id", tenant_id).eq("id", exp["id"]).execute()
+                back = (db.table("commerce_expenses").select("amount_cents").eq("tenant_id", tenant_id)
+                        .eq("id", exp["id"]).limit(1).execute().data or [{}])[0]
+                if int(back.get("amount_cents") or 0) == total:
+                    note += f" The expense is updated to the full R{total / 100:,.2f}."
+            return note, row
+        if category in _FINANCIAL_DOC_CATEGORIES:
+            commit_fields = {k: v for k, v in merged.items() if not k.startswith("_")}
+            commit_fields.setdefault("doc_type", _CATEGORY_TO_DOC_TYPE.get(category, "invoice"))
+            committed = await cs.commit_inbound_document(
+                tenant_id, commit_fields, source="whatsapp", filed_document_id=first["id"],
+                project=first.get("project"), is_boq=(category == "Bill of Quantities (BOQ)"))
+            rec = (committed or {}).get("record") or {}
+            if (committed or {}).get("committed") and rec.get("invoice_number"):
+                note += f" Booked as {rec['invoice_number']}."
+        return note, row
+    except Exception as exc:
+        logger.warning("joining page to %s failed: %s", (first or {}).get("id"), exc)
+        return "", None
+
+
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
                                   category, summary, fields, already_committed=False,
                                   source="whatsapp", project=None):
@@ -5251,8 +5421,11 @@ def _flatten_extraction_item(item: Any) -> str:
     (e.g. contact_details: {email, phone, website}). Never invents structure that isn't there."""
     if isinstance(item, dict):
         parts = []
-        for v in item.values():
+        for k, v in item.items():
             if v is None or v == "":
+                continue
+            if str(k).endswith("_cents") and isinstance(v, (int, float)):
+                parts.append(f"R{v / 100:,.2f}")        # never raw cents in a reply
                 continue
             if isinstance(v, dict):
                 sub = _flatten_extraction_item(v)
@@ -5266,6 +5439,14 @@ def _flatten_extraction_item(item: Any) -> str:
     if item is None or item == "":
         return ""
     return str(item)
+
+
+# Fields an extraction carries for Vula's own use, never for the person reading the reply.
+# 2026-10-26, DIGG: a filed BOQ answered "Unverified Figures: line_items[0].unit_price_cents,
+# 480000, 4800.0", "Confidence: medium" and "Total Budget: 432195".
+_NOT_FOR_REPLY = {"confidence", "amounts_exclude_vat", "line_items_source", "labels"}
+_AD_HOC_MONEY_KEY = re.compile(r"total|budget|actual|invoiced|amount|price|cost|balance|"
+                               r"outstanding|variance|subtotal|vat", re.IGNORECASE)
 
 
 def _format_extraction(analysis: dict) -> str:
@@ -5288,8 +5469,14 @@ def _format_extraction(analysis: dict) -> str:
     lines = []
     fields = analysis.get("fields") or {}
     for k, v in fields.items():
-        if v is None or v == "" or k in ("items", "line_items"):
+        if v is None or v == "" or k in ("items", "line_items") or k in _NOT_FOR_REPLY:
             continue
+        if k.startswith("_"):
+            continue          # Vula's own bookkeeping (_unverified_figures …), said in words elsewhere
+        if (isinstance(v, (int, float)) and not isinstance(v, bool) and not k.endswith("_cents")
+                and _AD_HOC_MONEY_KEY.search(k)):
+            continue          # a money figure under a key the model made up ("total_budget":
+                              # 432195) — unit unknown and unchecked, so it is not repeated as fact
         if isinstance(v, list):
             if not v:
                 continue

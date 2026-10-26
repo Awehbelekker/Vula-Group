@@ -57,7 +57,8 @@ async def test_personal_card_payment_marked_reimbursable():
     with (
         patch("vula.commerce.service._client", return_value=mock_db),
         patch("vula.commerce.service.match_supplier", new=AsyncMock(return_value=None)),
-        patch("vula.commerce.expenses.list_cards", return_value=[]),  # no registered card matches
+        # the business's own card is registered and this slip's card isn't it
+        patch("vula.commerce.expenses.list_cards", return_value=[{"last4": "0001"}]),
     ):
         result = await commit_inbound_document(TID, extracted, auto_commit=True)
 
