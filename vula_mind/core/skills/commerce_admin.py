@@ -325,6 +325,22 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                      "description": "Look-back window in days. Omit for all time."}}},
     }},
     {"type": "function", "function": {
+        "name": "bank_payments",
+        "description": (
+            "Search the BANK STATEMENT lines for a person or business by name — 'all payments "
+            "from Rudolf on the statements', 'what has Rudi paid us', 'what did we pay Pudlo', "
+            "'track payments to Flush'. Lists each matching line (date, amount, in/out, project) "
+            "with totals, and says up to which date the statements run. Use this, not "
+            "find_document, for anything about what went in or out of the bank."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "The person or business as the owner wrote it"},
+            "direction": {"type": "string", "enum": ["in", "out", "any"],
+                          "description": "'in' = paid to us, 'out' = we paid them. Default any."},
+            "days": {"type": "integer", "description": "Look-back window in days. Omit for all."}},
+            "required": ["name"]},
+    }},
+    {"type": "function", "function": {
         "name": "reimbursement_balance",
         "description": "What the business owes a specific person for money they paid out of pocket "
                        "(e.g. stock/materials bought on a personal card or cash) that hasn't been "
@@ -1515,6 +1531,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
 # (knowledge, drafting, contacts, meetings, reminders) and stay available to everyone.
 _TOOL_SCOPE: Dict[str, str] = {
     "sales_summary": "finances", "finance_insights": "finances", "cash_summary": "finances",
+    "bank_payments": "finances",
     "reimbursement_balance": "finances", "add_expense": "finances",
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
@@ -2357,6 +2374,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
             if name == "cash_summary":       return await self._cash_summary(tid, args)
+            if name == "bank_payments":      return self._bank_payments(tid, args)
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
@@ -4474,6 +4492,66 @@ class CommerceAdminSkill(BaseSkill):
         # Spacing varies too: real OTH data carries both "OfftheHook" and "Off the Hook", which
         # a space-preserving key would report as two different suppliers.
         return re.sub(r"\s+", "", s) or "unknown"
+
+    def _bank_payments(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Bank statement lines naming a person or business, with totals — built in code.
+
+        2026-10-26, DIGG: "Can you track all payment for Rudolf on the statements" searched the
+        documents and answered "I couldn't find any information about Rudolf" — while his
+        R37,500 PayShap ("Rudolf Scheepe", the bank cuts names short) was on the statement.
+        Each word of the name is matched on its first six letters for that reason."""
+        from datetime import date, timedelta
+        name = str(args.get("name") or "").strip()
+        words = [w[:6] for w in re.findall(r"[A-Za-z]{3,}", name)
+                 if w.lower() not in {"the", "and", "from", "for", "pty", "ltd"}]
+        if not words:
+            return {"reply_verbatim": "Who should I look for on the statements? Send a name."}
+        db = service._client()
+        direction = (args.get("direction") or "any").lower()
+        rows: Dict[str, dict] = {}
+        for w in words:
+            q = (db.table("commerce_bank_transactions")
+                 .select("id,txn_date,amount_cents,direction,description,project")
+                 .eq("tenant_id", tid).neq("match_status", "ignored").ilike("description", f"%{w}%"))
+            if direction in ("in", "out"):
+                q = q.eq("direction", direction)
+            if args.get("days"):
+                try:
+                    q = q.gte("txn_date", (date.today() - timedelta(days=int(args["days"]))).isoformat())
+                except (TypeError, ValueError):
+                    pass
+            for r in q.order("txn_date").limit(500).execute().data or []:
+                rows[r["id"]] = r
+        try:
+            last = (db.table("commerce_bank_transactions").select("txn_date").eq("tenant_id", tid)
+                    .lte("txn_date", date.today().isoformat())
+                    .order("txn_date", desc=True).limit(1).execute().data or [])
+            covered = f" The statements in Vula run to {last[0]['txn_date']}." if last else ""
+        except Exception:
+            covered = ""
+        if not rows:
+            return {"reply_verbatim": f"Nothing on the bank statements mentions *{name}*.{covered}"}
+        found = sorted(rows.values(), key=lambda r: (r.get("txn_date") or "", r.get("description") or ""))
+        lines, total_in, total_out = [], 0, 0
+        for r in found:
+            amt = int(r.get("amount_cents") or 0)
+            into = r.get("direction") == "in"
+            total_in += amt if into else 0
+            total_out += 0 if into else amt
+            proj = f" · {r['project']}" if r.get("project") else ""
+            lines.append(f"• {r.get('txn_date')}  {'+' if into else '−'}R{amt / 100:,.2f}  "
+                         f"{r.get('description')}{proj}")
+        head = f"🏦 Bank lines mentioning *{name}* ({len(found)}):"
+        sums = []
+        if total_in:
+            sums.append(f"received *R{total_in / 100:,.2f}*")
+        if total_out:
+            sums.append(f"paid out *R{total_out / 100:,.2f}*")
+        text = "\n".join([head, *lines[:40], "", "Total: " + ", ".join(sums) + "." + covered])
+        if len(lines) > 40:
+            text += f"\n(First 40 of {len(lines)} shown.)"
+        return {"lines": len(found), "received_cents": total_in, "paid_out_cents": total_out,
+                "reply_verbatim": text}
 
     async def _cash_summary(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Money in vs money out from the COMMERCE tables, with a supplier breakdown.

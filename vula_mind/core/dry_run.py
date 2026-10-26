@@ -25,7 +25,7 @@ _STATE: ContextVar[Optional[Dict[str, Any]]] = ContextVar("vula_dry_run", defaul
 # mailbox, filing, pulling a drive file into the knowledge base — is recorded, not run.
 READ_ONLY = frozenset({
     # commerce_admin
-    "booking_availability", "calculate", "cash_summary", "competitor_check", "customer_lookup",
+    "bank_payments", "booking_availability", "calculate", "cash_summary", "competitor_check", "customer_lookup",
     "dynamics_lookup", "email_thread_summary", "finance_insights", "find_document", "list_bookings",
     "list_discount_codes", "list_purchase_orders", "list_quotes", "list_reminders", "list_rules",
     "list_storefront_pages", "list_subscriptions", "list_suppliers", "lookup_business_info",

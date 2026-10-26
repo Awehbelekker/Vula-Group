@@ -129,3 +129,57 @@ def test_a_fresh_slips_misread_year_is_put_right():
     assert fresh_slip_date("2025-11-03", today) == "2025-11-03"     # a year out can be real
     assert fresh_slip_date("2024-12-15", date(2026, 1, 10)) == "2025-12-15"   # across New Year
     assert fresh_slip_date("not a date", today) == "not a date"
+
+
+def test_payment_questions_about_the_statements_go_to_the_admin_agent():
+    from core.skills.base import looks_like_owner_admin_question as owner_q
+    assert owner_q("Can you track all payment for Rudolf on the statments")
+    assert owner_q("Please give me all payment recieved from a Rudolf on the statments")
+    assert owner_q("What has Rudi paid us")
+    assert not owner_q("belladonna")
+    assert not owner_q("Send me the tile spec sheet")
+
+
+class _BankQ:
+    def __init__(self, rows, f):
+        self.rows, self.f = rows, f
+
+    def select(self, *a): return self
+    def eq(self, k, v): self.f.append(("eq", k, v)); return self
+    def neq(self, *a): return self
+    def lte(self, *a): return self
+    def gte(self, *a): return self
+    def ilike(self, k, pat): self.f.append(("ilike", k, pat)); return self
+    def order(self, *a, **k): return self
+    def limit(self, *a): return self
+
+    def execute(self):
+        from types import SimpleNamespace
+        pats = [p.strip("%").lower() for t, k, p in self.f if t == "ilike"]
+        if not pats:
+            return SimpleNamespace(data=[{"txn_date": "2026-10-17"}])
+        return SimpleNamespace(data=[r for r in self.rows if pats[0] in r["description"].lower()])
+
+
+def test_bank_payments_lists_rudolfs_payment_from_the_statement(monkeypatch):
+    from core.skills.commerce_admin import CommerceAdminSkill
+    rows = [{"id": "b1", "txn_date": "2026-09-17", "amount_cents": 3750000, "direction": "in",
+             "description": "Payshap Credit 4Deb4 Rudolf Scheepe", "project": "Belladonna"},
+            {"id": "b2", "txn_date": "2026-09-22", "amount_cents": 840650, "direction": "out",
+             "description": "Payshap Account Off-Us Rudi Project", "project": "Belladonna"}]
+
+    class _DB:
+        def table(self, n): return _BankQ(rows, [])
+
+    monkeypatch.setattr("vula.commerce.service._client", lambda: _DB())
+    out = CommerceAdminSkill()._bank_payments("digg-demo", {"name": "Rudolf Scheepers"})
+    assert out["received_cents"] == 3750000 and out["lines"] == 1
+    assert "2026-09-17  +R37,500.00  Payshap Credit 4Deb4 Rudolf Scheepe · Belladonna" in out["reply_verbatim"]
+    assert "run to 2026-10-17" in out["reply_verbatim"]
+    none = CommerceAdminSkill()._bank_payments("digg-demo", {"name": "Nobody"})
+    assert none["reply_verbatim"].startswith("Nothing on the bank statements mentions *Nobody*")
+
+
+def test_bank_payments_is_read_only():
+    from core import dry_run
+    assert "bank_payments" in dry_run.READ_ONLY
