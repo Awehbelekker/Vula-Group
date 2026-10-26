@@ -2641,7 +2641,8 @@ async def commit_inbound_document(
     doc_date = today
     if extracted.get("date"):
         try:
-            doc_date = date.fromisoformat(extracted["date"])
+            from vula.commerce.expenses import fresh_slip_date
+            doc_date = date.fromisoformat(fresh_slip_date(str(extracted["date"])[:10], today))
         except ValueError:
             pass
     due_date = None

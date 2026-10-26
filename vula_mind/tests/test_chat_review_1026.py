@@ -105,3 +105,27 @@ def test_ok_keeps_a_guessed_project_and_a_name_moves_it(monkeypatch):
     assert not moved
     wa._answer_expense_question("digg-demo", "expense_project", "c1", "Belladonna")
     assert moved == ["Belladonna"]
+
+
+def test_a_tile_suppliers_slip_is_never_booked_as_labour():
+    from vula.commerce.expenses import _materials_not_labour
+    accounts = [{"code": "casual_labour"}, {"code": "cost_of_sales"}, {"code": "wages"}]
+    pudlo = ("PUDLO S.A (PTY) LTD This is a tax invoice from Pudlo S.A (Pty) Ltd to Digg for building "
+             "materials, specifically MAPEI ULTRACOLOR PLUS 100 WHITE 5KG")
+    assert _materials_not_labour("casual_labour", pudlo, accounts) == "cost_of_sales"
+    assert _materials_not_labour("casual_labour", "Nelitho wages week 40", accounts) == "casual_labour"
+    assert _materials_not_labour("casual_labour", "Tiler: labour to lay tiles", accounts) == "casual_labour"
+    assert _materials_not_labour("fuel", pudlo, accounts) == "fuel"          # only labour is corrected
+
+
+def test_a_fresh_slips_misread_year_is_put_right():
+    from datetime import date
+    from vula.commerce.expenses import fresh_slip_date
+    today = date(2026, 10, 26)
+    assert fresh_slip_date("2015-10-26", today) == "2026-10-26"     # Pudlo R14,228.45
+    assert fresh_slip_date("2020-10-20", today) == "2026-10-20"     # Pudlo grout
+    assert fresh_slip_date("2026-10-23", today) == "2026-10-23"     # read right — untouched
+    assert fresh_slip_date("2022-04-11", today) == "2022-04-11"     # no recent 11 Apr — left for a person
+    assert fresh_slip_date("2025-11-03", today) == "2025-11-03"     # a year out can be real
+    assert fresh_slip_date("2024-12-15", date(2026, 1, 10)) == "2025-12-15"   # across New Year
+    assert fresh_slip_date("not a date", today) == "not a date"
