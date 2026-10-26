@@ -206,7 +206,8 @@ def _money_rows(tenant_id: str) -> List[dict]:
 
 
 async def _reread_boq(tenant_id: str, row: dict) -> bool:
-    """Read one filed BOQ in full. True when it now has more lines than before."""
+    """Read one filed BOQ in full. True when it now has more lines than before, or — for a sheet
+    already read from its cells — when the cells now read differently (a better reader)."""
     from vula.ingestion import boq_sheet
     name = (row.get("filename") or "").lower()
     if not row.get("file_url") or not name.endswith(boq_sheet.SHEET_SUFFIXES + (".pdf",)):
@@ -227,7 +228,10 @@ async def _reread_boq(tenant_id: str, row: dict) -> bool:
             done = await _complete_boq_lines({"category": _BOQ, "fields": fields}, path, text,
                                              row["filename"])
             new_fields = done.get("fields") or fields
-    if len(new_fields.get("line_items") or []) <= before:
+    if new_fields.get("line_items_source") == "sheet" and fields.get("line_items_source") == "sheet":
+        if new_fields.get("line_items") == fields.get("line_items"):
+            return False               # the cells read the same as last time
+    elif len(new_fields.get("line_items") or []) <= before:
         return False
     (service._client().table("vula_filed_documents").update({"fields": new_fields})
      .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())

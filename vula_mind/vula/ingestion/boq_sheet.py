@@ -33,6 +33,17 @@ the row above — CONTRACT BOQ, CUMULATIVE AMOUNT CERTIFIED TO DATE, ANTICIPATED
 contract column stays the amount; the certified and anticipated ones are kept on each line as
 `certified_cents` / `anticipated_cents`, and a "BILL NO 1 - PRELIMINARIES" row carrying the bill's
 totals is that bill's heading, never a line.
+
+Read in full (26 Oct), that certificate also showed what a valuation adds to a bill: rows coded
+"NEW" are variations (new rates, extra work) and uncoded rows are notes, quote breakdowns and the
+contingency / fee / VAT / retention recap. In a bill whose items carry codes, only numbered items
+are the contract (they add up to each bill's stated total); "NEW" rows are kept as variations
+(`variation_cents`), as is an uncoded row with nothing in the contract but money certified
+("Sealant"); other uncoded rows are dropped. A "BOQ Summary" tab restates the bill and is skipped
+once the bill is read. Its area tabs (Bio, Physio, Common, Café) repeat the Complete tab's items,
+so a tab whose items are already read is skipped, and a TRUE/FALSE check cell or an item code
+alone on a row is never a heading. Read this way, all 12 bills of PC No. 10 match the
+certificate's own bill totals (contract, certified, anticipated) to the cent.
 """
 from __future__ import annotations
 
@@ -181,13 +192,13 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
         row = list(row or [])
         if cols is None:
             cols = _header_map(row, rows[n + 1:n + 60])
-            if cols and n:
-                _group_columns(cols, list(rows[n - 1] or []), row)
+            for above in rows[max(0, n - 3):n] if cols else []:   # a blank row may sit between
+                _group_columns(cols, list(above or []), row)
             continue
         again = _header_map(row, rows[n + 1:n + 60])
         if again:                       # a repeated header (a new page/bill) — re-map
-            if n:
-                _group_columns(again, list(rows[n - 1] or []), row)
+            for above in rows[max(0, n - 3):n]:
+                _group_columns(again, list(above or []), row)
             cols, summary = again, False
             continue
         if summary:                     # the summary page repeats each bill's total
@@ -198,10 +209,12 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
         if not desc:
             # A heading in another column ("Site Management" in column A, the description in B):
             # a row with one text cell and nothing else.
-            filled = [_clean(c) for c in row if _clean(c)]
-            if (len(filled) == 1 and re.search(r"[A-Za-z]", filled[0]) and len(filled[0]) <= 90
-                    and _num(filled[0]) is None and not _SKIP.match(filled[0])):
-                section = filled[0]
+            filled = [(i, _clean(c)) for i, c in enumerate(row)
+                      if _clean(c) and not isinstance(c, bool)]
+            if (len(filled) == 1 and filled[0][0] != cols.get("code")
+                    and re.search(r"[A-Za-z]", filled[0][1]) and len(filled[0][1]) <= 90
+                    and _num(filled[0][1]) is None and not _SKIP.match(filled[0][1])):
+                section = filled[0][1]
             continue
         if not re.search(r"[A-Za-z]", desc):
             continue
@@ -253,7 +266,37 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
         for k, v in tracked.items():
             line[f"{k}_cents"] = int(round(v * 100)) if v is not None else None
         out.append(line)
+    return _contract_items(out) if "code" in (cols or {}) else out
+
+
+_ITEM_NO = re.compile(r"^\d+(\.\d+)*$")
+
+
+def _contract_items(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """In a bill whose items carry codes, the numbered items are the contract; a "NEW" row is a
+    variation, kept with its amount as `variation_cents`; an uncoded row is a note or a recap."""
+    numbered = [li for li in lines if _ITEM_NO.match(li.get("code") or "")]
+    if not numbered or len(numbered) * 3 < len(lines):
+        return lines                   # codes are occasional here, not the bill's structure
+    out = []
+    for li in lines:
+        code = li.get("code") or ""
+        if _ITEM_NO.match(code):
+            out.append(li)
+        elif code:
+            out.append({**li, "variation": True, "variation_cents": li.get("total_cents"),
+                        "total_cents": None})
+        elif not li.get("total_cents") and (li.get("certified_cents") or li.get("anticipated_cents")):
+            # Uncoded extra work with nothing in the contract but money certified ("Sealant").
+            out.append({**li, "variation": True, "total_cents": None,
+                        "variation_cents": li.get("anticipated_cents") or li.get("certified_cents")})
     return out
+
+
+def _seen(lines: List[Dict[str, Any]], already: set) -> bool:
+    """Most of a sheet's items were read on an earlier sheet (an area tab of a Complete bill)."""
+    keys = {(li.get("description") or "").lower() for li in lines}
+    return bool(keys) and len(keys & already) * 10 >= len(keys) * 7
 
 
 def _log_unrecognised(filename: str, sheet: str, rows: List[List[Any]]) -> None:
@@ -282,11 +325,20 @@ def parse(path: Path) -> List[Dict[str, Any]]:
             from openpyxl import load_workbook
             wb = load_workbook(path, data_only=True, read_only=True)
             lines: List[Dict[str, Any]] = []
+            already: set = set()
             for ws in wb.worksheets:
                 rows = [list(r) for r in ws.iter_rows(values_only=True)]
                 got = parse_rows(rows, ws.title)
                 if not got:
                     _log_unrecognised(path.name, ws.title, rows)
+                elif already and re.search(r"\b(summary|cost split)\b", ws.title, re.IGNORECASE):
+                    log.info("BOQ sheet %s / %s: a summary of the bill; skipped", path.name, ws.title)
+                    continue
+                elif _seen(got, already):
+                    log.info("BOQ sheet %s / %s: repeats items already read; skipped",
+                             path.name, ws.title)
+                    continue
+                already |= {(li.get("description") or "").lower() for li in got}
                 lines.extend(got)
             wb.close()
             return lines
@@ -301,7 +353,7 @@ def section_budgets(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     order: List[str] = []
     sums: Dict[str, Dict[str, int]] = {}
     extra = [k for k in ("actual_cents", "invoiced_cents", "paid_cents", "certified_cents",
-                         "anticipated_cents") if any(k in li for li in lines)]
+                         "anticipated_cents", "variation_cents") if any(k in li for li in lines)]
     for li in lines:
         s = li.get("section") or "General"
         if s not in sums:
@@ -324,7 +376,10 @@ def apply_to_fields(fields: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict
     column's sum (actual, paid, invoiced, …) is that column, not the bill's total: the budget
     sum replaces it, and nothing is added for VAT the sheet doesn't show."""
     fields = dict(fields or {})
-    if len(lines) <= len(fields.get("line_items") or []):
+    # A newer read of the cells replaces an older one (the reader improves; 26 Oct, HPC's PC No. 10
+    # was first read as 482 doubled lines, correctly 152). An LLM's list is replaced only by more.
+    if not lines or (fields.get("line_items_source") != "sheet"
+                     and len(lines) <= len(fields.get("line_items") or [])):
         return fields
     fields["line_items"] = lines
     fields["sections"] = section_budgets(lines)
