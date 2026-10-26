@@ -112,7 +112,12 @@ def match_project(tenant_id: str, text: str, projects: Optional[List[str]] = Non
         score = len(want & toks(p))
         if score > best_score:
             best, best_score = p, score
-    return best if best_score >= 1 else None
+    if best_score >= 1:
+        return best
+    # A typo ("Beladona" for Belladonna, 2026-10-26) — one project's word, and only one.
+    from vula.commerce.service import close_spelling
+    close = [p for p in projects if any(close_spelling(w, pw) for w in want for pw in toks(p))]
+    return close[0] if len(close) == 1 else None
 
 
 _PROJ_STOP = {"the", "for", "site", "project", "job", "this", "that", "on", "at", "to"}

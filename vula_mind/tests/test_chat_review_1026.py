@@ -337,3 +337,25 @@ def test_reversing_an_expense_mirrors_its_posting(monkeypatch):
     assert p["source_type"] == "expense_reversal" and p["source_id"] == "e1"
     assert sum(li["debit_cents"] for li in p["lines"]) == sum(li["credit_cents"] for li in p["lines"]) == 11500
     assert {"account_code": "bank_cash", "debit_cents": 11500, "credit_cents": 0} in p["lines"]
+
+
+# ── Ian, 26 Oct: misspelt project names ("Beladona", "Belladona" on DIGG's bank lines) ──
+
+def test_a_misspelt_project_is_still_found():
+    from vula.commerce import expenses
+    projects = ["Belladonna", "HPC Bokaap", "Atlantis Paarden Eiland", "Porterfield"]
+    assert expenses.match_project("digg-demo", "Beladona tiles", projects) == "Belladonna"
+    assert expenses.match_project("digg-demo", "for the porterfeild job", projects) == "Porterfield"
+    assert expenses.match_project("digg-demo", "atlantic seaboard", projects) is None
+    assert expenses.match_project("digg-demo", "bellville", projects) is None
+    # Two projects equally close: ask, never pick one.
+    assert expenses.match_project("digg-demo", "Beladona", ["Belladonna", "Beladonna Flats"]) is None
+
+
+def test_the_resolver_reads_a_misspelt_project_in_a_caption():
+    from vula.integrations import project_resolver
+    projects = [{"name": "Belladonna", "ids": {"belladonna"}, "words": {"belladonna"}},
+                {"name": "HPC Bokaap", "ids": {"hpc bokaap"}, "words": {"hpc"}}]
+    assert project_resolver._named(projects, "Belladona top up on the slip") == ["Belladonna"]
+    assert project_resolver._named(projects, "Belladonna and HPC") == ["Belladonna", "HPC Bokaap"]
+    assert project_resolver._named(projects, "Bella's toilet") == []

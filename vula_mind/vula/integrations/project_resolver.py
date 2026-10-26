@@ -101,7 +101,15 @@ def _named(projects: List[Dict[str, Any]], text: str) -> List[str]:
         idents = [i for i in p["ids"] if len(i) >= 3]
         if any(f" {i} " in t for i in idents) or any(f" {w} " in t or f" {w} " in t2 for w in p["words"]):
             hits.append(p["name"])
-    return hits
+    if hits:
+        return hits
+    # Misspelt ("Beladona"): a project's own identifying word, give or take a typo — and only when
+    # exactly one project comes that close, so a near-tie still asks.
+    from vula.commerce.service import close_spelling
+    tokens = set(t.split())
+    close = [p["name"] for p in projects
+             if any(close_spelling(tok, w) for w in p["words"] for tok in tokens)]
+    return close if len(close) == 1 else []
 
 
 def _by_payment(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
