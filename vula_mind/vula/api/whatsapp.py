@@ -5251,8 +5251,11 @@ def _flatten_extraction_item(item: Any) -> str:
     (e.g. contact_details: {email, phone, website}). Never invents structure that isn't there."""
     if isinstance(item, dict):
         parts = []
-        for v in item.values():
+        for k, v in item.items():
             if v is None or v == "":
+                continue
+            if str(k).endswith("_cents") and isinstance(v, (int, float)):
+                parts.append(f"R{v / 100:,.2f}")        # never raw cents in a reply
                 continue
             if isinstance(v, dict):
                 sub = _flatten_extraction_item(v)
@@ -5266,6 +5269,14 @@ def _flatten_extraction_item(item: Any) -> str:
     if item is None or item == "":
         return ""
     return str(item)
+
+
+# Fields an extraction carries for Vula's own use, never for the person reading the reply.
+# 2026-10-26, DIGG: a filed BOQ answered "Unverified Figures: line_items[0].unit_price_cents,
+# 480000, 4800.0", "Confidence: medium" and "Total Budget: 432195".
+_NOT_FOR_REPLY = {"confidence", "amounts_exclude_vat", "line_items_source", "labels"}
+_AD_HOC_MONEY_KEY = re.compile(r"total|budget|actual|invoiced|amount|price|cost|balance|"
+                               r"outstanding|variance|subtotal|vat", re.IGNORECASE)
 
 
 def _format_extraction(analysis: dict) -> str:
@@ -5288,8 +5299,14 @@ def _format_extraction(analysis: dict) -> str:
     lines = []
     fields = analysis.get("fields") or {}
     for k, v in fields.items():
-        if v is None or v == "" or k in ("items", "line_items"):
+        if v is None or v == "" or k in ("items", "line_items") or k in _NOT_FOR_REPLY:
             continue
+        if k.startswith("_"):
+            continue          # Vula's own bookkeeping (_unverified_figures …), said in words elsewhere
+        if (isinstance(v, (int, float)) and not isinstance(v, bool) and not k.endswith("_cents")
+                and _AD_HOC_MONEY_KEY.search(k)):
+            continue          # a money figure under a key the model made up ("total_budget":
+                              # 432195) — unit unknown and unchecked, so it is not repeated as fact
         if isinstance(v, list):
             if not v:
                 continue

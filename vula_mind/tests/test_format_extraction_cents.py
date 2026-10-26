@@ -53,3 +53,19 @@ def test_real_payment_notification_breakdown_matches_expected_shape():
     assert "• Amount: R2,800.00" in out
     assert "Cents" not in out
     assert "• Payer: AWEH BE LEKKER (PTY) LTD" in out
+
+
+def test_a_reply_never_shows_vulas_bookkeeping_or_raw_cents():
+    """2026-10-26, DIGG: Judy's Belladonna BOQ was answered with "Unverified Figures:
+    line_items[0].unit_price_cents, 480000, 4800.0", room budgets in cents ("Main Bathroom,
+    990000"), "Confidence: medium" and "Total Budget: 432195"."""
+    out = _format_extraction({"fields": {
+        "supplier": "Bathroom Bizarre (Pty) Ltd", "tax_id": "4060154616",
+        "total_cents": 2050831, "confidence": "medium", "total_budget": 432195,
+        "_unverified_figures": [{"rand": 4800.0, "cents": 480000, "field": "line_items[0].total_cents"}],
+        "sections": [{"section": "Main Bathroom", "budget_cents": 990000}],
+        "line_items": [{"description": "Butler sink"}]}})
+    assert "Unverified" not in out and "line_items[0]" not in out and "480000" not in out
+    assert "Confidence" not in out and "432195" not in out and "990000" not in out
+    assert "Main Bathroom, R9,900.00" in out and "• Total: R20,508.31" in out
+    assert "Tax Id: 4060154616" in out and "• Line items: 1" in out
