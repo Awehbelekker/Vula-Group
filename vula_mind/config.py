@@ -164,6 +164,9 @@ class Settings(BaseSettings):
     kb_ctx_baseline: str = ""
     # Filed invoices/quotes per business re-read each night for the richer details (0 = off).
     kb_enrich_per_night: int = 60
+    # A second look at the search's top 20 (vula/ingestion/rerank.py): off | lexical | llm.
+    kb_rerank: str = "off"
+    kb_rerank_timeout_s: float = 8.0
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     # Meta only allows FREE-FORM WhatsApp text within 24 hours of the person's last inbound
     # message. Everything proactive Vula sends — an order alert, a document notification, an

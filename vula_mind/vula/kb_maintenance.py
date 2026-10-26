@@ -300,7 +300,9 @@ async def _supplier_details(apply: bool = True) -> Dict[str, Any]:
     by: Dict[str, Any] = {}
     for t in _ctx_tenants():
         try:
-            by[t] = await asyncio.to_thread(supplier_details.backfill, t, apply)
+            from vula.commerce import service
+            names, _ = await service.own_business_names(t)
+            by[t] = await asyncio.to_thread(supplier_details.backfill, t, apply, names)
         except Exception as exc:  # noqa: BLE001
             by[t] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
     return {"by_tenant": by, "summary": by}

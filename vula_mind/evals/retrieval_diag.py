@@ -10,6 +10,7 @@ document's rank at each stage of VulaIngestionPipeline.query():
   kw_rank      the literal-term pass alone (QdrantStore.keyword_search on _salient_terms)
   prod_rank    the full query() at the skills' top_k (4): what the model actually sees
   deep_rank    the full query() at top_k 20
+  lexical_rank / llm_rank   prod_rank with each second look at the top 20 (vula/ingestion/rerank.py)
 
 and a cause for each miss:
 
@@ -36,6 +37,7 @@ from evals.retrieval import DEEP_TOP_K, PROD_TOP_K, _matches, load_cases, ranked
 log = logging.getLogger(__name__)
 
 VEC_DEPTH = 50
+RERANK_MODES = ("lexical", "llm")
 CAUSES = ("found", "below_threshold", "ranked_low", "keyword_only", "lost_in_merge", "not_retrievable")
 SWEEP = (0.2, 0.25, 0.3, 0.35, 0.4)
 
@@ -98,12 +100,17 @@ async def diagnose(case: Dict[str, Any]) -> Dict[str, Any]:
         vec = await store.search(tid, emb, limit=VEC_DEPTH, score_threshold=0.0, exclude_source_types=exclude)
         terms = _salient_terms(q)
         kw = await store.keyword_search(tid, terms, limit=DEEP_TOP_K, exclude_source_types=exclude) if terms else []
-        prod = await pipe.query(q, top_k=PROD_TOP_K, authoritative_only=True)
-        deep = await pipe.query(q, top_k=DEEP_TOP_K, authoritative_only=True)
+        prod = await pipe.query(q, top_k=PROD_TOP_K, authoritative_only=True, rerank="off")
+        deep = await pipe.query(q, top_k=DEEP_TOP_K, authoritative_only=True, rerank="off")
+        # The same question with each second look (vula/ingestion/rerank.py), to compare.
+        reranked = {m: await pipe.query(q, top_k=PROD_TOP_K, authoritative_only=True, rerank=m)
+                    for m in RERANK_MODES}
     except Exception as exc:  # noqa: BLE001 — one broken case must not sink the run
         row.update(error=f"{type(exc).__name__}: {str(exc)[:200]}", cause="error")
         return row
     row["top_score"] = round(vec[0].get("score") or 0.0, 4) if vec else None
+    for m, hits in reranked.items():
+        row[f"{m}_rank"] = _rank_ids(hits, ids) if ids else _rank(ranked_docs(hits), expected)
     if ids:
         row["vec_rank"], row["vec_score"] = _rank_ids(vec, ids), _best_score(vec, ids, by_id=True)
         row["kw_rank"], row["prod_rank"] = _rank_ids(kw, ids), _rank_ids(prod, ids)
@@ -132,6 +139,9 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                            "causes": {c: sum(1 for r in ok if r.get("cause") == c) for c in CAUSES}}
     out["recall@4"] = _share(ok, lambda r: r.get("prod_rank") is not None)
     out["recall@20"] = _share(ok, lambda r: r.get("deep_rank") is not None)
+    for m in RERANK_MODES:
+        if any(f"{m}_rank" in r for r in ok):
+            out[f"recall@4_{m}"] = _share(ok, lambda r, m=m: r.get(f"{m}_rank") is not None)
     out["vector_recall@4_no_threshold"] = _share(ok, lambda r: (r.get("vec_rank") or 99) <= PROD_TOP_K)
     out["vector_recall@20_no_threshold"] = _share(ok, lambda r: (r.get("vec_rank") or 99) <= DEEP_TOP_K)
     out["keyword_recall@4"] = _share(ok, lambda r: (r.get("kw_rank") or 99) <= PROD_TOP_K)

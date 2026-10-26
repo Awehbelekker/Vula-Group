@@ -986,8 +986,67 @@ def _same_business(a: str, b: str) -> bool:
     return bool(ka) and ka == kb
 
 
+# Words that describe the kind of business, not which one: "DIGG Architects" is DIGG.
+_OWN_NAME_TAIL = re.compile(
+    r"(?:\s+(?:architects?|architecture|design|designs|studio|group|holdings|trading|projects|"
+    r"consulting|consultants|construction|services|solutions|sa|south africa|demo))+$", re.I)
+_OWN_CACHE: Dict[str, Tuple[float, List[str], List[str]]] = {}
+
+
+async def own_business_names(tenant_id: str) -> Tuple[List[str], List[str]]:
+    """(every name this business goes by, its own VAT / registration numbers) — the display name,
+    the tenant id, and the invoice settings' company name and trading-as name, each "X t/a Y"
+    split into both halves (2026-10-26: "AwehBelekker (Pty) Ltd t/a DIGG", "DIGG" and "DIGG
+    Architects" were all filed as DIGG's SUPPLIERS, and 21 of DIGG's own invoices booked as
+    bills). Cached five minutes; fail-open to the display name and tenant id."""
+    import time as _t
+    hit = _OWN_CACHE.get(tenant_id)
+    if hit and _t.time() - hit[0] < 300:
+        return hit[1], hit[2]
+    names: List[str] = [tenant_id]
+    numbers: List[str] = []
+    try:
+        from vula.api.tenants import get_config as _get_tenant_config
+        names.append((_get_tenant_config(tenant_id) or {}).get("display_name") or "")
+    except Exception:
+        pass
+    try:
+        st = await get_invoice_settings(tenant_id) or {}
+        names += [st.get("company_name") or "", st.get("trading_as") or ""]
+        numbers = [re.sub(r"[^0-9a-z]", "", st[k].lower()) for k in ("vat_number", "company_reg")
+                   if isinstance(st.get(k), str)]
+    except Exception:
+        pass
+    out: List[str] = []
+    for n in (x for x in names if isinstance(x, str)):
+        for part in [n, *re.split(r"\bt\s*/\s*a\b|\btrading as\b", n, flags=re.I)]:
+            part = (part or "").strip(" ,-")
+            if part and part not in out:
+                out.append(part)
+    numbers = [x for x in numbers if len(x) >= 6]
+    _OWN_CACHE[tenant_id] = (_t.time(), out, numbers)
+    return out, numbers
+
+
+def is_own_name(name: str, own_names: List[str], own_numbers: Optional[List[str]] = None,
+                tax_id: Optional[str] = None) -> bool:
+    """Is `name` (or `tax_id`) this business itself? Exact after normalising, or equal once a
+    trailing kind-of-business word is dropped from both ("DIGG Architects" = "DIGG Architecture")."""
+    if tax_id and own_numbers and re.sub(r"[^0-9a-z]", "", tax_id.lower()) in own_numbers:
+        return True
+    if not (name or "").strip():
+        return False
+    for own in own_names:
+        if _same_business(name, own):
+            return True
+        a, b = _OWN_NAME_TAIL.sub("", name.strip()), _OWN_NAME_TAIL.sub("", own.strip())
+        if len(re.sub(r"[^a-z0-9]", "", a.lower())) >= 3 and _same_business(a, b):
+            return True
+    return False
+
+
 def classify_direction(supplier_name: str, tenant_name: str, tenant_id: str,
-                       supplier_known: bool = False) -> tuple:
+                       supplier_known: bool = False, own_names: Optional[List[str]] = None) -> tuple:
     """Work out whether a scanned document is ours or theirs, and how sure we are.
 
     Returns (direction, confident, reason).
@@ -1006,7 +1065,8 @@ def classify_direction(supplier_name: str, tenant_name: str, tenant_id: str,
     sales invoices (R32,307.97) on the wrong side of the ledger. So the caller marks it for
     review and asks a human rather than committing a guess.
     """
-    if _same_business(supplier_name, tenant_name) or _same_business(supplier_name, tenant_id):
+    if (_same_business(supplier_name, tenant_name) or _same_business(supplier_name, tenant_id)
+            or (own_names and is_own_name(supplier_name, own_names))):
         return "outbound", True, "issued by this business"
     if supplier_known:
         return "inbound", True, "known supplier"
@@ -2554,10 +2614,15 @@ async def commit_inbound_document(
     needs_review = False
     ask_direction_of = None      # set when we can't tell whose document this is
 
-    supplier_match = await match_supplier(
+    # The business's own document is never a supplier's: no match, no new supplier record.
+    own_names, own_numbers = await own_business_names(tenant_id)
+    own_document = is_own_name(supplier_name, own_names, own_numbers, tax_id or None)
+    supplier_match = None if own_document else await match_supplier(
         tenant_id, name=supplier_name or None, tax_id=tax_id or None, layout_signature=layout_signature,
     )
-    if supplier_match and supplier_match["auto_apply"]:
+    if own_document:
+        pass
+    elif supplier_match and supplier_match["auto_apply"]:
         supplier_row = supplier_match["supplier"]
         payment_terms_days = supplier_row.get("payment_terms_days", 30)
     elif supplier_match:
@@ -2648,7 +2713,10 @@ async def commit_inbound_document(
         # the direction is a genuine coin-flip (new supplier vs an imported client invoice), so
         # it is flagged for review rather than committed as a guess.
         direction, dir_confident, dir_reason = classify_direction(
-            supplier_name, tenant_name, tenant_id, supplier_known=bool(supplier_row))
+            supplier_name, tenant_name, tenant_id, supplier_known=bool(supplier_row),
+            own_names=own_names)
+        if own_document:
+            direction, dir_confident, dir_reason = "outbound", True, "issued by this business"
         if not dir_confident:
             needs_review = True
             logger.info("direction unconfident for %s (%s): filed as %s pending review",

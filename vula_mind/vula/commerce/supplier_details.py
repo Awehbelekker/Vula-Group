@@ -57,7 +57,10 @@ def updates_from_document(supplier: Dict[str, Any], fields: Dict[str, Any],
     email = (f.get("supplier_email") or "").strip()
     if _blank(s.get("contact_email")) and re.fullmatch(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}", email):
         up["contact_email"] = email
+    from vula.commerce.extraction_quality import is_sa_bank
     bank = f.get("supplier_bank") if isinstance(f.get("supplier_bank"), dict) else {}
+    if not is_sa_bank(bank.get("bank_name")):
+        bank = {}           # an account at no recognised bank is a misread, not bank details
     acct = _digits(bank.get("account_number"))
     change = None
     if acct and len(acct) >= 6:
@@ -115,7 +118,7 @@ async def alert_bank_change(tenant_id: str, supplier_name: str, change: Dict[str
                              idem_key=f"bank-change:{filed_document_id or supplier_name}")
 
 
-def backfill(tenant_id: str, apply: bool = True) -> Dict[str, Any]:
+def backfill(tenant_id: str, apply: bool = True, own_names: Optional[list] = None) -> Dict[str, Any]:
     """One pass over the supplier bills already filed, newest first: fill each supplier's blanks
     from their own invoices. No alerts — a historical bank difference is counted, not sent. A VAT
     number on 3+ suppliers' invoices is the business's own and is never given to a supplier."""
@@ -127,7 +130,9 @@ def backfill(tenant_id: str, apply: bool = True) -> Dict[str, Any]:
     rows = (db.table("vula_filed_documents").select("id,supplier_id,fields,created_at,category")
             .eq("tenant_id", tenant_id).in_("category", ["Invoice", "Quote / Estimate"])
             .order("created_at", desc=True).limit(5000).execute().data or [])
-    rows = [r for r in rows if r.get("supplier_id") in sups]
+    # The business's own "supplier" records (its own invoices filed as bills) get nothing.
+    mine = {i for i, sup in sups.items() if own_names and service.is_own_name(sup.get("name") or "", own_names)}
+    rows = [r for r in rows if r.get("supplier_id") in sups and r.get("supplier_id") not in mine]
     own = kb_records.own_vat_numbers(rows)
     out: Dict[str, Any] = {"tenant": tenant_id, "suppliers": len(sups), "documents": len(rows),
                            "suppliers_updated": 0, "filled": {}, "bank_differences": 0}
