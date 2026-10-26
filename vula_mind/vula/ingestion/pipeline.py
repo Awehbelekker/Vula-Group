@@ -1915,7 +1915,7 @@ class VulaIngestionPipeline:
     async def query(self, question: str, top_k: int = 5,
                     authoritative_only: bool = False, category: str | None = None,
                     expand: bool = True, audience: str | None = None,
-                    doc_id: str | None = None) -> List[dict]:
+                    doc_id: str | None = None, rerank: str | None = None) -> List[dict]:
         """
         Semantic search across this tenant's knowledge base.
         Returns relevant document chunks for RAG.
@@ -1944,6 +1944,9 @@ class VulaIngestionPipeline:
 
         doc_id (2026-10-24): search inside this one document only (a staff member's pick after
         "which one did you mean?" — vula/kb_learning.py).
+
+        rerank (2026-10-26): "lexical" | "llm" | "off" — a second look at the top 20 before the
+        best top_k are returned (vula/ingestion/rerank.py). None = settings.kb_rerank.
         """
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
         # Inside one picked document every chunk is a candidate: the person already said which.
@@ -1960,7 +1963,10 @@ class VulaIngestionPipeline:
                 variants.append(syn)
             variants += await expand_query(question, self.tenant_id)
 
-        depth = max(top_k * 2, 8)
+        from vula.ingestion import rerank as _rerank
+        mode = (rerank if rerank is not None else getattr(settings, "kb_rerank", "off")) or "off"
+        # A second look needs the top 20 to choose from, not just enough to fill top_k.
+        depth = max(top_k * 2, 8, _rerank.CANDIDATES if mode != "off" else 0)
 
         async def _one(q: str) -> List[dict]:
             try:
@@ -1999,6 +2005,9 @@ class VulaIngestionPipeline:
                             or any(i in (h.get("text") or "").lower() for i in idents)]
 
         fused = _fuse(runs[0], runs[1:], keyword_hits)
+        if mode != "off" and len(fused) > top_k:
+            fused = await _rerank.rerank(question, fused, mode,
+                                         timeout_s=float(getattr(settings, "kb_rerank_timeout_s", 8.0)))
         return _without_placeholders(fused[:top_k])
 
     async def answer(
