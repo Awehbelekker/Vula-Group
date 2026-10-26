@@ -3308,7 +3308,7 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
             msg += " — paid on the *company card* (I'll match it to the bank statement)."
         elif paid_with == "personal":
             msg += f" — paid on a *personal card*, so it's owed back to {name or 'you'}. 👛"
-        elif claim.get("reimbursable"):
+        elif claim.get("reimbursable") and paid_with is not None:
             msg += f" — marked to reimburse {name or 'you'}. 👛"
         else:
             msg += "."
@@ -3464,16 +3464,32 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
                                       detail=None if cat else t)
         return f"👍 Logged that *R{amt:,.2f}* as *{(cat or 'other').title()}*."
     if kind == "expense_paid_with":
-        if not re.search(r"\b(company|own|personal|my card|my money|cash)\b", low):
+        paid_with = paid_with_answer(low)
+        if not paid_with:
             return None
-        is_company = bool(re.search(r"\bcompany\b", low))
-        paid_with = "company_card" if is_company else ("cash" if re.search(r"\bcash\b", low) else "personal")
-        service._client().table("commerce_expenses").update(
-            {"paid_with": paid_with, "reimbursable": not is_company, "updated_at": service._now()}
+        db = service._client()
+        if paid_with == "client":
+            # The client paid the supplier directly: not the business's cost. The slip stays filed
+            # on the project as the record; the claim leaves the books (2026-10-26, Bathroom Bizarre).
+            db.table("commerce_expenses").update(
+                {"paid_with": "client", "reimbursable": False, "status": "cancelled",
+                 "notes": "Paid directly by the client — not a business cost.",
+                 "updated_at": service._now()}).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
+            if claim.get("status") != "unconfirmed":
+                from vula.commerce import ledger
+                ledger.reverse_expense(tenant_id, claim)
+            where = f" on *{claim['project']}*" if claim.get("project") else ""
+            return (f"👍 Noted — the client paid that *R{amt:,.2f}* directly, so it's not booked as "
+                    f"your cost. The slip stays filed{where}.")
+        reimbursable = paid_with in ("personal", "cash")
+        db.table("commerce_expenses").update(
+            {"paid_with": paid_with, "reimbursable": reimbursable, "updated_at": service._now()}
         ).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
-        if is_company:
-            return (f"👍 Noted — that *R{amt:,.2f}* was on the company card. "
+        if paid_with == "company_card":
+            return (f"👍 Noted — that *R{amt:,.2f}* was paid by the company. "
                     "I'll match it against the bank statement.")
+        if paid_with == "petty_cash":
+            return f"👍 Noted — *R{amt:,.2f}* came out of petty cash."
         return f"👍 Noted — *R{amt:,.2f}* was your own money, so it's marked to be paid back to you. 👛"
     if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
         expenses.assign(tenant_id, claim_id, project="")
@@ -3486,6 +3502,26 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
         return None
     expenses.assign(tenant_id, claim_id, project=proj)
     return f"✅ Allocated that *R{amt:,.2f}* expense to *{proj}*."
+
+
+def paid_with_answer(low: str) -> Optional[str]:
+    """'1'…'4' or the words for them → company_card | personal | client | petty_cash (plain
+    'cash' stays the sender's own cash, as before). None when the reply isn't an answer."""
+    low = (low or "").strip().lower()
+    num = re.match(r"^\(?([1-4])\)?(?:\b|$)", low)
+    if num:
+        return {"1": "company_card", "2": "personal", "3": "client", "4": "petty_cash"}[num.group(1)]
+    if re.search(r"\b(client|customer)\b", low):
+        return "client"
+    if re.search(r"\bpetty\b", low):
+        return "petty_cash"
+    if re.search(r"\b(company|business|eft)\b", low):
+        return "company_card"
+    if re.search(r"\b(own|personal|my card|my money|myself)\b", low):
+        return "personal"
+    if re.search(r"\bcash\b", low):
+        return "cash"
+    return None
 
 
 _BATCH_PROJECT_RE = re.compile(

@@ -263,3 +263,77 @@ def test_cost_statement_wordings_are_read(tmp_path):
     (li,) = boq_sheet.parse(p)
     assert (li["description"], li["section"], li["total_cents"], li["actual_cents"]) == \
         ("Tiles + waterproofing", "Main Bathroom", 840000, 912050)
+
+
+# ── Ian, 26 Oct: "if a staff member scans an invoice or receipt it should ask paid-by options" ──
+
+def test_a_staff_members_slip_always_asks_who_paid(monkeypatch):
+    from vula import doc_steps
+    from vula.commerce import expenses
+    monkeypatch.setattr(expenses, "list_cards", lambda t: [])
+    base = {"status": "submitted", "project": "Belladonna", "purpose_category": None, "card_last4": None}
+    staff = {**base, "paid_with": None, "reimbursable": True}
+    owner = {**base, "paid_with": None, "reimbursable": False}
+    assert doc_steps.expense_step("digg-demo", staff) == "expense_paid_with"
+    assert doc_steps.expense_step("digg-demo", owner) == "expense_purpose"     # the owner isn't nagged
+    assert "*3* the client paid · *4* petty cash" in doc_steps._EXPENSE_PROMPTS["expense_paid_with"]
+    assert doc_steps.expense_step("digg-demo", {**staff, "paid_with": "client", "status": "cancelled"}) is None
+
+
+def test_who_paid_answers():
+    for reply, want in (("1", "company_card"), ("2", "personal"), ("3", "client"), ("4", "petty_cash"),
+                        ("company card", "company_card"), ("EFT from the business", "company_card"),
+                        ("my own money", "personal"), ("the client paid", "client"),
+                        ("Rudi the customer paid it", "client"), ("petty cash", "petty_cash"),
+                        ("cash", "cash"), ("Belladonna", None), ("12", None)):
+        assert wa.paid_with_answer(reply.lower()) == want, reply
+
+
+def _claim_db(row):
+    from types import SimpleNamespace
+
+    class Q:
+        def __init__(self): self.patch = None
+        def select(self, *a): return self
+        def eq(self, *a): return self
+        def limit(self, *a): return self
+        def update(self, p): self.patch = p; return self
+        def execute(self):
+            if self.patch:
+                row.update(self.patch)
+            return SimpleNamespace(data=[row])
+
+    return SimpleNamespace(table=lambda n: Q())
+
+
+def test_a_client_paid_slip_leaves_the_books_but_stays_filed(monkeypatch):
+    from vula.commerce import ledger
+    row = {"id": "e1", "tenant_id": "digg-demo", "amount_cents": 1793606, "status": "submitted",
+           "project": "Belladonna", "paid_with": None, "reimbursable": True}
+    monkeypatch.setattr("vula.commerce.service._client", lambda: _claim_db(row))
+    reversed_ = []
+    monkeypatch.setattr(ledger, "reverse_expense", lambda t, e: reversed_.append(e["id"]))
+    out = wa._answer_expense_question("digg-demo", "expense_paid_with", "e1", "3")
+    assert (row["status"], row["paid_with"], row["reimbursable"]) == ("cancelled", "client", False)
+    assert reversed_ == ["e1"]
+    assert "client paid that *R17,936.06* directly" in out and "stays filed on *Belladonna*" in out
+
+
+def test_petty_cash_and_company_are_never_owed_back(monkeypatch):
+    for answer, want in (("4", "petty_cash"), ("1", "company_card")):
+        row = {"id": "e1", "amount_cents": 25000, "status": "submitted", "paid_with": None, "reimbursable": True}
+        monkeypatch.setattr("vula.commerce.service._client", lambda: _claim_db(row))
+        wa._answer_expense_question("digg-demo", "expense_paid_with", "e1", answer)
+        assert (row["paid_with"], row["reimbursable"]) == (want, False)
+
+
+def test_reversing_an_expense_mirrors_its_posting(monkeypatch):
+    from vula.commerce import ledger
+    posted = []
+    monkeypatch.setattr(ledger, "_post", lambda t, **k: posted.append(k))
+    ledger.reverse_expense("digg-demo", {"id": "e1", "amount_cents": 11500, "vat_cents": 1500,
+                                         "account_code": "cost_of_sales", "date": "2026-10-22"})
+    (p,) = posted
+    assert p["source_type"] == "expense_reversal" and p["source_id"] == "e1"
+    assert sum(li["debit_cents"] for li in p["lines"]) == sum(li["credit_cents"] for li in p["lines"]) == 11500
+    assert {"account_code": "bank_cash", "debit_cents": 11500, "credit_cents": 0} in p["lines"]

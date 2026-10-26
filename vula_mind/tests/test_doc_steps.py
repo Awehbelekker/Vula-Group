@@ -65,7 +65,7 @@ async def test_answering_the_project_asks_the_card_question_next(db, cards, monk
     with patch.object(wa, "_send_reply", AsyncMock()) as reply:
         assert await wa._answer_open_question(TID, PHONE, "Atlantis")
     text = reply.await_args.args[1]
-    assert "Atlantis Paarden Eiland" in text and "*company card* or *your own money*" in text
+    assert "Atlantis Paarden Eiland" in text and "Who paid for this?" in text
     assert "What was this for" not in text                         # one at a time
     assert [q["kind"] for q in oq.open_for(TID, PHONE)] == ["expense_paid_with"]
 
