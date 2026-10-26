@@ -183,3 +183,83 @@ def test_bank_payments_lists_rudolfs_payment_from_the_statement(monkeypatch):
 def test_bank_payments_is_read_only():
     from core import dry_run
     assert "bank_payments" in dry_run.READ_ONLY
+
+
+import pytest
+
+
+class _Rows:
+    def __init__(self, data): self.data, self.upd = data, []
+    def select(self, *a): return self
+    def eq(self, *a): return self
+    def limit(self, *a): return self
+    def update(self, row): self.upd.append(row); return self
+    def execute(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(data=self.data)
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_boq_reread_never_replaces_a_spreadsheet_budget(monkeypatch, tmp_path):
+    from vula.commerce import reread, service
+    filed = _Rows([{"filename": "Belladonna Flat – project bill variance 2026-10-26.xlsx"}])
+
+    class _DB:
+        def table(self, n): return filed
+
+    upserts = []
+    monkeypatch.setattr(service, "_client", lambda: _DB())
+    monkeypatch.setattr(service, "upsert_project_boq", lambda *a, **k: upserts.append((a, k)))
+    monkeypatch.setattr(reread, "_download", AsyncMock(return_value=b"%PDF"))
+
+    async def more_lines(result, path, text, filename):
+        return {"fields": {"line_items": [{"description": f"l{i}", "total_cents": 100} for i in range(9)],
+                           "sections": [{"section": "Main Bathroom", "budget_cents": 990000}]}}
+
+    monkeypatch.setattr("vula.api.whatsapp._complete_boq_lines", more_lines)
+
+    class _Pages:
+        async def parse(self, path): return [(1, "page text")]
+
+    class _Pipe:
+        def __init__(self, **k): self.parser = _Pages()
+
+    monkeypatch.setattr("vula.ingestion.pipeline.VulaIngestionPipeline", _Pipe)
+    row = {"id": "d1", "filename": "Bill of Quantities 20261026-1002.pdf", "project": "Belladonna",
+           "file_url": "https://x/doc.pdf", "fields": {"line_items": [{"description": "P&G"}]}}
+    assert await reread._reread_boq("digg-demo", row) is True      # the PDF's own record is fuller
+    assert upserts == []                                            # but the budget stays the sheet's
+    filed.data = []                                                 # no spreadsheet filed → PDF may set it
+    row["fields"] = {"line_items": [{"description": "P&G"}]}
+    assert await reread._reread_boq("digg-demo", row) is True
+    assert len(upserts) == 1
+
+
+def test_a_sheet_with_no_recognised_header_says_what_it_saw(tmp_path, caplog):
+    import logging
+    from openpyxl import Workbook
+    from vula.ingestion import boq_sheet
+    wb = Workbook()
+    ws = wb.active
+    for r in (["Belladonna Flat"], ["Thing", "Number", "Other"], ["Tiling", 14000, 9000]):
+        ws.append(r)
+    p = tmp_path / "bill.xlsx"
+    wb.save(p)
+    with caplog.at_level(logging.INFO, logger="vula.ingestion.boq_sheet"):
+        assert boq_sheet.parse(p) == []
+    assert "no header row recognised" in caplog.text and "Thing; Number; Other" in caplog.text
+
+
+def test_cost_statement_wordings_are_read(tmp_path):
+    from openpyxl import Workbook
+    from vula.ingestion import boq_sheet
+    wb = Workbook()
+    ws = wb.active
+    for r in (["Work item", "Budget allowance (R)", "Spent to date"], ["Main Bathroom"],
+              ["Tiles + waterproofing", 8400, 9120.5]):
+        ws.append(r)
+    p = tmp_path / "bill.xlsx"
+    wb.save(p)
+    (li,) = boq_sheet.parse(p)
+    assert (li["description"], li["section"], li["total_cents"], li["actual_cents"]) == \
+        ("Tiles + waterproofing", "Main Bathroom", 840000, 912050)
