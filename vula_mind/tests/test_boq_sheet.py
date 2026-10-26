@@ -210,3 +210,23 @@ def test_a_payment_certificate_keeps_contract_certified_and_anticipated(tmp_path
     assert boq_sheet.section_budgets(lines) == [
         {"section": "PRELIMINARIES", "budget_cents": 100000, "certified_cents": 110000, "anticipated_cents": 100000},
         {"section": "MASONRY", "budget_cents": 90000, "certified_cents": 85000, "anticipated_cents": 85000}]
+
+
+def test_a_read_total_that_is_the_actual_column_becomes_the_budget_with_no_vat(tmp_path):
+    """Belladonna, 26 Oct: the model took the Actual column as the total, flagged it as excluding
+    VAT, and the contract value came out at actual + 15%."""
+    p = tmp_path / "project bill.xlsx"
+    _sheet(p)
+    model = {"line_items": [{"description": "P&G"}], "total_cents": 8318869,     # = Actual column
+             "amounts_exclude_vat": True, "vat_cents": 1352830, "subtotal_cents": 9018869}
+    fields = boq_sheet.apply_to_fields(model, boq_sheet.parse(p))
+    assert fields["total_cents"] == sum(s["budget_cents"] for s in fields["sections"]) == 7790000
+    assert fields["amounts_exclude_vat"] is False
+    assert "vat_cents" not in fields and "subtotal_cents" not in fields
+
+
+def test_a_read_total_that_is_no_columns_sum_is_kept(tmp_path):
+    p = tmp_path / "project bill.xlsx"
+    _sheet(p)
+    fields = boq_sheet.apply_to_fields({"line_items": [], "total_cents": 9500000}, boq_sheet.parse(p))
+    assert fields["total_cents"] == 9500000

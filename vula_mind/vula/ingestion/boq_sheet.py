@@ -315,8 +315,14 @@ def section_budgets(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def apply_to_fields(fields: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Put the sheet's lines on an analysis's fields when the sheet read found more than the
-    LLM did. A total the LLM read is kept (it came from the document); a missing one becomes
-    the sum of the lines."""
+    LLM did. A total the LLM read is kept (a QS bill's selling price with fee and VAT is more
+    than its lines); a missing one becomes the sum of the line budgets.
+
+    2026-10-26, DIGG: the LLM read of Judy's Belladonna bill took the Actual column's R569,162 as
+    the total and flagged it as excluding VAT, so the project's contract value became R654,535.75
+    (DIGG isn't VAT registered; the budget is R461,195). A read total that is just another
+    column's sum (actual, paid, invoiced, …) is that column, not the bill's total: the budget
+    sum replaces it, and nothing is added for VAT the sheet doesn't show."""
     fields = dict(fields or {})
     if len(lines) <= len(fields.get("line_items") or []):
         return fields
@@ -330,6 +336,13 @@ def apply_to_fields(fields: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict
         fields["_unverified_figures"] = flagged
     else:
         fields.pop("_unverified_figures", None)
-    if not fields.get("total_cents"):
-        fields["total_cents"] = sum(int(li.get("total_cents") or 0) for li in lines)
+    budget = sum(int(li.get("total_cents") or 0) for li in lines)
+    read = int(fields.get("total_cents") or 0)
+    other_columns = {sum(int(li.get(f"{k}_cents") or 0) for li in lines) for k in _TRACKED
+                     if any(li.get(f"{k}_cents") is not None for li in lines)}
+    if budget > 0 and (not read or any(abs(read - c) <= 100 for c in other_columns if c)):
+        fields["total_cents"] = budget
+        fields["amounts_exclude_vat"] = False
+        fields.pop("vat_cents", None)
+        fields.pop("subtotal_cents", None)
     return fields
