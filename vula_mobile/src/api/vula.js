@@ -9,16 +9,15 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // local desktop on the same WiFi mesh (e.g. http://192.168.1.100:7438).
 const DEFAULT_HOST = "https://vula-group-production.up.railway.app";
 
-// Default API key — baked in so the app works out of the box. Users can
-// override per-tenant in Settings.
-const DEFAULT_API_KEY = "0d409e634bd4e81a0d7dd0764264db6cac20721e2ce43915a43cd1997a019ca5";
+// No key ships with the app (2026-10-26). A key baked into an app bundle can be read by anyone
+// who has the app, and the server key acts on every business. Enter yours in Settings.
 
 async function getHost() {
   return (await AsyncStorage.getItem("vula_host")) || DEFAULT_HOST;
 }
 
 async function getApiKey() {
-  return (await AsyncStorage.getItem("vula_api_key")) || DEFAULT_API_KEY;
+  return (await AsyncStorage.getItem("vula_api_key")) || "";
 }
 
 async function headers(extra = {}) {
