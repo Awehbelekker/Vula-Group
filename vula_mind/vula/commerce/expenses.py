@@ -293,11 +293,15 @@ def resolve_paid_with(tenant_id: str, *, card_last4: Optional[str] = None,
     Suffix-tolerant: Capitec prints 'Card 572' (3 digits) while slips may show 4."""
     digits = re.sub(r"\D", "", card_last4 or "")[-4:]
     if len(digits) >= 3:
-        for c in list_cards(tenant_id):
+        cards = list_cards(tenant_id)
+        for c in cards:
             reg = (c.get("last4") or "")
             if reg.endswith(digits) or digits.endswith(reg[-3:]):
                 return "company_card"
-        return "personal"
+        # Only "personal" when the business HAS registered its cards and this isn't one. With
+        # none registered we can't tell (2026-10-26, DIGG: its own Visa Debit slip was booked
+        # "personal card, owed back to you") — return None so the next question asks.
+        return "personal" if cards else None
     if (payment_method or "").lower() == "cash":
         return "cash"
     return None

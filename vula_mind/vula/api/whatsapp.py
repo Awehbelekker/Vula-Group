@@ -1034,10 +1034,13 @@ async def receive_message(
                         if phone and media_id:
                             # Background — document processing takes far longer than Meta's
                             # webhook timeout; blocking here is what causes the retry storm.
-                            _run_bg(_handle_document_ingest(
+                            # One sender's documents/photos run one after another on every
+                            # line, so each sees what the previous one booked (2026-10-26, DIGG:
+                            # 3 photos of one Pudlo slip ran at once and it was booked twice).
+                            _run_bg(_one_at_a_time(route_tenant, phone, _handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
                                 content_sha=doc.get("sha256") or None, route_mode=route_mode,
-                            ), label="document_ingest", turn={
+                            )), label="document_ingest", turn={
                                 "tenant_id": route_tenant, "phone": phone, "kind": "document",
                                 "text": filename, "wamid": msg_id})
 
@@ -1051,9 +1054,8 @@ async def receive_message(
                                 phone, msg_type, media_id, caption, mime_type, msg_id,
                                 route_mode, route_tenant, media.get("sha256") or None,
                             )
-                            if route_mode == "commerce":
-                                _media_coro = _one_at_a_time(route_tenant, phone, _media_coro,
-                                                             forwarded=fwd_customer)
+                            _media_coro = _one_at_a_time(route_tenant, phone, _media_coro,
+                                                         forwarded=fwd_customer if route_mode == "commerce" else False)
                             _run_bg(_media_coro, label="image_video", turn={
                                 "tenant_id": route_tenant, "phone": phone, "kind": msg_type,
                                 "text": caption, "wamid": msg_id})
@@ -2433,6 +2435,23 @@ def _image_filename(caption: str, msg_id: str, mime_type: str) -> str:
     return f"{name}.{ext}" if name else f"image-{msg_id}.{ext}"
 
 
+def _project_named_in_caption(tenant_id: str, filename: str) -> Optional[str]:
+    """The project a photo's caption names ("Belladonna and DIGG had to topup the amount on the
+    slip"), or None. 2026-10-26, DIGG: that caption was dropped before the project was chosen,
+    so the Bathroom Bizarre invoice was filed with no project. Only a project actually NAMED
+    counts (project_resolver's strict match), never a loose shared word."""
+    caption = _caption_hint(filename)
+    if not caption or not tenant_id:
+        return None
+    try:
+        from vula.integrations.project_resolver import resolve
+        r = resolve(tenant_id, {}, caption)
+        return r["project"] if r and r.get("kind") == "named" else None
+    except Exception as exc:
+        logger.debug("caption project check skipped: %s", exc)
+        return None
+
+
 def _caption_hint(filename: str) -> str:
     """The caption a photo was named after, or "" for a generated name."""
     stem = (filename or "").rsplit(".", 1)[0].strip()
@@ -3099,6 +3118,7 @@ async def _handle_document_ingest(
         file_note, filed_row = await _file_uploaded_document(
             tenant_id, phone, result, local_path, mime_type,
             doc_category, summary, fields, already_committed=already_committed,
+            project=_project_named_in_caption(tenant_id, filename),
         )
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
@@ -3194,12 +3214,14 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         project = (expenses.match_project(tenant_id, caption) if caption else None) or None
         # "Save both under X", said while this slip was still being read.
         project = project or _batch_project_for(tenant_id, phone)
+        guessed_from_supplier = False
         if supplier and not project:
             try:
                 from vula.integrations.doc_filing import lookup_learned_project
                 learned = lookup_learned_project(tenant_id, {"supplier": supplier})
                 if learned and not learned.get("ambiguous"):
                     project = learned.get("project")
+                    guessed_from_supplier = bool(project)
             except Exception:
                 pass
         if not project:
@@ -3263,7 +3285,11 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
                 logger.warning("expense confirm buttons failed: %s", exc)
         if claim.get("vat_cents"):
             msg += f" (incl. VAT R{claim['vat_cents']/100:,.2f})"
-        if claim.get("project"):
+        if claim.get("project") and guessed_from_supplier:
+            # 2026-10-26, DIGG: a Belladonna grout slip went to HPC Bokaap because earlier Pudlo
+            # payments were HPC's — said as fact. It's a guess from the supplier's history.
+            msg += f", on *{claim['project']}* (where {supplier}'s slips usually go)"
+        elif claim.get("project"):
             msg += f", on *{claim['project']}*"
         if paid_with == "company_card":
             msg += " — paid on the *company card* (I'll match it to the bank statement)."
@@ -3276,7 +3302,12 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         # One question at a time, in the receipt's fixed order (vula/doc_steps.py): project →
         # company card or own money → purpose → odometer. Each answer asks the next. Until
         # 6 Oct all of them went out in one message and a single reply had to untangle them.
-        if not confirm_first:
+        if not confirm_first and guessed_from_supplier and claim.get("id"):
+            from vula import open_questions
+            open_questions.ask(tenant_id, phone, "expense_project", claim["id"],
+                               f"expense_project: R{total / 100:,.2f} receipt (guessed)")
+            msg += "\n📍 Is that right? Reply *OK*, or the project it's really for."
+        elif not confirm_first:
             from vula import doc_steps
             nxt = doc_steps.next_question(tenant_id, phone, claim.get("id") or "",
                                           claim={**claim, "paid_with": claim.get("paid_with", paid_with)})
@@ -3434,6 +3465,9 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
     if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
         expenses.assign(tenant_id, claim_id, project="")
         return "👍 Noted — no project. It's in your books."
+    if claim.get("project") and low.rstrip(".!") in ("ok", "okay", "yes", "y", "correct", "right",
+                                                      "that's right", "thats right", "ja"):
+        return f"👍 Kept on *{claim['project']}*."
     proj = expenses.match_project(tenant_id, t)
     if not proj:
         return None

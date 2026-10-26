@@ -52,7 +52,9 @@ def expense_step(tenant_id: str, claim: dict) -> Optional[str]:
     if claim.get("project") is None and (claim["needs_project"] if "needs_project" in claim
                                          else bool(expenses.known_projects(tenant_id))):
         return "expense_project"
-    if claim.get("paid_with") is None and expenses.list_cards(tenant_id):
+    # A card slip whose card isn't registered (or a business that registered its cards) —
+    # resolve_paid_with left it unknown rather than assume "personal" (2026-10-26, DIGG).
+    if claim.get("paid_with") is None and (claim.get("card_last4") or expenses.list_cards(tenant_id)):
         return "expense_paid_with"
     if not claim.get("purpose_category"):
         return "expense_purpose"
