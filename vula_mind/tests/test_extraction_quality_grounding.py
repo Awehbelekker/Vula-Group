@@ -45,3 +45,18 @@ def test_small_amounts_below_floor_are_ignored():
 def test_whole_rand_amount_without_cents_in_source_still_grounds():
     ex = {"total_cents": 4400000}
     assert ungrounded_figures(ex, "Amount paid: R44 000 to the supplier") == []
+
+
+def test_a_figure_one_zero_short_is_not_grounded_by_a_bigger_number_on_the_page():
+    """2026-10-26, DIGG's Belladonna labour statement: "R 72 500" and "R 7 100" were booked as
+    R7,250 and R710 — and passed, because "7250" is inside "72500" as a digit substring."""
+    text = ("Demolish kitchen wall and install new lintel R 2 700\nDemolition and structural "
+            "subtotal R 7 100\nScope of works total R 52 850\nTotal labour R 72 500")
+    bad = ungrounded_figures({"total_cents": 725000, "line_items": [{"total_cents": 71000}]}, text)
+    assert sorted(b["cents"] for b in bad) == [71000, 725000]
+    assert ungrounded_figures({"total_cents": 7250000, "line_items": [{"total_cents": 710000}]}, text) == []
+
+
+def test_comma_and_space_grouped_amounts_both_ground():
+    assert ungrounded_figures({"total_cents": 125000}, "Cement R1,250.00") == []
+    assert ungrounded_figures({"total_cents": 710050}, "Subtotal 7 100,50") == []

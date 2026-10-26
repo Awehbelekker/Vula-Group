@@ -53,13 +53,47 @@ def ungrounded_figures(ex: Dict[str, Any], source_text: str,
     digits = re.sub(r"\D", "", source_text or "")
     if len(digits) < 3:
         return []
+    on_page = _amounts_in_text(source_text)
     bad: List[Dict[str, Any]] = []
     for label, cents in _iter_money_cents(ex):
         if abs(cents) < min_cents:
             continue
-        if not any(c in digits for c in _money_candidates(cents)):
+        if on_page:
+            grounded = abs(cents) in on_page
+        else:
+            grounded = any(c in digits for c in _money_candidates(cents))
+        if not grounded:
             bad.append({"field": label, "cents": cents, "rand": round(cents / 100, 2)})
     return bad
+
+
+# A printed amount: digits with optional space/comma/apostrophe thousands groups and an
+# optional 1-2 digit decimal part ("R 7 100", "R1,250.00", "7 100,50", "44 000").
+_AMOUNT_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[ \u00a0\u202f,']\d{3})+(?:[.,]\d{1,2})?(?!\d)"
+                        r"|(?<![\d.,])\d+(?:[.,]\d{1,2})?(?!\d)")
+
+
+def _amounts_in_text(text: str) -> set:
+    """Every amount printed in `text`, in cents, compared as whole numbers — not as digit
+    substrings. 2026-10-26, DIGG: a labour statement printed "R 72 500" and "R 7 100"; the model
+    booked R7,250 and R710, and the substring check passed both ("7250" is inside "72500").
+    Each printed number counts both as written and, for "7 100", as its separate pieces, so a
+    column whose groups OCR merged or split still grounds the right figure."""
+    out: set = set()
+    for m in _AMOUNT_RE.finditer(text or ""):
+        tok = m.group(0)
+        frac = 0
+        dec = re.search(r"[.,](\d{1,2})$", tok)
+        body = tok
+        if dec and not re.fullmatch(r"\d{1,3}(?:,\d{3})+", tok):
+            frac = int(dec.group(1).ljust(2, "0"))
+            body = tok[: dec.start()]
+        whole = re.sub(r"\D", "", body)
+        if whole:
+            out.add(int(whole) * 100 + frac)
+        for piece in re.findall(r"\d+", body):       # the pieces of a grouped number too
+            out.add(int(piece) * 100)
+    return out
 
 
 def scan_quality_ok(ex: Dict[str, Any]) -> bool:
