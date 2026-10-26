@@ -10,6 +10,12 @@ section heading, and every row with a rate or an amount is a line. Every figure 
 from its cell — nothing is inferred beyond rate = amount ÷ qty when the rate column is blank.
 
 Money comes back as integer cents (the sheet holds Rands).
+
+2026-10-26, DIGG's Belladonna project bill: an "Item | Unit | Qty | Trade | Budget | Actual |
+Invoiced | Outstanding" sheet was never found (a bare "Item" only counted as the code column), so
+the LLM's 5-line read stood. "Item" is the description when there is no description column, a
+Room / Area column is the line's section, and a cost-tracking sheet's Trade / Actual / Invoiced /
+Outstanding cells are kept on each line.
 """
 from __future__ import annotations
 
@@ -32,7 +38,15 @@ _HEADERS = {
     "amount": re.compile(r"^(amount|total|amount \(r\)|total \(r\)|amount r|line total|value|cost|"
                          r"sub ?total|budget|original budget)$"),
     "code": re.compile(r"^(item|item no|no|ref|code|nr|#)$"),
+    # A cost-tracking sheet's columns, kept on the line when present (never the amount).
+    "room": re.compile(r"^(room|area|section|zone|location|space)$"),
+    "trade": re.compile(r"^(trade|trades|sub-?contractor|contractor|supplier)$"),
+    "actual": re.compile(r"^(actual|actuals|actual cost|actual spend|actual \(r\)|spent|cost to date)$"),
+    "invoiced": re.compile(r"^(invoiced|invoiced \(r\)|invoiced to date|billed|claimed)$"),
+    "outstanding": re.compile(r"^(outstanding|outstanding \(r\)|balance|balance due|to invoice)$"),
 }
+# Kept as `<key>_cents` on each line when the sheet has the column.
+_TRACKED = ("actual", "invoiced", "outstanding")
 _SKIP = re.compile(r"^\s*(sub[\s-]*total|total|carried (forward|to)|brought forward|"
                    r"vat|grand total|summary)\b", re.IGNORECASE)
 
@@ -61,6 +75,8 @@ def _header_map(row: List[Any]) -> Optional[Dict[str, int]]:
             if key not in cols and pat.match(label):
                 cols[key] = i
                 break
+    if "desc" not in cols and "code" in cols and _clean(row[cols["code"]]).lower() == "item":
+        cols["desc"] = cols.pop("code")     # "Item" heads the description column
     if "desc" in cols and ("rate" in cols or "amount" in cols):
         return cols
     return None
@@ -92,7 +108,14 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
             continue
         if _SKIP.match(desc):
             continue
-        if qty is None and rate is None and amount is None:
+        tracked = {k: _num(_cell(row, cols, k)) for k in _TRACKED if k in cols}
+        unit = _clean(_cell(row, cols, "unit")) or None
+        trade = _clean(_cell(row, cols, "trade")) or None
+        room = _clean(_cell(row, cols, "room")) or None
+        spent = any(v for v in tracked.values())
+        if qty is None and rate is None and amount is None and not spent:
+            if unit or trade:
+                continue                # a scoped line nobody priced yet — not a heading
             if len(desc) <= 90:
                 section = desc          # a heading row: "Airconditioning", "BILL 3 — FINISHES"
             continue
@@ -100,18 +123,22 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
             rate = amount / qty
         if amount is None and rate is not None:
             amount = rate * (qty if qty is not None else 1)
-        if not rate and not amount:
+        if not rate and not amount and not spent:
             continue
-        unit = _clean(_cell(row, cols, "unit")) or None
-        out.append({
+        line = {
             "description": desc[:300],
             "quantity": qty if qty is not None else 1,
             "unit": unit[:20] if unit else None,
             "unit_price_cents": int(round((rate or 0) * 100)) if rate else None,
             "total_cents": int(round(amount * 100)) if amount is not None else None,
-            "section": section or (sheet or None),
+            "section": room or section or (sheet or None),
             "code": _clean(_cell(row, cols, "code")) or None,
-        })
+        }
+        if "trade" in cols:
+            line["trade"] = trade[:80] if trade else None
+        for k, v in tracked.items():
+            line[f"{k}_cents"] = int(round(v * 100)) if v is not None else None
+        out.append(line)
     return out
 
 
@@ -137,16 +164,20 @@ def parse(path: Path) -> List[Dict[str, Any]]:
 
 
 def section_budgets(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """[{"section", "budget_cents"}] in sheet order — vula_project_boq.sections' shape."""
+    """[{"section", "budget_cents"}] in sheet order — vula_project_boq.sections' shape. A
+    cost-tracking sheet's sections also carry `actual_cents` / `invoiced_cents` sums."""
     order: List[str] = []
-    sums: Dict[str, int] = {}
+    sums: Dict[str, Dict[str, int]] = {}
+    extra = [k for k in ("actual_cents", "invoiced_cents") if any(k in li for li in lines)]
     for li in lines:
         s = li.get("section") or "General"
         if s not in sums:
             order.append(s)
-            sums[s] = 0
-        sums[s] += int(li.get("total_cents") or 0)
-    return [{"section": s, "budget_cents": sums[s]} for s in order]
+            sums[s] = {"budget_cents": 0, **{k: 0 for k in extra}}
+        sums[s]["budget_cents"] += int(li.get("total_cents") or 0)
+        for k in extra:
+            sums[s][k] += int(li.get(k) or 0)
+    return [{"section": s, **sums[s]} for s in order]
 
 
 def apply_to_fields(fields: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict[str, Any]:
