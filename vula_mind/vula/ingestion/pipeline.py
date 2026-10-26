@@ -126,6 +126,11 @@ GLM_OCR_MODEL = settings.model_ocr
 EMBED_MODEL = settings.model_embed
 CHUNK_SIZE = settings.chunk_size
 CHUNK_OVERLAP = settings.chunk_overlap
+# 2026-10-26, DIGG: HPC's PC No. 10 (a 500 KB valuation sheet) became one 288,000-character chunk —
+# a table has single newlines and no sentence ends, so nothing split it — and the embeddings API
+# refused it (400), failing the whole upload. No chunk is ever longer than this; the word count
+# alone can't promise that for cells like "R10,166.85|15.00|R10,166.85".
+MAX_CHUNK_CHARS = 4000
 MAX_FILE_SIZE_MB = settings.max_file_mb
 # A page this covered in images is treated as one whose real content is IN the images, and is
 # OCR'd even though it already carries readable text. 0.5 was chosen against gerflor's real
@@ -647,9 +652,11 @@ class SemanticChunker:
         for para in paragraphs:
             para_tokens = len(para.split())
 
-            # If single paragraph exceeds chunk size, split by sentence
-            if para_tokens > self.chunk_size:
-                sentences = self._split_sentences(para)
+            # If single paragraph exceeds chunk size, split by sentence (a table: by row)
+            if para_tokens > self.chunk_size or len(para) > MAX_CHUNK_CHARS:
+                sentences = [piece for line in para.split("\n") if line.strip()
+                             for sent in self._split_sentences(line)
+                             for piece in self._hard_split(sent)]
                 for sent in sentences:
                     sent_tokens = len(sent.split())
                     if current_size + sent_tokens > self.chunk_size and current_chunk:
@@ -673,7 +680,20 @@ class SemanticChunker:
         if current_chunk:
             chunks.append("\n\n".join(current_chunk))
 
-        return [c for c in chunks if len(c.strip()) > 20]
+        capped = [piece for c in chunks for piece in self._hard_split(c)]
+        return [c for c in capped if len(c.strip()) > 20]
+
+    def _hard_split(self, text: str) -> List[str]:
+        """Pieces of at most MAX_CHUNK_CHARS, broken at a newline or space where there is one."""
+        out = []
+        while len(text) > MAX_CHUNK_CHARS:
+            cut = max(text.rfind("\n", 0, MAX_CHUNK_CHARS), text.rfind(" ", 0, MAX_CHUNK_CHARS))
+            cut = cut if cut > MAX_CHUNK_CHARS // 2 else MAX_CHUNK_CHARS
+            out.append(text[:cut].strip())
+            text = text[cut:].strip()
+        if text:
+            out.append(text)
+        return out
 
     def _split_sentences(self, text: str) -> List[str]:
         """Basic sentence splitter."""
@@ -734,7 +754,9 @@ class EmbeddingEngine:
             resp = await client.post(
                 "https://openrouter.ai/api/v1/embeddings",
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-                json={"model": self.model, "input": text},
+                # Never more than the model takes (8,191 tokens) — the chunker keeps every chunk
+                # well under MAX_CHUNK_CHARS; this is the backstop for any other caller.
+                json={"model": self.model, "input": text[:6 * MAX_CHUNK_CHARS]},
             )
             resp.raise_for_status()
             data = resp.json().get("data", [{}])
