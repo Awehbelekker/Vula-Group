@@ -72,8 +72,7 @@ async def _call(req, db, secret="sek", debug=False):
          patch.object(yoco.commerce, "update_order_status", upd_order), \
          patch.object(yoco.commerce, "update_invoice_status", upd_inv), \
          patch.object(yoco.commerce, "apply_order_stock", stock), \
-         patch.object(yoco, "_notify_order_paid", notify), \
-         patch.object(yoco.settings, "n8n_webhook_base", ""):
+         patch.object(yoco, "_notify_order_paid", notify):
         await yoco.yoco_webhook(req)
     return upd_order, upd_inv, notify, stock
 

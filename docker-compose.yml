@@ -78,27 +78,6 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes
 
-  # ── n8n (workflow automation) ──────────────────────────────────────────────
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: vula-n8n
-    restart: unless-stopped
-    ports:
-      - "5678:5678"
-    environment:
-      N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: vula
-      N8N_BASIC_AUTH_PASSWORD: vula2026
-      GENERIC_TIMEZONE: Africa/Johannesburg
-      WEBHOOK_URL: http://localhost:5678/
-      # Allows n8n to call the Vula API on the host machine
-      VULA_API_URL: http://host.docker.internal:7438
-    volumes:
-      - n8n_data:/home/node/.n8n
-      - ./n8n_workflows:/home/node/workflows:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
   # ── LiteLLM Gateway (unified model endpoint) ──────────────────────────────
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -136,7 +115,6 @@ volumes:
   qdrant_data:
   ollama_data:
   redis_data:
-  n8n_data:
   vula_uploads:
   vula_takeoff:
   vula_data:

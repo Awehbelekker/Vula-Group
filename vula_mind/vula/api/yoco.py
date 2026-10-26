@@ -400,21 +400,6 @@ async def yoco_webhook(request: Request) -> dict:
             amount_cents=amount_cents,
         )
 
-        # Also fire n8n if configured (for advanced automation)
-        n8n_base = settings.n8n_webhook_base
-        if n8n_base:
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    await client.post(
-                        f"{n8n_base}/yoco-payment-success",
-                        json={
-                            "order_id": order_id, "display_id": display_id,
-                            "tenant_id": tenant_id, "customer_phone": customer_phone,
-                            "customer_name": customer_name, "amount_cents": amount_cents,
-                        },
-                    )
-            except Exception as exc:
-                log.warning("n8n notification failed (non-fatal): %s", exc)
 
     elif event_type in ("payment.failed", "checkout.expired"):
         # Only an unpaid order is cancelled (a late "expired" for a checkout that was paid via

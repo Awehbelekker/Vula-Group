@@ -89,7 +89,7 @@ async def test_a_bank_change_alerts_the_finance_team_once_per_document():
     with patch("vula.integrations.notify.notify_team", new=AsyncMock(return_value=1)) as nt:
         await sd.alert_bank_change("digg-demo", "Solid Cape", {"on_file": "…9999", "on_invoice": "…7890"}, "doc1")
     args, kwargs = nt.await_args
-    assert args[1] == "bank_review" and kwargs["idem_key"] == "bank-change:doc1"
+    assert args[1] == "bank_details_changed" and kwargs["idem_key"] == "bank-change:doc1"
 
 
 def test_backfill_fills_from_newest_skips_own_vat_and_counts_history():
