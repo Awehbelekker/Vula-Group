@@ -183,3 +183,30 @@ def test_a_qs_bill_is_sectioned_by_bill_and_counted_once(tmp_path):
         {"section": "PRELIMINARIES", "budget_cents": 100000},
         {"section": "MASONRY", "budget_cents": 90000},            # not "Brickwork", not the NOTE
         {"section": "PROVISIONAL SUMS, ETC", "budget_cents": 200000}]   # 0% profit and R- skipped
+
+
+def test_a_payment_certificate_keeps_contract_certified_and_anticipated(tmp_path):
+    p = tmp_path / "Bills of Quantities - PC No. 10.xlsx"
+    _sheet(p, [["Complete BILLS OF QUANTITIES", None, None, None, None, "CONTRACT BOQ", None, None,
+                "CUMALATIVE AMOUNT CERTIFIED TO DATE", None, "PREVIOUS AMOUNT CERTIFEID", None,
+                "CERTIFIED THIS CERTIFICATE", None, None, "COST TO COMPLETE", None, None,
+                "ANTICIPATED FINAL ACCOUNT", None, "MOVEMENT"],
+               ["ITEM NO", None, "DESCRIPTION", None, None, "QUANTITY", " RATE", " AMOUNT", "QUANTITY",
+                " AMOUNT", "QUANTITY", " AMOUNT", "QUANTITY", " AMOUNT", None, "QUANTITY", " AMOUNT", None,
+                " AMOUNT", None, " AMOUNT"],
+               [None, None, "BILL NO 1 - PRELIMINARIES", None, None, None, None, "R1,000.00", None,
+                "R1,100.00", None, "R900.00", None, "R200.00", None, None, "-R100.00", None, "R1,000.00"],
+               ["98", None, "Preliminaries & General", None, "Item", "1", " 1,000.00 ", "R1,000.00", None,
+                "R1,100.00", None, "R900.00", "-", "R200.00", None, None, "-R100.00", None, "R1,000.00"],
+               [None, None, "BILL NO 2 - MASONRY", None, None, None, None, "R900.00", None, "R850.00"],
+               [None, None, "BRICKWORK"],
+               ["1", None, "Half brick walls", None, "m²", 8, " 50.00 ", "R400.00", 8.0, "R400.00", 8.0,
+                "R400.00", "-", "R-", None, "-", "R-", None, "R400.00"],
+               ["4", None, "Breeze blocks", None, "m²", 10, " 50.00 ", "R500.00", 9.0, "R450.00", 9.0,
+                "R450.00", "-", "R-", None, "-", "R-", None, "R450.00"]])
+    lines = boq_sheet.parse(p)
+    assert [li["description"] for li in lines] == ["Preliminaries & General", "Half brick walls", "Breeze blocks"]
+    assert lines[2]["unit"] == "m²"
+    assert boq_sheet.section_budgets(lines) == [
+        {"section": "PRELIMINARIES", "budget_cents": 100000, "certified_cents": 110000, "anticipated_cents": 100000},
+        {"section": "MASONRY", "budget_cents": 90000, "certified_cents": 85000, "anticipated_cents": 85000}]

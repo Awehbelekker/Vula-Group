@@ -27,6 +27,12 @@ description and unit columns carry no heading, so they are found from the rows b
 (the longest text, the short "m²"/"No"/"Item" cells); "R-" is zero, so a 0% "Profit on the above
 item" never becomes a copy of its provisional sum; and the SUMMARY page that repeats every bill's
 total ends the bill, so nothing is counted twice.
+
+Its payment certificates (PC No. 10, 6 Oct) put several AMOUNT columns under group headings in
+the row above — CONTRACT BOQ, CUMULATIVE AMOUNT CERTIFIED TO DATE, ANTICIPATED FINAL ACCOUNT. The
+contract column stays the amount; the certified and anticipated ones are kept on each line as
+`certified_cents` / `anticipated_cents`, and a "BILL NO 1 - PRELIMINARIES" row carrying the bill's
+totals is that bill's heading, never a line.
 """
 from __future__ import annotations
 
@@ -60,7 +66,10 @@ _HEADERS = {
     "paid": re.compile(r"^(paid|paid to date|amount paid|paid \(r\))$"),
 }
 # Kept as `<key>_cents` on each line when the sheet has the column.
-_TRACKED = ("actual", "invoiced", "outstanding", "paid")
+_TRACKED = ("actual", "invoiced", "outstanding", "paid", "certified", "anticipated")
+# A valuation's group headings, in the row above the column headings: the AMOUNT column under each.
+_GROUPS = {"certified": re.compile(r"cum[mu]*lative.*certifi|certified to date", re.IGNORECASE),
+           "anticipated": re.compile(r"anticipated final", re.IGNORECASE)}
 _SKIP = re.compile(r"^\s*(sub[\s-]*total|total|carried (forward|to)|brought forward|"
                    r"vat|grand total|summary)\b", re.IGNORECASE)
 _SUBTOTAL = re.compile(r"\bsub[\s-]*totals?\b|\btotals?\s*$", re.IGNORECASE)
@@ -73,6 +82,8 @@ def _clean(v: Any) -> str:
 # "BILL NO 2" on its own row: the next heading is that bill's title, and the headings inside it
 # ("Brickwork", "LOCKS") are sub-headings, not new sections.
 _BILL_NO = re.compile(r"^\s*bill\s*(no\.?|nr\.?|number)?\s*\d+\s*$", re.IGNORECASE)
+_BILL_TITLED = re.compile(r"^\s*bill\s*(no\.?|nr\.?|number)?\s*\d+\s*[-–—:]\s*(?P<title>.+)$",
+                          re.IGNORECASE)
 _DASH = re.compile(r"^\s*R?\s*[-–—]\s*$")      # "R-", " - ": an accountant's zero
 
 
@@ -114,7 +125,7 @@ def _infer_columns(cols: Dict[str, int], below: List[List[Any]]) -> None:
             text[i] = text.get(i, 0) + len(v)
             if len(v) <= 6:
                 short[i] = short.get(i, 0) + 1
-    if "desc" not in cols and text:
+    if "desc" not in cols and "code" in cols and text:
         cols["desc"] = max(text, key=text.get)
     q = cols.get("qty")
     if "unit" not in cols and q is not None:
@@ -134,8 +145,8 @@ def _header_map(row: List[Any], below: Optional[List[List[Any]]] = None) -> Opti
                 break
     if "desc" not in cols and "code" in cols and _clean(row[cols["code"]]).lower() == "item":
         cols["desc"] = cols.pop("code")     # "Item" heads the description column
-    if ("desc" not in cols and below and "code" in cols
-            and sum(k in cols for k in ("qty", "rate", "amount")) >= 2):
+    if (below and sum(k in cols for k in ("qty", "rate", "amount")) >= 2
+            and (("desc" not in cols and "code" in cols) or "unit" not in cols)):
         _infer_columns(cols, below)
     if "desc" in cols and ("rate" in cols or "amount" in cols):
         return cols
@@ -145,6 +156,17 @@ def _header_map(row: List[Any], below: Optional[List[List[Any]]] = None) -> Opti
 def _cell(row: List[Any], cols: Dict[str, int], key: str) -> Any:
     i = cols.get(key)
     return row[i] if i is not None and i < len(row) else None
+
+
+def _group_columns(cols: Dict[str, int], above: List[Any], header: List[Any]) -> None:
+    """Map each valuation group heading in `above` to the first AMOUNT column at or after it."""
+    amounts = [i for i, c in enumerate(header) if re.match(r"^amount\b", _clean(c).lower())]
+    for i, c in enumerate(above or []):
+        for key, pat in _GROUPS.items():
+            if key not in cols and pat.search(_clean(c)):
+                after = [a for a in amounts if a >= i]
+                if after:
+                    cols[key] = after[0]
 
 
 def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
@@ -159,9 +181,13 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
         row = list(row or [])
         if cols is None:
             cols = _header_map(row, rows[n + 1:n + 60])
+            if cols and n:
+                _group_columns(cols, list(rows[n - 1] or []), row)
             continue
         again = _header_map(row, rows[n + 1:n + 60])
         if again:                       # a repeated header (a new page/bill) — re-map
+            if n:
+                _group_columns(again, list(rows[n - 1] or []), row)
             cols, summary = again, False
             continue
         if summary:                     # the summary page repeats each bill's total
@@ -183,6 +209,10 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
             summary = True
             continue
         if _SKIP.match(desc) or _SUBTOTAL.search(desc):
+            continue
+        titled = _BILL_TITLED.match(desc)
+        if titled:                      # "BILL NO 2 - MASONRY" (with the bill's totals): a heading
+            bills, title_next, section = True, False, titled.group("title").strip()[:90]
             continue
         tracked = {k: _num(_cell(row, cols, k)) for k in _TRACKED if k in cols}
         unit = _clean(_cell(row, cols, "unit")) or None
@@ -270,7 +300,8 @@ def section_budgets(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cost-tracking sheet's sections also carry `actual_cents` / `invoiced_cents` / `paid_cents` sums."""
     order: List[str] = []
     sums: Dict[str, Dict[str, int]] = {}
-    extra = [k for k in ("actual_cents", "invoiced_cents", "paid_cents") if any(k in li for li in lines)]
+    extra = [k for k in ("actual_cents", "invoiced_cents", "paid_cents", "certified_cents",
+                         "anticipated_cents") if any(k in li for li in lines)]
     for li in lines:
         s = li.get("section") or "General"
         if s not in sums:
