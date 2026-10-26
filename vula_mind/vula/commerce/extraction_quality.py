@@ -159,6 +159,20 @@ def _alnum(s: Any) -> str:
     return re.sub(r"[^0-9a-z]", "", str(s or "").lower())
 
 
+# Registered SA banks (and the common ways invoices write them). Bank details naming anything
+# else — "City of Cape Town (listed beneficiary)" was read off a municipal bill's payment-reference
+# line — are not bank details.
+_SA_BANK_RE = re.compile(
+    r"\b(absa|fnb|first\s*national|rmb|rand\s*merchant|nedbank|standard\s*bank|stanbic|sbsa|capitec|"
+    r"investec|african\s*bank|tyme\s*bank|tymebank|discovery\s*bank|bidvest\s*bank|sasfin|grindrod|"
+    r"mercantile|access\s*bank|hbz|bank\s*zero|old\s*mutual|ubank|postbank|habib|albaraka|"
+    r"citibank|hsbc|j\.?\s*p\.?\s*morgan|bnp\s*paribas|china\s*construction)\b", re.I)
+
+
+def is_sa_bank(name: Any) -> bool:
+    return bool(_SA_BANK_RE.search(str(name or "")))
+
+
 def valid_sa_vat(v: Any) -> bool:
     d = re.sub(r"\D", "", str(v or ""))
     return len(d) == 10 and d.startswith("4")
@@ -193,6 +207,9 @@ def verify_identifiers(fields: Dict[str, Any], source_text: str) -> Dict[str, An
             if bank.get(k) not in (None, "") and not on_page(bank[k]):
                 dropped.append({"field": f"supplier_bank.{k}", "why": "not in the document"})
                 bank.pop(k)
+        if bank.get("account_number") and not is_sa_bank(bank.get("bank_name")):
+            dropped.append({"field": "supplier_bank", "why": "not a recognised bank"})
+            bank = {}
         # Without an account number a bank name alone is no use to anyone.
         f["supplier_bank"] = bank if bank.get("account_number") else None
         if f["supplier_bank"] is None:
