@@ -58,6 +58,11 @@ jobs:
       - name: Check migration sentinels
         run: python tools/check_migration_sentinels.py
 
+      # Code under the dashboard / mobile / site folders ships to every browser or phone: no
+      # secret may be written into it (2026-10-26: the mobile app carried the server API key).
+      - name: Check client code for secrets
+        run: python tools/check_client_secrets.py
+
   # ── Docker image — the actual Railway build ───────────────────────────────────
   # Every deploy 2026-09-02 → 2026-09-10 failed silently at build (`COPY
   # requirements.txt` — wrong context) while GitHub CI stayed green, so prod ran
