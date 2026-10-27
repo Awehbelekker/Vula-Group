@@ -387,6 +387,9 @@ function routes(role, modules = []) {
     r("GET", `^/v1/master/evals/reports`, () => F.evalReports),
     r("GET", `^/v1/master/evals/feedback-cases`, () => F.feedbackCases),
     r("GET", `^/v1/master/qdrant-backup`, () => F.qdrantBackups),
+    r("GET", `^/v1/master/app-errors`, () => ({ errors: F.appErrors, total: F.appErrors.reduce((a, e) => a + e.count, 0) })),
+    r("POST", `^/v1/master/app-errors/${T}/resolve`, () => ({ ok: true })),
+    r("POST", `^/v1/app-errors$`, () => ({ ok: true })),
     r("GET", `^/v1/master/wa-login-template`, () => ({
       accounts: [{ account: "…0042", tenants: ["demo-bakery"], status: "APPROVED" },
         { account: "…8607", tenants: ["demo-shop", "lowveld-cycles"], status: "missing" }],

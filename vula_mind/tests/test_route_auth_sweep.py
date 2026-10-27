@@ -113,6 +113,7 @@ PUBLIC = {
     ("POST", "/v1/auth/wa/code"): "log in with WhatsApp — sends a code; same answer for any number",
     ("POST", "/v1/auth/wa/code/verify"): "log in with WhatsApp — checks the code with the browser's secret",
     ("POST", "/v1/website/leads"): "vula-ai.com sign-up form — rate-limited, honeypot, nothing returned",
+    ("POST", "/v1/app-errors"): "the dashboard's crash reports — limited per address, scrubbed, business only if the session proves it",
     ("GET", "/v1/commerce/{tenant_id}/manifest.webmanifest"): "the installed app's name/colour/icons — public brand fields only",
     ("GET", "/v1/commerce/{tenant_id}/app-icon/{size}.png"): "the installed app's icon image, from the public brand",
     ("GET", "/v1/commerce/{tenant_id}/app-icon/maskable/{size}.png"): "the same icon, inside Android's round crop",

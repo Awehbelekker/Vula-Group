@@ -4,10 +4,10 @@
  * UsersPanel (master/useMasterOps.js). States in words with a tone (no ✓ / ✗ / emoji), tables
  * as DataTables (stacked on a phone), times in SAST, USD with the rand beside it.
  */
-import { CalendarClock, ClipboardCopy, Database, Eye, KeyRound, Mail, Plus, Send, ShieldCheck, Smartphone, Trash2, Waypoints } from 'lucide-react'
+import { Bug, CalendarClock, Check, ClipboardCopy, Database, Eye, KeyRound, Mail, Plus, Send, ShieldCheck, Smartphone, Trash2, Waypoints } from 'lucide-react'
 import { Button, Card, DataTable, EmptyState, Field, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatCard, StatusChip } from '../ui/index.jsx'
 import { when } from './TenantDetailV2'
-import { useLoginTemplate, useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './useMasterOps'
+import { useAppErrors, useLoginTemplate, useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './useMasterOps'
 import './master.css'
 
 const loading = <Card><Skeleton lines={4} /></Card>
@@ -39,6 +39,33 @@ function LoginTemplateCard({ onError }) {
   )
 }
 
+/* ── Crashes on people's devices ── */
+function AppErrorsCard({ onError, onViewDetail }) {
+  const x = useAppErrors({ onError })
+  if (!x.errors) return null
+  const rows = x.errors
+  return (
+    <>
+      <div className="vms-head">
+        <h3 className="vms-h"><Bug size={16} aria-hidden="true" className="vms-ic" />App errors on people's devices</h3>
+        <StatusChip tone={rows.length ? 'warn' : 'ok'}>{rows.length ? `${rows.length} open · last 14 days` : 'None in 14 days'}</StatusChip>
+      </div>
+      <p className="vms-muted">A screen that broke in the dashboard, reported by the device itself. No customer details are kept: numbers, emails and ids are taken out first. Marking one fixed hides it until it happens again.</p>
+      <Card pad={0}>
+        <DataTable caption="App errors" rows={rows} empty="Nothing has broken on anyone's device in the last 14 days." columns={[
+          { key: 'message', label: 'What broke', render: (e) => <span>{e.message}{e.frames ? <span className="vms-muted vms-mono"> · {e.frames.split('\n')[0]}</span> : null}</span> },
+          { key: 'page', label: 'Screen', render: (e) => e.page || '—' },
+          { key: 'tenant_id', label: 'Business', render: (e) => e.tenant_id ? <TenantLink id={e.tenant_id} onViewDetail={onViewDetail} /> : <span className="vms-muted">not signed in</span> },
+          { key: 'count', label: 'Times', render: (e) => e.count },
+          { key: 'last_seen', label: 'Last', render: (e) => when(e.last_seen) },
+          { key: 'browser', label: 'Device', render: (e) => <span className="vms-muted">{e.browser} · {e.build}</span> },
+          { key: 'fix', label: '', render: (e) => <Button size="sm" variant="secondary" Icon={Check} onClick={() => x.resolve(e.id)}>Fixed</Button> },
+        ]} stack={{ title: (e) => e.message, detail: (e) => `${e.page || 'no screen'} · ${e.tenant_id || 'not signed in'} · ${e.count}× · ${when(e.last_seen)} · ${e.browser}` }} />
+      </Card>
+    </>
+  )
+}
+
 /* ── Health ── */
 export function HealthV2({ onError, onViewDetail }) {
   const x = useMasterHealth({ onError })
@@ -66,6 +93,8 @@ export function HealthV2({ onError, onViewDetail }) {
           sub={vrl.low_coverage ? 'Low coverage — too few events for a pass-rate to mean anything' : (vrl.last_event_at ? `last ${when(vrl.last_event_at)}` : undefined)}
           color={vrl.low_coverage ? 'var(--warn-text)' : undefined} />
       </div>
+
+      <AppErrorsCard onError={onError} onViewDetail={onViewDetail} />
 
       {pending.length > 0 && (
         <Card className="vms-form vms-attn">

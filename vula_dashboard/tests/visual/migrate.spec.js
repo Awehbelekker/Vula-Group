@@ -644,6 +644,18 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
   }
 }
 
+test("master health: what broke on people's devices, and marking one fixed", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("tab", { name: "Health" }).click();
+  const table = page.getByRole("table", { name: "App errors" });
+  await expect(table.getByText(/reading 'total_cents'/)).toBeVisible();
+  await expect(table.getByText("not signed in")).toBeVisible();
+  await expect(page.getByText("2 open · last 14 days")).toBeVisible();
+  const fixed = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/app-errors\/ae-1\/resolve$/.test(new URL(r.url()).pathname));
+  await table.getByRole("row", { name: /total_cents/ }).getByRole("button", { name: "Fixed" }).click();
+  await fixed;
+});
+
 test("master health: the login-code template is sent only where it's missing, after asking", async ({ page }) => {
   await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.getByRole("tab", { name: "Health" }).click();

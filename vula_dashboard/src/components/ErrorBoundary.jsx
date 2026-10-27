@@ -8,6 +8,7 @@
  * actionable message instead of a silent dead end.
  */
 import { Component } from "react";
+import { reportError } from "../lib/appErrors";
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
@@ -22,6 +23,7 @@ export default class ErrorBoundary extends Component {
   componentDidCatch(error, info) {
     // eslint-disable-next-line no-console
     console.error("ErrorBoundary caught a render error:", error, info?.componentStack);
+    reportError(error, { source: "render" });   // Master › Health sees it (lib/appErrors.js)
   }
 
   render() {

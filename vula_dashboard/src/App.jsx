@@ -45,6 +45,7 @@ import { applyBrand, applyThemeMode } from "./theme/tokens";
 import { applyUiMode, uiV2For, rememberedTenantUi, rememberTenantUi } from "./lib/flags";
 import { showOnAppIcon } from "./lib/appBadge";
 import { setLaunchScreens } from "./lib/iosSplash";
+import { setErrorContext } from "./lib/appErrors";
 
 const COLORS = {
   bg: "var(--bg)",
@@ -274,6 +275,14 @@ export default function App() {
   useEffect(() => {
     showOnAppIcon(user && role !== "master" ? openEscalations : 0);
   }, [user, role, openEscalations]);
+
+  // A crash report says which business and which screen (lib/appErrors.js; the business is kept
+  // only if the session proves it).
+  useEffect(() => {
+    const tid = role === "master" ? (activeTab === "merchant" ? masterTenant : null) : ownTenant;
+    setErrorContext({ tenantId: user ? tid || null : null,
+      page: role === "master" && activeTab !== "merchant" ? `master/${activeTab}` : merchTab });
+  }, [user, role, ownTenant, masterTenant, activeTab, merchTab]);
 
   const withInboxBadge = (groups, count) => !count ? groups : groups.map(g => ({
     ...g, items: g.items.map(it => it.id === "inbox" ? { ...it, badge: count > 99 ? "99+" : String(count) } : it),
