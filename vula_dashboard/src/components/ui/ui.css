@@ -158,3 +158,11 @@ button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
 
 /* ── Page footers: the redesign says "Powered by Vula" once, in the shell (Phase F) ──────── */
 :root[data-ui="v2"] .vula-powered { display: none !important; }
+
+/* ── Offline banner (OfflineBanner.jsx): top of the screen, under the notch ─────────────── */
+.vui-offline { position: fixed; z-index: 1150; top: calc(8px + env(safe-area-inset-top)); left: 50%;
+  transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box;
+  display: flex; gap: 8px; align-items: flex-start; padding: 10px 14px; border-radius: var(--radius-md);
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--warn);
+  box-shadow: var(--shadow-md); font-size: var(--fs-body); line-height: 1.4; }
+.vui-offline svg { flex: none; margin-top: 2px; color: var(--warn); }
