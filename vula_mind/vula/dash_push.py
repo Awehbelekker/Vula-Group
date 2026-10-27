@@ -2,7 +2,7 @@
 vula/dash_push.py — the dashboard's notifications on a phone or computer (2026-10-27, PWA pass 3).
 
 A device that turned notifications on (Settings › On this device › Notifications, or the menu)
-is a row of vula_dash_push_subs (migration 226), tied to the signed-in person's team member by
+is a row of vula_dash_push_subs (migration 228), tied to the signed-in person's team member by
 their WhatsApp number. It gets the alerts that person already gets on WhatsApp — the same
 choices (vula_team_members.notify), the same rules — so there is one place to change them:
 
@@ -62,7 +62,7 @@ def clean(text: str, limit: int = 180) -> str:
 def subscriptions(tenant_id: str) -> list:
     try:
         return _db().table(TABLE).select("*").eq("tenant_id", tenant_id).execute().data or []
-    except Exception as exc:          # migration 226 not applied yet: no devices
+    except Exception as exc:          # migration 228 not applied yet: no devices
         logger.debug("push subscriptions unreadable: %s", exc)
         return []
 

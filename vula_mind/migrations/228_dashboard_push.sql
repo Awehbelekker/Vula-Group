@@ -1,4 +1,4 @@
--- 226_dashboard_push.sql — the dashboard's notifications on a phone or computer (2026-10-27, PWA
+-- 228_dashboard_push.sql — the dashboard's notifications on a phone or computer (2026-10-27, PWA
 -- pass 3). Until now only the Tap to Pay coach app could push (kb_push_subs, migration 202, tied
 -- to its own enrolled devices); the dashboard told people things only on WhatsApp.
 --
