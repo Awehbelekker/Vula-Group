@@ -19,6 +19,7 @@ pdfplumber>=0.11.0        # second pass (better tables) + image-coverage heurist
 python-docx>=1.1.0
 pandas>=2.2.0
 openpyxl>=3.1.0
+xlrd>=2.0.1            # old .xls workbooks (QS packages still export them)
 pillow>=10.3.0
 
 # ── OCR Fallback ────────────────────────────────────────────────────────────

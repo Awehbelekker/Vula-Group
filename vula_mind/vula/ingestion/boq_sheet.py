@@ -44,28 +44,44 @@ once the bill is read. Its area tabs (Bio, Physio, Common, Café) repeat the Com
 so a tab whose items are already read is skipped, and a TRUE/FALSE check cell or an item code
 alone on a row is never a heading. Read this way, all 12 bills of PC No. 10 match the
 certificate's own bill totals (contract, certified, anticipated) to the cent.
+
+27 Oct: a tenant's QS may use any bill layout, so the reader no longer depends on DIGG's and HPC's
+wordings. In order, each step only when the one before finds no table:
+- more headings, Afrikaans included (Beskrywing, Hoeveelheid, Eenheid, Tarief, Bedrag), then a
+  heading that merely *contains* the word ("Total Amount Excl VAT", "Quantity (m²)");
+- a two-row heading ("RATE" over "R"), and a JBCC bill's Rand and cents columns ("R | c") — the
+  cents are added to the Rands;
+- no heading at all: the quantity, rate and amount columns are the three number columns where
+  quantity × rate = amount on most rows, the description the column with the most text.
+"1 234,56" (a decimal comma) and "(1 500.00)" (a negative) read as numbers, and an old .xls
+workbook is read like an .xlsx. Every figure still comes from its cell.
 """
 from __future__ import annotations
 
 import csv
 import logging
 import re
+from collections import Counter
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-SHEET_SUFFIXES = (".xlsx", ".xlsm", ".csv")
+SHEET_SUFFIXES = (".xlsx", ".xlsm", ".xls", ".csv")
 
 _HEADERS = {
     "desc": re.compile(r"^(item\s+)?(description|particulars|details|work(s)?|scope|item description|"
-                       r"description of work(s)?|element)$"),
-    "qty": re.compile(r"^(qty|qnty|quantity|quantities|qty\.)$"),
-    "unit": re.compile(r"^(unit|units|uom)$"),
-    "rate": re.compile(r"^(rate|unit rate|unit price|price|rate \(r\)|rate r|unit cost)$"),
+                       r"description of work(s)?|element|scope of work(s)?|work description|"
+                       r"specification|beskrywing|omskrywing|item beskrywing)$"),
+    "qty": re.compile(r"^(qty|qnty|quantity|quantities|qty\.|quant|q'?ty|hoeveelheid|hoev\.?|aantal)$"),
+    "unit": re.compile(r"^(unit|units|uom|unit of measure|eenheid|eenhede)$"),
+    "rate": re.compile(r"^(rate|unit rate|unit price|price|rate \(r\)|rate r|unit cost|rate per unit|"
+                       r"tarief|eenheidsprys|eenheidstarief)$"),
     "amount": re.compile(r"^(amount|total|amount \(r\)|total \(r\)|amount r|line total|value|cost|"
-                         r"sub ?total|budget|original budget)$"),
-    "code": re.compile(r"^(item|item no|no|ref|code|nr|#)$"),
+                         r"sub ?total|budget|original budget|total amount|total cost|nett amount|"
+                         r"extension|bedrag|totaal)$"),
+    "code": re.compile(r"^(item|item no\.?|no\.?|ref|ref no\.?|code|nr\.?|#|item nr\.?|item ref|nommer)$"),
     # A cost-tracking sheet's columns, kept on the line when present (never the amount).
     "room": re.compile(r"^(room|area|section|zone|location|space|room ?/ ?area|area ?/ ?room)$"),
     "trade": re.compile(r"^(trade|trades|sub-?contractor|contractor|supplier|responsible|"
@@ -81,6 +97,17 @@ _TRACKED = ("actual", "invoiced", "outstanding", "paid", "certified", "anticipat
 # A valuation's group headings, in the row above the column headings: the AMOUNT column under each.
 _GROUPS = {"certified": re.compile(r"cum[mu]*lative.*certifi|certified to date", re.IGNORECASE),
            "anticipated": re.compile(r"anticipated final", re.IGNORECASE)}
+# A heading that only *contains* the word ("Total Amount Excl VAT", "Quantity (m²)"), tried for
+# the columns no exact heading claimed. Ordered: "Unit Rate" is a rate before it is a unit.
+_CONTAINS = (("rate", re.compile(r"\b(rate|tarief|unit price|unit cost|eenheidsprys)\b")),
+             ("qty", re.compile(r"\b(qty|quant\w*|hoeveelheid)\b")),
+             ("amount", re.compile(r"\b(amount|total|bedrag|totaal|extension)\b")),
+             ("desc", re.compile(r"\b(desc\w*|beskrywing|omskrywing|particulars)\b")),
+             ("unit", re.compile(r"^(unit|units|eenheid)\b")))
+# Never the bill's own amount: a valuation's or a cost tracker's other money columns.
+_NOT_CONTRACT = re.compile(r"certif|claim|paid|actual|invoic|outstanding|balance|previous|to date|"
+                           r"variance|%|percent", re.IGNORECASE)
+_CENTS = {"c", "c.", "cents", "cent", "ct", "sent"}
 _SKIP = re.compile(r"^\s*(sub[\s-]*total|total|carried (forward|to)|brought forward|"
                    r"vat|grand total|summary)\b", re.IGNORECASE)
 _SUBTOTAL = re.compile(r"\bsub[\s-]*totals?\b|\btotals?\s*$", re.IGNORECASE)
@@ -105,15 +132,24 @@ def _num(v: Any) -> Optional[float]:
         return float(v)
     if _DASH.match(str(v)):
         return 0.0
-    s = re.sub(r"[R\s,]", "", str(v)).replace(" ", "")
+    s = re.sub(r"ZAR|[R\s\u00a0\u202f]", "", str(v))
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.strip("()")
+    if re.fullmatch(r"-?\d{1,3}(\.\d{3})+,\d{1,2}", s):      # "1.234,56"
+        s = s.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"-?\d+,\d{1,2}", s):                 # "1234,56" / "1 234,56"
+        s = s.replace(",", ".")
+    else:
+        s = s.replace(",", "")
     try:
-        return float(s)
+        return -float(s) if neg else float(s)
     except ValueError:
         return None
 
 
 # A heading's unit is not part of its name: "Budget (R)", "Actual (ZAR)", "Spent to date R".
-_UNIT_SUFFIX = re.compile(r"\s*(?:\((?:r|zar|rand|incl\.? vat|excl\.? vat)\)|\br\b)\s*$", re.IGNORECASE)
+_UNIT_SUFFIX = re.compile(r"\s*(?:\((?:r|zar|rand|incl\.? vat|excl\.? vat)\)|\br\b|"
+                          r"\b(?:incl|excl)(?:uding|\.)? vat)\s*$", re.IGNORECASE)
 # Wordings DIGG-style cost statements use for the same columns (2026-10-26).
 _ALIASES = {"budget allowance": "budget", "allowance": "budget", "budgeted": "budget",
             "spent to date": "actual", "actual to date": "actual", "actual spend to date": "actual",
@@ -147,6 +183,7 @@ def _infer_columns(cols: Dict[str, int], below: List[List[Any]]) -> None:
 
 def _header_map(row: List[Any], below: Optional[List[List[Any]]] = None) -> Optional[Dict[str, int]]:
     cols: Dict[str, int] = {}
+    labels = {}
     for i, cell in enumerate(row):
         label = _UNIT_SUFFIX.sub("", _clean(cell).lower().rstrip(":")).strip()
         label = _ALIASES.get(label, label)
@@ -154,6 +191,14 @@ def _header_map(row: List[Any], below: Optional[List[List[Any]]] = None) -> Opti
             if key not in cols and pat.match(label):
                 cols[key] = i
                 break
+        else:
+            if label and len(label) <= 40 and not _NOT_CONTRACT.search(label):
+                labels[i] = label
+    figures = any(_num(c) is not None for c in row if not isinstance(c, bool) and _clean(c))
+    for i, label in ({} if figures else labels).items():   # headings that only contain the word
+        key = next((k for k, pat in _CONTAINS if pat.search(label)), None)
+        if key and key not in cols:     # "Unit Rate" names a rate; it is never the unit
+            cols[key] = i
     if "desc" not in cols and "code" in cols and _clean(row[cols["code"]]).lower() == "item":
         cols["desc"] = cols.pop("code")     # "Item" heads the description column
     if (below and sum(k in cols for k in ("qty", "rate", "amount")) >= 2
@@ -169,6 +214,48 @@ def _cell(row: List[Any], cols: Dict[str, int], key: str) -> Any:
     return row[i] if i is not None and i < len(row) else None
 
 
+def _money(row: List[Any], cols: Dict[str, int], key: str) -> Optional[float]:
+    """A figure, with its cents column added when the bill splits Rands and cents ("R | c")."""
+    rands, cents = _num(_cell(row, cols, key)), _num(_cell(row, cols, f"{key}_c"))
+    if cents is None:
+        return rands
+    if rands is None and not cents:
+        return None
+    return (rands or 0) + (-cents if (rands or 0) < 0 else cents) / 100
+
+
+def _subheading(row: List[Any]) -> bool:
+    """The second row of a two-row heading: two or more short labels, no figures ("R", "c")."""
+    cells = [_clean(c) for c in row or [] if _clean(c)]
+    return len(cells) >= 2 and all(len(c) <= 12 and not re.search(r"\d", c) for c in cells)
+
+
+def _combine(top: List[Any], bottom: List[Any]) -> List[str]:
+    n = max(len(top), len(bottom))
+    pad = lambda r: list(r) + [None] * (n - len(r))
+    return [" ".join(x for x in (_clean(a), _clean(b)) if x) for a, b in zip(pad(top), pad(bottom))]
+
+
+def _find_header(rows: List[List[Any]], n: int) -> "tuple[Optional[Dict[str, int]], int]":
+    """The column map for a heading at row n, and how many rows the heading takes (1 or 2)."""
+    row = list(rows[n] or [])
+    nxt = list(rows[n + 1] or []) if n + 1 < len(rows) else []
+    two = _subheading(nxt)
+    cols, span = _header_map(row, rows[n + 1:n + 60]), 1
+    if cols is None and two and _header_map(nxt, rows[n + 2:n + 61]) is None:
+        cols, span = _header_map(_combine(row, nxt), rows[n + 2:n + 61]), 2   # not a heading alone
+    if cols:
+        labels = _combine(row, nxt) if two else [_clean(c) for c in row]
+        for key in ("rate", "amount"):
+            i = cols.get(key)
+            if i is not None and i + 1 < len(labels) and labels[i + 1].split(" ")[-1].lower() in _CENTS:
+                cols[f"{key}_c"] = i + 1
+                span = 2 if two else span
+        for above in rows[max(0, n - 3):n]:   # a blank row may sit between
+            _group_columns(cols, list(above or []), row)
+    return cols, span
+
+
 def _group_columns(cols: Dict[str, int], above: List[Any], header: List[Any]) -> None:
     """Map each valuation group heading in `above` to the first AMOUNT column at or after it."""
     amounts = [i for i, c in enumerate(header) if re.match(r"^amount\b", _clean(c).lower())]
@@ -180,32 +267,91 @@ def _group_columns(cols: Dict[str, int], above: List[Any], header: List[Any]) ->
                     cols[key] = after[0]
 
 
-def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
-    """Lines from one sheet's rows (a list of cell-value lists)."""
-    cols = None
+def parse_rows(rows: List[List[Any]], sheet: str = "", infer: bool = True) -> List[Dict[str, Any]]:
+    """Lines from one sheet's rows (a list of cell-value lists). `infer`: with no heading row, find
+    the columns from the figures — only for a workbook with no bill read yet, since a bill's
+    other tabs are quotes and workings (HPC's PC No. 10 carries StorePlay's joinery proforma,
+    already in the bill as one item)."""
+    lines = _read(rows, sheet)
+    if lines or not infer:
+        return lines
+    cols = _infer_table(rows)
+    if not cols:
+        return []
+    log.info("BOQ sheet %s: no heading row; columns found from the figures: %s", sheet or "?", cols)
+    return _read(rows, sheet, cols)
+
+
+def _infer_table(rows: List[List[Any]]) -> Optional[Dict[str, int]]:
+    """A bill with no heading row: the quantity, rate and amount are the three number columns
+    where quantity × rate = amount on most rows that have all three (at least 3 rows), the
+    quantity left of the rate; the description is the column with the most text on those rows."""
+    nums: List[Dict[int, float]] = []
+    for r in rows[:3000]:
+        d = {}
+        for i, c in enumerate(r or []):
+            if isinstance(c, bool) or (isinstance(c, str) and not re.search(r"\d", c)):
+                continue
+            x = _num(c)
+            if x:
+                d[i] = x
+        nums.append(d if len(d) >= 3 else {})
+    counts = Counter(i for d in nums for i in d)
+    cand = sorted(i for i, k in counts.items() if k >= 3)[:15]
+    best = None
+    for a in cand:
+        for q, r in combinations([i for i in cand if i != a], 2):
+            both = hits = 0
+            for d in nums:
+                if q in d and r in d and a in d:
+                    both += 1
+                    hits += abs(d[q] * d[r] - d[a]) <= max(0.05, abs(d[a]) * 0.005)
+            score = (hits, a > r)            # the amount is normally the rightmost
+            if hits >= 3 and hits * 10 >= both * 6 and (best is None or score > best[0]):
+                best = (score, q, r, a)
+    if not best:
+        return None
+    _, q, r, a = best
+    matched = [rows[n] for n, d in enumerate(nums)
+               if q in d and r in d and a in d and abs(d[q] * d[r] - d[a]) <= max(0.05, abs(d[a]) * 0.005)]
+    text: Dict[int, int] = {}
+    for row in matched:
+        for i, c in enumerate(row or []):
+            v = _clean(c)
+            if i not in (q, r, a) and v and _num(v) is None:
+                text[i] = text.get(i, 0) + len(re.findall(r"[A-Za-z]", v))
+    if not text or max(text.values()) < 4 * len(matched):
+        return None
+    cols = {"desc": max(text, key=text.get), "qty": q, "rate": r, "amount": a}
+    _infer_columns(cols, matched)
+    return cols
+
+
+def _read(rows: List[List[Any]], sheet: str = "",
+          cols: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
     section = None
     summary = False
     bills = False          # the sheet is numbered bills ("BILL NO 1")
     title_next = False     # the next heading names the bill
     out: List[Dict[str, Any]] = []
+    skip_to = 0
     for n, row in enumerate(rows):
         row = list(row or [])
-        if cols is None:
-            cols = _header_map(row, rows[n + 1:n + 60])
-            for above in rows[max(0, n - 3):n] if cols else []:   # a blank row may sit between
-                _group_columns(cols, list(above or []), row)
+        if n < skip_to:                 # the second row of a two-row heading
             continue
-        again = _header_map(row, rows[n + 1:n + 60])
+        if cols is None:
+            cols, span = _find_header(rows, n)
+            skip_to = n + span
+            continue
+        again, span = _find_header(rows, n)
         if again:                       # a repeated header (a new page/bill) — re-map
-            for above in rows[max(0, n - 3):n]:
-                _group_columns(again, list(above or []), row)
-            cols, summary = again, False
+            cols, summary, skip_to = again, False, n + span
             continue
         if summary:                     # the summary page repeats each bill's total
             continue
         desc = _clean(_cell(row, cols, "desc"))
-        qty, rate, amount = (_num(_cell(row, cols, "qty")), _num(_cell(row, cols, "rate")),
-                             _num(_cell(row, cols, "amount")))
+        qty, rate, amount = (_num(_cell(row, cols, "qty")), _money(row, cols, "rate"),
+                             _money(row, cols, "amount"))
         if not desc:
             # A heading in another column ("Site Management" in column A, the description in B):
             # a row with one text cell and nothing else.
@@ -329,6 +475,22 @@ def _log_unrecognised(filename: str, sheet: str, rows: List[List[Any]]) -> None:
              filename, sheet, "; ".join(labels[:20]) or "(none)")
 
 
+def _sheets(path: Path, suffix: str) -> List["tuple[str, List[List[Any]]]"]:
+    """(title, rows) per worksheet. An old .xls (Excel 97–2003, still what many QS packages
+    export) is read with xlrd; its empty cells are "" and become None like openpyxl's."""
+    if suffix == ".xls":
+        import xlrd
+        book = xlrd.open_workbook(str(path))
+        return [(sh.name, [[None if c == "" else c for c in sh.row_values(i)] for i in range(sh.nrows)])
+                for sh in book.sheets()]
+    from openpyxl import load_workbook
+    wb = load_workbook(path, data_only=True, read_only=True)
+    try:
+        return [(ws.title, [list(r) for r in ws.iter_rows(values_only=True)]) for ws in wb.worksheets]
+    finally:
+        wb.close()
+
+
 def parse(path: Path) -> List[Dict[str, Any]]:
     """Every priced line of a BOQ workbook/CSV. [] when no sheet has a recognisable header."""
     path = Path(path)
@@ -337,26 +499,22 @@ def parse(path: Path) -> List[Dict[str, Any]]:
         if suffix == ".csv":
             with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
                 return parse_rows(list(csv.reader(fh)), path.stem)
-        if suffix in (".xlsx", ".xlsm"):
-            from openpyxl import load_workbook
-            wb = load_workbook(path, data_only=True, read_only=True)
+        if suffix in (".xlsx", ".xlsm", ".xls"):
             lines: List[Dict[str, Any]] = []
             already: set = set()
-            for ws in wb.worksheets:
-                rows = [list(r) for r in ws.iter_rows(values_only=True)]
-                got = parse_rows(rows, ws.title)
+            for title, rows in _sheets(path, suffix):
+                got = parse_rows(rows, title, infer=not lines)
                 if not got:
-                    _log_unrecognised(path.name, ws.title, rows)
-                elif already and re.search(r"\b(summary|cost split)\b", ws.title, re.IGNORECASE):
-                    log.info("BOQ sheet %s / %s: a summary of the bill; skipped", path.name, ws.title)
+                    _log_unrecognised(path.name, title, rows)
+                elif already and re.search(r"\b(summary|cost split)\b", title, re.IGNORECASE):
+                    log.info("BOQ sheet %s / %s: a summary of the bill; skipped", path.name, title)
                     continue
                 elif _seen(got, already):
                     log.info("BOQ sheet %s / %s: repeats items already read; skipped",
-                             path.name, ws.title)
+                             path.name, title)
                     continue
                 already |= {(li.get("description") or "").lower() for li in got}
                 lines.extend(got)
-            wb.close()
             return lines
     except Exception as exc:
         log.warning("BOQ sheet parse failed for %s: %s", path.name, exc)
