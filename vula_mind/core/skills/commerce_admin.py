@@ -1660,6 +1660,34 @@ def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]
     return [t for t in tools if _TOOL_SCOPE.get(t["function"]["name"]) in (None, *allowed)]
 
 
+# Tools that message customers or move money. The model may only pass confirm=true for one of
+# these after the owner was shown its preview (a pending row in commerce_pending_confirmations
+# for the same tool and phone). 2026-10-27 (gap audit 2.5): nothing stopped a model from calling
+# send_invoice with confirm=true straight away, e.g. on "make a quote for Sam and send it" in a
+# voice note, so the customer could get it before the owner saw anything. The Confirm button
+# re-runs the tool via _dispatch_tool directly and is not affected.
+_PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "record_payment",
+                            "send_broadcast", "send_payment_reminders", "send_purchase_order"})
+
+
+def _preview_was_shown(tenant_id: str, phone: Optional[str], tool: str) -> bool:
+    """True (and the pending row is used up) when this phone has an unexpired preview of this
+    tool waiting: the owner typed "yes" to it. Any doubt is False: show the preview again."""
+    if not phone:
+        return False
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        upd = (service._client().table("commerce_pending_confirmations")
+               .update({"status": "confirmed", "resolved_at": now})
+               .eq("tenant_id", tenant_id).eq("phone", phone).eq("tool_name", tool)
+               .eq("status", "pending").gt("expires_at", now).execute())
+        return bool(upd.data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending-confirmation check failed, previewing instead: %s", exc)
+        return False
+
+
 class ConfirmationRequired(Exception):
     """Raised from _agent_loop when a dispatched tool returns {"preview": True, ...} (22 tools
     use this exact shape — update_stock, record_payment, create_purchase_order, ...). Caught in
@@ -2075,6 +2103,11 @@ class CommerceAdminSkill(BaseSkill):
                 logger.warning("commerce_admin: refused tool %s — not offered to this caller", name)
                 return {"error": f"{name} isn't available here. Use one of the tools you were given, "
                                  f"or tell the user you can't do that."}
+            if (name in _PREVIEW_FIRST and args.get("confirm")
+                    and not _preview_was_shown(ctx["tenant_id"], ctx.get("phone"), name)):
+                logger.warning("commerce_admin: %s called with confirm before any preview, "
+                               "showing the preview instead", name)
+                args = {k: v for k, v in args.items() if k not in ("confirm", "refund_made")}
             return await self._dispatch_tool(name, args, ctx)
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
