@@ -220,7 +220,7 @@ for (const who of ROLES) {
       const items = await menu(page);
       for (const [zone, labels] of Object.entries(items)) {
         for (const label of labels) {
-          if (/^(sign out|log out)$/i.test(label)) continue;
+          if (/^(sign out|log out|install vula)$/i.test(label)) continue;   // actions, not screens (install.spec.js covers the install sheet)
           try { await go(page, zone || null, label); } catch (e) { report.push({ screen: `${zone} ${label}`, error: String(e).slice(0, 200) }); continue; }
           const name = `${zone ? `${zone} › ` : ""}${label}`;
           try { await check(name); } catch (e) { report.push({ screen: name, error: String(e).slice(0, 200) }); continue; }
