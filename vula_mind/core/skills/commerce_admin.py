@@ -569,6 +569,21 @@ INVOICE_TOOLS = [
             "confirm": {"type": "boolean"}},
             "required": ["invoice_number"]}}},
     {"type": "function", "function": {
+        "name": "recurring_invoice",
+        "description": "Recurring invoices: set one up from an existing invoice ('bill Sam this "
+                       "every month', 'make INV-00012 recurring'), list them, or stop one. Each "
+                       "one is created as a draft and the owner is asked before it is sent. "
+                       "Without confirm=true, set_up and stop return a preview.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["set_up", "list", "stop"]},
+            "invoice_number": {"type": "string", "description": "set_up: the invoice to repeat."},
+            "cadence": {"type": "string", "enum": ["monthly", "weekly"]},
+            "start_date": {"type": "string", "description": "set_up: first new invoice, YYYY-MM-DD. "
+                           "Omit for one period after the original invoice."},
+            "customer_name": {"type": "string", "description": "stop: whose recurring invoice."},
+            "confirm": {"type": "boolean"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "record_payment",
         "description": "Record a payment received against an existing invoice, by its number "
                        "(e.g. OTH-INV-00001). Supports partial payments — status becomes "
@@ -1608,6 +1623,10 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
+    # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
+    # so a member restricted to e.g. Projects could still pull the full statements on WhatsApp.
+    "financial_report": "finances", "finance_settings": "finances",
+    "send_payment_reminders": "invoices",
     "staff_notice": "team", "staff_poll": "team",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
@@ -1643,6 +1662,34 @@ def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]
         return tools
     allowed = set(access)
     return [t for t in tools if _TOOL_SCOPE.get(t["function"]["name"]) in (None, *allowed)]
+
+
+# Tools that message customers or move money. The model may only pass confirm=true for one of
+# these after the owner was shown its preview (a pending row in commerce_pending_confirmations
+# for the same tool and phone). 2026-10-27 (gap audit 2.5): nothing stopped a model from calling
+# send_invoice with confirm=true straight away, e.g. on "make a quote for Sam and send it" in a
+# voice note, so the customer could get it before the owner saw anything. The Confirm button
+# re-runs the tool via _dispatch_tool directly and is not affected.
+_PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "record_payment",
+                            "send_broadcast", "send_payment_reminders", "send_purchase_order"})
+
+
+def _preview_was_shown(tenant_id: str, phone: Optional[str], tool: str) -> bool:
+    """True (and the pending row is used up) when this phone has an unexpired preview of this
+    tool waiting: the owner typed "yes" to it. Any doubt is False: show the preview again."""
+    if not phone:
+        return False
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        upd = (service._client().table("commerce_pending_confirmations")
+               .update({"status": "confirmed", "resolved_at": now})
+               .eq("tenant_id", tenant_id).eq("phone", phone).eq("tool_name", tool)
+               .eq("status", "pending").gt("expires_at", now).execute())
+        return bool(upd.data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending-confirmation check failed, previewing instead: %s", exc)
+        return False
 
 
 class ConfirmationRequired(Exception):
@@ -2060,6 +2107,11 @@ class CommerceAdminSkill(BaseSkill):
                 logger.warning("commerce_admin: refused tool %s — not offered to this caller", name)
                 return {"error": f"{name} isn't available here. Use one of the tools you were given, "
                                  f"or tell the user you can't do that."}
+            if (name in _PREVIEW_FIRST and args.get("confirm")
+                    and not _preview_was_shown(ctx["tenant_id"], ctx.get("phone"), name)):
+                logger.warning("commerce_admin: %s called with confirm before any preview, "
+                               "showing the preview instead", name)
+                args = {k: v for k, v in args.items() if k not in ("confirm", "refund_made")}
             return await self._dispatch_tool(name, args, ctx)
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
@@ -2447,6 +2499,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "payment_link":       return await self._payment_link(tid, args)
             if name == "financial_report":   return await self._financial_report(tid, args)
             if name == "credit_note":        return await self._credit_note(tid, args)
+            if name == "recurring_invoice":  return await self._recurring_invoice(tid, args)
             if name == "record_payment":     return await self._record_payment(tid, args)
             if name == "list_quotes":        return await self._list_quotes(tid, args.get("status"))
             if name == "convert_quote_to_invoice": return await self._convert_quote_to_invoice(tid, args.get("quote_number", ""))
@@ -3205,6 +3258,80 @@ class CommerceAdminSkill(BaseSkill):
                 "invoice_number": after.get("invoice_number"), "invoice_status": after.get("status"),
                 "still_owed": self._rands(max(0, int(after.get("total_cents") or 0)
                                               - int(after.get("total_paid_cents") or 0)))}
+
+    async def _recurring_invoice(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Set up / list / stop recurring invoices (gap audit 2.3: until 27 Oct this was only in
+        the dashboard). The scheduler creates each as a draft and asks before sending
+        (service._propose_recurring_send). Stopping deactivates; nothing is deleted."""
+        from datetime import date
+        action = args.get("action") or "list"
+        active = [r for r in await service.list_recurring(tid) if r.get("active", True)]
+
+        def total(r: Dict[str, Any]) -> int:
+            return sum(int(li.get("total_cents") or 0) for li in (r.get("line_items") or []))
+
+        if action == "list":
+            return {"recurring": [{"customer": r.get("customer_name"), "label": r.get("label"),
+                                   "cadence": r.get("cadence"), "next_invoice": r.get("next_run_at"),
+                                   "amount_excl_vat": self._rands(total(r))} for r in active]}
+        if action == "stop":
+            who = " ".join((args.get("customer_name") or "").lower().split())
+            hits = [r for r in active if who and who in " ".join((r.get("customer_name") or "").lower().split())]
+            if len(hits) != 1:
+                return {"status": "need_info",
+                        "message": ("Which one? " if hits or active else "There are no recurring invoices. ")
+                        + ", ".join(f"{r.get('customer_name')} ({r.get('cadence')})" for r in (hits or active))}
+            r = hits[0]
+            if not args.get("confirm"):
+                return {"preview": True, "customer": r.get("customer_name"), "cadence": r.get("cadence"),
+                        "next_invoice": r.get("next_run_at"),
+                        "message": "Confirm to stop this recurring invoice (call again with confirm=true)."}
+            await service.upsert_recurring(tid, {"id": r["id"], "customer_name": r.get("customer_name"),
+                                                 "active": False})
+            after = next((x for x in await service.list_recurring(tid) if x.get("id") == r["id"]), None)
+            ok = bool(after) and after.get("active") is False
+            _readback_gate(tid, "recurring_invoice_stop", ok, {"id": r["id"]}, {"found": bool(after)})
+            if not ok:
+                return _not_confirmed("Stopping it could not be confirmed on re-read; check Invoices › Recurring.")
+            return _checked({"stopped": True}, f"✅ Stopped the recurring invoice for *{r.get('customer_name')}*.")
+
+        inv = await self._find_invoice_by_number(tid, args.get("invoice_number", ""))
+        if not inv or inv.get("doc_type") != "invoice" or (inv.get("direction") or "outbound") != "outbound":
+            return {"status": "need_info",
+                    "message": "Which invoice should repeat? Give its number, e.g. INV-00012."}
+        cadence = args.get("cadence") or "monthly"
+        today = date.today().isoformat()
+        start = (args.get("start_date") or "")[:10]
+        try:
+            date.fromisoformat(start)
+        except ValueError:
+            start = service._advance((inv.get("issue_date") or today)[:10], cadence)
+            while start < today:
+                start = service._advance(start, cadence)
+        lines = inv.get("line_items") or []
+        if isinstance(lines, str):
+            import json as _json
+            lines = _json.loads(lines or "[]")
+        data = {"customer_name": inv.get("customer_name"), "customer_email": inv.get("customer_email"),
+                "customer_phone": inv.get("customer_phone"), "customer_address": inv.get("customer_address"),
+                "line_items": lines, "vat_rate": float(inv.get("vat_rate") or 15), "cadence": cadence,
+                "next_run_at": start, "active": True,
+                "label": f"{inv.get('customer_name')} — {cadence} (from {inv.get('invoice_number')})"}
+        if not args.get("confirm"):
+            return {"preview": True, "from_invoice": inv.get("invoice_number"),
+                    "customer": inv.get("customer_name"), "amount": self._rands(inv.get("total_cents")),
+                    "cadence": cadence, "first_new_invoice": start,
+                    "message": "Each one is made as a draft and I'll ask you before it goes to the "
+                               "customer. Confirm to set it up (call again with confirm=true)."}
+        row = await service.upsert_recurring(tid, data)
+        after = next((x for x in await service.list_recurring(tid) if x.get("id") == row.get("id")), None)
+        ok = bool(after) and after.get("active", True) and after.get("next_run_at", "")[:10] == start
+        _readback_gate(tid, "recurring_invoice_set_up", ok, {"next_run_at": start}, {"found": bool(after)})
+        if not ok:
+            return _not_confirmed("The recurring invoice could not be confirmed on re-read; check Invoices › Recurring.")
+        return _checked({"set_up": True, "next_invoice": start},
+                        f"✅ *{inv.get('customer_name')}* will get {inv.get('invoice_number')} again "
+                        f"{cadence}, first on {start}. Each one comes to you as a draft to approve first.")
 
     async def _share_project(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Preview what the client will see, then (confirm=true) make the link — read back before

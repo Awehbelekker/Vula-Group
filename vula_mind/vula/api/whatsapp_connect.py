@@ -262,6 +262,8 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         record["label"] = moving["label"]
     save_number(db, body.tenant_id, phone_number_id, record, purpose=purpose,
                 extra={"coexistence": body.coexistence, "history_sync": history_sync})
+    from vula import trials
+    trials.start_on_go_live(body.tenant_id)          # the 14-day trial runs from going live
     moved, move_note = None, None
     if moving:
         old_pnid = moving["phone_number_id"]
@@ -646,6 +648,8 @@ async def link_existing_number(tenant_id: str, phone_number_id: str, pin: Option
               "webhook_registered": True, "connected_by": linked_by,
               "connected_at": datetime.now(timezone.utc).isoformat()}
     save_number(db, tenant_id, pnid, record, purpose=purpose)
+    from vula import trials
+    trials.start_on_go_live(tenant_id)               # the 14-day trial runs from going live
     # Forget anything cached about this number or tenant so the next message routes and replies right.
     from vula.api import whatsapp as wa
     wa._forget_wa_number(tenant_id, pnid)

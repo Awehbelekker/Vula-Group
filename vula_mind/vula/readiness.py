@@ -99,6 +99,19 @@ def tenant_gaps(client) -> dict[str, list[dict]]:
         if mode == "live" and not settings.tap_hash_pepper:
             add(tid, "Tap to Pay hashes are keyed off the Supabase key (they change if it's rotated)",
                 "Set TAP_HASH_PEPPER before going live")
+    # Invoices: a VAT vendor's tax invoice needs its VAT number and address (VAT Act s20(4));
+    # without the number Vula prints "Invoice" instead (vula/commerce/pdf.py::is_tax_invoice).
+    for r in _rows(client, "commerce_invoice_settings", "tenant_id,vat_registered,vat_number,registered_address"):
+        tid = r.get("tenant_id")
+        if tid not in tids or r.get("vat_registered") is False:
+            continue
+        missing = [w for w, v in (("VAT number", r.get("vat_number")), ("registered address", r.get("registered_address")))
+                   if not (v or "").strip()]
+        if missing:
+            add(tid, f"Marked VAT-registered but its {' and '.join(missing)} "
+                     f"{'are' if len(missing) > 1 else 'is'} missing, so invoices "
+                     f"can't be valid tax invoices",
+                "Add them under Settings › Invoices, or untick VAT registered if it isn't")
     for tid in tids:
         out.setdefault(tid, [])
     return out

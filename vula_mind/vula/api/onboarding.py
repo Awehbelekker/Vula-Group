@@ -364,7 +364,7 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
     # dashboard (15 Oct 2026). It was f"{vula_base_url}/{slug}" — app.vula.ai, which isn't ours.
     from vula.api.tenants import dashboard_url_for
     workspace_url = dashboard_url_for(slug)
-    trial_ends = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    trial_ends = (datetime.now(timezone.utc) + timedelta(days=settings.trial_days)).isoformat()
 
     # Normalise WhatsApp to E.164 without leading + so lookup always matches
     whatsapp_normalised: str | None = None
