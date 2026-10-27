@@ -129,6 +129,17 @@ test.describe("service worker", () => {
     await expect.poll(() => page.evaluate(async () => Boolean(await caches.match("/")))).toBe(true);
   });
 
+  // The dev server has no build, so this build's file list is handed to the worker here.
+  test("keeps every screen's files when it installs, not only the screens opened so far", async ({ page, context }) => {
+    await context.route(/\/precache\.json/, (route) => route.fulfill({ contentType: "application/json",
+      body: JSON.stringify({ build: "test", files: ["/assets/NeverOpened-x1.js", "/assets/NeverOpened-x1.css"] }) }));
+    await context.route(/\/assets\/NeverOpened-x1\.(js|css)$/, (route) => route.fulfill({
+      contentType: route.request().url().endsWith(".js") ? "text/javascript" : "text/css", body: "/* a screen */" }));
+    await controlled(page);
+    await expect.poll(() => page.evaluate(async () => Boolean(await caches.match("/assets/NeverOpened-x1.js")))).toBe(true);
+    expect(await page.evaluate(async () => Boolean(await caches.match("/assets/NeverOpened-x1.css")))).toBe(true);
+  });
+
   test("a customer's receipt page is never kept on the phone", async ({ page }) => {
     await controlled(page);
     await page.goto("/r/test-token").catch(() => {});
