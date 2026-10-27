@@ -1183,9 +1183,9 @@ async def _stale_handoff_scheduler_loop() -> None:
     auto-resume doesn't depend on any outbound send succeeding, so it's the actual guarantee
     here, the ping is the insurance on top."""
     import asyncio as _asyncio
-    from vula.commerce import job_config, service as commerce_service
+    from vula.commerce import job_config
+    from vula import handoff_watch
     from vula.escalation import _pick_helper
-    from vula.api.whatsapp import _send_reply
     from vula.api import tenants as _t
 
     await _asyncio.sleep(200)  # settle on boot
@@ -1202,31 +1202,10 @@ async def _stale_handoff_scheduler_loop() -> None:
                 if not job_config.claim_run(tenant_id, "stale_handoff_resume", cfg):
                     continue
                 try:
-                    for session in await commerce_service.find_stale_paused_sessions(tenant_id):
-                        who = (session.get("customer_name") or session.get("customer_phone")
-                              or "a customer")
-                        # Whoever the conversation is assigned to in the inbox, else the
-                        # tenant's default helper.
-                        helper = (_assigned_member(tenant_id, session.get("assigned_to"))
-                                  or _pick_helper(tenant_id))
-                        if helper and helper.get("whatsapp"):
-                            msg = (f"⏰ Heads up — you paused Vula's replies to {who} a while "
-                                  f"ago and nothing's happened since. I've resumed answering "
-                                  f"them so they're not left waiting; jump back in any time by "
-                                  f"replying in the inbox.")
-                            if not await _send_reply(helper["whatsapp"], msg, tenant_id=tenant_id):
-                                log.warning("stale-handoff ping undelivered for %s session %s "
-                                          "(helper outside their 24h WhatsApp window?)",
-                                          tenant_id, session["id"])
-                        else:
-                            log.warning("stale-handoff: no helper configured to notify for "
-                                      "%s session %s", tenant_id, session["id"])
-                        await commerce_service.set_session_paused(tenant_id, session["id"], False)
-                        log.info("auto-resumed stale-paused session %s for %s (idle since %s)",
-                                session["id"], tenant_id, session.get("last_at"))
-                        from core.mass_mind import health as _mm_health
-                        _mm_health.record_event(tenant_id, "stale_handoff_auto_resumed",
-                                                 {"session_id": session["id"]})
+                    # 30-min reminder, 2 h resume + apology (vula/handoff_watch.py). Whoever the
+                    # conversation is assigned to in the inbox, else the tenant's default helper.
+                    await handoff_watch.sweep(tenant_id, helper_for=lambda sess, t=tenant_id: (
+                        _assigned_member(t, sess.get("assigned_to")) or _pick_helper(t)))
                 except Exception as exc:
                     log.warning("stale handoff resume failed for %s: %s", tenant_id, exc)
         except Exception as exc:
