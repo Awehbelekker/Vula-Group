@@ -18,7 +18,7 @@ class Basic extends Response {
 
 function worker({ version = "b2", windows = [] } = {}) {
   const on = {};
-  const shown = [];
+  const shown = [], badges = [];
   const net = { online: true, calls: [] };
   const stores = new Map();
   const keyOf = (r) => new URL(typeof r === "string" ? r : r.url, ORIGIN).href;
@@ -48,6 +48,7 @@ function worker({ version = "b2", windows = [] } = {}) {
     skipWaiting: async () => {},
     clients: { claim: async () => {}, matchAll: async () => windows },
     registration: { showNotification: async (title, opts) => { shown.push({ title, ...opts }); } },
+    navigator: { setAppBadge: async () => { badges.push("dot"); } },
   };
   vm.runInNewContext(CODE, { self, caches, fetch: fetchFn, Response, URL, console });
 
@@ -67,7 +68,7 @@ function worker({ version = "b2", windows = [] } = {}) {
     on.push({ data: { json: () => payload, text: () => JSON.stringify(payload) }, waitUntil: (x) => { p = x; } });
     await p;
   };
-  return { net, stores, run, get, push, shown };
+  return { net, stores, run, get, push, shown, badges };
 }
 
 test("installs with this build's name and keeps the offline page", async () => {
@@ -143,6 +144,7 @@ test("an alert sounds on the phone, and a second of the same kind sounds again",
   assert.equal(w.shown[0].silent, false);
   assert.equal(w.shown[0].renotify, true);
   assert.equal(w.shown[0].data.url, "/#/go/inbox");
+  assert.deepEqual(w.badges, ["dot"]);                          // a dot on the app's icon till it's opened
 });
 
 test("with Vula open on screen the notification is silent and the app is told to chime", async () => {
@@ -153,4 +155,5 @@ test("with Vula open on screen the notification is silent and the app is told to
   await w.push({ title: "New paid order", body: "OTH-12 · R318.40", tag: "order-OTH-12" });
   assert.equal(w.shown[0].silent, true);
   assert.deepEqual(JSON.parse(JSON.stringify(told)), [{ type: "vula-alert", title: "New paid order", tag: "order-OTH-12" }]);
+  assert.deepEqual(w.badges, []);                               // they're looking at it: no dot
 });

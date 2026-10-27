@@ -3,6 +3,11 @@ vula/commerce/brand_icon.py — a business's square app icon (PNG) for its insta
 
 From its square icon if it uploaded one, else its logo centred on a white tile, else its initial
 on its brand colour. iOS ignores SVG touch icons, so these are always PNG.
+
+maskable (2026-10-27): Android shows an installed app's icon as a circle or squircle and keeps only
+the middle — a circle 80% of the icon wide. The maskable variant keeps everything that matters
+inside that circle (a logo within MASK_SAFE of the tile; a square icon shrunk onto its own edge
+colour), so no corner of a business's logo is cut off. The plain icon is unchanged.
 """
 from __future__ import annotations
 
@@ -11,6 +16,9 @@ import logging
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+# The widest a square can be and still sit inside the 80%-wide safe circle: 0.8 / √2 ≈ 0.566.
+MASK_SAFE = 0.56
 
 
 def _hex_rgb(h: str):
@@ -41,8 +49,16 @@ def _letter_tile(accent: str, name: str, size: int):
     return img
 
 
+def _edge_colour(img) -> tuple:
+    """The colour around a square icon's edge (its four corners, averaged)."""
+    w, h = img.size
+    px = [img.getpixel((x, y)) for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
+    solid = [p for p in px if len(p) < 4 or p[3] > 32] or [(255, 255, 255, 255)]
+    return tuple(sum(p[i] for p in solid) // len(solid) for i in range(3))
+
+
 async def render_icon(src: Optional[str], accent: str, name: str, size: int, square: bool = False,
-                      logo_size: Optional[str] = None) -> bytes:
+                      logo_size: Optional[str] = None, maskable: bool = False) -> bytes:
     from PIL import Image
     img = None
     if src:
@@ -50,7 +66,13 @@ async def render_icon(src: Optional[str], accent: str, name: str, size: int, squ
             from vula.commerce.reference_url import safe_fetch_bytes
             data = await safe_fetch_bytes(src)
             logo = Image.open(io.BytesIO(data)).convert("RGBA")
-            if square:                       # an uploaded app icon: fill the tile
+            if square and maskable:          # an uploaded app icon, shrunk onto its own edge colour
+                inner = int(size * 0.8)
+                shrunk = logo.resize((inner, inner))
+                bg = Image.new("RGB", (size, size), _edge_colour(logo))
+                bg.paste(shrunk, ((size - inner) // 2, (size - inner) // 2), mask=shrunk.split()[3])
+                img = bg
+            elif square:                     # an uploaded app icon: fill the tile
                 img = logo.resize((size, size))
                 bg = Image.new("RGB", (size, size), (255, 255, 255))
                 bg.paste(img, mask=img.split()[3])
@@ -58,7 +80,8 @@ async def render_icon(src: Optional[str], accent: str, name: str, size: int, squ
             else:                            # a wide logo: centred with a safe margin (maskable)
                 tile = Image.new("RGB", (size, size), (255, 255, 255))
                 from vula.commerce.brand_sizes import ICON_FILL, size_key
-                inner = int(size * ICON_FILL[size_key(logo_size)])
+                fill = ICON_FILL[size_key(logo_size)]
+                inner = int(size * (min(fill, MASK_SAFE) if maskable else fill))
                 logo.thumbnail((inner, inner))
                 tile.paste(logo, ((size - logo.width) // 2, (size - logo.height) // 2), mask=logo.split()[3])
                 img = tile

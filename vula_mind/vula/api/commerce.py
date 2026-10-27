@@ -5079,22 +5079,28 @@ async def public_brand(tenant_id: str):
 _ICON_CACHE: dict = {}
 
 
+@router.get("/{tenant_id}/app-icon/maskable/{size}.png")
+async def public_app_icon_maskable(tenant_id: str, size: int):
+    """The same icon with everything inside Android's round-icon safe zone (brand_icon.MASK_SAFE)."""
+    return await public_app_icon(tenant_id, size, maskable=True)
+
+
 @router.get("/{tenant_id}/app-icon/{size}.png")
-async def public_app_icon(tenant_id: str, size: int):
+async def public_app_icon(tenant_id: str, size: int, maskable: bool = False):
     import time as _time
     from fastapi.responses import Response
     size = 512 if size > 256 else (192 if size > 180 else 180)
     settings = await service.get_invoice_settings(tenant_id) or {}
     src = settings.get("icon_url") or settings.get("logo_url")
     accent = settings.get("accent_color") or "#2C5545"
-    key = (tenant_id, size, src, accent, settings.get("logo_size"))
+    key = (tenant_id, size, src, accent, settings.get("logo_size"), bool(maskable))
     hit = _ICON_CACHE.get(key)
     if hit and _time.time() - hit[0] < 3600:
         return Response(hit[1], media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
     from vula.commerce.brand_icon import render_icon
     name = settings.get("trading_as") or settings.get("company_name") or tenant_id
     png = await render_icon(src, accent, name, size, square=bool(settings.get("icon_url")),
-                            logo_size=settings.get("logo_size"))
+                            logo_size=settings.get("logo_size"), maskable=bool(maskable))
     _ICON_CACHE[key] = (_time.time(), png)
     return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
@@ -5117,6 +5123,23 @@ def _dashboard_origin(tenant_id: str, app: Optional[str]) -> Optional[str]:
     return None
 
 
+def _app_shortcuts(tenant_id: str, root: str, icon: str) -> list:
+    """Long-press the installed app's icon (Android): straight to the scanner, the assistant, the
+    inbox, and invoices when this business has them. The app opens them (QuickLauncher's ?launch=,
+    App.jsx's #/go/ links)."""
+    from vula.api.tenants import enabled_modules
+    try:
+        mods = enabled_modules(tenant_id)
+    except Exception:
+        mods = []
+    items = [("Scan a document", "Scan", "?launch=scan"), ("Ask Vula", "Ask Vula", "?launch=chat"),
+             ("Inbox", "Inbox", "#/go/inbox")]
+    if "invoices" in mods:
+        items.append(("Invoices", "Invoices", "#/go/invoices"))
+    return [{"name": n, "short_name": sn, "url": f"{root}{path}",
+             "icons": [{"src": icon, "sizes": "192x192", "type": "image/png"}]} for n, sn, path in items]
+
+
 @router.get("/{tenant_id}/manifest.webmanifest")
 async def public_manifest(tenant_id: str, app: Optional[str] = None):
     """The installed app's manifest in the business's own name, colour and icon. It's served from
@@ -5130,12 +5153,19 @@ async def public_manifest(tenant_id: str, app: Optional[str] = None):
     base = f"{(_settings.public_base_url or '').rstrip('/')}/v1/commerce/{tenant_id}/app-icon"
     origin = _dashboard_origin(tenant_id, app)
     root = f"{origin}/" if origin else "/"
+    # "id" keeps one installed app per business when the start address changes (an Android
+    # phone otherwise treats a new start_url as a second app). Plain and maskable icons are
+    # separate: one image can't both fill a square tile and keep its logo inside the round crop.
     manifest = {
-        "name": name, "short_name": name[:12], "description": brand.get("tagline") or f"{name} — run by Vula",
+        "id": root, "name": name, "short_name": name[:12],
+        "description": brand.get("tagline") or f"{name} — run by Vula",
         "start_url": root, "scope": root, "display": "standalone",
         "background_color": "#F7F4EE", "theme_color": brand.get("accent_color") or "#2C5545",
-        "icons": [{"src": f"{base}/192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-                  {"src": f"{base}/512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
+        "icons": [{"src": f"{base}/192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                  {"src": f"{base}/512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                  {"src": f"{base}/maskable/192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+                  {"src": f"{base}/maskable/512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}],
+        "shortcuts": _app_shortcuts(tenant_id, root, f"{base}/192.png"),
     }
     if origin:
         manifest["share_target"] = {

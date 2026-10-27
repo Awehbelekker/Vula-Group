@@ -123,6 +123,8 @@ self.addEventListener("push", (e) => {
       icon: "/icon-192.png", badge: "/icon-192.png", vibrate: [120, 60, 120], data: { url: d.url || "/" },
     });
     onScreen.forEach((c) => c.postMessage({ type: "vula-alert", title: d.title || "Vula", tag: d.tag || "vula" }));
+    // A dot on the app's icon until Vula is opened (src/lib/appBadge.js sets the real number then).
+    if (!onScreen.length && self.navigator.setAppBadge) await self.navigator.setAppBadge().catch(() => {});
   })());
 });
 
