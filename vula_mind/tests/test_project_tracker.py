@@ -161,7 +161,7 @@ def test_the_public_page_refuses_an_unknown_link():
     assert res.status_code == 404 and b"isn't valid" in res.body
 
 
-# ── what the client paid suppliers directly (migration 228) ──────────────────
+# ── what the client paid suppliers directly (migration 229) ──────────────────
 
 def _with_direct(db):
     db.tables["vula_project_direct_payments"] = [

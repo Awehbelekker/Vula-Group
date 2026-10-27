@@ -16,7 +16,7 @@ sources the rest of Vula uses (no second set of books):
   paid directly     what the client paid suppliers themselves: direct-supplier invoices
                     (job_costing.direct_costs), slips answered "the client paid"
                     (commerce_expenses.paid_with = 'client'), and payments recorded as the
-                    client's own (vula_project_direct_payments, migration 228 — with what the
+                    client's own (vula_project_direct_payments, migration 229 — with what the
                     client has still to pay) — in the project's spend, never in the business's
                     cost, fee or profit
   fee               the project's terms (vula_project_terms: cost-plus, fee %) on the business's cost

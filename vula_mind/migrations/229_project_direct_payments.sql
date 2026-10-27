@@ -1,4 +1,4 @@
--- 228_project_direct_payments.sql — what the client paid suppliers and trades directly.
+-- 229_project_direct_payments.sql — what the client paid suppliers and trades directly.
 --
 -- 27 Oct 2026 (DIGG, Belladonna): Rudi paid Flush, Edward (joinery), Elyas (electrical), Edison
 -- (plumbing), Jack Hammer, Cash Tile and Bathroom Bizarre himself — R283,816.08, with R64,270

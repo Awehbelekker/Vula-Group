@@ -105,6 +105,7 @@ from vula.api.subscriptions import router as subscriptions_router
 from vula.api.recurring_bills import router as recurring_bills_router
 from vula.api.yoco import router as yoco_router
 from vula.api.whatsapp_connect import router as whatsapp_connect_router
+from vula.api.dash_push import router as dash_push_router
 from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.shopify_connect import router as shopify_admin_router, webhook_router as shopify_webhook_router
 from vula.api.shop_domain import router as shop_domain_router
@@ -1802,6 +1803,7 @@ _TENANT_GUARD_RES = [
     re.compile(r"^/v1/email/(?:status|set-primary|sync|backfill|contacts|followups|disconnect)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/clickup/(?:status|lists|sync-kb)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/whatsapp/(?:connect/status|disconnect|health|numbers)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/push/([^/]+)/(?:key|subscribe|unsubscribe|test)$"),
     re.compile(r"^/v1/yoco/(?:status|test|disconnect)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/(?:google|microsoft|dynamics365)/status/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/(?:google|dynamics365)/(?!authorize-url|oauth|status)([^/]+)/"),
@@ -1979,6 +1981,7 @@ app.include_router(recurring_bills_router, prefix="/v1/recurring-bills")
 app.include_router(yoco_router, prefix="/v1/yoco")
 app.include_router(yoco_connect_router, prefix="/v1/yoco")
 app.include_router(whatsapp_connect_router, prefix="/v1/whatsapp")
+app.include_router(dash_push_router, prefix="/v1/push")
 app.include_router(draft_router, prefix="/v1")
 app.include_router(agent_router, prefix="/v1")
 

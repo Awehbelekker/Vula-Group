@@ -16,8 +16,9 @@ class Basic extends Response {
   clone() { return Object.setPrototypeOf(super.clone(), Basic.prototype); }
 }
 
-function worker({ version = "b2" } = {}) {
+function worker({ version = "b2", windows = [] } = {}) {
   const on = {};
+  const shown = [];
   const net = { online: true, calls: [] };
   const stores = new Map();
   const keyOf = (r) => new URL(typeof r === "string" ? r : r.url, ORIGIN).href;
@@ -44,7 +45,9 @@ function worker({ version = "b2" } = {}) {
   const self = {
     location: new URL(`${ORIGIN}/sw.js?v=${version}`),
     addEventListener: (type, fn) => { on[type] = fn; },
-    skipWaiting: async () => {}, clients: { claim: async () => {} },
+    skipWaiting: async () => {},
+    clients: { claim: async () => {}, matchAll: async () => windows },
+    registration: { showNotification: async (title, opts) => { shown.push({ title, ...opts }); } },
   };
   vm.runInNewContext(CODE, { self, caches, fetch: fetchFn, Response, URL, console });
 
@@ -58,7 +61,13 @@ function worker({ version = "b2" } = {}) {
     await tick();
     return res.text();
   };
-  return { net, stores, run, get };
+  // A push from the server: its payload, as the browser hands it to the worker.
+  const push = async (payload) => {
+    let p;
+    on.push({ data: { json: () => payload, text: () => JSON.stringify(payload) }, waitUntil: (x) => { p = x; } });
+    await p;
+  };
+  return { net, stores, run, get, push, shown };
 }
 
 test("installs with this build's name and keeps the offline page", async () => {
@@ -123,4 +132,25 @@ test("API calls, other sites and anything but a plain GET always go to the netwo
   assert.equal(await w.get("/v1/orders", { origin: "https://api.vula.test" }), null);
   assert.equal(await w.get("/", { method: "POST" }), null);
   assert.equal(await w.get("/shared/0"), null);
+});
+
+
+test("an alert sounds on the phone, and a second of the same kind sounds again", async () => {
+  const w = worker();
+  await w.push({ title: "A customer is waiting", body: "Thandi asked about delivery", tag: "customer_unanswered", url: "/#/go/inbox" });
+  assert.equal(w.shown.length, 1);
+  assert.equal(w.shown[0].title, "A customer is waiting");
+  assert.equal(w.shown[0].silent, false);
+  assert.equal(w.shown[0].renotify, true);
+  assert.equal(w.shown[0].data.url, "/#/go/inbox");
+});
+
+test("with Vula open on screen the notification is silent and the app is told to chime", async () => {
+  const told = [];
+  const open = { url: `${ORIGIN}/#/go/orders`, visibilityState: "visible", postMessage: (m) => told.push(m) };
+  const hidden = { url: `${ORIGIN}/`, visibilityState: "hidden", postMessage: (m) => told.push({ hidden: m }) };
+  const w = worker({ windows: [open, hidden] });
+  await w.push({ title: "New paid order", body: "OTH-12 · R318.40", tag: "order-OTH-12" });
+  assert.equal(w.shown[0].silent, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(told)), [{ type: "vula-alert", title: "New paid order", tag: "order-OTH-12" }]);
 });
