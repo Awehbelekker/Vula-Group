@@ -7,6 +7,7 @@ import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { OfflineBanner, UiHost, toast } from "./components/ui/index.jsx";
 import { InstallSteps } from "./components/install/InstallVula.jsx";
+import { NotificationsSheet } from "./components/notifications/NotificationsPanel.jsx";
 import { installAuthFetch } from "./lib/authFetch";
 
 // Attach the signed-in user's JWT to every guarded Vula API call (tenant-scoped auth).
@@ -27,6 +28,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <UiHost />
       <OfflineBanner />
       <InstallSteps />
+      <NotificationsSheet />
     </ErrorBoundary>
   </React.StrictMode>
 );

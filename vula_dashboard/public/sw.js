@@ -105,3 +105,24 @@ self.addEventListener("fetch", (e) => {
   else if (url.pathname.startsWith("/assets/")) e.respondWith(asset(req));
   else e.respondWith(other(req));
 });
+
+// Notifications (2026-10-27, PWA pass 3): an alert this person also gets on WhatsApp
+// (vula_mind/vula/dash_push.py). A tap opens the page it's about, in the open app when there is one.
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: "Vula", body: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.title || "Vula", {
+    body: d.body || "", tag: d.tag || "vula", icon: "/icon-192.png", badge: "/icon-192.png",
+    vibrate: [120, 60, 120], data: { url: d.url || "/" },
+  }));
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const target = new URL((e.notification.data && e.notification.data.url) || "/", self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    const open = list.find((c) => new URL(c.url).origin === self.location.origin && !new URL(c.url).pathname.startsWith("/pay/"));
+    if (open) return open.focus().then((c) => (c && "navigate" in c ? c.navigate(target) : c));
+    return self.clients.openWindow(target);
+  }));
+});

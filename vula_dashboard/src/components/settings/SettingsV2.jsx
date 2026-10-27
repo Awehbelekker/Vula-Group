@@ -7,12 +7,13 @@
  */
 import { useEffect, useState } from 'react'
 import {
-  ArrowLeft, Bike, Brain, ChevronRight, ClipboardList, Clock, Cloud, Contact, CreditCard, Globe, ImageUp, LayoutGrid,
+  ArrowLeft, Bell, Bike, Brain, ChevronRight, ClipboardList, Clock, Cloud, Contact, CreditCard, Globe, ImageUp, LayoutGrid,
   ListChecks, Mail, MapPin, MessageCircle, Moon, Palette, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, X,
 } from 'lucide-react'
 import { Button, Card, Field, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
 import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES, THEME_EVENT, getThemeMode, setThemeMode } from '../../theme/tokens'
 import BrandPreview from './BrandPreview'
+import { NotificationsPanel } from '../notifications/NotificationsPanel.jsx'
 import YocoConnectV2 from './connect/YocoConnectV2'
 import StoreConnectV2 from './connect/StoreConnectV2'
 import ShopDomainV2 from './connect/ShopDomainV2'
@@ -48,6 +49,7 @@ const GROUPS = [
     { id: 'clickup', label: 'ClickUp', Icon: ListChecks, hint: 'Connect ClickUp to create, list and update tasks — and set reminders — straight from WhatsApp.' },
   ] },
   { label: 'On this device', items: [
+    { id: 'notifications', label: 'Notifications', Icon: Bell, hint: 'Your Vula alerts — new paid orders, customers waiting, approvals — as notifications on this phone or computer, as well as on WhatsApp.' },
     { id: 'appearance', label: 'Appearance', Icon: SunMoon, hint: 'Light or dark, for this phone or computer only — everyone else keeps their own. Your business’s colours, logo and fonts are in Brand kit.' },
   ] },
   { label: 'Vula', items: [
@@ -98,6 +100,7 @@ function Section({ id, tenantId, tenantName, adminEmail, onOpen }) {
   switch (id) {
     case 'brand': return <BrandKit tenantId={tenantId} />
     case 'appearance': return <Appearance onOpenBrand={() => onOpen('brand')} />
+    case 'notifications': return <NotificationsPanel tenantId={tenantId} />
     case 'profile': return <BusinessProfile tenantId={tenantId} />
     case 'hours': return <Hours tenantId={tenantId} />
     case 'delivery': return <Delivery tenantId={tenantId} />

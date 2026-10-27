@@ -185,13 +185,26 @@ async def _notify_order_paid(
                 log.warning("order approval create failed: %s", exc)
                 for name, phone, role in team:
                     await _send(phone, summary + "\n\nVula dashboard → Orders")
+                await _push_paid_order(tenant_id, team, display_id, amount, customer_name)
         else:
             for name, phone, role in team:
                 await _send(phone, summary + "\n\nVula dashboard → Orders")
+            await _push_paid_order(tenant_id, team, display_id, amount, customer_name)
             try:
                 await dispatch_order(tenant_id, order_id, summary, customer_name)
             except Exception as exc:
                 log.warning("order dispatch failed: %s", exc)
+
+
+async def _push_paid_order(tenant_id: str, team: list, display_id: str, amount: str, customer_name: str) -> None:
+    """The paid-order alert on the team's phones that turned notifications on (vula/dash_push.py)."""
+    try:
+        from vula.dash_push import push_to_phones
+        await push_to_phones(tenant_id, [p for (_n, p, _r) in team], "New paid order",
+                             f"{display_id} · {amount}" + (f" · {customer_name}" if customer_name else ""),
+                             page="orders", tag=f"order-{display_id}", owner_fallback=True)
+    except Exception as exc:
+        log.debug("paid-order push skipped: %s", exc)
 
 
 async def _get_tenant_yoco_creds(tenant_id: str) -> Optional[dict]:

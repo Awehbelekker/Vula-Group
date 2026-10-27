@@ -12,7 +12,7 @@
  * "Powered by Vula" appears once: the sidebar foot, or the More sheet on a phone.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CalendarCheck, Camera, Download, Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
+import { Bell, CalendarCheck, Camera, Download, Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
   FilePlus2, Wallet, ScanLine, UserPlus, Megaphone } from "lucide-react";
 import { getThemeMode, setThemeMode, DARK_MODE_READY, THEME_EVENT } from "../theme/tokens";
 import { iconFor, houseGroups, flattenNav, ADD_ACTIONS } from "../navConfig";
@@ -21,6 +21,7 @@ import { IconButton, Sheet, ListRow, CommandPalette, useCommandPaletteHotkey, Fl
 import { useInstall } from "../lib/install";
 import { startInstall } from "./install/InstallVula.jsx";
 import { handOff } from "../lib/sharedFiles";
+import { openNotifications } from "./notifications/NotificationsPanel.jsx";
 import { PoweredByVula } from "./brand/VulaLogo.jsx";
 import "./VulaShellV2.css";
 
@@ -90,6 +91,9 @@ function UserMenu({ userEmail, roleLabel, onLogout }) {
           <div className="v2-menu-scrim" onClick={() => setOpen(false)} aria-hidden="true" />
           <div className="v2-menu" role="menu">
             <div className="v2-menu-who">{userEmail}{roleLabel ? <span> · {roleLabel}</span> : null}</div>
+            <button type="button" role="menuitem" className="v2-menu-item" onClick={() => { setOpen(false); openNotifications(); }}>
+              <Bell size={18} strokeWidth={1.75} aria-hidden="true" /> Notifications
+            </button>
             {!install.installed && (
               <button type="button" role="menuitem" className="v2-menu-item" onClick={() => { setOpen(false); startInstall(install); }}>
                 <Download size={18} strokeWidth={1.75} aria-hidden="true" /> Install Vula
@@ -251,6 +255,8 @@ export default function VulaShellV2({
           </div>))}
         <div className="v2-sheet-group">
           <div className="v2-nav-label">You</div>
+          <ListRow Icon={Bell} title="Notifications" detail="Your alerts on this phone"
+            onClick={() => { setMore(false); openNotifications(); }} />
           {!install.installed && (
             <ListRow Icon={Download} title="Install Vula" detail="Put it on your home screen"
               onClick={() => { setMore(false); startInstall(install); }} />)}
