@@ -11,15 +11,16 @@
  *                    (More = the whole grouped nav in a sheet; no burger)
  * "Powered by Vula" appears once: the sidebar foot, or the More sheet on a phone.
  */
-import { useEffect, useMemo, useState } from "react";
-import { CalendarCheck, Download, Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CalendarCheck, Camera, Download, Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
   FilePlus2, Wallet, ScanLine, UserPlus, Megaphone } from "lucide-react";
-import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
+import { getThemeMode, setThemeMode, DARK_MODE_READY, THEME_EVENT } from "../theme/tokens";
 import { iconFor, houseGroups, flattenNav, ADD_ACTIONS } from "../navConfig";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import { IconButton, Sheet, ListRow, CommandPalette, useCommandPaletteHotkey, FloatingToolbar } from "./ui/index.jsx";
 import { useInstall } from "../lib/install";
 import { startInstall } from "./install/InstallVula.jsx";
+import { handOff } from "../lib/sharedFiles";
 import { PoweredByVula } from "./brand/VulaLogo.jsx";
 import "./VulaShellV2.css";
 
@@ -66,6 +67,11 @@ function NavList({ groups, activeId, onSelect, rail }) {
 
 function ThemeButton() {
   const [mode, setMode] = useState(getThemeMode());
+  useEffect(() => {           // changed in Settings › Appearance: show the same
+    const sync = () => setMode(getThemeMode());
+    window.addEventListener(THEME_EVENT, sync);
+    return () => window.removeEventListener(THEME_EVENT, sync);
+  }, []);
   const i = Math.max(0, MODES.findIndex(([m]) => m === mode));
   const next = MODES[(i + 1) % MODES.length][0];
   return <IconButton Icon={MODES[i][2]} label={`${MODES[i][1]} — switch`} quiet onClick={() => { setThemeMode(next); setMode(next); }} />;
@@ -131,6 +137,18 @@ export default function VulaShellV2({
     .map((a) => ({ ...a, target: has(a.tab) ? a.tab : a.alsoTab && has(a.alsoTab) ? a.alsoTab : null }))
     .filter((a) => a.target);
   const runAdd = (a) => { setAdd(false); if (a.launch && onLaunch) onLaunch(a.launch); else go(a.target); };
+  // The camera button (2026-10-27, Ian: "we should have a camera/scanner button"): one tap opens
+  // the phone's camera (a computer: choose a photo); the photo goes straight into the Smart
+  // Scanner, which reads it — nothing is booked until the person checks it and taps to save.
+  const canScan = Boolean(onLaunch) && addActions.some((a) => a.key === "scan");
+  const scanInput = useRef(null);
+  const scanPhoto = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";                   // the same photo can be taken again
+    if (!file) return;
+    handOff("scan", [file]);
+    onLaunch("scanner");
+  };
 
   const paletteSources = [
     { group: "Pages", items: pages.map((p) => ({ id: p.id, label: p.label, detail: p.sectionLabel || undefined,
@@ -192,6 +210,12 @@ export default function VulaShellV2({
                 <Search size={18} strokeWidth={1.75} aria-hidden="true" /><span>Search</span>
                 <span className="vui-kbd" aria-hidden="true">Ctrl K</span>
               </button>)}
+            {canScan && (
+              <>
+                <input ref={scanInput} type="file" accept="image/*" capture="environment" hidden onChange={scanPhoto}
+                  data-testid="scan-camera-input" />
+                <IconButton Icon={Camera} label="Scan a document with the camera" quiet onClick={() => scanInput.current?.click()} />
+              </>)}
             {inboxItem && <IconButton Icon={Inbox} label="Inbox" count={Number(String(inboxCount || "").replace("+", "")) || 0}
               quiet onClick={() => select("inbox")} />}
             {!mobile && DARK_MODE_READY && <ThemeButton />}

@@ -193,7 +193,10 @@ export function setThemeMode(mode) {
   const m = ["auto", "light", "dark"].includes(mode) ? mode : "auto";
   try { localStorage.setItem(MODE_KEY, m); } catch { /* private mode: this visit only */ }
   applyThemeMode(m);
+  // Every light/dark control (the header button, Settings › Appearance) shows the same choice.
+  try { window.dispatchEvent(new Event(THEME_EVENT)); } catch { /* no window */ }
 }
+export const THEME_EVENT = "vula-theme-change";
 export function applyThemeMode(mode = getThemeMode()) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;

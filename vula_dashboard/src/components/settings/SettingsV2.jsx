@@ -5,13 +5,13 @@
  * grouped: on a phone the list, then one section with a way back; from 1024px the list beside
  * the open section.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowLeft, Bike, Brain, ChevronRight, ClipboardList, Clock, Cloud, Contact, CreditCard, Globe, ImageUp, LayoutGrid,
-  ListChecks, Mail, MapPin, MessageCircle, Palette, ShoppingBag, ShoppingCart, Smartphone, Sparkles, X,
+  ListChecks, Mail, MapPin, MessageCircle, Moon, Palette, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, X,
 } from 'lucide-react'
 import { Button, Card, Field, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
-import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES } from '../../theme/tokens'
+import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES, THEME_EVENT, getThemeMode, setThemeMode } from '../../theme/tokens'
 import BrandPreview from './BrandPreview'
 import YocoConnectV2 from './connect/YocoConnectV2'
 import StoreConnectV2 from './connect/StoreConnectV2'
@@ -46,6 +46,9 @@ const GROUPS = [
     { id: 'microsoft', label: 'Microsoft (OneDrive & Outlook)', Icon: LayoutGrid, hint: 'Connect Microsoft 365 so Vula can find & file OneDrive documents and draft Outlook replies (draft-only).' },
     { id: 'email', label: 'Email (IMAP / SMTP)', Icon: Mail, hint: 'Connect any mailbox without OAuth — GoDaddy Workspace, cPanel, Zoho. Search it, file attachments to the knowledge base, draft replies.' },
     { id: 'clickup', label: 'ClickUp', Icon: ListChecks, hint: 'Connect ClickUp to create, list and update tasks — and set reminders — straight from WhatsApp.' },
+  ] },
+  { label: 'On this device', items: [
+    { id: 'appearance', label: 'Appearance', Icon: SunMoon, hint: 'Light or dark, for this phone or computer only — everyone else keeps their own. Your business’s colours, logo and fonts are in Brand kit.' },
   ] },
   { label: 'Vula', items: [
     { id: 'learned', label: 'What Vula has learned', Icon: Brain, hint: "Everything Vula has picked up about how your business runs — your voice, answers learned from your team, and how it's learned to categorise your suppliers." },
@@ -84,16 +87,17 @@ export default function SettingsV2({ tenantId, tenantName, adminEmail }) {
             <h2 id="vst-title" className="vst-title"><shown.Icon size={22} strokeWidth={1.75} aria-hidden="true" />{shown.label}</h2>
             <p className="vst-sub">{shown.hint}</p>
           </div>
-          <Section id={shown.id} {...props} />
+          <Section id={shown.id} {...props} onOpen={setOpen} />
         </section>
       </div>
     </div>
   )
 }
 
-function Section({ id, tenantId, tenantName, adminEmail }) {
+function Section({ id, tenantId, tenantName, adminEmail, onOpen }) {
   switch (id) {
     case 'brand': return <BrandKit tenantId={tenantId} />
+    case 'appearance': return <Appearance onOpenBrand={() => onOpen('brand')} />
     case 'profile': return <BusinessProfile tenantId={tenantId} />
     case 'hours': return <Hours tenantId={tenantId} />
     case 'delivery': return <Delivery tenantId={tenantId} />
@@ -125,6 +129,37 @@ function Choices({ label, options, value, onChange, shape }) {
             style={shape ? { borderRadius: k === 'sharp' ? 2 : k === 'soft' ? 6 : 12 } : undefined}>{l}</button>))}
       </div>
     </div>
+  )
+}
+
+// ── Appearance (this device's light / dark choice; theme/tokens.js) ──
+const LOOKS = [
+  ['auto', 'Match this device', 'Light by day and dark at night, when your phone or computer switches.', SunMoon],
+  ['light', 'Light', 'Always light.', Sun],
+  ['dark', 'Dark', 'Always dark — easier on the eyes at night and on the battery.', Moon],
+]
+
+function Appearance({ onOpenBrand }) {
+  const [mode, setMode] = useState(getThemeMode())
+  useEffect(() => {           // the header's switch changes it too
+    const sync = () => setMode(getThemeMode())
+    window.addEventListener(THEME_EVENT, sync)
+    return () => window.removeEventListener(THEME_EVENT, sync)
+  }, [])
+  return (
+    <Card className="vst-card">
+      <div className="vst-looks" role="radiogroup" aria-label="Appearance">
+        {LOOKS.map(([key, label, detail, Icon]) => (
+          <button key={key} type="button" role="radio" aria-checked={mode === key} className="vst-look"
+            onClick={() => { setThemeMode(key); setMode(key) }}>
+            <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
+            <span className="vst-look-text"><span className="vst-strong">{label}</span><span className="vst-sub">{detail}</span></span>
+          </button>))}
+      </div>
+      <div className="vst-row">
+        <Button size="sm" variant="secondary" Icon={Palette} onClick={onOpenBrand}>Your business’s colours, logo and fonts</Button>
+      </div>
+    </Card>
   )
 }
 

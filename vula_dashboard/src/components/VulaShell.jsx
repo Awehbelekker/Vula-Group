@@ -6,9 +6,9 @@
  * module/access predicates) so this stays reusable for both the merchant and master shells.
  * Styles live in index.css (.vshell-*) so media queries + tokens (var(--accent) etc.) apply.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Menu, Moon, Sun, SunMoon } from "lucide-react";
-import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
+import { getThemeMode, setThemeMode, DARK_MODE_READY, THEME_EVENT } from "../theme/tokens";
 import { iconFor } from "../navConfig";
 import VulaShellV2 from "./VulaShellV2";
 import { useInstall } from "../lib/install";
@@ -31,6 +31,11 @@ function Glyph({ emoji, Icon, size = 20 }) {
 
 function ThemeToggle() {
   const [mode, setMode] = useState(getThemeMode());
+  useEffect(() => {           // changed in Settings › Appearance: show the same
+    const sync = () => setMode(getThemeMode());
+    window.addEventListener(THEME_EVENT, sync);
+    return () => window.removeEventListener(THEME_EVENT, sync);
+  }, []);
   const i = Math.max(0, MODES.findIndex(([m]) => m === mode));
   const next = MODES[(i + 1) % MODES.length][0];
   return (
