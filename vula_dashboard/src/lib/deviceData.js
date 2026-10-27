@@ -9,14 +9,17 @@
  *     vula.ui.tenant.* (each business's cached design choice)
  *   - vula.stockq.* / vula.stockt.* — a stock count's scans not yet sent. If there are any, the
  *     person is asked first: signing out loses them.
+ *   - Cache Storage "vula-scanq" — Smart Scanner photos taken with no signal, not yet read
+ *     (lib/scanQueue.js). Asked about first, the same way.
  * Kept: this device's own settings (light/dark, receipt sound and volume, ?ui= preview), and
  * the app's own files in the service worker's shell cache (no one's data is ever in it).
  */
 import { confirmDialog } from '../components/ui/index.jsx'
+import { SCAN_QUEUE, waitingScans } from './scanQueue'
 
 const PERSON_KEYS = ['vula.masterTenant', 'vula.go']
 const PERSON_PREFIXES = ['vula.ui.tenant.', 'vula.stockq.', 'vula.stockt.']
-const PERSON_CACHES = ['vula-share']
+const PERSON_CACHES = ['vula-share', SCAN_QUEUE]
 
 function keys(storage) {
   try {
@@ -51,8 +54,14 @@ export async function clearPersonData() {
 /** Before signing out: false when the person chose to stay signed in to keep unsent scans. */
 export async function readyToSignOut() {
   const n = unsentStockScans()
-  if (!n) return true
+  const photos = (await waitingScans()).length
+  if (!n && !photos) return true
+  const what = [
+    n && `${n} stock scan${n === 1 ? '' : 's'}`,
+    photos && `${photos} scanner photo${photos === 1 ? '' : 's'}`,
+  ].filter(Boolean).join(' and ')
+  const one = n + photos === 1
   return confirmDialog(
-    `${n} stock scan${n === 1 ? ' hasn’t' : 's haven’t'} been sent yet. They’re only on this phone, and signing out deletes them. Sign out anyway?`,
+    `${what} ${one ? 'hasn’t' : 'haven’t'} been sent yet. ${one ? 'It’s' : 'They’re'} only on this phone, and signing out deletes ${one ? 'it' : 'them'}. Sign out anyway?`,
     { danger: true, confirmLabel: 'Sign out anyway', cancelLabel: 'Stay signed in' })
 }

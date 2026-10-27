@@ -34,7 +34,8 @@ export default function VulaSmartScanner(props) {
 }
 
 function SmartScannerV1({ tenantId, products = [], onExpenseCreated, onStockUpdated }) {
-  const { docType, setDocType, preview, scanning, result, commitPreview, committed, error, saving, saved, lineMatches, stockMsg, fileRef, updateLine, handleImage, commitToBooks, bookStock, updateCosts, reset } =
+  const { docType, setDocType, preview, scanning, result, commitPreview, committed, error, saving, saved, lineMatches, stockMsg, fileRef, updateLine, handleImage, commitToBooks, bookStock, updateCosts, reset,
+    waiting, online, kept, readNext } =
     useSmartScanner({ tenantId, onExpenseCreated, onStockUpdated })
 
   const fmt = c => c != null ? `R${(c / 100).toFixed(2)}` : '—'
@@ -49,6 +50,14 @@ function SmartScannerV1({ tenantId, products = [], onExpenseCreated, onStockUpda
           turns it into an expense or stock update in one tap.
         </p>
       </div>
+
+      {kept && <div role="status" style={s.keptBox}>{kept}</div>}
+      {waiting.length > 0 && !preview && (
+        <div aria-label="Waiting on this phone" style={s.keptBox}>
+          <strong>{waiting.length} photo{waiting.length === 1 ? '' : 's'} waiting on this phone.</strong>{' '}
+          {online ? <button onClick={() => readNext(true)} style={s.retakeInline}>Read the next one</button>
+            : 'They’re read as soon as you’re back online.'}
+        </div>)}
 
       {/* Doc type selector */}
       <div style={s.chips}>
@@ -253,6 +262,8 @@ const s = {
   previewImg:   { width: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)' },
   scanningOverlay: { position: 'absolute', inset: 0, background: 'rgba(247,244,238,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 600, color: 'var(--accent, var(--accent))', borderRadius: 8 },
   retakeBtn:    { position: 'absolute', top: 8, right: 8, padding: '4px 10px', background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' },
+  keptBox:      { background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--ink)', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
+  retakeInline: { padding: '6px 12px', minHeight: 40, background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, cursor: 'pointer' },
   errorBox:     { background: 'var(--danger-soft)', border: '1px solid var(--danger-soft)', color: 'var(--danger)', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
   resultCard:   { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 },
   resultHeader: { marginBottom: 12 },

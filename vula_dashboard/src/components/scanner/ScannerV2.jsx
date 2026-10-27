@@ -3,9 +3,10 @@
  * VulaSmartScanner (scanner/useSmartScanner.js): pick the kind of document, take a photo (the
  * phone's own camera) or choose one, the server reads it, review what it found, then one tap books
  * it — commit to books, receive matched lines into stock, or update cost prices. Nothing is booked
- * before that tap. Amounts are the server's integer cents through formatMoney.
+ * before that tap. Amounts are the server's integer cents through formatMoney. With no signal the
+ * photo waits on the phone and is read when it's back online (2026-10-27).
  */
-import { Camera, CheckCircle2, FileText, PackageCheck, Receipt, RotateCcw, ScanLine, Sparkles, Tags } from 'lucide-react'
+import { Camera, CheckCircle2, CloudOff, FileText, PackageCheck, Receipt, RotateCcw, ScanLine, Sparkles, Tags } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
 import { Button, Card, Field, Input, PillTabs, Select, StatusChip } from '../ui/index.jsx'
 import { useSmartScanner } from './useSmartScanner'
@@ -33,6 +34,9 @@ export default function ScannerV2({ tenantId, products = [], onExpenseCreated, o
   return (
     <section className={`vsc${inSheet ? ' vsc--sheet' : ''}`} aria-label="Smart Scanner">
       {!inSheet && <p className="vsc-sub">Photograph a receipt, delivery note, invoice or price list. Vula reads it, you check it, and one tap books it. Nothing is booked before that tap.</p>}
+
+      {x.kept && <p className="vsc-kept" role="status"><CloudOff size={18} aria-hidden="true" />{x.kept}</p>}
+      {x.waiting.length > 0 && !x.preview && <Waiting x={x} />}
 
       {!x.saved && (
         <>
@@ -141,6 +145,18 @@ export default function ScannerV2({ tenantId, products = [], onExpenseCreated, o
         </Card>
       )}
     </section>
+  )
+}
+
+/** Photos taken with no signal, waiting on this phone (lib/scanQueue.js). */
+function Waiting({ x }) {
+  const n = x.waiting.length
+  return (
+    <Card className="vsc-waiting" aria-label="Waiting on this phone">
+      <p className="vsc-h">{n} photo{n === 1 ? '' : 's'} waiting on this phone</p>
+      <p className="vsc-sub">{x.online ? 'Read one, check it, save it — then the next.' : 'No signal. They’re read as soon as you’re back online.'}</p>
+      {x.online && <div className="vsc-row"><Button size="sm" variant="secondary" Icon={ScanLine} onClick={() => x.readNext(true)}>Read the next one</Button></div>}
+    </Card>
   )
 }
 
