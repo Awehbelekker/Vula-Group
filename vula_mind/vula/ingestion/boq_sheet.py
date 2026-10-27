@@ -266,7 +266,23 @@ def parse_rows(rows: List[List[Any]], sheet: str = "") -> List[Dict[str, Any]]:
         for k, v in tracked.items():
             line[f"{k}_cents"] = int(round(v * 100)) if v is not None else None
         out.append(line)
+    out = _costs_positive(out)
     return _contract_items(out) if "code" in (cols or {}) else out
+
+
+def _costs_positive(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A spend log that enters every cost as a negative (money out) reads as costs, not credits.
+    2026-10-27: Judy's Porterfield "Bouwerk" sheets (Bathroom Bizarre -7,480.10, Builders
+    Warehouse -6,971.00 …) read as a budget of -R311,441.02 with every section negative. Only
+    when nearly every amount is negative — a real BOQ's credit or discount line stays negative."""
+    amounts = [li["total_cents"] for li in lines if li.get("total_cents")]
+    if len(amounts) < 5 or sum(1 for a in amounts if a < 0) * 10 < len(amounts) * 8:
+        return lines
+    for li in lines:
+        for k in ("total_cents", "unit_price_cents", *(f"{t}_cents" for t in _TRACKED)):
+            if li.get(k):
+                li[k] = -li[k]
+    return lines
 
 
 _ITEM_NO = re.compile(r"^\d+(\.\d+)*$")

@@ -181,3 +181,20 @@ def test_the_sort_preview_runs_off_the_event_loop(monkeypatch):
     monkeypatch.setattr(pr, "sort_pending", lambda t, **k: seen.setdefault("thread", threading.current_thread()) and {})
     asyncio.run(commerce.admin_sort_projects_preview(TID))
     assert seen["thread"] is not threading.main_thread()
+
+
+def test_sort_pending_reads_bank_lines_and_supplier_history_once(db, monkeypatch):
+    """2026-10-27: the preview still took 67 s — every waiting document read the bank lines and
+    its supplier's history again."""
+    db.tables["vula_filed_documents"] += [
+        {"id": f"q{i}", "tenant_id": TID, "status": "pending_project", "filename": "scan.jpg",
+         "summary": "", "fields": {"supplier": "Gardens Handiman", "total_cents": 1000 + i,
+                                   "date": "2026-10-01"}, "commerce_invoice_id": None}
+        for i in range(20)]
+    calls = []
+    real = db.table
+    monkeypatch.setattr(db, "table", lambda name: calls.append(name) or real(name))
+    pr.sort_pending(TID)
+    assert calls.count("commerce_bank_transactions") <= 2       # the prefetch (+ the month hint)
+    assert calls.count("vula_filed_documents") <= 3             # waiting docs + one supplier read
+    assert pr._run() == {}                                      # nothing left behind for the next run

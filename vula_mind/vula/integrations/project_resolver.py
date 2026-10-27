@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections import Counter
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
@@ -124,6 +125,15 @@ def _by_payment(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, An
     except (TypeError, ValueError):
         when = None
     tol = max(100, int(total * 0.01))
+    pre = _run().get("bank_out")
+    if pre is not None:                                   # sort_pending: read once per run
+        lo = (when - timedelta(days=3)).isoformat() if when else None
+        hi = (when + timedelta(days=60)).isoformat() if when else None
+        rows = [r for r in pre if total - tol <= int(r.get("amount_cents") or 0) <= total + tol
+                and (not when or lo <= str(r.get("txn_date"))[:10] <= hi)]
+        if len(rows) != 1 or not rows[0].get("project"):
+            return None
+        return {"project": rows[0]["project"], "txn": rows[0]}
     q = (_client().table("commerce_bank_transactions")
          .select("id,txn_date,description,amount_cents,project,match_status")
          .eq("tenant_id", tenant_id).eq("direction", "out")
@@ -156,13 +166,19 @@ def _by_supplier(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, A
     if len(first) < 3:
         return None
     counts: Counter = Counter()
-    try:
-        docs = (_client().table("vula_filed_documents").select("project,fields")
-                .eq("tenant_id", tenant_id).eq("status", "filed")
-                .ilike("fields->>supplier", f"%{first}%").limit(500).execute().data or [])
-    except Exception as exc:
-        log.debug("supplier history (documents) skipped: %s", exc)
-        docs = []
+    cache = _run().get("supplier_docs")
+    if cache is not None and first in cache:
+        docs = cache[first]
+    else:
+        try:
+            docs = (_client().table("vula_filed_documents").select("project,fields")
+                    .eq("tenant_id", tenant_id).eq("status", "filed")
+                    .ilike("fields->>supplier", f"%{first}%").limit(500).execute().data or [])
+        except Exception as exc:
+            log.debug("supplier history (documents) skipped: %s", exc)
+            docs = []
+        if cache is not None:
+            cache[first] = docs
     for d in docs:
         sup = (d.get("fields") or {}).get("supplier")
         if d.get("project") and sup and _canonical_party(sup) == pkey:
@@ -226,6 +242,17 @@ def resolve(tenant_id: str, fields: Optional[Dict[str, Any]], text: str = "",
 
 
 _MONTH_CACHE: Dict[tuple, Optional[Dict[str, Any]]] = {}
+# Lookups shared by every document in one sort_pending run (2026-10-27: the preview still took
+# 67 s for DIGG's 357 waiting documents — two database reads per document).
+# Thread-local: sort_pending runs in a worker thread, and two tenants' runs must not share one.
+_TL = threading.local()
+
+
+def _run() -> Dict[str, Any]:
+    d = getattr(_TL, "run", None)
+    if d is None:
+        d = _TL.run = {}
+    return d
 
 
 def _month_project(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -278,6 +305,23 @@ def sort_pending(tenant_id: str, apply: bool = False, limit: int = 1000,
     # waiting documents each re-read the register, the project names and the business's own
     # names — thousands of calls on every Documents page load, and the server stopped answering.
     projects = _projects(tenant_id)
+    try:
+        _run()["bank_out"] = [r for r in _all_pages(lambda: (
+            _client().table("commerce_bank_transactions")
+            .select("id,txn_date,description,amount_cents,project,match_status")
+            .eq("tenant_id", tenant_id).eq("direction", "out").order("txn_date")))
+            if r.get("match_status") != "ignored"]
+    except Exception as exc:
+        log.debug("bank lines prefetch skipped: %s", exc)
+    _run()["supplier_docs"] = {}
+    try:
+        return _sort(tenant_id, rows, projects, apply, include_suggested)
+    finally:
+        _run().clear()
+
+
+def _sort(tenant_id: str, rows: List[Dict[str, Any]], projects: List[Dict[str, Any]],
+          apply: bool, include_suggested: bool) -> Dict[str, Any]:
     plan, by_project, by_reason = [], Counter(), Counter()
     suggested: Counter = Counter()
     left = 0
