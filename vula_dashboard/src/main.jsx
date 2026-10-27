@@ -1,5 +1,6 @@
 // First: catches the browser's install offer, which fires once soon after load (PWA pass 2).
 import { isInstalled } from "./lib/install";
+import { listenForAlerts } from "./lib/alertChime";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
@@ -32,6 +33,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     </ErrorBoundary>
   </React.StrictMode>
 );
+
+listenForAlerts();
 
 window.addEventListener("appinstalled", () => {
   if (!isInstalled()) return;

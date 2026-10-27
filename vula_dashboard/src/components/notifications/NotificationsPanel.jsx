@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, BellOff, Download, Send } from "lucide-react";
 import * as push from "../../lib/push";
+import { chimeOn, playAlertChime, setChimeOn } from "../../lib/alertChime";
 import { useInstall } from "../../lib/install";
 import { useAuthStore } from "../../store/auth";
 import { startInstall } from "../install/InstallVula.jsx";
@@ -26,6 +27,7 @@ export function NotificationsPanel({ tenantId }) {
   const [about, setAbout] = useState(null);          // {public_key, enabled, alerts}
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [chime, setChime] = useState(chimeOn());
 
   const check = useCallback(async () => {
     if (!push.supported()) return setState(push.needsInstallFirst() ? "install" : "unsupported");
@@ -87,6 +89,11 @@ export function NotificationsPanel({ tenantId }) {
           ) : (
             <p className="vst-sub">You don’t get any alerts yet. Your business owner chooses them for you in Team.</p>)}
           <p className="vst-sub">They’re the alerts you get on WhatsApp. To change them, ask your owner to update Team, or reply on WhatsApp, e.g. “stop low stock alerts”.</p>
+          <label className="vui-push-chime">
+            <input type="checkbox" checked={chime}
+              onChange={(e) => { setChimeOn(e.target.checked); setChime(e.target.checked); if (e.target.checked) playAlertChime(); }} />
+            <span>Play a chime when an alert arrives while Vula is open on this screen</span>
+          </label>
           <div className="vst-row">
             {state === "off"
               ? <Button Icon={Bell} onClick={on} disabled={busy}>{busy ? "Turning on…" : "Turn on notifications"}</Button>

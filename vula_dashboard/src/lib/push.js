@@ -20,13 +20,18 @@ export function permission() {
   try { return Notification.permission; } catch { return "default"; }
 }
 
+// Never waits on navigator.serviceWorker.ready: with no worker registered (blocked, private mode,
+// not yet installed) it never settles, and sign-out (store/auth.js) would hang on it.
 async function registration() {
-  return (await navigator.serviceWorker.getRegistration("/")) || navigator.serviceWorker.ready;
+  try { return (await navigator.serviceWorker.getRegistration("/")) || null; } catch { return null; }
 }
+
+const within = (ms, p) => Promise.race([p, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
 
 export async function currentSubscription() {
   if (!supported()) return null;
-  try { return await (await registration())?.pushManager.getSubscription(); } catch { return null; }
+  try { return await within(3000, (async () => (await registration())?.pushManager.getSubscription() || null)()); }
+  catch { return null; }
 }
 
 export async function info(tenantId) {
@@ -49,6 +54,7 @@ export async function turnOn(tenantId, publicKey) {
   const granted = await Notification.requestPermission();
   if (granted !== "granted") return "blocked";
   const reg = await registration();
+  if (!reg) throw new Error("Vula isn’t fully set up on this device yet — reload the page and try again.");
   const sub = (await reg.pushManager.getSubscription())
     || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
   const r = await post(tenantId, "subscribe", sub.toJSON());
@@ -59,8 +65,8 @@ export async function turnOn(tenantId, publicKey) {
 export async function turnOff(tenantId) {
   const sub = await currentSubscription();
   if (!sub) return;
-  await post(tenantId, "unsubscribe", { endpoint: sub.endpoint }).catch(() => {});
-  await sub.unsubscribe().catch(() => {});
+  await within(4000, post(tenantId, "unsubscribe", { endpoint: sub.endpoint }).catch(() => {}));
+  await within(2000, sub.unsubscribe().catch(() => {}));
 }
 
 export async function sendTest(tenantId) {

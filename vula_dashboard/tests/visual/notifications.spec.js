@@ -93,3 +93,15 @@ test.describe("on an iPhone", () => {
     await expect(page.getByRole("dialog", { name: "Put Vula on your home screen" })).toBeVisible();
   });
 });
+
+test("an alert arriving while Vula is open chimes, and the chime can be switched off on this device", async ({ page }) => {
+  await open(page, { subscribed: true });
+  await page.locator(".v2-shell").click({ position: { x: 10, y: 200 } });               // the tap that lets a page make sound
+  await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data: { type: "vula-alert", title: "New paid order" } })));
+  await expect.poll(() => page.evaluate(() => window.__vulaChimes || 0)).toBe(1);
+  const sheet = await fromMenu(page);
+  const chime = sheet.getByRole("checkbox", { name: /Play a chime/ });
+  await expect(chime).toBeChecked();
+  await chime.uncheck();
+  expect(await page.evaluate(() => localStorage.getItem("vula.alert.chime"))).toBe("off");
+});
