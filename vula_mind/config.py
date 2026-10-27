@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # Seconds the event loop may stop turning before vula/loop_watchdog.py logs where it's stuck
     # and alerts the operator (once per alert cooldown). 0 = off.
     loop_watchdog_stall_s: int = 60
+    # Free trial length in days (27 Oct: 14, was 30). It runs from when the business's WhatsApp
+    # number goes live (vula/trials.py::start_on_go_live), not from signup.
+    trial_days: int = 14
 
     # ── Storage ─────────────────────────────────────────────────────────────
     # Railway sets DATA_DIR=/data (volume mount). Locally falls back to home dir.

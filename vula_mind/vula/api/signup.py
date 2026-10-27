@@ -124,9 +124,10 @@ async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user
     log.info("New self-serve tenant: %s (owner=%s)", slug, user.get("email"))
     # Billing/trial record (was never written for self-serve tenants, so master couldn't
     # mark them paid or extend their trial). Best-effort.
+    from config import settings
     from vula.api.tenants import ensure_billing_row
     ensure_billing_row(slug, body.display_name or slug, email=user.get("email"),
-                       contact_name=body.display_name, trial_days=30)
+                       contact_name=body.display_name, trial_days=settings.trial_days)
 
     # 2026-08-24 (structured starter KB): seed a small set of business_type-appropriate
     # starter documents so this tenant's KB isn't empty on day one — reduces the "empty

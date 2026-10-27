@@ -1,7 +1,7 @@
 /**
  * OnboardWizardV2.jsx — the redesigned Master HQ › Onboard Client (2026-10-20, UX redesign
  * Phase F). Same flow as VulaOnboarding (onboard/useOnboardWizard.js): plan, business details,
- * documents to train on, review, then provisioning the 30-day trial workspace. Activating needs
+ * documents to train on, review, then provisioning the 14-day trial workspace. Activating needs
  * the terms ticked, on a review step that shows exactly what will be created.
  */
 import { useState } from "react";
@@ -32,13 +32,13 @@ export default function OnboardWizardV2() {
         {s === 0 && (
           <div className="vob">
             <h2 className="vob-h">Set a client up on Vula</h2>
-            <p className="vhq-sub">Vula learns their business (pricing, clients, voice) and works as an AI team member. 30-day free trial, no card, cancel any time. POPIA-aligned, billed in rand.</p>
+            <p className="vhq-sub">Vula learns their business (pricing, clients, voice) and works as an AI team member. 14-day free trial from when their WhatsApp goes live, no card, cancel any time. POPIA-aligned, billed in rand.</p>
             <div><Button Icon={ArrowRight} onClick={() => x.setStep(1)}>Start</Button></div>
           </div>)}
         {s === 1 && (
           <div className="vob">
             <h2 className="vob-h">Choose a plan</h2>
-            <p className="vhq-muted">Every plan starts with a 30-day free trial.</p>
+            <p className="vhq-muted">Every plan starts with a 14-day free trial, counted from when the WhatsApp number goes live.</p>
             <div className="vob-tiers" role="radiogroup" aria-label="Plan">
               {TIER_INFO.map((t) => (
                 <button key={t.id} type="button" role="radio" aria-checked={x.plan === t.id} className="vob-tier" onClick={() => x.setPlan(t.id)}>
@@ -139,7 +139,7 @@ function Review({ x }) {
       {x.error && <p className="vhq-error" role="alert">{x.error}</p>}
       <label className="vob-check" style={{ alignItems: "flex-start", paddingTop: "var(--space-2)" }}>
         <input type="checkbox" checked={agreed} onChange={() => setAgreed((a) => !a)} style={{ marginTop: 2 }} />
-        <span>They agree to the Vula Group Terms of Service and Privacy Policy, and understand this is a 30-day free trial they can cancel before billing starts.</span>
+        <span>They agree to the Vula Group Terms of Service and Privacy Policy, and understand this is a 14-day free trial they can cancel before billing starts.</span>
       </label>
       <div className="vhq-row">
         <Button variant="quiet" Icon={ArrowLeft} onClick={() => x.setStep(3)}>Back</Button>

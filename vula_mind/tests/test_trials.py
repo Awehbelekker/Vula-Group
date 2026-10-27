@@ -55,3 +55,70 @@ def test_the_daily_loop_counts_real_sends_and_tells_the_operator():
     src = inspect.getsource(server._daily_trial_expiry_loop)
     assert "trials.due_emails(" in src and "trials.operator_line(" in src
     assert "if await send_trial_expiry_email(" in src and "alert_operator(line)" in src
+
+
+# ── 14 days, from when the WhatsApp number goes live (27 Oct) ─────────────────
+
+class _DB:
+    def __init__(self, row):
+        self.row, self.updates = row, []
+
+    def table(self, _n):
+        return self
+
+    def select(self, _c):
+        return self
+
+    def eq(self, _k, _v):
+        return self
+
+    def limit(self, _n):
+        return self
+
+    def update(self, patch):
+        self.updates.append(patch)
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": [self.row] if self.row else []})()
+
+
+NOW = __import__("datetime").datetime(2026, 10, 27, 12, 0, tzinfo=__import__("datetime").timezone.utc)
+
+
+def test_trial_is_14_days_by_default():
+    from config import settings
+    assert settings.trial_days == 14
+
+
+def test_going_live_restarts_the_14_days(monkeypatch):
+    db = _DB({"trial_ends": "2026-10-30T09:00:00+00:00", "paid": False})   # signed up 16 Oct
+    assert trials.start_on_go_live("seaside", db, now=NOW) == "2026-11-10"
+    assert db.updates[0]["trial_ends"].startswith("2026-11-10")
+
+
+def test_going_live_never_shortens_a_trial():
+    db = _DB({"trial_ends": "2026-11-20T00:00:00+00:00", "paid": False})   # an older 30-day trial
+    assert trials.start_on_go_live("old", db, now=NOW) is None and db.updates == []
+
+
+@pytest.mark.parametrize("row", [None, {"trial_ends": None, "paid": False},
+                                 {"trial_ends": "2026-10-30", "paid": True}])
+def test_paid_or_no_trial_is_left_alone(row):
+    db = _DB(row)
+    assert trials.start_on_go_live("x", db, now=NOW) is None and db.updates == []
+
+
+def test_a_db_error_never_breaks_connecting_a_number():
+    class Broken:
+        def table(self, _n):
+            raise RuntimeError("db down")
+    assert trials.start_on_go_live("x", Broken(), now=NOW) is None
+
+
+def test_both_connect_flows_start_the_trial_and_signup_uses_the_setting():
+    import inspect
+    from vula.api import signup, whatsapp_connect
+    src = inspect.getsource(whatsapp_connect)
+    assert src.count("trials.start_on_go_live(") == 2
+    assert "trial_days=settings.trial_days" in inspect.getsource(signup)

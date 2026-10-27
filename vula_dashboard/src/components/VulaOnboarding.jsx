@@ -134,7 +134,7 @@ function StepIntro({ onNext }) {
         Vula learns your business — your pricing, your clients, your voice — and works as your AI team member. Built for POPIA compliance. ZAR-native. Built in Cape Town.
       </p>
       <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap", marginBottom: 48 }}>
-        {["30-day free trial", "No credit card", "Cancel anytime"].map(t => (
+        {["14-day free trial", "No credit card", "Cancel anytime"].map(t => (
           <div key={t} style={{ display: "flex", alignItems: "center", gap: 8, color: "#666", fontSize: 13, fontFamily: "monospace" }}>
             <span style={{ color: "#C4922A" }}>✓</span> {t}
           </div>
@@ -151,7 +151,7 @@ function StepPlan({ selected, onSelect, onNext, onBack }) {
   return (
     <div>
       <h2 style={{ fontSize: 28, color: "#F0EDE8", marginBottom: 8 }}>Choose your plan</h2>
-      <p style={{ color: "#666", fontSize: 14, marginBottom: 32, fontFamily: "monospace" }}>All plans include a 30-day free trial. No card required.</p>
+      <p style={{ color: "#666", fontSize: 14, marginBottom: 32, fontFamily: "monospace" }}>All plans include a 14-day free trial, counted from when your WhatsApp number goes live. No card required.</p>
       <div style={{ display: "grid", gap: 16, marginBottom: 32 }}>
         {TIERS.map(tier => (
           <div
@@ -306,7 +306,7 @@ function StepConfirm({ data, plan, onSubmit, onBack, loading, error }) {
   return (
     <div>
       <h2 style={{ fontSize: 28, color: "#F0EDE8", marginBottom: 8 }}>Review & activate</h2>
-      <p style={{ color: "#666", fontSize: 14, marginBottom: 28, fontFamily: "monospace" }}>Your 30-day free trial starts today.</p>
+      <p style={{ color: "#666", fontSize: 14, marginBottom: 28, fontFamily: "monospace" }}>Your 14-day free trial starts when your WhatsApp number goes live.</p>
 
       <div style={{ background: "#0D0D0D", border: "1px solid #2A2A2A", borderRadius: 8, padding: 24, marginBottom: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1E1E1E" }}>
@@ -361,7 +361,7 @@ function StepConfirm({ data, plan, onSubmit, onBack, loading, error }) {
           {agreed && <span style={{ color: "#0A0A0A", fontSize: 11 }}>✓</span>}
         </div>
         <span style={{ fontSize: 12, color: "#666", fontFamily: "monospace", lineHeight: 1.6 }}>
-          I agree to the Vula Group Terms of Service and Privacy Policy. I understand this is a 30-day free trial and I can cancel before billing begins.
+          I agree to the Vula Group Terms of Service and Privacy Policy. I understand this is a 14-day free trial and I can cancel before billing begins.
         </span>
       </div>
 
