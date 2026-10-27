@@ -55,16 +55,25 @@ export async function printBoq(tenantId, project) {
   const html = await fetch(`${boqUrl(tenantId, "/print")}?project=${encodeURIComponent(project)}`).then((r) => r.text()).catch(() => "");
   if (w) { w.document.write(html || "<p>The bill couldn't be loaded.</p>"); w.document.close(); }
 }
-/** Download the bill as the branded Excel template, pre-filled. */
-export async function downloadBoq(tenantId, project) {
-  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/boq-online.xlsx?project=${encodeURIComponent(project)}`).catch(() => null);
-  if (!r || !r.ok) return false;
+/** Save a file the API returns. Resolves to "ok", "forbidden" (no access) or "failed". */
+async function saveFile(path, filename) {
+  const r = await fetch(`${VULA_API}${path}`).catch(() => null);
+  if (!r || !r.ok) return r && r.status === 403 ? "forbidden" : "failed";
   const url = URL.createObjectURL(await r.blob());
-  const a = Object.assign(document.createElement("a"), { href: url, download: `${project.replace(/[^\w -]/g, "").replace(/ /g, "_")}_BOQ.xlsx` });
-  a.click();
+  Object.assign(document.createElement("a"), { href: url, download: filename }).click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return true;
+  return "ok";
 }
+const fileStem = (project) => project.replace(/[^\w -]/g, "").replace(/ /g, "_");
+/** The bill as the branded Excel template, pre-filled — the team's working copy (Money access only). */
+export const downloadBoq = (tenantId, project) =>
+  saveFile(`/v1/commerce/${tenantId}/admin/projects/boq-online.xlsx?project=${encodeURIComponent(project)}`, `${fileStem(project)}_BOQ.xlsx`);
+/** The priced bill as a PDF — the copy for clients and anyone outside the team. */
+export const downloadBoqPdf = (tenantId, project) =>
+  saveFile(`/v1/commerce/${tenantId}/admin/projects/boq-online.pdf?project=${encodeURIComponent(project)}`, `${fileStem(project)}_priced_bill.pdf`);
+/** The QS's view of the project (no cost, fee or profit) — open to a login limited to Projects. */
+export const fetchQsView = (tenantId, project) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/qs-view?project=${encodeURIComponent(project)}`).then((r) => r.json());
 export const revokeShare = (tenantId, id) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/shares/${id}/revoke`, { method: "POST" }).then((r) => r.ok).catch(() => false);
 /** The money rows the screen shows: numbers, and strings that are already rand amounts. */

@@ -16,7 +16,8 @@ vula_boq_drafts (migration 227):
 - "Use as the project budget": the total and section totals become the project's budget
   (vula_project_boq) — unless the project's signed baseline is locked, which only a variation
   changes (project_programme.set_baseline).
-- Print: the priced bill as a page in the tenant's brand; Excel: the template, pre-filled.
+- Print / PDF: the priced bill in the tenant's brand — what goes to anyone outside the team.
+  Excel: the template, pre-filled — for the team only (Money access; vula/api/server.py), locked.
 
 All money is integer cents; every query is scoped by tenant_id.
 """
@@ -212,10 +213,13 @@ def _r(cents: Optional[int]) -> str:
     return "" if cents is None else f"R{cents / 100:,.2f}".replace(",", " ")
 
 
-def print_html(tenant_id: str, project: str, brand: Dict[str, Any]) -> str:
+def print_html(tenant_id: str, project: str, brand: Dict[str, Any], autoprint: bool = True,
+               lines: Optional[List[Dict[str, Any]]] = None) -> str:
     """The priced bill as a printable page: lines by section with subtotals, the bill total."""
     from vula.commerce.boq_template import TRADES
     d = load(tenant_id, project)
+    if lines is not None:
+        d = {**d, "lines": lines}
     e = html.escape
     accent = e(brand.get("accent_color") or "#2C5545")
     name = e(brand.get("name") or "")
@@ -248,7 +252,13 @@ tr.tot td{{font-weight:bold;font-size:14px;border-top:2px solid {accent};border-
 <h1>Priced bill of quantities — {e(d['project'])}</h1><p>{name}</p>
 <table><tr><th>Item</th><th>Description</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>
 {''.join(body)}<tr class='tot'><td colspan='5'>Bill total</td><td class='n'>{_r(d['total_cents'])}</td></tr></table>
-<script>window.onload=()=>window.print()</script></body></html>"""
+{"<script>window.onload=()=>window.print()</script>" if autoprint else ""}</body></html>"""
+
+
+def pdf(tenant_id: str, project: str, brand: Dict[str, Any]) -> bytes:
+    """The priced bill as a PDF — the copy that goes outside the team."""
+    from weasyprint import HTML
+    return HTML(string=print_html(tenant_id, project, brand, autoprint=False)).write_pdf()
 
 
 def workbook(tenant_id: str, project: str) -> bytes:

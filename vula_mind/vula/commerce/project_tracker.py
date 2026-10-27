@@ -349,8 +349,23 @@ def summary_text(pos: Dict[str, Any], view: str) -> str:
     return "\n".join(lines)
 
 
-def render(brand: Dict[str, Any], v: Dict[str, Any]) -> str:
-    """The client's page. Every value escaped; every figure from client_view()."""
+def _downloads(links: Optional[Dict[str, str]]) -> str:
+    if not links:
+        return ""
+    e = html.escape
+    return ("<p class='dl'>" + " ".join(f"<a href='{e(url)}'>⬇ {e(label)}</a>" for label, url in links.items())
+            + "</p>")
+
+
+def pdf(brand: Dict[str, Any], v: Dict[str, Any]) -> bytes:
+    """The shared page as a PDF (no download links on it)."""
+    from weasyprint import HTML
+    return HTML(string=render(brand, v)).write_pdf()
+
+
+def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, str]] = None) -> str:
+    """The client's page. Every value escaped; every figure from client_view(). `links`: the
+    downloads offered on it ({label: url}) — PDFs only; nobody outside the team gets the Excel."""
     from vula.commerce import powered_by
     e = html.escape
     name = e(brand.get("name") or "")
@@ -443,7 +458,9 @@ body{{margin:0;padding:0 12px;background:#f5f3ee;font-family:system-ui,-apple-sy
 table{{width:100%;border-collapse:collapse;font-size:15px}}td{{padding:7px 0;border-bottom:1px solid #eee;vertical-align:top}}
 td.n{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}tr.total td{{font-weight:700;border-top:2px solid {accent}}}
 .d{{display:block;color:#8a857c;font-size:12px}}tr.h td{{color:#8a857c;font-size:12px}}
+.dl{{margin:22px 0 0}}.dl a{{display:inline-block;margin:0 10px 8px 0;padding:9px 14px;border-radius:9px;
+background:{accent};color:#fff;text-decoration:none;font-weight:600;font-size:14px}}
 {powered_by.pill_css(dark_mode=False)}
 </style></head><body><div class="card">{logo_html}<h1>{title}</h1>
 <p class="muted">Project account · {e(VIEW_LABEL[v['view']])} · as of {e(str(v.get('as_of') or ''))}</p>
-{''.join(parts)}<p class="muted" style="margin-top:20px">Questions? Contact {name}.</p></div>{powered_by.pill_html()}</body></html>"""
+{''.join(parts)}{_downloads(links)}<p class="muted" style="margin-top:20px">Questions? Contact {name}.</p></div>{powered_by.pill_html()}</body></html>"""

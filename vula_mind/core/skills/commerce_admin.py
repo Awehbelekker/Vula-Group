@@ -3238,7 +3238,9 @@ class CommerceAdminSkill(BaseSkill):
             "📐 Your BOQ template (Excel), with " + lib + ":\n" + url + "\n\n"
             "Fill in the Cover (client and project), pick a section and item per line, type the quantity. "
             "The Priced Bill tab is the client copy. Send the finished sheet back here with the project "
-            "name as the caption and I'll set the project budget from it. The link works for 7 days."),
+            "name as the caption and I'll set the project budget from it. The link works for 7 days.\n\n"
+            "It's your team's working copy — locked and licensed to your business. Send clients a PDF "
+            "(Projects › BOQ › PDF for the client), not this file."),
             "rates": info["rates"]}
 
     async def _financial_report(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:

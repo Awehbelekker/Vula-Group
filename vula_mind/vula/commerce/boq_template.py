@@ -29,6 +29,14 @@ units are the standard ones (m, m², m³, No, kg, t, Item, Sum, Prov Sum, PC Sum
 pack size (bag, tin, sheet) kept as a materials price. Formulas are locked, inputs open; A4 page
 setup with the tenant's footer; the BOQ and Priced Bill print only as far as their last line.
 
+Not for reuse (2026-10-27, Ian: "don't want people to reuse the template"): only the team gets
+the Excel — Money access (vula/api/server.py), the WhatsApp tool's finances scope — and anyone
+outside it gets PDFs (boq_online.pdf, the shared project page). The workbook itself is locked with
+a random password nobody is given: formulas and layout can't be changed, sheets can't be added,
+unhidden or copied out, and the rate library's cells can't be selected; the inputs stay open. Every
+page says who it is licensed to. Excel's protection is a deterrent, not encryption — who gets the
+file is the real control.
+
 Every figure in the library is a price the tenant's own documents hold — nothing is invented,
 and no other tenant's prices are ever read (every query is scoped by tenant_id). The workbook's
 BOQ sheet reads back through vula/ingestion/boq_sheet.py, so a filled-in copy sent to Vula sets
@@ -39,6 +47,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import secrets
 from collections import Counter
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,6 +57,7 @@ from openpyxl.comments import Comment
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.workbook.protection import WorkbookProtection
 from openpyxl.worksheet.datavalidation import DataValidation
 
 log = logging.getLogger(__name__)
@@ -313,6 +323,7 @@ def render(b: Dict[str, Any], lib: List[List[Any]], logo: Optional[bytes], today
     RAND = '"R" #,##0.00;[Red]-"R" #,##0.00;"-"'
     footer = " · ".join(x for x in (b["legal_name"], f"Reg No {b['reg_no']}" if b["reg_no"] else "",
                                     b["address"]) if x)
+    licence = f"Licensed to {b['display_name']} — not for reuse or redistribution"
     vat_line = f"VAT No {b['vat_number']}" if b["vat_registered"] and b["vat_number"] else (
         "VAT registered" if b["vat_registered"] else "Not VAT registered")
 
@@ -339,6 +350,7 @@ def render(b: Dict[str, Any], lib: List[List[Any]], logo: Optional[bytes], today
             ws.print_title_rows = title_rows
         ws.oddHeader.right.text, ws.oddHeader.right.size = f"{b['display_name']} — Bill of Quantities", 8
         ws.oddFooter.left.text, ws.oddFooter.left.size = footer, 7
+        ws.oddFooter.center.text, ws.oddFooter.center.size = licence, 7
         ws.oddFooter.right.text, ws.oddFooter.right.size = "Page &P of &N", 8
         ws.sheet_view.showGridLines = False
 
@@ -740,8 +752,9 @@ def render(b: Dict[str, Any], lib: List[List[Any]], logo: Optional[bytes], today
                          "the caption — Vula reads every BOQ line and sets the project budget from it."),
         ("Printing", "Each sheet is set up for A4 with your logo, page numbers and company details. The BOQ and "
                      "Priced Bill print only as far as their last line in Excel."),
-        ("Protection", "Sheets are protected without a password so formulas stay intact. Review › Unprotect sheet "
-                       "if you need to change the layout."),
+        ("Licence", f"This workbook is licensed to {b['display_name']} for its own projects — not for reuse or "
+                    "redistribution. The layout, formulas and rate library are locked; the yellow cells are yours. "
+                    "Send clients and outside parties a PDF (Vula › Projects › BOQ › PDF), not this file."),
     ]
     for i, (a, t) in enumerate(text, 4):
         rm.cell(i, 1, a).font = F(10, True)
@@ -757,10 +770,18 @@ def render(b: Dict[str, Any], lib: List[List[Any]], logo: Optional[bytes], today
     page(rm, False)
 
     # ── protection, order, print areas ──
-    for ws in (cv, bq, pb, sm, rl):
+    # A random password nobody is given: the inputs stay open, nothing else can be changed.
+    password = secrets.token_urlsafe(18)
+    for ws in (cv, bq, pb, sm, rl, rm):
         ws.protection.sheet = True
+        ws.protection.password = password
         ws.protection.formatColumns = ws.protection.formatRows = False
         ws.protection.autoFilter = ws.protection.sort = False
+    rl.protection.selectLockedCells = True        # the library can be picked from, not copied out
+    wb.security = WorkbookProtection(workbookPassword=password, lockStructure=True)
+    wb.properties.creator = b["display_name"]
+    wb.properties.title = f"Bill of Quantities — {b['display_name']}"
+    wb.properties.description = licence
     wb.move_sheet("Read me", offset=-(len(wb.sheetnames) - 2))
     wb.move_sheet("Lists", offset=len(wb.sheetnames))
     wb.active = 0

@@ -178,3 +178,78 @@ def test_the_qs_view_shows_valuations_programme_and_register_but_never_the_busin
     assert "Retention held" in page and "55% of the time gone" in page and "PC No. 2.xlsx" in page
     assert "Labour" not in page and "R35 000.00" not in page
     assert "Valuation 2" in pt.summary_text(POS, "qs")
+
+
+# ── not for reuse: the Excel and the prices stay with the team; outsiders get PDFs ──
+
+import pytest  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+from vula.api import server  # noqa: E402
+
+QS_LOGIN = {"full": False, "access": ["projects"]}
+
+
+def _as(scope):
+    return (patch("vula.api.tenant_auth.is_tenant_member", AsyncMock(return_value=True)),
+            patch("vula.api.tenant_auth.member_scope", AsyncMock(return_value=scope)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["admin/boq-template.xlsx", "admin/boq-library", "admin/projects/boq-online.xlsx",
+                                  "admin/projects/tracker", "admin/projects/share", "admin/projects/shares/s1/revoke",
+                                  "admin/projects/costing"])
+async def test_a_projects_only_login_never_gets_the_excel_the_prices_or_the_full_tracker(path):
+    a, b = _as(QS_LOGIN)
+    with a, b:
+        res = await server._guard_check("GET", f"/v1/commerce/{TID}/admin/{path.split('admin/', 1)[1]}", "Bearer qs")
+    assert res is not None and res.status_code == 403
+    a, b = _as({"full": False, "access": ["finances"]})
+    with a, b:
+        assert await server._guard_check("GET", f"/v1/commerce/{TID}/{path}", "Bearer team") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["admin/projects/boq-online", "admin/projects/boq-online/print",
+                                  "admin/projects/boq-online.pdf", "admin/projects/qs-view"])
+async def test_a_projects_only_login_keeps_the_online_bill_its_pdf_and_the_qs_view(path):
+    a, b = _as(QS_LOGIN)
+    with a, b:
+        assert await server._guard_check("GET", f"/v1/commerce/{TID}/{path}", "Bearer qs") is None
+
+
+def test_the_excel_is_locked_with_a_password_nobody_is_given_and_says_who_it_is_licensed_to():
+    data = bt.render(BRAND, [], None, date(2026, 10, 27))
+    wb = load_workbook(io.BytesIO(data))
+    assert wb.security.lockStructure and wb.security.workbookPassword
+    for name in ("Cover", "BOQ", "Priced Bill", "Summary", "Rate Library", "Read me"):
+        assert wb[name].protection.sheet and wb[name].protection.password, name
+    assert wb["Rate Library"].protection.selectLockedCells          # prices can't be selected and copied
+    assert wb["BOQ"]["F9"].protection.locked is False                # the inputs stay open
+    assert "Licensed to Example Builders" in wb["BOQ"].oddFooter.center.text
+    other = load_workbook(io.BytesIO(bt.render(BRAND, [], None, date(2026, 10, 27))))
+    assert other.security.workbookPassword != wb.security.workbookPassword   # a new password per file
+    readme = " ".join(str(c.value) for row in wb["Read me"].iter_rows() for c in row if c.value)
+    assert "Unprotect" not in readme and "not for reuse" in readme
+
+
+def test_the_priced_bill_pdf_is_a_pdf():
+    with patch.object(bo, "load", return_value={"project": "Sample Flat", "total_cents": 1500, "lines": [
+            {"section": "Tiling", "description": "Tiles", "unit": "m²", "qty": "1", "rate_cents": 1500,
+             "amount_cents": 1500, "area": None}]}):
+        data = bo.pdf(TID, "Sample Flat", {"name": "Example"})
+    assert data[:4] == b"%PDF"
+
+
+def test_the_shared_page_offers_pdfs_only():
+    import asyncio
+    from vula.api import project_track
+    share = {"id": "s1", "tenant_id": TID, "project": "Sample Flat", "view": "qs", "views": 0}
+    with (patch.object(pt, "share_for_token", return_value=share), patch.object(pt, "position", return_value=POS),
+          patch.object(pt, "note_view"), patch("vula.api.commerce.public_brand", AsyncMock(return_value={"name": "Example"})),
+          patch.object(bo, "load", return_value={"lines": [{"description": "x"}]})):
+        page = asyncio.run(project_track.project_page("tok")).body.decode()
+        pdf = asyncio.run(project_track.project_page_pdf("tok"))
+    assert "href='/track/tok/pdf'" in page and "href='/track/tok/bill.pdf'" in page
+    assert ".xlsx'" not in page                    # no link to an Excel — a file NAME in the register is fine
+    assert pdf.media_type == "application/pdf" and pdf.body[:4] == b"%PDF"

@@ -3717,6 +3717,19 @@ async def admin_boq_online_print(tenant_id: str, project: str):
     return HTMLResponse(await asyncio.to_thread(boq_online.print_html, tenant_id, project, brand))
 
 
+@router.get("/{tenant_id}/admin/projects/boq-online.pdf")
+async def admin_boq_online_pdf(tenant_id: str, project: str):
+    """The priced bill as a PDF — what goes to anyone outside the team (the Excel stays inside)."""
+    import asyncio
+    from fastapi.responses import Response
+    from vula.commerce import boq_online
+    brand = await public_brand(tenant_id)
+    data = await asyncio.to_thread(boq_online.pdf, tenant_id, project, brand)
+    safe = "".join(ch for ch in project if ch.isalnum() or ch in " -_").strip().replace(" ", "_") or "Project"
+    return Response(content=data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}_priced_bill.pdf"'})
+
+
 @router.get("/{tenant_id}/admin/projects/boq-online.xlsx")
 async def admin_boq_online_xlsx(tenant_id: str, project: str):
     """The bill as the branded Excel template, pre-filled."""
@@ -3745,6 +3758,16 @@ async def admin_project_tracker(tenant_id: str, project: str):
     pos = await asyncio.to_thread(pt.position, tenant_id, project)
     return {"position": pos, "client_views": {v: pt.client_view(pos, v) for v in pt.VIEWS},
             "shares": await asyncio.to_thread(pt.list_shares, tenant_id, project)}
+
+
+@router.get("/{tenant_id}/admin/projects/qs-view")
+async def admin_project_qs_view(tenant_id: str, project: str):
+    """The QS's view only (no cost, fee or profit) — what a team login limited to Projects sees;
+    the full tracker needs Money access (vula/api/server.py _SECTION_RULES)."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    pos = await asyncio.to_thread(pt.position, tenant_id, project)
+    return {"view": pt.client_view(pos, "qs")}
 
 
 @router.post("/{tenant_id}/admin/projects/share")

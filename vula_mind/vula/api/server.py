@@ -1832,6 +1832,12 @@ _SECTION_RULES = [
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/expense-sheet(?:/|$)"),
      _MONEY_TABS | {"rep-expenses", "rep-expense-sheet"}),
     (None, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/"), _MONEY_TABS),
+    # 2026-10-27 (Ian: "don't want people to reuse the template"): the editable Excel and the
+    # rate library behind it carry the business's own prices, and the full project tracker its
+    # cost, fee and profit — Money access only. A QS login limited to Projects keeps the online
+    # BOQ, its PDF and the QS view (admin/projects/qs-view).
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:boq-template\.xlsx|boq-library|projects/boq-online\.xlsx|"
+                      r"projects/(?:tracker|share|shares|costing))(?:/|$)"), _MONEY_TABS),
     (None, re.compile(r"^/v1/users/[^/]+(?:/|$)"), frozenset()),
     (None, re.compile(r"^/v1/team/[^/]+/audit/?$"), frozenset()),
     # ...except a staff member's own "Got it" on a notice (vula/api/staff_notices.py)

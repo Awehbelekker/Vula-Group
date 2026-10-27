@@ -10,7 +10,7 @@ import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Uploa
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
-import { PROJECT_TABS, createShare, downloadBoq, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline, fetchTracker,
+import { PROJECT_TABS, createShare, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline, fetchQsView, fetchTracker,
   makeBoqTheBudget, printBoq, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject, useProjects } from "./useProjects";
 import "./projects.css";
 
@@ -311,10 +311,19 @@ function ProjectBoq({ tenantId, project }) {
             <Button disabled={!dirty} onClick={save}>Save</Button>
             <Button variant="secondary" disabled={bill.baseline_locked || (!lines.length)} onClick={makeBudget}>Make this the project budget</Button>
             <Button variant="secondary" disabled={dirty || !bill.lines?.length} onClick={() => printBoq(tenantId, project)}>Print / PDF</Button>
-            <Button variant="secondary" disabled={dirty || !bill.lines?.length} onClick={() => downloadBoq(tenantId, project)}>Excel</Button>
+            <Button variant="secondary" disabled={dirty || !bill.lines?.length} onClick={async () => {
+              const r = await downloadBoqPdf(tenantId, project);
+              if (r !== "ok") setNote("The PDF couldn't be made just now — try again.");
+            }}>PDF for the client</Button>
+            <Button variant="secondary" disabled={dirty || !bill.lines?.length} onClick={async () => {
+              const r = await downloadBoq(tenantId, project);
+              if (r === "forbidden") setNote("The Excel is your team's working copy — it needs Money access. Send the client the PDF.");
+              else if (r !== "ok") setNote("The Excel couldn't be made just now — try again.");
+            }}>Excel (team only)</Button>
           </div>
           {note && <p className="vpj-sub" role="status">{note}</p>}
           {dirty && <p className="vpj-sub">Unsaved changes — Save before printing or downloading.</p>}
+          <p className="vpj-sub">Clients and outside parties get the PDF. The Excel is locked and licensed to your business — for your own team.</p>
         </div>
       </Section>
       {!bill.baseline_locked && (
@@ -333,19 +342,22 @@ function ProjectBoq({ tenantId, project }) {
  * anticipated final per bill, valuations and retention, variations, the programme against time,
  * invoices, and the document register — and a link to send the QS. */
 function ProjectQs({ tenantId, project }) {
-  const [t, setT] = useState(null);
+  const [v, setV] = useState(null);
+  const [shares, setShares] = useState(null);           // null = this login can't share (no Money access)
   const [made, setMade] = useState(null);
-  const load = useCallback(() => { fetchTracker(tenantId, project).then(setT).catch(() => setT({ error: true })); }, [tenantId, project]);
+  const load = useCallback(() => {
+    fetchQsView(tenantId, project).then((d) => setV(d.view || { error: true })).catch(() => setV({ error: true }));
+    fetchTracker(tenantId, project).then((d) => setShares(d.shares || null)).catch(() => setShares(null));
+  }, [tenantId, project]);
   useEffect(() => { setMade(null); load(); }, [load]);
-  if (!t) return <Empty>Loading…</Empty>;
-  const v = t.client_views?.qs;
-  if (t.error || !v) return <Empty>The project couldn't be read just now.</Empty>;
+  if (!v) return <Empty>Loading…</Empty>;
+  if (v.error) return <Empty>The project couldn't be read just now.</Empty>;
   const secs = v.sections || [];
   const valued = secs.some((s) => s.certified_cents != null || s.anticipated_cents != null);
   const tot = (k) => secs.reduce((a, s) => a + (s[k] || 0), 0);
   const c = v.claims?.latest;
   const pg = v.programme;
-  const qsLinks = (t.shares || []).filter((s) => s.view === "qs");
+  const qsLinks = (shares || []).filter((s) => s.view === "qs");
   return (
     <>
       <Section title="Contract" hint={v.baseline_locked ? "Against the signed, locked baseline." : undefined}>
@@ -385,7 +397,7 @@ function ProjectQs({ tenantId, project }) {
         {(v.documents || []).length === 0 && <Empty>Nothing filed under this project yet.</Empty>}
         {(v.documents || []).slice(0, 25).map((d, i) => <Line key={i} label={`${d.name} · ${d.category || ""}`} value={d.filed} />)}
       </Section>
-      <Section title="Give the QS access" hint="A read-only link — no login. It never shows your own costs, fee or profit. For a QS who must edit the BOQ, add them in Team with Projects access.">
+      {shares && <Section title="Give the QS access" hint="A read-only link — no login, PDF downloads only. It never shows your own costs, fee or profit. For a QS who must edit the BOQ, add them in Team with Projects access.">
         <div className="vpj-form vpj-pad"><div className="vpj-go">
           <Button onClick={async () => { const r = await createShare(tenantId, project, "qs"); setMade(r); if (!r.error) load(); }}>Make a QS link</Button>
         </div>
@@ -397,7 +409,7 @@ function ProjectQs({ tenantId, project }) {
           <Line key={s.id} label={`QS link · made ${String(s.created_at || "").slice(0, 10)} · opened ${s.views || 0}×${s.active ? "" : " · off"}`}
             value={s.active ? <Button size="sm" variant="secondary" onClick={async () => { if (await revokeShare(tenantId, s.id)) load(); }}>Switch off</Button> : ""} />
         ))}
-      </Section>
+      </Section>}
     </>
   );
 }
