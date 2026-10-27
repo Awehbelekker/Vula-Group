@@ -3515,6 +3515,21 @@ async def admin_report_ledger_csv(tenant_id: str, since: Optional[str] = None, u
                     headers={"Content-Disposition": f'attachment; filename="ledger-{tenant_id}.csv"'})
 
 
+@router.get("/{tenant_id}/admin/boq-template.xlsx")
+async def admin_boq_template(tenant_id: str):
+    """A branded Bill of Quantities workbook priced from the tenant's own price book
+    (vula/commerce/boq_template.py) — the same one Vula sends on WhatsApp."""
+    import asyncio
+    from datetime import date
+    from fastapi.responses import Response
+    from vula.commerce import boq_template
+    data, _info = await asyncio.to_thread(boq_template.build, tenant_id)
+    return Response(content=data,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="BOQ_Template_{date.today().isoformat()}.xlsx"'})
+
+
 # ── Casual labour: worker register + payment recognition + report ─────────────
 class WorkerIn(BaseModel):
     id: Optional[str] = None
@@ -3641,6 +3656,138 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
         raise HTTPException(status_code=400, detail="No statement lines found — the sheet needs "
                             "Date, Description and Money In/Money Out (or Amount) columns.")
     return result
+
+
+class BoqOnlineIn(BaseModel):
+    project: str
+    lines: List[Dict[str, Any]] = []
+    by: Optional[str] = None
+
+
+@router.get("/{tenant_id}/admin/boq-library")
+async def admin_boq_library(tenant_id: str):
+    """The rate library the BOQ editor picks from — the Excel template's (own rates, then the
+    price book's learned rates, by ASAQS trade)."""
+    import asyncio
+    from vula.commerce import boq_template
+    rows = await asyncio.to_thread(boq_template.library, tenant_id)
+    keys = ("key", "trade", "description", "unit", "rate", "kind", "source", "date")
+    return {"trades": boq_template.TRADES, "units": boq_template.UNITS,
+            "items": [{**dict(zip(keys, r)), "rate_cents": int(round(r[4] * 100))} for r in rows]}
+
+
+@router.get("/{tenant_id}/admin/projects/boq-online")
+async def admin_boq_online(tenant_id: str, project: str):
+    import asyncio
+    from vula.commerce import boq_online
+    return await asyncio.to_thread(boq_online.load, tenant_id, project)
+
+
+@router.post("/{tenant_id}/admin/projects/boq-online")
+async def admin_boq_online_save(tenant_id: str, body: BoqOnlineIn):
+    """Save the bill; amounts and totals are worked out here, then read back."""
+    import asyncio
+    from vula.commerce import boq_online
+    return await asyncio.to_thread(boq_online.save, tenant_id, body.project, body.lines, body.by)
+
+
+@router.get("/{tenant_id}/admin/projects/boq-online/from-bill")
+async def admin_boq_online_from_bill(tenant_id: str, project: str):
+    """The latest filed BOQ's lines as working lines (not saved until the owner saves)."""
+    import asyncio
+    from vula.commerce import boq_online
+    return {"lines": await asyncio.to_thread(boq_online.from_filed_bill, tenant_id, project)}
+
+
+@router.post("/{tenant_id}/admin/projects/boq-online/use-as-budget")
+async def admin_boq_online_budget(tenant_id: str, body: BoqOnlineIn):
+    import asyncio
+    from vula.commerce import boq_online
+    res = await asyncio.to_thread(boq_online.use_as_budget, tenant_id, body.project)
+    if res.get("error"):
+        raise HTTPException(status_code=409, detail=res["error"])
+    return res
+
+
+@router.get("/{tenant_id}/admin/projects/boq-online/print", response_class=HTMLResponse)
+async def admin_boq_online_print(tenant_id: str, project: str):
+    import asyncio
+    from vula.commerce import boq_online
+    brand = await public_brand(tenant_id)
+    return HTMLResponse(await asyncio.to_thread(boq_online.print_html, tenant_id, project, brand))
+
+
+@router.get("/{tenant_id}/admin/projects/boq-online.pdf")
+async def admin_boq_online_pdf(tenant_id: str, project: str):
+    """The priced bill as a PDF — what goes to anyone outside the team (the Excel stays inside)."""
+    import asyncio
+    from fastapi.responses import Response
+    from vula.commerce import boq_online
+    brand = await public_brand(tenant_id)
+    data = await asyncio.to_thread(boq_online.pdf, tenant_id, project, brand)
+    safe = "".join(ch for ch in project if ch.isalnum() or ch in " -_").strip().replace(" ", "_") or "Project"
+    return Response(content=data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}_priced_bill.pdf"'})
+
+
+@router.get("/{tenant_id}/admin/projects/boq-online.xlsx")
+async def admin_boq_online_xlsx(tenant_id: str, project: str):
+    """The bill as the branded Excel template, pre-filled."""
+    import asyncio
+    from fastapi.responses import Response
+    from vula.commerce import boq_online
+    data = await asyncio.to_thread(boq_online.workbook, tenant_id, project)
+    safe = "".join(ch for ch in project if ch.isalnum() or ch in " -_").strip().replace(" ", "_") or "Project"
+    return Response(content=data,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}_BOQ.xlsx"'})
+
+
+class ProjectShareIn(BaseModel):
+    project: str
+    view: str                   # price | open_book
+    by: Optional[str] = None
+
+
+@router.get("/{tenant_id}/admin/projects/tracker")
+async def admin_project_tracker(tenant_id: str, project: str):
+    """One project's money picture (vula/commerce/project_tracker.py), with what each client view
+    would show and the project's share links."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    pos = await asyncio.to_thread(pt.position, tenant_id, project)
+    return {"position": pos, "client_views": {v: pt.client_view(pos, v) for v in pt.VIEWS},
+            "shares": await asyncio.to_thread(pt.list_shares, tenant_id, project)}
+
+
+@router.get("/{tenant_id}/admin/projects/qs-view")
+async def admin_project_qs_view(tenant_id: str, project: str):
+    """The QS's view only (no cost, fee or profit) — what a team login limited to Projects sees;
+    the full tracker needs Money access (vula/api/server.py _SECTION_RULES)."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    pos = await asyncio.to_thread(pt.position, tenant_id, project)
+    return {"view": pt.client_view(pos, "qs")}
+
+
+@router.post("/{tenant_id}/admin/projects/share")
+async def admin_project_share(tenant_id: str, body: ProjectShareIn):
+    """A client link for the project in the chosen view (price | open_book)."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    try:
+        return await asyncio.to_thread(pt.create_share, tenant_id, body.project, body.view, body.by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/projects/shares/{share_id}/revoke")
+async def admin_project_share_revoke(tenant_id: str, share_id: str):
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    if not await asyncio.to_thread(pt.revoke_share, tenant_id, share_id):
+        raise HTTPException(status_code=404, detail="No such link.")
+    return {"revoked": True}
 
 
 @router.get("/{tenant_id}/admin/projects/costing")
