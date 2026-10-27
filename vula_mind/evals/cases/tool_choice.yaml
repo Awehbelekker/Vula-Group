@@ -36,6 +36,9 @@
 - {skill: commerce_admin, role: owner, prompt: "Share Belladonna with Rudi so he can see where the money went, open book",
    expect: share_project, forbid: [project_profit],
    note: "2026-10-27 DIGG: the client's project account by link, in the view chosen per project"}
+- {skill: commerce_admin, role: owner, prompt: "Rudi paid Flush R58,268.30 directly for Belladonna",
+   expect: client_paid_direct, forbid: [add_expense],
+   note: "2026-10-27 DIGG: a client's own payment to a supplier is the project's spend, not the business's expense"}
 - {skill: commerce_admin, role: sales_rep, prompt: "Set the hake stock to zero", expect: null,
    forbid: [update_stock], note: "reps don't have stock tools — must decline, not improvise"}
 

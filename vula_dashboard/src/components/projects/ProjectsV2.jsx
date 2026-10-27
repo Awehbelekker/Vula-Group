@@ -10,8 +10,8 @@ import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Uploa
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
-import { PROJECT_TABS, createShare, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline, fetchQsView, fetchTracker,
-  makeBoqTheBudget, printBoq, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject, useProjects } from "./useProjects";
+import { PROJECT_TABS, addDirectPayment, createShare, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline, fetchQsView, fetchTracker,
+  makeBoqTheBudget, printBoq, removeDirectPayment, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject, useProjects } from "./useProjects";
 import "./projects.css";
 
 const STATUS = { active: { label: "Active", tone: "ok" }, on_hold: { label: "On hold", tone: "highlight" }, complete: { label: "Complete", tone: "muted" } };
@@ -338,6 +338,50 @@ function ProjectBoq({ tenantId, project }) {
   );
 }
 
+const NEW_DIRECT = { supplier: "", amount: "", paid_on: "", status: "paid", description: "" };
+
+/** What the client paid suppliers and trades themselves (or still has to) — the project's spend,
+ * never your cost or fee (vula_project_direct_payments). */
+function DirectPayments({ tenantId, project, p, onChange }) {
+  const [f, setF] = useState(NEW_DIRECT);
+  const [note, setNote] = useState("");
+  const list = p.direct_payments || [];
+  const add = async () => {
+    const amount = parseFloat(String(f.amount).replace(/[^\d.]/g, ""));
+    const r = await addDirectPayment(tenantId, { ...f, project, amount, paid_on: f.paid_on || null });
+    if (r.error) { setNote(r.error); return; }
+    setNote(`Recorded: ${r.supplier} ${money(r.amount_cents)}.`);
+    setF(NEW_DIRECT);
+    onChange();
+  };
+  const other = (p.paid_directly_suppliers_cents || 0) + (p.paid_directly_slips_cents || 0);
+  return (
+    <Section title={`Paid by the client directly · ${money(p.paid_directly_cents || 0)}`}
+      hint="Suppliers and trades the client paid themselves. It counts against the budget, never as your cost or fee. Don't add a slip that was already answered “the client paid”.">
+      {list.map((d) => (
+        <Line key={d.id} label={`${d.supplier}${d.description ? ` — ${d.description}` : ""}${d.status === "to_pay" ? " · still to pay" : d.paid_on ? ` · ${d.paid_on}` : ""}`}
+          value={<span className="vpj-go"><span className="vula-money">{money(d.amount_cents)}</span>
+            <Button size="sm" variant="secondary" onClick={async () => { if (await removeDirectPayment(tenantId, d.id)) onChange(); }}>Remove</Button></span>} />
+      ))}
+      {other > 0 && <Line label="From filed invoices and slips marked “the client paid”" value={cents(other)} />}
+      {p.to_pay_directly_cents > 0 && <Line label={<strong>Still to be paid by the client directly</strong>} value={<strong>{cents(p.to_pay_directly_cents)}</strong>} />}
+      <div className="vpj-form vpj-pad">
+        <Field label="Supplier or trade"><Input value={f.supplier} onChange={(e) => setF({ ...f, supplier: e.target.value })} /></Field>
+        <Field label="Amount (R)"><Input inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></Field>
+        <Field label="Paid or still to pay">
+          <Select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
+            <option value="paid">Paid</option><option value="to_pay">Still to pay</option>
+          </Select>
+        </Field>
+        <Field label="Date (if paid)"><Input type="date" value={f.paid_on} onChange={(e) => setF({ ...f, paid_on: e.target.value })} /></Field>
+        <Field label="What for (optional)"><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
+        <div className="vpj-go"><Button disabled={!f.supplier || !f.amount} onClick={add}>Record</Button></div>
+        {note && <p className="vpj-sub" role="status">{note}</p>}
+      </div>
+    </Section>
+  );
+}
+
 /** What a quantity surveyor looks at (project_tracker's "qs" view): contract, certified and
  * anticipated final per bill, valuations and retention, variations, the programme against time,
  * invoices, and the document register — and a link to send the QS. */
@@ -456,6 +500,7 @@ function ProjectMoney({ tenantId, project }) {
         <Line label={<strong>Total spent{p.spent_pct != null ? ` · ${p.spent_pct}% of budget` : ""}</strong>} value={<strong>{cents(p.spent_cents)}</strong>} />
         {p.budget_left_cents != null && <Line label="Budget left" value={cents(p.budget_left_cents)} />}
       </Section>
+      <DirectPayments tenantId={tenantId} project={project} p={p} onChange={load} />
       <Section title="Account" hint={`Open book adds your fee (${p.fee_pct}%) to your cost; price only works from your invoices.`}>
         <Line label="Cost through you" value={cents(p.business_cost_cents)} />
         <Line label={`Fee (${p.fee_pct}%)`} value={cents(p.fee_cents)} />

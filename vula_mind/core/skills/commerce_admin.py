@@ -1067,6 +1067,24 @@ PROJECT_TOOLS = [
             "view": {"type": "string", "enum": ["price", "open_book", "qs"]},
             "confirm": {"type": "boolean"}},
             "required": ["project"]}}},
+    # 27 Oct (DIGG, Belladonna): Rudi paid Flush, Edward and Elyas himself — the project's spend,
+    # never the business's cost. Nothing could record it.
+    {"type": "function", "function": {
+        "name": "client_paid_direct",
+        "description": "Record that the CLIENT paid a supplier or trade directly on a project (or still "
+                       "has to) — it counts in the project's spend against the budget, never as your "
+                       "cost, fee or profit. Use for 'Rudi paid Flush R58,268.30 directly', 'the client "
+                       "still has to pay Edward R45,000'. Not for money the client paid YOU. The first "
+                       "call previews; call again with confirm=true only after the owner says yes.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string"},
+            "supplier": {"type": "string", "description": "Who the client paid, e.g. 'Flush Bathrooms'."},
+            "amount": {"type": "number", "description": "Rands, as the owner said it."},
+            "date": {"type": "string", "description": "YYYY-MM-DD, only if given."},
+            "still_to_pay": {"type": "boolean", "description": "True when the client hasn't paid it yet."},
+            "description": {"type": "string"},
+            "confirm": {"type": "boolean"}},
+            "required": ["project", "supplier", "amount"]}}},
     # 6 Oct (DIGG): "HPC project profit and also after tax" — tax worked out in code from the
     # business's own bank lines and the SARS tables (vula/commerce/tax.py), never by the model.
     {"type": "function", "function": {
@@ -1554,7 +1572,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     except Exception:
         with_projects = True
     tools += [t for t in PROJECT_TOOLS
-              if with_projects or t["function"]["name"] not in ("project_profit", "boq_template", "share_project")]
+              if with_projects or t["function"]["name"] not in ("project_profit", "boq_template", "share_project",
+                                                                   "client_paid_direct")]
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1586,7 +1605,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "tax_estimate": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     "staff_notice": "team", "staff_poll": "team",
@@ -2516,6 +2535,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._boq_template(tid)
             if name == "share_project":
                 return await self._share_project(tid, args, ctx)
+            if name == "client_paid_direct":
+                return await self._client_paid_direct(tid, args, ctx)
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),
@@ -3219,6 +3240,39 @@ class CommerceAdminSkill(BaseSkill):
             "It always shows the books as they are now. It works until "
             f"{str(share['expires_at'])[:10]}; switch it off any time from Projects › Money in the dashboard."),
             "share_id": share["id"]}
+
+    async def _client_paid_direct(self, tid: str, args: Dict[str, Any],
+                                  ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Preview, then (confirm=true) record a client's own payment to a supplier — read back."""
+        import asyncio
+        from vula.commerce import project_tracker as pt
+        from vula.commerce.service import canonical_project, project_key, registered_projects
+        raw = (args.get("project") or "").strip()
+        project = canonical_project(tid, raw) or raw
+        known = {project_key(r.get("name")) for r in registered_projects(tid)}
+        if not project or (known and project_key(project) not in known):
+            return {"status": "need_info", "message": f"I can't find a project called '{raw}'. Which project?"}
+        try:
+            cents = int(round(float(args.get("amount")) * 100))
+        except (TypeError, ValueError):
+            return {"status": "need_info", "message": "How much was it?"}
+        supplier = (args.get("supplier") or "").strip()
+        status = "to_pay" if args.get("still_to_pay") else "paid"
+        what = "still has to pay" if status == "to_pay" else "paid"
+        if not args.get("confirm"):
+            return {"preview": True, "reply_verbatim": (
+                f"*{project}*: the client {what} *{supplier}* R{cents / 100:,.2f} directly"
+                + (f" ({args['date']})" if args.get("date") else "") + ".\n"
+                "It counts in the project's spend against the budget, not as your cost or fee.\n\n"
+                "Reply *confirm* to record it.")}
+        try:
+            row = await asyncio.to_thread(pt.add_direct_payment, tid, project, supplier, cents,
+                                          paid_on=args.get("date"), status=status,
+                                          description=args.get("description"), by=(ctx or {}).get("phone"))
+        except ValueError as exc:
+            return {"status": "need_info", "message": str(exc)}
+        return {"reply_verbatim": (f"✅ Recorded on *{row['project']}*: the client {what} *{row['supplier']}* "
+                                   f"R{row['amount_cents'] / 100:,.2f} directly."), "payment_id": row["id"]}
 
     async def _boq_template(self, tid: str) -> Dict[str, Any]:
         """A branded BOQ workbook priced from the price book (vula/commerce/boq_template.py), as a

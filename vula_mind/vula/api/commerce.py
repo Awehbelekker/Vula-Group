@@ -3760,6 +3760,39 @@ async def admin_project_tracker(tenant_id: str, project: str):
             "shares": await asyncio.to_thread(pt.list_shares, tenant_id, project)}
 
 
+class DirectPaymentIn(BaseModel):
+    project: str
+    supplier: str
+    amount: float                     # Rands as typed; stored as integer cents
+    paid_on: Optional[str] = None
+    status: str = "paid"              # paid | to_pay
+    description: Optional[str] = None
+    by: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/projects/direct-payments")
+async def admin_direct_payment_add(tenant_id: str, body: DirectPaymentIn):
+    """A payment the client made (or still has to make) to a supplier directly — in the project's
+    spend, never the business's cost (vula/commerce/project_tracker.py)."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    try:
+        return await asyncio.to_thread(pt.add_direct_payment, tenant_id, body.project, body.supplier,
+                                       int(round(body.amount * 100)), paid_on=body.paid_on, status=body.status,
+                                       description=body.description, by=body.by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/projects/direct-payments/{payment_id}/remove")
+async def admin_direct_payment_remove(tenant_id: str, payment_id: str):
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    if not await asyncio.to_thread(pt.remove_direct_payment, tenant_id, payment_id):
+        raise HTTPException(status_code=404, detail="No such payment.")
+    return {"removed": True}
+
+
 @router.get("/{tenant_id}/admin/projects/qs-view")
 async def admin_project_qs_view(tenant_id: str, project: str):
     """The QS's view only (no cost, fee or profit) — what a team login limited to Projects sees;

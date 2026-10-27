@@ -74,6 +74,16 @@ export const downloadBoqPdf = (tenantId, project) =>
 /** The QS's view of the project (no cost, fee or profit) — open to a login limited to Projects. */
 export const fetchQsView = (tenantId, project) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/qs-view?project=${encodeURIComponent(project)}`).then((r) => r.json());
+/** Record a payment the client made (status "paid") or still has to make ("to_pay") to a supplier directly. */
+export async function addDirectPayment(tenantId, body) {
+  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/direct-payments`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+  if (!r) return { error: "Couldn't reach Vula — try again." };
+  const d = await r.json().catch(() => ({}));
+  return r.ok ? d : { error: d.detail || "That couldn't be saved." };
+}
+export const removeDirectPayment = (tenantId, id) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/direct-payments/${id}/remove`, { method: "POST" }).then((r) => r.ok).catch(() => false);
 export const revokeShare = (tenantId, id) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/shares/${id}/revoke`, { method: "POST" }).then((r) => r.ok).catch(() => false);
 /** The money rows the screen shows: numbers, and strings that are already rand amounts. */
