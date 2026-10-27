@@ -97,6 +97,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The speed budget: what a phone downloads to open the app, and everything the installed
+      # app keeps offline, gzipped (scripts/size-budget.json). Raise it only on purpose.
+      - name: Speed budget
+        run: npm run check:size
+
       # Every page on the shared design tokens: no new hardcoded colours or fonts (the
       # allowance per file only goes down — scripts/design-token-baseline.json).
       - name: Design tokens

@@ -92,3 +92,65 @@ async def render_icon(src: Optional[str], accent: str, name: str, size: int, squ
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+# ── The iPhone's launch screen (2026-10-27, PWA pass 6) ───────────────────────
+# iOS shows a startup image while an installed web app opens — a blank white screen without one —
+# and only one made for the exact screen size. Portrait, every iPhone still in use (CSS width x
+# height @ pixel ratio), as the dashboard links them (src/lib/iosSplash.js). Anything else is
+# refused rather than rendered (no one-off sizes to cache or burn CPU on).
+SPLASH_SIZES = {
+    (1320, 2868), (1290, 2796), (1206, 2622), (1179, 2556), (1284, 2778), (1170, 2532),
+    (1125, 2436), (1242, 2688), (828, 1792), (1242, 2208), (750, 1334), (640, 1136),
+}
+# The dashboard's own page colours (src/index.css --bg / --ink, light and dark).
+SPLASH_LOOK = {False: ((247, 244, 238), (30, 30, 30)), True: ((18, 18, 17), (242, 239, 232))}
+
+
+def _rounded(img, radius: int):
+    from PIL import Image, ImageDraw
+    mask = Image.new("L", img.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, img.size[0] - 1, img.size[1] - 1), radius, fill=255)
+    out = Image.new("RGBA", img.size)
+    out.paste(img.convert("RGBA"), mask=mask)
+    return out
+
+
+def _fit(name: str, font_for, max_w: int, size: int):
+    """The name at the largest size up to `size` that fits `max_w`, else shortened with an ellipsis."""
+    for s in range(size, max(size // 2, 8) - 1, -2):
+        font = font_for(s)
+        if font.getlength(name) <= max_w:
+            return name, font
+    font = font_for(max(size // 2, 8))
+    while name and font.getlength(name + "…") > max_w:
+        name = name[:-1]
+    return name.rstrip() + "…", font
+
+
+async def render_splash(src: Optional[str], accent: str, name: str, width: int, height: int,
+                        square: bool = False, logo_size: Optional[str] = None, dark: bool = False) -> bytes:
+    """The business's app icon (rounded, as on the home screen) above its name, on the
+    dashboard's page colour — so opening the app looks like the app."""
+    from PIL import Image, ImageDraw, ImageFont
+    bg, ink = SPLASH_LOOK[bool(dark)]
+    img = Image.new("RGB", (width, height), bg)
+    side = int(min(width, height) * 0.30)
+    icon = Image.open(io.BytesIO(await render_icon(src, accent, name, side, square=square, logo_size=logo_size)))
+    icon = _rounded(icon, int(side * 0.225))
+    top = int(height * 0.42) - side // 2
+    img.paste(icon, ((width - side) // 2, top), mask=icon.split()[3])
+
+    def font_for(s):
+        try:
+            return ImageFont.truetype("DejaVuSans-Bold.ttf", s)
+        except Exception:
+            return ImageFont.load_default()
+    label, font = _fit((name or "").strip(), font_for, int(width * 0.84), int(width * 0.06))
+    if label:
+        d = ImageDraw.Draw(img)
+        box = d.textbbox((0, 0), label, font=font)
+        d.text(((width - (box[2] - box[0])) / 2 - box[0], top + side + int(side * 0.18)), label, fill=ink, font=font)
+    out = io.BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()

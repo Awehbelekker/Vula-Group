@@ -43,6 +43,7 @@ import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, m
 import { applyBrand, applyThemeMode } from "./theme/tokens";
 import { applyUiMode, uiV2For, rememberedTenantUi, rememberTenantUi } from "./lib/flags";
 import { showOnAppIcon } from "./lib/appBadge";
+import { setLaunchScreens } from "./lib/iosSplash";
 
 const COLORS = {
   bg: "var(--bg)",
@@ -208,6 +209,7 @@ export default function App() {
     const tid = (role === "master") ? (activeTab === "merchant" ? masterTenant : null) : ownTenant;
     setBrand(null); // reset on tenant switch so a stale logo/name never flashes for the wrong tenant
     applyBrand({});
+    setLaunchScreens(VULA_API, null);
     if (!tid) return;
     let alive = true;
     const load = () => fetch(`${VULA_API}/v1/commerce/${tid}/brand`)
@@ -224,6 +226,7 @@ export default function App() {
         // ?app: the manifest is served from the API, so it learns the app's own address (start page, Share target)
         setLink("manifest", `${VULA_API}/v1/commerce/${tid}/manifest.webmanifest?app=${encodeURIComponent(window.location.origin)}`);
         setLink("apple-touch-icon", `${VULA_API}/v1/commerce/${tid}/app-icon/180.png`);
+        setLaunchScreens(VULA_API, tid);          // the iPhone's launch screen, in the same brand
         if (b.name) document.title = b.name;
       })
       .catch(() => {});

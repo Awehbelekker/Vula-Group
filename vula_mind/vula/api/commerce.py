@@ -5138,6 +5138,35 @@ async def public_app_icon(tenant_id: str, size: int, maskable: bool = False):
     return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
+@router.get("/{tenant_id}/app-splash/{size}.png")
+async def public_app_splash(tenant_id: str, size: str, dark: bool = False):
+    """The iPhone's launch screen for the business's installed app (brand_icon.render_splash):
+    its icon and name. Only the iPhone screen sizes (brand_icon.SPLASH_SIZES), portrait."""
+    import time as _time
+    from fastapi.responses import Response
+    from vula.commerce.brand_icon import SPLASH_SIZES, render_splash
+    try:
+        w, h = (int(n) for n in size.split("x", 1))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not a launch screen size.")
+    if (w, h) not in SPLASH_SIZES:
+        raise HTTPException(status_code=404, detail="Not a launch screen size.")
+    settings = await service.get_invoice_settings(tenant_id) or {}
+    src = settings.get("icon_url") or settings.get("logo_url")
+    accent = settings.get("accent_color") or "#2C5545"
+    name = settings.get("trading_as") or settings.get("company_name") or tenant_id
+    key = ("splash", tenant_id, w, h, bool(dark), src, accent, name, settings.get("logo_size"))
+    hit = _ICON_CACHE.get(key)
+    if hit and _time.time() - hit[0] < 3600:
+        return Response(hit[1], media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+    png = await render_splash(src, accent, name, w, h, square=bool(settings.get("icon_url")),
+                              logo_size=settings.get("logo_size"), dark=bool(dark))
+    if len(_ICON_CACHE) > 600:                  # 24 launch screens a business; never grows unbounded
+        _ICON_CACHE.clear()
+    _ICON_CACHE[key] = (_time.time(), png)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+
 def _dashboard_origin(tenant_id: str, app: Optional[str]) -> Optional[str]:
     """The dashboard address the installed app runs on, as the dashboard reports it (?app=), when
     it's one of Vula's dashboard hosts: this business's own, the shared one, or *.vula-ai.com.

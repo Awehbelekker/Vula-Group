@@ -99,3 +99,58 @@ async def test_the_round_icon_keeps_the_whole_logo_inside_androids_crop(monkeypa
     else:
         red = [(x, y) for x in range(192) for y in range(192) if is_red(img.getpixel((x, y)))]
         assert red and all((x - c) ** 2 + (y - c) ** 2 <= r ** 2 for x, y in red)
+
+
+# ── the iPhone's launch screen (2026-10-27) ───────────────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dark", [False, True])
+async def test_the_launch_screen_is_the_businesss_icon_and_name_on_the_apps_own_colour(monkeypatch, dark):
+    import io
+    from PIL import Image
+    from vula.commerce import brand_icon
+
+    async def settings(tid):
+        return {"trading_as": "Off the Hook", "accent_color": "#0077b6"}
+    monkeypatch.setattr(commerce.service, "get_invoice_settings", settings)
+    res = await commerce.public_app_splash("off-the-hook", "1179x2556", dark=dark)
+    img = Image.open(io.BytesIO(res.body)).convert("RGB")
+    assert img.size == (1179, 2556) and res.media_type == "image/png"
+    bg, ink = brand_icon.SPLASH_LOOK[dark]
+    assert img.getpixel((5, 5)) == bg                                    # the dashboard's page colour
+    assert img.getpixel((1179 // 2, int(2556 * 0.42))) == (0, 119, 182)  # the icon, in the middle
+    name_row = [img.getpixel((x, y)) for y in range(1300, 1500) for x in range(300, 880)]
+    assert ink in name_row or any(sum(abs(a - b) for a, b in zip(p, ink)) < 60 for p in name_row)   # the name below
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", ["4000x4000", "1179x2557", "big", "1179"])
+async def test_only_iphone_screen_sizes_are_drawn(size):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        await commerce.public_app_splash("off-the-hook", size)
+    assert e.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_long_name_is_shortened_to_fit():
+    from vula.commerce.brand_icon import _fit
+    from PIL import ImageFont
+    try:
+        ImageFont.truetype("DejaVuSans-Bold.ttf", 10)
+    except OSError:
+        pytest.skip("DejaVu isn't installed here (the production image has it)")
+    font_for = lambda s: ImageFont.truetype("DejaVuSans-Bold.ttf", s)       # noqa: E731
+    label, font = _fit("Digg Architecture and Interiors Proprietary Limited Cape Town", font_for, 600, 70)
+    assert label.endswith("…") and font.getlength(label) <= 600
+    assert _fit("DIGG", font_for, 600, 70)[0] == "DIGG"
+
+
+def test_the_dashboard_asks_for_exactly_the_sizes_drawn():
+    """vula_dashboard/src/lib/iosSplash.js links one image per iPhone; each must be drawable here."""
+    import re
+    from pathlib import Path
+    from vula.commerce.brand_icon import SPLASH_SIZES
+    js = (Path(__file__).resolve().parents[2] / "vula_dashboard/src/lib/iosSplash.js").read_text()
+    phones = re.findall(r"\[(\d+), (\d+), (\d)\]", js)
+    assert {(int(w) * int(r), int(h) * int(r)) for w, h, r in phones} == SPLASH_SIZES

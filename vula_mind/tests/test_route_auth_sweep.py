@@ -116,6 +116,7 @@ PUBLIC = {
     ("GET", "/v1/commerce/{tenant_id}/manifest.webmanifest"): "the installed app's name/colour/icons — public brand fields only",
     ("GET", "/v1/commerce/{tenant_id}/app-icon/{size}.png"): "the installed app's icon image, from the public brand",
     ("GET", "/v1/commerce/{tenant_id}/app-icon/maskable/{size}.png"): "the same icon, inside Android's round crop",
+    ("GET", "/v1/commerce/{tenant_id}/app-splash/{size}.png"): "the iPhone's launch screen: the public icon and name",
     ("GET", "/v1/tenant/{tenant_id}/status"): "onboarding status after signup payment",
     ("GET", "/v1/training/status"): "shared KB status (no tenant data)",
     ("GET", "/v1/training/topics"): "shared KB topic list (no tenant data)",
