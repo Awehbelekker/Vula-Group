@@ -2000,6 +2000,9 @@ app.include_router(yoco_router, prefix="/v1/yoco")
 app.include_router(yoco_connect_router, prefix="/v1/yoco")
 app.include_router(whatsapp_connect_router, prefix="/v1/whatsapp")
 app.include_router(dash_push_router, prefix="/v1/push")
+from vula.api.app_errors import router as app_errors_router, master_router as app_errors_master_router  # noqa: E402
+app.include_router(app_errors_router, prefix="/v1/app-errors")              # the dashboard's crash reports (public, limited)
+app.include_router(app_errors_master_router, prefix="/v1/master/app-errors")  # master-only list
 app.include_router(draft_router, prefix="/v1")
 app.include_router(agent_router, prefix="/v1")
 

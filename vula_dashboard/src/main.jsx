@@ -10,9 +10,11 @@ import { OfflineBanner, UiHost, toast } from "./components/ui/index.jsx";
 import { InstallSteps } from "./components/install/InstallVula.jsx";
 import { NotificationsSheet } from "./components/notifications/NotificationsPanel.jsx";
 import { installAuthFetch } from "./lib/authFetch";
+import { listenForErrors } from "./lib/appErrors";
 
 // Attach the signed-in user's JWT to every guarded Vula API call (tenant-scoped auth).
 installAuthFetch();
+listenForErrors();      // crashes on this device reach Master › Health (lib/appErrors.js)
 
 // Self-heal stale deployments: after a new deploy, an already-open tab still references old
 // lazy-chunk filenames that no longer exist (Vercel returns index.html → module MIME error).

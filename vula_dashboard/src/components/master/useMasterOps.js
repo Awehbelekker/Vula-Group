@@ -34,6 +34,18 @@ export function useMasterHealth({ onError }) {
   return { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql }
 }
 
+/** Crashes in the dashboard on people's devices (GET /v1/master/app-errors, vula/app_errors.py):
+ * scrubbed, counted per build and business; "Fixed" hides one until it happens again. */
+export function useAppErrors({ onError }) {
+  const [errors, setErrors] = useState(null)
+  const load = () => authFetch('/v1/master/app-errors?days=14').then(d => setErrors(d.errors || [])).catch(e => onError(e.message))
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  const resolve = async (id) => {
+    try { await authFetch(`/v1/master/app-errors/${id}/resolve`, { method: 'POST' }); await load() } catch (e) { onError(e.message) }
+  }
+  return { errors, resolve }
+}
+
 /** Vula's WhatsApp login-code template on each WhatsApp account (Meta's review status), and
  * submitting it where it's missing — only that template (GET/POST /v1/master/wa-login-template). */
 export function useLoginTemplate({ onError }) {

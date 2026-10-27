@@ -1208,3 +1208,12 @@ export const trainingTopics = { topics: [
   { topic: "JBCC contracts and payment certificates", filename: "jbcc.md", chars: 18400 },
   { topic: "Reading architectural drawings", filename: "drawings.md", chars: 12600 },
 ] };
+
+// ── Crashes on people's devices (Master › Health; vula/app_errors.py) — already scrubbed ──
+export const appErrors = [
+  { id: "ae-1", tenant_id: "harbour-vine", build: "a1b2c3d4e5f6", page: "invoices", message: "TypeError: Cannot read properties of undefined (reading 'total_cents')",
+    frames: "/assets/VulaInvoices-Ab12.js:4\n/assets/main-Cd34.js:88", browser: "Chrome 141 · Android", count: 7,
+    first_seen: "2026-10-26T08:12:00Z", last_seen: "2026-10-27T09:40:00Z", resolved_at: null },
+  { id: "ae-2", tenant_id: null, build: "a1b2c3d4e5f6", page: "", message: "unhandled: Session expired — please sign in again.",
+    frames: null, browser: "Safari 18 · iPhone", count: 2, first_seen: "2026-10-27T07:01:00Z", last_seen: "2026-10-27T07:05:00Z", resolved_at: null },
+];
