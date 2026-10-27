@@ -7,6 +7,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { supabase } from '../lib/supabase'
+import { clearPersonData, readyToSignOut } from '../lib/deviceData'
 
 export const useAuthStore = create(
   persist(
@@ -29,8 +30,12 @@ export const useAuthStore = create(
       // Sign-out must kill the SUPABASE session too — clearing only the store left the session
       // alive, and the login screen's mount effect immediately logged the user back in
       // (confirmed live 2026-07-17: sign-out was impossible).
+      // 2026-10-27: and leaves nothing of this person on a shared phone (lib/deviceData.js) —
+      // after asking, when a stock count's scans haven't been sent yet.
       logout: async () => {
+        if (!(await readyToSignOut())) return
         try { await supabase.auth.signOut() } catch { /* still clear local state */ }
+        await clearPersonData()
         set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null })
       },
     }),

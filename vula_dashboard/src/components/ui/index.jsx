@@ -434,6 +434,7 @@ export function UiHost() {
 
 /* ── New in the redesign (2026-10-17, Phase C) — one file each ───────────────────────────── */
 export { ListRow } from "./ListRow.jsx";
+export { OfflineBanner } from "./OfflineBanner.jsx";
 export { DataTable } from "./DataTable.jsx";
 export { FilterBar } from "./FilterBar.jsx";
 export { Sheet } from "./Sheet.jsx";

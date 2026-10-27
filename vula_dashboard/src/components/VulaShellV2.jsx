@@ -81,7 +81,7 @@ function UserMenu({ userEmail, roleLabel, onLogout }) {
           <div className="v2-menu-scrim" onClick={() => setOpen(false)} aria-hidden="true" />
           <div className="v2-menu" role="menu">
             <div className="v2-menu-who">{userEmail}{roleLabel ? <span> · {roleLabel}</span> : null}</div>
-            <button type="button" role="menuitem" className="v2-menu-item" onClick={onLogout}>
+            <button type="button" role="menuitem" className="v2-menu-item" onClick={() => { setOpen(false); onLogout(); }}>
               <LogOut size={18} strokeWidth={1.75} aria-hidden="true" /> Sign out
             </button>
           </div>
@@ -219,7 +219,7 @@ export default function VulaShellV2({
           </div>))}
         <div className="v2-sheet-group">
           <div className="v2-nav-label">You</div>
-          <ListRow Icon={LogOut} title="Sign out" detail={`${userEmail || ""}${roleLabel ? ` · ${roleLabel}` : ""}`} onClick={onLogout} />
+          <ListRow Icon={LogOut} title="Sign out" detail={`${userEmail || ""}${roleLabel ? ` · ${roleLabel}` : ""}`} onClick={() => { setMore(false); onLogout(); }} />
           {DARK_MODE_READY && <div style={{ padding: "8px 12px" }}><ThemeButton /></div>}
         </div>
         {powered}
