@@ -30,6 +30,9 @@
 - {skill: commerce_admin, role: owner, prompt: "Move DIG-BILL-00134 to Belladonna, it was filed under the wrong project",
    expect: move_to_project, forbid: [find_document],
    note: "2026-10-26 DIGG: Pudlo's Belladonna tiles were filed under HPC Bokaap and nothing could move them"}
+- {skill: commerce_admin, role: owner, prompt: "Send me a BOQ template for the new Constantia job",
+   expect: boq_template, forbid: [find_document],
+   note: "2026-10-27 DIGG: a branded bill of quantities priced from the business's own price book"}
 - {skill: commerce_admin, role: sales_rep, prompt: "Set the hake stock to zero", expect: null,
    forbid: [update_stock], note: "reps don't have stock tools — must decline, not improvise"}
 

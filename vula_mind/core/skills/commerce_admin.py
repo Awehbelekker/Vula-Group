@@ -1039,6 +1039,16 @@ PROJECT_TOOLS = [
             "unit": {"type": "string", "description": "m2, m, each, day… if the user said one."},
             "project": {"type": "string"}},
             "required": ["item"]}}},
+    # 27 Oct (DIGG): a branded BOQ workbook priced from the business's own price book.
+    {"type": "function", "function": {
+        "name": "boq_template",
+        "description": "A fresh Bill of Quantities spreadsheet for pricing a job: the business's "
+                       "logo and details, cover for the client and project, dropdown lines per "
+                       "trade (ASAQS order), and a rate library of the business's own latest "
+                       "prices from its invoices, quotes and priced bills. Use for 'send me a BOQ "
+                       "template', 'I need a bill of quantities sheet', 'a costing template for a "
+                       "new job'. The reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {}}}},
     # 6 Oct (DIGG): "HPC project profit and also after tax" — tax worked out in code from the
     # business's own bank lines and the SARS tables (vula/commerce/tax.py), never by the model.
     {"type": "function", "function": {
@@ -1526,7 +1536,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     except Exception:
         with_projects = True
     tools += [t for t in PROJECT_TOOLS
-              if with_projects or t["function"]["name"] != "project_profit"]
+              if with_projects or t["function"]["name"] not in ("project_profit", "boq_template")]
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1558,7 +1568,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     "staff_notice": "team", "staff_poll": "team",
@@ -2484,6 +2494,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._staff_notice(tid, args, ctx)
             if name == "staff_poll":
                 return await self._staff_poll(tid, args, ctx)
+            if name == "boq_template":
+                return await self._boq_template(tid)
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),
@@ -3152,6 +3164,27 @@ class CommerceAdminSkill(BaseSkill):
                 "invoice_number": after.get("invoice_number"), "invoice_status": after.get("status"),
                 "still_owed": self._rands(max(0, int(after.get("total_cents") or 0)
                                               - int(after.get("total_paid_cents") or 0)))}
+
+    async def _boq_template(self, tid: str) -> Dict[str, Any]:
+        """A branded BOQ workbook priced from the price book (vula/commerce/boq_template.py), as a
+        week-long private link — WhatsApp shows a raw URL, never markdown."""
+        import asyncio
+        from vula.commerce import boq_template
+        try:
+            url, info = await asyncio.to_thread(boq_template.link, tid)
+        except Exception as exc:
+            logger.error("BOQ template failed for %s: %s", tid, exc)
+            return {"error": "I couldn't build the BOQ template just now — please try again shortly."}
+        if not url:
+            return {"error": "The BOQ template was built but couldn't be stored — please try again shortly."}
+        lib = (f"{info['rates']} of your own prices across {info['trades']} trades" if info["rates"]
+               else "no prices yet — your rate library fills up as invoices, quotes and priced bills are filed")
+        return {"reply_verbatim": (
+            "📐 Your BOQ template (Excel), with " + lib + ":\n" + url + "\n\n"
+            "Fill in the Cover (client and project), pick a section and item per line, type the quantity. "
+            "The Priced Bill tab is the client copy. Send the finished sheet back here with the project "
+            "name as the caption and I'll set the project budget from it. The link works for 7 days."),
+            "rates": info["rates"]}
 
     async def _financial_report(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         import asyncio

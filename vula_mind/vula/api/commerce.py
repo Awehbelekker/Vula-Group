@@ -3515,6 +3515,21 @@ async def admin_report_ledger_csv(tenant_id: str, since: Optional[str] = None, u
                     headers={"Content-Disposition": f'attachment; filename="ledger-{tenant_id}.csv"'})
 
 
+@router.get("/{tenant_id}/admin/boq-template.xlsx")
+async def admin_boq_template(tenant_id: str):
+    """A branded Bill of Quantities workbook priced from the tenant's own price book
+    (vula/commerce/boq_template.py) — the same one Vula sends on WhatsApp."""
+    import asyncio
+    from datetime import date
+    from fastapi.responses import Response
+    from vula.commerce import boq_template
+    data, _info = await asyncio.to_thread(boq_template.build, tenant_id)
+    return Response(content=data,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="BOQ_Template_{date.today().isoformat()}.xlsx"'})
+
+
 # ── Casual labour: worker register + payment recognition + report ─────────────
 class WorkerIn(BaseModel):
     id: Optional[str] = None
