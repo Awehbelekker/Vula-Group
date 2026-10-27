@@ -1049,6 +1049,22 @@ PROJECT_TOOLS = [
                        "template', 'I need a bill of quantities sheet', 'a costing template for a "
                        "new job'. The reply is sent exactly as returned.",
         "parameters": {"type": "object", "properties": {}}}},
+    # 27 Oct (DIGG): the project tracker, shared with the client by link in the view chosen per project.
+    {"type": "function", "function": {
+        "name": "share_project",
+        "description": "A link the client can open to see their project's account. Two views, chosen "
+                       "per project: 'price' (contract, invoiced, paid, still owed — your own costs "
+                       "and margin stay private) or 'open_book' (cost-plus: your cost per trade, what "
+                       "the client paid suppliers directly, the fee and the balance). Use for 'share "
+                       "Belladonna with Rudi', 'send the client a project link', 'open book link for "
+                       "HPC'. If the owner didn't say which view, call without one — the tool asks. "
+                       "The first call previews what the client will see; call again with confirm="
+                       "true only after the owner says yes. The reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "Project name as the user said it."},
+            "view": {"type": "string", "enum": ["price", "open_book"]},
+            "confirm": {"type": "boolean"}},
+            "required": ["project"]}}},
     # 6 Oct (DIGG): "HPC project profit and also after tax" — tax worked out in code from the
     # business's own bank lines and the SARS tables (vula/commerce/tax.py), never by the model.
     {"type": "function", "function": {
@@ -1536,7 +1552,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     except Exception:
         with_projects = True
     tools += [t for t in PROJECT_TOOLS
-              if with_projects or t["function"]["name"] not in ("project_profit", "boq_template")]
+              if with_projects or t["function"]["name"] not in ("project_profit", "boq_template", "share_project")]
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1568,7 +1584,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "tax_estimate": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     "staff_notice": "team", "staff_poll": "team",
@@ -2496,6 +2512,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._staff_poll(tid, args, ctx)
             if name == "boq_template":
                 return await self._boq_template(tid)
+            if name == "share_project":
+                return await self._share_project(tid, args, ctx)
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),
@@ -3164,6 +3182,37 @@ class CommerceAdminSkill(BaseSkill):
                 "invoice_number": after.get("invoice_number"), "invoice_status": after.get("status"),
                 "still_owed": self._rands(max(0, int(after.get("total_cents") or 0)
                                               - int(after.get("total_paid_cents") or 0)))}
+
+    async def _share_project(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Preview what the client will see, then (confirm=true) make the link — read back before
+        it's reported (vula/commerce/project_tracker.py)."""
+        import asyncio
+        from vula.commerce import project_tracker as pt
+        from vula.commerce.service import canonical_project, project_key, registered_projects
+        raw = (args.get("project") or "").strip()
+        project = canonical_project(tid, raw) or raw
+        known = {project_key(r.get("name")) for r in registered_projects(tid)}
+        if not project or (known and project_key(project) not in known):
+            return {"status": "need_info", "message": f"I can't find a project called '{raw}'. Which project?"}
+        view = args.get("view")
+        if view not in pt.VIEWS:
+            return {"reply_verbatim": (
+                f"How should the client see *{project}*?\n"
+                "• *Price only* — the contract, what's been invoiced and paid, what's still owed. "
+                "Your own costs and margin stay private.\n"
+                "• *Open book* — cost-plus: your cost per trade, what they paid suppliers directly, "
+                "your fee and the balance.\n\nReply *price only* or *open book*.")}
+        pos = await asyncio.to_thread(pt.position, tid, project)
+        if not args.get("confirm"):
+            return {"preview": True, "reply_verbatim": pt.summary_text(pos, view)
+                    + "\n\nReply *confirm* to make the link (it works for 180 days and you can switch it off)."}
+        by = (ctx or {}).get("phone")
+        share = await asyncio.to_thread(pt.create_share, tid, project, view, by)
+        return {"reply_verbatim": (
+            f"🔗 {project} — {pt.VIEW_LABEL[view]} link for the client:\n{share['url']}\n\n"
+            "It always shows the books as they are now. It works until "
+            f"{str(share['expires_at'])[:10]}; switch it off any time from Projects › Money in the dashboard."),
+            "share_id": share["id"]}
 
     async def _boq_template(self, tid: str) -> Dict[str, Any]:
         """A branded BOQ workbook priced from the price book (vula/commerce/boq_template.py), as a

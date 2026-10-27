@@ -10,22 +10,12 @@ import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Uploa
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
-import { PROJECT_TABS, fetchBoq, fetchFinancials, moneyRows, saveBoqTotal, uploadToProject, useProjects } from "./useProjects";
+import { PROJECT_TABS, createShare, fetchBoq, fetchTracker, revokeShare, saveBoqTotal, uploadToProject, useProjects } from "./useProjects";
 import "./projects.css";
 
 const STATUS = { active: { label: "Active", tone: "ok" }, on_hold: { label: "On hold", tone: "highlight" }, complete: { label: "Complete", tone: "muted" } };
 const statusChip = (s) => { const st = STATUS[s] || { label: (s || "").replace("_", " "), tone: "muted" }; return <StatusChip tone={st.tone}>{st.label}</StatusChip>; };
 const money = (c) => formatMoney(c || 0, { cents: "always" });
-// project_financials() sends rand amounts (2 dp, server-computed), counts (*_count) and *_cents.
-const MONEY_LABELS = { contract: "Contract value", invoiced: "Invoiced", invoiced_paid: "Invoices paid", invoice_count: "Invoices",
-  quoted: "Quoted", quote_count: "Quotes", paid_in: "Paid in", spent: "Spent", labour_cents: "Casual labour", net: "Net",
-  remaining: "Remaining", outstanding: "Outstanding" };
-const moneyLabel = (k) => MONEY_LABELS[k] || (k.charAt(0).toUpperCase() + k.slice(1)).replace(/_cents$/, "").replace(/_/g, " ");
-const moneyValue = (k, v) => {
-  if (typeof v !== "number") return String(v);
-  if (/_count$/.test(k)) return String(v);
-  return <span className="vula-money">{money(/_cents$/.test(k) ? v : Math.round(v * 100))}</span>;
-};
 
 export default function ProjectsV2({ tenantId }) {
   const x = useProjects(tenantId);
@@ -237,16 +227,86 @@ function ProjectBoq({ tenantId, project }) {
   );
 }
 
+const VIEWS = { price: "Price only", open_book: "Open book (cost-plus)" };
+const VIEW_HINT = {
+  price: "The contract, what's been invoiced and paid, and what's still owed. Your own costs and margin stay private.",
+  open_book: "Cost-plus: your cost per trade, what the client paid suppliers directly, your fee and the balance.",
+};
+const cents = (c) => (c == null ? "—" : <span className="vula-money">{money(c)}</span>);
+
+/** One project's money (vula/commerce/project_tracker.py): budget vs actual, the account both ways,
+ * cost by trade, and the client links — each made in the view chosen for this project. */
 function ProjectMoney({ tenantId, project }) {
-  const [f, setF] = useState(null);
-  useEffect(() => { fetchFinancials(tenantId, project).then(setF).catch(() => setF(null)); }, [tenantId, project]);
-  if (!f) return <Empty>Loading…</Empty>;
-  const rows = moneyRows(f);
+  const [t, setT] = useState(null);
+  const [view, setView] = useState("price");
+  const [made, setMade] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    fetchTracker(tenantId, project).then((d) => {
+      setT(d);
+      const last = (d.shares || []).find((s) => s.active);
+      if (last) setView(last.view);
+    }).catch(() => setT({ error: true }));
+  }, [tenantId, project]);
+  useEffect(() => { setMade(null); load(); }, [load]);
+  if (!t) return <Empty>Loading…</Empty>;
+  if (t.error || !t.position) return <Empty>The project's money couldn't be read just now.</Empty>;
+  const p = t.position;
+  const share = async () => {
+    setBusy(true);
+    const r = await createShare(tenantId, project, view);
+    setBusy(false);
+    setMade(r);
+    if (!r.error) load();
+  };
   return (
-    <Section title="Money" hint="Contract, invoiced, paid in and spent for this project. Job costing (cost, fee, profit) is in Finances.">
-      {rows.length === 0 && <Empty>No money recorded against this project yet.</Empty>}
-      {rows.map(([k, v]) => <Line key={k} label={moneyLabel(k)} value={moneyValue(k, v)} />)}
-    </Section>
+    <>
+      <Section title="Budget vs actual" hint="Spent = what went through your bank on this project, plus what the client paid suppliers directly.">
+        <Line label={p.budget_title || "Budget (BOQ)"} value={p.budget_cents ? cents(p.budget_cents) : "not set"} />
+        {p.variations_claimed_cents > 0 && <Line label="Variations claimed" value={cents(p.variations_claimed_cents)} />}
+        <Line label="Spent through you" value={cents(p.business_cost_cents)} />
+        <Line label="Paid by the client directly" value={cents(p.paid_directly_cents)} />
+        <Line label={<strong>Total spent{p.spent_pct != null ? ` · ${p.spent_pct}% of budget` : ""}</strong>} value={<strong>{cents(p.spent_cents)}</strong>} />
+        {p.budget_left_cents != null && <Line label="Budget left" value={cents(p.budget_left_cents)} />}
+      </Section>
+      <Section title="Account" hint={`Open book adds your fee (${p.fee_pct}%) to your cost; price only works from your invoices.`}>
+        <Line label="Cost through you" value={cents(p.business_cost_cents)} />
+        <Line label={`Fee (${p.fee_pct}%)`} value={cents(p.fee_cents)} />
+        <Line label="Received from the client" value={cents(p.received_cents)} />
+        <Line label={<strong>Open-book balance due</strong>} value={<strong>{cents(p.open_book_balance_cents)}</strong>} />
+        <Line label={`Invoiced (${(p.invoices || []).length})`} value={cents(p.invoiced_cents)} />
+        <Line label="Invoices paid" value={cents(p.invoices_paid_cents)} />
+        <Line label={<strong>Invoices owed</strong>} value={<strong>{cents(p.invoices_owed_cents)}</strong>} />
+        {p.to_invoice_cents != null && <Line label="Still to invoice" value={cents(p.to_invoice_cents)} />}
+        {p.profit_cents != null && <Line label="Your profit after overheads (never shown to the client)" value={cents(p.profit_cents)} />}
+      </Section>
+      <Section title="Cost by trade" hint={p.unallocated_trade_cents ? `${money(p.unallocated_trade_cents)} isn't allocated to a trade yet — tag those bank lines in Bank.` : undefined}>
+        {(p.trades || []).length === 0 && <Empty>No bank lines on this project yet.</Empty>}
+        {(p.trades || []).map((tr) => <Line key={tr.trade} label={tr.trade} value={cents(tr.cents)} />)}
+      </Section>
+      <Section title="Share with the client" hint="The client opens a link — no login. It always shows the books as they are now.">
+        <div className="vpj-form vpj-pad">
+          <Field label="What the client sees on this project" hint={VIEW_HINT[view]}>
+            <Select value={view} onChange={(e) => setView(e.target.value)}>
+              {Object.entries(VIEWS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </Select>
+          </Field>
+          <div className="vpj-go"><Button disabled={busy} onClick={share}>{busy ? "Making the link…" : "Make a client link"}</Button></div>
+          {made?.error && <p className="vpj-sub" role="alert">{made.error}</p>}
+          {made?.url && (
+            <p className="vpj-sub" role="status">
+              Send this to the client: <a href={made.url} target="_blank" rel="noreferrer">{made.url}</a>{" "}
+              <Button size="sm" variant="secondary" onClick={() => navigator.clipboard?.writeText(made.url)}>Copy</Button>
+            </p>
+          )}
+        </div>
+        {(t.shares || []).map((s) => (
+          <Line key={s.id}
+            label={`${VIEWS[s.view] || s.view} · made ${String(s.created_at || "").slice(0, 10)} · opened ${s.views || 0}×${s.active ? ` · until ${String(s.expires_at || "").slice(0, 10)}` : " · off"}`}
+            value={s.active ? <Button size="sm" variant="secondary" onClick={async () => { if (await revokeShare(tenantId, s.id)) load(); }}>Switch off</Button> : ""} />
+        ))}
+      </Section>
+    </>
   );
 }
 

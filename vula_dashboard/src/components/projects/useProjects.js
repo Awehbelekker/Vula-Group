@@ -21,6 +21,19 @@ export async function saveBoqTotal(tenantId, project, total) {
 }
 export const fetchFinancials = (tenantId, project) =>
   fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then((r) => r.json());
+/** The project tracker (budget vs actual, account, share links) — vula/commerce/project_tracker.py. */
+export const fetchTracker = (tenantId, project) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/tracker?project=${encodeURIComponent(project)}`).then((r) => r.json());
+/** A client link for the project in `view` ("price" | "open_book"); resolves to { url, expires_at } or { error }. */
+export async function createShare(tenantId, project, view) {
+  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/share`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, view }) }).catch(() => null);
+  if (!r) return { error: "Couldn't reach Vula — try again." };
+  const d = await r.json().catch(() => ({}));
+  return r.ok ? d : { error: d.detail || "The link couldn't be made." };
+}
+export const revokeShare = (tenantId, id) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/shares/${id}/revoke`, { method: "POST" }).then((r) => r.ok).catch(() => false);
 /** The money rows the screen shows: numbers, and strings that are already rand amounts. */
 export const moneyRows = (f) => Object.entries(f || {}).filter(([, v]) => typeof v === "number" || (typeof v === "string" && /^R/.test(v)));
 

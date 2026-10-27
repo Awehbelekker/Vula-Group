@@ -113,6 +113,7 @@ from vula.api.manufacturing import router as manufacturing_router
 from vula.api.draft import router as draft_router
 from vula.api.agent import router as agent_router
 from vula.api.links import router as links_router
+from vula.api.project_track import router as project_track_router
 from vula.api.master import router as master_router
 from vula.api.master_auth import require_auth
 from vula.api.menu_page import router as menu_page_router
@@ -1922,6 +1923,7 @@ async def _guard_check(method: str, path: str, auth_header: str, api_key: str = 
 app.include_router(tap_app_router)  # coach PWA API — own device+PIN token auth (see vula/tap/appapi.py)
 app.include_router(tap_router)  # no prefix — public /t/{code} tap + /v1/tap/pay; merchant routes are tenant-guarded
 app.include_router(links_router)  # no prefix — public /l/{code} redirect for broadcast click tracking
+app.include_router(project_track_router)  # no prefix — public /track/{token}: a project shared with its client
 app.include_router(email_public_router)  # no prefix — public /email/unsubscribe for campaigns
 app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} photo menu
 app.include_router(master_router, prefix="/v1/master")  # ALL endpoints require verified master JWT

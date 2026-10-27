@@ -3658,6 +3658,43 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
     return result
 
 
+class ProjectShareIn(BaseModel):
+    project: str
+    view: str                   # price | open_book
+    by: Optional[str] = None
+
+
+@router.get("/{tenant_id}/admin/projects/tracker")
+async def admin_project_tracker(tenant_id: str, project: str):
+    """One project's money picture (vula/commerce/project_tracker.py), with what each client view
+    would show and the project's share links."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    pos = await asyncio.to_thread(pt.position, tenant_id, project)
+    return {"position": pos, "client_views": {v: pt.client_view(pos, v) for v in pt.VIEWS},
+            "shares": await asyncio.to_thread(pt.list_shares, tenant_id, project)}
+
+
+@router.post("/{tenant_id}/admin/projects/share")
+async def admin_project_share(tenant_id: str, body: ProjectShareIn):
+    """A client link for the project in the chosen view (price | open_book)."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    try:
+        return await asyncio.to_thread(pt.create_share, tenant_id, body.project, body.view, body.by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/projects/shares/{share_id}/revoke")
+async def admin_project_share_revoke(tenant_id: str, share_id: str):
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    if not await asyncio.to_thread(pt.revoke_share, tenant_id, share_id):
+        raise HTTPException(status_code=404, detail="No such link.")
+    return {"revoked": True}
+
+
 @router.get("/{tenant_id}/admin/projects/costing")
 async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
     """Job costing from the bank: per project received / cost by trade / cost-plus fee target /

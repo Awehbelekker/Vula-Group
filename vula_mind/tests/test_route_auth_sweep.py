@@ -30,6 +30,8 @@ PUBLIC = {
     ("GET", "/email/unsubscribe"): "signed unsubscribe link in campaign emails",
     ("POST", "/email/unsubscribe"): "signed unsubscribe link in campaign emails",
     ("GET", "/l/{code}"): "broadcast click-tracking redirect",
+    ("GET", "/track/{token}"): "a project's account shared with its client — 192-bit random token, only its hash "
+                               "stored; expires and can be revoked; the view the business chose (no profit ever)",
     ("POST", "/v1/tap/app/enrol"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("POST", "/v1/tap/app/login"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("GET", "/v1/tap/app/me"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
