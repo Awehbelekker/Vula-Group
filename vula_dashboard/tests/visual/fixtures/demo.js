@@ -584,6 +584,36 @@ export const projectOverview = (id) => id === "pj-1"
   : { phases: [], documents: { Invoice: 1 }, documents_with_phases: { Invoice: 1 }, boq: null,
       parent: projectsList.find((x) => x.id === id)?.parent_id ? { id: "pj-1", name: projectsList[0].name } : null };
 export const projectBoq = { total_cents: 12000000, sections: [{ section: "Food", budget_cents: 8200000 }, { section: "Staff", budget_cents: 2600000 }, { section: "Hire", budget_cents: 1200000 }] };
+// The project tracker, online BOQ and QS view (vula/commerce/project_tracker.py, boq_online.py; #227/#229).
+// Same project as projectFinancials: R 120 000 budget, R 64 500.50 invoiced, R 40 000 paid. Cents.
+export const projectTracker = {
+  position: {
+    project: "Bay Events catering", budget_title: "Budget (BOQ)", budget_cents: 12000000, variations_claimed_cents: 0,
+    sections: projectBoq.sections,
+    trades: [{ trade: "Food", cents: 2950000 }, { trade: "Staff", cents: 840000 }, { trade: "Hire", cents: 485000 }],
+    unallocated_trade_cents: 0,
+    business_cost_cents: 4275000, paid_directly_cents: 650000, paid_directly_recorded_cents: 650000,
+    paid_directly_suppliers_cents: 0, paid_directly_slips_cents: 0, to_pay_directly_cents: 0,
+    direct_payments: [{ id: "dp-1", supplier: "Cape Marquees", description: "Marquee deposit", amount_cents: 650000, status: "paid", paid_on: "2026-10-09" }],
+    spent_cents: 4925000, spent_pct: 41, budget_left_cents: 7075000,
+    fee_pct: 10, fee_cents: 427500, open_book_total_cents: 4702500, received_cents: 4000000, open_book_balance_cents: 702500,
+    invoices: [{ number: "INV-0041" }, { number: "INV-0044" }, { number: "INV-0047" }],
+    invoiced_cents: 6450050, invoices_paid_cents: 4000000, invoices_owed_cents: 2450050, to_invoice_cents: 5549950,
+    profit_cents: 395000,
+  },
+  client_views: {},
+  shares: [{ id: "sh-1", view: "price", active: true, views: 3, created_at: "2026-10-20T09:12:00Z", expires_at: "2027-04-18T09:12:00Z" }],
+};
+export const projectQsView = { view: {
+  project: "Bay Events catering", baseline_locked: false, budget_cents: 12000000, variations_claimed_cents: 0, contract_cents: 12000000,
+  sections: projectBoq.sections, claims: { latest: null },
+  invoices: projectTracker.position.invoices, invoiced_cents: 6450050, invoices_paid_cents: 4000000, invoices_owed_cents: 2450050, to_invoice_cents: 5549950,
+  programme: null, documents: [{ name: "Bay-Events-quote.pdf", category: "quote", filed: "2026-10-02" }],
+} };
+export const boqOnline = { project: "Bay Events catering", total_cents: 0, lines: [] };
+export const boqLibrary = { trades: ["Preliminaries", "Food", "Staff", "Hire"], units: ["Item", "No", "m²", "hr"],
+  items: [{ key: "Staff — waiter (hr)", trade: "Staff", description: "Waiter", unit: "hr", rate: 95, rate_cents: 9500, kind: "own", source: "own rate" }] };
+
 export const projectFinancials = { project: "Bay Events catering", contract: 120000, invoiced: 64500.5, invoiced_paid: 40000, invoice_count: 3,
   quoted: 12000, quote_count: 1, paid_in: 40000, spent: 31275.25, labour_cents: 480000, net: 8724.75, remaining: 88724.75, outstanding: 24500.5,
   latest_claim: null, transactions: [] };

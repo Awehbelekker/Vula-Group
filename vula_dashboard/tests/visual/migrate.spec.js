@@ -354,7 +354,7 @@ test("projects: alias, phase and BOQ value send the same bodies; a phone goes ba
   await page.getByRole("button", { name: "Add phase" }).click();
   expect((await phase).postDataJSON()).toEqual({ phase: "Phase 3" });
   await page.getByRole("tab", { name: "BOQ" }).click();
-  await expect(page.getByText(/^BOQ · R.120.000\.00$/)).toBeVisible();
+  await expect(page.getByText(/^Project budget · R.120.000\.00$/)).toBeVisible();
   await page.getByLabel("Contract value (R)").fill("1 250 000");
   const boq = page.waitForRequest((r) => r.method() === "POST" && /\/boq$/.test(new URL(r.url()).pathname));
   await page.getByRole("button", { name: "Save value" }).click();
