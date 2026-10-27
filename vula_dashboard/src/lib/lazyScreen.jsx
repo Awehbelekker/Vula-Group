@@ -10,31 +10,17 @@
  *   const BrandKit = lazyScreen(() => import('./VulaSettings'), 'BrandKitSettings')   // a named export
  *   <ScreenSuspense>…</ScreenSuspense>    the placeholder while one loads
  *
- * A screen that can't be fetched — the app open across an update whose old files are gone, a
- * dropped connection — reloads the page once (a fresh app has the new files); if it still fails,
- * the error reaches ErrorBoundary as before, rather than looping.
+ * A screen that can't be fetched waits for the signal to come back if the phone is offline;
+ * online, it's an app left open across an update, so the page reloads once (a fresh app has the
+ * new files) — and if it still fails, the error reaches ErrorBoundary rather than looping
+ * (reloadOnce.js).
  */
 import { lazy, Suspense } from "react";
 import { Skeleton } from "../components/ui/index.jsx";
-
-const RELOADED = "vula.screen.reloaded";
-
-function reloadOnce(err) {
-  try {
-    const last = Number(sessionStorage.getItem(RELOADED) || 0);
-    if (Date.now() - last > 30000) {
-      sessionStorage.setItem(RELOADED, String(Date.now()));
-      window.location.reload();
-      return new Promise(() => {});          // the page is going; never render the failure
-    }
-  } catch { /* no sessionStorage: fall through to the error */ }
-  throw err;
-}
+import { loadScreen } from "./reloadOnce.js";
 
 export function lazyScreen(load, name = "default") {
-  return lazy(() => load()
-    .then((m) => (name === "default" ? m : { default: m[name] }))
-    .catch(reloadOnce));
+  return lazy(() => loadScreen(load).then((m) => (name === "default" ? m : { default: m[name] })));
 }
 
 /** The placeholder while a screen loads: the page's own skeleton lines, nothing that jumps. */

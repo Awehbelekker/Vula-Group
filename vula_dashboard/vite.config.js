@@ -13,6 +13,10 @@ export default defineConfig({
     // three pages: the dashboard (/), the coach app (/pay/, own manifest + service worker) and the customer receipt (/r/<token>)
     rollupOptions: { input: { main: "index.html", pay: "pay/index.html", receipt: "r/index.html" } },
   },
+  // Screens load when opened (src/lib/lazyScreen.jsx), so the dev server would only find the
+  // packages they use the first time one opens — then re-bundle and reload the page under you
+  // (and under the browser tests). Scan every source file up front instead.
+  optimizeDeps: { entries: ["index.html", "src/**/*.{js,jsx}"] },
   server: {
     port: 3000,
     proxy: {
