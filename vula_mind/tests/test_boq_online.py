@@ -198,7 +198,7 @@ def _as(scope):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["admin/boq-template.xlsx", "admin/boq-library", "admin/projects/boq-online.xlsx",
                                   "admin/projects/tracker", "admin/projects/share", "admin/projects/shares/s1/revoke",
-                                  "admin/projects/costing"])
+                                  "admin/projects/costing", "admin/projects/direct-payments"])
 async def test_a_projects_only_login_never_gets_the_excel_the_prices_or_the_full_tracker(path):
     a, b = _as(QS_LOGIN)
     with a, b:

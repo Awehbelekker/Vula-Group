@@ -159,3 +159,63 @@ def test_the_public_page_refuses_an_unknown_link():
     with patch.object(pt, "share_for_token", return_value=None):
         res = asyncio.run(project_page("not-a-real-token"))
     assert res.status_code == 404 and b"isn't valid" in res.body
+
+
+# ── what the client paid suppliers directly (migration 229) ──────────────────
+
+def _with_direct(db):
+    db.tables["vula_project_direct_payments"] = [
+        {"id": "d1", "tenant_id": TID, "project": "Sample Flat", "supplier": "Flush Bathrooms", "amount_cents": 5_000_00,
+         "paid_on": "2026-09-10", "status": "paid"},
+        {"id": "d2", "tenant_id": TID, "project": "Sample Flat", "supplier": "Edward (joinery)", "amount_cents": 4_500_00,
+         "description": "balance", "paid_on": None, "status": "to_pay"},
+        {"id": "d3", "tenant_id": TID, "project": "Sample Flat", "supplier": "Typo Co", "amount_cents": 9_999_00,
+         "status": "removed"},
+        {"id": "d4", "tenant_id": "other-tenant", "project": "Sample Flat", "supplier": "Not ours", "amount_cents": 1_00,
+         "status": "paid"}]
+    return db
+
+
+def test_the_clients_own_payments_count_in_the_spend_never_in_the_business_cost():
+    p = _position(_with_direct(_db()))
+    assert p["paid_directly_recorded_cents"] == 5_000_00 and p["to_pay_directly_cents"] == 4_500_00
+    assert p["paid_directly_cents"] == 8_000_00 + 2_000_00 + 5_000_00        # invoices + slips + recorded
+    assert p["business_cost_cents"] == 40_000_00 and p["fee_cents"] == 4_000_00   # unchanged
+    assert [d["supplier"] for d in p["direct_payments"]] == ["Flush Bathrooms", "Edward (joinery)"]
+    v = pt.client_view(p, "open_book")
+    page = pt.render({"name": "Example"}, v)
+    assert "Still to be paid by you directly" in page and "Edward (joinery) — balance" in page and "Typo Co" not in page
+    assert "direct_payments" not in pt.client_view(p, "price")
+
+
+def test_a_direct_payment_is_checked_saved_and_read_back():
+    import pytest
+    db = _db()
+    with (patch.object(pt, "_client", return_value=db),
+          patch("vula.commerce.service.canonical_project", return_value="Sample Flat"),
+          patch("vula.commerce.ledger._all_pages", side_effect=lambda make: make().execute().data)):
+        for bad in ({"supplier": "", "amount_cents": 100}, {"supplier": "X", "amount_cents": 0},
+                    {"supplier": "X", "amount_cents": 100, "status": "maybe"}):
+            with pytest.raises(ValueError):
+                pt.add_direct_payment(TID, "sample flat", bad["supplier"], bad["amount_cents"],
+                                      status=bad.get("status", "paid"))
+        row = pt.add_direct_payment(TID, "sample flat", "  Flush   Bathrooms ", 5_826_830, paid_on="2026-09-10")
+        assert (row["project"], row["supplier"], row["amount_cents"], row["status"]) == \
+            ("Sample Flat", "Flush Bathrooms", 5_826_830, "paid")
+        assert pt.remove_direct_payment(TID, row["id"])
+        assert pt.direct_payments(TID, "sample flat") == []
+
+
+def test_whatsapp_previews_then_records_a_client_payment():
+    from core.skills.commerce_admin import CommerceAdminSkill
+    skill = CommerceAdminSkill()
+    with (patch("vula.commerce.service.canonical_project", return_value="Sample Flat"),
+          patch("vula.commerce.service.registered_projects", return_value=[{"name": "Sample Flat"}]),
+          patch.object(pt, "add_direct_payment", return_value={"id": "d9", "project": "Sample Flat",
+                                                               "supplier": "Flush", "amount_cents": 5_826_830}) as add):
+        args = {"project": "sample flat", "supplier": "Flush", "amount": 58268.30}
+        pre = asyncio.run(skill._client_paid_direct(TID, args))
+        assert pre["preview"] and "R58,268.30" in pre["reply_verbatim"] and not add.called
+        done = asyncio.run(skill._client_paid_direct(TID, {**args, "confirm": True}, {"phone": "27820000000"}))
+    assert add.call_args.args[:4] == (TID, "Sample Flat", "Flush", 5_826_830)
+    assert "Recorded on *Sample Flat*" in done["reply_verbatim"]

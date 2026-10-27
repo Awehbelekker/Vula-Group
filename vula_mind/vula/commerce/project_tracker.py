@@ -14,9 +14,11 @@ sources the rest of Vula uses (no second set of books):
   cost by trade     the business's bank lines allocated to the project (job_costing.costing),
                     plus statement-proven claims someone paid from their own pocket
   paid directly     what the client paid suppliers themselves: direct-supplier invoices
-                    (job_costing.direct_costs) and slips answered "the client paid"
-                    (commerce_expenses.paid_with = 'client') — in the project's spend, never
-                    in the business's cost, fee or profit
+                    (job_costing.direct_costs), slips answered "the client paid"
+                    (commerce_expenses.paid_with = 'client'), and payments recorded as the
+                    client's own (vula_project_direct_payments, migration 229 — with what the
+                    client has still to pay) — in the project's spend, never in the business's
+                    cost, fee or profit
   fee               the project's terms (vula_project_terms: cost-plus, fee %) on the business's cost
   received          money in on the project (job_costing)
   invoiced / paid   the project's own invoices (commerce_invoices)
@@ -85,6 +87,59 @@ def _client_paid(tenant_id: str, key: str) -> Dict[str, Any]:
                  .eq("tenant_id", tenant_id).eq("paid_with", "client"))
     mine = [r for r in rows if _key(r.get("project")) == key]
     return {"cents": sum(int(r.get("amount_cents") or 0) for r in mine), "lines": len(mine)}
+
+
+_DIRECT = "vula_project_direct_payments"
+
+
+def direct_payments(tenant_id: str, key: str) -> List[Dict[str, Any]]:
+    """The client's own payments to suppliers and trades on the project (paid and still to pay)."""
+    rows = _rows(lambda: _client().table(_DIRECT)
+                 .select("id,project,supplier,description,amount_cents,paid_on,status,created_at")
+                 .eq("tenant_id", tenant_id).order("paid_on"))
+    return [{"id": r["id"], "supplier": r.get("supplier"), "description": r.get("description"),
+             "amount_cents": int(r.get("amount_cents") or 0), "paid_on": r.get("paid_on"), "status": r.get("status")}
+            for r in rows if _key(r.get("project")) == key and r.get("status") in ("paid", "to_pay")]
+
+
+def add_direct_payment(tenant_id: str, project: str, supplier: str, amount_cents: int, *,
+                       paid_on: Optional[str] = None, status: str = "paid", description: Optional[str] = None,
+                       by: Optional[str] = None) -> Dict[str, Any]:
+    """Record a payment the client made (or still has to make) to a supplier directly, read back."""
+    supplier = " ".join(str(supplier or "").split())[:120]
+    if not supplier:
+        raise ValueError("Say who the client paid.")
+    try:
+        amount_cents = int(amount_cents)
+    except (TypeError, ValueError):
+        raise ValueError("The amount isn't a number.")
+    if amount_cents <= 0:
+        raise ValueError("The amount must be more than R0.")
+    if status not in ("paid", "to_pay"):
+        raise ValueError("status must be 'paid' or 'to_pay'")
+    from vula.commerce.service import canonical_project
+    name = canonical_project(tenant_id, project) or project
+    db = _client()
+    res = db.table(_DIRECT).insert({
+        "tenant_id": tenant_id, "project": name, "supplier": supplier,
+        "description": (" ".join(str(description or "").split())[:200] or None), "amount_cents": amount_cents,
+        "paid_on": (str(paid_on)[:10] if paid_on else None), "status": status, "created_by": by}).execute()
+    new_id = ((getattr(res, "data", None) or [{}])[0] or {}).get("id")
+    back = [r for r in direct_payments(tenant_id, _key(name))
+            if (new_id and r["id"] == new_id) or (not new_id and r["supplier"] == supplier and r["amount_cents"] == amount_cents)]
+    if not back:
+        raise RuntimeError("the payment was not saved")
+    return {**back[-1], "project": name}
+
+
+def remove_direct_payment(tenant_id: str, payment_id: str) -> bool:
+    """Take a wrong entry out (kept, marked 'removed'), read back."""
+    db = _client()
+    db.table(_DIRECT).update({"status": "removed", "updated_at": datetime.now(timezone.utc).isoformat()}) \
+        .eq("tenant_id", tenant_id).eq("id", payment_id).execute()
+    rows = (db.table(_DIRECT).select("status").eq("tenant_id", tenant_id).eq("id", payment_id)
+            .limit(1).execute().data or [])
+    return bool(rows and rows[0].get("status") == "removed")
 
 
 def _invoices(tenant_id: str, key: str) -> List[Dict[str, Any]]:
@@ -173,6 +228,9 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
     variations = (costed or {}).get("variations") or {}
     direct = int((job_costing.direct_costs(tenant_id).get(key) or {}).get("cents") or 0)
     by_client = _client_paid(tenant_id, key)
+    recorded = direct_payments(tenant_id, key)
+    recorded_paid = sum(r["amount_cents"] for r in recorded if r["status"] == "paid")
+    to_pay_directly = sum(r["amount_cents"] for r in recorded if r["status"] == "to_pay")
     invoices = _invoices(tenant_id, key)
     fee_pct = _fee_pct(tenant_id, name, costed)
     fee = int(round(business_cost * fee_pct / 100))
@@ -181,7 +239,7 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
     contract = budget + claimed
     invoiced = sum(i["total_cents"] for i in invoices)
     paid = sum(i["paid_cents"] for i in invoices)
-    paid_directly = direct + by_client["cents"]
+    paid_directly = direct + by_client["cents"] + recorded_paid
     spent = business_cost + paid_directly
     return {
         "project": name,
@@ -197,6 +255,8 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
         "business_cost_cents": business_cost,
         "paid_directly_cents": paid_directly,
         "paid_directly_suppliers_cents": direct, "paid_directly_slips_cents": by_client["cents"],
+        "paid_directly_recorded_cents": recorded_paid, "direct_payments": recorded,
+        "to_pay_directly_cents": to_pay_directly,
         "spent_cents": spent,
         "budget_left_cents": budget - spent if budget else None,
         "spent_pct": round(100 * spent / budget) if budget else None,
@@ -225,6 +285,7 @@ _PRICE_FIELDS = ("project", "budget_title", "sections", "budget_cents", "variati
 _QS_FIELDS = _PRICE_FIELDS + ("variations_extra_cost_cents", "baseline_locked", "claims", "programme",
                                "documents")
 _OPEN_BOOK_FIELDS = _PRICE_FIELDS + ("trades", "business_cost_cents", "paid_directly_cents", "spent_cents",
+                                     "direct_payments", "to_pay_directly_cents",
                                      "budget_left_cents", "fee_pct", "fee_cents", "open_book_total_cents",
                                      "received_cents", "open_book_balance_cents")
 
@@ -325,7 +386,8 @@ def summary_text(pos: Dict[str, Any], view: str) -> str:
                      + (f" (incl. variations {_r(v['variations_claimed_cents'])})" if v.get("variations_claimed_cents") else ""))
     if view == "open_book":
         lines += [f"Your cost to date: {_r(v['business_cost_cents'])}",
-                  f"Paid by the client directly to suppliers: {_r(v['paid_directly_cents'])}",
+                  f"Paid by the client directly to suppliers: {_r(v['paid_directly_cents'])}"
+                  + (f" (still to pay directly: {_r(v['to_pay_directly_cents'])})" if v.get("to_pay_directly_cents") else ""),
                   f"Fee ({v['fee_pct']:g}%): {_r(v['fee_cents'])}",
                   f"Paid to you so far: {_r(v['received_cents'])}",
                   f"*Balance due: {_r(v['open_book_balance_cents'])}*"]
@@ -397,13 +459,20 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                 row("Paid to us so far", -(v.get("received_cents") or 0)),
                 row("Balance due", v.get("open_book_balance_cents"), True)]
         parts.append(table("Account", acct))
-        if v.get("paid_directly_cents"):
+        if v.get("paid_directly_cents") or v.get("to_pay_directly_cents"):
             spent = [row("Through us", v.get("business_cost_cents")),
                      row("Paid by you directly to suppliers", v.get("paid_directly_cents")),
                      row("Total spent on the project", v.get("spent_cents"), True)]
             if v.get("budget_left_cents") is not None:
                 spent.append(row("Budget left", v["budget_left_cents"]))
             parts.append(table("Against the budget", spent))
+            mine = v.get("direct_payments") or []
+            for status, title in (("paid", "Paid by you directly"), ("to_pay", "Still to be paid by you directly")):
+                rows_ = [row(f"{d['supplier']}{' — ' + d['description'] if d.get('description') else ''}", d["amount_cents"])
+                         for d in mine if d["status"] == status]
+                if rows_:
+                    rows_.append(row("Total", sum(d["amount_cents"] for d in mine if d["status"] == status), True))
+                    parts.append(table(title, rows_))
     else:
         acct = [row("Invoiced to date", v.get("invoiced_cents")), row("Paid", v.get("invoices_paid_cents")),
                 row("Owed now", v.get("invoices_owed_cents"), True)]
