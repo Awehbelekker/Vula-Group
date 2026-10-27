@@ -1606,9 +1606,10 @@ async def admin_update_costs(tenant_id: str, body: dict):
 @router.get("/{tenant_id}/admin/documents/reread")
 async def admin_reread_status(tenant_id: str):
     """How many filed PDFs a re-read could fill in, and the last run's progress."""
+    import asyncio
     from vula.commerce import reread
     try:
-        n = len(reread.candidates(tenant_id))
+        n = len(await asyncio.to_thread(reread.candidates, tenant_id))
     except Exception as exc:
         log.debug("reread candidates failed: %s", exc)
         n = 0
@@ -1633,24 +1634,27 @@ async def admin_reread_documents(tenant_id: str, request: Request):
 
 @router.get("/{tenant_id}/admin/documents/sort-projects")
 async def admin_sort_projects_preview(tenant_id: str):
-    """What "which project?" documents Vula can place itself, and why — nothing written."""
+    """What "which project?" documents Vula can place itself, and why — nothing written. Off the
+    event loop: it reads every waiting document (2026-10-27, 357 at DIGG froze the server)."""
+    import asyncio
     from vula.api.tenants import uses_projects
     from vula.integrations.project_resolver import sort_pending
     if not uses_projects(tenant_id):
         return {"waiting": 0, "would_file": 0, "filed": 0, "still_ask": 0, "by_project": {},
                 "by_reason": {}, "sample": []}
-    return sort_pending(tenant_id, apply=False)
+    return await asyncio.to_thread(sort_pending, tenant_id, apply=False)
 
 
 @router.post("/{tenant_id}/admin/documents/sort-projects")
 async def admin_sort_projects_apply(tenant_id: str, request: Request):
     """File the waiting documents Vula can place confidently (named in the document, paid by a
     payment on a project, or the supplier's usual project). Owner/manager."""
+    import asyncio
     from vula.integrations.project_resolver import sort_pending
     if not await _may_apply_stock(request, tenant_id):
         raise HTTPException(status_code=403, detail="Only the owner or a manager can do this.")
     include = request.query_params.get("include_suggested") in ("1", "true", "yes")
-    return sort_pending(tenant_id, apply=True, include_suggested=include)
+    return await asyncio.to_thread(sort_pending, tenant_id, apply=True, include_suggested=include)
 
 
 @router.get("/{tenant_id}/admin/documents/learn")

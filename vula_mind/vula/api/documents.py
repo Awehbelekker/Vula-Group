@@ -10,6 +10,7 @@ Filed records are written by the WhatsApp ingest path (vula/integrations/doc_fil
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -79,7 +80,7 @@ async def documents_health(tenant_id: str) -> dict:
     that aren't on the register — with samples to act on (vula/commerce/doc_quality.py)."""
     from vula.commerce.doc_quality import health
     try:
-        return {"tenant_id": tenant_id, **health(tenant_id)}
+        return {"tenant_id": tenant_id, **(await asyncio.to_thread(health, tenant_id))}
     except Exception as exc:
         log.warning("documents health failed: %s", exc)
         return {"tenant_id": tenant_id, "error": "Couldn't read the documents right now."}
@@ -91,6 +92,10 @@ async def projects(tenant_id: str) -> dict:
     ClickUp list names like "Team Space / Get Started with ClickUp" were offered as projects and
     documents got filed under them), then ClickUp lists and field-ops projects, each mapped to
     its registered name where there is one."""
+    return await asyncio.to_thread(_project_options, tenant_id)
+
+
+def _project_options(tenant_id: str) -> dict:
     out: list[dict] = []
     try:
         from vula.commerce.service import canonical_project, registered_projects

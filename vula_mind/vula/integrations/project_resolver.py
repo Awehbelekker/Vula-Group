@@ -176,9 +176,10 @@ def _by_supplier(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, A
     return {"project_key": top, "hits": hits, "of": n, "supplier": party}
 
 
-def resolve(tenant_id: str, fields: Optional[Dict[str, Any]], text: str = "") -> Optional[Dict[str, Any]]:
+def resolve(tenant_id: str, fields: Optional[Dict[str, Any]], text: str = "",
+            projects: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     fields = fields or {}
-    projects = _projects(tenant_id)
+    projects = _projects(tenant_id) if projects is None else projects
     if not projects:
         return None
     by_key = {_key(p["name"]): p["name"] for p in projects}
@@ -273,11 +274,16 @@ def sort_pending(tenant_id: str, apply: bool = False, limit: int = 1000,
                 .eq("tenant_id", tenant_id).eq("status", "pending_project").order("created_at"))
     rows = _all_pages(make)[:limit]
     _MONTH_CACHE.clear()
+    # The project list once for the whole run, not once per document. 2026-10-27: DIGG's 357
+    # waiting documents each re-read the register, the project names and the business's own
+    # names — thousands of calls on every Documents page load, and the server stopped answering.
+    projects = _projects(tenant_id)
     plan, by_project, by_reason = [], Counter(), Counter()
     suggested: Counter = Counter()
     left = 0
     for r in rows:
-        res = resolve(tenant_id, r.get("fields") or {}, f"{r.get('filename') or ''} {r.get('summary') or ''}")
+        res = resolve(tenant_id, r.get("fields") or {}, f"{r.get('filename') or ''} {r.get('summary') or ''}",
+                      projects=projects)
         if res and res.get("kind") == "month":
             suggested[res["project"]] += 1
         if res and res.get("project") and (res["confidence"] >= AUTO_FILE
