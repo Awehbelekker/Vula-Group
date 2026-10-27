@@ -77,6 +77,14 @@ test("an offline phone says so, and stops saying so when it's back", async ({ pa
   await expect(banner).toHaveCount(0);
 });
 
+test("an iPhone opens the app on the business's own launch screen, light or dark", async ({ page }) => {
+  await open(page);
+  const links = page.locator('link[rel="apple-touch-startup-image"]');
+  await expect(links).toHaveCount(24);                                  // 12 iPhones × light and dark
+  const pro = await page.locator('link[rel="apple-touch-startup-image"][media*="device-width: 393px"][media*="dark"]').getAttribute("href");
+  expect(pro).toMatch(/\/v1\/commerce\/demo-shop\/app-splash\/1179x2556\.png\?dark=true$/);
+});
+
 test("the manifest installs Vula and lets a tablet turn sideways", async ({ request }) => {
   const m = await (await request.get("/manifest.webmanifest")).json();
   expect(m.display).toBe("standalone");

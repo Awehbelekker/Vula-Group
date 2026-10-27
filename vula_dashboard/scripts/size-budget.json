@@ -1,0 +1,5 @@
+{
+  "_note": "KB gzipped, checked by scripts/check-size.mjs after the build. Set 27 Oct 2026 at about 5% over: first_load 574 KB, everything 867 KB.",
+  "first_load": 600,
+  "everything": 920
+}

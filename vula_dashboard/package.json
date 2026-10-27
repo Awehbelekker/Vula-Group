@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "check:puck-sync": "node scripts/check-puck-sync.mjs",
     "check:tokens": "node scripts/check-design-tokens.mjs",
+    "check:size": "node scripts/check-size.mjs",
     "test:unit": "node --experimental-detect-module --test tests/unit/brand.test.mjs tests/unit/money.test.mjs tests/unit/html.test.mjs tests/unit/dates.test.mjs tests/unit/sw.test.mjs tests/unit/precache.test.mjs"
   },
   "dependencies": {
