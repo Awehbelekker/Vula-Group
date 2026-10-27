@@ -13,6 +13,7 @@ from __future__ import annotations
 from vula.commerce import powered_by
 from vula.commerce.brand_sizes import logo_px as _logo_px
 import json
+import re
 import logging
 from typing import Any, Optional
 
@@ -509,6 +510,44 @@ def _group_sections(line_items: list) -> list:
     return sections
 
 
+def is_tax_invoice(doc_type: str, branding: dict) -> bool:
+    """Only a VAT vendor may issue a "Tax Invoice", and SARS (VAT Act s20(4)) requires its VAT
+    number on it. 2026-10-27: a tenant marked VAT-registered with no number saved (Off the Hook)
+    printed "Tax Invoice" with no VAT number at all; it now prints "Invoice" until the number is
+    in, and vula/readiness.py tells the operator."""
+    return (doc_type == "invoice" and branding.get("vat_registered") is not False
+            and bool((branding.get("vat") or "").strip()))
+
+
+def _digits(s: str) -> str:
+    return re.sub(r"\D", "", s or "")
+
+
+def saved_client_details(tenant_id: str, invoice: dict) -> dict:
+    """The customer's VAT number and address from the saved clients directory
+    (commerce_invoice_clients), matched on email, then phone, then name. Invoices have no VAT
+    column of their own, so before 27 Oct a VAT-registered customer's number never reached the
+    tax invoice (s20(4) needs it on a full tax invoice). {} when nothing matches or no DB."""
+    try:
+        from vula.commerce import service
+        rows = (service._client().table("commerce_invoice_clients")
+                .select("name,email,phone,address,vat_number").eq("tenant_id", tenant_id)
+                .execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        log.debug("saved client lookup skipped: %s", exc)
+        return {}
+    email = (invoice.get("customer_email") or "").strip().lower()
+    phone = _digits(invoice.get("customer_phone"))[-9:]
+    name = " ".join((invoice.get("customer_name") or "").lower().split())
+    for test in (lambda r: email and (r.get("email") or "").strip().lower() == email,
+                 lambda r: len(phone) == 9 and _digits(r.get("phone"))[-9:] == phone,
+                 lambda r: name and " ".join((r.get("name") or "").lower().split()) == name):
+        hit = next((r for r in rows if test(r)), None)
+        if hit:
+            return {"vat": (hit.get("vat_number") or "").strip(), "address": (hit.get("address") or "").strip()}
+    return {}
+
+
 def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> bytes:
     """Render an invoice / quote dict as PDF bytes.
 
@@ -577,6 +616,13 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         bill_address = invoice.get("customer_address", "")
         bill_email = invoice.get("customer_email", "")
         bill_phone = invoice.get("customer_phone", "")
+    customer_vat = "" if inbound else (invoice.get("customer_vat") or "")
+    # tax invoices and credit notes (s21(3) asks for the same recipient details)
+    if (not inbound and is_tax_invoice("invoice" if doc_type == "credit_note" else doc_type, branding)
+            and not (customer_vat and bill_address)):
+        saved = saved_client_details(tenant_id, invoice)
+        customer_vat = customer_vat or saved.get("vat", "")
+        bill_address = bill_address or saved.get("address", "")
 
     ctx: dict[str, Any] = {
         # Tenant branding (outbound) / supplier identity (inbound) — see comment above
@@ -592,7 +638,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "payment_info": branding.get("payment_info", ""),
         "pay_url": invoice.get("pay_url", ""),
         # Document meta — only a VAT-registered supplier may issue a "Tax Invoice".
-        "doc_label": ("Invoice" if doc_type == "invoice" and branding.get("vat_registered") is False
+        "doc_label": ("Invoice" if doc_type == "invoice" and not is_tax_invoice(doc_type, branding)
                       else _DOC_LABELS.get(doc_type, "Document")),
         "invoice_number": invoice.get("invoice_number", ""),
         "status": invoice.get("status", "draft"),
@@ -604,7 +650,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "customer_email": bill_email,
         "customer_phone": bill_phone,
         "customer_address": bill_address,
-        "customer_vat": "" if inbound else (invoice.get("customer_vat") or ""),
+        "customer_vat": customer_vat,
         # Financials — always integer cents, never floats in storage
         "line_items": line_items,
         "sections": _group_sections(line_items),
@@ -619,7 +665,9 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "cert_style": choice in _CERT_STYLE_TEMPLATES,
         # Branding depth (migration 103) — all default to today's fixed behavior when unset.
         "footer_text": branding.get("footer_text") or "",
-        "show_vat_breakdown": branding.get("show_vat_breakdown", True),
+        # a tax invoice must show the VAT charged (s20(4)), whatever the display setting says
+        "show_vat_breakdown": (branding.get("show_vat_breakdown", True)
+                               or (not inbound and is_tax_invoice(doc_type, branding))),
         "show_company_reg": branding.get("show_company_reg", True),
         "logo_size": branding.get("logo_size") or "md",
         # one size setting for every surface (vula/commerce/brand_sizes.py)
