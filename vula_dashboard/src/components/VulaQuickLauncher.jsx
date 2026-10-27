@@ -4,12 +4,13 @@
  * Access-aware: only shows actions the member may use.
  */
 import { useState, useEffect } from "react";
-import VulaAssistant from "./VulaAssistant";
-import VulaSmartScanner from "./VulaSmartScanner";
-import VulaFollowups from "./VulaFollowups";
-import VulaFinances from "./VulaFinances";
-import VulaInvoices from "./VulaInvoices";
+const VulaAssistant = lazyScreen(() => import("./VulaAssistant"));
+const VulaSmartScanner = lazyScreen(() => import("./VulaSmartScanner"));
+const VulaFollowups = lazyScreen(() => import("./VulaFollowups"));
+const VulaFinances = lazyScreen(() => import("./VulaFinances"));
+const VulaInvoices = lazyScreen(() => import("./VulaInvoices"));
 import { Sheet } from "./ui/index.jsx";
+import { lazyScreen, ScreenSuspense } from "../lib/lazyScreen.jsx";
 
 const C = { green: "var(--accent)", surface: "var(--surface)", border: "var(--border)", text: "var(--text)" };
 
@@ -48,7 +49,7 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true, 
       {v2 && (
         <Sheet open={!!ActiveComp} title={ACTIONS.find((a) => a.key === active)?.label || ""} onClose={() => setActive(null)}>
           {/* the scanner and the assistant have redesigned versions that sit in a sheet; the rest render as before */}
-          {ActiveComp && (active === "scanner" || active === "assistant" ? <ActiveComp tenantId={tenantId} v2 inSheet /> : <ActiveComp tenantId={tenantId} />)}
+          {ActiveComp && <ScreenSuspense>{active === "scanner" || active === "assistant" ? <ActiveComp tenantId={tenantId} v2 inSheet /> : <ActiveComp tenantId={tenantId} />}</ScreenSuspense>}
         </Sheet>
       )}
 
@@ -60,7 +61,7 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true, 
               <span style={{ fontWeight: 700, color: C.text, fontSize: 14 }}>{ACTIONS.find((a) => a.key === active)?.label}</span>
               <button onClick={() => setActive(null)} style={{ border: "none", background: "none", fontSize: 22, color: "var(--muted)", cursor: "pointer", lineHeight: 1 }}>×</button>
             </div>
-            <div style={{ flex: 1, overflowY: "auto" }}><ActiveComp tenantId={tenantId} /></div>
+            <div style={{ flex: 1, overflowY: "auto" }}><ScreenSuspense><ActiveComp tenantId={tenantId} /></ScreenSuspense></div>
           </div>
         </div>
       )}

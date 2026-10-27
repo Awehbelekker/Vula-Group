@@ -7,37 +7,38 @@ const VulaInvoiceApproval = lazy(() => import("./components/VulaInvoiceApproval"
 const VulaUiKit = lazy(() => import("./components/VulaUiKit")); // #/ui-kit, master only (UX redesign)
 const ShareSheet = lazy(() => import("./components/share/ShareSheet")); // #/share, from the phone's Share sheet
 import { useAuthStore } from "./store/auth";
-import VulaDashboard from "./components/VulaDashboard";
-import VulaQS from "./components/VulaQS";
-import VulaQSPro from "./components/VulaQSPro";
-import VulaTakeoff from "./components/VulaTakeoff";
-import VulaOnboarding from "./components/VulaOnboarding";
-import VulaAdmin from "./components/VulaAdmin";
-import VulaDocuments from "./components/VulaDocuments";
-import VulaProjects from "./components/VulaProjects";
-import VulaQSRates from "./components/VulaQSRates";
-import VulaContacts from "./components/VulaContacts";
-import VulaFinances from "./components/VulaFinances";
-import VulaFollowups from "./components/VulaFollowups";
-import VulaTeam from "./components/VulaTeam";
-import VulaProjectWorkspace from "./components/VulaProjectWorkspace";
+import { lazyScreen, ScreenSuspense } from "./lib/lazyScreen.jsx";
+const VulaDashboard = lazyScreen(() => import("./components/VulaDashboard"));
+const VulaQS = lazyScreen(() => import("./components/VulaQS"));
+const VulaQSPro = lazyScreen(() => import("./components/VulaQSPro"));
+const VulaTakeoff = lazyScreen(() => import("./components/VulaTakeoff"));
+const VulaOnboarding = lazyScreen(() => import("./components/VulaOnboarding"));
+const VulaAdmin = lazyScreen(() => import("./components/VulaAdmin"));
+const VulaDocuments = lazyScreen(() => import("./components/VulaDocuments"));
+const VulaProjects = lazyScreen(() => import("./components/VulaProjects"));
+const VulaQSRates = lazyScreen(() => import("./components/VulaQSRates"));
+const VulaContacts = lazyScreen(() => import("./components/VulaContacts"));
+const VulaFinances = lazyScreen(() => import("./components/VulaFinances"));
+const VulaFollowups = lazyScreen(() => import("./components/VulaFollowups"));
+const VulaTeam = lazyScreen(() => import("./components/VulaTeam"));
+const VulaProjectWorkspace = lazyScreen(() => import("./components/VulaProjectWorkspace"));
 import VulaQuickLauncher from "./components/VulaQuickLauncher";
-import VulaReports from "./components/VulaReports";
-import VulaPayments from "./components/VulaPayments";
-import VulaMasterPanel from "./components/VulaMasterPanel";
+const VulaReports = lazyScreen(() => import("./components/VulaReports"));
+const VulaPayments = lazyScreen(() => import("./components/VulaPayments"));
+const VulaMasterPanel = lazyScreen(() => import("./components/VulaMasterPanel"));
 import { VULA_API, authFetch } from "./lib/authFetch";
 import { Button, promptDialog } from "./components/ui/index.jsx";
 import { ArrowLeft, Eye } from "lucide-react";
 import VulaLogo from "./components/brand/VulaLogo.jsx";
-import VulaSubscriptions from "./components/VulaSubscriptions";
-import VulaTraining from "./components/VulaTraining";
-import VulaFieldOps from "./components/VulaFieldOps";
-import VulaDraft from "./components/VulaDraft";
-import VulaAgent from "./components/VulaAgent";
-import VulaInvoices from "./components/VulaInvoices";
-import VulaBudget from "./components/VulaBudget";
+const VulaSubscriptions = lazyScreen(() => import("./components/VulaSubscriptions"));
+const VulaTraining = lazyScreen(() => import("./components/VulaTraining"));
+const VulaFieldOps = lazyScreen(() => import("./components/VulaFieldOps"));
+const VulaDraft = lazyScreen(() => import("./components/VulaDraft"));
+const VulaAgent = lazyScreen(() => import("./components/VulaAgent"));
+const VulaInvoices = lazyScreen(() => import("./components/VulaInvoices"));
+const VulaBudget = lazyScreen(() => import("./components/VulaBudget"));
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
-import VulaSmartScanner from "./components/VulaSmartScanner";
+const VulaSmartScanner = lazyScreen(() => import("./components/VulaSmartScanner"));
 import VulaShell from "./components/VulaShell";
 import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible, applyLabels, flattenNav, withV2Pages, withV2Moves } from "./navConfig";
 import { applyBrand, applyThemeMode } from "./theme/tokens";
@@ -491,6 +492,7 @@ export default function App() {
         ) : null}
       >
         <div className="v1-page" style={{ padding: "4px 0 24px" }}>
+          <ScreenSuspense>
           <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} v2={v2}
             onOpenTenant={async (tid) => {
               // An optional support reason for the audit trail (vula_admin_audit + the tenant's
@@ -512,6 +514,7 @@ export default function App() {
               setActiveTab("merchant");
             }}
             {...(activeTab === "master" ? { activeTab: masterSubTab, onTabChange: setMasterSubTab } : {})} />
+          </ScreenSuspense>
         </div>
       </VulaShell>
       <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} v2={v2} />
