@@ -1712,8 +1712,8 @@ async def lifespan(app: FastAPI):
             await __a.to_thread(check_payment_setup)
         except Exception as exc:
             log.debug("schema check task failed: %s", exc)
-        # Gap audit 1.1: what switched-on features still need, to the operator once (the
-        # scheduler process only, so two workers don't both send it).
+        # Gap audit 1.1: what switched-on features still need, to the operator when that list
+        # changes (the scheduler process only, so two workers don't both send it).
         if settings.run_scheduled_jobs:
             try:
                 from core.mass_mind.health import should_alert
@@ -1722,7 +1722,7 @@ async def lifespan(app: FastAPI):
                 line = readiness.summary(await __a.to_thread(readiness.report))
                 if line:
                     log.warning("%s", line)
-                    if should_alert("readiness"):
+                    if readiness.is_new(line) and should_alert("readiness"):
                         await alert_operator(line)
             except Exception as exc:
                 log.info("readiness check skipped: %s", type(exc).__name__)

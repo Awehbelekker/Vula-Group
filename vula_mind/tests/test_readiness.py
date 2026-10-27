@@ -105,3 +105,10 @@ def test_ready_needs_the_api_key():
     import vula.api.server as server
     src = inspect.getsource(server)
     assert '@app.get("/ready", dependencies=[Depends(require_auth)])' in src
+
+
+def test_same_gaps_alert_once_across_redeploys(tmp_path, monkeypatch):
+    monkeypatch.setattr(readiness.settings, "data_dir", tmp_path)
+    assert readiness.is_new("🔧 Vula setup: 1 thing(s)")
+    assert not readiness.is_new("🔧 Vula setup: 1 thing(s)")
+    assert readiness.is_new("🔧 Vula setup: 2 thing(s)")

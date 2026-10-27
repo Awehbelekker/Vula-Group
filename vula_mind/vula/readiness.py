@@ -136,3 +136,19 @@ def summary(rep: dict) -> Optional[str]:
         return None
     shown = "; ".join(parts[:4]) + (f"; and {len(parts) - 4} more" if len(parts) > 4 else "")
     return f"🔧 Vula setup: {len(parts)} thing(s) still to do. {shown}. Full list: GET /ready"
+
+
+def is_new(line: str) -> bool:
+    """True when `line` differs from the last summary sent (kept on the data volume, so a
+    redeploy with the same gaps doesn't alert again). Records it."""
+    import hashlib
+    path = settings.data_dir / "readiness_last.txt"
+    digest = hashlib.sha256(line.encode()).hexdigest()
+    try:
+        if path.exists() and path.read_text().strip() == digest:
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(digest)
+    except OSError as exc:
+        logger.info("readiness: couldn't record the last summary (%s)", type(exc).__name__)
+    return True
