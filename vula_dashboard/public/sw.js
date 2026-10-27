@@ -9,27 +9,52 @@
    - Share into Vula: the phone's Share sheet posts to /share-target (see receiveShare).
 
    On sign-out the app deletes "vula-share" (src/lib/deviceData.js). The shell cache only holds
-   the app's own files, never anyone's data. */
+   the app's own files, never anyone's data.
+
+   Every screen opens offline (2026-10-27, PWA pass 5): on install the worker keeps the app shell
+   and every file the dashboard can load (precache.json, written by the build — precache.js),
+   not only the screens opened since the last update. The previous build's files stay too, until
+   the next one: an app that was already open keeps running that build until it's reloaded. */
 const VERSION = new URL(self.location.href).searchParams.get("v") || "dev";
 const SHELL = `vula-shell-${VERSION}`;
 const OFFLINE_URL = "/offline.html";
 const PRECACHE = [OFFLINE_URL, "/icon.svg", "/icon-192.png"];
 
+// This build's file list (precache.json); none in development, or when it can't be fetched.
+async function buildFiles() {
+  try {
+    const res = await fetch(`/precache.json?v=${encodeURIComponent(VERSION)}`, { cache: "no-store" });
+    const list = res.ok ? await res.json() : null;
+    return Array.isArray(list?.files) ? list.files.filter((f) => typeof f === "string" && f.startsWith("/assets/")) : [];
+  } catch { return []; }
+}
+
+// Each file on its own: one that fails is fetched the first time it's used instead, as before.
+async function keepAll(cache, urls) {
+  await Promise.all(urls.map((u) => fetch(new Request(u, { cache: "reload" }))
+    .then((res) => (res.ok ? cache.put(u, res) : null)).catch(() => null)));
+}
+
 self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(SHELL)
-      .then((c) => c.addAll(PRECACHE))
-      .catch(() => { /* offline page is a nicety: never block the update on it */ })
-      .then(() => self.skipWaiting())
-  );
+  e.waitUntil((async () => {
+    try {
+      const cache = await caches.open(SHELL);
+      await keepAll(cache, [...PRECACHE, "/", ...(await buildFiles())]);
+    } catch { /* never block the update on it */ }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) =>
-      // Old app shells go; the share cache stays (it holds what the person just shared).
-      Promise.all(keys.filter((k) => k !== SHELL && k !== SHARE_CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys().then((keys) => {
+      // The share cache stays (it holds what the person just shared), and so does the previous
+      // build's shell (an open app may still be running it); older shells go. Keys come back
+      // oldest first.
+      const shells = keys.filter((k) => k.startsWith("vula-shell-") && k !== SHELL);
+      const previous = shells[shells.length - 1];
+      return Promise.all(keys.filter((k) => k !== SHELL && k !== SHARE_CACHE && k !== previous).map((k) => caches.delete(k)));
+    }).then(() => self.clients.claim())
   );
 });
 
@@ -68,7 +93,9 @@ async function page(req, url) {
     if (res.ok && isShell(url)) keep("/", res.clone());              // the app shell for offline
     return res;
   } catch {
-    return (isShell(url) && (await caches.match("/"))) || (await caches.match(OFFLINE_URL))
+    // This build's shell first: the previous build's is kept too, and caches.match() looks there first.
+    const shell = isShell(url) && ((await (await caches.open(SHELL)).match("/")) || (await caches.match("/")));
+    return shell || (await caches.match(OFFLINE_URL))
       || new Response("You're offline.", { status: 503, headers: { "Content-Type": "text/plain" } });
   }
 }

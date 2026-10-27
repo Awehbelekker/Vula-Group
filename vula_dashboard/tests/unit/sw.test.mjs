@@ -16,7 +16,13 @@ class Basic extends Response {
   clone() { return Object.setPrototypeOf(super.clone(), Basic.prototype); }
 }
 
-function worker({ version = "b2", windows = [] } = {}) {
+// A request the worker builds itself (new Request("/assets/…", {cache: "reload"})).
+class Req {
+  constructor(url, opts = {}) { this.url = new URL(url, ORIGIN).href; this.cache = opts.cache; }
+}
+
+// precache: this build's file list (precache.json); fail: paths the network answers with a 500.
+function worker({ version = "b2", windows = [], precache = null, fail = [] } = {}) {
   const on = {};
   const shown = [], badges = [];
   const net = { online: true, calls: [] };
@@ -26,7 +32,10 @@ function worker({ version = "b2", windows = [] } = {}) {
     const url = keyOf(req);
     net.calls.push(new URL(url).pathname);
     if (!net.online) throw new TypeError("Failed to fetch");
-    return new Basic(`net:${new URL(url).pathname}`, { status: 200 });
+    const path = new URL(url).pathname;
+    if (path === "/precache.json") return precache ? new Basic(JSON.stringify(precache), { status: 200 }) : new Basic("not here", { status: 404 });
+    if (fail.includes(path)) return new Basic("server error", { status: 500 });
+    return new Basic(`net:${path}`, { status: 200 });
   };
   const cache = (m) => ({
     put: async (r, res) => { m.set(keyOf(r), await res.text()); },
@@ -50,7 +59,7 @@ function worker({ version = "b2", windows = [] } = {}) {
     registration: { showNotification: async (title, opts) => { shown.push({ title, ...opts }); } },
     navigator: { setAppBadge: async () => { badges.push("dot"); } },
   };
-  vm.runInNewContext(CODE, { self, caches, fetch: fetchFn, Response, URL, console });
+  vm.runInNewContext(CODE, { self, caches, fetch: fetchFn, Request: Req, Response, URL, console });
 
   const run = async (type) => { let p; on[type]({ waitUntil: (x) => { p = x; } }); await p; };
   // A request as the browser hands it over; null when the worker leaves it to the network.
@@ -78,12 +87,43 @@ test("installs with this build's name and keeps the offline page", async () => {
   assert.ok(w.stores.get("vula-shell-b2").has(`${ORIGIN}/offline.html`));
 });
 
-test("a new build drops the old app shell but keeps what was shared into Vula", async () => {
+test("a new build keeps the previous build's files (an open app may still run it), not older ones, and what was shared", async () => {
   const w = worker({ version: "b2" });
-  w.stores.set("vula-shell-b1", new Map()); w.stores.set("vula-share", new Map()); w.stores.set("vula-shell-v1", new Map());
+  w.stores.set("vula-shell-b0", new Map()); w.stores.set("vula-share", new Map()); w.stores.set("vula-shell-b1", new Map());
   await w.run("install");
   await w.run("activate");
-  assert.deepEqual([...w.stores.keys()].sort(), ["vula-share", "vula-shell-b2"]);
+  assert.deepEqual([...w.stores.keys()].sort(), ["vula-share", "vula-shell-b1", "vula-shell-b2"]);
+});
+
+test("installing keeps every file the dashboard can load, so every screen opens offline", async () => {
+  const files = ["/assets/main-a1.js", "/assets/main-a1.css", "/assets/ShareSheet-c3.js", "/assets/leaflet-src-d4.js"];
+  const w = worker({ precache: { build: "b2", files: [...files, "https://evil.test/x.js", "/r/secret"] } });
+  await w.run("install");
+  const kept = w.stores.get("vula-shell-b2");
+  for (const f of files) assert.equal(kept.get(`${ORIGIN}${f}`), `net:${f}`);
+  assert.ok(kept.has(`${ORIGIN}/`));                                         // the app shell too
+  assert.ok(![...kept.keys()].some((k) => k.includes("evil") || k.includes("/r/")));   // only the build's own files
+  w.net.online = false;
+  assert.equal(await w.get("/assets/ShareSheet-c3.js"), "net:/assets/ShareSheet-c3.js");   // never opened, still there
+});
+
+test("a file that won't download doesn't stop the update; with no list the update still installs", async () => {
+  const w = worker({ precache: { files: ["/assets/a.js", "/assets/b.js"] }, fail: ["/assets/b.js"] });
+  await w.run("install");
+  assert.ok(w.stores.get("vula-shell-b2").has(`${ORIGIN}/assets/a.js`));
+  assert.ok(!w.stores.get("vula-shell-b2").has(`${ORIGIN}/assets/b.js`));   // fetched when first used instead
+  const bare = worker();                                                     // development: no precache.json
+  await bare.run("install");
+  assert.ok(bare.stores.get("vula-shell-b2").has(`${ORIGIN}/offline.html`));
+});
+
+test("offline, the app opens as this build, not the previous one kept beside it", async () => {
+  const w = worker({ version: "b2" });
+  w.stores.set("vula-shell-b1", new Map([[`${ORIGIN}/`, "old shell"]]));
+  await w.run("install");
+  await w.run("activate");
+  w.net.online = false;
+  assert.equal(await w.get("/", { mode: "navigate" }), "net:/");
 });
 
 test("online, the app comes from the network and is kept for later", async () => {
@@ -94,8 +134,10 @@ test("online, the app comes from the network and is kept for later", async () =>
 });
 
 test("offline, the app opens from the copy it kept; with no copy, the offline page", async () => {
-  const w = worker();
+  const fail = ["/"];                                                         // the shell didn't download at install
+  const w = worker({ fail });
   await w.run("install");
+  fail.length = 0;
   w.net.online = false;
   assert.equal(await w.get("/", { mode: "navigate" }), "net:/offline.html");
   w.net.online = true;
