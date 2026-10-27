@@ -15,6 +15,7 @@ sheet found on the way is stored as rows (stock_sheet.persist_if_stock_sheet).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -219,7 +220,8 @@ async def _reread_boq(tenant_id: str, row: dict) -> bool:
         path = Path(tmp) / Path(row["filename"]).name
         path.write_bytes(data)
         if name.endswith(boq_sheet.SHEET_SUFFIXES):
-            new_fields = boq_sheet.apply_to_fields(fields, boq_sheet.parse(path))
+            new_fields = await asyncio.to_thread(
+                lambda: boq_sheet.apply_to_fields(fields, boq_sheet.parse(path)))
         else:
             from vula.api.whatsapp import _complete_boq_lines
             from vula.ingestion.pipeline import VulaIngestionPipeline
@@ -233,6 +235,12 @@ async def _reread_boq(tenant_id: str, row: dict) -> bool:
             return False               # the cells read the same as last time
     elif len(new_fields.get("line_items") or []) <= before:
         return False
+    await asyncio.to_thread(_save_boq, tenant_id, row, new_fields, name)
+    return True
+
+
+def _save_boq(tenant_id: str, row: dict, new_fields: dict, name: str) -> None:
+    from vula.ingestion import boq_sheet
     (service._client().table("vula_filed_documents").update({"fields": new_fields})
      .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
     row["fields"] = new_fields
@@ -240,7 +248,6 @@ async def _reread_boq(tenant_id: str, row: dict) -> bool:
             and (name.endswith(boq_sheet.SHEET_SUFFIXES) or not _has_sheet_boq(tenant_id, row["project"]))):
         service.upsert_project_boq(tenant_id, row["project"], int(new_fields.get("total_cents") or 0),
                                    sections=new_fields["sections"])
-    return True
 
 
 def _has_sheet_boq(tenant_id: str, project: str) -> bool:
@@ -334,17 +341,45 @@ async def _store_stock_sheet(tenant_id: str, row: dict) -> bool:
         tenant_id, row.get("doc_id") or row["id"], row["filename"], text))
 
 
-async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[str, Any]:
+def _label_rows(tenant_id: str, rows: List[dict], st: Dict[str, Any]) -> None:
+    from vula.integrations.doc_labels import labels_for
+    st["labelled"] = 0
+    for row in rows:
+        f = row.get("fields") or {}
+        labels = labels_for(row.get("category") or "", row.get("summary") or "", f, row.get("filename") or "")
+        if labels and labels != (f.get("labels") or []):
+            f = {**f, "labels": labels}
+            row["fields"] = f
+            try:
+                (service._client().table("vula_filed_documents").update({"fields": f})
+                 .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
+                st["labelled"] += 1
+            except Exception as exc:
+                log.debug("label update failed for %s: %s", row.get("id"), exc)
+
+
+def _build_price_book(tenant_id: str, rows: List[dict], st: Dict[str, Any]) -> None:
     from vula.commerce import price_book
+    for row in rows:
+        st["priced_lines"] += price_book.record_from_document(tenant_id, row)
+        st["documents"] += 1
+    st["labour_rates"] = price_book.record_worker_rates(tenant_id)
+    st["summary"] = price_book.summary(tenant_id)
+    st["still_unread"] = len(candidates(tenant_id))
+
+
+async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[str, Any]:
     st = _LEARN[tenant_id] = {"running": True, "step": "re-reading documents missing data",
                               "reread_fixed": 0, "boqs_completed": 0, "documents": 0,
                               "priced_lines": 0, "labour_rates": 0, "failed": 0}
     try:
-        if reread_first and candidates(tenant_id):
+        # Everything synchronous (database reads/writes, the price book) runs in a thread — on
+        # the event loop it stopped the server answering anything while it ran (2026-10-27).
+        if reread_first and await asyncio.to_thread(candidates, tenant_id):
             r = await reread_missing(tenant_id)
             st["reread_fixed"] = r.get("fixed", 0)
         st["step"] = "reading BOQs in full"
-        rows = _money_rows(tenant_id)
+        rows = await asyncio.to_thread(_money_rows, tenant_id)
         for row in rows:
             if row.get("category") == _BOQ:
                 try:
@@ -363,7 +398,7 @@ async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[
                 except Exception as exc:
                     log.warning("price list read of %s failed: %s", row.get("id"), exc)
                     st["failed"] += 1
-        for row in _stock_sheet_candidates(tenant_id):
+        for row in await asyncio.to_thread(_stock_sheet_candidates, tenant_id):
             try:
                 if await _store_stock_sheet(tenant_id, row):
                     st["stock_sheets"] += 1
@@ -371,27 +406,9 @@ async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[
                 log.warning("stock sheet read of %s failed: %s", row.get("id"), exc)
                 st["failed"] += 1
         st["step"] = "labelling variations"
-        st["labelled"] = 0
-        from vula.integrations.doc_labels import labels_for
-        for row in rows:
-            f = row.get("fields") or {}
-            labels = labels_for(row.get("category") or "", row.get("summary") or "", f, row.get("filename") or "")
-            if labels and labels != (f.get("labels") or []):
-                f = {**f, "labels": labels}
-                row["fields"] = f
-                try:
-                    (service._client().table("vula_filed_documents").update({"fields": f})
-                     .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
-                    st["labelled"] += 1
-                except Exception as exc:
-                    log.debug("label update failed for %s: %s", row.get("id"), exc)
+        await asyncio.to_thread(_label_rows, tenant_id, rows, st)
         st["step"] = "building the price book"
-        for row in rows:
-            st["priced_lines"] += price_book.record_from_document(tenant_id, row)
-            st["documents"] += 1
-        st["labour_rates"] = price_book.record_worker_rates(tenant_id)
-        st["summary"] = price_book.summary(tenant_id)
-        st["still_unread"] = len(candidates(tenant_id))
+        await asyncio.to_thread(_build_price_book, tenant_id, rows, st)
         st["step"] = "done"
     except Exception as exc:
         log.warning("learn from history failed for %s: %s", tenant_id, exc)

@@ -158,3 +158,26 @@ def test_a_place_name_alone_is_not_a_project(db):
     # 17 Jordaan Street, Bo-Kaap is another client's block of flats, not HPC Bokaap
     assert pr.resolve(TID, {}, "Fire and Rescue: Block of Flats at 17 Jordaan Street, Bo-Kaap") is None
     assert pr.resolve(TID, {}, "HPC fit-out variation")["project"] == "HPC Bokaap"
+
+
+def test_sort_pending_reads_the_projects_once_not_per_document(db, monkeypatch):
+    """2026-10-27: DIGG's 357 waiting documents each re-read the project register on every
+    Documents page load, and the server stopped answering for 15 minutes."""
+    db.tables["vula_filed_documents"] += [
+        {"id": f"p{i}", "tenant_id": TID, "status": "pending_project", "filename": f"HPC-PC{i}.pdf",
+         "summary": "", "fields": {}, "commerce_invoice_id": None} for i in range(25)]
+    real, calls = pr._projects, []
+    monkeypatch.setattr(pr, "_projects", lambda t: calls.append(t) or real(t))
+    dry = pr.sort_pending(TID)
+    assert dry["waiting"] == 25 and dry["would_file"] == 25 and len(calls) == 1
+
+
+def test_the_sort_preview_runs_off_the_event_loop(monkeypatch):
+    import asyncio
+    import threading
+    from vula.api import commerce
+    seen = {}
+    monkeypatch.setattr("vula.api.tenants.uses_projects", lambda t: True)
+    monkeypatch.setattr(pr, "sort_pending", lambda t, **k: seen.setdefault("thread", threading.current_thread()) and {})
+    asyncio.run(commerce.admin_sort_projects_preview(TID))
+    assert seen["thread"] is not threading.main_thread()
