@@ -159,7 +159,7 @@ async def member_scope(authorization: str, tenant_id: str) -> dict | None:
         db = cs._client()
         login_rows = (db.table("vula_tenant_users").select("tenant_id,role")
                       .eq("user_id", user.get("id")).limit(10).execute().data or [])
-        team_rows = (db.table("vula_team_members").select("email,role,access,notify,name,whatsapp,active")
+        team_rows = (db.table("vula_team_members").select("id,email,role,access,notify,name,whatsapp,active")
                      .eq("tenant_id", tenant_id).execute().data or [])
     except Exception as exc:
         # Fail closed and don't cache: a DB blip must never widen access, and the next request

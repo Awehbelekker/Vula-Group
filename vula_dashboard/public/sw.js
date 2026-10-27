@@ -105,3 +105,33 @@ self.addEventListener("fetch", (e) => {
   else if (url.pathname.startsWith("/assets/")) e.respondWith(asset(req));
   else e.respondWith(other(req));
 });
+
+// Notifications (2026-10-27, PWA pass 3): an alert this person also gets on WhatsApp
+// (vula_mind/vula/dash_push.py). A tap opens the page it's about, in the open app when there is one.
+// With Vula open on screen the notification is silent and the app chimes instead (one sound, not
+// two: src/lib/alertChime.js); otherwise the phone's own notification sound plays. renotify: a
+// second alert of the same kind (two customers waiting) sounds again instead of quietly
+// replacing the first.
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: "Vula", body: e.data ? e.data.text() : "" }; }
+  e.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const onScreen = windows.filter((c) => c.visibilityState === "visible" && !new URL(c.url).pathname.startsWith("/pay/"));
+    await self.registration.showNotification(d.title || "Vula", {
+      body: d.body || "", tag: d.tag || "vula", renotify: true, silent: onScreen.length > 0,
+      icon: "/icon-192.png", badge: "/icon-192.png", vibrate: [120, 60, 120], data: { url: d.url || "/" },
+    });
+    onScreen.forEach((c) => c.postMessage({ type: "vula-alert", title: d.title || "Vula", tag: d.tag || "vula" }));
+  })());
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const target = new URL((e.notification.data && e.notification.data.url) || "/", self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    const open = list.find((c) => new URL(c.url).origin === self.location.origin && !new URL(c.url).pathname.startsWith("/pay/"));
+    if (open) return open.focus().then((c) => (c && "navigate" in c ? c.navigate(target) : c));
+    return self.clients.openWindow(target);
+  }));
+});

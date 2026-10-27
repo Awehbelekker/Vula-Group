@@ -103,6 +103,14 @@ async def notify_team(tenant_id: str, event_type: str, message: str,
                 sent += 1
         except Exception as exc:
             logger.debug("notify_team send failed (%s): %s", to, exc)
+    # The same alert on the phones/computers these people turned notifications on for
+    # (vula/dash_push.py) — same people, same choices; WhatsApp stays the record.
+    try:
+        from vula.dash_push import push_event
+        await push_event(tenant_id, event_type, message, recipients, idem_key=idem_key,
+                         owner_fallback=event_type in URGENT_EVENTS)
+    except Exception as exc:
+        logger.debug("notify_team push skipped: %s", exc)
     return sent
 
 

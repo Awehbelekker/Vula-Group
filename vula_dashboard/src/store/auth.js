@@ -8,10 +8,11 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { supabase } from '../lib/supabase'
 import { clearPersonData, readyToSignOut } from '../lib/deviceData'
+import { turnOff as turnOffPush } from '../lib/push'
 
 export const useAuthStore = create(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,          // { id, email, name }
       tenantId: null,      // 'off-the-hook' | 'master' | etc.
       role: null,          // 'master' | 'owner' | 'staff'
@@ -34,6 +35,9 @@ export const useAuthStore = create(
       // after asking, when a stock count's scans haven't been sent yet.
       logout: async () => {
         if (!(await readyToSignOut())) return
+        // This device stops getting this person's alerts (lib/push.js) — while still signed in,
+        // so the API can drop it.
+        try { if (get().tenantId) await turnOffPush(get().tenantId) } catch { /* best effort */ }
         try { await supabase.auth.signOut() } catch { /* still clear local state */ }
         await clearPersonData()
         set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null })

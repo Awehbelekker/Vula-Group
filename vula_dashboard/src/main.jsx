@@ -1,5 +1,6 @@
 // First: catches the browser's install offer, which fires once soon after load (PWA pass 2).
 import { isInstalled } from "./lib/install";
+import { listenForAlerts } from "./lib/alertChime";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
@@ -7,6 +8,7 @@ import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { OfflineBanner, UiHost, toast } from "./components/ui/index.jsx";
 import { InstallSteps } from "./components/install/InstallVula.jsx";
+import { NotificationsSheet } from "./components/notifications/NotificationsPanel.jsx";
 import { installAuthFetch } from "./lib/authFetch";
 
 // Attach the signed-in user's JWT to every guarded Vula API call (tenant-scoped auth).
@@ -27,9 +29,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <UiHost />
       <OfflineBanner />
       <InstallSteps />
+      <NotificationsSheet />
     </ErrorBoundary>
   </React.StrictMode>
 );
+
+listenForAlerts();
 
 window.addEventListener("appinstalled", () => {
   if (!isInstalled()) return;

@@ -115,6 +115,14 @@ async def create_approval(
         else:
             await open_questions.ask_or_queue(tenant_id, s["approver_phone"], "approval",
                                               appr["id"], title, msg)
+    # …and on the approvers' phones that turned notifications on (vula/dash_push.py).
+    try:
+        from vula.dash_push import push_to_phones
+        await push_to_phones(tenant_id, [s["approver_phone"] for s in steps], "Approval needed", title,
+                             page={"order": "orders", "quote": "invoices", "invoice": "invoices",
+                                   "expense": "expenses"}.get(entity_type), tag=f"approval-{appr.get('id')}")
+    except Exception as exc:
+        logger.debug("approval push skipped: %s", exc)
     return appr
 
 
