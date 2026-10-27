@@ -359,3 +359,29 @@ def test_the_resolver_reads_a_misspelt_project_in_a_caption():
     assert project_resolver._named(projects, "Belladona top up on the slip") == ["Belladonna"]
     assert project_resolver._named(projects, "Belladonna and HPC") == ["Belladonna", "HPC Bokaap"]
     assert project_resolver._named(projects, "Bella's toilet") == []
+
+
+def test_the_newest_spreadsheet_boq_is_the_project_budget(monkeypatch):
+    """2026-10-27: Learn from history re-read Judy's 10:09 Belladonna sheet (R432,195 by room)
+    after her 17:49 sheet by trade (R461,195), and the older one became the budget."""
+    from vula.commerce import reread, service
+    filed = _Rows([
+        {"id": "old", "filename": "Belladonna Flat – project bill variance 2026-10-26.xlsx",
+         "created_at": "2026-10-26T10:09:03+00:00"},
+        {"id": "new", "filename": "Bill of Quantities - DiGG 20261026-1749.xlsx",
+         "created_at": "2026-10-26T17:50:01+00:00"},
+        {"id": "pdf", "filename": "Bill of Quantities 20261026-1002.pdf",
+         "created_at": "2026-10-26T10:02:32+00:00"}])
+
+    class _DB:
+        def table(self, n): return filed
+
+    monkeypatch.setattr(service, "_client", lambda: _DB())
+
+    def sets(rid, sheet=True):
+        row = next(r for r in filed.data if r["id"] == rid)
+        return reread._sets_project_budget("digg-demo", {**row, "project": "Belladonna"}, sheet)
+    assert sets("new") and not sets("old")
+    assert not sets("pdf", sheet=False)                     # a spreadsheet is filed
+    filed.data = [r for r in filed.data if r["id"] == "pdf"]
+    assert sets("pdf", sheet=False)                         # the only BOQ
