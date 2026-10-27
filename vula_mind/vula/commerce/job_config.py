@@ -82,10 +82,11 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
     # tenant, same reuse of this machinery as stale_escalation_nudge above (2026-09-11).
     "stale_handoff_resume": {
         "label": "Stale handoff auto-resume", "kind": "interval",
-        "interval_minutes": 60, "template_suffix": "stale_handoff_resume",
-        "description": "A conversation an owner paused for human handoff, then went silent "
-                       "on for 2+ hours, gets the bot resumed so the customer isn't left "
-                       "permanently waiting — the owner is pinged first, best-effort."},
+        "interval_minutes": 15, "template_suffix": "stale_handoff_resume",
+        "description": "A conversation an owner paused for human handoff: after 30 minutes "
+                       "with the customer waiting, the owner is reminded; after 2+ hours of "
+                       "silence the bot resumes and apologises to the customer, so they "
+                       "aren't left permanently waiting — the owner is pinged first, best-effort."},
 }
 
 SAST = timezone(timedelta(hours=2))

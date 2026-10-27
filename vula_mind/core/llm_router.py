@@ -110,10 +110,93 @@ def install_ollama_auth() -> None:
         # headers, rather than touching every call site. Never overrides an explicit caller value.
         if is_ollama and "num_ctx" not in kwargs:
             kwargs["num_ctx"] = 8192
-        return await _orig(*args, **kwargs)
+        model = kwargs.get("model") or (args[0] if args else "")
+        if not str(model).startswith("openrouter/") or args:
+            return await _orig(*args, **kwargs)
+        return await _with_cloud_fallback(_orig, kwargs)
 
     litellm.acompletion = _wrapped
     _ollama_auth_installed = True
+
+
+# ── Cloud model fallback (gap audit 1.3) ─────────────────────────────────────
+# Before this, one OpenRouter model erroring (provider outage, rate limit, model withdrawn) failed
+# the whole turn: there was no second model. Every openrouter/ call now walks
+# [requested model, *CLOUD_MODEL_FALLBACKS] on errors a different model can fix. Errors in the
+# request itself (bad input, auth, context too long) fail straight away: another model won't help.
+_NO_RETRY = {"BadRequestError", "AuthenticationError", "PermissionDeniedError", "UnprocessableEntityError"}
+_RETRY = {"APIError", "TimeoutError"}
+
+
+def _worth_another_model(exc: BaseException) -> bool:
+    names = {c.__name__ for c in type(exc).__mro__}
+    return not (names & _NO_RETRY) and bool(names & _RETRY)
+
+
+def _has_image(messages) -> bool:
+    for m in messages or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, list) and any(
+                isinstance(p, dict) and p.get("type") in ("image_url", "input_image") for p in content):
+            return True
+    return False
+
+
+def cloud_fallback_chain(model: str, messages=None) -> list:
+    """The openrouter/ models to try in order, starting with `model`. An image call only falls
+    back to the vision model: the text models in the list can't read the picture."""
+    if _has_image(messages):
+        extra = [settings.model_vision]
+    else:
+        extra = [m.strip() for m in (settings.cloud_model_fallbacks or "").split(",") if m.strip()]
+    chain = [model]
+    for m in extra:
+        full = m if m.startswith("openrouter/") else f"openrouter/{m}"
+        if full not in chain:
+            chain.append(full)
+    return chain
+
+
+async def _with_cloud_fallback(call, kwargs: dict):
+    chain = cloud_fallback_chain(kwargs["model"], kwargs.get("messages"))
+    for i, model in enumerate(chain):
+        try:
+            return await call(**{**kwargs, "model": model})
+        except Exception as exc:
+            if not _worth_another_model(exc):
+                raise
+            last = i == len(chain) - 1
+            # model names and the error type only — never the prompt (POPIA telemetry rule)
+            logger.warning("cloud model %s failed (%s)%s", model, type(exc).__name__,
+                           "" if last else f" — trying {chain[i + 1]}")
+            if last:
+                _note_ai_down(chain, exc)
+                raise
+
+
+def _note_ai_down(chain: list, exc: BaseException) -> None:
+    """Every cloud model failed: mark the WhatsApp turn (so it sends the holding reply instead
+    of going quiet) and tell the operator, at most once per alert cooldown."""
+    try:
+        from vula import turns
+        turn = turns.current()
+        if turn is not None:
+            turn["_ai_down"] = True
+            turns.note("ai_unavailable", models=",".join(chain), error=type(exc).__name__)
+    except Exception:
+        pass
+    try:
+        from core.mass_mind.health import should_alert
+        if not should_alert("cloud_models_down"):
+            return
+        import asyncio as _asyncio
+        from vula.integrations.platform_support import alert_operator
+        _asyncio.get_running_loop().create_task(alert_operator(
+            f"⚠️ Every cloud AI model failed ({', '.join(m.split('/', 1)[-1] for m in chain)}): "
+            f"{type(exc).__name__}. Customers get a holding reply until it recovers. "
+            f"Check OpenRouter status and credit."))
+    except Exception:
+        pass
 
 
 async def ollama_available(base: Optional[str] = None, model: Optional[str] = None) -> bool:

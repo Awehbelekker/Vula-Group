@@ -122,7 +122,7 @@ from vula.api.email_public import router as email_public_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
-from vula.log_streams import handlers as _log_handlers  # noqa: E402
+from vula.log_streams import JsonFormatter as _JsonFormatter, bind as _bind_log, handlers as _log_handlers  # noqa: E402
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -135,7 +135,10 @@ logging.basicConfig(
     # (The format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s", %H:%M:%S.)
     # 2026-10-20: ERROR and up now go to stderr so Railway labels real errors as errors too
     # (vula/log_streams.py); everything below stays on stdout as before.
-    handlers=_log_handlers(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")),
+    # 2026-10-27: JSON lines by default (level / tenant / req labels Railway can filter on).
+    handlers=_log_handlers(
+        _JsonFormatter() if settings.log_format != "text" and not settings.debug
+        else logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")),
 )
 # POPIA: mask customer phone numbers in the (retained, Railway-captured) logs. No-op under DEBUG.
 try:
@@ -1180,9 +1183,9 @@ async def _stale_handoff_scheduler_loop() -> None:
     auto-resume doesn't depend on any outbound send succeeding, so it's the actual guarantee
     here, the ping is the insurance on top."""
     import asyncio as _asyncio
-    from vula.commerce import job_config, service as commerce_service
+    from vula.commerce import job_config
+    from vula import handoff_watch
     from vula.escalation import _pick_helper
-    from vula.api.whatsapp import _send_reply
     from vula.api import tenants as _t
 
     await _asyncio.sleep(200)  # settle on boot
@@ -1199,31 +1202,10 @@ async def _stale_handoff_scheduler_loop() -> None:
                 if not job_config.claim_run(tenant_id, "stale_handoff_resume", cfg):
                     continue
                 try:
-                    for session in await commerce_service.find_stale_paused_sessions(tenant_id):
-                        who = (session.get("customer_name") or session.get("customer_phone")
-                              or "a customer")
-                        # Whoever the conversation is assigned to in the inbox, else the
-                        # tenant's default helper.
-                        helper = (_assigned_member(tenant_id, session.get("assigned_to"))
-                                  or _pick_helper(tenant_id))
-                        if helper and helper.get("whatsapp"):
-                            msg = (f"⏰ Heads up — you paused Vula's replies to {who} a while "
-                                  f"ago and nothing's happened since. I've resumed answering "
-                                  f"them so they're not left waiting; jump back in any time by "
-                                  f"replying in the inbox.")
-                            if not await _send_reply(helper["whatsapp"], msg, tenant_id=tenant_id):
-                                log.warning("stale-handoff ping undelivered for %s session %s "
-                                          "(helper outside their 24h WhatsApp window?)",
-                                          tenant_id, session["id"])
-                        else:
-                            log.warning("stale-handoff: no helper configured to notify for "
-                                      "%s session %s", tenant_id, session["id"])
-                        await commerce_service.set_session_paused(tenant_id, session["id"], False)
-                        log.info("auto-resumed stale-paused session %s for %s (idle since %s)",
-                                session["id"], tenant_id, session.get("last_at"))
-                        from core.mass_mind import health as _mm_health
-                        _mm_health.record_event(tenant_id, "stale_handoff_auto_resumed",
-                                                 {"session_id": session["id"]})
+                    # 30-min reminder, 2 h resume + apology (vula/handoff_watch.py). Whoever the
+                    # conversation is assigned to in the inbox, else the tenant's default helper.
+                    await handoff_watch.sweep(tenant_id, helper_for=lambda sess, t=tenant_id: (
+                        _assigned_member(t, sess.get("assigned_to")) or _pick_helper(t)))
                 except Exception as exc:
                     log.warning("stale handoff resume failed for %s: %s", tenant_id, exc)
         except Exception as exc:
@@ -1686,6 +1668,18 @@ async def lifespan(app: FastAPI):
         install_metering()
     except Exception as exc:
         log.warning("metering install skipped: %s", exc)
+    try:
+        # at boot, not first use: routes that skip resolve_generation_route still get the Ollama
+        # headers and the cloud model fallback (core/llm_router.py)
+        from core.llm_router import install_ollama_auth
+        install_ollama_auth()
+    except Exception as exc:
+        log.warning("llm router install skipped: %s", exc)
+    try:
+        from vula import loop_watchdog
+        loop_watchdog.start(settings.loop_watchdog_stall_s)
+    except Exception as exc:
+        log.warning("loop watchdog not started: %s", exc)
 
     async def _schema_check() -> None:
         # Migrations are applied by hand (no runner) — surface an unapplied one at boot as one
@@ -1697,6 +1691,20 @@ async def lifespan(app: FastAPI):
             await __a.to_thread(check_payment_setup)
         except Exception as exc:
             log.debug("schema check task failed: %s", exc)
+        # Gap audit 1.1: what switched-on features still need, to the operator when that list
+        # changes (the scheduler process only, so two workers don't both send it).
+        if settings.run_scheduled_jobs:
+            try:
+                from core.mass_mind.health import should_alert
+                from vula import readiness
+                from vula.integrations.platform_support import alert_operator
+                line = readiness.summary(await __a.to_thread(readiness.report))
+                if line:
+                    log.warning("%s", line)
+                    if readiness.is_new(line) and should_alert("readiness"):
+                        await alert_operator(line)
+            except Exception as exc:
+                log.info("readiness check skipped: %s", type(exc).__name__)
 
     _asyncio.create_task(_schema_check())
     if not settings.enforce_tenant_auth:
@@ -1749,6 +1757,7 @@ async def request_middleware(request: Request, call_next):
     """Structured request logging with correlation ID, timing, and error tracking."""
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
     request.state.request_id = request_id
+    _bind_log(req=request_id, tenant=_path_tenant(request.url.path))
     started = _time.monotonic()
 
     try:
@@ -1864,6 +1873,15 @@ _MASTER_ONLY = [
 # from tenant_admin_guard above, not folded into it — metering must never depend on
 # ENFORCE_TENANT_AUTH, which only gates auth, not cost attribution.
 _TENANT_ID_RE = re.compile(r"^/v1/commerce/([^/]+)/")
+
+
+def _path_tenant(path: str):
+    """The tenant a request path names, for log labels only (never for auth)."""
+    for rx in (_TENANT_ID_RE, *_TENANT_GUARD_RES):
+        m = rx.match(path)
+        if m:
+            return m.group(1)
+    return None
 
 
 @app.middleware("http")
@@ -2390,6 +2408,17 @@ async def health_check():
             "email_resend": "live" if settings.resend_api_key else "disabled by design",
         },
     }
+
+
+@app.get("/ready", dependencies=[Depends(require_auth)])
+async def readiness_report():
+    """What each switched-on feature still needs, platform and per tenant (vula/readiness.py).
+    503 while a platform setting is missing; a tenant's unfinished setup alone stays 200."""
+    import asyncio as _asyncio
+    from fastapi.responses import JSONResponse
+    from vula import readiness
+    rep = await _asyncio.to_thread(readiness.report)
+    return JSONResponse(rep, status_code=200 if rep["ready"] else 503)
 
 
 @app.get("/metrics", dependencies=[Depends(require_auth)])

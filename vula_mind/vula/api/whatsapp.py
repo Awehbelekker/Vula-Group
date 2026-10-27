@@ -539,6 +539,27 @@ def _track_inbound(msg_id: Optional[str], **fields) -> None:
         logger.debug("inbound tracking skipped for %s (migration 179?): %s", msg_id, exc)
 
 
+HOLDING_REPLY = "Just checking that for you…"
+AI_DOWN_REPLY = ("Sorry, I can't answer that right now: my AI service is down for a moment. "
+                 "The team has been told. Please send it again in a few minutes. 🙏")
+
+
+async def _answer_even_if_ai_down(coro):
+    """Gap audit 1.3: when every AI model failed (core/llm_router.py marks the turn) and nothing
+    was sent, send a holding reply instead of going quiet. Runs inside the recorded turn."""
+    from vula import turns as _turns
+    try:
+        return await coro
+    finally:
+        turn = _turns.current()
+        answered = any(r.get("text") != HOLDING_REPLY for r in (turn or {}).get("replies") or [])
+        if turn and turn.get("_ai_down") and not answered and turn.get("phone"):
+            try:
+                await _send_reply(turn["phone"], AI_DOWN_REPLY, turn.get("tenant_id") or "")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("AI-down holding reply not sent: %s", type(exc).__name__)
+
+
 def _run_bg(coro, *, label: str, track: Optional[dict] = None, turn: Optional[dict] = None) -> None:
     """Fire a slow handler as a background task and return control to the webhook immediately.
 
@@ -559,7 +580,7 @@ def _run_bg(coro, *, label: str, track: Optional[dict] = None, turn: Optional[di
                 "kind": "voice" if track.get("kind") == "audio" else (track.get("kind") or "text"),
                 "text": _p.get("text") or "", "wamid": track.get("msg_id")}
     if turn is not None:
-        coro = _turns.run(coro, **turn)    # one recorded turn per message (vula/turns.py)
+        coro = _turns.run(_answer_even_if_ai_down(coro), **turn)    # one recorded turn per message (vula/turns.py)
 
     async def _wrapped():
         if track:
@@ -1801,14 +1822,21 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
         from vula import escalation as esc
         # 2026-10-22: a customer asking for a person always reaches one — before any stored
         # answer, and whatever the bot's own reply says.
-        if not _is_insider(caller_role) and esc.wants_human(text):
+        wants_person, upset = esc.wants_human(text), esc.customer_seems_frustrated(text)
+        # 2026-10-27 (gap audit 1.5): the phrase lists are starters outside English and
+        # Afrikaans, so a message in another language they miss gets one cheap AI check.
+        if not _is_insider(caller_role) and not (wants_person or upset) and esc.needs_classifier(text):
+            verdict = await esc.classify_customer_message(text)
+            if verdict:
+                wants_person, upset = verdict["wants_person"], verdict["upset"]
+        if not _is_insider(caller_role) and wants_person:
             _WEAK_STREAK.pop((tenant_id, phone), None)
             row = esc.create_escalation(tenant_id, phone, text)
             if row:
                 if not row.get("deduped"):
                     await _send_reply(
                         row["helper_phone"],
-                        esc.helper_prompt(row, text, esc.customer_seems_frustrated(text),
+                        esc.helper_prompt(row, text, upset,
                                           await esc.customer_context(tenant_id, phone, exclude=text),
                                           reason="asked_for_person"),
                         tenant_id=tenant_id,
@@ -1829,7 +1857,8 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             if learned:
                 return learned
         struggling = weak_run >= 2
-        if not struggling and not esc.should_escalate(reply, confidence, customer_text=text):
+        if not struggling and not esc.should_escalate(reply, confidence, customer_text=text,
+                                                      frustrated=upset):
             return reply
         learned = await esc.find_learned_answer(tenant_id, text)
         if learned:
@@ -1847,7 +1876,7 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             if not row.get("deduped"):
                 await _send_reply(
                     row["helper_phone"],
-                    esc.helper_prompt(row, text, esc.customer_seems_frustrated(text),
+                    esc.helper_prompt(row, text, upset,
                                       await esc.customer_context(tenant_id, phone, exclude=text),
                                       reason="struggling" if struggling else ""),
                     tenant_id=tenant_id,
@@ -8285,7 +8314,7 @@ async def _run_with_holding_message(phone: str, tenant_id: str, coro, *, delay: 
         return await _asyncio.wait_for(_asyncio.shield(task), timeout=delay)
     except _asyncio.TimeoutError:
         try:
-            await _send_reply(phone, "Just checking that for you…", tenant_id)
+            await _send_reply(phone, HOLDING_REPLY, tenant_id)
         except Exception as exc:
             logger.debug("holding message send skipped: %s", exc)
     if not phone:

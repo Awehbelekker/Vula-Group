@@ -71,7 +71,8 @@ def test_stale_handoff_resume_effective_config_defaults():
     cfg = job_config.effective_config("t1", "stale_handoff_resume", row=None)
     assert cfg["enabled"] is True
     assert cfg["kind"] == "interval"
-    assert cfg["interval_minutes"] == 60
+    # 15, not 60 (2026-10-27): the 30-minute owner reminder (vula/handoff_watch.py) needs it
+    assert cfg["interval_minutes"] == 15
 
 
 def test_stale_handoff_resume_respects_tenant_override():
