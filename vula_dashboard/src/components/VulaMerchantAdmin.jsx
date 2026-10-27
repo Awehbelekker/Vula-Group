@@ -13,84 +13,85 @@
 
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { SectionTabs, toast, confirmDialog, Skeleton, ErrorCard } from './ui/index.jsx'
-import { toQty } from './VulaStock'
+import { lazyScreen, ScreenSuspense } from '../lib/lazyScreen.jsx'
+import { toQty } from './stock/useStock'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { MERCHANT_GROUPS, iconFor, sectionOf } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
-import VulaSmartScanner from './VulaSmartScanner'
-import VulaStock from './VulaStock'
+const VulaSmartScanner = lazyScreen(() => import('./VulaSmartScanner'))
+const VulaStock = lazyScreen(() => import('./VulaStock'))
 import VulaHomeV2 from './VulaHomeV2'
 import VulaToday from './VulaToday'
 import VulaActivity from './VulaActivity'
-import VulaCosting from './VulaCosting'
-import VulaInvoices from './VulaInvoices'
-import VulaBookings from './VulaBookings'
-import VulaMarketing from './VulaMarketing'
-import VulaFinanceInsights from './VulaFinanceInsights'
-import FinancesV2 from './finances/FinancesV2'
+const VulaCosting = lazyScreen(() => import('./VulaCosting'))
+const VulaInvoices = lazyScreen(() => import('./VulaInvoices'))
+const VulaBookings = lazyScreen(() => import('./VulaBookings'))
+const VulaMarketing = lazyScreen(() => import('./VulaMarketing'))
+const VulaFinanceInsights = lazyScreen(() => import('./VulaFinanceInsights'))
+const FinancesV2 = lazyScreen(() => import('./finances/FinancesV2'))
 import { useDiscounts, valueLabel } from './discounts/useDiscounts'
-import DiscountsV2 from './discounts/DiscountsV2'
+const DiscountsV2 = lazyScreen(() => import('./discounts/DiscountsV2'))
 import { useSuppliers, usePurchaseOrders } from './suppliers/useSuppliers'
-import SuppliersV2 from './suppliers/SuppliersV2'
+const SuppliersV2 = lazyScreen(() => import('./suppliers/SuppliersV2'))
 import { DEL_PAID, printRunSheet, useDeliveryList } from './delivery/useDelivery'
 import { escapeHtml as esc } from '../lib/html'
-import DeliveryV2 from './delivery/DeliveryV2'
-import VulaBankRec from './VulaBankRec'
-import VulaAccounting from './VulaAccounting'
-import VulaLabour from './VulaLabour'
-import VulaExpenses from './VulaExpenses'
-import VulaImport from './VulaImport'
-import VulaRecurringOrders from './VulaRecurringOrders'
-import VulaAgentActivity from './VulaAgentActivity'
-import VulaBudget from './VulaBudget'
-import VulaBroadcast from './VulaBroadcast'
-import VulaEmailCampaigns from './VulaEmailCampaigns'
-import VulaWATemplates from './VulaWATemplates'
-import VulaScheduledJobs from './VulaScheduledJobs'
-import VulaCustomers from './VulaCustomers'
-import VulaAssistant from './VulaAssistant'
-import VulaInbox from './VulaInbox'
-import VulaSettings from './VulaSettings'
-import VulaDocuments from './VulaDocuments'
-import VulaProjects from './VulaProjects'
-import VulaQSRates from './VulaQSRates'
-import VulaContacts from './VulaContacts'
-import VulaFinances from './VulaFinances'
-import VulaFollowups from './VulaFollowups'
-import VulaTeam from './VulaTeam'
-import VulaProjectWorkspace from './VulaProjectWorkspace'
-import VulaFieldOps from './VulaFieldOps'
-import VulaReports from './VulaReports'
-import VulaOrderWorkflow from './VulaOrderWorkflow'
-import VulaClientOnboarding from './VulaClientOnboarding'
-import VulaCSMetrics from './VulaCSMetrics'
-import VulaJobCosting from './VulaJobCosting'
-import VulaCrossCheck from './VulaCrossCheck'
+const DeliveryV2 = lazyScreen(() => import('./delivery/DeliveryV2'))
+const VulaBankRec = lazyScreen(() => import('./VulaBankRec'))
+const VulaAccounting = lazyScreen(() => import('./VulaAccounting'))
+const VulaLabour = lazyScreen(() => import('./VulaLabour'))
+const VulaExpenses = lazyScreen(() => import('./VulaExpenses'))
+const VulaImport = lazyScreen(() => import('./VulaImport'))
+const VulaRecurringOrders = lazyScreen(() => import('./VulaRecurringOrders'))
+const VulaAgentActivity = lazyScreen(() => import('./VulaAgentActivity'))
+const VulaBudget = lazyScreen(() => import('./VulaBudget'))
+const VulaBroadcast = lazyScreen(() => import('./VulaBroadcast'))
+const VulaEmailCampaigns = lazyScreen(() => import('./VulaEmailCampaigns'))
+const VulaWATemplates = lazyScreen(() => import('./VulaWATemplates'))
+const VulaScheduledJobs = lazyScreen(() => import('./VulaScheduledJobs'))
+const VulaCustomers = lazyScreen(() => import('./VulaCustomers'))
+const VulaAssistant = lazyScreen(() => import('./VulaAssistant'))
+const VulaInbox = lazyScreen(() => import('./VulaInbox'))
+const VulaSettings = lazyScreen(() => import('./VulaSettings'))
+const VulaDocuments = lazyScreen(() => import('./VulaDocuments'))
+const VulaProjects = lazyScreen(() => import('./VulaProjects'))
+const VulaQSRates = lazyScreen(() => import('./VulaQSRates'))
+const VulaContacts = lazyScreen(() => import('./VulaContacts'))
+const VulaFinances = lazyScreen(() => import('./VulaFinances'))
+const VulaFollowups = lazyScreen(() => import('./VulaFollowups'))
+const VulaTeam = lazyScreen(() => import('./VulaTeam'))
+const VulaProjectWorkspace = lazyScreen(() => import('./VulaProjectWorkspace'))
+const VulaFieldOps = lazyScreen(() => import('./VulaFieldOps'))
+const VulaReports = lazyScreen(() => import('./VulaReports'))
+const VulaOrderWorkflow = lazyScreen(() => import('./VulaOrderWorkflow'))
+const VulaClientOnboarding = lazyScreen(() => import('./VulaClientOnboarding'))
+const VulaCSMetrics = lazyScreen(() => import('./VulaCSMetrics'))
+const VulaJobCosting = lazyScreen(() => import('./VulaJobCosting'))
+const VulaCrossCheck = lazyScreen(() => import('./VulaCrossCheck'))
 import GlassCard from './GlassCard'
-import VulaRepToday from './VulaRepToday'
-import { BrandKitSettings } from './VulaSettings'
-import VulaQS from './VulaQS'
-import VulaQSPro from './VulaQSPro'
-import VulaTakeoff from './VulaTakeoff'
-import VulaRepHome from './VulaRepHome'
-import VulaRepCrmContacts from './VulaRepCrmContacts'
-import VulaRepCallSheet from './VulaRepCallSheet'
-import VulaRepExpenseSheet from './VulaRepExpenseSheet'
-import VulaRepReminders from './VulaRepReminders'
-import VulaRepCrmLookup from './VulaRepCrmLookup'
-import VulaDraft from './VulaDraft'
-import VulaAutomations from './VulaAutomations'
-import VulaFlowBuilder from './VulaFlowBuilder'
+const VulaRepToday = lazyScreen(() => import('./VulaRepToday'))
+const BrandKitSettings = lazyScreen(() => import('./VulaSettings'), 'BrandKitSettings')
+const VulaQS = lazyScreen(() => import('./VulaQS'))
+const VulaQSPro = lazyScreen(() => import('./VulaQSPro'))
+const VulaTakeoff = lazyScreen(() => import('./VulaTakeoff'))
+const VulaRepHome = lazyScreen(() => import('./VulaRepHome'))
+const VulaRepCrmContacts = lazyScreen(() => import('./VulaRepCrmContacts'))
+const VulaRepCallSheet = lazyScreen(() => import('./VulaRepCallSheet'))
+const VulaRepExpenseSheet = lazyScreen(() => import('./VulaRepExpenseSheet'))
+const VulaRepReminders = lazyScreen(() => import('./VulaRepReminders'))
+const VulaRepCrmLookup = lazyScreen(() => import('./VulaRepCrmLookup'))
+const VulaDraft = lazyScreen(() => import('./VulaDraft'))
+const VulaAutomations = lazyScreen(() => import('./VulaAutomations'))
+const VulaFlowBuilder = lazyScreen(() => import('./VulaFlowBuilder'))
 // Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
-const VulaPages = lazy(() => import('./VulaPages'))
-import VulaPayments from './VulaPayments'
-import VulaTapToPay from './VulaTapToPay'
+const VulaPages = lazyScreen(() => import('./VulaPages'))
+const VulaPayments = lazyScreen(() => import('./VulaPayments'))
+const VulaTapToPay = lazyScreen(() => import('./VulaTapToPay'))
 import { VULA_API } from '../lib/authFetch'
 import { NEXT_STATUSES, ORDER_DELETABLE, ORDER_FILTERS, useOrders } from './orders/useOrders'
-import OrdersV2 from './orders/OrdersV2'
-import ProductsV2 from './products/ProductsV2'
+const OrdersV2 = lazyScreen(() => import('./orders/OrdersV2'))
+const ProductsV2 = lazyScreen(() => import('./products/ProductsV2'))
 
 
 const STATUS_LABELS = {
@@ -179,6 +180,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             switch, so no component can carry stale state across tenants — not a perf concern,
             this only remounts the one currently-visible tab, not the whole dashboard shell. */}
         <div key={tenantId} className="vma-content" style={styles.contentBare}>
+          <ScreenSuspense>
           {/* A restricted sales_rep login gets their own summary here instead of the tenant-wide
               owner overview — 'overview' itself stays always-visible (merchantVisible's own
               rule), only WHAT renders on it differs for this one role. */}
@@ -213,6 +215,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'team'      && <VulaTeam          tenantId={tenantId} v2={v2} />}
           {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} v2={v2} />}
+          </ScreenSuspense>
         </div>
     </>
   )
@@ -234,10 +237,12 @@ function AssistantSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendi
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'assistant' && <VulaAssistant tenantId={tenantId} v2={v2} />}
       {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} v2={v2} />}
       {active === 'automations' && <VulaAutomations tenantId={tenantId} v2={v2} />}
       {active === 'flows' && <VulaFlowBuilder tenantId={tenantId} v2={v2} />}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -248,6 +253,7 @@ function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsume
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'orders' && <OrdersTab tenantId={tenantId} v2={v2} />}
       {active === 'products' && <ProductsTab tenantId={tenantId} v2={v2} />}
       {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} v2={v2} />}
@@ -258,6 +264,7 @@ function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsume
       {active === 'costing' && <VulaCosting tenantId={tenantId} v2={v2} />}
       {active === 'suppliers' && (v2 ? <SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} /> : <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
       {active === 'import' && <VulaImport tenantId={tenantId} v2={v2} />}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -268,6 +275,7 @@ function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsum
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'invoices' && <VulaInvoices tenantId={tenantId} v2={v2} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={onClearSupplierFilter} />}
       {active === 'expenses' && <VulaExpenses tenantId={tenantId} v2={v2} />}
       {active === 'bank' && <VulaBankRec tenantId={tenantId} v2={v2} />}
@@ -277,6 +285,7 @@ function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsum
       {active === 'budget' && <VulaBudget tenantId={tenantId} v2={v2} />}
       {active === 'scanner' && <VulaSmartScanner tenantId={tenantId} products={products} v2={v2} />}
       {active === 'finances' && <FinancesSubsection tenantId={tenantId} v2={v2} />}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -292,8 +301,10 @@ function FinancesSubsection({ tenantId, v2 = false }) {
     <div>
       <VulaFinanceInsights tenantId={tenantId} />
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'insights' && <VulaReports tenantId={tenantId} />}
       {active === 'ledger' && <VulaFinances tenantId={tenantId} />}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -304,9 +315,11 @@ function PeopleSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingN
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'customers' && <VulaCustomers tenantId={tenantId} v2={v2} />}
       {active === 'contacts' && <VulaContacts tenantId={tenantId} v2={v2} />}
       {active === 'followups' && <VulaFollowups tenantId={tenantId} v2={v2} />}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -319,12 +332,14 @@ function MarketingSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendi
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} v2={v2} />}
       {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} v2={v2} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
       {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} v2={v2} />}
       {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} v2={v2} />}
       {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} v2={v2} />}
       {active === 'marketing' && <VulaMarketing tenantId={tenantId} v2={v2} onSendAsBroadcast={onSendAsBroadcast} />}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -335,6 +350,7 @@ function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onCons
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'projects' && <VulaProjects tenantId={tenantId} v2={v2} />}
       {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} v2={v2} />}
       {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} v2={v2} />}
@@ -344,6 +360,7 @@ function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onCons
       {/* the redesign files Stock and Suppliers here (navConfig.withV2Moves) */}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} v2={v2} />}
       {active === 'suppliers' && (v2 ? <SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} /> : <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -354,6 +371,7 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} v2={v2} repPhone={repPhone} />}
       {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} v2={v2} repPhone={repPhone} />}
       {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
@@ -362,6 +380,7 @@ function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsu
       {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
       {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} v2={v2} repPhone={repPhone} />}
       {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} v2={v2} />}
+      </ScreenSuspense>
     </div>
   )
 }
@@ -372,10 +391,12 @@ function EstimatingSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePend
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      <ScreenSuspense>
       {active === 'qs' && <VulaQS tenantId={tenantId} v2={v2} />}
       {active === 'qspro' && <VulaQSPro tenantId={tenantId} v2={v2} />}
       {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} v2={v2} />}
       {active === 'draft' && <VulaDraft tenantId={tenantId} v2={v2} />}
+      </ScreenSuspense>
     </div>
   )
 }

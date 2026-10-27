@@ -1,5 +1,5 @@
 {
-  "_note": "KB gzipped, checked by scripts/check-size.mjs after the build. Set 27 Oct 2026 at about 5% over: first_load 574 KB, everything 867 KB.",
-  "first_load": 600,
-  "everything": 920
+  "_note": "KB gzipped, checked by scripts/check-size.mjs after the build. 27 Oct 2026: screens load when opened (src/lib/lazyScreen.jsx) — first_load 203 KB (was 574), everything 974 KB in ~170 files. Set ~10% over.",
+  "first_load": 230,
+  "everything": 1020
 }
