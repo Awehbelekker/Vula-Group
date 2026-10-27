@@ -1822,14 +1822,21 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
         from vula import escalation as esc
         # 2026-10-22: a customer asking for a person always reaches one — before any stored
         # answer, and whatever the bot's own reply says.
-        if not _is_insider(caller_role) and esc.wants_human(text):
+        wants_person, upset = esc.wants_human(text), esc.customer_seems_frustrated(text)
+        # 2026-10-27 (gap audit 1.5): the phrase lists are starters outside English and
+        # Afrikaans, so a message in another language they miss gets one cheap AI check.
+        if not _is_insider(caller_role) and not (wants_person or upset) and esc.needs_classifier(text):
+            verdict = await esc.classify_customer_message(text)
+            if verdict:
+                wants_person, upset = verdict["wants_person"], verdict["upset"]
+        if not _is_insider(caller_role) and wants_person:
             _WEAK_STREAK.pop((tenant_id, phone), None)
             row = esc.create_escalation(tenant_id, phone, text)
             if row:
                 if not row.get("deduped"):
                     await _send_reply(
                         row["helper_phone"],
-                        esc.helper_prompt(row, text, esc.customer_seems_frustrated(text),
+                        esc.helper_prompt(row, text, upset,
                                           await esc.customer_context(tenant_id, phone, exclude=text),
                                           reason="asked_for_person"),
                         tenant_id=tenant_id,
@@ -1850,7 +1857,8 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             if learned:
                 return learned
         struggling = weak_run >= 2
-        if not struggling and not esc.should_escalate(reply, confidence, customer_text=text):
+        if not struggling and not esc.should_escalate(reply, confidence, customer_text=text,
+                                                      frustrated=upset):
             return reply
         learned = await esc.find_learned_answer(tenant_id, text)
         if learned:
@@ -1868,7 +1876,7 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             if not row.get("deduped"):
                 await _send_reply(
                     row["helper_phone"],
-                    esc.helper_prompt(row, text, esc.customer_seems_frustrated(text),
+                    esc.helper_prompt(row, text, upset,
                                       await esc.customer_context(tenant_id, phone, exclude=text),
                                       reason="struggling" if struggling else ""),
                     tenant_id=tenant_id,

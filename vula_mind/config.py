@@ -246,6 +246,10 @@ class Settings(BaseSettings):
     # Gap audit 1.3: tried in order when an OpenRouter model errors (outage, rate limit, model
     # withdrawn), after the model the route picked. Comma-separated OpenRouter ids. Image calls
     # fall back to model_vision only (core/llm_router.py::cloud_fallback_chain).
+    # Gap audit 1.5: one cheap local-first AI check for "wants a person" / "upset" when a
+    # customer writes in an African language the phrase lists only partly cover
+    # (vula/escalation.py::classify_customer_message). Off = phrase lists only.
+    escalation_classifier_enabled: bool = True
     cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash"
     # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
     # grades. Empty = rules only.
