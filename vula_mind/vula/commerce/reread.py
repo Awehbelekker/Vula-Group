@@ -245,24 +245,38 @@ def _save_boq(tenant_id: str, row: dict, new_fields: dict, name: str) -> None:
      .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
     row["fields"] = new_fields
     if (row.get("project") and new_fields.get("sections")
-            and (name.endswith(boq_sheet.SHEET_SUFFIXES) or not _has_sheet_boq(tenant_id, row["project"]))):
+            and _sets_project_budget(tenant_id, row, name.endswith(boq_sheet.SHEET_SUFFIXES))):
         service.upsert_project_boq(tenant_id, row["project"], int(new_fields.get("total_cents") or 0),
                                    sections=new_fields["sections"])
 
 
-def _has_sheet_boq(tenant_id: str, project: str) -> bool:
-    """Whether the project has a BOQ filed as a spreadsheet. Its cells are the budget; a PDF of
-    the same bill never replaces it. 2026-10-26, DIGG: re-reading Judy's Belladonna PDF (columns
-    scrambled, P&G read as R4,800 for R48,000) wrote its rooms over the project's budget."""
+def _sets_project_budget(tenant_id: str, row: dict, is_sheet: bool) -> bool:
+    """Whether this BOQ is the one the project's budget comes from. A spreadsheet's cells are the
+    budget, and the NEWEST spreadsheet wins; a PDF only when the project has no spreadsheet BOQ
+    and no newer BOQ at all.
+    2026-10-26, DIGG: re-reading Judy's Belladonna PDF (columns scrambled, P&G read as R4,800 for
+    R48,000) wrote its rooms over the project's budget. 2026-10-27: Learn from history re-read
+    Judy's 10:09 room-by-room sheet (R432,195) after her 17:49 sheet by trade (R461,195), and the
+    older one became the budget."""
     from vula.ingestion import boq_sheet
     try:
-        rows = (service._client().table("vula_filed_documents").select("filename")
-                .eq("tenant_id", tenant_id).eq("project", project).eq("category", _BOQ)
+        rows = (service._client().table("vula_filed_documents").select("id,filename,created_at")
+                .eq("tenant_id", tenant_id).eq("project", row["project"]).eq("category", _BOQ)
                 .limit(200).execute().data or [])
     except Exception as exc:
-        log.debug("sheet BOQ check skipped: %s", exc)
+        log.debug("project budget check skipped: %s", exc)
         return False
-    return any((r.get("filename") or "").lower().endswith(boq_sheet.SHEET_SUFFIXES) for r in rows)
+    mine = str(row.get("created_at") or "")
+    others = [r for r in rows if r.get("id") != row.get("id")]
+
+    def sheet(r):
+        return (r.get("filename") or "").lower().endswith(boq_sheet.SHEET_SUFFIXES)
+
+    def newer(r):
+        return bool(mine) and str(r.get("created_at") or "") > mine
+    if is_sheet:
+        return not any(sheet(r) and newer(r) for r in others)
+    return not any(sheet(r) or newer(r) for r in others)
 
 
 async def _file_text(tenant_id: str, row: dict, path: Path) -> str:
