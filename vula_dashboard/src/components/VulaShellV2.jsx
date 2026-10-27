@@ -12,12 +12,14 @@
  * "Powered by Vula" appears once: the sidebar foot, or the More sheet on a phone.
  */
 import { useEffect, useMemo, useState } from "react";
-import { CalendarCheck, Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
+import { CalendarCheck, Download, Inbox, LogOut, Menu, Moon, PanelLeftOpen, Plus, Search, Sun, SunMoon, X,
   FilePlus2, Wallet, ScanLine, UserPlus, Megaphone } from "lucide-react";
 import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
 import { iconFor, houseGroups, flattenNav, ADD_ACTIONS } from "../navConfig";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import { IconButton, Sheet, ListRow, CommandPalette, useCommandPaletteHotkey, FloatingToolbar } from "./ui/index.jsx";
+import { useInstall } from "../lib/install";
+import { startInstall } from "./install/InstallVula.jsx";
 import { PoweredByVula } from "./brand/VulaLogo.jsx";
 import "./VulaShellV2.css";
 
@@ -71,6 +73,7 @@ function ThemeButton() {
 
 function UserMenu({ userEmail, roleLabel, onLogout }) {
   const [open, setOpen] = useState(false);
+  const install = useInstall();
   const initial = (userEmail || "?")[0].toUpperCase();
   return (
     <div className="v2-user">
@@ -81,6 +84,10 @@ function UserMenu({ userEmail, roleLabel, onLogout }) {
           <div className="v2-menu-scrim" onClick={() => setOpen(false)} aria-hidden="true" />
           <div className="v2-menu" role="menu">
             <div className="v2-menu-who">{userEmail}{roleLabel ? <span> · {roleLabel}</span> : null}</div>
+            {!install.installed && (
+              <button type="button" role="menuitem" className="v2-menu-item" onClick={() => { setOpen(false); startInstall(install); }}>
+                <Download size={18} strokeWidth={1.75} aria-hidden="true" /> Install Vula
+              </button>)}
             <button type="button" role="menuitem" className="v2-menu-item" onClick={() => { setOpen(false); onLogout(); }}>
               <LogOut size={18} strokeWidth={1.75} aria-hidden="true" /> Sign out
             </button>
@@ -100,6 +107,7 @@ export default function VulaShellV2({
   const bp = useBreakpoint();
   const [railOpen, setRailOpen] = useState(false);
   const [more, setMore] = useState(false);
+  const install = useInstall();
   const [add, setAdd] = useState(false);
   const [palette, setPalette] = useState(false);
   useCommandPaletteHotkey(setPalette);
@@ -219,6 +227,9 @@ export default function VulaShellV2({
           </div>))}
         <div className="v2-sheet-group">
           <div className="v2-nav-label">You</div>
+          {!install.installed && (
+            <ListRow Icon={Download} title="Install Vula" detail="Put it on your home screen"
+              onClick={() => { setMore(false); startInstall(install); }} />)}
           <ListRow Icon={LogOut} title="Sign out" detail={`${userEmail || ""}${roleLabel ? ` · ${roleLabel}` : ""}`} onClick={() => { setMore(false); onLogout(); }} />
           {DARK_MODE_READY && <div style={{ padding: "8px 12px" }}><ThemeButton /></div>}
         </div>

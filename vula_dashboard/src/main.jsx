@@ -1,9 +1,12 @@
+// First: catches the browser's install offer, which fires once soon after load (PWA pass 2).
+import { isInstalled } from "./lib/install";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { OfflineBanner, UiHost, toast } from "./components/ui/index.jsx";
+import { InstallSteps } from "./components/install/InstallVula.jsx";
 import { installAuthFetch } from "./lib/authFetch";
 
 // Attach the signed-in user's JWT to every guarded Vula API call (tenant-scoped auth).
@@ -23,9 +26,15 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <App />
       <UiHost />
       <OfflineBanner />
+      <InstallSteps />
     </ErrorBoundary>
   </React.StrictMode>
 );
+
+window.addEventListener("appinstalled", () => {
+  if (!isInstalled()) return;
+  toast("Vula is on your home screen. Open it from there next time.");
+});
 
 // Register the PWA service worker (installable home-screen app, offline shell). 2026-10-27: the
 // build id in its address makes every deploy install a fresh worker, so phones don't keep running

@@ -11,6 +11,8 @@ import { Menu, Moon, Sun, SunMoon } from "lucide-react";
 import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
 import { iconFor } from "../navConfig";
 import VulaShellV2 from "./VulaShellV2";
+import { useInstall } from "../lib/install";
+import { startInstall } from "./install/InstallVula.jsx";
 
 // Auto (follow the phone) → Light → Dark → Auto. Per person, remembered on this device.
 const MODES = [["auto", "◐", "Theme: follows your device", SunMoon], ["light", "☀", "Theme: light", Sun],
@@ -61,6 +63,7 @@ function VulaShellV1({
   children,
 }) {
   const [open, setOpen] = useState(false); // mobile drawer state
+  const install = useInstall();
   const activeZone = zones?.find((z) => z.id === activeZoneId) || zones?.[0];
   const renderedGroups = zones ? (activeZone?.groups || []) : groups;
 
@@ -118,6 +121,7 @@ function VulaShellV1({
             {headerExtra}
             {DARK_MODE_READY && <ThemeToggle />}
             <span className="vshell-user">{userEmail}{roleLabel ? ` · ${roleLabel}` : ""}</span>
+            {!install.installed && <button className="vshell-signout" onClick={() => startInstall(install)}>Install Vula</button>}
             <button className="vshell-signout" onClick={onLogout}>Sign out</button>
           </div>
         </div>

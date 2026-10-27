@@ -166,3 +166,15 @@ button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
   background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--warn);
   box-shadow: var(--shadow-md); font-size: var(--fs-body); line-height: 1.4; }
 .vui-offline svg { flex: none; margin-top: 2px; color: var(--warn); }
+
+/* ── Install Vula (components/install/InstallVula.jsx) ─────────────────────────────────── */
+.vui-install-card { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: space-between;
+  margin-bottom: var(--space-3); border-left: 4px solid var(--brand) !important; }
+.vui-install-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; color: var(--ink); }
+.vui-install-card-text span { color: var(--muted); font-size: var(--fs-body); }
+.vui-install-card-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.vui-install-intro { margin: 0 0 var(--space-3); color: var(--ink); }
+.vui-install-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-3); counter-reset: step; }
+.vui-install-steps li { display: flex; gap: var(--space-3); align-items: flex-start; color: var(--ink); line-height: 1.45; }
+.vui-install-steps svg { flex: none; margin-top: 1px; color: var(--brand-text); }
+.vui-install-note { margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--fs-caption); }
