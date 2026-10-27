@@ -301,3 +301,21 @@ def test_a_newer_read_of_the_cells_replaces_an_older_one(tmp_path):
     assert len(fields["line_items"]) == 5 and fields["sections"][0]["budget_cents"] == 60000
     llm = {"line_items": [{"description": "x"}] * 9}
     assert boq_sheet.apply_to_fields(llm, boq_sheet.parse(p)) == llm   # an LLM list: only by more
+
+
+def test_a_spend_log_with_negative_costs_reads_as_costs():
+    """2026-10-27: Judy's Porterfield Bouwerk sheets enter every cost as a negative; the project
+    budget read as -R311,441.02."""
+    rows = [["Description", "Amount"], ["Main Bathroom", None],
+            ["Bathroom Bizarre", -7480.10], ["Builders Warehouse", -6971.00], ["Talisman", -3249.90],
+            ["Kitchen", None], ["Builders Warehouse", -233.00], ["Gelmar", -76.00], ["Refund", 150.00]]
+    lines = boq_sheet.parse_rows(rows, "Bouwerk")
+    assert [li["total_cents"] for li in lines] == [748010, 697100, 324990, 23300, 7600, -15000]
+    secs = {s["section"]: s["budget_cents"] for s in boq_sheet.section_budgets(lines)}
+    assert secs["Main Bathroom"] == 748010 + 697100 + 324990 and secs["Kitchen"] == 23300 + 7600 - 15000
+
+
+def test_a_boq_with_one_credit_line_keeps_its_sign():
+    rows = [["Description", "Amount"], ["Brickwork", 15000], ["Plaster", 6000], ["Ceilings", 3700],
+            ["Doors", 3450], ["Tiling", 14000], ["Less: deposit discount", -1000]]
+    assert [li["total_cents"] for li in boq_sheet.parse_rows(rows, "BOQ")][-1] == -100000

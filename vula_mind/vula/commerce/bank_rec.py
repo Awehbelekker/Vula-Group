@@ -862,6 +862,23 @@ _BANK_LAYOUT = re.compile(
     r"account number\s*:?\s*\d{6,}", re.IGNORECASE)
 
 
+_INVOICE_WORDS = re.compile(r"\btax invoice\b|\binvoice (no|number|#)|\bquotation\b|\bpro-?forma\b",
+                            re.IGNORECASE)
+
+
+def looks_like_supplier_document(text: str) -> bool:
+    """A supplier's invoice, quote or statement of account — never the business's bank statement,
+    however it was sent in. Only a page with the bank statement's own layout (statement period,
+    branch code…) escapes this, since FNB prints "Tax Invoice" on its statements.
+    2026-10-27: a hire company's invoice (DOW004 #113631) uploaded on the Bank page on 7 Oct went
+    in as five bank lines (tile cutter, transport, delivery, VAT) — uploads skipped every check."""
+    head = (text or "")[:6000]
+    if _BANK_LAYOUT.search(head):
+        return False
+    return bool(_SUPPLIER_ONLY.search(head)
+                or (_INVOICE_WORDS.search(head) and not _BALANCE_WORDS.search(head)))
+
+
 def looks_like_own_bank_statement(text: str) -> bool:
     """Is this the business's OWN bank account statement — not a supplier's statement of
     account, an invoice or a receipt with the word "statement" on it? 2026-09-28: every emailed
@@ -1013,7 +1030,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         return {"error": f"could not read statement (wrong password?): {exc}"}
     if not text.strip():
         return {"error": "no readable text in the statement (scanned image?)"}
-    if not trusted and not looks_like_own_bank_statement(text):
+    if looks_like_supplier_document(text) or (not trusted and not looks_like_own_bank_statement(text)):
         log.info("%s: %s is not the business's own bank statement — filed only, no bank lines",
                  tenant_id, source_file)
         return {"error": "not a bank statement of this business (supplier statement/invoice?)",

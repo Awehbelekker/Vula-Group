@@ -499,3 +499,41 @@ def test_direct_suppliers_count_against_the_boq_not_digg(db, monkeypatch):
     cost = project_programme.cost_position(TID, "HPC Bokaap", date(2026, 10, 3), tasks=[])
     assert cost["spent_cents"] == 1000000 + 79401520 + 11661123
     assert cost["paid_by_digg_cents"] == 1000000 and cost["paid_directly_cents"] == 79401520 + 11661123
+
+
+def test_an_uploaded_supplier_invoice_never_becomes_bank_lines():
+    """2026-10-27: a hire company's invoice (DOW004 #113631) uploaded on the Bank page went in as
+    five bank lines — uploads skipped the bank-statement check entirely."""
+    from vula.commerce.bank_rec import looks_like_supplier_document
+    hire_invoice = ("DOWNTOWN HIRE  TAX INVOICE  Invoice No 113631  Account DOW004  SIG4 1.5m Sigma Tile "
+                    "Cutter hire 1,880.00  Transport 120.00  VAT 260.87  Banking details: FNB")
+    supplier_statement = ("SOLID CAPE (PTY) LTD  Statement of Account  Account: DIG003  Current 30 Days "
+                          "Amount Due R77,513.00")
+    capitec = ("Capitec Bank  Account Statement  Opening Balance R156,069.73  "
+               "13/07/2026 HPC DOORS -27,292.48  Closing Balance R1,968.69")
+    nedbank_with_vat_note = ("Nedbank  Statement period 01/10/2026 - 31/10/2026  Account number 1234567890  "
+                             "This statement is a tax invoice for bank fees  Opening balance 1,000.00")
+    assert looks_like_supplier_document(hire_invoice)
+    assert looks_like_supplier_document(supplier_statement)
+    assert not looks_like_supplier_document(capitec)
+    assert not looks_like_supplier_document(nedbank_with_vat_note)
+    from tests.test_fnb_statement import TEXT as real_fnb_layout
+    assert not looks_like_supplier_document(real_fnb_layout)
+
+
+@pytest.mark.asyncio
+async def test_the_bank_upload_refuses_a_supplier_invoice(monkeypatch, tmp_path):
+    from vula.commerce import bank_rec
+    pdf = tmp_path / "DOW004Invoice113631.pdf"
+    pdf.write_bytes(b"%PDF")
+    monkeypatch.setattr(bank_rec, "extract_pdf_text",
+                        lambda p, pwd=None: "TAX INVOICE  Invoice No 113631  Sigma Tile Cutter hire 1,880.00")
+    monkeypatch.setattr("vula.ingestion.fnb_statement.pdf_text", lambda p, pwd=None: "")
+    called = []
+
+    async def _no(*a, **k):
+        called.append(1)
+        return []
+    monkeypatch.setattr(bank_rec, "extract_transactions", _no)
+    res = await bank_rec.ingest_statement("digg-demo", pdf, source_file=pdf.name, trusted=True)
+    assert res.get("not_bank_statement") and not called
