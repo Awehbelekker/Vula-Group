@@ -1712,6 +1712,20 @@ async def lifespan(app: FastAPI):
             await __a.to_thread(check_payment_setup)
         except Exception as exc:
             log.debug("schema check task failed: %s", exc)
+        # Gap audit 1.1: what switched-on features still need, to the operator once (the
+        # scheduler process only, so two workers don't both send it).
+        if settings.run_scheduled_jobs:
+            try:
+                from core.mass_mind.health import should_alert
+                from vula import readiness
+                from vula.integrations.platform_support import alert_operator
+                line = readiness.summary(await __a.to_thread(readiness.report))
+                if line:
+                    log.warning("%s", line)
+                    if should_alert("readiness"):
+                        await alert_operator(line)
+            except Exception as exc:
+                log.info("readiness check skipped: %s", type(exc).__name__)
 
     _asyncio.create_task(_schema_check())
     if not settings.enforce_tenant_auth:
@@ -2415,6 +2429,17 @@ async def health_check():
             "email_resend": "live" if settings.resend_api_key else "disabled by design",
         },
     }
+
+
+@app.get("/ready", dependencies=[Depends(require_auth)])
+async def readiness_report():
+    """What each switched-on feature still needs, platform and per tenant (vula/readiness.py).
+    503 while a platform setting is missing; a tenant's unfinished setup alone stays 200."""
+    import asyncio as _asyncio
+    from fastapi.responses import JSONResponse
+    from vula import readiness
+    rep = await _asyncio.to_thread(readiness.report)
+    return JSONResponse(rep, status_code=200 if rep["ready"] else 503)
 
 
 @app.get("/metrics", dependencies=[Depends(require_auth)])

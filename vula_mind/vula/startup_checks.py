@@ -153,8 +153,13 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
 ]
 
 
+# The last check_schema() result, for vula/readiness.py (None until it has run).
+LAST_MISSING: list[str] | None = None
+
+
 def check_schema() -> list[str]:
     """Probe each sentinel. Returns a list of human-readable "missing" strings (also logged)."""
+    global LAST_MISSING
     try:
         from vula.commerce import service
         client = service._client()
@@ -183,6 +188,7 @@ def check_schema() -> list[str]:
         )
     else:
         logger.info("schema check OK — all %d migration sentinels present", len(_SENTINELS))
+    LAST_MISSING = missing
     return missing
 
 
@@ -190,6 +196,16 @@ def check_payment_setup() -> list[str]:
     """Active tenants with no way to take payment — no card gateway connected and no EFT
     details. Payment links can't be sent for them, so it is said once at boot, loudly, rather
     than discovered when an owner asks Vula for a link (vula/commerce/pay_page.py)."""
+    unready = unready_payment_tenants()
+    if unready:
+        logger.error("PAYMENTS NOT SET UP for %s — no card gateway and no EFT details, so "
+                     "payment links can't be sent. Connect one under Settings › Payments.",
+                     ", ".join(sorted(unready)))
+    return unready
+
+
+def unready_payment_tenants() -> list[str]:
+    """check_payment_setup's list, without the log line (also read by vula/readiness.py)."""
     try:
         from vula.commerce import service
         from vula.api import tenants as _t
@@ -209,9 +225,4 @@ def check_payment_setup() -> list[str]:
     except Exception as exc:  # noqa: BLE001
         logger.info("payment setup check skipped (%s)", exc)
         return []
-    unready = [t for t in tids if t not in gw | yoco | eft and _t.is_active(t)]
-    if unready:
-        logger.error("PAYMENTS NOT SET UP for %s — no card gateway and no EFT details, so "
-                     "payment links can't be sent. Connect one under Settings › Payments.",
-                     ", ".join(sorted(unready)))
-    return unready
+    return [t for t in tids if t not in gw | yoco | eft and _t.is_active(t)]
