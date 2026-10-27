@@ -11,6 +11,10 @@ Nothing here suspends a workspace: what happens at the end of a trial is a busin
 27 Oct (Ian): the trial is TRIAL_DAYS (14) and runs from when the business's WhatsApp number goes
 live, not from signup: Meta's number approval can take days and nothing works before it. Signup
 sets the end date; connecting a number pushes it to 14 days from then (never earlier).
+
+No trial_ends = billed by hand by the master admin (Ian, 27 Oct: every tenant before then is
+managed that way until switched on to billing, so their trial dates were cleared). Nothing here
+emails, lists or extends those; setting a trial date from master switches them back on.
 """
 from __future__ import annotations
 
