@@ -42,6 +42,7 @@ import VulaShell from "./components/VulaShell";
 import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible, applyLabels, flattenNav, withV2Pages, withV2Moves } from "./navConfig";
 import { applyBrand, applyThemeMode } from "./theme/tokens";
 import { applyUiMode, uiV2For, rememberedTenantUi, rememberTenantUi } from "./lib/flags";
+import { showOnAppIcon } from "./lib/appBadge";
 
 const COLORS = {
   bg: "var(--bg)",
@@ -263,6 +264,12 @@ export default function App() {
     const t = setInterval(poll, 20000);
     return () => clearInterval(t);
   }, [user, role, tenantId, masterTenant, activeTab]);
+
+  // The same count on the installed app's icon — for this login's own business only (not a
+  // business the master has opened), and gone when signed out.
+  useEffect(() => {
+    showOnAppIcon(user && role !== "master" ? openEscalations : 0);
+  }, [user, role, openEscalations]);
 
   const withInboxBadge = (groups, count) => !count ? groups : groups.map(g => ({
     ...g, items: g.items.map(it => it.id === "inbox" ? { ...it, badge: count > 99 ? "99+" : String(count) } : it),

@@ -80,6 +80,7 @@ test("an offline phone says so, and stops saying so when it's back", async ({ pa
 test("the manifest installs Vula and lets a tablet turn sideways", async ({ request }) => {
   const m = await (await request.get("/manifest.webmanifest")).json();
   expect(m.display).toBe("standalone");
+  expect(m.id).toBe("/");
   expect(m.orientation).toBeUndefined();
   const sizes = m.icons.filter((i) => i.type === "image/png").map((i) => `${i.sizes}:${i.purpose}`);
   expect(sizes).toEqual(expect.arrayContaining(["192x192:any", "512x512:any", "512x512:maskable"]));
@@ -87,6 +88,20 @@ test("the manifest installs Vula and lets a tablet turn sideways", async ({ requ
   const offline = await request.get("/offline.html");
   expect(offline.ok()).toBe(true);
   expect(await offline.text()).toContain("You’re offline");
+});
+
+test("the app's icon shows how many customers are waiting, and clears on sign-out", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__badge = [];
+    navigator.setAppBadge = async (n) => { window.__badge.push(n); };
+    navigator.clearAppBadge = async () => { window.__badge.push(0); };
+  });
+  await open(page);
+  await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBeGreaterThan(0);
+  const waiting = await page.evaluate(() => window.__badge.at(-1));
+  await signOut(page);
+  await expect.poll(() => page.evaluate(() => window.__badge?.at(-1))).toBe(0);
+  expect(waiting).toBeGreaterThan(0);
 });
 
 test.describe("service worker", () => {
