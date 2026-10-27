@@ -122,7 +122,7 @@ from vula.api.email_public import router as email_public_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
-from vula.log_streams import handlers as _log_handlers  # noqa: E402
+from vula.log_streams import JsonFormatter as _JsonFormatter, bind as _bind_log, handlers as _log_handlers  # noqa: E402
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -135,7 +135,10 @@ logging.basicConfig(
     # (The format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s", %H:%M:%S.)
     # 2026-10-20: ERROR and up now go to stderr so Railway labels real errors as errors too
     # (vula/log_streams.py); everything below stays on stdout as before.
-    handlers=_log_handlers(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")),
+    # 2026-10-27: JSON lines by default (level / tenant / req labels Railway can filter on).
+    handlers=_log_handlers(
+        _JsonFormatter() if settings.log_format != "text" and not settings.debug
+        else logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")),
 )
 # POPIA: mask customer phone numbers in the (retained, Railway-captured) logs. No-op under DEBUG.
 try:
@@ -1749,6 +1752,7 @@ async def request_middleware(request: Request, call_next):
     """Structured request logging with correlation ID, timing, and error tracking."""
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
     request.state.request_id = request_id
+    _bind_log(req=request_id, tenant=_path_tenant(request.url.path))
     started = _time.monotonic()
 
     try:
@@ -1864,6 +1868,15 @@ _MASTER_ONLY = [
 # from tenant_admin_guard above, not folded into it — metering must never depend on
 # ENFORCE_TENANT_AUTH, which only gates auth, not cost attribution.
 _TENANT_ID_RE = re.compile(r"^/v1/commerce/([^/]+)/")
+
+
+def _path_tenant(path: str):
+    """The tenant a request path names, for log labels only (never for auth)."""
+    for rx in (_TENANT_ID_RE, *_TENANT_GUARD_RES):
+        m = rx.match(path)
+        if m:
+            return m.group(1)
+    return None
 
 
 @app.middleware("http")

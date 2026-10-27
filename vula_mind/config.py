@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     api_key: str = ""                   # require this header: X-API-Key
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     debug: bool = False
+    # "json": one JSON object per log line, so Railway labels warnings as warnings and can filter
+    # by tenant / request (vula/log_streams.py). "text" for reading logs in a terminal; DEBUG=true
+    # also switches to text.
+    log_format: str = "json"
 
     # ── Storage ─────────────────────────────────────────────────────────────
     # Railway sets DATA_DIR=/data (volume mount). Locally falls back to home dir.
