@@ -284,30 +284,32 @@ async def _daily_trial_expiry_loop() -> None:
         try:
             from vula.api.onboarding import _supabase, _payfast_url
             from vula.api.email import send_trial_expiry_email
+            from vula import trials
+            from vula.integrations.platform_support import alert_operator
             today = datetime.now(timezone.utc).date()
             rows = await _supabase.select("vula_tenants", {"paid": "false", "status": "active"}) or []
             warned = 0
-            for t in rows:
-                trial_end_str = (t.get("trial_ends") or "")[:10]
-                if not trial_end_str:
-                    continue
+            for t, days_left in trials.due_emails(rows, today):
                 try:
-                    days_left = (datetime.fromisoformat(trial_end_str).date() - today).days
-                    if days_left in (7, 3, 1, 0):
-                        payment_url = _payfast_url(
-                            t.get("workspace_slug") or t["tenant_id"], t.get("plan", "starter"),
-                            t.get("email", ""), t.get("contact_name", ""),
-                        )
-                        await send_trial_expiry_email(
-                            to=t.get("email", ""),
-                            first_name=(t.get("contact_name") or "there").split()[0],
-                            company_name=t.get("company_name", ""),
-                            days_left=days_left,
-                            payment_url=payment_url,
-                        )
+                    payment_url = _payfast_url(
+                        t.get("workspace_slug") or t["tenant_id"], t.get("plan", "starter"),
+                        t.get("email", ""), t.get("contact_name", ""),
+                    )
+                    # count only emails that went out (Resend may be off: _send returns False)
+                    if await send_trial_expiry_email(
+                        to=t.get("email", ""),
+                        first_name=(t.get("contact_name") or "there").split()[0],
+                        company_name=t.get("company_name", ""),
+                        days_left=days_left,
+                        payment_url=payment_url,
+                    ):
                         warned += 1
                 except Exception:
                     pass
+            # gap audit 5.1: the operator hears about trials ending, whether or not email works
+            line = trials.operator_line(rows, today)
+            if line and settings.run_scheduled_jobs:
+                await alert_operator(line)
             if warned:
                 log.info("Trial expiry warnings sent: %d tenants", warned)
         except Exception as exc:

@@ -386,7 +386,7 @@ async def send_trial_expiry_email(
         + '<tr><td style="padding:0 0 20px">'
         + f'<div style="background:{urgency_color}15;border-left:3px solid {urgency_color};padding:14px 18px;border-radius:4px;">'
         + f'<p style="margin:0;font-size:13px;color:{urgency_color};font-weight:600;">Trial expires {urgency_label}</p>'
-        + f'<p style="margin:6px 0 0;font-size:13px;color:#5A5A5A;">Your Vula workspace for <strong>{company_name}</strong> will be suspended. Subscribe now to keep your AI and all your uploaded documents.</p>'
+        + f'<p style="margin:6px 0 0;font-size:13px;color:#5A5A5A;">Subscribe to keep using Vula for <strong>{company_name}</strong>, with your AI assistant and all your uploaded documents.</p>'
         + "</div></td></tr>"
         + cta
         + _FOOTER
