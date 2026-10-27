@@ -1623,6 +1623,10 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
+    # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
+    # so a member restricted to e.g. Projects could still pull the full statements on WhatsApp.
+    "financial_report": "finances", "finance_settings": "finances",
+    "send_payment_reminders": "invoices",
     "staff_notice": "team", "staff_poll": "team",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),

@@ -14,6 +14,12 @@
 - {skill: email_admin, prompt: "Thanks, that's all for now", expect: null}
 
 - {skill: commerce_admin, role: owner, prompt: "How were sales today?", expect: sales_summary}
+- {skill: commerce_admin, role: owner, prompt: "Send me this month's P&L", expect: financial_report,
+   note: "gap audit 3.1: statements + PDF link on WhatsApp"}
+- {skill: commerce_admin, role: owner, prompt: "Bill Bokaap Holdings for ACM-INV-00012 again every month",
+   expect: recurring_invoice, forbid: [create_invoice], note: "gap audit 2.3"}
+- {skill: commerce_admin, role: owner, prompt: "Make a quote for Sam, 3 days tiling at R2500 a day, and send it to him",
+   expect: create_invoice, forbid: [send_invoice], note: "gap audit 2.5: a draft first, sending only after a preview"}
 - {skill: commerce_admin, role: owner, prompt: "Mark OTH-00042 as dispatched", expect: update_order_status}
 - {skill: commerce_admin, role: owner, prompt: "She paid cash for OTH-00051", expect: update_order_status}
 - {skill: commerce_admin, role: owner, prompt: "What's running low?", expect: stock_status}
