@@ -1052,17 +1052,19 @@ PROJECT_TOOLS = [
     # 27 Oct (DIGG): the project tracker, shared with the client by link in the view chosen per project.
     {"type": "function", "function": {
         "name": "share_project",
-        "description": "A link the client can open to see their project's account. Two views, chosen "
-                       "per project: 'price' (contract, invoiced, paid, still owed — your own costs "
-                       "and margin stay private) or 'open_book' (cost-plus: your cost per trade, what "
-                       "the client paid suppliers directly, the fee and the balance). Use for 'share "
-                       "Belladonna with Rudi', 'send the client a project link', 'open book link for "
-                       "HPC'. If the owner didn't say which view, call without one — the tool asks. "
+        "description": "A link the client or the QS can open to see the project's account. Views, "
+                       "chosen per project: 'price' (contract, invoiced, paid, still owed — your own "
+                       "costs and margin stay private), 'open_book' (cost-plus: your cost per trade, "
+                       "what the client paid suppliers directly, the fee and the balance) or 'qs' (a "
+                       "quantity surveyor's view: contract, certified and anticipated per bill, "
+                       "variations, valuations, programme, document register). Use for 'share "
+                       "Belladonna with Rudi', 'send the client a project link', 'give the QS access "
+                       "to HPC'. If the owner didn't say which view, call without one — the tool asks. "
                        "The first call previews what the client will see; call again with confirm="
                        "true only after the owner says yes. The reply is sent exactly as returned.",
         "parameters": {"type": "object", "properties": {
             "project": {"type": "string", "description": "Project name as the user said it."},
-            "view": {"type": "string", "enum": ["price", "open_book"]},
+            "view": {"type": "string", "enum": ["price", "open_book", "qs"]},
             "confirm": {"type": "boolean"}},
             "required": ["project"]}}},
     # 6 Oct (DIGG): "HPC project profit and also after tax" — tax worked out in code from the
@@ -3201,15 +3203,19 @@ class CommerceAdminSkill(BaseSkill):
                 "• *Price only* — the contract, what's been invoiced and paid, what's still owed. "
                 "Your own costs and margin stay private.\n"
                 "• *Open book* — cost-plus: your cost per trade, what they paid suppliers directly, "
-                "your fee and the balance.\n\nReply *price only* or *open book*.")}
+                "your fee and the balance.\n"
+                "• *QS view* — for the quantity surveyor: contract, certified and anticipated per bill, "
+                "variations, valuations, programme and the document register.\n\n"
+                "Reply *price only*, *open book* or *QS view*.")}
         pos = await asyncio.to_thread(pt.position, tid, project)
         if not args.get("confirm"):
             return {"preview": True, "reply_verbatim": pt.summary_text(pos, view)
                     + "\n\nReply *confirm* to make the link (it works for 180 days and you can switch it off)."}
         by = (ctx or {}).get("phone")
         share = await asyncio.to_thread(pt.create_share, tid, project, view, by)
+        who = "the QS" if view == "qs" else "the client"
         return {"reply_verbatim": (
-            f"🔗 {project} — {pt.VIEW_LABEL[view]} link for the client:\n{share['url']}\n\n"
+            f"🔗 {project} — {pt.VIEW_LABEL[view]} link for {who}:\n{share['url']}\n\n"
             "It always shows the books as they are now. It works until "
             f"{str(share['expires_at'])[:10]}; switch it off any time from Projects › Money in the dashboard."),
             "share_id": share["id"]}

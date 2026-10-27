@@ -287,18 +287,21 @@ def library(tenant_id: str, today: Optional[date] = None) -> List[List[Any]]:
 
 # ── workbook ───────────────────────────────────────────────────────────────
 
-def build(tenant_id: str, today: Optional[date] = None) -> Tuple[bytes, Dict[str, Any]]:
-    """The workbook's bytes and what went into it ({"rates", "trades", "own_rates", "logo"})."""
+def build(tenant_id: str, today: Optional[date] = None, lines: Optional[List[Dict[str, Any]]] = None,
+          project: Optional[str] = None) -> Tuple[bytes, Dict[str, Any]]:
+    """The workbook's bytes and what went into it ({"rates", "trades", "own_rates", "logo"}).
+    `lines` (a bill priced online — vula/commerce/boq_online.py) and `project` pre-fill it."""
     today = today or date.today()
     b = brand(tenant_id)
     lib = library(tenant_id, today)
     logo = _logo_bytes(b.get("logo_url"))
-    data = render(b, lib, logo, today)
+    data = render(b, lib, logo, today, lines=lines, project=project)
     return data, {"rates": len(lib), "trades": len({r[1] for r in lib}),
                   "own_rates": sum(1 for r in lib if r[5] == "Your rate"), "logo": bool(logo)}
 
 
-def render(b: Dict[str, Any], lib: List[List[Any]], logo: Optional[bytes], today: date) -> bytes:
+def render(b: Dict[str, Any], lib: List[List[Any]], logo: Optional[bytes], today: date,
+           lines: Optional[List[Dict[str, Any]]] = None, project: Optional[str] = None) -> bytes:
     A, INK = b["accent"], b["ink"]
     F = lambda size=10, bold=False, color=INK: Font(name="Arial", size=size, bold=bold, color=color)
     fill = lambda c: PatternFill("solid", fgColor=c)
@@ -526,7 +529,24 @@ def render(b: Dict[str, Any], lib: List[List[Any]], logo: Optional[bytes], today
     bq.cell(LR + 1, 9, "Bill total").font = F(10, True)
     x = bq.cell(LR + 1, 10, f"=SUM(J{FR}:J{LR})")
     x.font, x.number_format = F(10, True), RAND
-    example = next((r for r in lib if r[1] == "Tiling"), lib[0] if lib else None)
+    rates = {r[0]: r[4] for r in lib}
+    for r, li in zip(range(FR, LR + 1), lines or []):
+        # A library line keeps its pick (and its source); anything else is typed in, as an owner would.
+        bq.cell(r, 1, li.get("section") or None)
+        rate = li.get("rate_cents")
+        if li.get("key") in rates:
+            bq.cell(r, 3, li["key"])
+            if rate is not None and round(rates[li["key"]] * 100) != rate:
+                bq.cell(r, 8, rate / 100)
+        else:
+            bq.cell(r, 4, li.get("description"))
+            bq.cell(r, 5, li.get("unit"))
+            bq.cell(r, 8, rate / 100 if rate is not None else None)
+        bq.cell(r, 6, float(li["qty"]) if li.get("qty") not in (None, "") else None)
+        bq.cell(r, 13, li.get("area"))
+    if project:
+        cv["C21"] = project
+    example = None if lines else next((r for r in lib if r[1] == "Tiling"), lib[0] if lib else None)
     if example:
         bq.cell(FR, 1, example[1])
         bq.cell(FR, 3, example[0])

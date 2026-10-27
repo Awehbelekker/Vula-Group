@@ -32,6 +32,39 @@ export async function createShare(tenantId, project, view) {
   const d = await r.json().catch(() => ({}));
   return r.ok ? d : { error: d.detail || "The link couldn't be made." };
 }
+/** The online BOQ (vula/commerce/boq_online.py): the bill, the rate library, and its actions. */
+const boqUrl = (tenantId, path = "") => `${VULA_API}/v1/commerce/${tenantId}/admin/projects/boq-online${path}`;
+export const fetchBoqOnline = (tenantId, project) =>
+  fetch(`${boqUrl(tenantId)}?project=${encodeURIComponent(project)}`).then((r) => r.json());
+export const fetchBoqLibrary = (tenantId) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/boq-library`).then((r) => r.json());
+export const fetchBillLines = (tenantId, project) =>
+  fetch(`${boqUrl(tenantId, "/from-bill")}?project=${encodeURIComponent(project)}`).then((r) => r.json());
+/** POST to the bill; resolves to the server's answer or { error }. */
+async function boqPost(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+  if (!r) return { error: "Couldn't reach Vula — try again." };
+  const d = await r.json().catch(() => ({}));
+  return r.ok ? d : { error: d.detail || "That didn't work — try again." };
+}
+export const saveBoqOnline = (tenantId, project, lines) => boqPost(boqUrl(tenantId), { project, lines });
+export const makeBoqTheBudget = (tenantId, project) => boqPost(boqUrl(tenantId, "/use-as-budget"), { project });
+/** Open the priced bill in a new window to print or save as PDF. */
+export async function printBoq(tenantId, project) {
+  const w = window.open("", "_blank");
+  const html = await fetch(`${boqUrl(tenantId, "/print")}?project=${encodeURIComponent(project)}`).then((r) => r.text()).catch(() => "");
+  if (w) { w.document.write(html || "<p>The bill couldn't be loaded.</p>"); w.document.close(); }
+}
+/** Download the bill as the branded Excel template, pre-filled. */
+export async function downloadBoq(tenantId, project) {
+  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/boq-online.xlsx?project=${encodeURIComponent(project)}`).catch(() => null);
+  if (!r || !r.ok) return false;
+  const url = URL.createObjectURL(await r.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: `${project.replace(/[^\w -]/g, "").replace(/ /g, "_")}_BOQ.xlsx` });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
 export const revokeShare = (tenantId, id) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/shares/${id}/revoke`, { method: "POST" }).then((r) => r.ok).catch(() => false);
 /** The money rows the screen shows: numbers, and strings that are already rand amounts. */
