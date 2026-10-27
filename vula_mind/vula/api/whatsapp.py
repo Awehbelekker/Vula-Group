@@ -539,6 +539,27 @@ def _track_inbound(msg_id: Optional[str], **fields) -> None:
         logger.debug("inbound tracking skipped for %s (migration 179?): %s", msg_id, exc)
 
 
+HOLDING_REPLY = "Just checking that for you…"
+AI_DOWN_REPLY = ("Sorry, I can't answer that right now: my AI service is down for a moment. "
+                 "The team has been told. Please send it again in a few minutes. 🙏")
+
+
+async def _answer_even_if_ai_down(coro):
+    """Gap audit 1.3: when every AI model failed (core/llm_router.py marks the turn) and nothing
+    was sent, send a holding reply instead of going quiet. Runs inside the recorded turn."""
+    from vula import turns as _turns
+    try:
+        return await coro
+    finally:
+        turn = _turns.current()
+        answered = any(r.get("text") != HOLDING_REPLY for r in (turn or {}).get("replies") or [])
+        if turn and turn.get("_ai_down") and not answered and turn.get("phone"):
+            try:
+                await _send_reply(turn["phone"], AI_DOWN_REPLY, turn.get("tenant_id") or "")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("AI-down holding reply not sent: %s", type(exc).__name__)
+
+
 def _run_bg(coro, *, label: str, track: Optional[dict] = None, turn: Optional[dict] = None) -> None:
     """Fire a slow handler as a background task and return control to the webhook immediately.
 
@@ -559,7 +580,7 @@ def _run_bg(coro, *, label: str, track: Optional[dict] = None, turn: Optional[di
                 "kind": "voice" if track.get("kind") == "audio" else (track.get("kind") or "text"),
                 "text": _p.get("text") or "", "wamid": track.get("msg_id")}
     if turn is not None:
-        coro = _turns.run(coro, **turn)    # one recorded turn per message (vula/turns.py)
+        coro = _turns.run(_answer_even_if_ai_down(coro), **turn)    # one recorded turn per message (vula/turns.py)
 
     async def _wrapped():
         if track:
@@ -8285,7 +8306,7 @@ async def _run_with_holding_message(phone: str, tenant_id: str, coro, *, delay: 
         return await _asyncio.wait_for(_asyncio.shield(task), timeout=delay)
     except _asyncio.TimeoutError:
         try:
-            await _send_reply(phone, "Just checking that for you…", tenant_id)
+            await _send_reply(phone, HOLDING_REPLY, tenant_id)
         except Exception as exc:
             logger.debug("holding message send skipped: %s", exc)
     if not phone:

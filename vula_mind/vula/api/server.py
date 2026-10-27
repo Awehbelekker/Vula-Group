@@ -1689,6 +1689,18 @@ async def lifespan(app: FastAPI):
         install_metering()
     except Exception as exc:
         log.warning("metering install skipped: %s", exc)
+    try:
+        # at boot, not first use: routes that skip resolve_generation_route still get the Ollama
+        # headers and the cloud model fallback (core/llm_router.py)
+        from core.llm_router import install_ollama_auth
+        install_ollama_auth()
+    except Exception as exc:
+        log.warning("llm router install skipped: %s", exc)
+    try:
+        from vula import loop_watchdog
+        loop_watchdog.start(settings.loop_watchdog_stall_s)
+    except Exception as exc:
+        log.warning("loop watchdog not started: %s", exc)
 
     async def _schema_check() -> None:
         # Migrations are applied by hand (no runner) — surface an unapplied one at boot as one

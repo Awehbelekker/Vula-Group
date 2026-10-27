@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     # by tenant / request (vula/log_streams.py). "text" for reading logs in a terminal; DEBUG=true
     # also switches to text.
     log_format: str = "json"
+    # Seconds the event loop may stop turning before vula/loop_watchdog.py logs where it's stuck
+    # and alerts the operator (once per alert cooldown). 0 = off.
+    loop_watchdog_stall_s: int = 60
 
     # ── Storage ─────────────────────────────────────────────────────────────
     # Railway sets DATA_DIR=/data (volume mount). Locally falls back to home dir.
@@ -240,6 +243,10 @@ class Settings(BaseSettings):
     # listed uses model_worker_cloud. Pick entries from `python -m evals.run tools` results, not
     # reputation. An env change still needs `railway up` to take effect.
     cloud_model_by_task: str = ""
+    # Gap audit 1.3: tried in order when an OpenRouter model errors (outage, rate limit, model
+    # withdrawn), after the model the route picked. Comma-separated OpenRouter ids. Image calls
+    # fall back to model_vision only (core/llm_router.py::cloud_fallback_chain).
+    cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash"
     # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
     # grades. Empty = rules only.
     benchmark_judge_model: str = "openrouter/anthropic/claude-sonnet-5"
