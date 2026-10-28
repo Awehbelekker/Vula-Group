@@ -90,9 +90,17 @@ def get_service() -> TapService:
                     receipt_secret="receipt:" + pepper, receipt_base_url=settings.dashboard_url,
                     reminder_template=settings.tap_reminder_template,
                     reminder_final_template=settings.tap_reminder_final_template)
+    from vula.tap.gateways import GatewayRouter, tenant_choice
     from vula.tap.push import build_pusher
-    return TapService(SupabaseRepo(), WhatsAppMessenger(), PayFastGateway(settings.public_base_url), cfg,
-                      pusher=build_pusher(settings))
+    gateways = {"payfast": PayFastGateway(settings.public_base_url)}
+    from vula.tap.gateways import CHOICE_TTL_S
+    router = GatewayRouter(gateways, choose=lambda t: tenant_choice(t, set(gateways)), ttl_s=CHOICE_TTL_S)
+    return TapService(SupabaseRepo(), WhatsAppMessenger(), router, cfg, pusher=build_pusher(settings))
+
+
+# Gateways Tap to Pay can check out through (vula/tap/gateways.py). A payment notification from
+# one of these is offered to Tap to Pay first; anything that isn't a tap payment carries on.
+TAP_GATEWAYS = ("payfast",)
 
 
 # ── WhatsApp hooks (called from vula/api/whatsapp.py) ────────────────────────────────────────
@@ -116,15 +124,20 @@ async def try_handle_interactive(tenant_id: Optional[str], phone: str, reply_id:
         return True
 
 
-async def try_handle_itn(tenant_id: str, headers: dict, body: bytes, form: dict) -> Optional[str]:
-    """PayFast ITN for a tap session (m_payment_id 'kb-<session>'). None = not a tap payment."""
-    if not str(form.get("m_payment_id", "")).startswith("kb-") or not tenant_enabled(tenant_id):
+async def try_handle_itn(tenant_id: str, headers: dict, body: bytes, form: dict,
+                         provider: str = "payfast") -> Optional[str]:
+    """A gateway's payment notification for a tap session (reference 'kb-<session>'). None = not a
+    tap payment, so the generic invoice/order handling carries on."""
+    if provider not in TAP_GATEWAYS or not tenant_enabled(tenant_id):
+        return None
+    if provider == "payfast" and not str(form.get("m_payment_id", "")).startswith("kb-"):
         return None
     try:
-        return await get_service().confirm_payment(tenant_id, headers, body, form)
+        outcome = await get_service().confirm_payment(tenant_id, headers, body, form, provider=provider)
     except Exception:  # noqa: BLE001
         log.exception("tap ITN handling failed (tenant=%s)", tenant_id)
         return "error"
+    return None if outcome == "not_tap" else outcome
 
 
 # ── public pages ─────────────────────────────────────────────────────────────────────────────
@@ -238,11 +251,14 @@ async def pay(session_id: str, nonce: str):
 async def done(session_id: str, request: Request):
     from vula.tap import express_page
     from vula.tap.express import COOKIE
-    slip = get_service().express.slip_link(session_id[:64], request.cookies.get(COOKIE) or "")
-    if slip:                # an express payment: wait for PayFast, then print the slip on screen
+    svc = get_service()
+    slip = svc.express.slip_link(session_id[:64], request.cookies.get(COOKIE) or "")
+    if slip:                # an express payment: wait for the gateway, then print the slip on screen
+        s = svc.repo.get_session_any_tenant(session_id[:64]) or {}
         nonce = secrets.token_urlsafe(16)
-        return _secure(HTMLResponse(express_page.done(slip, f"/v1/tap/done/{session_id[:64]}/status", nonce)),
-                       nonce)
+        return _secure(HTMLResponse(express_page.done(
+            slip, f"/v1/tap/done/{session_id[:64]}/status", nonce,
+            pay_with=svc.gateway_label(s["tenant_id"]) if s.get("tenant_id") else "PayFast")), nonce)
     return _page("Thank you", "Your slip will arrive in WhatsApp as soon as the payment is confirmed. "
                               "You can close this page.")
 

@@ -76,7 +76,8 @@ class ExpressPay:
         out = {"tenant_id": tenant, "merchant": svc.repo.merchant_name(tenant),
                "staff": svc.repo.staff_name(tenant, tag.get("bound_id")), "kind": _KIND.get(d.kind, "no_bill"),
                "tip_presets": [(bp // 100) for bp in svc.cfg.tip_presets_bp],
-               "quick_presets": list(svc.cfg.quick_tip_presets_cents[:3])}
+               "quick_presets": list(svc.cfg.quick_tip_presets_cents[:3]),
+               "pay_with": svc.gateway_label(tenant)}
         if d.kind == mt.CLAIM:
             bill = svc.repo.get_bill(tenant, d.bill_id) or {}
             out.update(bill_cents=int(bill.get("subtotal_cents") or 0),

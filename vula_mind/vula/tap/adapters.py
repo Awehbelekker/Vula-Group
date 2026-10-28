@@ -68,6 +68,8 @@ def _payfast_row(tenant_id: str) -> Optional[dict]:
 
 
 class PayFastGateway:
+    name, label = "payfast", "PayFast"
+
     def __init__(self, public_base_url: str, server_validate: bool = True):
         self.base = public_base_url.rstrip("/")
         self.server_validate = server_validate
@@ -84,7 +86,10 @@ class PayFastGateway:
             notify_url=f"{self.base}/v1/payments/webhook/{tenant_id}/payfast", customer={}, mode=row["mode"])
         return link.url
 
-    async def verify_itn(self, *, tenant_id: str, headers: dict, body: bytes, form: dict) -> Optional[dict[str, Any]]:
+    async def verify_itn(self, *, tenant_id: str, headers: dict, body: bytes, form: dict,
+                         provider: str = "payfast") -> Optional[dict[str, Any]]:
+        if provider != self.name:
+            return None
         row = _payfast_row(tenant_id)
         if not row:
             return None

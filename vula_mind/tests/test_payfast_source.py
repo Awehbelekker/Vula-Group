@@ -40,7 +40,7 @@ def test_webhook_ignores_a_forged_itn_in_enforce_mode(monkeypatch):
     from config import settings
     seen = []
 
-    async def handled(tenant_id, headers, body, form):
+    async def handled(tenant_id, headers, body, form, provider="payfast"):
         seen.append(form.get("m_payment_id"))
         return "ok"
     monkeypatch.setattr(tap_api, "try_handle_itn", handled)
