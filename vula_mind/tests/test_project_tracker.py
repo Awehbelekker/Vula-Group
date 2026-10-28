@@ -219,3 +219,36 @@ def test_whatsapp_previews_then_records_a_client_payment():
         done = asyncio.run(skill._client_paid_direct(TID, {**args, "confirm": True}, {"phone": "27820000000"}))
     assert add.call_args.args[:4] == (TID, "Sample Flat", "Flush", 5_826_830)
     assert "Recorded on *Sample Flat*" in done["reply_verbatim"]
+
+
+def _reconciled_db():
+    db = _db()
+    db.tables["vula_project_boq"][0]["sections"] = [
+        {"section": "Bathroom", "budget_cents": 30_000_00, "actual_cents": 36_000_00, "paid_cents": 30_000_00},
+        {"section": "Kitchen", "budget_cents": 20_000_00, "actual_cents": 19_000_00, "paid_cents": 19_000_00}]
+    return db
+
+
+def test_the_reconciled_project_bill_shows_actual_and_paid_per_section():
+    # 28 Oct (Ian): "we did a whole recon on the Belladonna but it's not reflecting in the project
+    # tables" — the project bill's Actual / Paid columns were stored on the sections but dropped
+    p = _position(_reconciled_db())
+    assert p["sections"][0] == {"section": "Bathroom", "budget_cents": 30_000_00,
+                                "actual_cents": 36_000_00, "paid_cents": 30_000_00}
+    s = p["sheet"]
+    assert (s["actual_cents"], s["paid_cents"], s["to_pay_cents"]) == (55_000_00, 49_000_00, 6_000_00)
+    assert (s["over_budget_cents"], s["over_sections"]) == (5_000_00, ["Bathroom"])
+    assert s["not_in_books_cents"] == 55_000_00 - p["spent_cents"]
+    assert _position()["sheet"] is None                    # a bill without those columns: nothing new
+
+
+def test_a_price_or_qs_link_never_shows_what_the_sections_really_cost():
+    p = _position(_reconciled_db())
+    for view in ("price", "qs"):
+        v = pt.client_view(p, view)
+        assert "sheet" not in v and all("actual_cents" not in s and "paid_cents" not in s for s in v["sections"])
+        assert "R36 000.00" not in pt.render({"name": "Example Builders"}, v)
+    ob = pt.client_view(p, "open_book")
+    assert ob["sheet"]["actual_cents"] == 55_000_00
+    page = pt.render({"name": "Example Builders"}, ob)
+    assert "By section" in page and "R36 000.00" in page and "R49 000.00" in page

@@ -51,6 +51,10 @@ VIEW_LABEL = {"price": "Price only", "open_book": "Open book (cost-plus)", "qs":
 # A valuation's per-bill figures, kept on vula_project_boq sections when the BOQ is a payment
 # certificate (vula/ingestion/boq_sheet.py: certified / anticipated / variation columns).
 _SECTION_EXTRA = ("certified_cents", "anticipated_cents", "variation_cents")
+# The business's own reconciled project bill (boq_sheet: Actual / Paid-to-date columns) — what each
+# section really cost and how much of it is paid, whoever paid it. Owner and open-book views only:
+# a price-only or QS link never shows what the business's suppliers cost.
+_SECTION_COST = ("actual_cents", "paid_cents")
 LINK_DAYS = 180
 
 
@@ -241,13 +245,24 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
     paid = sum(i["paid_cents"] for i in invoices)
     paid_directly = direct + by_client["cents"] + recorded_paid
     spent = business_cost + paid_directly
+    sections = [{"section": s.get("section"), "budget_cents": int(s.get("budget_cents") or 0),
+                 **{k: int(s[k]) for k in _SECTION_EXTRA + _SECTION_COST if s.get(k) is not None}}
+                for s in boq.get("sections") or [] if s.get("section")]
+    sheet = None
+    if any("actual_cents" in s for s in sections):
+        actual = sum(s.get("actual_cents", 0) for s in sections)
+        sheet_paid = sum(s.get("paid_cents", 0) for s in sections)
+        sheet = {"actual_cents": actual, "paid_cents": sheet_paid, "to_pay_cents": actual - sheet_paid,
+                 "over_budget_cents": actual - budget if budget else None,
+                 "over_sections": [s["section"] for s in sections if s.get("actual_cents", 0) > s["budget_cents"]],
+                 # what the books show against what the reconciled bill says it cost
+                 "not_in_books_cents": actual - spent}
     return {
         "project": name,
         "budget_cents": budget, "budget_title": boq.get("title"),
         "baseline_locked": bool(boq.get("baseline_locked")),
-        "sections": [{"section": s.get("section"), "budget_cents": int(s.get("budget_cents") or 0),
-                      **{k: int(s[k]) for k in _SECTION_EXTRA if s.get(k) is not None}}
-                     for s in boq.get("sections") or [] if s.get("section")],
+        "sections": sections,
+        "sheet": sheet,
         "variations_claimed_cents": claimed,
         "variations_extra_cost_cents": int(variations.get("extra_cost_cents") or 0),
         "contract_cents": contract,
@@ -287,14 +302,17 @@ _QS_FIELDS = _PRICE_FIELDS + ("variations_extra_cost_cents", "baseline_locked", 
 _OPEN_BOOK_FIELDS = _PRICE_FIELDS + ("trades", "business_cost_cents", "paid_directly_cents", "spent_cents",
                                      "direct_payments", "to_pay_directly_cents",
                                      "budget_left_cents", "fee_pct", "fee_cents", "open_book_total_cents",
-                                     "received_cents", "open_book_balance_cents")
+                                     "received_cents", "open_book_balance_cents", "sheet")
 
 
 def client_view(pos: Dict[str, Any], view: str) -> Dict[str, Any]:
     """What the client sees. `price` keeps the business's cost, fee and margin private; neither
     view carries the overhead share, profit or anything not listed above."""
     fields = {"open_book": _OPEN_BOOK_FIELDS, "qs": _QS_FIELDS}.get(view, _PRICE_FIELDS)
-    return {"view": view if view in VIEWS else "price", **{k: pos.get(k) for k in fields}}
+    out = {"view": view if view in VIEWS else "price", **{k: pos.get(k) for k in fields}}
+    if view != "open_book":
+        out["sections"] = [{k: v for k, v in s.items() if k not in _SECTION_COST} for s in out.get("sections") or []]
+    return out
 
 
 # ── share links ────────────────────────────────────────────────────────────
@@ -489,6 +507,15 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                     f"{cell(tot('anticipated_cents'))}</tr>")
         parts.append("<h3>By bill</h3><table><tr class='h'><td></td><td class='n'>Contract</td><td class='n'>Certified</td>"
                      f"<td class='n'>Anticipated final</td></tr>{''.join(body)}</table>")
+    elif secs and v["view"] == "open_book" and v.get("sheet"):
+        cell = lambda c: f"<td class='n'>{_r(c)}</td>"
+        body = [f"<tr><td>{e(s['section'])}</td>{cell(s['budget_cents'])}{cell(s.get('actual_cents'))}"
+                f"{cell(s.get('paid_cents'))}</tr>" for s in secs]
+        sh = v["sheet"]
+        body.append(f"<tr class='total'><td>Total</td>{cell(sum(s['budget_cents'] for s in secs))}"
+                    f"{cell(sh['actual_cents'])}{cell(sh['paid_cents'])}</tr>")
+        parts.append("<h3>By section</h3><table><tr class='h'><td></td><td class='n'>Budget</td><td class='n'>Actual</td>"
+                     f"<td class='n'>Paid</td></tr>{''.join(body)}</table>")
     elif secs:
         parts.append(table("Budget by section", [row(s["section"], s["budget_cents"]) for s in secs]))
     if v["view"] == "qs":

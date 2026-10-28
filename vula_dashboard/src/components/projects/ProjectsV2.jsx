@@ -269,12 +269,19 @@ function ProjectBoq({ tenantId, project }) {
   };
   if (!bill) return <Empty>Loading…</Empty>;
   const sections = boq?.sections || [];
+  // the business's reconciled project bill carries what each section really cost and what's paid
+  const reconciled = sections.some((s) => s.actual_cents != null);
+  const sumOf = (k) => sections.reduce((a, s) => a + (s[k] || 0), 0);
   return (
     <>
       <Section title={`Project budget · ${boq?.total_cents ? money(boq.total_cents) : "not set"}`}
         hint={bill.baseline_locked ? "The signed baseline is locked — changes to it go through a variation order."
           : bill.budget_is_this_bill ? "The budget is the bill below." : "Filing a BOQ document under this project sets the budget, or use the bill below."}>
-        {sections.map((s, i) => <Line key={i} label={s.section} value={<span className="vula-money">{money(s.budget_cents)}</span>} />)}
+        {reconciled && <Line label={<span className="vpj-sub">Section</span>} value={<span className="vpj-sub">Budget · Actual · Paid</span>} />}
+        {sections.map((s, i) => <Line key={i} label={s.section} value={reconciled
+          ? <span className="vula-money">{money(s.budget_cents)} · <span style={(s.actual_cents || 0) > s.budget_cents ? { color: "var(--danger, #b91c1c)", fontWeight: 600 } : undefined}>{money(s.actual_cents || 0)}</span> · {money(s.paid_cents || 0)}</span>
+          : <span className="vula-money">{money(s.budget_cents)}</span>} />)}
+        {reconciled && <Line label={<strong>Total</strong>} value={<strong className="vula-money">{money(sumOf("budget_cents"))} · {money(sumOf("actual_cents"))} · {money(sumOf("paid_cents"))}</strong>} />}
         {sections.length === 0 && <Empty>No trade sections yet.</Empty>}
       </Section>
       <Section title={`Bill of quantities · ${money(billTotal)}`} hint="Pick a trade and an item from your rate library, or type your own. Type the quantity — the amount adds up.">
@@ -500,6 +507,15 @@ function ProjectMoney({ tenantId, project }) {
         <Line label={<strong>Total spent{p.spent_pct != null ? ` · ${p.spent_pct}% of budget` : ""}</strong>} value={<strong>{cents(p.spent_cents)}</strong>} />
         {p.budget_left_cents != null && <Line label="Budget left" value={cents(p.budget_left_cents)} />}
       </Section>
+      {p.sheet && (
+        <Section title="Per your reconciled project bill" hint="From the Actual and Paid columns of the project bill filed for this project. Only you and open-book client links see these.">
+          <Line label="Budget" value={cents(p.budget_cents)} />
+          <Line label="Actual cost" value={cents(p.sheet.actual_cents)} />
+          {p.sheet.over_budget_cents != null && <Line label={p.sheet.over_budget_cents > 0 ? `Over budget${p.sheet.over_sections.length ? ` (${p.sheet.over_sections.join(", ")})` : ""}` : "Under budget"} value={<strong>{cents(Math.abs(p.sheet.over_budget_cents))}</strong>} />}
+          <Line label="Paid so far" value={cents(p.sheet.paid_cents)} />
+          <Line label={<strong>Still to pay</strong>} value={<strong>{cents(p.sheet.to_pay_cents)}</strong>} />
+          {p.sheet.not_in_books_cents > 0 && <Line label="Of the actual cost, not in Vula's books yet (paid in cash, by the client or not yet booked)" value={cents(p.sheet.not_in_books_cents)} />}
+        </Section>)}
       <DirectPayments tenantId={tenantId} project={project} p={p} onChange={load} />
       <Section title="Account" hint={`Open book adds your fee (${p.fee_pct}%) to your cost; price only works from your invoices.`}>
         <Line label="Cost through you" value={cents(p.business_cost_cents)} />
