@@ -57,8 +57,10 @@ class ExpressPay:
     def payer(self, cookie: str) -> str:
         return hmac.new(self.svc.cfg.pepper.encode(), f"web:{cookie}".encode(), hashlib.sha256).hexdigest()
 
-    def _slip_mac(self, session_id: str) -> str:
-        return hmac.new(self.svc.cfg.pepper.encode(), f"slip:{session_id}".encode(),
+    def _slip_mac(self, session_id: str, payer_hash: str) -> str:
+        # bound to the paying browser's payer hash, not just the session id: knowing a payment's id
+        # is not enough to have its slip sent to another number (security review, 28 Oct)
+        return hmac.new(self.svc.cfg.pepper.encode(), f"slip:{session_id}:{payer_hash}".encode(),
                         hashlib.sha256).hexdigest()[:16]
 
     # ── the page ─────────────────────────────────────────────────────────────────────────────
@@ -215,15 +217,18 @@ class ExpressPay:
             return True
         return False
 
-    def slip_link(self, session_id: str) -> Optional[str]:
-        """wa.me link that asks Vula for this payment's slip, or None (unknown / not a web payment)."""
+    def slip_link(self, session_id: str, cookie: str) -> Optional[str]:
+        """wa.me link that asks Vula for this payment's slip, or None (unknown, not a web payment,
+        or not the browser that paid)."""
         s = self.svc.repo.get_session_any_tenant(session_id)
-        if not s or s.get("payer_enc"):
+        if (not s or s.get("payer_enc") or not cookie
+                or not hmac.compare_digest(s["payer_hash"], self.payer(cookie))):
             return None
         number = re.sub(r"\D", "", self.svc.repo.tenant_wa_number(s["tenant_id"]) or "")
         if not number:
             return None
-        return f"https://wa.me/{number}?text={quote(f'SLIP {session_id}.{self._slip_mac(session_id)}')}"
+        mac = self._slip_mac(session_id, s["payer_hash"])
+        return f"https://wa.me/{number}?text={quote(f'SLIP {session_id}.{mac}')}"
 
     async def claim_slip(self, tenant_id: str, phone: str, text: str) -> bool:
         """WhatsApp "SLIP <ref>": link the number to the web payment and send its slip (now if it is
@@ -234,14 +239,12 @@ class ExpressPay:
         svc = self.svc
         sid, mac = m.group(1), m.group(2)
         s = svc.repo.get_session(tenant_id, sid)
-        if not s or not hmac.compare_digest(mac, self._slip_mac(sid)):
+        mine = bool(s) and bool(s.get("payer_enc")) and s["payer_hash"] == svc.phone_hash(phone)
+        if not s or (not mine and (s.get("payer_enc")             # linked to another number already
+                                   or not hmac.compare_digest(mac, self._slip_mac(sid, s["payer_hash"])))):
             await svc._say(tenant_id, phone, "We couldn't find that payment. Ask staff for help.")
             return True
-        if s.get("payer_enc"):
-            if s["payer_hash"] != svc.phone_hash(phone):          # linked to another number already
-                await svc._say(tenant_id, phone, "We couldn't find that payment. Ask staff for help.")
-                return True
-        else:
+        if not mine:
             svc.repo.cas_session(tenant_id, sid, expected=s["state"], new=s["state"], fields={
                 "payer_enc": svc.cfg.encrypt(re.sub(r"\D", "", phone)), "payer_hash": svc.phone_hash(phone)})
         if s["state"] == "paid":

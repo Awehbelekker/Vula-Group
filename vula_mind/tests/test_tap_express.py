@@ -181,7 +181,8 @@ async def test_slip_requested_before_the_payment_is_confirmed(env):
     bill(svc, tag)
     await pay(svc)
     s = only_session(repo)
-    link = svc.express.slip_link(s["id"])
+    assert svc.express.slip_link(s["id"], "browser-2") is None      # only the browser that paid
+    link = svc.express.slip_link(s["id"], "browser-1")
     assert link.startswith("https://wa.me/27737815979?text=SLIP%20")
     text = re.search(r"text=(.+)$", link).group(1).replace("%20", " ")
     assert await svc.handle_text(T, CUST, text) is True
@@ -198,7 +199,7 @@ async def test_slip_requested_after_payment_and_guarded(env):
     s = only_session(repo)
     gw.itn = itn(s["id"], 50000)
     await svc.confirm_payment(T, {}, b"", {})
-    text = re.search(r"text=(.+)$", svc.express.slip_link(s["id"])).group(1).replace("%20", " ")
+    text = re.search(r"text=(.+)$", svc.express.slip_link(s["id"], "browser-1")).group(1).replace("%20", " ")
     await svc.handle_text(T, CUST, text)
     assert any("Paid R 500.00" in m[3] for m in msg.to(CUST, "text"))
     other = "+27 83 222 9999"
@@ -206,6 +207,21 @@ async def test_slip_requested_after_payment_and_guarded(env):
     assert "couldn't find" in msg.to(other, "text")[-1][3]
     await svc.handle_text(T, other, f"SLIP {s['id']}.{'0' * 16}")     # forged
     assert "couldn't find" in msg.to(other, "text")[-1][3]
+    n = len(msg.to(CUST, "text"))
+    await svc.handle_text(T, CUST, text)                       # the payer asks again: resent
+    assert len(msg.to(CUST, "text")) == n + 1 and "Paid R 500.00" in msg.to(CUST, "text")[-1][3]
+
+
+async def test_knowing_the_payment_id_is_not_enough_for_its_slip(env):
+    svc, repo, msg, gw, tag, _ = env
+    bill(svc, tag)
+    await pay(svc)
+    s = only_session(repo)
+    import hashlib
+    import hmac
+    guess = hmac.new(b"pep", f"slip:{s['id']}".encode(), hashlib.sha256).hexdigest()[:16]   # old, id-only MAC
+    await svc.handle_text(T, "+27 83 222 9999", f"SLIP {s['id']}.{guess}")
+    assert repo.sessions[s["id"]]["payer_enc"] is None          # not linked to the stranger
 
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -232,8 +248,9 @@ def test_http_tap_page_then_pay(http):
     assert r.status_code == 303 and r.headers["location"].startswith("https://pay.example/checkout/")
     s = only_session(repo)
     assert s["tip_cents"] == 5000
-    done = client.get(f"/v1/tap/done/{s['id']}")
+    done = client.get(f"/v1/tap/done/{s['id']}", cookies={COOKIE: "c1"})
     assert "Get my slip on WhatsApp" in done.text and "wa.me" in done.text
+    assert "wa.me" not in client.get(f"/v1/tap/done/{s['id']}", cookies={COOKIE: "c2"}).text
     client.get(f"/v1/tap/cancelled/{s['id']}", cookies={COOKIE: "c1"})
     assert repo.sessions[s["id"]]["state"] == "cancelled"
 

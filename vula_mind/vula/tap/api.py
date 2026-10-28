@@ -215,9 +215,10 @@ async def pay(session_id: str, nonce: str):
 
 
 @router.get("/v1/tap/done/{session_id}")
-async def done(session_id: str):
+async def done(session_id: str, request: Request):
     from vula.tap import express_page
-    slip = get_service().express.slip_link(session_id[:64])
+    from vula.tap.express import COOKIE
+    slip = get_service().express.slip_link(session_id[:64], request.cookies.get(COOKIE) or "")
     if slip:                                   # an express payment: the slip is one tap away
         return HTMLResponse(express_page.done(slip))
     return _page("Thank you", "Your slip will arrive in WhatsApp as soon as the payment is confirmed. "
