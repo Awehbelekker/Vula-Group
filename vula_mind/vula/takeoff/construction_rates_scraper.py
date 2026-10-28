@@ -8,7 +8,7 @@ Runs weekly via n8n → updates the Qdrant knowledge base →
 Vula QS Pro pulls fresh rates instead of static AECOM tables.
 
 Sources:
-    - AECOM Africa Cost Guide (estimationqs.com summary)
+    - AECOM Africa Property & Construction Cost Guide (the PDF itself, read monthly at most)
     - Builders Warehouse (builders.co.za)
     - Cashbuild (cashbuild.co.za)  
     - Italtile (italtile.co.za) — tiles and flooring
@@ -143,6 +143,57 @@ class RateFetcher:
             text = re.sub(r"\s+", " ", text)
             return text[:15000]  # Cap for LLM
 
+    async def fetch_pdf_pages(self, url: str, timeout: float = 90.0) -> List[str]:
+        """A PDF's text, one string per page (PyMuPDF, as in the ingestion pipeline)."""
+        async with httpx.AsyncClient(headers=self.HEADERS, timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+        data = resp.content
+        if not data.startswith(b"%PDF"):
+            raise ValueError("the link didn't return a PDF")
+        if len(data) > MAX_PDF_BYTES:
+            raise ValueError(f"the PDF is too large ({len(data) // 1_000_000} MB)")
+        return await asyncio.to_thread(_pdf_pages, data)
+
+
+def _pdf_pages(data: bytes) -> List[str]:
+    import pymupdf
+    with pymupdf.open(stream=data, filetype="pdf") as doc:
+        return [page.get_text() for page in doc]
+
+
+# 2026-10-28: the AECOM guide is ~100 pages covering all of Africa; only the South African rand
+# rate tables matter. A page qualifies when it reads as South African (rand / R per m² / an SA
+# city) and is dense with prices; the densest go to the model, in page order, a few at a time.
+_SA_HINT = re.compile(r"south africa|johannesburg|cape town|durban|pretoria|gauteng|\brand\b|\br\s?/\s?m", re.I)
+_PRICE_RANGE = re.compile(r"\d[\d ,]{2,}\s?[-–]\s?\d[\d ,]{2,}")
+_PER_UNIT = re.compile(r"m²|m2\b|/m\b|per m", re.I)
+MAX_PDF_BYTES = 60_000_000
+PDF_CHUNKS = 6
+PDF_CHUNK_CHARS = 7000
+
+
+def rate_pages(pages: List[str], max_chunks: Optional[int] = None, chunk_chars: Optional[int] = None) -> List[str]:
+    """The guide's South African price pages, packed into chunks the model can read."""
+    max_chunks, chunk_chars = max_chunks or PDF_CHUNKS, chunk_chars or PDF_CHUNK_CHARS
+    scored = []
+    for i, text in enumerate(pages):
+        density = len(_PRICE_RANGE.findall(text)) + len(_PER_UNIT.findall(text))
+        if density >= 5 and _SA_HINT.search(text):
+            scored.append((density, i))
+    picked = sorted(i for _, i in sorted(scored, reverse=True)[: max_chunks * 2])
+    chunks: List[str] = []
+    cur = ""
+    for i in picked:
+        text = re.sub(r"[ \t]+", " ", pages[i]).strip()[:chunk_chars]
+        if cur and len(cur) + len(text) > chunk_chars:
+            chunks.append(cur)
+            cur = ""
+        cur += f"\n[page {i + 1}]\n{text}"
+    if cur:
+        chunks.append(cur)
+    return chunks[:max_chunks]
+
 
 def _parse_json_array(raw: str) -> Optional[list]:
     r"""Tolerant JSON-array extraction from LLM output. 2026-09-11: `json.loads(match.group())`
@@ -179,14 +230,33 @@ class RateExtractor:
     def __init__(self):
         self.fetcher = RateFetcher()
 
-    async def extract_rates(self, url: str, source_name: str, prompt: str) -> ScrapedCatalogue:
-        """Fetch a page and extract construction rates using local DeepSeek."""
+    async def extract_rates(self, url: str, source_name: str, prompt: str, kind: str = "html") -> ScrapedCatalogue:
+        """Fetch a page (or a PDF's rate pages) and extract construction rates using the local model."""
         try:
-            content = await self.fetcher.fetch(url)
+            if kind == "pdf":
+                chunks = rate_pages(await self.fetcher.fetch_pdf_pages(url))
+                if not chunks:
+                    return ScrapedCatalogue(source_name=source_name, source_url=url, status="no_data",
+                                            error="no South African price pages found in the PDF")
+            else:
+                chunks = [await self.fetcher.fetch(url)]
         except Exception as e:
             logger.warning(f"Failed to fetch {url}: {e}")
             return ScrapedCatalogue(source_name=source_name, source_url=url, status="fetch_failed", error=str(e))
 
+        rates: Dict[str, MaterialRate] = {}
+        last: Optional[ScrapedCatalogue] = None
+        for content in chunks:
+            cat = await self._extract_one(url, source_name, prompt, content)
+            if cat.status == "ok":
+                for r in cat.rates:
+                    rates.setdefault(r.key, r)          # first page that names a rate wins
+            last = cat
+        if rates:
+            return ScrapedCatalogue(source_name=source_name, source_url=url, rates=list(rates.values()))
+        return last or ScrapedCatalogue(source_name=source_name, source_url=url, status="no_data")
+
+    async def _extract_one(self, url: str, source_name: str, prompt: str, content: str) -> ScrapedCatalogue:
         extraction_prompt = (
             f"{prompt}\n\n"
             f"Page content:\n{content[:8000]}\n\n"
@@ -441,9 +511,18 @@ class ConstructionRatesScraper:
 
     SOURCES = [
         {
+            # 2026-10-28: the estimationqs.com summary page is gone (404). This is AECOM's Africa
+            # Property & Construction Cost Guide 2025/26 itself (36th edition, the free copy the
+            # ASAQS publishes). The rates change once a year, so it's read at most monthly.
             "name": "AECOM 2025/26",
-            "url": "https://estimationqs.com/building-costs-per-square-metre-in-south-africa-2025-to-2026-aecom-guide/",
-            "prompt": "Extract all South African construction cost benchmarks in ZAR per square metre from this AECOM cost guide. Include office, retail, industrial, residential, fitout, parking, MEP rates.",
+            "url": "https://cdn.ymaws.com/www.asaqs.co.za/resource/resmgr/4_resources/free_resources/"
+                   "other_publications/aecom_africa_cost_guide_2025.pdf",
+            "kind": "pdf",
+            "refresh_days": 30,
+            "prompt": "Extract the South African building cost rates in rand (ZAR) per square metre from these "
+                      "pages of the AECOM Africa Property & Construction Cost Guide. Include office, retail, "
+                      "industrial, residential, hotel, fitout, parking and MEP rates. Ignore other countries "
+                      "and any US dollar figures.",
         },
         {
             "name": "Rand Tools SA",
@@ -497,12 +576,14 @@ class ConstructionRatesScraper:
             async with semaphore:
                 logger.info(f"Scraping: {source['name']}")
                 catalogue = await self.extractor.extract_rates(
-                    source["url"], source["name"], source["prompt"]
+                    source["url"], source["name"], source["prompt"], source.get("kind", "html")
                 )
                 self.db.log_scrape(catalogue)
                 return catalogue
 
-        catalogues = await asyncio.gather(*[scrape_one(s) for s in self.SOURCES], return_exceptions=True)
+        sources = [s for s in self.SOURCES if not self._fresh(s)]
+        up_to_date = [s["name"] for s in self.SOURCES if s not in sources]
+        catalogues = await asyncio.gather(*[scrape_one(s) for s in sources], return_exceptions=True)
 
         # Process results. 2026-09-11: a source whose fetch 404'd or whose LLM response didn't
         # parse used to still land in sources_scraped (it WAS attempted, just produced nothing)
@@ -512,7 +593,7 @@ class ConstructionRatesScraper:
         sources_failed: List[Dict[str, str]] = []
         for i, cat in enumerate(catalogues):
             if isinstance(cat, Exception):
-                name = self.SOURCES[i]["name"] if i < len(self.SOURCES) else "?"
+                name = sources[i]["name"] if i < len(sources) else "?"
                 logger.error(f"Scraper error: {cat}")
                 sources_failed.append({"source": name, "reason": str(cat)})
                 continue
@@ -543,10 +624,12 @@ class ConstructionRatesScraper:
         summary = (
             f"Vula Scout — Construction Rates Update\n"
             f"{'─' * 40}\n"
-            f"Scraped: {len(sources_scraped)}/{len(self.SOURCES)} sources\n"
+            f"Scraped: {len(sources_scraped)}/{len(sources)} sources\n"
             f"Rates: {len(all_rates)} total · {counts['new']} new · {counts['updated']} updated\n"
             f"Duration: {time.time()-started:.1f}s\n"
         )
+        if up_to_date:
+            summary += f"Up to date, not re-read: {', '.join(up_to_date)}\n"
         if sources_failed:
             summary += (f"\n⚠️ {len(sources_failed)} source(s) produced nothing:\n"
                        + "\n".join(f"  {f['source']}: {f['reason']}" for f in sources_failed) + "\n")
@@ -564,10 +647,30 @@ class ConstructionRatesScraper:
             sources_failed=sources_failed,
         )
 
+    def _fresh(self, source: dict) -> bool:
+        """A periodic source (the yearly AECOM guide) that was read successfully, with rates, from
+        the same link within its refresh_days isn't downloaded again. The run log is kept in
+        Supabase (vula_material_rate_log): the local SQLite copy is wiped on every deploy."""
+        days = source.get("refresh_days")
+        if not days:
+            return False
+        from vula import durable
+        rows = durable.select("vula_material_rate_log", "url,scraped_at,rates_extracted", order="scraped_at",
+                              desc=True, limit=5, source=source["name"], status="ok") or []
+        for r in rows:
+            if r.get("url") != source["url"] or not r.get("rates_extracted"):
+                continue
+            try:
+                at = datetime.fromisoformat(str(r.get("scraped_at")).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            now = datetime.now(at.tzinfo) if at.tzinfo else datetime.now()
+            return (now - at).days < days
+        return False
+
     async def get_live_rate(self, material_description: str) -> Optional[Dict]:
         """
-        Query the database for a specific material rate.
-        Falls back to scraping if not in DB.
+        Query the database for a specific material rate (None when it isn't there).
         
         Usage: rate = await scraper.get_live_rate("porcelain tiles 600x600")
         """
@@ -580,18 +683,10 @@ class ConstructionRatesScraper:
             best = max(matches, key=lambda r: sum(1 for w in desc_lower.split() if w in r["label"].lower()))
             return best
 
-        # Not in DB — attempt live scrape from AECOM source
-        logger.info(f"Rate not cached, attempting live lookup: {material_description}")
-        cat = await self.extractor.extract_rates(
-            self.SOURCES[0]["url"],
-            "AECOM 2025/26 (live)",
-            f"Find the construction cost rate in ZAR for: {material_description}",
-        )
-        if cat.rates:
-            rate = cat.rates[0]
-            self.db.upsert(rate)
-            return {"label": rate.label, "low": rate.low, "high": rate.high, "mid": rate.mid, "unit": rate.unit}
-
+        # Not in DB. 2026-10-28: this used to scrape the AECOM summary page live (gone, 404). The
+        # guide is now a PDF read monthly into the DB, so a rate that isn't there isn't fetched
+        # per question — the caller falls back to its own rates.
+        logger.info(f"Rate not cached: {material_description}")
         return None
 
     def whatsapp_digest(self) -> str:
