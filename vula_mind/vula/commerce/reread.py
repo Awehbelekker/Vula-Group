@@ -247,10 +247,21 @@ def _save_boq(tenant_id: str, row: dict, new_fields: dict, name: str) -> None:
     (service._client().table("vula_filed_documents").update({"fields": new_fields})
      .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
     row["fields"] = new_fields
+    # 2026-10-28, DIGG: Learn from history re-read Judy's Porterfield cost report, whose read total
+    # was R-311,441.02 (a savings column), and made that the project's budget. A negative total is
+    # never a budget (the document is updated, the budget left alone); a missing one is the sum of
+    # the sections, and nothing when that isn't positive either.
+    total = int(new_fields.get("total_cents") or 0)
+    if total == 0:
+        total = sum(int(s.get("budget_cents") or 0) for s in new_fields.get("sections") or [])
+    if total <= 0:
+        if row.get("project") and new_fields.get("sections"):
+            log.warning("BOQ %s total %s: not used as %s's budget", row.get("id"),
+                        new_fields.get("total_cents"), row["project"])
+        return
     if (row.get("project") and new_fields.get("sections")
             and _sets_project_budget(tenant_id, row, name.endswith(boq_sheet.SHEET_SUFFIXES))):
-        service.upsert_project_boq(tenant_id, row["project"], int(new_fields.get("total_cents") or 0),
-                                   sections=new_fields["sections"])
+        service.upsert_project_boq(tenant_id, row["project"], total, sections=new_fields["sections"])
 
 
 def _sets_project_budget(tenant_id: str, row: dict, is_sheet: bool) -> bool:

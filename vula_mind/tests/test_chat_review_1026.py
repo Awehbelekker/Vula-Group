@@ -419,3 +419,25 @@ async def test_a_pdf_bill_read_from_its_tables_replaces_a_longer_scrambled_read(
     assert await reread._reread_boq("digg-demo", row) is True
     assert row["fields"]["line_items"][0]["total_cents"] == 48_000_00
     assert await reread._reread_boq("digg-demo", row) is False      # the same cells again: nothing to save
+
+
+def test_a_negative_bill_total_never_becomes_a_project_budget(monkeypatch):
+    # 28 Oct: a re-read cost report with a total of R-311,441.02 became Porterfield's budget
+    from vula.commerce import reread, service
+    filed = _Rows([])
+
+    class _DB:
+        def table(self, n): return filed
+
+    upserts = []
+    monkeypatch.setattr(service, "_client", lambda: _DB())
+    monkeypatch.setattr(service, "upsert_project_boq", lambda *a, **k: upserts.append((a, k)))
+    row = {"id": "d9", "project": "Sample Flat", "filename": "cost report.xlsx", "created_at": "2026-08-11"}
+    sections = [{"section": "Main Bathroom", "budget_cents": 31_144_102}]
+    reread._save_boq("t1", row, {"total_cents": -31_144_102, "sections": sections}, "cost report.xlsx")
+    assert upserts == [] and row["fields"]["total_cents"] == -31_144_102   # the document itself is still updated
+    reread._save_boq("t1", row, {"total_cents": 0, "sections": [{"section": "X", "budget_cents": 0}]}, "x.xlsx")
+    assert upserts == []
+    reread._save_boq("t1", row, {"sections": sections}, "cost report.xlsx")          # no total: the sections
+    reread._save_boq("t1", row, {"total_cents": 24_055_353, "sections": sections}, "cost report.xlsx")
+    assert [u[0][2] for u in upserts] == [31_144_102, 24_055_353]
