@@ -84,6 +84,20 @@ export async function addDirectPayment(tenantId, body) {
 }
 export const removeDirectPayment = (tenantId, id) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/direct-payments/${id}/remove`, { method: "POST" }).then((r) => r.ok).catch(() => false);
+/** Link a client's WhatsApp number to the project (vula/commerce/project_client.py); resolves to the link or { error }. */
+export async function addProjectClient(tenantId, body) {
+  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/clients`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+  if (!r) return { error: "Couldn't reach Vula — try again." };
+  const d = await r.json().catch(() => ({}));
+  return r.ok ? d : { error: d.detail || "The client couldn't be added." };
+}
+export const removeProjectClient = (tenantId, id) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/clients/${id}/remove`, { method: "POST" }).then((r) => r.ok).catch(() => false);
+/** Yes/no to a slip the client sent on WhatsApp; the client is told either way. */
+export const decideClientSlip = (tenantId, id, approve) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/client-slips/${id}/decide`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve }) }).then((r) => r.ok).catch(() => false);
 export const revokeShare = (tenantId, id) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/shares/${id}/revoke`, { method: "POST" }).then((r) => r.ok).catch(() => false);
 /** The money rows the screen shows: numbers, and strings that are already rand amounts. */

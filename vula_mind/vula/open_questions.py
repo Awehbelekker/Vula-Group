@@ -36,6 +36,7 @@ TTL = {
     "new_project": timedelta(days=1),
     "promo_scope": timedelta(days=1),
     "new_project_name": timedelta(hours=6),
+    "client_slip": timedelta(days=7),
 }
 # At most this many documents in one "still need a project" list; the rest wait for the next.
 LIST_MAX = 15

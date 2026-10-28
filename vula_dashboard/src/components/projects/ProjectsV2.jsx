@@ -10,8 +10,9 @@ import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Uploa
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
-import { PROJECT_TABS, addDirectPayment, createShare, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline, fetchQsView, fetchTracker,
-  makeBoqTheBudget, printBoq, removeDirectPayment, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject, useProjects } from "./useProjects";
+import { PROJECT_TABS, addDirectPayment, addProjectClient, createShare, decideClientSlip, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
+  fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject,
+  useProjects } from "./useProjects";
 import "./projects.css";
 
 const STATUS = { active: { label: "Active", tone: "ok" }, on_hold: { label: "On hold", tone: "highlight" }, complete: { label: "Complete", tone: "muted" } };
@@ -516,6 +517,7 @@ function ProjectMoney({ tenantId, project }) {
           <Line label={<strong>Still to pay</strong>} value={<strong>{cents(p.sheet.to_pay_cents)}</strong>} />
           {p.sheet.not_in_books_cents > 0 && <Line label="Of the actual cost, not in Vula's books yet (paid in cash, by the client or not yet booked)" value={cents(p.sheet.not_in_books_cents)} />}
         </Section>)}
+      <ClientSlips tenantId={tenantId} slips={t.proposed_slips || []} onChange={load} />
       <DirectPayments tenantId={tenantId} project={project} p={p} onChange={load} />
       <Section title="Account" hint={`Open book adds your fee (${p.fee_pct}%) to your cost; price only works from your invoices.`}>
         <Line label="Cost through you" value={cents(p.business_cost_cents)} />
@@ -554,7 +556,63 @@ function ProjectMoney({ tenantId, project }) {
             value={s.active ? <Button size="sm" variant="secondary" onClick={async () => { if (await revokeShare(tenantId, s.id)) load(); }}>Switch off</Button> : ""} />
         ))}
       </Section>
+      <ProjectClients tenantId={tenantId} project={project} clients={t.clients || []} defaultView={view} onChange={load} />
     </>
+  );
+}
+
+/** Slips the client sent on WhatsApp for suppliers they paid themselves — nothing counts until you say yes. */
+function ClientSlips({ tenantId, slips, onChange }) {
+  if (!slips.length) return null;
+  const decide = async (id, approve) => { if (await decideClientSlip(tenantId, id, approve)) onChange(); };
+  return (
+    <Section title={`Slips from the client to check · ${slips.length}`}
+      hint="The client sent these on WhatsApp. Yes records it as paid by the client directly; no leaves it out. The client is told either way.">
+      {slips.map((s) => (
+        <Line key={s.id} label={`${s.supplier}${s.paid_on ? ` · ${s.paid_on}` : ""}${s.description ? ` — ${s.description}` : ""}`}
+          value={<span className="vpj-go"><span className="vula-money">{money(s.amount_cents)}</span>
+            <Button size="sm" onClick={() => decide(s.id, true)}>Yes</Button>
+            <Button size="sm" variant="secondary" onClick={() => decide(s.id, false)}>No</Button></span>} />
+      ))}
+    </Section>
+  );
+}
+
+const NEW_CLIENT = { name: "", phone: "" };
+
+/** The client on WhatsApp (vula/commerce/project_client.py): they ask this business's number about
+ * the project and get answers from their view only; their slips and questions come to you. */
+function ProjectClients({ tenantId, project, clients, defaultView, onChange }) {
+  const [f, setF] = useState(NEW_CLIENT);
+  const [view, setView] = useState(defaultView);
+  const [note, setNote] = useState("");
+  useEffect(() => setView(defaultView), [defaultView]);
+  const add = async () => {
+    const r = await addProjectClient(tenantId, { project, name: f.name || null, phone: f.phone, view });
+    if (r.error) { setNote(r.error); return; }
+    setNote(`${r.name || r.phone} can now message your WhatsApp number about ${project}. Let them know — Vula can't message them first.`);
+    setF(NEW_CLIENT);
+    onChange();
+  };
+  return (
+    <Section title="The client on WhatsApp"
+      hint="They message your business's WhatsApp number to ask what they've paid, what's due, the budget and what's left to do — answered from their view only. Slips they send and lines they question come to you.">
+      {clients.map((c) => (
+        <Line key={c.id} label={`${c.name || "Client"} · ${c.phone} · ${VIEWS[c.view] || c.view}`}
+          value={<Button size="sm" variant="secondary" onClick={async () => { if (await removeProjectClient(tenantId, c.id)) onChange(); }}>Remove</Button>} />
+      ))}
+      <div className="vpj-form vpj-pad">
+        <Field label="Client's name"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+        <Field label="WhatsApp number"><Input inputMode="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
+        <Field label="What they see" hint={VIEW_HINT[view]}>
+          <Select value={view} onChange={(e) => setView(e.target.value)}>
+            {Object.entries(VIEWS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </Select>
+        </Field>
+        <div className="vpj-go"><Button disabled={!f.phone} onClick={add}>Add client</Button></div>
+        {note && <p className="vpj-sub" role="status">{note}</p>}
+      </div>
+    </Section>
   );
 }
 
