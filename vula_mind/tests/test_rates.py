@@ -207,7 +207,7 @@ async def test_run_full_update_tracks_failed_sources(tmp_path):
     scraper = ConstructionRatesScraper()
     scraper.db = RatesDatabase(db_path=tmp_path / "rates.db")
 
-    async def fake_extract(url, source_name, prompt):
+    async def fake_extract(url, source_name, prompt, kind="html"):
         if source_name == scraper.SOURCES[0]["name"]:
             return ScrapedCatalogue(
                 source_name=source_name, source_url=url,
@@ -346,3 +346,69 @@ def test_a_high_below_low_is_treated_as_a_single_price():
     from vula.takeoff.construction_rates_scraper import _rates_from_items
     (r,) = _rates_from_items([{"label": "Sand", "low": 450, "high": 45}], "x")
     assert (r.low, r.high) == (450.0, 450.0)
+
+
+# ── AECOM guide read from the PDF itself (28 Oct: the summary page it came from 404s) ──────────
+
+def _guide_pages():
+    filler = "Contents\nForeword by the managing director\n"
+    usd = "Nairobi, Kenya\nOffices US$/m2 1 200 - 1 800\nRetail US$/m2 900 - 1 500\n" * 3
+    sa = ("BUILDING COSTS - SOUTH AFRICA (R/m²)\nOffices: low-rise 11 600 - 15 900\n"
+          "Retail: shopping centre 14 300 - 19 900\nResidential: simple 7 400 - 9 900\n"
+          "Industrial: warehouse 6 700 - 8 800\nParking: basement 5 600 - 7 900\n")
+    return [filler, usd, sa, filler, sa.replace("Offices", "Hotels")]
+
+
+def test_only_south_african_price_pages_go_to_the_model():
+    from vula.takeoff.construction_rates_scraper import rate_pages
+    chunks = rate_pages(_guide_pages())
+    text = "\n".join(chunks)
+    assert "[page 3]" in text and "[page 5]" in text
+    assert "Nairobi" not in text and "Foreword" not in text
+    assert rate_pages(["Contents", "Nairobi, Kenya\nOffices US$/m2 1 200 - 1 800"]) == []
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_source_is_read_page_chunks_and_merged(monkeypatch):
+    from vula.takeoff import construction_rates_scraper as crs
+    ex = crs.RateExtractor()
+    monkeypatch.setattr(ex.fetcher, "fetch_pdf_pages", AsyncMock(return_value=_guide_pages()))
+    monkeypatch.setattr(crs, "PDF_CHUNK_CHARS", 300)            # one page per chunk
+    seen = []
+
+    async def one(url, name, prompt, content):
+        seen.append(content)
+        label = "Offices low-rise" if len(seen) == 1 else "Hotels"
+        return ScrapedCatalogue(source_name=name, source_url=url,
+                                rates=[MaterialRate(key=label.lower(), label=label, unit="m²", low=100, high=200)])
+    monkeypatch.setattr(ex, "_extract_one", one)
+    cat = await ex.extract_rates("https://x/guide.pdf", "AECOM 2025/26", "p", "pdf")
+    assert cat.status == "ok" and sorted(r.label for r in cat.rates) == ["Hotels", "Offices low-rise"]
+    assert len(seen) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_yearly_guide_is_not_downloaded_again_within_the_month(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    from vula import durable
+    from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper
+    scraper = ConstructionRatesScraper()
+    scraper.db = RatesDatabase(db_path=tmp_path / "rates.db")
+    aecom = next(s for s in scraper.SOURCES if s.get("kind") == "pdf")
+    assert aecom["url"].endswith(".pdf") and "estimationqs" not in aecom["url"]
+    log = [{"url": aecom["url"], "scraped_at": (datetime.now() - timedelta(days=3)).isoformat(), "rates_extracted": 40}]
+    monkeypatch.setattr(durable, "select", lambda *a, **k: log)
+    called = []
+
+    async def fake_extract(url, source_name, prompt, kind="html"):
+        called.append(source_name)
+        return ScrapedCatalogue(source_name=source_name, source_url=url, status="no_data")
+    with patch.object(scraper.extractor, "extract_rates", new=AsyncMock(side_effect=fake_extract)):
+        result = await scraper.run_full_update()
+    assert aecom["name"] not in called and "Up to date, not re-read: AECOM 2025/26" in result.summary
+    assert all(f["source"] != aecom["name"] for f in result.sources_failed)
+    # an old read, a read with no rates, or a read of another link: downloaded again
+    for stale in ({**log[0], "scraped_at": (datetime.now() - timedelta(days=40)).isoformat()},
+                  {**log[0], "rates_extracted": 0}, {**log[0], "url": "https://old.example/page"}):
+        monkeypatch.setattr(durable, "select", lambda *a, s=stale, **k: [s])
+        assert scraper._fresh(aecom) is False
