@@ -233,6 +233,9 @@ async def _reread_boq(tenant_id: str, row: dict) -> bool:
     if new_fields.get("line_items_source") == "sheet" and fields.get("line_items_source") == "sheet":
         if new_fields.get("line_items") == fields.get("line_items"):
             return False               # the cells read the same as last time
+    elif new_fields.get("line_items_source") == "sheet":
+        pass                           # cells (a sheet, or a PDF's own tables) replace a model's read,
+                                       # even one with as many lines: a scrambled read often has more
     elif len(new_fields.get("line_items") or []) <= before:
         return False
     await asyncio.to_thread(_save_boq, tenant_id, row, new_fields, name)
