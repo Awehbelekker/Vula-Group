@@ -2648,6 +2648,8 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
            f"✅ {rec.get('matched_invoices', 0)} matched to invoices"
            f" · 🧾 {rec.get('matched_expenses', 0)} matched to receipts"
            f" · 👷 {rec.get('matched_workers', 0)} worker payments")
+    from vula.commerce import bank_review
+    msg += bank_review.named_line(rec)
     if rec.get("superseded"):
         msg += f"\n🔁 {rec['superseded']} earlier misread line(s) replaced by this statement."
     if rec.get("extraction_reconciled") is False:
@@ -2656,7 +2658,6 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
     ni = rec.get("needs_input", 0)
     if ni:
         # Start the review right here in the chat — one item at a time.
-        from vula.commerce import bank_review
         q = bank_review.start_review(tenant_id)
         if q:
             msg += f"\n\n{ni} I couldn't allocate — let's sort them here:\n\n{q}"

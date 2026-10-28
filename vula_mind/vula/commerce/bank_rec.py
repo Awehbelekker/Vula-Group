@@ -616,6 +616,8 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # Owner allocations learned from earlier statements (project + trade per counterparty).
     from vula.commerce import allocation
     alloc_rules = allocation.load_rules(tenant_id)
+    naming = allocation.naming_projects(tenant_id)
+    named_counts: Dict[str, int] = {}
     canon: Dict[str, Optional[str]] = {}
 
     # Categorise the whole statement up front — batched cloud calls with direction-aware
@@ -629,6 +631,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     used_bill_ids: set = set()
     for idx, t in enumerate(txns):
         status, inv_id, order_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None, None
+        bill_project = None
         if not auto_settle:
             if t["direction"] == "in":
                 unmatched_in += 1
@@ -696,7 +699,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                             await service.update_invoice_status(tenant_id, bm["id"], "paid")
                             inv_id, status = bm["id"], "matched"
                             # the payment is for the bill's project (job costing)
-                            wk_project = wk_project or bm.get("project")
+                            bill_project = bm.get("project")
                             used_bill_ids.add(bm["id"])
                             matched_bills += 1
                         except Exception as exc:
@@ -755,11 +758,15 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             "vat_treatment": (acc_map.get(code) or {}).get("vat_treatment"), "categorized_by": cat_src,
             "worker_id": worker_id, "project": wk_project,
         }
-        # Project/trade: an owner's earlier allocation of this very line wins, then the
-        # worker's default project, then a clear learned rule (vula/commerce/allocation.py).
+        # Project/trade: an owner's earlier allocation of this very line wins, then the project
+        # of the supplier bill it paid, then a project the line names ("…22 Porterfield"), then
+        # the worker's default project, then a clear learned rule (vula/commerce/allocation.py).
         s_project, s_trade = ((None, None) if own_wages
                               else allocation.suggest(alloc_rules, t.get("description"), None, tenant_id))
-        project = (prior or {}).get("project") or wk_project or s_project
+        n_project = None if own_wages else allocation.named_project(naming, t.get("description"))
+        project = (prior or {}).get("project") or bill_project or n_project or wk_project or s_project
+        if n_project and project == n_project and not (prior or {}).get("project"):
+            named_counts[n_project] = named_counts.get(n_project, 0) + 1
         trade = (prior or {}).get("trade") or s_trade
         if project:
             if project not in canon:
@@ -790,6 +797,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             "matched_orders": matched_orders,
             "matched_workers": matched_workers, "matched_expenses": matched_expenses,
             "needs_input": needs_input, "card_settlements": card_settlements,
+            "named_projects": named_counts,
             "unmatched_credits": unmatched_in, "unmatched_debits": unmatched_out}
 
 

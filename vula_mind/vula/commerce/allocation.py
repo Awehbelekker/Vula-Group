@@ -153,12 +153,54 @@ def suggest(rules: List[Dict], description: Optional[str],
     return project, trade
 
 
+def naming_projects(tenant_id: str) -> List[Dict]:
+    """The registered projects, with only the words a bank line can safely name them by.
+
+    2026-10-28 (Ian, importing Porterfield's statements): "FNB App Payment To Sporty Plumming 22
+    Porterfield" (R4,050) stayed off Porterfield — no worker, bill or learned rule matched, though
+    the line names the project. A bank line goes on a project it names, but more strictly than a
+    document (vula/integrations/project_resolver.py): only the register's projects (not every
+    name ever typed on an expense); never a project number (bank references and amounts are full
+    of numbers — Porterfield's is 2604); and a project's lead word only from 6 letters, so
+    "Discovery Life" is not "Life Changers - Tableview" and "HPC" stays with its learned rule."""
+    try:
+        from vula.api.tenants import uses_projects
+        if not uses_projects(tenant_id):
+            return []
+        from vula.commerce.service import registered_projects
+        from vula.integrations.project_resolver import _projects
+        registered = {r.get("name") for r in registered_projects(tenant_id) if r.get("name")}
+        out = []
+        for p in _projects(tenant_id):
+            if p["name"] not in registered:
+                continue
+            out.append({"name": p["name"],
+                        "ids": {i for i in p["ids"] if i and not re.sub(r"\W", "", i).isdigit()},
+                        "words": {w for w in p.get("words", set()) if len(w) >= 6}})
+        return out
+    except Exception as exc:  # noqa: BLE001 — naming is a bonus, never blocks an import
+        log.debug("project names for bank lines skipped: %s", exc)
+        return []
+
+
+def named_project(projects: List[Dict], description: Optional[str],
+                  payee: Optional[str] = None) -> Optional[str]:
+    """The one project a bank line names ("…22 Porterfield", "Send Belladona Tiles"), else None."""
+    if not projects:
+        return None
+    from vula.integrations.project_resolver import _named
+    hits = _named(projects, f"{payee or ''} {description or ''}")
+    return hits[0] if len(hits) == 1 else None
+
+
 def apply_to_existing(tenant_id: str) -> int:
     """Put already-saved, unallocated bank lines on a project wherever a learned rule is clear
-    (e.g. after a statement sheet taught "HPC …" → HPC Bokaap). Returns how many were set."""
+    (e.g. after a statement sheet taught "HPC …" → HPC Bokaap), or the line names one project.
+    Returns how many were set."""
     from vula.commerce.ledger import _all_pages
     rules = load_rules(tenant_id)
-    if not rules:
+    named = naming_projects(tenant_id)
+    if not rules and not named:
         return 0
     db = _client()
 
@@ -175,7 +217,9 @@ def apply_to_existing(tenant_id: str) -> int:
     for r in rows:
         if r.get("match_status") == "ignored":
             continue
-        project, trade = suggest(rules, r.get("description"), r.get("payee"), tenant_id)
+        project = named_project(named, r.get("description"), r.get("payee"))
+        s_project, trade = suggest(rules, r.get("description"), r.get("payee"), tenant_id)
+        project = project or s_project
         if not project:
             continue
         patch = {"project": project}
