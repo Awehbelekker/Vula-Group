@@ -5069,6 +5069,25 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
     except Exception as exc:
         logger.debug("Doc analyze: deterministic parse skipped for %s: %s", filename, exc)
 
+    # 1b. A PDF whose text is mostly a table (a bill, quote, project bill, statement of account):
+    # PyMuPDF's plain text runs the columns together (2026-10-28, Ian: Judy's Belladonna bill as a
+    # PDF read P&G as R4,800 for R48,000; the same bill as a spreadsheet read exactly). Read it
+    # through Docling first, which keeps rows and columns (vula/ingestion/pdf_tables.py) — not
+    # only as the last retry below. Payment notices were handled above on the exact text.
+    structured = False
+    plain_text = text
+    if str(local_path or "").lower().endswith(".pdf"):
+        try:
+            from vula.ingestion import pdf_tables
+            if pdf_tables.looks_tabular(text):
+                md = await pdf_tables.structured_markdown(local_path)
+                # Docling without OCR drops a scanned page's text: keep the plain read then.
+                if md and len(md) >= 0.5 * len(text):
+                    logger.info("Doc analyze: %s read as tables (Docling) before the model", filename)
+                    text, structured = md, True
+        except Exception as exc:
+            logger.debug("Doc analyze: table read skipped for %s: %s", filename, exc)
+
     full_text = text
     # Bank details and the supplier's VAT number usually sit at the foot of the last page: a
     # long document keeps its start and its end (2026-10-25), not just its first 6000 characters.
@@ -5254,7 +5273,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 # correct Markdown instead (self-hosted, no cloud OCR bill). Deliberately gated
                 # behind this first failure, not the default path: it costs real CPU seconds and
                 # should only run for the minority of documents that actually need it.
-                if str(local_path).lower().endswith(".pdf") and _needs_escalation(result):
+                if str(local_path).lower().endswith(".pdf") and not structured and _needs_escalation(result):
                     try:
                         from vula.ingestion.docling_extract import extract_markdown
                         md_text = await extract_markdown(local_path)
@@ -5293,7 +5312,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         # stored as fact (extraction_quality.verify_identifiers). Checked against the whole text.
         if result and result.get("category") in _FINANCIAL_DOC_CATEGORIES:
             from vula.commerce.extraction_quality import totals_disagree, verify_identifiers
-            checked = verify_identifiers(result.get("fields") or {}, full_text or text)
+            checked = verify_identifiers(result.get("fields") or {},
+                                         (full_text or text) + ("\n" + plain_text if structured else ""))
             if totals_disagree(checked):
                 checked["_check"] = "subtotal + VAT does not make the total"
             result["fields"] = checked
@@ -5301,6 +5321,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             result = await _complete_boq_lines(result, local_path, full_text, filename)
         elif result and result.get("category") == _PRICE_LIST:
             result = await _complete_price_list(result, local_path, full_text, filename)
+        elif result and result.get("category") in _LINE_CHECKED_CATEGORIES:
+            result = await _complete_invoice_lines(result, full_text, filename)
         if result:
             # Labels a person would put on it — "Variation — over BOQ", "Back-charge"
             # (vula/integrations/doc_labels.py, deterministic).
@@ -5335,9 +5357,20 @@ async def _complete_boq_lines(result: dict, local_path, full_text: str, filename
                 result["fields"] = boq_sheet.apply_to_fields(fields, lines)
                 logger.info("BOQ sheet %s: %d lines read from the sheet", filename, len(lines))
             return result
-        if len(full_text or "") <= 6000:
+        if str(local_path or "").lower().endswith(".pdf"):
+            # The bill's own tables, cell by cell — the spreadsheet reader, not the model.
+            from vula.ingestion import pdf_tables
+            md = full_text if pdf_tables.has_tables(full_text) else await pdf_tables.structured_markdown(local_path)
+            lines = pdf_tables.boq_lines(md) if md else []
+            if len(lines) >= 2:
+                result["fields"] = {**boq_sheet.apply_to_fields(fields, lines, authoritative=True),
+                                    "line_items_read_from": "pdf_tables"}
+                logger.info("BOQ PDF %s: %d lines read from its tables", filename, len(lines))
+                return result
+        middle = _unread_middle(full_text)
+        if not middle:
             return result
-        extra = await _boq_lines_from_text(full_text[6000:6000 + 6000 * 8], filename)
+        extra = await _boq_lines_from_text(middle[:6000 * 8], filename)
         if extra:
             seen = {(str(li.get("description") or "").strip().lower(), li.get("total_cents"))
                     for li in fields.get("line_items") or [] if isinstance(li, dict)}
@@ -5349,6 +5382,39 @@ async def _complete_boq_lines(result: dict, local_path, full_text: str, filename
             logger.info("BOQ %s: %d more lines read past the first page of text", filename, len(extra))
     except Exception as exc:
         logger.debug("BOQ line completion skipped for %s: %s", filename, exc)
+    return result
+
+
+def _unread_middle(full_text: str) -> str:
+    """The part of a long document the one-shot read above never saw: it reads the first 4,600
+    and the last 1,400 characters. (Until 2026-10-28 the follow-up read started at 6,000, so
+    characters 4,600-6,000 — often a whole page of lines — were read by nobody.)"""
+    full_text = full_text or ""
+    return full_text[4600:-1400] if len(full_text) > 6000 else ""
+
+
+async def _complete_invoice_lines(result: dict, full_text: str, filename: str) -> dict:
+    """An invoice or quote whose lines come to less than its total, from a document longer than
+    the one-shot read: read the unread middle for the missing lines (grounded per chunk, as for a
+    BOQ). Only when lines are missing — a short or complete read costs nothing extra."""
+    from vula.commerce.extraction_quality import lines_short_cents
+    fields = result.get("fields") or {}
+    middle = _unread_middle(full_text)
+    if not middle or not fields.get("line_items") or not lines_short_cents(fields):
+        return result
+    try:
+        kind = "quote" if result.get("category") == "Quote / Estimate" else "invoice"
+        extra = await _boq_lines_from_text(middle[:6000 * 8], filename, doc_kind=kind)
+        seen = {(str(li.get("description") or "").strip().lower(), li.get("total_cents"))
+                for li in fields.get("line_items") or [] if isinstance(li, dict)}
+        new = [li for li in extra
+               if (str(li.get("description") or "").strip().lower(), li.get("total_cents")) not in seen]
+        if new:
+            result["fields"] = {**fields, "line_items": list(fields.get("line_items") or []) + new}
+            logger.info("%s %s: %d more lines read from the middle pages (%s short before)",
+                        kind.title(), filename, len(new), lines_short_cents(fields))
+    except Exception as exc:
+        logger.debug("invoice line completion skipped for %s: %s", filename, exc)
     return result
 
 
