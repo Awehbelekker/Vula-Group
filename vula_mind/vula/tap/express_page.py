@@ -40,6 +40,11 @@ f.addEventListener('submit',function(){b.disabled=true;b.textContent='Opening se
 """
 
 
+def _n(nonce: str) -> str:
+    """The CSP nonce attribute for an inline script (vula/tap/api.py sets the matching header)."""
+    return f" nonce='{escape(nonce)}'" if nonce else ""
+
+
 def _r(cents: int) -> str:
     return mo.format_rands(cents)
 
@@ -60,7 +65,7 @@ def _tips(bill_cents: int, presets: list) -> str:
             "<input class=n name=custom_tip inputmode=decimal placeholder='e.g. 20'></div>")
 
 
-def render(code: str, v: dict, error: str = "") -> str:
+def render(code: str, v: dict, error: str = "", nonce: str = "") -> str:
     """The page for one view() result (kinds bill / quick_tip / open_amount / tabs / locked / no_bill)."""
     merchant, staff, kind = v.get("merchant") or "", v.get("staff") or "", v["kind"]
     head = (f"<h1>{escape(merchant)}</h1>"
@@ -110,7 +115,7 @@ def render(code: str, v: dict, error: str = "") -> str:
     return (f"<!doctype html><html lang=en><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'>"
             f"<title>Pay {escape(merchant)}</title><style>{_CSS}</style><main>{body}</main>"
-            f"<script>{_JS}</script></html>")
+            f"<script{_n(nonce)}>{_JS}</script></html>")
 
 
 _POLL_JS = """
@@ -124,7 +129,7 @@ if(n<60)setTimeout(tick,1500);else msg.textContent='Still confirming. Your slip 
 """
 
 
-def done(slip_url: str | None, status_url: str = "") -> str:
+def done(slip_url: str | None, status_url: str = "", nonce: str = "") -> str:
     """Waits for PayFast's confirmation, then opens the animated printed slip (/r/<token>)."""
     slip = (f"<p><a href='{escape(slip_url)}'><button type=button>Get my slip on WhatsApp</button></a></p>"
             if slip_url else "<p>Your slip will arrive in WhatsApp as soon as the payment is confirmed.</p>")
@@ -134,4 +139,4 @@ def done(slip_url: str | None, status_url: str = "") -> str:
             f"<style>{_CSS}</style><body{data}><main><h1>Thank you</h1>"
             f"<p class=who id=msg>Confirming your payment with PayFast\u2026</p>"
             f"{slip}<p class=foot>Your slip opens here as soon as it is confirmed.</p></main>"
-            f"{'<script>' + _POLL_JS + '</script>' if status_url else ''}</html>")
+            f"{'<script' + _n(nonce) + '>' + _POLL_JS + '</script>' if status_url else ''}</html>")

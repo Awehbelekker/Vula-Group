@@ -156,6 +156,20 @@ The owner switches tabs on under Money › Tap to Pay › **Bar tabs** (and sets
 - **Idle tabs:** after the reminder time with nothing new, the customer gets one pay prompt and the owner a message
   (`TabDesk.sweep_idle`, run by the tap sweep). Adding an item resets the clock.
 
+## Security hardening (29 Oct 2026)
+- **PayFast ITN source check** (`vula/payfast_source.py`), on top of the signature and the server post-back:
+  the caller (last X-Forwarded-For hop, appended by Railway's edge) must be one of PayFast's ITN hosts
+  (resolved, cached 10 min) or `PAYFAST_ITN_IP_RANGES`. `PAYFAST_ITN_SOURCE_CHECK=log` (default) only logs a
+  mismatch; after a real payment shows no "not a known PayFast address" warning, set it to `enforce`.
+  Check the ranges against PayFast's integration docs first. A DNS failure never blocks a payment.
+- **Pay pages** (`/t/{code}`, done, cancelled, link expired): strict CSP with a per-response script nonce,
+  `frame-ancestors 'none'`, forms only to this site or PayFast (`*.payfast.co.za`, `*.payfast.io`), nosniff,
+  no-store, HSTS.
+- **Audit trail** (`kb_audit`, migration 232, append-only trigger): every owner and staff write (bills,
+  tab items, tabs settings, tags, phones, shares, go-live/pause, reminders, receipt revokes) with who and
+  when, never a customer number. Owner view: Money › Tap to Pay › Activity (`GET /v1/tap/{tenant}/audit`).
+  A failed audit write is logged and doesn't block the action.
+
 ## Test payments
 The setup R5 test books nothing and doesn't alert the coach, but the payer now receives the same WhatsApp slip as a real customer, marked
 "TEST PAYMENT - nothing is booked to anyone", so the owner can see exactly what customers get (no tax-invoice offer on a test). The merchant

@@ -62,6 +62,14 @@ async def remove_provider(tenant_id: str, provider: str) -> dict:
 @router.post("/webhook/{tenant_id}/{provider}")
 async def payment_webhook(tenant_id: str, provider: str, request: Request) -> dict:
     """Verify a gateway notification and mark the referenced invoice paid."""
+    if provider == "payfast":
+        from config import settings
+        from vula import payfast_source
+        peer = getattr(request, "client", None)
+        if not await payfast_source.allowed(dict(request.headers), peer.host if peer else "",
+                                            mode=settings.payfast_itn_source_check,
+                                            ranges=settings.payfast_itn_ip_ranges):
+            return {"received": True}
     if provider == "yoco":
         # Yoco.verify_webhook() deliberately skips HMAC verification ("handled in the existing
         # yoco webhook" — see its docstring) because Yoco's Checkout API silently ignores the

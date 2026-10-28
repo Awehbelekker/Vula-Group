@@ -294,3 +294,35 @@ async def test_tabs_in_the_app_and_dashboard(client, env):
     assert client.post(f"/v1/tap/{T}/tabs/{tab['id']}/items/{item}/void").json()["total_cents"] == 0
     assert client.post(f"/v1/tap/{T}/tabs/{tab['id']}/close").json() == {"status": "cancelled"}
     assert client.get("/v1/tap/app/tabs", headers=h1).json()["tabs"] == []
+
+
+async def test_owner_and_staff_actions_are_in_the_audit_trail(client, env):
+    import re
+    svc, repo, *_ = env
+    h1, _ = sign_in(client, svc, "m1", SIPHO)
+    b = client.post("/v1/tap/app/bills", headers=h1, json={"amount_cents": 25000, "description": "Lesson",
+                                                           "customer_phone": CUST}).json()
+    assert client.post(f"/v1/tap/app/bills/{b['id']}/cancel", headers=h1).status_code == 200
+    ob = client.post(f"/v1/tap/{T}/bills", json={"staff_id": "m2", "amount_cents": 9900, "description": "Board hire"}).json()
+    client.post(f"/v1/tap/{T}/bills/{ob['id']}/cancel")
+    client.put(f"/v1/tap/{T}/tabs/settings", json={"enabled": True, "idle_hours": 3})
+    token = re.search(r"text=TAB%20(\S+)", svc.tabs.open_link(repo.get_tag_by_code("tag-m1"))).group(1)
+    await svc.handle_text(T, CUST, f"TAB {token}", "Sam")
+    tab = client.get("/v1/tap/app/tabs", headers=h1).json()["tabs"][0]
+    v = client.post(f"/v1/tap/app/tabs/{tab['id']}/items", headers=h1,
+                    json={"description": "Lager", "quantity": 2, "unit_cents": 4500}).json()
+    client.post(f"/v1/tap/app/tabs/{tab['id']}/items/{v['items'][0]['id']}/void", headers=h1)
+
+    rows = client.get(f"/v1/tap/{T}/audit").json()["activity"]
+    got = [(r["who"], r["action"]) for r in reversed(rows)]
+    assert got == [("Sipho", "device.enrol"), ("Sipho", "bill.create"), ("Sipho", "bill.cancel"),
+                   ("o@x.co", "bill.create"), ("o@x.co", "bill.cancel"), ("o@x.co", "tabs.settings"),
+                   ("Sipho", "tab.item_add"), ("Sipho", "tab.item_void")]
+    text = [r["summary"] for r in reversed(rows)]
+    assert "Created a bill R 250.00 (Lesson)" in text and "Cancelled a bill R 99.00 (Board hire)" in text
+    assert "Added 2 × Lager (R 90.00) to Sam" in text and "Removed 2 × Lager (R 90.00) from Sam" in text
+    # never the customer's number
+    assert not any("4482" in str(r) for r in repo.audit_rows)
+    # an audit write that fails never blocks the action itself
+    repo.add_audit = lambda row: (_ for _ in ()).throw(RuntimeError("db down"))
+    assert client.post(f"/v1/tap/{T}/tabs/{tab['id']}/close").status_code == 200

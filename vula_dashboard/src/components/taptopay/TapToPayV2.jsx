@@ -7,7 +7,7 @@
  * writing a bill off ask first.
  */
 import { useState } from 'react'
-import { Ban, Beer, Check, Copy, CreditCard, ExternalLink, KeyRound, Pause, Play, QrCode, Receipt, Plus, RefreshCw, Rocket, Send, Smartphone, Undo2, X } from 'lucide-react'
+import { Ban, Beer, Check, Copy, History, CreditCard, ExternalLink, KeyRound, Pause, Play, QrCode, Receipt, Plus, RefreshCw, Rocket, Send, Smartphone, Undo2, X } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
 import { Button, Card, Field, Input, Select, StatusChip, confirmDialog } from '../ui/index.jsx'
 import { MODE_BADGE, STATUS_TONE, useTapToPay } from './useTapToPay'
@@ -154,6 +154,7 @@ export default function TapToPayV2({ tenantId }) {
       {st.mode !== 'off' && <Unpaid x={x} st={st} />}
       {st.mode !== 'off' && x.tabs && <Tabs x={x} />}
       {st.mode !== 'off' && <NewBill x={x} withTag={withTag} />}
+      {x.activity.length > 0 && <Activity x={x} />}
     </section>
   )
 }
@@ -338,6 +339,27 @@ function Tabs({ x }) {
               </div></li>))}
           </ul>)}
       {t.enabled && <div><Button size="sm" variant="quiet" Icon={RefreshCw} disabled={x.busy === 'tabs-load'} onClick={x.reloadTabs}>Refresh</Button></div>}
+    </Card>
+  )
+}
+
+function Activity({ x }) {
+  const [all, setAll] = useState(false)
+  const rows = all ? x.activity : x.activity.slice(0, 10)
+  const at = (iso) => { try { return new Date(iso).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Johannesburg' }) } catch { return '' } }
+  return (
+    <Card className="vtp-card" role="group" aria-labelledby="vtp-activity">
+      <h2 className="vtp-h" id="vtp-activity"><History size={18} aria-hidden="true" />Activity</h2>
+      <p className="vtp-muted">Every bill, tab and setting change by you or your team, newest first. This list can't be edited or deleted.</p>
+      <ul className="vtp-list" aria-label="Activity">
+        {rows.map(r => (
+          <li key={r.id} className="vtp-row vtp-billrow">
+            <span className="vtp-muted" style={{ minWidth: 110 }}>{at(r.at)}</span>
+            <b>{r.who}</b>
+            <span className="vtp-grow">{r.summary}</span>
+          </li>))}
+      </ul>
+      {x.activity.length > 10 && <div><Button size="sm" variant="quiet" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${x.activity.length}`}</Button></div>}
     </Card>
   )
 }

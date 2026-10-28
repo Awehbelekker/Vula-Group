@@ -87,6 +87,13 @@ class SupabaseRepo:
     def add_tab_item(self, row: dict) -> dict:
         return self.db.table("kb_tab_items").insert(row).execute().data[0]
 
+    def add_audit(self, row: dict) -> None:
+        self.db.table("kb_audit").insert(row).execute()
+
+    def audit_log(self, tenant_id: str, limit: int = 100) -> list[dict]:
+        return (self.db.table("kb_audit").select("*").eq("tenant_id", tenant_id)
+                .order("created_at", desc=True).limit(limit).execute().data or [])
+
     def tab_items(self, tenant_id: str, bill_id: str) -> list[dict]:
         return (self.db.table("kb_tab_items").select("*").eq("tenant_id", tenant_id).eq("bill_id", bill_id)
                 .is_("voided_at", "null").order("created_at").execute().data or [])

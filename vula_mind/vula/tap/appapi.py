@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from vula.tap import api as tap_api
+from vula.tap import audit
 from vula.tap.appauth import Actor, AppAuth, AuthError
 from vula.tap.core.money import MoneyError
 from vula.tap.service import ReminderError
@@ -64,9 +65,12 @@ async def enrol(body: EnrolIn) -> dict:
     if not tap_api.tenant_enabled(body.tenant):
         raise HTTPException(status_code=403, detail="Tap to Pay isn't switched on for this business yet.")
     try:
-        return get_auth().enrol(body.tenant, body.phone, body.code, body.pin, body.label)
+        out = get_auth().enrol(body.tenant, body.phone, body.code, body.pin, body.label)
     except AuthError as exc:
         raise _http(exc) from exc
+    audit.record(tap_api.get_service(), body.tenant, actor_kind="staff", actor=out["member"]["id"],
+                 action="device.enrol")
+    return out
 
 
 @router.post("/v1/tap/app/login")
@@ -115,6 +119,12 @@ class NewBill(BaseModel):
     staff_id: Optional[str] = None            # managers/owners may bill on someone else's tag
 
 
+def _audit(a: Actor, action: str, bill_id: Optional[str] = None, **detail) -> None:
+    """Staff actions go in the append-only audit trail (vula/tap/audit.py, migration 232)."""
+    audit.record(tap_api.get_service(), a.tenant_id, actor_kind="staff", actor=a.member_id,
+                 action=action, bill_id=bill_id, device_id=a.device_id, **detail)
+
+
 def _own_bill(a: Actor, bill_id: str) -> dict:
     b = tap_api.get_service().repo.get_bill(a.tenant_id, bill_id)
     if not b or not (a.sees_all or b.get("staff_id") == a.member_id):
@@ -142,6 +152,8 @@ async def new_bill(body: NewBill, a: Actor = Depends(app_actor)) -> dict:
         if "23505" in str(exc) or "duplicate key" in str(exc).lower():
             raise HTTPException(status_code=409, detail="You already have an open bill. Cancel it or wait for it to be paid.") from exc
         raise
+    _audit(a, "bill.create", bill["id"], amount_cents=body.amount_cents, description=body.description,
+           to_customer=bool(body.customer_phone), staff_id=staff)
     return {**_public_bill(bill), "bill_code": bill.get("bill_code")}
 
 
@@ -153,6 +165,7 @@ async def cancel(bill_id: str, a: Actor = Depends(app_actor)) -> dict:
                                                     "or the owner closes it from the dashboard.")
     if not tap_api.get_service().cancel_bill(a.tenant_id, bill_id):
         raise HTTPException(status_code=409, detail="This bill can't be cancelled.")
+    _audit(a, "bill.cancel", bill_id, amount_cents=b.get("subtotal_cents"), description=b.get("description"))
     return {"status": "cancelled"}
 
 
@@ -161,6 +174,7 @@ async def release(bill_id: str, a: Actor = Depends(app_actor)) -> dict:
     _own_bill(a, bill_id)
     if not tap_api.get_service().release_bill(a.tenant_id, bill_id):
         raise HTTPException(status_code=409, detail="This bill isn't claimed.")
+    _audit(a, "bill.release", bill_id)
     return {"status": "open"}
 
 
@@ -171,6 +185,7 @@ async def remind(bill_id: str, a: Actor = Depends(app_actor)) -> dict:
         await tap_api.get_service().send_reminder_now(a.tenant_id, bill_id)
     except ReminderError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _audit(a, "bill.remind", bill_id)
     return {"sent": True}
 
 
@@ -286,4 +301,4 @@ async def app_add_item(bill_id: str, body: TabItem, a: Actor = Depends(app_actor
 
 @router.post("/v1/tap/app/tabs/{bill_id}/items/{item_id}/void")
 async def app_void_item(bill_id: str, item_id: str, a: Actor = Depends(app_actor)) -> dict:
-    return _tab(_tabs_on(a).tabs.void_item, a.tenant_id, bill_id, item_id)
+    return _tab(_tabs_on(a).tabs.void_item, a.tenant_id, bill_id, item_id, by=a.member_id)

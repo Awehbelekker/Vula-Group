@@ -319,6 +319,12 @@ class Settings(BaseSettings):
     # instead of WhatsApp. False = the WhatsApp flow for every tap, as before 28 Oct.
     tap_express: bool = True
     tap_hash_pepper: str = ""
+    # PayFast ITN source check (vula/payfast_source.py), on top of the signature + server post-back:
+    # off | log (default: log a non-PayFast caller, still process) | enforce (ignore it). Ranges are
+    # PayFast's published ITN source networks, added to its resolved hosts; check them against
+    # PayFast's integration docs before switching to enforce.
+    payfast_itn_source_check: str = "log"
+    payfast_itn_ip_ranges: str = "197.97.145.144/28,41.74.179.192/27,102.216.36.0/28,102.216.36.128/28,144.126.193.139/32"
     # Approved WhatsApp template (utility) for unpaid-bill reminders sent more than ~23 h after the customer's
     # last message, body params {{1}} merchant, {{2}} amount, {{3}} pay link. Empty = such reminders are skipped.
     tap_reminder_template: str = ""
