@@ -102,10 +102,25 @@ def render(code: str, v: dict, error: str = "") -> str:
             f"<script>{_JS}</script></html>")
 
 
-def done(slip_url: str | None) -> str:
+_POLL_JS = """
+(function(){var st=document.body.dataset.status,wa=document.body.dataset.wa,n=0,msg=document.getElementById('msg');
+function tick(){n++;fetch(st,{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()})
+.then(function(d){if(d.paid&&d.receipt_url){location.replace(d.receipt_url+(wa?'?wa='+encodeURIComponent(wa):''));return}
+if(d.paid){msg.textContent='Payment received. Thank you!';return}if(d.failed){msg.textContent=
+"That payment didn't go through. You haven't been charged. Tap the tag to try again.";return}
+if(n<60)setTimeout(tick,1500);else msg.textContent='Still confirming. Your slip will come on WhatsApp if you ask for it below.'})
+.catch(function(){if(n<60)setTimeout(tick,2000)})}tick()})();
+"""
+
+
+def done(slip_url: str | None, status_url: str = "") -> str:
+    """Waits for PayFast's confirmation, then opens the animated printed slip (/r/<token>)."""
     slip = (f"<p><a href='{escape(slip_url)}'><button type=button>Get my slip on WhatsApp</button></a></p>"
             if slip_url else "<p>Your slip will arrive in WhatsApp as soon as the payment is confirmed.</p>")
+    data = (f" data-status='{escape(status_url)}' data-wa='{escape(slip_url or '')}'" if status_url else "")
     return (f"<!doctype html><html lang=en><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'><title>Thank you</title>"
-            f"<style>{_CSS}</style><main><h1>Thank you</h1><p class=who>Your payment is being confirmed.</p>"
-            f"{slip}<p class=foot>You can close this page.</p></main></html>")
+            f"<style>{_CSS}</style><body{data}><main><h1>Thank you</h1>"
+            f"<p class=who id=msg>Confirming your payment with PayFast\u2026</p>"
+            f"{slip}<p class=foot>Your slip opens here as soon as it is confirmed.</p></main>"
+            f"{'<script>' + _POLL_JS + '</script>' if status_url else ''}</html>")

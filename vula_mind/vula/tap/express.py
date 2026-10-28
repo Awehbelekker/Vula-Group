@@ -217,6 +217,18 @@ class ExpressPay:
             return True
         return False
 
+    def status(self, session_id: str, cookie: str) -> dict:
+        """For the done page while PayFast confirms: {"paid", "receipt_url"}. Only the browser that
+        paid gets an answer; the receipt link is the printed-slip page (/r/<token>)."""
+        s = self.svc.repo.get_session_any_tenant(session_id)
+        if (not s or s.get("payer_enc") or not cookie
+                or not hmac.compare_digest(s["payer_hash"], self.payer(cookie))):
+            return {"paid": False, "receipt_url": None}
+        if s["state"] != "paid":
+            return {"paid": False, "receipt_url": None, "failed": s["state"] in ("failed", "cancelled", "expired")}
+        pay = self.svc.repo.payment_for_session(s["tenant_id"], session_id)
+        return {"paid": True, "receipt_url": (self.svc.receipt_url(pay) or None) if pay else None}
+
     def slip_link(self, session_id: str, cookie: str) -> Optional[str]:
         """wa.me link that asks Vula for this payment's slip, or None (unknown, not a web payment,
         or not the browser that paid)."""

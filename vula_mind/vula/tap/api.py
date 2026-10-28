@@ -219,10 +219,20 @@ async def done(session_id: str, request: Request):
     from vula.tap import express_page
     from vula.tap.express import COOKIE
     slip = get_service().express.slip_link(session_id[:64], request.cookies.get(COOKIE) or "")
-    if slip:                                   # an express payment: the slip is one tap away
-        return HTMLResponse(express_page.done(slip))
+    if slip:                # an express payment: wait for PayFast, then print the slip on screen
+        return HTMLResponse(express_page.done(slip, f"/v1/tap/done/{session_id[:64]}/status"),
+                            headers={"Cache-Control": "no-store"})
     return _page("Thank you", "Your slip will arrive in WhatsApp as soon as the payment is confirmed. "
                               "You can close this page.")
+
+
+@router.get("/v1/tap/done/{session_id}/status")
+async def done_status(session_id: str, request: Request) -> Response:
+    """The done page polls this until PayFast confirms, then opens the printed slip."""
+    import json
+    from vula.tap.express import COOKIE
+    body = get_service().express.status(session_id[:64], request.cookies.get(COOKIE) or "")
+    return Response(json.dumps(body), media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/v1/tap/cancelled/{session_id}")

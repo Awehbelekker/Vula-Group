@@ -552,17 +552,21 @@ class TapService:
         await self._notify_staff(tenant_id, s, phone)
         return "paid"
 
+    def receipt_url(self, pay: dict) -> str:
+        """The animated receipt page (/r/<token> on the dashboard) for a payment, or "" if unset."""
+        if not (self.cfg.receipt_secret and self.cfg.receipt_base_url):
+            return ""
+        from vula.tap.receipt import make_token
+        return (f"{self.cfg.receipt_base_url.rstrip('/')}/r/"
+                f"{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}")
+
     async def _send_slip(self, tenant_id: str, s: dict, pay: dict, is_test: bool, phone: str) -> None:
         """The payer's WhatsApp slip. A test payment gets the same slip (marked TEST) so the owner
         sees what customers get. Also sent later to an express payer who asks for it (SLIP)."""
         total = s["bill_cents"] + s["tip_cents"]
         tax_hint = ("\nNeed a VAT tax invoice? Reply TAX."
                     if s["bill_cents"] and not is_test and self.tax.can_issue(tenant_id) else "")
-        receipt_url = ""
-        if self.cfg.receipt_secret and self.cfg.receipt_base_url:
-            from vula.tap.receipt import make_token
-            receipt_url = (f"{self.cfg.receipt_base_url.rstrip('/')}/r/"
-                           f"{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}")
+        receipt_url = self.receipt_url(pay)
         slip = (f"{'TEST PAYMENT - nothing is booked to anyone. ' if is_test else ''}"
                 f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
                 f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{tax_hint}")

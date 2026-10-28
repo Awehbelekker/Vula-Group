@@ -271,3 +271,42 @@ def test_http_car_guard_preset_buttons_are_cents(http):
     token = re.search(r"name=token value='([^']+)'", r.text).group(1)
     r = client.post("/t/guard-1/pay", data={"token": token, "amount": "1000"}, cookies={COOKIE: "c1"})
     assert r.status_code == 303 and only_session(repo)["tip_cents"] == 1000
+
+
+# ── after paying: the printed slip opens by itself ───────────────────────────
+
+async def test_status_opens_the_printed_slip_for_the_payer_only(env):
+    svc, repo, msg, gw, tag, _ = env
+    svc.cfg.receipt_secret, svc.cfg.receipt_base_url = "rs", "https://dash.test"
+    bill(svc, tag)
+    await pay(svc)
+    s = only_session(repo)
+    assert svc.express.status(s["id"], "browser-1") == {"paid": False, "receipt_url": None, "failed": False}
+    gw.itn = itn(s["id"], 50000)
+    await svc.confirm_payment(T, {}, b"", {})
+    st = svc.express.status(s["id"], "browser-1")
+    assert st["paid"] and st["receipt_url"].startswith("https://dash.test/r/")
+    assert svc.express.status(s["id"], "browser-2") == {"paid": False, "receipt_url": None}
+
+
+async def test_status_reports_a_failed_payment(env):
+    svc, repo, msg, gw, tag, _ = env
+    bill(svc, tag)
+    await pay(svc)
+    s = only_session(repo)
+    gw.itn = itn(s["id"], 50000, paid=False)
+    await svc.confirm_payment(T, {}, b"", {})
+    assert svc.express.status(s["id"], "browser-1")["failed"] is True
+
+
+def test_http_done_page_polls_then_opens_the_slip(http):
+    client, svc, repo, tag = http
+    bill(svc, tag)
+    r = client.get("/t/coach-sipho", cookies={COOKIE: "c1"})
+    token = re.search(r"name=token value='([^']+)'", r.text).group(1)
+    client.post("/t/coach-sipho/pay", data={"token": token, "tip": "0"}, cookies={COOKIE: "c1"})
+    s = only_session(repo)
+    page = client.get(f"/v1/tap/done/{s['id']}", cookies={COOKIE: "c1"}).text
+    assert f"data-status='/v1/tap/done/{s['id']}/status'" in page and "location.replace" in page
+    st = client.get(f"/v1/tap/done/{s['id']}/status", cookies={COOKIE: "c1"})
+    assert st.json()["paid"] is False and st.headers["cache-control"] == "no-store"

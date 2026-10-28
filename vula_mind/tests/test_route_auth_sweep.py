@@ -50,6 +50,8 @@ PUBLIC = {
     ("POST", "/v1/tap/receipt/{token}/tax-invoice"): "tap-to-pay tax invoice request — same receipt token; one immutable invoice per payment",
     ("GET", "/v1/tap/receipt/{token}/tax-invoice.pdf"): "tap-to-pay tax invoice PDF — same receipt token; 404 until requested",
     ("GET", "/t/{code}"): "tap-to-pay NFC/QR tag landing (express pay page) — mints a single-use claim token, off unless tenant enabled",
+    ("GET", "/v1/tap/done/{session_id}/status"): "express pay's done page polling for PayFast's confirmation — answers only "
+                                                  "the browser that paid (cookie), with its own receipt link",
     ("POST", "/t/{code}/pay"): "express pay's Pay button — needs the page's single-use claim token; the customer pays on PayFast "
                                "and only the verified ITN marks anything paid",
     ("GET", "/t/{code}/qr.svg"): "tap-to-pay printable QR of the public tap link — carries no secret",
