@@ -279,7 +279,7 @@ function ProjectBoq({ tenantId, project }) {
           : bill.budget_is_this_bill ? "The budget is the bill below." : "Filing a BOQ document under this project sets the budget, or use the bill below."}>
         {reconciled && <Line label={<span className="vpj-sub">Section</span>} value={<span className="vpj-sub">Budget · Actual · Paid</span>} />}
         {sections.map((s, i) => <Line key={i} label={s.section} value={reconciled
-          ? <span className="vula-money">{money(s.budget_cents)} · <span style={(s.actual_cents || 0) > s.budget_cents ? { color: "var(--danger, #b91c1c)", fontWeight: 600 } : undefined}>{money(s.actual_cents || 0)}</span> · {money(s.paid_cents || 0)}</span>
+          ? <span className="vula-money">{money(s.budget_cents)} · <span style={(s.actual_cents || 0) > s.budget_cents ? { color: "var(--danger-text)", fontWeight: 600 } : undefined}>{money(s.actual_cents || 0)}</span> · {money(s.paid_cents || 0)}</span>
           : <span className="vula-money">{money(s.budget_cents)}</span>} />)}
         {reconciled && <Line label={<strong>Total</strong>} value={<strong className="vula-money">{money(sumOf("budget_cents"))} · {money(sumOf("actual_cents"))} · {money(sumOf("paid_cents"))}</strong>} />}
         {sections.length === 0 && <Empty>No trade sections yet.</Empty>}
