@@ -49,7 +49,9 @@ PUBLIC = {
     ("GET", "/v1/tap/receipt/{token}"): "tap-to-pay public receipt — 128-bit HMAC token, revocable, customer-safe fields only",
     ("POST", "/v1/tap/receipt/{token}/tax-invoice"): "tap-to-pay tax invoice request — same receipt token; one immutable invoice per payment",
     ("GET", "/v1/tap/receipt/{token}/tax-invoice.pdf"): "tap-to-pay tax invoice PDF — same receipt token; 404 until requested",
-    ("GET", "/t/{code}"): "tap-to-pay NFC/QR tag landing — mints a 2-minute single-use claim token, off unless tenant enabled",
+    ("GET", "/t/{code}"): "tap-to-pay NFC/QR tag landing (express pay page) — mints a single-use claim token, off unless tenant enabled",
+    ("POST", "/t/{code}/pay"): "express pay's Pay button — needs the page's single-use claim token; the customer pays on PayFast "
+                               "and only the verified ITN marks anything paid",
     ("GET", "/t/{code}/qr.svg"): "tap-to-pay printable QR of the public tap link — carries no secret",
     ("GET", "/v1/tap/pay/{session_id}/{nonce}"): "tap-to-pay one-time pay link — nonce hash-checked against the session",
     ("GET", "/v1/tap/done/{session_id}"): "tap-to-pay gateway return page — informational only, never marks paid",

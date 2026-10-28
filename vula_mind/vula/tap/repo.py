@@ -104,6 +104,10 @@ class SupabaseRepo:
                 return False
             raise
 
+    def payment_for_session(self, tenant_id: str, session_id: str) -> Optional[dict]:
+        return self._one(self.db.table("kb_payments").select("*").eq("tenant_id", tenant_id)
+                         .eq("session_id", session_id).eq("status", "succeeded"))
+
     def record_payment(self, row: dict) -> Optional[dict]:
         try:
             return self.db.table("kb_payments").insert(row).execute().data[0]

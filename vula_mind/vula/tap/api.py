@@ -24,7 +24,7 @@ import time
 from functools import lru_cache
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -135,11 +135,61 @@ def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
 
 
 @router.get("/t/{code}")
-async def tap(code: str):
-    url = get_service().tap(code[:64])
+async def tap(code: str, request: Request, via: str = ""):
+    code = code[:64]
+    if settings.tap_express and via != "whatsapp":
+        return _express(code, request)
+    url = get_service().tap(code)
     if not url:
         return _page("Tag not verified", "We couldn't verify this tag. Ask staff to take payment another way.", 404)
     return RedirectResponse(url, status_code=302)
+
+
+def _express(code: str, request: Request, error: str = "") -> Response:
+    """Express pay (vula/tap/express.py): the tap opens one pay page instead of WhatsApp."""
+    from vula.tap import express_page
+    from vula.tap.express import COOKIE, ExpressPay
+    svc = get_service()
+    cookie = request.cookies.get(COOKIE) or ""
+    fresh = not cookie
+    cookie = cookie or ExpressPay.new_cookie()
+    v = svc.express.view(code, cookie)
+    if v is None:
+        return _page("Tag not verified", "We couldn't verify this tag. Ask staff to take payment another way.", 404)
+    if v["kind"] == "whatsapp":                    # a bill sent to a number: WhatsApp proves the number
+        url = svc.tap(code)
+        return RedirectResponse(url, status_code=302) if url else _page(
+            "Tag not verified", "We couldn't verify this tag. Ask staff to take payment another way.", 404)
+    resp = HTMLResponse(express_page.render(code, v, error), status_code=200)
+    resp.headers["Cache-Control"] = "no-store"
+    if fresh:
+        resp.set_cookie(COOKIE, cookie, max_age=86400, httponly=True, samesite="lax", secure=True)
+    return resp
+
+
+@router.post("/t/{code}/pay")
+async def tap_pay(code: str, request: Request):
+    """The express page's Pay button: claim, price, then straight to PayFast."""
+    from vula.tap.express import COOKIE, ExpressError
+    code = code[:64]
+    form = await request.form()
+    cookie = request.cookies.get(COOKIE) or ""
+    if not cookie:                                  # cookies blocked: the page can't know who is paying
+        return _express(code, request, "Please allow cookies for this page, or pay in WhatsApp below.")
+    svc = get_service()
+    quick = str(form.get("amount") or "")
+    amount = str(form.get("amount_other") or "") if quick == "other" else quick
+    if quick.isdigit() and int(quick) in svc.cfg.quick_tip_presets_cents:   # a preset button, in cents
+        amount = f"{int(quick) / 100:.2f}"
+    try:
+        url = await svc.express.checkout(code, str(form.get("token") or ""), cookie,
+                                         tip=str(form.get("tip") or "0"),
+                                         custom_tip=str(form.get("custom_tip") or ""), amount=amount)
+    except ExpressError as exc:
+        return _express(code, request, str(exc))
+    except MoneyError:
+        return _express(code, request, "That amount doesn't look right. Type it in rands, for example 15.")
+    return RedirectResponse(url, status_code=303)
 
 
 @router.get("/t/{code}/qr.svg")
@@ -166,12 +216,19 @@ async def pay(session_id: str, nonce: str):
 
 @router.get("/v1/tap/done/{session_id}")
 async def done(session_id: str):
+    from vula.tap import express_page
+    slip = get_service().express.slip_link(session_id[:64])
+    if slip:                                   # an express payment: the slip is one tap away
+        return HTMLResponse(express_page.done(slip))
     return _page("Thank you", "Your slip will arrive in WhatsApp as soon as the payment is confirmed. "
                               "You can close this page.")
 
 
 @router.get("/v1/tap/cancelled/{session_id}")
-async def cancelled(session_id: str):
+async def cancelled(session_id: str, request: Request):
+    from vula.tap.express import COOKIE
+    # an express payer who backs out frees the bill at once, so the next tap works straight away
+    get_service().express.cancel(session_id[:64], request.cookies.get(COOKIE) or "")
     return _page("Payment cancelled", "You haven't been charged. Tap the tag again to restart.")
 
 

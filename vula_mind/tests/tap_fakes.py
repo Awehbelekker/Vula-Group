@@ -128,6 +128,11 @@ class MemoryRepo:
         self.events.add(k)
         return True
 
+    def payment_for_session(self, tenant_id, session_id):
+        hit = [p for p in self.payments.values() if p["tenant_id"] == tenant_id
+               and p["session_id"] == session_id and p.get("status") == "succeeded"]
+        return dict(hit[0]) if hit else None
+
     def record_payment(self, row):
         k = (row["provider"], row["provider_ref"])
         if k in self.payments:

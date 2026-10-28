@@ -30,7 +30,13 @@ def svc(monkeypatch):
     return s
 
 
-def test_tap_redirects_to_whatsapp(svc):
+def test_tap_redirects_to_whatsapp(svc, monkeypatch):
+    # 28 Oct: a tap opens the express pay page by default (tests/test_tap_express.py); the WhatsApp
+    # flow is ?via=whatsapp, or every tap with TAP_EXPRESS=false
+    r = client.get("/t/coach-sipho?via=whatsapp")
+    assert r.status_code == 302
+    assert re.match(r"https://wa\.me/27737815979\?text=PAY%20[\w-]{16,}$", r.headers["location"])
+    monkeypatch.setattr(tap_api.settings, "tap_express", False)
     r = client.get("/t/coach-sipho")
     assert r.status_code == 302
     assert re.match(r"https://wa\.me/27737815979\?text=PAY%20[\w-]{16,}$", r.headers["location"])
@@ -100,6 +106,7 @@ PUBLIC = [
     ("GET", "/v1/tap/done/s1"),
     ("GET", "/v1/tap/cancelled/s1"),
     ("GET", "/t/coach-sipho"),
+    ("POST", "/t/coach-sipho/pay"),
 ]
 
 
