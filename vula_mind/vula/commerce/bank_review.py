@@ -227,6 +227,16 @@ async def handle_answer(tenant_id: str, text: str) -> Optional[str]:
         tenant_id, f"✅ R{int(txn.get('amount_cents') or 0)/100:,.2f} → *{(acct or {}).get('name', code)}* — learned.")
 
 
+def named_line(rec: Dict[str, Any]) -> str:
+    """The statement summary's line for bank lines put on the project they name."""
+    named = rec.get("named_projects") or {}
+    if not named:
+        return ""
+    return ("\n📁 On the project they name: "
+            + ", ".join(f"{p} {n}" for p, n in sorted(named.items(), key=lambda kv: -kv[1]))
+            + " (wrong? move it in the 🏦 Bank tab)")
+
+
 async def kickoff(tenant_id: str, rec: Dict[str, Any]) -> None:
     """After a statement is reconciled: WhatsApp the owner the summary and, if anything
     needs their input, start the one-at-a-time review right there in the chat."""
@@ -236,6 +246,7 @@ async def kickoff(tenant_id: str, rec: Dict[str, Any]) -> None:
                f"✅ {rec.get('matched_invoices', 0)} matched to invoices · "
                f"🧾 {rec.get('matched_expenses', 0)} matched to receipts · "
                f"👷 {rec.get('matched_workers', 0)} worker payments")
+        msg += named_line(rec)
         if rec.get("needs_input"):
             q = start_review(tenant_id)
             if q:
