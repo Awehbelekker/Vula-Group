@@ -25,6 +25,7 @@ class MemoryRepo:
         self.n = itertools.count(1)
         self.tags, self.tokens, self.bills, self.sessions = {}, {}, {}, {}
         self.tab_rows = {}
+        self.audit_rows = []
         self.events, self.payments, self.ledger = set(), {}, []
         self.rules, self.wa = {}, {}
         self.names = {}
@@ -101,6 +102,12 @@ class MemoryRepo:
     def open_tabs(self, tenant_id):
         return [dict(b) for b in self.bills.values() if b["tenant_id"] == tenant_id and b.get("bill_type") == "tab"
                 and b["status"] in ("open", "claimed", "abandoned", "needs_follow_up")]
+
+    def add_audit(self, row):
+        self.audit_rows.append({"id": self._id(), "created_at": self.clock().isoformat(), **row})
+
+    def audit_log(self, tenant_id, limit=100):
+        return [dict(r) for r in reversed(self.audit_rows) if r["tenant_id"] == tenant_id][:limit]
 
     def add_tab_item(self, row):
         it = {"id": self._id(), "voided_at": None, "created_at": self.clock().isoformat(), **row}

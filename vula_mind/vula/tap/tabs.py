@@ -124,7 +124,7 @@ class TabDesk:
         return tab
 
     def add_item(self, tenant_id: str, bill_id: str, *, description: str, quantity: int,
-                 unit_cents: int, by: str) -> dict:
+                 unit_cents: int, by: str, actor_kind: str = "staff") -> dict:
         tab = self._tab(tenant_id, bill_id)
         if tab["status"] == "claimed":
             raise TabError("The customer is paying this tab right now. Add it after, or start a new tab.")
@@ -140,15 +140,19 @@ class TabDesk:
         self.svc.repo.add_tab_item({"tenant_id": tenant_id, "bill_id": bill_id, "description": desc,
                                     "quantity": quantity, "unit_cents": unit_cents,
                                     "line_cents": quantity * unit_cents, "added_by": by})
+        self._audit(tab, "tab.item_add", by, actor_kind, description=desc, quantity=quantity,
+                    line_cents=quantity * unit_cents)
         return self._refresh(tenant_id, bill_id, item_added=True)
 
-    def void_item(self, tenant_id: str, bill_id: str, item_id: str) -> dict:
+    def void_item(self, tenant_id: str, bill_id: str, item_id: str, by: str = "", actor_kind: str = "staff") -> dict:
         tab = self._tab(tenant_id, bill_id)
         if tab["status"] != "open":
             raise TabError("Only an open tab can be changed.")
         it = self.svc.repo.void_tab_item(tenant_id, item_id, self.svc.now().isoformat())
         if not it or it["bill_id"] != bill_id:
             raise TabError("Item not found.")
+        self._audit(tab, "tab.item_void", by, actor_kind, description=it.get("description"),
+                    quantity=it.get("quantity"), line_cents=it.get("line_cents"))
         return self._refresh(tenant_id, bill_id)
 
     def total(self, tenant_id: str, bill_id: str) -> int:
@@ -162,11 +166,19 @@ class TabDesk:
         self.svc.repo.update_bill(tenant_id, bill_id, fields)
         return self.view(self.svc.repo.get_bill(tenant_id, bill_id), reveal=False)
 
-    def close_empty(self, tenant_id: str, bill_id: str) -> bool:
+    def close_empty(self, tenant_id: str, bill_id: str, by: str = "", actor_kind: str = "owner") -> bool:
         tab = self._tab(tenant_id, bill_id)
         if self.total(tenant_id, bill_id):
             raise TabError("This tab has items. The customer pays it, or the owner closes it as unpaid.")
-        return self.svc.cancel_bill(tenant_id, tab["id"])
+        ok = self.svc.cancel_bill(tenant_id, tab["id"])
+        if ok:
+            self._audit(tab, "tab.close", by, actor_kind)
+        return ok
+
+    def _audit(self, tab: dict, action: str, by: str, actor_kind: str, **detail) -> None:
+        from vula.tap import audit
+        audit.record(self.svc, tab["tenant_id"], actor_kind=actor_kind, actor=by, action=action,
+                     bill_id=tab["id"], tab=tab.get("customer_name") or None, **detail)
 
     # ── views ────────────────────────────────────────────────────────────────────────────────
     def view(self, tab: dict, reveal: bool) -> dict:

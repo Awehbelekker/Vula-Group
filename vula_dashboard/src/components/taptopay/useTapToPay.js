@@ -42,6 +42,7 @@ export function useTapToPay(tenantId) {
   const [unpaid, setUnpaid] = useState([]);
   const [closing, setClosing] = useState(null);     // bill id whose "paid another way" picker is open
   const [tabs, setTabs] = useState(null);           // {enabled, idle_hours, tabs:[…]} (bar tabs)
+  const [activity, setActivity] = useState([]);     // audit trail: who did what (append-only)
   const poll = useRef(null);
 
   const load = useCallback(async () => {
@@ -57,6 +58,7 @@ export function useTapToPay(tenantId) {
       setNb((b) => ({ ...b, member: b.member || s.staff.find((x) => x.tag)?.id || "" }));
       api(`/v1/tap/${tenantId}/unpaid`).then((d) => setUnpaid(d.unpaid || [])).catch(() => {});
       api(`/v1/tap/${tenantId}/devices`).then((d) => setDevices(d.devices || [])).catch(() => {});
+      api(`/v1/tap/${tenantId}/audit?limit=100`).then((d) => setActivity(d.activity || [])).catch(() => {});
       if (s.mode !== "off") {
         const b = await api(`/v1/tap/${tenantId}/bills`).catch(() => ({ bills: [] }));
         // open tabs are managed in the Tabs card, not as bills
@@ -164,5 +166,5 @@ export function useTapToPay(tenantId) {
 
   const billAction = (id, action) => run(`b-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/${action}`, { method: "POST" }); await load(); });
 
-  return { st, err, busy, shares, setShares, pf, setPf, editPf, setEditPf, test, testMember, setTestMember, bills, nb, setNb, newCode, enrol, devices, unpaid, closing, setClosing, connectPayfast, saveShares, getTag, startTest, goLive, pause, createBill, getEnrolCode, revokeDevice, setReminders, remind, closeBill, when, billAction, tabs, setTabsOn, reloadTabs, addTabItem, voidTabItem, closeEmptyTab };
+  return { st, err, busy, shares, setShares, pf, setPf, editPf, setEditPf, test, testMember, setTestMember, bills, nb, setNb, newCode, enrol, devices, unpaid, closing, setClosing, connectPayfast, saveShares, getTag, startTest, goLive, pause, createBill, getEnrolCode, revokeDevice, setReminders, remind, closeBill, when, billAction, tabs, setTabsOn, reloadTabs, addTabItem, voidTabItem, closeEmptyTab, activity };
 }

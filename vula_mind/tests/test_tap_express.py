@@ -310,3 +310,19 @@ def test_http_done_page_polls_then_opens_the_slip(http):
     assert f"data-status='/v1/tap/done/{s['id']}/status'" in page and "location.replace" in page
     st = client.get(f"/v1/tap/done/{s['id']}/status", cookies={COOKIE: "c1"})
     assert st.json()["paid"] is False and st.headers["cache-control"] == "no-store"
+
+
+def test_pay_pages_send_a_strict_content_security_policy(http):
+    client, svc, repo, tag = http
+    bill(svc, tag)
+    r = client.get("/t/coach-sipho")
+    csp = r.headers["content-security-policy"]
+    nonce = re.search(r"'nonce-([^']+)'", csp).group(1)
+    assert f"<script nonce='{nonce}'>" in r.text                    # the page's own script still runs
+    assert "frame-ancestors 'none'" in csp and "default-src 'none'" in csp and "unsafe-eval" not in csp
+    assert "form-action 'self' https://*.payfast.co.za https://*.payfast.io" in csp
+    assert r.headers["x-frame-options"] == "DENY" and r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["cache-control"] == "no-store"
+    assert nonce not in client.get("/t/coach-sipho").headers["content-security-policy"]   # fresh per response
+    plain = client.get("/t/nope")                                   # the plain "Tag not verified" page too
+    assert plain.status_code == 404 and "script-src 'none'" in plain.headers["content-security-policy"]
