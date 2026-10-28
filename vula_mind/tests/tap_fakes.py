@@ -444,5 +444,5 @@ class FakeGateway:
         self.created.append(session["id"])
         return f"https://pay.example/checkout/{session['id']}"
 
-    async def verify_itn(self, *, tenant_id, headers, body, form):
+    async def verify_itn(self, *, tenant_id, headers, body, form, provider="payfast"):
         return self.itn

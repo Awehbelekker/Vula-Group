@@ -95,6 +95,11 @@ class TapService:
         from vula.tap.tax import TaxDesk
         return TaxDesk(self)
 
+    def gateway_label(self, tenant_id: str) -> str:
+        """The name customers see for the payment page ("PayFast"), from the tenant's gateway."""
+        label_for = getattr(self.gateway, "label_for", None)
+        return label_for(tenant_id) if label_for else "PayFast"
+
     @property
     def tabs(self):
         from vula.tap.tabs import TabDesk
@@ -508,9 +513,12 @@ class TapService:
                                                   description=f"{self.repo.merchant_name(s['tenant_id'])} - {desc}")
 
     # ── 4. gateway notification ──────────────────────────────────────────────────────────────
-    async def confirm_payment(self, tenant_id: str, headers: dict, body: bytes, form: dict) -> str:
-        """Process a PayFast ITN. Returns a short outcome label (for logs/tests)."""
-        ev = await self.gateway.verify_itn(tenant_id=tenant_id, headers=headers, body=body, form=form)
+    async def confirm_payment(self, tenant_id: str, headers: dict, body: bytes, form: dict,
+                              provider: str = "payfast") -> str:
+        """Process a gateway's payment notification (PayFast's ITN; vula/tap/gateways.py routes it to
+        the gateway it came from). Returns a short outcome label (for logs/tests)."""
+        ev = await self.gateway.verify_itn(tenant_id=tenant_id, headers=headers, body=body, form=form,
+                                           provider=provider)
         if not ev:
             return "rejected"
         ref = str(ev.get("reference") or "")
@@ -520,8 +528,9 @@ class TapService:
         if not s:
             return "unknown_session"
         status_key = "paid" if ev.get("paid") else "unpaid"
-        if not self.repo.record_event(tenant_id=tenant_id, source="payfast",
-                                      event_id=f"{ev.get('pf_payment_id') or ref}:{status_key}"):
+        gateway_ref = ev.get("provider_payment_id") or ev.get("pf_payment_id")
+        if not self.repo.record_event(tenant_id=tenant_id, source=provider,
+                                      event_id=f"{gateway_ref or ref}:{status_key}"):
             return "duplicate"
         phone = self.cfg.decrypt(s["payer_enc"]) if s.get("payer_enc") else ""
         if not ev.get("paid"):
@@ -544,8 +553,8 @@ class TapService:
                                      new=st.session_next("awaiting_payment", "payment_succeeded")):
             return "raced"
         pay = self.repo.record_payment({
-            "tenant_id": tenant_id, "session_id": s["id"], "provider": "payfast",
-            "provider_ref": REF_PREFIX + s["id"], "pf_payment_id": ev.get("pf_payment_id"),
+            "tenant_id": tenant_id, "session_id": s["id"], "provider": provider,
+            "provider_ref": REF_PREFIX + s["id"], "pf_payment_id": gateway_ref,      # the gateway's own id
             "status": "succeeded", "method": ev.get("method"), "amount_cents": total,
             "fee_cents": int(ev.get("fee_cents") or 0)})
         if pay is None:
@@ -562,7 +571,7 @@ class TapService:
         if is_test:                                  # setup test: unlocks "Go live", books nothing
             self.repo.upsert_settings(tenant_id, {"tested_at": self.now().isoformat()})
             for p in self.repo.team_phones(tenant_id, None):
-                await self._say(tenant_id, p, "Tap to Pay test payment received. PayFast is set up "
+                await self._say(tenant_id, p, f"Tap to Pay test payment received. {self.gateway_label(tenant_id)} is set up "
                                               "correctly - you can go live in the dashboard.")
         if phone:
             await self._send_slip(tenant_id, s, pay, is_test, phone)

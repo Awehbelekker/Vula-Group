@@ -120,8 +120,11 @@ class Gateway(Protocol):
     async def create_checkout(self, *, tenant_id: str, session: dict, description: str) -> Optional[str]:
         """Return the hosted-checkout URL for this session, or None if no gateway is configured."""
 
-    async def verify_itn(self, *, tenant_id: str, headers: dict, body: bytes, form: dict) -> Optional[dict[str, Any]]:
-        """Return {'reference','paid','amount_cents','pf_payment_id','currency'?} when authentic, else None."""
+    async def verify_itn(self, *, tenant_id: str, headers: dict, body: bytes, form: dict,
+                         provider: str = "payfast") -> Optional[dict[str, Any]]:
+        """Return {'reference','paid','amount_cents','provider_payment_id' (PayFast: 'pf_payment_id'),
+        'currency'?} when authentic, else None. `provider` is the gateway the notification came
+        from (its webhook path); a gateway refuses another provider's notification."""
 
 
 class Pusher(Protocol):

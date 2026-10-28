@@ -110,7 +110,7 @@ def render(code: str, v: dict, error: str = "", nonce: str = "") -> str:
             mode, data_bill = "open", 0
         body = (f"{head}{err}<form id=f method=post action='/t/{escape(code)}/pay' data-mode={mode} "
                 f"data-bill={data_bill}>{hidden}{fields}<button id=pay type=submit>Pay</button></form>"
-                "<p class=foot>Secure payment on PayFast.<br>"
+                f"<p class=foot>Secure payment on {escape(v.get('pay_with') or 'PayFast')}.<br>"
                 f"<a href='/t/{escape(code)}?via=whatsapp'>Rather pay in WhatsApp</a></p>")
     return (f"<!doctype html><html lang=en><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -129,7 +129,7 @@ if(n<60)setTimeout(tick,1500);else msg.textContent='Still confirming. Your slip 
 """
 
 
-def done(slip_url: str | None, status_url: str = "", nonce: str = "") -> str:
+def done(slip_url: str | None, status_url: str = "", nonce: str = "", pay_with: str = "PayFast") -> str:
     """Waits for PayFast's confirmation, then opens the animated printed slip (/r/<token>)."""
     slip = (f"<p><a href='{escape(slip_url)}'><button type=button>Get my slip on WhatsApp</button></a></p>"
             if slip_url else "<p>Your slip will arrive in WhatsApp as soon as the payment is confirmed.</p>")
@@ -137,6 +137,6 @@ def done(slip_url: str | None, status_url: str = "", nonce: str = "") -> str:
     return (f"<!doctype html><html lang=en><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'><title>Thank you</title>"
             f"<style>{_CSS}</style><body{data}><main><h1>Thank you</h1>"
-            f"<p class=who id=msg>Confirming your payment with PayFast\u2026</p>"
+            f"<p class=who id=msg>Confirming your payment with {escape(pay_with)}\u2026</p>"
             f"{slip}<p class=foot>Your slip opens here as soon as it is confirmed.</p></main>"
             f"{'<script' + _n(nonce) + '>' + _POLL_JS + '</script>' if status_url else ''}</html>")

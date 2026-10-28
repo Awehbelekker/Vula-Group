@@ -170,6 +170,14 @@ The owner switches tabs on under Money › Tap to Pay › **Bar tabs** (and sets
   when, never a customer number. Owner view: Money › Tap to Pay › Activity (`GET /v1/tap/{tenant}/audit`).
   A failed audit write is logged and doesn't block the action.
 
+## Gateways (28 Oct 2026)
+Tap to Pay checks out through a router (`vula/tap/gateways.py`): each business uses its default connected
+payment provider when that provider can do Tap to Pay (`TAP_GATEWAYS` in `vula/tap/api.py`), else PayFast.
+A payment notification is verified by the gateway it came from (the provider in its webhook path,
+`/v1/payments/webhook/{tenant}/{provider}`), and the payment and its de-duplication event are booked under
+that provider. Today only PayFast is built. Stitch (Pay by Bank / PayShap, cards, wallets) plugs in as
+a second gateway once its API docs and sandbox keys are available.
+
 ## Test payments
 The setup R5 test books nothing and doesn't alert the coach, but the payer now receives the same WhatsApp slip as a real customer, marked
 "TEST PAYMENT - nothing is booked to anyone", so the owner can see exactly what customers get (no tax-invoice offer on a test). The merchant
