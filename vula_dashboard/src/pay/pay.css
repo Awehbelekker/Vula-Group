@@ -25,3 +25,6 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .ov .bar{position:sticky;bottom:0;margin-top:auto;width:100%;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:16px 12px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(rgba(18,23,26,0),#12171a 40%)}
 .ov .bar button{width:auto;margin:0;font-size:15px;padding:10px 20px}
 .ov .bar button.ghost{background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.28)}
+.tab{border-top:1px solid var(--vp-line);padding-top:6px;margin-top:6px}
+.tab-head{display:flex;justify-content:space-between;align-items:center;gap:8px;background:transparent;color:var(--vp-ink);padding:10px 2px;margin:0;font-weight:500;text-align:left}
+.tab-body{padding:0 2px 8px}.tab-line{padding:4px 0;font-size:15px}

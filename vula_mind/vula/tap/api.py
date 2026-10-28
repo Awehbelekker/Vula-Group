@@ -24,7 +24,7 @@ import time
 from functools import lru_cache
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -95,11 +95,11 @@ def get_service() -> TapService:
 
 
 # ── WhatsApp hooks (called from vula/api/whatsapp.py) ────────────────────────────────────────
-async def try_handle_text(tenant_id: Optional[str], phone: str, text: str) -> bool:
+async def try_handle_text(tenant_id: Optional[str], phone: str, text: str, name: str = "") -> bool:
     if not tenant_enabled(tenant_id):
         return False
     try:
-        return await get_service().handle_text(tenant_id, phone, text)
+        return await get_service().handle_text(tenant_id, phone, text, name)
     except Exception:  # noqa: BLE001 — never let a tap bug take the normal assistant down
         log.exception("tap text handler failed (tenant=%s)", tenant_id)
         return False
@@ -135,11 +135,61 @@ def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
 
 
 @router.get("/t/{code}")
-async def tap(code: str):
-    url = get_service().tap(code[:64])
+async def tap(code: str, request: Request, via: str = ""):
+    code = code[:64]
+    if settings.tap_express and via != "whatsapp":
+        return _express(code, request)
+    url = get_service().tap(code)
     if not url:
         return _page("Tag not verified", "We couldn't verify this tag. Ask staff to take payment another way.", 404)
     return RedirectResponse(url, status_code=302)
+
+
+def _express(code: str, request: Request, error: str = "") -> Response:
+    """Express pay (vula/tap/express.py): the tap opens one pay page instead of WhatsApp."""
+    from vula.tap import express_page
+    from vula.tap.express import COOKIE, ExpressPay
+    svc = get_service()
+    cookie = request.cookies.get(COOKIE) or ""
+    fresh = not cookie
+    cookie = cookie or ExpressPay.new_cookie()
+    v = svc.express.view(code, cookie)
+    if v is None:
+        return _page("Tag not verified", "We couldn't verify this tag. Ask staff to take payment another way.", 404)
+    if v["kind"] == "whatsapp":                    # a bill sent to a number: WhatsApp proves the number
+        url = svc.tap(code)
+        return RedirectResponse(url, status_code=302) if url else _page(
+            "Tag not verified", "We couldn't verify this tag. Ask staff to take payment another way.", 404)
+    resp = HTMLResponse(express_page.render(code, v, error), status_code=200)
+    resp.headers["Cache-Control"] = "no-store"
+    if fresh:
+        resp.set_cookie(COOKIE, cookie, max_age=86400, httponly=True, samesite="lax", secure=True)
+    return resp
+
+
+@router.post("/t/{code}/pay")
+async def tap_pay(code: str, request: Request):
+    """The express page's Pay button: claim, price, then straight to PayFast."""
+    from vula.tap.express import COOKIE, ExpressError
+    code = code[:64]
+    form = await request.form()
+    cookie = request.cookies.get(COOKIE) or ""
+    if not cookie:                                  # cookies blocked: the page can't know who is paying
+        return _express(code, request, "Please allow cookies for this page, or pay in WhatsApp below.")
+    svc = get_service()
+    quick = str(form.get("amount") or "")
+    amount = str(form.get("amount_other") or "") if quick == "other" else quick
+    if quick.isdigit() and int(quick) in svc.cfg.quick_tip_presets_cents:   # a preset button, in cents
+        amount = f"{int(quick) / 100:.2f}"
+    try:
+        url = await svc.express.checkout(code, str(form.get("token") or ""), cookie,
+                                         tip=str(form.get("tip") or "0"),
+                                         custom_tip=str(form.get("custom_tip") or ""), amount=amount)
+    except ExpressError as exc:
+        return _express(code, request, str(exc))
+    except MoneyError:
+        return _express(code, request, "That amount doesn't look right. Type it in rands, for example 15.")
+    return RedirectResponse(url, status_code=303)
 
 
 @router.get("/t/{code}/qr.svg")
@@ -165,13 +215,31 @@ async def pay(session_id: str, nonce: str):
 
 
 @router.get("/v1/tap/done/{session_id}")
-async def done(session_id: str):
+async def done(session_id: str, request: Request):
+    from vula.tap import express_page
+    from vula.tap.express import COOKIE
+    slip = get_service().express.slip_link(session_id[:64], request.cookies.get(COOKIE) or "")
+    if slip:                # an express payment: wait for PayFast, then print the slip on screen
+        return HTMLResponse(express_page.done(slip, f"/v1/tap/done/{session_id[:64]}/status"),
+                            headers={"Cache-Control": "no-store"})
     return _page("Thank you", "Your slip will arrive in WhatsApp as soon as the payment is confirmed. "
                               "You can close this page.")
 
 
+@router.get("/v1/tap/done/{session_id}/status")
+async def done_status(session_id: str, request: Request) -> Response:
+    """The done page polls this until PayFast confirms, then opens the printed slip."""
+    import json
+    from vula.tap.express import COOKIE
+    body = get_service().express.status(session_id[:64], request.cookies.get(COOKIE) or "")
+    return Response(json.dumps(body), media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/tap/cancelled/{session_id}")
-async def cancelled(session_id: str):
+async def cancelled(session_id: str, request: Request):
+    from vula.tap.express import COOKIE
+    # an express payer who backs out frees the bill at once, so the next tap works straight away
+    get_service().express.cancel(session_id[:64], request.cookies.get(COOKIE) or "")
     return _page("Payment cancelled", "You haven't been charged. Tap the tag again to restart.")
 
 
@@ -455,3 +523,59 @@ async def close_unpaid(tenant: str, bill_id: str, body: CloseIn, identity: dict 
     if not ok:
         raise HTTPException(status_code=409, detail="This bill isn't waiting on a payment any more.")
     return {"closed": body.action}
+
+
+# ── bar tabs (vula/tap/tabs.py, migration 231) ───────────────────────────────────────────────
+class TabsSettingsIn(BaseModel):
+    enabled: bool
+    idle_hours: int = Field(default=3, ge=1, le=24)
+
+
+class TabItemIn(BaseModel):
+    description: str = Field(min_length=1, max_length=80)
+    quantity: int = Field(default=1, ge=1, le=99)
+    unit_cents: int = Field(ge=0, le=1_000_000)
+
+
+@router.put("/v1/tap/{tenant}/tabs/settings")
+async def set_tabs(tenant: str, body: TabsSettingsIn, identity: dict = Depends(require_tenant_actor)) -> dict:
+    get_service().repo.upsert_settings(tenant, {"tabs_enabled": body.enabled, "tab_idle_hours": body.idle_hours})
+    return {"enabled": body.enabled, "idle_hours": body.idle_hours}
+
+
+@router.get("/v1/tap/{tenant}/tabs")
+async def list_tabs(tenant: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    """Open tabs with the customer's name and full number (the business sees who it is running a
+    tab for; the customer was told when the tab opened)."""
+    svc = get_service()
+    return {"enabled": svc.tabs.enabled(tenant), "idle_hours": svc.tabs.idle_hours(tenant),
+            "tabs": svc.tabs.list_open(tenant, reveal=True)}
+
+
+def _tab_call(fn, *args, **kw):
+    from vula.tap.tabs import TabError
+    try:
+        return fn(*args, **kw)
+    except TabError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/v1/tap/{tenant}/tabs/{bill_id}/items")
+async def add_tab_item(tenant: str, bill_id: str, body: TabItemIn,
+                       identity: dict = Depends(require_tenant_actor)) -> dict:
+    svc = _guard(tenant)
+    return _tab_call(svc.tabs.add_item, tenant, bill_id, description=body.description, quantity=body.quantity,
+                     unit_cents=body.unit_cents, by=identity.get("email") or identity.get("user_id") or "")
+
+
+@router.post("/v1/tap/{tenant}/tabs/{bill_id}/items/{item_id}/void")
+async def void_tab_item(tenant: str, bill_id: str, item_id: str,
+                        identity: dict = Depends(require_tenant_actor)) -> dict:
+    return _tab_call(_guard(tenant).tabs.void_item, tenant, bill_id, item_id)
+
+
+@router.post("/v1/tap/{tenant}/tabs/{bill_id}/close")
+async def close_empty_tab(tenant: str, bill_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    if not _tab_call(_guard(tenant).tabs.close_empty, tenant, bill_id):
+        raise HTTPException(status_code=409, detail="This tab can't be closed.")
+    return {"status": "cancelled"}

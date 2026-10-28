@@ -41,6 +41,7 @@ export function useTapToPay(tenantId) {
   const [devices, setDevices] = useState([]);
   const [unpaid, setUnpaid] = useState([]);
   const [closing, setClosing] = useState(null);     // bill id whose "paid another way" picker is open
+  const [tabs, setTabs] = useState(null);           // {enabled, idle_hours, tabs:[…]} (bar tabs)
   const poll = useRef(null);
 
   const load = useCallback(async () => {
@@ -58,7 +59,9 @@ export function useTapToPay(tenantId) {
       api(`/v1/tap/${tenantId}/devices`).then((d) => setDevices(d.devices || [])).catch(() => {});
       if (s.mode !== "off") {
         const b = await api(`/v1/tap/${tenantId}/bills`).catch(() => ({ bills: [] }));
-        setBills(b.bills || []);
+        // open tabs are managed in the Tabs card, not as bills
+        setBills((b.bills || []).filter((x) => !(x.bill_type === "tab" && (x.status === "open" || x.status === "claimed"))));
+        api(`/v1/tap/${tenantId}/tabs`).then(setTabs).catch(() => {});
       }
     } catch (e) { setErr(e.message); }
   }, [tenantId]);
@@ -73,7 +76,7 @@ export function useTapToPay(tenantId) {
 
   const run = async (key, fn) => {
     setBusy(key); setErr("");
-    try { await fn(); } catch (e) { setErr(e.message); } finally { setBusy(""); }
+    try { return await fn(); } catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
 
   const connectPayfast = () => run("pf", async () => {
@@ -133,7 +136,33 @@ export function useTapToPay(tenantId) {
   });
   const when = (iso) => { try { return new Date(iso).toLocaleString("en-ZA", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg" }); } catch { return ""; } };
 
+  // bar tabs: the owner switches them on; customers open one by tapping a tag; staff add items
+  const setTabsOn = (enabled, idle_hours) => run("tabs", async () => {
+    await api(`/v1/tap/${tenantId}/tabs/settings`, { method: "PUT", body: { enabled, idle_hours } });
+    setTabs(await api(`/v1/tap/${tenantId}/tabs`));
+  });
+  const reloadTabs = () => run("tabs-load", async () => setTabs(await api(`/v1/tap/${tenantId}/tabs`)));
+  const addTabItem = (id, item) => run(`t-${id}`, async () => {
+    if (!item.desc.trim()) throw new Error("What did they order?");
+    const qty = Number(item.qty);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 99) throw new Error("Quantity is 1 to 99.");
+    if (!RAND.test(item.price.trim())) throw new Error("Enter the price in rands, for example 45 or 45.50.");
+    await api(`/v1/tap/${tenantId}/tabs/${id}/items`, { method: "POST", body: {
+      description: item.desc.trim(), quantity: qty, unit_cents: Math.round(Number(item.price.trim()) * 100) } });
+    setTabs(await api(`/v1/tap/${tenantId}/tabs`));
+    return true;
+  });
+  const voidTabItem = (id, itemId, confirm = (m) => window.confirm(m)) => run(`t-${id}`, async () => {
+    if (!(await confirm("Remove this item from the tab?"))) return;
+    await api(`/v1/tap/${tenantId}/tabs/${id}/items/${itemId}/void`, { method: "POST" });
+    setTabs(await api(`/v1/tap/${tenantId}/tabs`));
+  });
+  const closeEmptyTab = (id) => run(`t-${id}`, async () => {
+    await api(`/v1/tap/${tenantId}/tabs/${id}/close`, { method: "POST" });
+    setTabs(await api(`/v1/tap/${tenantId}/tabs`));
+  });
+
   const billAction = (id, action) => run(`b-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/${action}`, { method: "POST" }); await load(); });
 
-  return { st, err, busy, shares, setShares, pf, setPf, editPf, setEditPf, test, testMember, setTestMember, bills, nb, setNb, newCode, enrol, devices, unpaid, closing, setClosing, connectPayfast, saveShares, getTag, startTest, goLive, pause, createBill, getEnrolCode, revokeDevice, setReminders, remind, closeBill, when, billAction };
+  return { st, err, busy, shares, setShares, pf, setPf, editPf, setEditPf, test, testMember, setTestMember, bills, nb, setNb, newCode, enrol, devices, unpaid, closing, setClosing, connectPayfast, saveShares, getTag, startTest, goLive, pause, createBill, getEnrolCode, revokeDevice, setReminders, remind, closeBill, when, billAction, tabs, setTabsOn, reloadTabs, addTabItem, voidTabItem, closeEmptyTab };
 }

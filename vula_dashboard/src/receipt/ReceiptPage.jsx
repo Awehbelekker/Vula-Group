@@ -16,6 +16,15 @@ const token = () => {
 };
 
 
+// Express pay (vula_mind/vula/tap/express.py) opens this page straight after paying, with ?wa=<the
+// wa.me link that asks Vula for the slip>. Only a wa.me link is ever used, never any other URL.
+const waLink = () => {
+  try {
+    const v = new URLSearchParams(location.search).get("wa") || "";
+    return /^https:\/\/wa\.me\/\d+\?text=/.test(v) ? v : "";
+  } catch { return ""; }
+};
+
 function TaxSheet({ tok, onDone, onClose }) {
   const [f, setF] = useState({ company: "", vat: "", address: "" });
   const [busy, setBusy] = useState(false);
@@ -89,6 +98,7 @@ export default function ReceiptPage() {
               <button className="p" onClick={replay}>Replay</button>
               <button onClick={toggle} aria-label={`Sound volume: ${volume}`}>{volume === "off" ? "Sound off" : `Sound: ${volume}`}</button>
               <button onClick={() => window.print()}>Save / print</button>
+              {waLink() && <a href={waLink()} rel="noopener noreferrer"><button>Send to my WhatsApp</button></a>}
               {state.data.tax_invoice_number
                 ? <a href={pdfUrl()} target="_blank" rel="noopener noreferrer"><button>Tax invoice {state.data.tax_invoice_number}</button></a>
                 : state.data.can_tax_invoice && <button onClick={() => setSheet(true)}>Get tax invoice</button>}

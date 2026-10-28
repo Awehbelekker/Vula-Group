@@ -123,6 +123,39 @@ owner), never sent as free text. Apply migration 204.
 Trade-off to know: an abandoned bill stays reserved to the customer who left, so another customer tapping that tag sees
 "being paid from another phone" until the owner uses Release (or the sequence ends and they close it).
 
+## Express pay (default since 28 Oct 2026)
+A tap opens **one pay page** (`GET /t/{code}`, `vula/tap/express.py` + `express_page.py`): the amount, tip
+buttons (No tip / 10 / 15 / 20% / Other) and **Pay**, which goes straight to PayFast (`POST /t/{code}/pay`).
+The WhatsApp round trip (press Send, wait for Vula, pick a tip, press Pay) is gone. The slip is optional:
+the done page has "Get my slip on WhatsApp", which sends `SLIP <ref>` and links the number to the payment
+(the slip goes out now if PayFast has confirmed, else when it does).
+- **Who is paying:** a random id in an HttpOnly cookie (`kb_web`), hashed with the pepper. The same browser
+  tapping again picks its own claim back up; any other phone sees "being paid on another phone".
+- **Backing out** on PayFast's page (cancel URL) frees the bill at once; a web session that just expires
+  also goes back to **open** (there is no number for reminders), not to abandoned.
+- **Same rules as WhatsApp:** the claim is the same compare-and-set, the session goes through the same
+  states, and only the verified PayFast ITN marks anything paid (amount checked, de-duplicated).
+- **Still WhatsApp:** bills sent to a customer's number (bill code / choose one of several) redirect to the
+  WhatsApp flow, which proves the number. "Rather pay in WhatsApp" (`?via=whatsapp`) is on every page.
+- Tag types: bill (appointment), tip only (`mode=quick_tip`, car guards: R5/R10/R20/Other) and customer
+  enters the amount (`allow_open_amount`). The dashboard can only create bill tags so far.
+- `TAP_EXPRESS=false` puts every tap back on the WhatsApp flow.
+
+## Bar tabs (migration 231, off by default)
+The owner switches tabs on under Money › Tap to Pay › **Bar tabs** (and sets the pay-reminder time, default 3 hours).
+- **Opening:** any of the bar's tags shows **Open a tab** on the express page. It opens WhatsApp with `TAB <token>`
+  (a single-use claim token), so the tab runs under the customer's proven WhatsApp number and their WhatsApp profile
+  name. A tab is a `kb_bills` row with `bill_type='tab'`; one open tab per customer per business. The customer is
+  told the business can see their name and number while the tab is open.
+- **Ordering:** staff add items (description, qty, price each) in Vula Pay (Open tabs card, number masked) or the
+  dashboard (full number). Items live in `kb_tab_items`; a void sets `voided_at`, nothing is deleted. Items can't be
+  added while the customer is paying (claimed). A tab with items can't be cancelled from the staff app.
+- **Paying:** the customer taps any tag again (it picks their own tab, never someone else's) or replies PAY TAB.
+  The total is recomputed from the items when the payment starts; an empty tab can't be paid and can be closed.
+  "my tab" shows what's on it. Payment then follows the normal rules (claim compare-and-set, ITN-only confirmation).
+- **Idle tabs:** after the reminder time with nothing new, the customer gets one pay prompt and the owner a message
+  (`TabDesk.sweep_idle`, run by the tap sweep). Adding an item resets the clock.
+
 ## Test payments
 The setup R5 test books nothing and doesn't alert the coach, but the payer now receives the same WhatsApp slip as a real customer, marked
 "TEST PAYMENT - nothing is booked to anyone", so the owner can see exactly what customers get (no tax-invoice offer on a test). The merchant

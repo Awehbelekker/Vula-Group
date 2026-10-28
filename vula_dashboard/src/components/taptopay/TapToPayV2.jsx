@@ -6,7 +6,8 @@
  * formatMoney; typed rands become cents in the hook. Replacing a tag, signing a phone out and
  * writing a bill off ask first.
  */
-import { Ban, Check, Copy, CreditCard, ExternalLink, KeyRound, Pause, Play, QrCode, Receipt, RefreshCw, Rocket, Send, Smartphone, Undo2, X } from 'lucide-react'
+import { useState } from 'react'
+import { Ban, Beer, Check, Copy, CreditCard, ExternalLink, KeyRound, Pause, Play, QrCode, Receipt, Plus, RefreshCw, Rocket, Send, Smartphone, Undo2, X } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
 import { Button, Card, Field, Input, Select, StatusChip, confirmDialog } from '../ui/index.jsx'
 import { MODE_BADGE, STATUS_TONE, useTapToPay } from './useTapToPay'
@@ -151,6 +152,7 @@ export default function TapToPayV2({ tenantId }) {
       </Step>
 
       {st.mode !== 'off' && <Unpaid x={x} st={st} />}
+      {st.mode !== 'off' && x.tabs && <Tabs x={x} />}
       {st.mode !== 'off' && <NewBill x={x} withTag={withTag} />}
     </section>
   )
@@ -277,6 +279,65 @@ function NewBill({ x, withTag }) {
               {(b.status === 'open' || b.status === 'claimed') && <Button size="sm" variant="secondary" Icon={X} onClick={() => x.billAction(b.id, 'cancel')}>Cancel</Button>}
             </li>))}
         </ul>)}
+    </Card>
+  )
+}
+
+const tabWhen = (iso) => { try { return new Date(iso).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Johannesburg' }) } catch { return '' } }
+
+function Tabs({ x }) {
+  const t = x.tabs
+  const [openId, setOpenId] = useState('')
+  const [item, setItem] = useState({ desc: '', qty: '1', price: '' })
+  const add = async (id) => { if (await x.addTabItem(id, item)) setItem({ desc: '', qty: '1', price: '' }) }
+  return (
+    <Card className="vtp-card" role="group" aria-labelledby="vtp-tabs">
+      <div className="vtp-row vtp-bottom">
+        <h2 className="vtp-h vtp-grow" id="vtp-tabs"><Beer size={18} aria-hidden="true" />Bar tabs</h2>
+        {t.enabled && (
+          <Field label="Pay reminder after" style={{ width: 170 }}>
+            <Select value={t.idle_hours} disabled={x.busy === 'tabs'} onChange={e => x.setTabsOn(true, Number(e.target.value))}>
+              {[1, 2, 3, 4, 6, 8].map(h => <option key={h} value={h}>{h} hour{h === 1 ? '' : 's'}</option>)}
+            </Select>
+          </Field>)}
+        <Button size="sm" variant={t.enabled ? 'secondary' : 'primary'} disabled={x.busy === 'tabs'}
+          onClick={() => x.setTabsOn(!t.enabled, t.idle_hours || 3)}>{t.enabled ? 'Switch tabs off' : 'Switch tabs on'}</Button>
+      </div>
+      <p className="vtp-muted">A customer taps any of your tags and chooses <b>Open a tab</b>: WhatsApp opens and the tab runs under their number and WhatsApp name. Staff add what they order (here or in the Vula Pay app), and the customer taps again or replies PAY TAB to pay it all at once. After {t.idle_hours || 3} hour{t.idle_hours === 1 ? '' : 's'} with nothing new, the customer gets one pay reminder and you get a message.</p>
+      {t.enabled && (t.tabs.length === 0
+        ? <p className="vtp-muted">No open tabs.</p>
+        : <ul className="vtp-list" aria-label="Open tabs">
+            {t.tabs.map(tab => (
+              <li key={tab.id}><div className="vtp-bill" role="group" aria-label={`Tab: ${tab.name}`}>
+                <div className="vtp-row">
+                  <b className="vtp-grow">{tab.name} <span className="vtp-muted">· {tab.phone ? <a className="vtp-link" href={`tel:+${tab.phone}`}>+{tab.phone}</a> : tab.number} · opened {tabWhen(tab.opened_at)}</span></b>
+                  <span className="vula-money">{money(tab.total_cents)}</span>
+                  {tab.status === 'claimed' && <StatusChip tone="warn">Paying</StatusChip>}
+                  <Button size="sm" variant="quiet" aria-expanded={openId === tab.id} onClick={() => setOpenId(openId === tab.id ? '' : tab.id)}>{openId === tab.id ? 'Hide' : `${tab.items.length} item${tab.items.length === 1 ? '' : 's'}`}</Button>
+                </div>
+                {openId === tab.id && (
+                  <>
+                    <ul className="vtp-list">
+                      {tab.items.map(it => (
+                        <li key={it.id} className="vtp-row">
+                          <span className="vtp-grow">{it.quantity} × {it.description}</span>
+                          <span className="vula-money">{money(it.line_cents)}</span>
+                          {tab.status === 'open' && <Button size="sm" variant="quiet" Icon={X} aria-label={`Remove ${it.description}`}
+                            disabled={x.busy === `t-${tab.id}`} onClick={() => x.voidTabItem(tab.id, it.id, ask('Remove'))}>Remove</Button>}
+                        </li>))}
+                    </ul>
+                    {tab.status === 'open' && (
+                      <form className="vtp-row vtp-bottom" onSubmit={e => { e.preventDefault(); add(tab.id) }}>
+                        <Field label="Item" style={{ flex: '2 1 160px', minWidth: 0 }}><Input value={item.desc} maxLength={80} onChange={e => setItem({ ...item, desc: e.target.value })} placeholder="e.g. Castle Lite" /></Field>
+                        <Field label="Qty" style={{ width: 70 }}><Input inputMode="numeric" value={item.qty} onChange={e => setItem({ ...item, qty: e.target.value })} /></Field>
+                        <Field label="Price each (R)" style={{ width: 130 }}><Input inputMode="decimal" value={item.price} onChange={e => setItem({ ...item, price: e.target.value })} placeholder="e.g. 45" /></Field>
+                        <Button type="submit" size="sm" Icon={Plus} disabled={x.busy === `t-${tab.id}`}>Add</Button>
+                        {tab.total_cents === 0 && <Button type="button" size="sm" variant="secondary" Icon={X} disabled={x.busy === `t-${tab.id}`} onClick={() => x.closeEmptyTab(tab.id)}>Close empty tab</Button>}
+                      </form>)}
+                  </>)}
+              </div></li>))}
+          </ul>)}
+      {t.enabled && <div><Button size="sm" variant="quiet" Icon={RefreshCw} disabled={x.busy === 'tabs-load'} onClick={x.reloadTabs}>Refresh</Button></div>}
     </Card>
   )
 }

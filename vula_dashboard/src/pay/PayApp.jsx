@@ -259,7 +259,9 @@ function Home({ token, onLock, onExpired }) {
   };
 
   const act = async (id, action) => { setErr(""); try { await call(`/v1/tap/app/bills/${id}/${action}`, { token, method: "POST" }); await loadBills(); } catch (x) { guard(x); } };
-  const open = bills.find((b) => b.status === "open" || b.status === "claimed");
+  const liveTab = (b) => b.bill_type === "tab" && (b.status === "open" || b.status === "claimed");
+  const shown = bills.filter((b) => !liveTab(b));     // open tabs live in the Tabs card
+  const open = shown.find((b) => b.status === "open" || b.status === "claimed");
   const isIos = /iphone|ipad/i.test(navigator.userAgent) && !window.matchMedia("(display-mode: standalone)").matches;
 
   return (
@@ -269,6 +271,8 @@ function Home({ token, onLock, onExpired }) {
       {!online && <div className="banner">You're offline. You can see recent bills, but creating a bill needs a connection.</div>}
       {me && me.mode === "off" && <div className="banner">Tap to Pay is switched off for this business.</div>}
       {err && <div className="err" role="alert">{err}</div>}
+
+      <Tabs token={token} guard={guard} online={online} bump={bills} />
 
       <form className="card" onSubmit={create}>
         <h2>New bill</h2>
@@ -291,8 +295,8 @@ function Home({ token, onLock, onExpired }) {
       )}
 
       <h2 style={{ marginTop: 18 }}>Bills</h2>
-      {bills.length === 0 && <div className="muted">No bills yet.</div>}
-      {bills.map((b) => (b.status === "paid" && !b.is_test
+      {shown.length === 0 && <div className="muted">No bills yet.</div>}
+      {shown.map((b) => (b.status === "paid" && !b.is_test
         ? <div key={b.id} className="card paid-card">
             <div className="row"><span className="pill paid">Paid</span><span className="muted">{b.description}</span></div>
             <div className="big">{rands(b.total_cents ?? b.subtotal_cents)}</div>
@@ -337,5 +341,86 @@ function Home({ token, onLock, onExpired }) {
         </div>
       )}
     </>
+  );
+}
+
+// ── bar tabs: the customer opens a tab by tapping a tag (WhatsApp); staff add what they order ──
+const TAB_RE = /^\d{1,5}([.,]\d{1,2})?$/;
+
+function Tabs({ token, guard, online, bump }) {
+  const [tabs, setTabs] = useState(null);           // null = loading; "off" = tabs switched off
+  const [openId, setOpenId] = useState("");
+  const [f, setF] = useState({ desc: "", qty: "1", price: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [quick, setQuick] = useState(() => { try { return JSON.parse(LS.get("vp.tabquick") || "[]"); } catch { return []; } });
+
+  const load = useCallback(async () => {
+    try { setTabs((await call("/v1/tap/app/tabs", { token })).tabs); }
+    catch (x) { if (x.status === 409) setTabs("off"); else if (x.status) guard(x); }
+  }, [token, guard]);
+
+  // reload when a bill event arrives (a tab opened, was claimed or paid) and every 30s
+  useEffect(() => { load(); }, [load, bump]);
+  useEffect(() => { const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+
+  if (tabs === null || tabs === "off") return null;
+
+  const replace = (t) => setTabs((cur) => cur.map((x) => (x.id === t.id ? { ...x, ...t } : x)));
+  const add = async (e, tab) => {
+    e.preventDefault(); setErr("");
+    const qty = Number(f.qty);
+    if (!f.desc.trim()) return setErr("What did they order?");
+    if (!Number.isInteger(qty) || qty < 1 || qty > 99) return setErr("Quantity is 1 to 99.");
+    if (!TAB_RE.test(f.price.trim())) return setErr("Enter the price in rands, for example 45 or 45.50.");
+    setBusy(true);
+    try {
+      const unit = Math.round(Number(f.price.trim().replace(",", ".")) * 100);
+      replace(await call(`/v1/tap/app/tabs/${tab.id}/items`, { token, method: "POST", body: { description: f.desc.trim(), quantity: qty, unit_cents: unit } }));
+      const q = [{ d: f.desc.trim(), p: f.price.trim() }, ...quick.filter((r) => r.d !== f.desc.trim())].slice(0, 8);
+      setQuick(q); LS.set("vp.tabquick", JSON.stringify(q));
+      setF({ desc: "", qty: "1", price: "" });
+    } catch (x) { if (x.status === 401) guard(x); else setErr(x.message); await load(); } finally { setBusy(false); }
+  };
+  const voidItem = async (tab, it) => {
+    if (!window.confirm(`Remove ${it.quantity} × ${it.description} from ${tab.name}'s tab?`)) return;
+    setErr("");
+    try { replace(await call(`/v1/tap/app/tabs/${tab.id}/items/${it.id}/void`, { token, method: "POST" })); }
+    catch (x) { if (x.status === 401) guard(x); else setErr(x.message); }
+  };
+
+  return (
+    <div className="card">
+      <div className="row"><h2 style={{ margin: 0 }}>Open tabs</h2><button className="ghost small" onClick={load}>Refresh</button></div>
+      {err && <div className="err" role="alert">{err}</div>}
+      {tabs.length === 0 && <div className="muted" style={{ marginTop: 6 }}>No open tabs. A customer taps a tag and chooses “Open a tab”.</div>}
+      {tabs.map((t) => (
+        <div key={t.id} className="tab">
+          <button type="button" className="tab-head" aria-expanded={openId === t.id} onClick={() => { setOpenId(openId === t.id ? "" : t.id); setErr(""); }}>
+            <span><strong>{t.name}</strong> <span className="muted">{t.number}</span></span>
+            <span>{t.status === "claimed" && <span className="pill claimed">paying</span>} {rands(t.total_cents)}</span>
+          </button>
+          {openId === t.id && (
+            <div className="tab-body">
+              {t.items.length === 0 && <div className="muted">Nothing on this tab yet.</div>}
+              {t.items.map((it) => (
+                <div key={it.id} className="row tab-line">
+                  <span>{it.quantity} × {it.description}</span>
+                  <span>{rands(it.line_cents)} {t.status === "open" && <button type="button" className="ghost small" aria-label={`Remove ${it.description}`} onClick={() => voidItem(t, it)}>✕</button>}</span>
+                </div>))}
+              {t.status === "claimed"
+                ? <div className="muted" style={{ marginTop: 6 }}>The customer is paying now. Add new orders after, or they open a new tab.</div>
+                : <form onSubmit={(e) => add(e, t)}>
+                    {quick.length > 0 && <div className="chips">{quick.map((r) => <button type="button" key={r.d} className="chip" onClick={() => setF({ ...f, desc: r.d, price: r.p })}>{r.d} · R{r.p}</button>)}</div>}
+                    <input aria-label="Item" placeholder="What? e.g. Castle Lite" value={f.desc} maxLength={80} onChange={(e) => setF({ ...f, desc: e.target.value })} />
+                    <div className="row">
+                      <input aria-label="Quantity" placeholder="Qty" inputMode="numeric" value={f.qty} style={{ width: 80 }} onChange={(e) => setF({ ...f, qty: e.target.value })} />
+                      <input aria-label="Price each in rands" placeholder="Price each (R)" inputMode="decimal" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} />
+                    </div>
+                    <button type="submit" disabled={busy || !online}>{busy ? "Adding…" : `Add to ${t.name}'s tab`}</button>
+                  </form>}
+            </div>)}
+        </div>))}
+    </div>
   );
 }

@@ -95,6 +95,16 @@ class TapService:
         from vula.tap.tax import TaxDesk
         return TaxDesk(self)
 
+    @property
+    def tabs(self):
+        from vula.tap.tabs import TabDesk
+        return TabDesk(self)
+
+    @property
+    def express(self):
+        from vula.tap.express import ExpressPay
+        return ExpressPay(self)
+
     def now(self) -> datetime:
         return self.cfg.clock()
 
@@ -134,7 +144,8 @@ class TapService:
             return
         tenant, bill_id = session["tenant_id"], session["bill_id"]
         bill = self.repo.get_bill(tenant, bill_id) or {}
-        if (bill.get("status") == "claimed" and not bill.get("is_test")
+        # a web (express) payer has no number to remind, so their bill simply goes back to open
+        if (bill.get("status") == "claimed" and not bill.get("is_test") and session.get("payer_enc")
                 and state_at_end in ("awaiting_confirm", "awaiting_payment", "failed")):
             if self.repo.cas_bill(tenant, bill_id, expected="claimed", new=st.bill_next("claimed", "abandon"),
                                   fields={"abandoned_at": self.now().isoformat(), "last_session_id": session["id"]}):
@@ -164,11 +175,16 @@ class TapService:
         return f"https://wa.me/{number}?text={quote('PAY ' + token)}"
 
     # ── 2. inbound WhatsApp text ─────────────────────────────────────────────────────────────
-    async def handle_text(self, tenant_id: str, phone: str, text: str) -> bool:
-        """True if this message belonged to the tap flow (caller must then not route it elsewhere)."""
+    async def handle_text(self, tenant_id: str, phone: str, text: str, name: str = "") -> bool:
+        """True if this message belonged to the tap flow (caller must then not route it elsewhere).
+        `name` is the sender's WhatsApp profile name (used to label a bar tab)."""
         m = _PAY_RE.match(text or "")
         if m:
             await self._start(tenant_id, phone, m.group(1))
+            return True
+        if await self.express.claim_slip(tenant_id, phone, text):
+            return True
+        if await self.tabs.handle_text(tenant_id, phone, text, name):
             return True
         if await self.tax.handle_text(tenant_id, phone, text):
             return True
@@ -189,8 +205,11 @@ class TapService:
             await self._say(tenant_id, phone, MSG_NOT_VERIFIED)
             return
         payer = self.phone_hash(phone)
+        # a bar tab is only ever offered to the number that opened it (vula/tap/tabs.py): never a
+        # code prompt or a "being paid elsewhere" for someone else's tab on the same tag
         bills = [mt.BillView(b["id"], b["status"], b.get("customer_hash"), b.get("claimed_by_hash"))
-                 for b in self.repo.live_bills_for_tag(tenant_id, tag["id"])]
+                 for b in self.repo.live_bills_for_tag(tenant_id, tag["id"])
+                 if b.get("bill_type") != "tab" or b.get("customer_hash") == payer]
         locked = self._code_locked(tenant_id, bills, payer)
         d = mt.resolve_tap(tag_mode=tag.get("mode", "appointment"), payer_hash=payer, bills=bills,
                            tag_allows_open_amount=bool(tag.get("allow_open_amount")), code_locked=locked)
@@ -228,6 +247,9 @@ class TapService:
         if not bill:
             await self._say(tenant_id, phone, MSG_NO_BILL)
             return
+        if bill.get("bill_type") == "tab" and not self.tabs.total(tenant_id, bill_id):
+            await self._say(tenant_id, phone, "Your tab is empty so far. Order something first!")
+            return
         if bill["status"] == "claimed" and bill.get("claimed_by_hash") == payer:
             existing = self._live(self.repo.active_session_for_payer(tenant_id, payer, self.now()))
             if existing and existing.get("bill_id") == bill_id:
@@ -244,7 +266,12 @@ class TapService:
                                     fields={"claimed_by_hash": payer}):
             await self._say(tenant_id, phone, MSG_LOCKED)    # lost the atomic claim
             return
-        session = self._new_session(tenant_id, bill_id, payer, phone, int(bill["subtotal_cents"]))
+        amount = int(bill["subtotal_cents"])
+        if bill.get("bill_type") == "tab":
+            # the items decide what is owed, worked out now the tab is claimed (staff can't add to it)
+            amount = self.tabs.total(tenant_id, bill_id)
+            self.repo.update_bill(tenant_id, bill_id, {"subtotal_cents": amount})
+        session = self._new_session(tenant_id, bill_id, payer, phone, amount)
         self.repo.cas_session(tenant_id, session["id"], expected="claimed", new=st.session_next("claimed", "amount_set"))
         session["state"] = "awaiting_tip"
         await self._ask_tip(session, phone)
@@ -538,25 +565,34 @@ class TapService:
                 await self._say(tenant_id, p, "Tap to Pay test payment received. PayFast is set up "
                                               "correctly - you can go live in the dashboard.")
         if phone:
-            # A test payment sends the payer the same slip (marked TEST) so the owner sees what customers get.
-            tax_hint = ("\nNeed a VAT tax invoice? Reply TAX."
-                        if s["bill_cents"] and not is_test and self.tax.can_issue(tenant_id) else "")
-            receipt_url = ""
-            if self.cfg.receipt_secret and self.cfg.receipt_base_url:
-                from vula.tap.receipt import make_token
-                receipt_url = (f"{self.cfg.receipt_base_url.rstrip('/')}/r/"
-                               f"{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}")
-            slip = (f"{'TEST PAYMENT - nothing is booked to anyone. ' if is_test else ''}"
-                    f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
-                    f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{tax_hint}")
-            if receipt_url:
-                await self.messenger.link_button(tenant_id, phone, slip, "View receipt", receipt_url)
-            else:
-                await self._say(tenant_id, phone, slip)
+            await self._send_slip(tenant_id, s, pay, is_test, phone)
         if is_test:
             return "test_paid"
         await self._notify_staff(tenant_id, s, phone)
         return "paid"
+
+    def receipt_url(self, pay: dict) -> str:
+        """The animated receipt page (/r/<token> on the dashboard) for a payment, or "" if unset."""
+        if not (self.cfg.receipt_secret and self.cfg.receipt_base_url):
+            return ""
+        from vula.tap.receipt import make_token
+        return (f"{self.cfg.receipt_base_url.rstrip('/')}/r/"
+                f"{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}")
+
+    async def _send_slip(self, tenant_id: str, s: dict, pay: dict, is_test: bool, phone: str) -> None:
+        """The payer's WhatsApp slip. A test payment gets the same slip (marked TEST) so the owner
+        sees what customers get. Also sent later to an express payer who asks for it (SLIP)."""
+        total = s["bill_cents"] + s["tip_cents"]
+        tax_hint = ("\nNeed a VAT tax invoice? Reply TAX."
+                    if s["bill_cents"] and not is_test and self.tax.can_issue(tenant_id) else "")
+        receipt_url = self.receipt_url(pay)
+        slip = (f"{'TEST PAYMENT - nothing is booked to anyone. ' if is_test else ''}"
+                f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
+                f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{tax_hint}")
+        if receipt_url:
+            await self.messenger.link_button(tenant_id, phone, slip, "View receipt", receipt_url)
+        else:
+            await self._say(tenant_id, phone, slip)
 
     async def _post_ledger(self, tenant_id: str, s: dict, pay: dict) -> None:
         bill = self.repo.get_bill(tenant_id, s["bill_id"]) if s.get("bill_id") else None
@@ -581,11 +617,13 @@ class TapService:
         share = alloc.net_by_party().get(staff, 0) if alloc and staff else 0
         what = (bill or {}).get("description") or "payment"
         msg = (f"Paid {_m(s['bill_cents'])} ({what}) + {_m(s['tip_cents'])} tip."
-               + (f" Your share {_m(share)}." if staff else "") + f" Customer {self.mask(phone)}.")
+               + (f" Your share {_m(share)}." if staff else "")
+               + (f" Customer {self.mask(phone)}." if phone else " Paid by tap."))
         for p in self.repo.team_phones(tenant_id, staff):
             await self._say(tenant_id, p, msg)
         await self._push(tenant_id, staff, f"Paid {_m(s['bill_cents'])} + {_m(s['tip_cents'])} tip",
-                         (f"Your share {_m(share)}. " if staff else "") + f"{what} · customer {self.mask(phone)}",
+                         (f"Your share {_m(share)}. " if staff else "")
+                         + (f"{what} · customer {self.mask(phone)}" if phone else f"{what} · paid by tap"),
                          tag=s.get("bill_id") or s["id"])
 
     async def _push(self, tenant_id: str, member_id: Optional[str], title: str, body: str, tag: str) -> None:
@@ -665,6 +703,10 @@ class TapService:
                     continue
                 stats["reminders"] += outcome == "sent"
                 stats["followups"] += outcome in ("followup", "opted_out")
+            try:
+                stats["tab_prompts"] = stats.get("tab_prompts", 0) + await self.tabs.sweep_idle(t)
+            except Exception:  # noqa: BLE001 — tabs need migration 231; never stop the reminder pass
+                logger.exception("idle tab sweep failed (tenant=%s)", t)
         return stats
 
     def _to_follow_up(self, bill: dict) -> None:

@@ -267,3 +267,30 @@ async def test_dead_subscription_removed_and_push_failure_never_breaks_payment(e
     bill = svc.create_bill(tenant_id=T, tag_id=next(t["id"] for t in repo.tags.values() if t["code"] == "tag-m1"),
                            amount_cents=50000, description="Lesson 2", staff_id="m1", created_by="m1")
     await run_payment(svc, repo, msg, gw, bill)           # still completes: asserts inside run_payment
+
+
+async def test_tabs_in_the_app_and_dashboard(client, env):
+    import re
+    svc, repo, *_ = env
+    h1, _ = sign_in(client, svc, "m1", SIPHO)
+    assert client.get("/v1/tap/app/tabs", headers=h1).status_code == 409          # tabs off by default
+    assert client.put(f"/v1/tap/{T}/tabs/settings", json={"enabled": True, "idle_hours": 2}).status_code == 200
+    token = re.search(r"text=TAB%20(\S+)", svc.tabs.open_link(repo.get_tag_by_code("tag-m1"))).group(1)
+    assert await svc.handle_text(T, CUST, f"TAB {token}", "Sam") is True
+    [tab] = client.get("/v1/tap/app/tabs", headers=h1).json()["tabs"]
+    assert tab["name"] == "Sam" and "phone" not in tab and tab["number"] == "ending 482"
+    v = client.post(f"/v1/tap/app/tabs/{tab['id']}/items", headers=h1,
+                    json={"description": "Lager", "quantity": 2, "unit_cents": 4500}).json()
+    assert v["total_cents"] == 9000
+    # a tab with drinks on it can't be cancelled from the staff app, and isn't a plain bill there
+    assert client.post(f"/v1/tap/app/bills/{tab['id']}/cancel", headers=h1).status_code == 409
+    bills = client.get("/v1/tap/app/bills", headers=h1).json()["bills"]
+    assert [b["bill_type"] for b in bills if b["id"] == tab["id"]] == ["tab"]
+    # the owner sees the full number and can void; an emptied tab can be closed
+    owner = client.get(f"/v1/tap/{T}/tabs").json()
+    assert owner["enabled"] and owner["idle_hours"] == 2 and owner["tabs"][0]["phone"] == "27821114482"
+    item = owner["tabs"][0]["items"][0]["id"]
+    assert client.post(f"/v1/tap/{T}/tabs/{tab['id']}/close").status_code == 409
+    assert client.post(f"/v1/tap/{T}/tabs/{tab['id']}/items/{item}/void").json()["total_cents"] == 0
+    assert client.post(f"/v1/tap/{T}/tabs/{tab['id']}/close").json() == {"status": "cancelled"}
+    assert client.get("/v1/tap/app/tabs", headers=h1).json()["tabs"] == []

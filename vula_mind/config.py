@@ -315,6 +315,9 @@ class Settings(BaseSettings):
     # the HMAC used to look customer numbers up without storing them; if blank it is derived from
     # the Supabase service key (set it explicitly so rotating that key doesn't orphan the hashes).
     tap_to_pay_tenants: str = ""
+    # Express pay (vula/tap/express.py): a tap opens one pay page (amount, tip, Pay -> PayFast)
+    # instead of WhatsApp. False = the WhatsApp flow for every tap, as before 28 Oct.
+    tap_express: bool = True
     tap_hash_pepper: str = ""
     # Approved WhatsApp template (utility) for unpaid-bill reminders sent more than ~23 h after the customer's
     # last message, body params {{1}} merchant, {{2}} amount, {{3}} pay link. Empty = such reminders are skipped.
