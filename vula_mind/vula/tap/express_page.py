@@ -20,7 +20,7 @@ justify-content:center;min-height:4.4rem;text-align:center;padding:.6rem .5rem;b
 background:#1b1b1b;color:#fff}.opt input:checked+span small{color:#ddd}label.l{display:block;margin:1rem 0 .35rem;
 font-weight:600}input.n{width:100%;font-size:1.3rem;padding:.75rem;border:2px solid #d6d6d2;border-radius:.8rem}
 button{width:100%;margin-top:1.25rem;padding:1.05rem;font-size:1.15rem;font-weight:700;border:0;
-border-radius:.9rem;background:#1b1b1b;color:#fff}.foot{color:#666;font-size:.85rem;margin-top:1rem;
+border-radius:.9rem;background:#1b1b1b;color:#fff}button.alt{background:#fff;color:#1b1b1b;border:2px solid #1b1b1b}.foot{color:#666;font-size:.85rem;margin-top:1rem;
 text-align:center}.foot a{color:#444}
 """
 
@@ -61,16 +61,27 @@ def _tips(bill_cents: int, presets: list) -> str:
 
 
 def render(code: str, v: dict, error: str = "") -> str:
-    """The page for one view() result (kinds bill / quick_tip / open_amount / locked / no_bill)."""
+    """The page for one view() result (kinds bill / quick_tip / open_amount / tabs / locked / no_bill)."""
     merchant, staff, kind = v.get("merchant") or "", v.get("staff") or "", v["kind"]
     head = (f"<h1>{escape(merchant)}</h1>"
             + (f"<p class=who>{'Tip for' if kind == 'quick_tip' else 'Served by'} {escape(staff)}</p>"
                if staff else "<p class=who></p>"))
     err = f"<div class=err>{escape(error)}</div>" if error else ""
-    if kind in ("locked", "no_bill"):
+    tab_links = ""
+    if v.get("open_tab_url") or v.get("pay_tab_url"):
+        tab_links = (
+            (f"<a href='{escape(v['open_tab_url'])}'><button type=button>Open a tab</button></a>"
+             if v.get("open_tab_url") else "")
+            + (f"<a href='{escape(v['pay_tab_url'])}'><button type=button class=alt>Pay my tab</button></a>"
+               if v.get("pay_tab_url") else "")
+            + "<p class=foot>Tabs open in WhatsApp, under your number. Order as you go and pay when "
+              "you leave.</p>")
+    if kind == "tabs":
+        body = f"{head}{err}<p>Run a tab: order as you go, pay when you leave.</p>{tab_links}"
+    elif kind in ("locked", "no_bill"):
         msg = ("This bill is being paid on another phone. Ask staff to release it."
                if kind == "locked" else "There's nothing to pay on this tag right now. Ask staff to add your bill.")
-        body = f"{head}{err}<p>{msg}</p>"
+        body = f"{head}{err}<p>{msg}</p>{tab_links}"
     else:
         hidden = f"<input type=hidden name=token value='{escape(v['token'])}'>"
         if kind == "bill":

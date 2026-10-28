@@ -24,6 +24,7 @@ class MemoryRepo:
         self.clock = clock
         self.n = itertools.count(1)
         self.tags, self.tokens, self.bills, self.sessions = {}, {}, {}, {}
+        self.tab_rows = {}
         self.events, self.payments, self.ledger = set(), {}, []
         self.rules, self.wa = {}, {}
         self.names = {}
@@ -89,6 +90,33 @@ class MemoryRepo:
     def update_bill(self, tenant_id, bill_id, fields):
         self.bills[bill_id].update(fields)
         self.bills[bill_id]["updated_at"] = self.clock().isoformat()
+
+    # bar tabs
+    def tab_for_customer(self, tenant_id, customer_hash):
+        hit = [b for b in self.bills.values() if b["tenant_id"] == tenant_id and b.get("bill_type") == "tab"
+               and b.get("customer_hash") == customer_hash
+               and b["status"] in ("open", "claimed", "abandoned", "needs_follow_up")]
+        return dict(hit[-1]) if hit else None
+
+    def open_tabs(self, tenant_id):
+        return [dict(b) for b in self.bills.values() if b["tenant_id"] == tenant_id and b.get("bill_type") == "tab"
+                and b["status"] in ("open", "claimed", "abandoned", "needs_follow_up")]
+
+    def add_tab_item(self, row):
+        it = {"id": self._id(), "voided_at": None, "created_at": self.clock().isoformat(), **row}
+        self.tab_rows[it["id"]] = it
+        return dict(it)
+
+    def tab_items(self, tenant_id, bill_id):
+        return [dict(i) for i in self.tab_rows.values() if i["tenant_id"] == tenant_id
+                and i["bill_id"] == bill_id and not i["voided_at"]]
+
+    def void_tab_item(self, tenant_id, item_id, now_iso):
+        it = self.tab_rows.get(item_id)
+        if not it or it["tenant_id"] != tenant_id or it["voided_at"]:
+            return None
+        it["voided_at"] = now_iso
+        return dict(it)
 
     # sessions
     def create_session(self, row):

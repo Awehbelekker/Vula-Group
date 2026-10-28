@@ -903,7 +903,9 @@ async def receive_message(
                             # producing the same retry-storm 499s that document/image/video/audio
                             # were already fixed for. Both handlers send their own reply via
                             # _send_reply, so backgrounding them changes nothing about delivery.
-                            if route_tenant and await _tap_try_text(route_tenant, phone, text):
+                            _wa_name = next((((c.get("profile") or {}).get("name") or "")
+                                             for c in value.get("contacts") or [] if c.get("wa_id") == phone), "")
+                            if route_tenant and await _tap_try_text(route_tenant, phone, text, _wa_name):
                                 pass  # tap-to-pay "PAY <token>" / typed tip or amount — handled
                             elif route_mode == "commerce":
                                 # Number is a shop line → ordering flow
@@ -1887,11 +1889,12 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
     return reply
 
 
-async def _tap_try_text(tenant_id: str, phone: str, text: str) -> bool:
+async def _tap_try_text(tenant_id: str, phone: str, text: str, name: str = "") -> bool:
     """Tap-to-pay gets first look at an inbound text; False = not ours (off for this tenant, or
-    not a PAY message / typed answer to a tap prompt), carry on to the normal routers."""
+    not a PAY message / typed answer to a tap prompt), carry on to the normal routers. `name` is
+    the sender's WhatsApp profile name (labels a bar tab, vula/tap/tabs.py)."""
     from vula.tap.api import try_handle_text
-    return await try_handle_text(tenant_id, phone, text)
+    return await try_handle_text(tenant_id, phone, text, name)
 
 
 async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: Optional[str] = None) -> None:

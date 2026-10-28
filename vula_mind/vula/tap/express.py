@@ -82,6 +82,12 @@ class ExpressPay:
             out.update(bill_cents=int(bill.get("subtotal_cents") or 0),
                        description=bill.get("description") or "", is_test=bool(bill.get("is_test")),
                        staff=svc.repo.staff_name(tenant, bill.get("staff_id")) or out["staff"])
+        if out["kind"] in ("no_bill", "locked") and svc.tabs.enabled(tenant):
+            # bar tabs (vula/tap/tabs.py): both go through WhatsApp, which proves the number
+            out["open_tab_url"] = svc.tabs.open_link(tag)
+            out["pay_tab_url"] = svc.tap(code)
+            if out["kind"] == "no_bill":
+                out["kind"] = "tabs"
         if out["kind"] in ("bill", "quick_tip", "open_amount"):
             token = secrets.token_urlsafe(16)
             svc.repo.create_claim_token(tenant_id=tenant, tag_id=tag["id"], token_hash=svc._token_hash(token),
@@ -92,7 +98,7 @@ class ExpressPay:
     def _decide(self, tenant: str, tag: dict, payer: str) -> mt.Decision:
         svc = self.svc
         bills = [mt.BillView(b["id"], b["status"], b.get("customer_hash"), b.get("claimed_by_hash"))
-                 for b in svc.repo.live_bills_for_tag(tenant, tag["id"])]
+                 for b in svc.repo.live_bills_for_tag(tenant, tag["id"]) if b.get("bill_type") != "tab"]
         return mt.resolve_tap(tag_mode=tag.get("mode", "appointment"), payer_hash=payer, bills=bills,
                               tag_allows_open_amount=bool(tag.get("allow_open_amount")),
                               code_locked=svc._code_locked(tenant, bills, payer))

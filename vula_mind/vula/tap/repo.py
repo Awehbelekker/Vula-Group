@@ -72,6 +72,30 @@ class SupabaseRepo:
     def update_bill(self, tenant_id, bill_id, fields) -> None:
         self.db.table("kb_bills").update({**fields, "updated_at": "now()"}).eq("tenant_id", tenant_id).eq("id", bill_id).execute()
 
+    # bar tabs (migration 231)
+    def tab_for_customer(self, tenant_id: str, customer_hash: str) -> Optional[dict]:
+        return self._one(self.db.table("kb_bills").select("*").eq("tenant_id", tenant_id)
+                         .eq("bill_type", "tab").eq("customer_hash", customer_hash)
+                         .in_("status", ["open", "claimed", "abandoned", "needs_follow_up"])
+                         .order("created_at", desc=True))
+
+    def open_tabs(self, tenant_id: str) -> list[dict]:
+        return (self.db.table("kb_bills").select("*").eq("tenant_id", tenant_id).eq("bill_type", "tab")
+                .in_("status", ["open", "claimed", "abandoned", "needs_follow_up"])
+                .order("created_at").execute().data or [])
+
+    def add_tab_item(self, row: dict) -> dict:
+        return self.db.table("kb_tab_items").insert(row).execute().data[0]
+
+    def tab_items(self, tenant_id: str, bill_id: str) -> list[dict]:
+        return (self.db.table("kb_tab_items").select("*").eq("tenant_id", tenant_id).eq("bill_id", bill_id)
+                .is_("voided_at", "null").order("created_at").execute().data or [])
+
+    def void_tab_item(self, tenant_id: str, item_id: str, now_iso: str) -> Optional[dict]:
+        rows = (self.db.table("kb_tab_items").update({"voided_at": now_iso}).eq("tenant_id", tenant_id)
+                .eq("id", item_id).is_("voided_at", "null").execute().data or [])
+        return rows[0] if rows else None
+
     # sessions
     def create_session(self, row: dict) -> dict:
         return self.db.table("kb_sessions").insert(row).execute().data[0]
@@ -149,7 +173,7 @@ class SupabaseRepo:
 
     def recent_bills(self, tenant_id: str, limit: int = 20) -> list[dict]:
         return (self.db.table("kb_bills")
-                .select("id,tag_id,status,description,subtotal_cents,staff_id,is_test,created_at")
+                .select("id,tag_id,bill_type,status,description,subtotal_cents,staff_id,is_test,created_at")
                 .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(limit).execute().data or [])
 
     def list_split_rules(self, tenant_id: str) -> list[dict]:
@@ -212,7 +236,7 @@ class SupabaseRepo:
                 .eq("member_id", member_id).execute().data or [])
 
     def bill_updates(self, tenant_id, since_iso, staff_id) -> list[dict]:
-        q = (self.db.table("kb_bills").select("id,status,description,subtotal_cents,staff_id,is_test,updated_at")
+        q = (self.db.table("kb_bills").select("id,bill_type,status,description,subtotal_cents,staff_id,is_test,updated_at")
              .eq("tenant_id", tenant_id).gt("updated_at", since_iso).order("updated_at"))
         if staff_id:
             q = q.eq("staff_id", staff_id)

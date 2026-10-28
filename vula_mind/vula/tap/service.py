@@ -96,6 +96,11 @@ class TapService:
         return TaxDesk(self)
 
     @property
+    def tabs(self):
+        from vula.tap.tabs import TabDesk
+        return TabDesk(self)
+
+    @property
     def express(self):
         from vula.tap.express import ExpressPay
         return ExpressPay(self)
@@ -170,13 +175,16 @@ class TapService:
         return f"https://wa.me/{number}?text={quote('PAY ' + token)}"
 
     # ── 2. inbound WhatsApp text ─────────────────────────────────────────────────────────────
-    async def handle_text(self, tenant_id: str, phone: str, text: str) -> bool:
-        """True if this message belonged to the tap flow (caller must then not route it elsewhere)."""
+    async def handle_text(self, tenant_id: str, phone: str, text: str, name: str = "") -> bool:
+        """True if this message belonged to the tap flow (caller must then not route it elsewhere).
+        `name` is the sender's WhatsApp profile name (used to label a bar tab)."""
         m = _PAY_RE.match(text or "")
         if m:
             await self._start(tenant_id, phone, m.group(1))
             return True
         if await self.express.claim_slip(tenant_id, phone, text):
+            return True
+        if await self.tabs.handle_text(tenant_id, phone, text, name):
             return True
         if await self.tax.handle_text(tenant_id, phone, text):
             return True
@@ -197,8 +205,11 @@ class TapService:
             await self._say(tenant_id, phone, MSG_NOT_VERIFIED)
             return
         payer = self.phone_hash(phone)
+        # a bar tab is only ever offered to the number that opened it (vula/tap/tabs.py): never a
+        # code prompt or a "being paid elsewhere" for someone else's tab on the same tag
         bills = [mt.BillView(b["id"], b["status"], b.get("customer_hash"), b.get("claimed_by_hash"))
-                 for b in self.repo.live_bills_for_tag(tenant_id, tag["id"])]
+                 for b in self.repo.live_bills_for_tag(tenant_id, tag["id"])
+                 if b.get("bill_type") != "tab" or b.get("customer_hash") == payer]
         locked = self._code_locked(tenant_id, bills, payer)
         d = mt.resolve_tap(tag_mode=tag.get("mode", "appointment"), payer_hash=payer, bills=bills,
                            tag_allows_open_amount=bool(tag.get("allow_open_amount")), code_locked=locked)
@@ -236,6 +247,9 @@ class TapService:
         if not bill:
             await self._say(tenant_id, phone, MSG_NO_BILL)
             return
+        if bill.get("bill_type") == "tab" and not self.tabs.total(tenant_id, bill_id):
+            await self._say(tenant_id, phone, "Your tab is empty so far. Order something first!")
+            return
         if bill["status"] == "claimed" and bill.get("claimed_by_hash") == payer:
             existing = self._live(self.repo.active_session_for_payer(tenant_id, payer, self.now()))
             if existing and existing.get("bill_id") == bill_id:
@@ -252,7 +266,12 @@ class TapService:
                                     fields={"claimed_by_hash": payer}):
             await self._say(tenant_id, phone, MSG_LOCKED)    # lost the atomic claim
             return
-        session = self._new_session(tenant_id, bill_id, payer, phone, int(bill["subtotal_cents"]))
+        amount = int(bill["subtotal_cents"])
+        if bill.get("bill_type") == "tab":
+            # the items decide what is owed, worked out now the tab is claimed (staff can't add to it)
+            amount = self.tabs.total(tenant_id, bill_id)
+            self.repo.update_bill(tenant_id, bill_id, {"subtotal_cents": amount})
+        session = self._new_session(tenant_id, bill_id, payer, phone, amount)
         self.repo.cas_session(tenant_id, session["id"], expected="claimed", new=st.session_next("claimed", "amount_set"))
         session["state"] = "awaiting_tip"
         await self._ask_tip(session, phone)
@@ -684,6 +703,10 @@ class TapService:
                     continue
                 stats["reminders"] += outcome == "sent"
                 stats["followups"] += outcome in ("followup", "opted_out")
+            try:
+                stats["tab_prompts"] = stats.get("tab_prompts", 0) + await self.tabs.sweep_idle(t)
+            except Exception:  # noqa: BLE001 — tabs need migration 231; never stop the reminder pass
+                logger.exception("idle tab sweep failed (tenant=%s)", t)
         return stats
 
     def _to_follow_up(self, bill: dict) -> None:

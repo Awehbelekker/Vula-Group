@@ -91,7 +91,7 @@ async def me(a: Actor = Depends(app_actor)) -> dict:
 
 
 def _public_bill(b: dict) -> dict:
-    return {k: b.get(k) for k in ("id", "status", "description", "subtotal_cents", "staff_id", "is_test", "updated_at")}
+    return {k: b.get(k) for k in ("id", "bill_type", "status", "description", "subtotal_cents", "staff_id", "is_test", "updated_at")}
 
 
 @router.get("/v1/tap/app/bills")
@@ -147,7 +147,10 @@ async def new_bill(body: NewBill, a: Actor = Depends(app_actor)) -> dict:
 
 @router.post("/v1/tap/app/bills/{bill_id}/cancel")
 async def cancel(bill_id: str, a: Actor = Depends(app_actor)) -> dict:
-    _own_bill(a, bill_id)
+    b = _own_bill(a, bill_id)
+    if b.get("bill_type") == "tab" and tap_api.get_service().tabs.total(a.tenant_id, bill_id):
+        raise HTTPException(status_code=409, detail="This tab has drinks on it. The customer pays it, "
+                                                    "or the owner closes it from the dashboard.")
     if not tap_api.get_service().cancel_bill(a.tenant_id, bill_id):
         raise HTTPException(status_code=409, detail="This bill can't be cancelled.")
     return {"status": "cancelled"}
@@ -246,3 +249,41 @@ async def push_unsubscribe(body: PushOff, a: Actor = Depends(app_actor)) -> dict
     if any(s["endpoint"] == body.endpoint for s in repo.push_subs_for(a.tenant_id, a.member_id)):
         repo.delete_push_sub(body.endpoint)
     return {"subscribed": False}
+
+
+# ── bar tabs: any staff member at the bar can see and add to the open tabs (numbers masked) ────
+class TabItem(BaseModel):
+    description: str = Field(min_length=1, max_length=80)
+    quantity: int = Field(default=1, ge=1, le=99)
+    unit_cents: int = Field(ge=0, le=1_000_000)
+
+
+def _tabs_on(a: Actor):
+    svc = tap_api.get_service()
+    if not tap_api.tenant_enabled(a.tenant_id) or not svc.tabs.enabled(a.tenant_id):
+        raise HTTPException(status_code=409, detail="Tabs are switched off. Ask your manager.")
+    return svc
+
+
+def _tab(fn, *args, **kw):
+    from vula.tap.tabs import TabError
+    try:
+        return fn(*args, **kw)
+    except TabError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/app/tabs")
+async def app_tabs(a: Actor = Depends(app_actor)) -> dict:
+    return {"tabs": _tabs_on(a).tabs.list_open(a.tenant_id, reveal=False)}
+
+
+@router.post("/v1/tap/app/tabs/{bill_id}/items")
+async def app_add_item(bill_id: str, body: TabItem, a: Actor = Depends(app_actor)) -> dict:
+    return _tab(_tabs_on(a).tabs.add_item, a.tenant_id, bill_id, description=body.description,
+                quantity=body.quantity, unit_cents=body.unit_cents, by=a.member_id)
+
+
+@router.post("/v1/tap/app/tabs/{bill_id}/items/{item_id}/void")
+async def app_void_item(bill_id: str, item_id: str, a: Actor = Depends(app_actor)) -> dict:
+    return _tab(_tabs_on(a).tabs.void_item, a.tenant_id, bill_id, item_id)

@@ -95,11 +95,11 @@ def get_service() -> TapService:
 
 
 # ── WhatsApp hooks (called from vula/api/whatsapp.py) ────────────────────────────────────────
-async def try_handle_text(tenant_id: Optional[str], phone: str, text: str) -> bool:
+async def try_handle_text(tenant_id: Optional[str], phone: str, text: str, name: str = "") -> bool:
     if not tenant_enabled(tenant_id):
         return False
     try:
-        return await get_service().handle_text(tenant_id, phone, text)
+        return await get_service().handle_text(tenant_id, phone, text, name)
     except Exception:  # noqa: BLE001 — never let a tap bug take the normal assistant down
         log.exception("tap text handler failed (tenant=%s)", tenant_id)
         return False
@@ -523,3 +523,59 @@ async def close_unpaid(tenant: str, bill_id: str, body: CloseIn, identity: dict 
     if not ok:
         raise HTTPException(status_code=409, detail="This bill isn't waiting on a payment any more.")
     return {"closed": body.action}
+
+
+# ── bar tabs (vula/tap/tabs.py, migration 231) ───────────────────────────────────────────────
+class TabsSettingsIn(BaseModel):
+    enabled: bool
+    idle_hours: int = Field(default=3, ge=1, le=24)
+
+
+class TabItemIn(BaseModel):
+    description: str = Field(min_length=1, max_length=80)
+    quantity: int = Field(default=1, ge=1, le=99)
+    unit_cents: int = Field(ge=0, le=1_000_000)
+
+
+@router.put("/v1/tap/{tenant}/tabs/settings")
+async def set_tabs(tenant: str, body: TabsSettingsIn, identity: dict = Depends(require_tenant_actor)) -> dict:
+    get_service().repo.upsert_settings(tenant, {"tabs_enabled": body.enabled, "tab_idle_hours": body.idle_hours})
+    return {"enabled": body.enabled, "idle_hours": body.idle_hours}
+
+
+@router.get("/v1/tap/{tenant}/tabs")
+async def list_tabs(tenant: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    """Open tabs with the customer's name and full number (the business sees who it is running a
+    tab for; the customer was told when the tab opened)."""
+    svc = get_service()
+    return {"enabled": svc.tabs.enabled(tenant), "idle_hours": svc.tabs.idle_hours(tenant),
+            "tabs": svc.tabs.list_open(tenant, reveal=True)}
+
+
+def _tab_call(fn, *args, **kw):
+    from vula.tap.tabs import TabError
+    try:
+        return fn(*args, **kw)
+    except TabError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/v1/tap/{tenant}/tabs/{bill_id}/items")
+async def add_tab_item(tenant: str, bill_id: str, body: TabItemIn,
+                       identity: dict = Depends(require_tenant_actor)) -> dict:
+    svc = _guard(tenant)
+    return _tab_call(svc.tabs.add_item, tenant, bill_id, description=body.description, quantity=body.quantity,
+                     unit_cents=body.unit_cents, by=identity.get("email") or identity.get("user_id") or "")
+
+
+@router.post("/v1/tap/{tenant}/tabs/{bill_id}/items/{item_id}/void")
+async def void_tab_item(tenant: str, bill_id: str, item_id: str,
+                        identity: dict = Depends(require_tenant_actor)) -> dict:
+    return _tab_call(_guard(tenant).tabs.void_item, tenant, bill_id, item_id)
+
+
+@router.post("/v1/tap/{tenant}/tabs/{bill_id}/close")
+async def close_empty_tab(tenant: str, bill_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    if not _tab_call(_guard(tenant).tabs.close_empty, tenant, bill_id):
+        raise HTTPException(status_code=409, detail="This tab can't be closed.")
+    return {"status": "cancelled"}
