@@ -539,7 +539,8 @@ def section_budgets(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{"section": s, **sums[s]} for s in order]
 
 
-def apply_to_fields(fields: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict[str, Any]:
+def apply_to_fields(fields: Dict[str, Any], lines: List[Dict[str, Any]],
+                    authoritative: bool = False) -> Dict[str, Any]:
     """Put the sheet's lines on an analysis's fields when the sheet read found more than the
     LLM did. A total the LLM read is kept (a QS bill's selling price with fee and VAT is more
     than its lines); a missing one becomes the sum of the line budgets.
@@ -552,7 +553,9 @@ def apply_to_fields(fields: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict
     fields = dict(fields or {})
     # A newer read of the cells replaces an older one (the reader improves; 26 Oct, HPC's PC No. 10
     # was first read as 482 doubled lines, correctly 152). An LLM's list is replaced only by more.
-    if not lines or (fields.get("line_items_source") != "sheet"
+    # `authoritative`: lines read from a PDF's own tables (vula/ingestion/pdf_tables.py) are cells
+    # too, and replace a model's list even when it has as many lines (a scrambled read often does).
+    if not lines or (not authoritative and fields.get("line_items_source") != "sheet"
                      and len(lines) <= len(fields.get("line_items") or [])):
         return fields
     fields["line_items"] = lines
