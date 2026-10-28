@@ -385,3 +385,37 @@ def test_the_newest_spreadsheet_boq_is_the_project_budget(monkeypatch):
     assert not sets("pdf", sheet=False)                     # a spreadsheet is filed
     filed.data = [r for r in filed.data if r["id"] == "pdf"]
     assert sets("pdf", sheet=False)                         # the only BOQ
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_bill_read_from_its_tables_replaces_a_longer_scrambled_read(monkeypatch):
+    # 28 Oct: Learn from history only saved a re-read with MORE lines, so the Belladonna PDF's
+    # 19 scrambled lines would have kept beating its 18 correct table lines.
+    from vula.commerce import reread, service
+    filed = _Rows([{"filename": "Belladonna Flat – project bill variance 2026-10-26.xlsx"}])
+
+    class _DB:
+        def table(self, n): return filed
+
+    monkeypatch.setattr(service, "_client", lambda: _DB())
+    monkeypatch.setattr(service, "upsert_project_boq", lambda *a, **k: None)
+    monkeypatch.setattr(reread, "_download", AsyncMock(return_value=b"%PDF"))
+
+    async def table_read(result, path, text, filename):
+        return {"fields": {"line_items": [{"description": "P&G", "total_cents": 48_000_00}],
+                           "line_items_source": "sheet", "line_items_read_from": "pdf_tables",
+                           "sections": [{"section": "Site Management", "budget_cents": 48_000_00}]}}
+    monkeypatch.setattr("vula.api.whatsapp._complete_boq_lines", table_read)
+
+    class _Pages:
+        async def parse(self, path): return [(1, "page text")]
+
+    class _Pipe:
+        def __init__(self, **k): self.parser = _Pages()
+    monkeypatch.setattr("vula.ingestion.pipeline.VulaIngestionPipeline", _Pipe)
+    scrambled = [{"description": "P&G", "total_cents": 4_800_00}, {"description": "junk", "total_cents": 1}]
+    row = {"id": "d1", "filename": "Bill of Quantities 20261026-1002.pdf", "project": "Belladonna",
+           "file_url": "https://x/doc.pdf", "fields": {"line_items": scrambled}}
+    assert await reread._reread_boq("digg-demo", row) is True
+    assert row["fields"]["line_items"][0]["total_cents"] == 48_000_00
+    assert await reread._reread_boq("digg-demo", row) is False      # the same cells again: nothing to save
