@@ -1889,6 +1889,275 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
     return reply
 
 
+# ── A project's client on the business's line (vula/commerce/project_client.py, migration 233) ──
+# 2026-10-28 (Ian): "can the client do everything we did like we went through Belladonna?" A
+# client the owner linked to a project asks about it here, sends slips for suppliers they paid
+# themselves (held for the owner's yes), and questions a line (handed to the team). A team
+# member is never handled as a client.
+
+_ADD_CLIENT_RE = re.compile(
+    r"^\s*add\s+client\s+(?P<name>.*?)\s*(?P<phone>\+?\d[\d \-]{7,16}\d)\s+(?:to|on|for)\s+(?P<project>.+?)"
+    r"(?:\s*[,(-]?\s*(?P<view>open[ -]?book|cost[ -]?plus|price(?:\s+only)?|qs(?:\s+view)?)\)?)?\s*$", re.I)
+_REMOVE_CLIENT_RE = re.compile(
+    r"^\s*remove\s+client\s+(?P<phone>\+?\d[\d \-]{7,16}\d)\s+(?:from|on)\s+(?P<project>.+?)\s*$", re.I)
+
+
+def _view_word(word: Optional[str]) -> Optional[str]:
+    w = re.sub(r"[\s-]+", " ", (word or "").lower()).strip()
+    if not w:
+        return None
+    if w.startswith(("open", "cost")):
+        return "open_book"
+    return "qs" if w.startswith("qs") else "price"
+
+
+async def _maybe_client_setup(phone: str, text: str, tenant_id: str) -> bool:
+    """"add client Rudi 082 123 4567 to Belladonna open book" / "remove client 0821234567 from
+    Belladonna" — the owner (or a manager/admin) links a client's WhatsApp to a project."""
+    m_add, m_rm = _ADD_CLIENT_RE.match(text or ""), _REMOVE_CLIENT_RE.match(text or "")
+    if not (m_add or m_rm):
+        return False
+    if (_caller_identity(tenant_id, phone)[1] or "").lower() not in ("owner", "manager", "admin"):
+        return False
+    import asyncio as _aio
+    from vula.commerce import project_client as pc
+    from vula.commerce.project_tracker import VIEW_LABEL
+    if m_add:
+        try:
+            link = await _aio.to_thread(pc.add_client, tenant_id, m_add.group("project").strip(" .,"),
+                                        m_add.group("phone"), m_add.group("name").strip(" ,") or None,
+                                        _view_word(m_add.group("view")), f"whatsapp:{_digits_only(phone)}")
+        except ValueError as exc:
+            await _send_reply(phone, f"I couldn't add that client: {exc}", tenant_id=tenant_id)
+            return True
+        who = link.get("name") or link["phone"]
+        await _send_reply(phone, (
+            f"✅ *{who}* ({link['phone']}) is now *{link['project']}*'s client on this WhatsApp line, "
+            f"seeing the *{VIEW_LABEL.get(link['view'], link['view'])}* view.\n\nThey can message this "
+            f"number to ask what they've paid, what's due, the budget and what's left to do. Slips they "
+            f"send come to you to approve first, and anything they question comes to the team. Let them "
+            f"know they can message this number — I can't message them first."), tenant_id=tenant_id)
+        return True
+    links = await _aio.to_thread(pc.links_for, tenant_id, m_rm.group("phone"))
+    from vula.commerce.service import project_key
+    hit = [lk for lk in links if project_key(lk.get("project")) == project_key(m_rm.group("project"))]
+    if not hit:
+        await _send_reply(phone, "That number isn't a client on that project.", tenant_id=tenant_id)
+        return True
+    ok = await _aio.to_thread(pc.remove_client, tenant_id, hit[0]["id"])
+    await _send_reply(phone, (f"✅ {hit[0].get('name') or hit[0]['phone']} is no longer *{hit[0]['project']}*'s "
+                              "client on WhatsApp." if ok else "I couldn't remove that client — try again."),
+                      tenant_id=tenant_id)
+    return True
+
+
+def _project_client_links(tenant_id: str, phone: str) -> list:
+    """This sender's live client links, or [] when they're on the team (or nobody linked them)."""
+    from vula.commerce import project_client as pc
+    links = pc.links_for(tenant_id, phone)
+    if not links:
+        return []
+    if _is_insider(_caller_identity(tenant_id, phone)[1]) or _is_tenant_owner(tenant_id, phone):
+        return []
+    return links
+
+
+async def _client_question_to_team(tenant_id: str, phone: str, link: dict, text: str) -> bool:
+    """Hand a client's question to the team (the customer escalation: the helper's reply is
+    relayed back here). False when nobody on the team can take it."""
+    from vula import escalation as esc
+    question = f"[{link['project']} — client {link.get('name') or link.get('phone')}] {(text or '').strip()}"
+    row = esc.create_escalation(tenant_id, phone, question)
+    if not row:
+        return False
+    if not row.get("deduped"):
+        await _send_reply(row["helper_phone"],
+                          esc.helper_prompt(row, question, esc.customer_seems_frustrated(text),
+                                            await esc.customer_context(tenant_id, phone, exclude=text)),
+                          tenant_id=tenant_id)
+    return True
+
+
+async def _maybe_project_client(phone: str, text: str, tenant_id: str) -> bool:
+    """A linked client's message about their project. True when handled."""
+    import asyncio as _aio
+    try:
+        links = await _aio.to_thread(_project_client_links, tenant_id, phone)
+    except Exception as exc:
+        logger.debug("project client check skipped: %s", exc)
+        return False
+    if not links:
+        return False
+    from vula.commerce import project_client as pc
+    link, choices = pc.pick_link(links, text)
+    if not link:
+        await _send_reply(phone, f"Which project is that about — {' or '.join(choices)}?", tenant_id=tenant_id)
+        return True
+    try:
+        out = await _aio.to_thread(pc.answer, tenant_id, link, text)
+    except Exception as exc:
+        logger.warning("project client answer failed for %s: %s", tenant_id, exc)
+        out = {"reply": "", "escalate": True}
+    reply = out["reply"]
+    if out.get("escalate"):
+        if not await _client_question_to_team(tenant_id, phone, link, text):
+            from vula.api.tenants import display_name
+            reply = (f"I couldn't reach the {display_name(tenant_id)} team just now — please contact them "
+                     "directly and they'll help.")
+        elif not reply:
+            reply = "I've passed that to the team — they'll reply to you here. 🙏"
+    _note_handler("project_client")
+    await _send_reply(phone, reply, tenant_id=tenant_id)
+    return True
+
+
+async def _read_client_slip(path, mime_type: str) -> Optional[dict]:
+    """{amount_cents, supplier, paid_on, reference} from a payment slip, or None. A verified bank
+    notice is read exactly (vula/ingestion/payment_notice.py); anything else by the same vision
+    reader as receipts (_scan_financial_photo), a PDF's first page as an image."""
+    from pathlib import Path as _Path
+    p = _Path(path)
+    if p.suffix.lower() == ".pdf" or "pdf" in (mime_type or ""):
+        try:
+            import fitz
+            with fitz.open(str(p)) as doc:
+                text = "\n".join(pg.get_text() for pg in doc)
+                from vula.ingestion import payment_notice
+                pn = payment_notice.parse(text)
+                if pn and pn.get("verified"):
+                    f = pn["fields"]
+                    return {"amount_cents": int(f["amount_cents"]), "supplier": f.get("payee_name"),
+                            "paid_on": f.get("date"), "reference": f.get("reference")}
+                png = p.with_suffix(".png")
+                doc[0].get_pixmap(dpi=150).save(str(png))
+                p = png
+        except Exception as exc:
+            logger.debug("client slip PDF read failed: %s", exc)
+            return None
+    fin = await _scan_financial_photo(str(p))
+    total = _num((fin or {}).get("total"))
+    if (not fin or total <= 0 or fin.get("currency") not in ("ZAR", "unknown", None)
+            or fin.get("doc_type") not in ("payment_confirmation", "receipt", "invoice")):
+        return None
+    return {"amount_cents": int(round(total * 100)), "supplier": fin.get("payee") or fin.get("vendor"),
+            "paid_on": fin.get("date"), "reference": fin.get("reference")}
+
+
+def _slip_approvers(tenant_id: str) -> list:
+    from vula.integrations import notify
+    to = notify.recipients_for(tenant_id, "payment_received")
+    if not to:
+        to = [notify._digits(m["whatsapp"]) for m in notify._members(tenant_id)
+              if (m.get("role") or "").lower() in ("owner", "manager") and m.get("whatsapp")]
+    return list(dict.fromkeys(t for t in to if t))
+
+
+async def _maybe_project_client_slip(phone: str, media_id: str, filename: str, mime_type: str,
+                                     tenant_id: str) -> bool:
+    """A linked client's photo or PDF: a slip for a supplier they paid themselves, held as a
+    proposed payment until the owner says yes. Never filed into the business's own books."""
+    import asyncio as _aio
+    import tempfile
+    from pathlib import Path as _Path
+    try:
+        links = await _aio.to_thread(_project_client_links, tenant_id, phone)
+    except Exception as exc:
+        logger.debug("project client slip check skipped: %s", exc)
+        return False
+    if not links:
+        return False
+    from vula.api.tenants import display_name
+    from vula.commerce import project_client as pc
+    biz = display_name(tenant_id)
+    link, choices = pc.pick_link(links, filename)
+    if not link:
+        await _send_reply(phone, (f"Which project is this for — {' or '.join(choices)}? Send it again with "
+                                  "the project's name as the caption."), tenant_id=tenant_id)
+        return True
+    data = await _download_media_bytes(media_id)
+    if not data:
+        await _send_reply(phone, "I couldn't open that — please send it again.", tenant_id=tenant_id)
+        return True
+    ext = ".pdf" if "pdf" in (mime_type or "") else (_Path(filename).suffix.lower() or ".jpg")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = _Path(tmpdir) / f"slip{ext}"
+        path.write_bytes(data)
+        slip = await _read_client_slip(path, mime_type)
+    if not slip:
+        await _send_reply(phone, (f"Thanks! I couldn't read a payment on that. If it's a slip for something "
+                                  f"you paid on *{link['project']}*, please send a clear photo or the bank's "
+                                  f"PDF — or ask and I'll pass it to the {biz} team."), tenant_id=tenant_id)
+        return True
+    try:
+        row = await _aio.to_thread(pc.stage_slip, tenant_id, link, supplier=slip.get("supplier") or "",
+                                   amount_cents=slip["amount_cents"], paid_on=slip.get("paid_on"),
+                                   reference=slip.get("reference"))
+    except Exception as exc:
+        logger.warning("client slip staging failed for %s: %s", tenant_id, exc)
+        await _send_reply(phone, "Sorry — I couldn't save that just now. Please send it again later.",
+                          tenant_id=tenant_id)
+        return True
+    url = _upload_to_storage("evidence", f"{tenant_id}/client-slips/{row['id']}{ext}", data,
+                             mime_type or "image/jpeg")
+    prompt = pc.slip_prompt(link, row, url)
+    from vula import open_questions as oq
+    approvers = _slip_approvers(tenant_id)
+    for to in approvers:
+        oq.ask(tenant_id, to, "client_slip", row["id"], prompt)
+        await _send_reply(to, prompt, tenant_id=tenant_id)
+    amount = pc._r(row["amount_cents"])
+    await _send_reply(phone, (f"Thanks — I've sent your payment of {amount} to {row['supplier']} to the {biz} "
+                              f"team to confirm. It shows on *{link['project']}* once they have. 🙏"
+                              if approvers else
+                              f"Thanks — I've saved your payment of {amount} to {row['supplier']}; the {biz} "
+                              f"team will confirm it."), tenant_id=tenant_id)
+    _note_handler("project_client_slip")
+    return True
+
+
+async def _answer_client_slip(tenant_id: str, phone: str, text: str, q: dict) -> bool:
+    """The owner's yes/no to a client's slip (open question kind 'client_slip')."""
+    import asyncio as _aio
+    from vula import open_questions as oq
+    from vula.commerce import project_client as pc
+    low = (text or "").strip().lower().rstrip(".!")
+    if low in _YES_WORDS or _APPROVE_RE.match(text or ""):
+        approve = True
+    elif low in _NO_WORDS or _REJECT_RE.match(text or ""):
+        approve = False
+    else:
+        return False
+    row = await _aio.to_thread(pc.decide_slip, tenant_id, q["ref_id"], approve)
+    oq.close_for(tenant_id, q["ref_id"], status="answered")
+    if row is None:
+        await _send_reply(phone, "That slip was already decided.", tenant_id=tenant_id)
+        return True
+    amount = pc._r(row["amount_cents"])
+    await _send_reply(phone, (f"✅ Recorded: {amount} paid directly by the client to {row['supplier']} on "
+                              f"*{row['project']}*." if approve else
+                              f"👍 Left out: {amount} to {row['supplier']} isn't counted on *{row['project']}*."),
+                      tenant_id=tenant_id)
+    await tell_client_slip_decision(tenant_id, row, approve)
+    return True
+
+
+async def tell_client_slip_decision(tenant_id: str, row: dict, approve: bool) -> None:
+    """Let the client who sent a slip know what the business decided (WhatsApp or dashboard)."""
+    import asyncio as _aio
+    from vula.commerce import project_client as pc
+    link_id = str(row.get("created_by") or "").removeprefix("client:")
+    link = await _aio.to_thread(pc.link_by_id, tenant_id, link_id) if link_id else None
+    if not link:
+        return
+    from vula.api.tenants import display_name
+    biz, amount = display_name(tenant_id), pc._r(row["amount_cents"])
+    await _send_reply(link["phone"], (
+        f"✅ {biz} confirmed your payment of {amount} to {row['supplier']} — it's on *{row['project']}* now."
+        if approve else
+        f"{biz} didn't add your payment of {amount} to {row['supplier']} to *{row['project']}*. "
+        f"They'll be in touch if they need anything."), tenant_id=tenant_id)
+
+
 async def _tap_try_text(tenant_id: str, phone: str, text: str, name: str = "") -> bool:
     """Tap-to-pay gets first look at an inbound text; False = not ours (off for this tenant, or
     not a PAY message / typed answer to a tap prompt), carry on to the normal routers. `name` is
@@ -2008,6 +2277,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         if _sig:
             await _send_reply(phone, _sig, tenant_id)
             return
+        # A project's client (migration 233): answered from their own project only.
+        if await _maybe_project_client(phone, text, tenant_id):
+            return
 
     # ── sales_rep team member → the rep-scoped commerce admin agent, not the generic
     # construction knowledge-base assistant below. This function (_handle_message) is the
@@ -2067,6 +2339,8 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     try:
         from vula.commerce import project_programme as _pp
         if await _maybe_project_setup(phone, text, tenant_id):
+            return
+        if await _maybe_client_setup(phone, text, tenant_id):
             return
         _prog = _pp.parse_start_programme(text, tenant_id)
         if _prog and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin"):
@@ -2707,6 +2981,8 @@ async def _handle_document_ingest(
                     "after 🙂"
                 ), route_tenant_id)
                 return
+        elif await _maybe_project_client_slip(phone, media_id, filename, mime_type, route_tenant_id):
+            return      # a project's client: their slip waits for the owner, never filed as ours
         # Dedicated tenant line, sender confirmed staff (or a knowledge-mode line): admin.
         tenant_id = route_tenant_id
         role = "admin"
@@ -3957,6 +4233,8 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
         return await _answer_new_project_question(tenant_id, phone, text, q)
     if kind == "promo_scope":
         return await _answer_promo_scope(tenant_id, phone, text, q)
+    if kind == "client_slip":
+        return await _answer_client_slip(tenant_id, phone, text, q)
     if kind == "doc_project_list":
         return await _answer_doc_project_list(tenant_id, phone, text, q)
     if kind == "doc_project":

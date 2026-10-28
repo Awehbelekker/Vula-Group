@@ -3755,9 +3755,68 @@ async def admin_project_tracker(tenant_id: str, project: str):
     would show and the project's share links."""
     import asyncio
     from vula.commerce import project_tracker as pt
+    from vula.commerce import project_client as pc
     pos = await asyncio.to_thread(pt.position, tenant_id, project)
-    return {"position": pos, "client_views": {v: pt.client_view(pos, v) for v in pt.VIEWS},
-            "shares": await asyncio.to_thread(pt.list_shares, tenant_id, project)}
+    out = {"position": pos, "client_views": {v: pt.client_view(pos, v) for v in pt.VIEWS},
+           "shares": await asyncio.to_thread(pt.list_shares, tenant_id, project)}
+    try:        # before migration 233 there are no WhatsApp clients or client slips
+        out["clients"] = await asyncio.to_thread(pc.list_clients, tenant_id, project)
+        out["proposed_slips"] = await asyncio.to_thread(pc.proposed_slips, tenant_id, project)
+    except Exception:
+        out["clients"], out["proposed_slips"] = [], []
+    return out
+
+
+class ProjectClientIn(BaseModel):
+    project: str
+    phone: str
+    name: Optional[str] = None
+    view: Optional[str] = None        # price | open_book | qs; default: the project's live share view
+    by: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/projects/clients")
+async def admin_project_client_add(tenant_id: str, body: ProjectClientIn):
+    """Link a client's WhatsApp number to a project (vula/commerce/project_client.py): they can ask
+    about it on the business's line, in this view only."""
+    import asyncio
+    from vula.commerce import project_client as pc
+    try:
+        return await asyncio.to_thread(pc.add_client, tenant_id, body.project, body.phone, body.name,
+                                       body.view, body.by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/projects/clients/{client_id}/remove")
+async def admin_project_client_remove(tenant_id: str, client_id: str):
+    import asyncio
+    from vula.commerce import project_client as pc
+    if not await asyncio.to_thread(pc.remove_client, tenant_id, client_id):
+        raise HTTPException(status_code=404, detail="No such client.")
+    return {"removed": True}
+
+
+class SlipDecisionIn(BaseModel):
+    approve: bool
+
+
+@router.post("/{tenant_id}/admin/projects/client-slips/{payment_id}/decide")
+async def admin_project_client_slip_decide(tenant_id: str, payment_id: str, body: SlipDecisionIn):
+    """The owner's yes/no to a client's slip — the same decision as answering it on WhatsApp."""
+    import asyncio
+    from vula import open_questions as oq
+    from vula.commerce import project_client as pc
+    row = await asyncio.to_thread(pc.decide_slip, tenant_id, payment_id, body.approve)
+    if row is None:
+        raise HTTPException(status_code=409, detail="That slip was already decided.")
+    oq.close_for(tenant_id, payment_id, status="answered")
+    try:
+        from vula.api.whatsapp import tell_client_slip_decision
+        await tell_client_slip_decision(tenant_id, row, body.approve)
+    except Exception as exc:  # the decision stands; the client just isn't told
+        log.warning("client slip decision message failed: %s", exc)
+    return row
 
 
 class DirectPaymentIn(BaseModel):
