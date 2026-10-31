@@ -147,6 +147,6 @@
     "doors": 2,
     "windows": 3
   },
-  "expect_review": false,
-  "note": "Synthetic. 10m x 8m unit drawn in mm ($INSUNITS=4): lounge 6x8, bedroom 4x5, bath 4x3. A drain block must not count as a door."
+  "expect_review": true,
+  "note": "Synthetic. 10m x 8m unit drawn in mm ($INSUNITS=4): lounge 6x8, bedroom 4x5, bath 4x3. A drain block must not count as a door. Held for review: a DXF has no floor finishes, so flooring would go unpriced."
 }

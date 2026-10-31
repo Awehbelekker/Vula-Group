@@ -58,7 +58,7 @@ def test_parse_scale():
 # ── measured confidence ──────────────────────────────────────────────────────
 
 def _p(ai, measured, gfa=0.0):
-    p = ExtractedProject(rooms=[Room(name=n, area=a) for n, a in ai],
+    p = ExtractedProject(rooms=[Room(name=n, area=a, floor_finish="lvt") for n, a in ai],
                          ai_rooms=[Room(name=n, area=a) for n, a in ai],
                          deterministic_rooms=measured, gross_floor_area=gfa)
     return assess(p, use_history=False)
@@ -117,8 +117,30 @@ def test_dxf_job_is_calibrated_named_and_measured(tmp_path):
     assert p.gross_floor_area == 80.0               # the outline, not counted as a room
     s = p.sheets[0]
     assert (s.scale_method, s.scale_verified_by, s.scale_ratio) == ("dxf_units", "dxf_header", 1.0)
-    assert p.review["status"] == "not_required"
     assert p.confidence_overall == 1.0
+    # Geometry is exact, but a DXF carries no finishes — held so flooring isn't silently unpriced.
+    assert p.review["status"] == "pending"
+    assert p.review["reasons"] == ["3 of 3 room(s) have no floor finish, so their flooring won't be "
+                                   "priced. Add finishes or approve without flooring."]
+
+
+def test_rooms_with_finishes_and_agreeing_readings_need_no_review():
+    p = ExtractedProject(rooms=[Room(name="A", area=50, floor_finish="carpet")],
+                         ai_rooms=[Room(name="A", area=50)], deterministic_rooms=[("A", 50.0)])
+    assert assess(p, use_history=False).review["status"] == "not_required"
+
+
+def test_approving_a_dxf_job_can_add_the_finishes():
+    _stage("rv8")
+    seen = {}
+
+    async def fake_price(job_id, project, tenant_id, markup):
+        seen["finishes"] = [(r.name, r.floor_finish, r.perimeter) for r in project.rooms]
+    with patch.object(api, "_price", fake_price):
+        r = client.post("/takeoff/rv8/review", json={"decision": "approve", "rooms": [
+            {"name": "Office", "area": 50.0, "floor_finish": "carpet"}]})
+    assert r.status_code == 200
+    assert seen["finishes"] == [("Office", "carpet", 0.0)]
 
 
 def test_unitless_dxf_goes_to_review(tmp_path):

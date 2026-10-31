@@ -171,6 +171,12 @@ def review_reasons(project: Any, geometry_warnings: Iterable[str] = ()) -> List[
     if not ("ai_vs_measured" in sig or "rooms_vs_gfa" in sig or (u and u.get("verified"))):
         reasons.append("Only one reading of the quantities — nothing independent to check it "
                        "against. Confirm the room areas.")
+    # A room with no floor finish gets no flooring line at all (boq_generator skips it), so a DXF
+    # read — geometry, no finishes — would be priced with its flooring silently missing.
+    bare = [r.name for r in project.rooms if not (getattr(r, "floor_finish", "") or "").strip()]
+    if bare:
+        reasons.append(f"{len(bare)} of {len(project.rooms)} room(s) have no floor finish, so their "
+                       f"flooring won't be priced. Add finishes or approve without flooring.")
     conf = getattr(project, "confidence_overall", 0) or 0
     if conf < REVIEW_BELOW and not reasons:
         reasons.append(f"Measured confidence is {conf * 100:.0f}% (below {REVIEW_BELOW * 100:.0f}%).")

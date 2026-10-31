@@ -5,6 +5,7 @@
  * room schedule, an order sheet and the live SA rates. Demo data shows until real plans are read,
  * and says so. Figures are the estimator's own rand maths, shown through formatMoney.
  */
+import { useState } from "react";
 import { AlertTriangle, ClipboardCopy, Download, FileUp, RefreshCw, X } from "lucide-react";
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, Input, PillTabs, Skeleton, StatCard, StatusChip } from "../ui/index.jsx";
@@ -63,7 +64,9 @@ export default function TakeoffV2({ tenantId }) {
 
       <PillTabs label="Takeoff view" tabs={TABS} active={x.tab} onChange={x.setTab} />
       {x.tab === "boq" && <Boq x={x} netTotal={netTotal} />}
-      {x.tab === "plans" && <Plans drawings={job?.project?.sheets ? [] : MOCK_TAKEOFF.drawings} areas={x.areas} onUpload={x.handleUploadClick} />}
+      {x.tab === "plans" && <Plans drawings={job?.project
+        ? (job.project.scale || []).map((s) => ({ sheet: s.sheet, title: s.sheet, scale: s.scale || "—", status: "read" }))
+        : MOCK_TAKEOFF.drawings} areas={x.areas} onUpload={x.handleUploadClick} />}
       {x.tab === "rooms" && <Rooms rooms={x.rooms} />}
       {x.tab === "order" && <Order items={x.filtered} markup={x.markup} selectedTrades={x.selectedTrades} projectName={x.projectName} />}
       {x.tab === "rates" && <Rates apiHost={x.apiHost} tenantId={tenantId} />}
@@ -77,14 +80,27 @@ export default function TakeoffV2({ tenantId }) {
 }
 
 /** Held before pricing: why, the two readings side by side, and approve / correct / reject. */
+const FINISHES = ["", "lvt", "vinyl_lvt", "carpet", "porcelain_tile", "tile", "epoxy", "screed", "concrete"];
+
 function Review({ x, job }) {
   const p = job.project || {};
+  const [finish, setFinish] = useState({});
   const reasons = job.review?.reasons || [];
   const measured = p.measured_rooms || [];
   const ai = p.ai_rooms || [];
   const names = [...new Set([...ai.map((r) => r.name), ...measured.map((r) => r.name)])];
   const area = (list, n) => list.find((r) => r.name === n)?.area;
   const dxfUnitsUnsure = (p.scale || []).some((s) => s.method === "inferred_from_extent");
+  // The rooms as they'll be priced: the chosen reading's areas, with any finishes picked here.
+  const roomsFrom = (useMeasured) => {
+    const src = useMeasured && measured.length ? measured : (p.room_list || []).map((r) => ({ name: r.name, area: r.area }));
+    return src.map((r) => ({ name: r.name, area: r.area,
+      floor_finish: finish[r.name] ?? (p.room_list || []).find((x) => x.name === r.name)?.floor ?? "" }));
+  };
+  const edited = Object.keys(finish).length > 0;
+  const approve = (useMeasured) => x.submitReview("approve", {
+    scale_confirmed: dxfUnitsUnsure,
+    ...(edited ? { rooms: roomsFrom(useMeasured) } : { use_measured: useMeasured }) });
   return (
     <Card className="ves-card" role="region" aria-labelledby="ves-review">
       <h3 id="ves-review" className="ves-h"><AlertTriangle size={16} aria-hidden="true" /> Check these quantities before Vula prices them</h3>
@@ -92,14 +108,20 @@ function Review({ x, job }) {
       <p className="ves-muted">Measured confidence {p.confidence ?? "—"}%. Nothing is priced or ordered until you approve.</p>
       {names.length > 0 && (
         <table className="ves-table">
-          <thead><tr><th>Room</th><th className="ves-num">AI reading (m²)</th><th className="ves-num">Measured / printed (m²)</th></tr></thead>
-          <tbody>{names.map((n) => (
-            <tr key={n}><td>{n}</td><td className="ves-num">{area(ai, n) ?? "—"}</td><td className="ves-num">{area(measured, n) ?? "—"}</td></tr>))}
+          <thead><tr><th>Room</th><th className="ves-num">AI reading (m²)</th><th className="ves-num">Measured / printed (m²)</th><th>Floor finish</th></tr></thead>
+          <tbody>{names.map((n) => {
+            const current = finish[n] ?? (p.room_list || []).find((r) => r.name === n)?.floor ?? "";
+            return (
+              <tr key={n}><td>{n}</td><td className="ves-num">{area(ai, n) ?? "—"}</td><td className="ves-num">{area(measured, n) ?? "—"}</td>
+                <td><select aria-label={`Floor finish for ${n}`} value={current} onChange={(e) => setFinish((f) => ({ ...f, [n]: e.target.value }))}>
+                  {FINISHES.map((v) => <option key={v} value={v}>{v ? words(v) : "None (not priced)"}</option>)}</select></td></tr>);
+          })}
           </tbody>
         </table>)}
       <div className="ves-row">
-        {measured.length > 0 && <Button disabled={x.reviewing} onClick={() => x.submitReview("approve", { use_measured: true, scale_confirmed: dxfUnitsUnsure })}>Use measured areas and price</Button>}
-        <Button variant="secondary" disabled={x.reviewing} onClick={() => x.submitReview("approve", { scale_confirmed: dxfUnitsUnsure })}>{measured.length ? "Use the AI reading" : "Approve as read"}</Button>
+        {measured.length > 0 && <Button disabled={x.reviewing} onClick={() => approve(true)}>Use measured areas and price</Button>}
+        {ai.length > 0 && <Button variant="secondary" disabled={x.reviewing} onClick={() => approve(false)}>Use the AI reading</Button>}
+        {!measured.length && !ai.length && <Button variant="secondary" disabled={x.reviewing} onClick={() => approve(false)}>Approve as read</Button>}
         <Button variant="quiet" Icon={X} disabled={x.reviewing} onClick={() => x.submitReview("reject")}>Reject</Button>
       </div>
       {dxfUnitsUnsure && <p className="ves-muted">The drawing doesn't state its units. Approving records that you checked one known dimension.</p>}

@@ -164,6 +164,6 @@
     }
   ],
   "gfa": 300.0,
-  "expect_review": false,
-  "note": "Synthetic. 20m x 15m floor in metres ($INSUNITS=6) with an L-shaped office (14x6 + 8x9 = 156)."
+  "expect_review": true,
+  "note": "Synthetic. 20m x 15m floor in metres ($INSUNITS=6) with an L-shaped office (14x6 + 8x9 = 156). Held for review: a DXF has no floor finishes, so flooring would go unpriced."
 }
