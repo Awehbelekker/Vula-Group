@@ -259,7 +259,7 @@ async def test_the_file_reads_back_to_the_books(books, group):
     from vula.commerce import xlsx_check
     spec, resolved, rows = await _rows({"source": "supplier_invoices", "group_by": group,
                                         "filters": {"supplier": "tile", "period": "this_year"}})
-    data, want = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    data, want, _exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
     assert set(want.values()) == {280_000, 42_000, 322_000}
     assert xlsx_check.mismatches(data, want) == []
 
@@ -270,7 +270,7 @@ async def test_a_changed_file_is_caught(books):
 
     from vula.commerce import xlsx_check
     spec, resolved, rows = await _rows({"source": "supplier_invoices", "filters": {"supplier": "tile"}})
-    data, want = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    data, want, _exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
     wb = load_workbook(io.BytesIO(data))
     wb.active["G7"] = 1.0
     buf = io.BytesIO()
@@ -283,7 +283,7 @@ async def test_text_from_the_books_never_becomes_a_formula(books):
     from openpyxl import load_workbook
     books.tables["commerce_expenses"][0]["description"] = '=HYPERLINK("http://example.invalid","x")'
     spec, resolved, rows = await _rows({"source": "expenses", "columns": ["date", "description", "amount"]})
-    data, _ = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    data, _, _x = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
     cell = load_workbook(io.BytesIO(data)).active["B7"]
     assert cell.data_type == "s" and cell.value.startswith("=HYPERLINK")
 
@@ -294,7 +294,7 @@ async def test_libreoffice_gives_the_same_totals(books, tmp_path):
     from openpyxl import load_workbook
     spec, resolved, rows = await _rows({"source": "supplier_invoices", "group_by": "month",
                                         "filters": {"supplier": "tile", "period": "this_year"}})
-    data, want = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    data, want, _exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
     src = tmp_path / "s.xlsx"
     src.write_bytes(data)
     subprocess.run(["soffice", "--headless", "--convert-to", "xlsx", "--outdir", str(tmp_path / "o"), str(src)],
@@ -425,3 +425,162 @@ async def test_find_document_does_not_answer_a_described_layout_itself():
     out = await _direct_supplier_answer("every Tile Co invoice this year per month in excel", "find_document",
                                         {"query": "tile co"}, {"matches": []}, tenant_id="tenant-a")
     assert out is None
+
+
+# ── item 1: calculations, counts and averages, summaries, charts ─────────────
+
+def test_a_calculation_only_uses_the_sheets_number_columns_and_plain_maths():
+    for bad, why in [("total; drop table", "only use"), ("total ** 2", "couldn't read"), ("sum(total)", "isn't a number column"),
+                     ("=1+1", "only use"), ("vat * total", "Money times money"), ("profit - vat", "isn't a number column"),
+                     ("(total - vat", "isn't closed")]:
+        with pytest.raises(sb.SpecError, match=why):
+            sb.validate({"source": "supplier_invoices", "computed": [{"label": "X", "formula": bad}]})
+
+
+def test_kinds_are_worked_out_and_inputs_are_kept_in_the_sheet():
+    spec = sb.validate({"source": "supplier_invoices", "columns": ["date", "supplier", "total"],
+                        "computed": [{"label": "Excl", "formula": "total - vat"},
+                                     {"label": "Margin %", "formula": "(total - vat) / total"},
+                                     {"label": "Per unit", "formula": "total / 2"}]})
+    assert [c["kind"] for c in spec["computed"]] == ["money", "percent", "money"]
+    assert "vat" in spec["columns"] and spec["columns"][-3:] == ["calc1", "calc2", "calc3"]
+    assert spec["totals"] == ["total", "vat", "calc1", "calc3"]
+    assert sb.validate(spec) == spec                                   # a saved spec checks out the same
+
+
+@pytest.mark.parametrize("bad,why", [
+    ({"chart": "bar"}, "needs a grouping"), ({"detail": False}, "needs a grouping"),
+    ({"group_by": "month", "detail": False, "summary": ["average"]}, "need the rows"),
+    ({"running": "supplier"}, "money column"), ({"group_by": "month", "chart": "radar"}, "bar, line or pie"),
+    ({"summary": ["median"]}, "count, average"),
+])
+def test_extras_are_checked(bad, why):
+    with pytest.raises(sb.SpecError, match=why):
+        sb.validate({"source": "supplier_invoices", **bad})
+
+
+MARGIN = {"source": "supplier_invoices", "group_by": "month", "filters": {"supplier": "tile", "period": "this_year"},
+          "computed": [{"label": "Excl VAT", "formula": "total - vat"},
+                       {"label": "Margin %", "formula": "(total - vat) / total"}]}
+
+
+@pytest.mark.asyncio
+async def test_calculated_columns_per_row_and_the_percentage_on_the_total(books):
+    spec, resolved, rows = await _rows({**MARGIN, "columns": ["date", "number", "total"]})
+    by = {r["number"]: r for r in rows}
+    assert by["T-1"]["calc1"] == 100_000 and by["T-3"]["calc1"] == -20_000
+    assert by["T-1"]["calc2"] == 0.8696                          # 1000 / 1150, to 4 places
+    tot = sb.totals(spec, rows)
+    assert tot["calc1"] == 280_000
+    assert sb.ratio_on(spec, spec["computed"][1], tot) == 0.8696   # on the totals, not a sum of %
+    text = sb.preview_text(spec, resolved, rows, TODAY)
+    assert "Margin % on the total: 87.0%" in text and "Margin % = (total - vat) / total (as a %)" in text
+
+
+@pytest.mark.asyncio
+async def test_a_division_by_zero_is_a_blank_cell_not_an_error(books):
+    from openpyxl import load_workbook
+
+    from vula.commerce import xlsx_check
+    books.tables["vula_filed_documents"].append(_doc("tenant-a", "Tile Co (Pty) Ltd", "T-Z", "2026-10-25", 0, 0, "Seaview"))
+    spec, resolved, rows = await _rows({**MARGIN, "group_by": "none", "columns": ["date", "number", "total"]})
+    zero = next(r for r in rows if r["number"] == "T-Z")
+    assert zero["calc2"] is None
+    data, want, exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    assert xlsx_check.mismatches(data, want, exact=exact) == []
+    ws = load_workbook(io.BytesIO(data)).active
+    row = next(c.row for c in ws["B"] if c.value == "T-Z")
+    col = spec["columns"].index("calc2") + 1
+    assert xlsx_check.value(ws, ws.cell(row=row, column=col).coordinate) == ""
+
+
+@pytest.mark.asyncio
+async def test_quantity_times_price_rounds_half_up_like_excel(books):
+    books.tables["vula_filed_documents"][0]["fields"]["line_items"].append(
+        {"description": "Sealer", "quantity": 2.5, "unit_price_cents": 12_345, "total_cents": 30_863})
+    spec, resolved, rows = await _rows({"source": "supplier_lines", "filters": {"supplier": "tile"},
+                                        "computed": [{"label": "Check", "formula": "quantity * unit_price"}]})
+    sealer = next(r for r in rows if r["description"] == "Sealer")
+    assert sealer["calc1"] == 30_863                              # 308.625 → 308.63
+    from vula.commerce import xlsx_check
+    data, want, exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    assert xlsx_check.mismatches(data, want, exact=exact) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group", ["none", "project"])
+async def test_running_balance_ends_at_the_total(books, group):
+    from vula.commerce import xlsx_check
+    spec, resolved, rows = await _rows({"source": "bank", "group_by": group, "running": "amount",
+                                        "columns": ["date", "description", "amount"]})
+    assert [r["running"] for r in rows] == [-115_000, 385_000]
+    data, want, exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    assert 385_000 in want.values() and xlsx_check.mismatches(data, want, exact=exact) == []
+
+
+@pytest.mark.asyncio
+async def test_count_average_lowest_and_highest_leave_out_headers_and_subtotals(books):
+    from vula.commerce import xlsx_check
+    spec, resolved, rows = await _rows({"source": "supplier_invoices", "group_by": "month",
+                                        "columns": ["date", "number", "total"], "totals": ["total"],
+                                        "summary": ["count", "average", "min", "max"],
+                                        "filters": {"supplier": "tile", "period": "this_year"}})
+    data, want, exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    assert 3.0 in exact.values()                                   # 3 invoices, not 3 + headers + subtotals
+    assert any(abs(v - (1150 + 2300 - 230) / 3) < 1e-9 for v in exact.values() if v)
+    assert {-23_000, 230_000} <= set(want.values())
+    assert xlsx_check.mismatches(data, want, exact=exact) == []
+
+
+@pytest.mark.asyncio
+async def test_totals_per_supplier_only(books):
+    from openpyxl import load_workbook
+
+    from vula.commerce import xlsx_check
+    spec, resolved, rows = await _rows({"source": "supplier_invoices", "group_by": "supplier", "detail": False})
+    data, want, exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    assert xlsx_check.mismatches(data, want, exact=exact) == []
+    ws = load_workbook(io.BytesIO(data)).active
+    assert ws["A6"].value == "Supplier" and [ws["A7"].value, ws["A8"].value] == ["BRICK", "TILE CO"]
+    assert "One line per supplier: 2 lines from 5 row(s)" in sb.preview_text(spec, resolved, rows, TODAY)
+
+
+@pytest.mark.asyncio
+async def test_a_chart_is_in_the_file_and_its_figures_read_back(books):
+    import zipfile
+
+    from vula.commerce import xlsx_check
+    spec, resolved, rows = await _rows({**MARGIN, "chart": "bar"})
+    data, want, exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+    assert any(n.startswith("xl/charts/chart") for n in names)
+    assert {115_000, 207_000} <= set(want.values())                # Sep and Oct totals in the chart data
+    assert xlsx_check.mismatches(data, want, exact=exact) == []
+    text = sb.preview_text(spec, resolved, rows, TODAY)
+    assert "▇" in text and "With a bar chart of Total per month" in text
+
+
+@pytest.mark.skipif(not shutil.which("soffice"), reason="LibreOffice not installed")
+@pytest.mark.asyncio
+async def test_libreoffice_agrees_with_every_checked_cell(books, tmp_path):
+    from openpyxl import load_workbook
+    books.tables["vula_filed_documents"].append(_doc("tenant-a", "Tile Co (Pty) Ltd", "T-Z", "2026-10-25", 0, 0, "Seaview"))
+    spec, resolved, rows = await _rows({**MARGIN, "chart": "line", "summary": ["count", "average", "min", "max"]})
+    data, want, exact = sb.workbook("Made Up Builders", spec, resolved, rows, today=TODAY)
+    src = tmp_path / "s.xlsx"
+    src.write_bytes(data)
+    subprocess.run(["soffice", "--headless", "--convert-to", "xlsx", "--outdir", str(tmp_path / "o"), str(src)],
+                   check=True, capture_output=True, timeout=120)
+    ws = load_workbook(tmp_path / "o" / "s.xlsx", data_only=True).active
+    assert {ref: round(ws[ref].value * 100) for ref in want} == want
+    for ref, v in exact.items():
+        got = ws[ref].value
+        assert (got in (None, "") if v is None else abs(float(got) - v) < 1e-6), (ref, got, v)
+
+
+@pytest.mark.asyncio
+async def test_design_and_build_with_calculations_and_a_chart(tool):
+    out = await tool(action="design", spec={**MARGIN, "chart": "bar", "summary": ["average"]})
+    assert "Margin % on the total" in out["reply_verbatim"]
+    out = await tool(action="build")
+    assert "checked against the books" in out["reply_verbatim"] and tool.sent

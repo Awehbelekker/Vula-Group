@@ -289,8 +289,15 @@ THE TASK — a spreadsheet the owner describes in their own words.
    checks it against the books and sends it.
 5. "Save it as …": action "save" with the name. "The Tile Co sheet for October": action "use" with the name
    and the new period. "What sheets do I have": action "list".
-6. If the tool says a column or filter isn't possible, tell the owner what is — never make the sheet some
-   other way.
+6. Maths and extras go in the spec too, never worked out by you:
+   - a calculated column: computed [{label, formula}] — "total minus VAT" → "total - vat", "margin %" →
+     "(total - vat) / total", "quantity times price" → "quantity * unit_price";
+   - "running balance" → running: the money column (e.g. amount);
+   - "average / count / highest / lowest" → summary;
+   - "just the totals per supplier" → group_by supplier with detail false;
+   - "with a chart" → chart bar, line or pie (it needs a grouping; ask "per month?" if there is none).
+7. If the tool says a column, calculation or filter isn't possible, tell the owner what is — never make the
+   sheet some other way.
 ```
 </details>
 
