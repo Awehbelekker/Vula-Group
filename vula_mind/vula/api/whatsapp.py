@@ -2127,7 +2127,7 @@ async def _answer_client_slip(tenant_id: str, phone: str, text: str, q: dict) ->
         approve = False
     else:
         return False
-    row = await _aio.to_thread(pc.decide_slip, tenant_id, q["ref_id"], approve)
+    row = await _aio.to_thread(pc.decide_slip, tenant_id, q["ref_id"], approve, by_phone=phone)
     oq.close_for(tenant_id, q["ref_id"], status="answered")
     if row is None:
         await _send_reply(phone, "That slip was already decided.", tenant_id=tenant_id)
