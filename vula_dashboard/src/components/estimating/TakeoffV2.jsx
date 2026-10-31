@@ -32,10 +32,12 @@ export default function TakeoffV2({ tenantId }) {
         <Button Icon={FileUp} disabled={x.uploading} onClick={x.handleUploadClick}>{x.uploading ? "Uploading…" : "Upload plans"}</Button>
       </div>
 
-      {job && job.status !== "complete" && (
+      {job?.status === "needs_review" && <Review x={x} job={job} />}
+
+      {job && !["complete", "needs_review"].includes(job.status) && (
         <p className={job.status === "failed" ? "ves-error" : "ves-note"} role="status">
           <span style={{ flex: 1 }}>{job.filename}: {x.statusLabel[job.status] || job.status}{job.error ? ` (${job.error})` : ""}</span>
-          {job.status === "failed" && <Button size="sm" variant="quiet" Icon={X} onClick={() => x.setLiveJob(null)}>Dismiss</Button>}
+          {["failed", "rejected"].includes(job.status) && <Button size="sm" variant="quiet" Icon={X} onClick={() => x.setLiveJob(null)}>Dismiss</Button>}
         </p>)}
 
       <Field label={`Markup: ${x.markup}%`}>
@@ -71,6 +73,37 @@ export default function TakeoffV2({ tenantId }) {
         : `Demo data: ${MOCK_TAKEOFF.drawings.length} drawing sheets, AECOM 2025/26 rates. Upload real plans for a live BOQ.`}
         {" "}Confidence: high 90% and up, review 75–89%, specialist needed below 75%.</p>
     </section>
+  );
+}
+
+/** Held before pricing: why, the two readings side by side, and approve / correct / reject. */
+function Review({ x, job }) {
+  const p = job.project || {};
+  const reasons = job.review?.reasons || [];
+  const measured = p.measured_rooms || [];
+  const ai = p.ai_rooms || [];
+  const names = [...new Set([...ai.map((r) => r.name), ...measured.map((r) => r.name)])];
+  const area = (list, n) => list.find((r) => r.name === n)?.area;
+  const dxfUnitsUnsure = (p.scale || []).some((s) => s.method === "inferred_from_extent");
+  return (
+    <Card className="ves-card" role="region" aria-labelledby="ves-review">
+      <h3 id="ves-review" className="ves-h"><AlertTriangle size={16} aria-hidden="true" /> Check these quantities before Vula prices them</h3>
+      <ul>{reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+      <p className="ves-muted">Measured confidence {p.confidence ?? "—"}%. Nothing is priced or ordered until you approve.</p>
+      {names.length > 0 && (
+        <table className="ves-table">
+          <thead><tr><th>Room</th><th className="ves-num">AI reading (m²)</th><th className="ves-num">Measured / printed (m²)</th></tr></thead>
+          <tbody>{names.map((n) => (
+            <tr key={n}><td>{n}</td><td className="ves-num">{area(ai, n) ?? "—"}</td><td className="ves-num">{area(measured, n) ?? "—"}</td></tr>))}
+          </tbody>
+        </table>)}
+      <div className="ves-row">
+        {measured.length > 0 && <Button disabled={x.reviewing} onClick={() => x.submitReview("approve", { use_measured: true, scale_confirmed: dxfUnitsUnsure })}>Use measured areas and price</Button>}
+        <Button variant="secondary" disabled={x.reviewing} onClick={() => x.submitReview("approve", { scale_confirmed: dxfUnitsUnsure })}>{measured.length ? "Use the AI reading" : "Approve as read"}</Button>
+        <Button variant="quiet" Icon={X} disabled={x.reviewing} onClick={() => x.submitReview("reject")}>Reject</Button>
+      </div>
+      {dxfUnitsUnsure && <p className="ves-muted">The drawing doesn't state its units. Approving records that you checked one known dimension.</p>}
+    </Card>
   );
 }
 

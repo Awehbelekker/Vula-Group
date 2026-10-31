@@ -169,7 +169,8 @@ export function useTakeoff({ tenantId = "" }) {
 
   // ── Poll job status ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!liveJob?.job_id || liveJob.status === "complete" || liveJob.status === "failed") {
+    // needs_review / rejected wait for a person (submitReview), so polling stops there too.
+    if (!liveJob?.job_id || ["complete", "failed", "needs_review", "rejected"].includes(liveJob.status)) {
       clearInterval(pollRef.current);
       return;
     }
@@ -185,6 +186,8 @@ export function useTakeoff({ tenantId = "" }) {
           setLiveJob(j => ({ ...j, status: "complete", project: data.project, boq: boqData.boq }));
         } else if (data.status === "failed") {
           setLiveJob(j => ({ ...j, status: "failed", error: data.error }));
+        } else if (data.status === "needs_review") {
+          setLiveJob(j => ({ ...j, status: "needs_review", project: data.project, review: data.review }));
         } else {
           setLiveJob(j => ({ ...j, status: data.status, project: data.project || j.project }));
         }
@@ -192,6 +195,27 @@ export function useTakeoff({ tenantId = "" }) {
     }, 3000);
     return () => clearInterval(pollRef.current);
   }, [liveJob?.job_id, liveJob?.status, apiHost, tenantId]);
+
+  // ── Review (the quantities a person must confirm before anything is priced) ──
+  // decision: "approve" | "reject"; opts: { use_measured, rooms, gross_floor_area, scale_confirmed, note }
+  const [reviewing, setReviewing] = useState(false);
+  const submitReview = useCallback(async (decision, opts = {}) => {
+    if (!liveJob?.job_id) return;
+    setReviewing(true);
+    try {
+      const resp = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}/review`, tenantId), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision, ...opts }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+      setLiveJob(j => ({ ...j, status: data.status }));   // approved → polling resumes until complete
+    } catch (e) {
+      toast(`Review not saved: ${e.message}`);
+    } finally {
+      setReviewing(false);
+    }
+  }, [apiHost, liveJob?.job_id, tenantId]);
 
   // ── Totals ─────────────────────────────────────────────────────────────────
   const filtered = displayItems.filter(i => selectedTrades.includes(i.trade));
@@ -244,10 +268,13 @@ export function useTakeoff({ tenantId = "" }) {
     reading_plans:   "Reading plans (OCR)…",
     generating_boq:  "Generating BOQ from drawings…",
     building_orders: "Building order package…",
+    needs_review:    "Check the quantities before pricing",
+    approved:        "Approved — pricing…",
+    rejected:        "Rejected — not priced",
     complete:        "Complete",
     failed:          "Failed",
   };
-  return { tab, setTab, markup, setMarkup, selectedTrades, setSelectedTrades, itemRates, setItemRates, apiHost, liveJob, setLiveJob, uploading, setUploading, fileRef, pollRef, liveItems, displayItems, liveRooms, rooms, areas, isLive, projectName, handleFileSelected, handleUploadClick, filtered, totals, downloadExcel, copyTSV, toggleTrade, TABS, statusLabel };
+  return { reviewing, submitReview, tab, setTab, markup, setMarkup, selectedTrades, setSelectedTrades, itemRates, setItemRates, apiHost, liveJob, setLiveJob, uploading, setUploading, fileRef, pollRef, liveItems, displayItems, liveRooms, rooms, areas, isLive, projectName, handleFileSelected, handleUploadClick, filtered, totals, downloadExcel, copyTSV, toggleTrade, TABS, statusLabel };
 }
 
 export function useTakeoffRates({ apiHost, tenantId }) {
