@@ -534,6 +534,11 @@ async def resolve_generation_route(
     cloud_model = cloud_model_for(task_type)
     run_id = run_id or str(uuid.uuid4())
     task = _task_label(task_type, messages)
+    try:                   # the measuring log files the call that follows under this label
+        from vula.integrations.metering import set_current_task
+        set_current_task(task)
+    except Exception:
+        pass
     install_ollama_auth()  # ensure Ollama calls carry the CF-Access token before any generation
 
     # Dev/test mode — force the cheapest model so QA doesn't burn premium tokens.

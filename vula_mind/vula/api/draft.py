@@ -369,7 +369,7 @@ Generate the complete document now:"""
         from core.llm_router import resolve_generation_route
         litellm.drop_params = True
 
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="document_draft")
 
         model_used = model
 
