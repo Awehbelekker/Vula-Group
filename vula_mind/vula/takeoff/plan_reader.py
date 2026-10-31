@@ -345,6 +345,7 @@ class DXFReader:
     def __init__(self):
         self.last_units: Dict[str, object] = {}
         self.last_outline_area: float = 0.0      # m², the building outline when one was drawn
+        self.last_outline_perimeter: float = 0.0
         self.last_unlabelled: int = 0
 
     def _units(self, doc, msp) -> Dict[str, object]:
@@ -404,7 +405,11 @@ class DXFReader:
             centres = [_centroid(p) for p in polys]
             outline_idx = {i for i, p in enumerate(polys)
                            if sum(1 for j, c in enumerate(centres) if j != i and _inside(c, p)) >= 2}
-            self.last_outline_area = round(max((_shoelace(polys[i]) for i in outline_idx), default=0.0), 2)
+            outline = max(outline_idx, key=lambda i: _shoelace(polys[i]), default=None)
+            self.last_outline_area = round(_shoelace(polys[outline]), 2) if outline is not None else 0.0
+            # The outline's perimeter is the external wall length — what tells internal partitions
+            # apart from external walls when the bill is priced (boq_generator, partitions).
+            self.last_outline_perimeter = round(_perimeter(polys[outline]), 2) if outline is not None else 0.0
 
             rooms = []
             doors = []
@@ -778,7 +783,8 @@ class PlanReader:
             # only invites an invented GFA.
             project = ExtractedProject(sheets=sheets, rooms=rooms_from_vector,
                                        doors_windows=doors_from_vector,
-                                       gross_floor_area=self.dxf_reader.last_outline_area)
+                                       gross_floor_area=self.dxf_reader.last_outline_area,
+                                       external_walls_m=self.dxf_reader.last_outline_perimeter)
             project.deterministic_rooms = [(r.name, r.area) for r in rooms_from_vector]
             if self.dxf_reader.last_unlabelled:
                 project.extraction_notes.append(

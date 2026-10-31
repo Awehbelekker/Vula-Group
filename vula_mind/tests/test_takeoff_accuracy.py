@@ -115,6 +115,7 @@ def test_dxf_job_is_calibrated_named_and_measured(tmp_path):
     assert sorted((r.name, r.area) for r in p.rooms) == [("BATHROOM", 12.0), ("BEDROOM", 20.0),
                                                          ("LOUNGE", 48.0)]
     assert p.gross_floor_area == 80.0               # the outline, not counted as a room
+    assert p.external_walls_m == 36.0               # its perimeter: 2 × (10 + 8)
     s = p.sheets[0]
     assert (s.scale_method, s.scale_verified_by, s.scale_ratio) == ("dxf_units", "dxf_header", 1.0)
     assert p.confidence_overall == 1.0

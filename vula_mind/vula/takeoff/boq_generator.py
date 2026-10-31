@@ -82,6 +82,7 @@ class BOQ:
     tenant_id: str
     items: List[BOQItem] = field(default_factory=list)
     markup_pct: float = 15.0
+    excluded: List[str] = field(default_factory=list)     # what this bill deliberately leaves out
 
     @property
     def net_total_cents(self) -> int:
@@ -120,6 +121,32 @@ class BOQ:
         return [i for i in self.items if i.requires_specialist]
 
     def to_dict(self) -> dict:
+        # The rate range, source and trade grouping travel with the bill (the Excel export's Source
+        # column and Trade Summary sheet were empty because to_dict dropped them).
+        items = [
+            {
+                "id": i.id,
+                "trade": i.trade,
+                "description": i.description,
+                "unit": i.unit,
+                "qty": round(i.qty, 2),
+                "rate_low": round(i.rate_low, 2),
+                "rate_high": round(i.rate_high, 2),
+                "rate_used": round(i.rate_used, 2),
+                "line_total": round(i.line_total, 2),
+                "rate_cents": i.rate_cents,
+                "line_total_cents": i.line_total_cents,
+                "source": i.source,
+                "confidence": i.confidence,
+                "notes": i.notes,
+                "requires_specialist": i.requires_specialist,
+            }
+            for i in self.items
+        ]
+        by_trade: Dict[str, list] = {}
+        for it in items:
+            by_trade.setdefault(it["trade"], []).append(it)
+        vat_cents = int((Decimal(self.grand_total_cents) * Decimal("0.15")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         return {
             "project_name": self.project_name,
             "net_total": self.net_total,
@@ -129,23 +156,11 @@ class BOQ:
             "net_total_cents": self.net_total_cents,
             "markup_cents": self.markup_cents,
             "grand_total_cents": self.grand_total_cents,
-            "items": [
-                {
-                    "id": i.id,
-                    "trade": i.trade,
-                    "description": i.description,
-                    "unit": i.unit,
-                    "qty": round(i.qty, 2),
-                    "rate_used": round(i.rate_used, 2),
-                    "line_total": round(i.line_total, 2),
-                    "rate_cents": i.rate_cents,
-                    "line_total_cents": i.line_total_cents,
-                    "confidence": i.confidence,
-                    "notes": i.notes,
-                    "requires_specialist": i.requires_specialist,
-                }
-                for i in self.items
-            ],
+            "vat_cents": vat_cents,
+            "total_incl_vat_cents": self.grand_total_cents + vat_cents,
+            "items": items,
+            "by_trade": by_trade,
+            "excluded": list(self.excluded),
         }
 
 
@@ -303,6 +318,15 @@ class RateLookup:
         return ref or (0, 0, unit or "item", "Estimate")
 
 
+def _is_window(d) -> bool:
+    return (d.type_ or "").lower() == "window" or str(d.ref or "").upper().startswith("W")
+
+
+def _perim(room) -> float:
+    """A room's perimeter; a square's when only the area was read (no wall ever left out)."""
+    return room.perimeter or math.sqrt(max(room.area or 0, 0)) * 4
+
+
 class ReviewRequired(Exception):
     """Raised by BOQGenerator.generate for a project whose quantities await (or failed) review."""
 
@@ -375,6 +399,13 @@ class BOQGenerator:
         else:
             low, high, _, source = self.rates.get(rate_key, unit)
             mid = (low + high) / 2
+        # `confidence` is now the cap for HOW the line is derived (100 = straight from the measured
+        # quantity); the quantities' own measured/approved confidence caps it further.
+        base = getattr(self, "_base_conf", None)
+        if base:
+            confidence = min(confidence, base)
+        if not mid:
+            notes = (notes + " · " if notes else "") + "No rate on file — add one to price this line"
         return BOQItem(
             id=self._next_id(trade[:3].upper()),
             trade=trade,
@@ -393,6 +424,12 @@ class BOQGenerator:
         )
 
     async def generate(self) -> BOQ:
+        """Price what was MEASURED — room floors, walls and skirting, ceilings, doors and windows,
+        wet areas, and fixtures counted from a schedule. 2026-10-31 (v1 scope): nothing is
+        guessed from floor area any more (electrical, HVAC, fire, demolition, screed, door counts,
+        kitchen runs, mezzanine steel, an acoustic/standard partition split). Those are listed in
+        BOQ.excluded so the bill says what it leaves out, instead of a ~R50k "complete" BOQ built
+        from fixed minimums when the reader found nothing."""
         p = self.project
         # Phase 4d: quantities a person hasn't confirmed are never priced (vula/takeoff/accuracy.py).
         status = (getattr(p, "review", None) or {}).get("status", "not_required")
@@ -403,160 +440,147 @@ class BOQGenerator:
             tenant_id=self.tenant_id,
             markup_pct=self.markup,
         )
+        # Line confidence follows the quantities: a person approved them, or what was measured.
+        self._base_conf = 100.0 if status == "approved" else round((p.confidence_overall or 0) * 100, 1)
+        rooms = [r for r in p.rooms if (r.area or 0) > 0]
+        dws = p.doors_windows or []
+        windows = [d for d in dws if _is_window(d)]
+        glass = [d for d in dws if not _is_window(d) and d.type_ in ("glass", "glazed")]
+        doors = [d for d in dws if d not in windows and d not in glass]
+        door_area = sum(d.width * d.height * (d.count or 1) for d in doors)
+        door_width = sum(d.width * (d.count or 1) for d in doors)
+        window_area = sum(d.width * d.height * (d.count or 1) for d in windows)
+        heights = sorted({round(r.height or 2.7, 2) for r in rooms})
+        h_note = (f"Wall height {heights[0]:.2f} m" if len(heights) == 1 else "Wall heights per room") + \
+            (" (confirmed at review)" if status == "approved" else " (assumed — confirm at review)")
+        wet = [r for r in rooms if r.is_wet]
+        boq.excluded = [
+            "Electrical, HVAC and fire protection — not measured from plans (v1); price from the engineers' schedules.",
+            "Demolition / strip-out and screed — not measured.",
+        ]
 
-        gfa = p.gross_floor_area or sum(r.area for r in p.rooms)
-        rooms = p.rooms
+        # ── STRUCTURE: mezzanine slab (measured area × the 150 mm the line states) ──
+        mez = [r for r in rooms if "mezz" in r.name.lower()]
+        if mez:
+            mez_area = sum(r.area for r in mez)
+            # concrete_30mpa is a per-m³ rate: measure the slab as a volume (NEW-T3).
+            boq.items.append(self._item("concrete", "Mezzanine concrete slab 150mm thk", "m³", mez_area * 0.15,
+                                        "concrete_30mpa", 100,
+                                        f"{mez_area:.1f}m² × 0.15m. Pending structural engineer sign-off"))
+            boq.excluded.append("Mezzanine steel structure — needs the structural engineer's BOQ.")
 
-        # ── DEMOLITION ──────────────────────────────────────────────────────
-        boq.items.append(self._item(
-            "demolition", "Strip out existing fit-out — full scope",
-            "m²", gfa, "demolition_light", 90,
-            "Full strip-out of existing fit-out including partitions, ceilings, flooring"
-        ))
+        # ── WET WORKS: floor + a 150 mm upstand on the perimeter ──
+        if wet:
+            wp = sum(r.area + _perim(r) * 0.15 for r in wet)
+            boq.items.append(self._item("wet_works", "Waterproofing membrane — wet areas incl. 150mm upstand",
+                                        "m²", wp, "waterproofing", 100))
 
-        # ── STRUCTURE ───────────────────────────────────────────────────────
-        # Check for mezzanine
-        mez_rooms = [r for r in rooms if "mezzanine" in r.name.lower() or "mezz" in r.name.lower()]
-        if mez_rooms:
-            mez_area = sum(r.area for r in mez_rooms)
-            # concrete_30mpa is a per-m³ rate: measure the slab as a volume (NEW-T3 — it was m² × an m³
-            # rate, ~6.7× too high for a 150mm slab).
-            boq.items.append(self._item("concrete", "Mezzanine concrete slab 150mm thk", "m³", mez_area * 0.15, "concrete_30mpa", 85, f"{mez_area:.1f}m² × 0.15m. Pending structural engineer sign-off"))
-            boq.items.append(self._item("concrete", "Mezzanine steel structure (erected)", "tonne", round(mez_area * 0.035, 1), "structural_steel", 70, "Estimate — structural BOQ required", True))
+        # ── PARTITIONS: internal wall length = (Σ room perimeters − external walls) / 2 — each
+        # internal wall bounds two rooms. Only when the external wall length is known.
+        perims = sum(_perim(r) for r in rooms)
+        if p.external_walls_m and perims > p.external_walls_m:
+            internal_m = (perims - p.external_walls_m) / 2
+            h = sum((r.height or 2.7) * _perim(r) for r in rooms) / perims
+            area = max(0.0, internal_m * h - door_area)
+            boq.items.append(self._item("drywall", "Partition wall — single skin 70mm (internal walls)", "m²",
+                                        area, "drywall_single", 95,
+                                        f"{internal_m:.1f} m of internal wall × {h:.2f} m, less doors. {h_note}"))
+        elif rooms:
+            boq.excluded.append("Partition walls — the external wall length isn't known, so internal walls "
+                                "can't be told apart. Add it at review or measure partitions separately.")
 
-        # ── WET WORKS ───────────────────────────────────────────────────────
-        wet_rooms = [r for r in rooms if r.is_wet]
-        if wet_rooms:
-            wet_area = sum(r.area for r in wet_rooms) * 1.2  # 20% extra for upstand
-            boq.items.append(self._item("wet_works", "Waterproofing membrane — wet areas", "m²", wet_area, "waterproofing", 90))
+        # ── CEILINGS: per room, never over gross floor area; "exposed"/none means no ceiling ──
+        acoustic = sum(r.area for r in rooms if "acoustic" in (r.ceiling_finish or "").lower()
+                       or "studio" in r.name.lower())
+        none = sum(r.area for r in rooms if (r.ceiling_finish or "").lower() in ("exposed", "none", "open"))
+        standard = sum(r.area for r in rooms) - acoustic - none
+        if standard > 0:
+            boq.items.append(self._item("drywall", "Suspended ceiling — standard 600×600 grid", "m²",
+                                        standard, "ceiling_standard", 100))
+        if acoustic > 0:
+            boq.items.append(self._item("drywall", "Suspended ceiling — acoustic tile", "m²", acoustic,
+                                        "ceiling_acoustic", 100))
 
-        # ── DRYWALL & PARTITIONS ─────────────────────────────────────────────
-        # Estimate internal wall area from room perimeters
-        internal_wall_area = sum(r.perimeter * r.height for r in rooms if r.perimeter > 0)
-        if not internal_wall_area:
-            # Fallback: estimate from GFA (typical fitout: 1.8m² wall per m² floor)
-            internal_wall_area = gfa * 1.8
-
-        # Split: 30% acoustic, 70% standard
-        acoustic_area = internal_wall_area * 0.30
-        standard_area = internal_wall_area * 0.70
-
-        boq.items.append(self._item("drywall", "Partition wall — single skin 70mm", "m²", round(standard_area), "drywall_single", 85))
-        boq.items.append(self._item("drywall", "Partition wall — acoustic double skin", "m²", round(acoustic_area), "drywall_double", 80, "Studio and meeting room boundaries"))
-
-        # Ceilings — from room areas
-        all_ceiling_area = gfa
-        acoustic_ceiling = sum(r.area for r in rooms if "acoustic" in r.ceiling_finish or "studio" in r.name.lower() or "board" in r.name.lower())
-        standard_ceiling  = all_ceiling_area - acoustic_ceiling
-
-        boq.items.append(self._item("drywall", "Suspended ceiling — standard 600×600 grid", "m²", round(standard_ceiling), "ceiling_standard", 90))
-        if acoustic_ceiling > 0:
-            boq.items.append(self._item("drywall", "Suspended ceiling — acoustic tile", "m²", round(acoustic_ceiling), "ceiling_acoustic", 85))
-
-        # ── SCREED ──────────────────────────────────────────────────────────
-        boq.items.append(self._item("flooring", "Sand/cement screed 50mm — general", "m²", round(gfa * 0.85), "screed_50mm", 90))
-
-        # ── FLOORING — from room finishes ────────────────────────────────────
+        # ── FLOORING: each room's finish once. A wet room with no finish is tiled; its floor tiles
+        # are priced here only (they were in flooring AND tiling before).
         finish_areas: Dict[str, float] = {}
-        for room in rooms:
-            ff = room.floor_finish.lower()
-            finish_areas[ff] = finish_areas.get(ff, 0) + room.area
-
+        for r in rooms:
+            ff = (r.floor_finish or "").lower() or ("porcelain_tile" if r.is_wet else "")
+            if ff:
+                finish_areas[ff] = finish_areas.get(ff, 0) + r.area
         finish_map = {
-            "lvt": ("flooring", "LVT / Vinyl plank (laid)", "m²", "lvt_vinyl", 90),
-            "vinyl_lvt": ("flooring", "LVT / Vinyl plank (laid)", "m²", "lvt_vinyl", 90),
-            "carpet": ("flooring", "Commercial carpet (laid)", "m²", "carpet_commercial", 88),
-            "epoxy": ("flooring", "Epoxy floor coating", "m²", "epoxy_coating", 88),
-            "porcelain_tile": ("flooring", "Porcelain floor tiles 600×600 (laid)", "m²", "tiles_porcelain_floor", 90),
-            "tile": ("flooring", "Porcelain floor tiles 600×600 (laid)", "m²", "tiles_porcelain_floor", 90),
+            "lvt": ("flooring", "LVT / Vinyl plank (laid)", "m²", "lvt_vinyl", 100),
+            "vinyl_lvt": ("flooring", "LVT / Vinyl plank (laid)", "m²", "lvt_vinyl", 100),
+            "carpet": ("flooring", "Commercial carpet (laid)", "m²", "carpet_commercial", 100),
+            "epoxy": ("flooring", "Epoxy floor coating", "m²", "epoxy_coating", 100),
+            "porcelain_tile": ("flooring", "Porcelain floor tiles 600×600 (laid)", "m²", "tiles_porcelain_floor", 100),
+            "tile": ("flooring", "Porcelain floor tiles 600×600 (laid)", "m²", "tiles_porcelain_floor", 100),
             "studio_floor": ("flooring", "Broadcast studio floor (specialist)", "m²", "lvt_vinyl", 60, True),
             "raised_access": ("flooring", "Raised access floor system", "m²", "lvt_vinyl", 65, True),
         }
-
+        tiled_floor = 0.0
         for finish, area in finish_areas.items():
-            if area < 2 or not finish:
-                continue
             mapping = finish_map.get(finish)
-            if mapping:
-                trade, desc, unit, rate_key, conf = mapping[:5]
-                specialist = len(mapping) > 5 and mapping[5]
-                boq.items.append(self._item(trade, desc, unit, round(area), rate_key, conf, specialist=bool(specialist)))
+            if not mapping:
+                boq.excluded.append(f"Floor finish '{finish}' ({area:.1f} m²) — no rate mapping; price it by hand.")
+                continue
+            trade, desc, unit, rate_key, cap = mapping[:5]
+            if rate_key == "tiles_porcelain_floor":
+                tiled_floor += area
+            boq.items.append(self._item(trade, desc, unit, area, rate_key, cap,
+                                        specialist=len(mapping) > 5 and mapping[5]))
 
-        # ── TILING — from wet rooms ──────────────────────────────────────────
-        for room in wet_rooms:
-            # Floor tiles
-            boq.items.append(self._item("tiling", f"Porcelain floor tiles 600×600 — {room.name}", "m²", round(room.area), "tiles_porcelain_floor", 92))
-            # Wall tiles (to 2.1m height on perimeter)
-            wall_tile_area = (room.perimeter or math.sqrt(room.area) * 4) * 2.1
-            boq.items.append(self._item("tiling", f"Ceramic wall tiles to 2.1m — {room.name}", "m²", round(wall_tile_area), "tiles_ceramic_wall", 88))
+        # ── SKIRTING: perimeter of rooms that aren't tiled, less door openings (both faces) ──
+        skirt_rooms = [r for r in rooms if not r.is_wet and "tile" not in (r.floor_finish or "").lower()]
+        if skirt_rooms:
+            length = max(0.0, sum(_perim(r) for r in skirt_rooms) - 2 * door_width)
+            boq.items.append(self._item("joinery", "Skirting", "m", length, "skirting", 95,
+                                        "Room perimeters less door openings"))
 
-        if wet_rooms:
-            total_tiled = sum(r.area + (r.perimeter or math.sqrt(r.area)*4)*2.1 for r in wet_rooms)
-            boq.items.append(self._item("tiling", "Tile adhesive and grout — all tiled areas", "m²", round(total_tiled), "tile_adhesive_grout", 92))
+        # ── TILING: wall tiles in wet rooms to 2.1 m; adhesive/grout over every tiled surface ──
+        wall_tiles = 0.0
+        for r in wet:
+            a = _perim(r) * 2.1
+            wall_tiles += a
+            boq.items.append(self._item("tiling", f"Ceramic wall tiles to 2.1m — {r.name}", "m²", a,
+                                        "tiles_ceramic_wall", 95))
+        if tiled_floor + wall_tiles > 0:
+            boq.items.append(self._item("tiling", "Tile adhesive and grout — all tiled areas", "m²",
+                                        tiled_floor + wall_tiles, "tile_adhesive_grout", 100))
 
-        # ── JOINERY & DOORS ──────────────────────────────────────────────────
-        if p.doors_windows:
-            for dw in p.doors_windows:
-                rate_map = {
-                    "hollow_core": "door_hollow_core",
-                    "solid": "door_solid",
-                    "fire_60": "door_fire_60",
-                    "fire_120": "door_fire_120",
-                    "acoustic": "door_acoustic",
-                    "glass": "glass_partition",
-                }
-                rate_key = rate_map.get(dw.type_, "door_solid")
-                specialist = dw.type_ in ("acoustic",)
-                conf = 95 if dw.type_ in ("hollow_core", "solid", "fire_60") else 70
-                boq.items.append(self._item(
-                    "joinery",
-                    f"{dw.type_.replace('_',' ').title()} door {dw.ref} ({dw.width}×{dw.height}m)",
-                    "no", dw.count, rate_key, conf,
-                    dw.fire_rating, specialist
-                ))
-        else:
-            # Estimate from GFA if no schedule
-            door_count = max(1, int(gfa / 25))
-            boq.items.append(self._item("joinery", "Solid core door — estimated count", "no", door_count, "door_solid", 70, "Count estimated from GFA — verify from door schedule"))
+        # ── DOORS, WINDOWS, GLAZING from the schedule: counts per type, windows and glass by area ──
+        rate_map = {"hollow_core": "door_hollow_core", "solid": "door_solid", "fire_60": "door_fire_60",
+                    "fire_120": "door_fire_120", "acoustic": "door_acoustic", "sliding": "door_solid"}
+        for d in doors:
+            boq.items.append(self._item(
+                "joinery", f"{d.type_.replace('_', ' ').title()} door {d.ref} ({d.width}×{d.height}m)",
+                "no", d.count or 1, rate_map.get(d.type_, "door_solid"),
+                100 if d.type_ in rate_map else 70, d.fire_rating, d.type_ == "acoustic"))
+        for w in windows:
+            boq.items.append(self._item("glazing", f"Aluminium window {w.ref} ({w.width}×{w.height}m × {w.count or 1})",
+                                        "m²", w.width * w.height * (w.count or 1), "window_alu_dg", 100))
+        for g in glass:
+            boq.items.append(self._item("glazing", f"Glass partition {g.ref} ({g.width}×{g.height}m × {g.count or 1})",
+                                        "m²", g.width * g.height * (g.count or 1), "glass_partition", 100))
+        if not dws:
+            boq.excluded.append("Doors and windows — no schedule read; nothing estimated.")
 
-        # Kitchen joinery
-        kitchen_rooms = [r for r in rooms if "kitchen" in r.name.lower() or "break" in r.name.lower()]
-        for kr in kitchen_rooms:
-            kitchen_run = math.sqrt(kr.area) * 1.5
-            boq.items.append(self._item("joinery", f"Kitchen units — {kr.name}", "m run", round(kitchen_run), "kitchen_unit", 80))
+        # ── PLUMBING: fixtures counted on a schedule, each a fixture point (not a whole bathroom) ──
+        for m in [m for m in p.mep_schedules if m.trade == "plumbing" and (m.count or 0) > 0]:
+            boq.items.append(self._item("plumbing", f"Plumbing point — {m.item}", "no", m.count,
+                                        "plumbing_drain_point", 65,
+                                        "Supply and connection point only — sanitaryware priced separately"))
+        if wet and not any(m.trade == "plumbing" for m in p.mep_schedules):
+            boq.excluded.append("Plumbing fixtures — no schedule read for the wet rooms; nothing estimated.")
 
-        # ── PLUMBING ─────────────────────────────────────────────────────────
-        plumbing_from_schedule = [m for m in p.mep_schedules if m.trade == "plumbing"]
-        if plumbing_from_schedule:
-            for item in plumbing_from_schedule:
-                boq.items.append(self._item("plumbing", f"Plumbing — {item.item}", item.unit, item.count, "plumbing_bathroom_full", 85))
-        else:
-            # Estimate from wet rooms
-            for room in wet_rooms:
-                if "ablut" in room.name.lower() or "toilet" in room.name.lower() or "bath" in room.name.lower() or "wc" in room.name.lower():
-                    boq.items.append(self._item("plumbing", f"Plumbing fitout — {room.name}", "no", 1, "plumbing_bathroom_full", 80, "Estimate — verify fixture count"))
-            if kitchen_rooms:
-                boq.items.append(self._item("plumbing", "Kitchen plumbing — sink, dishwasher, connections", "item", 1, "plumbing_drain_point", 80))
-
-        # ── ELECTRICAL ───────────────────────────────────────────────────────
-        boq.items.append(self._item("electrical", "DB board — 3-phase main distribution", "no", 1, "electrical_db", 88))
-        boq.items.append(self._item("electrical", "Electrical fitout — lighting, power, data (office areas)", "m²", round(gfa), "electrical_fitout", 85))
-        boq.items.append(self._item("electrical", "Emergency lighting & exit signage", "no", max(6, int(gfa / 20)), "electrical_emerg_light", 88))
-        boq.items.append(self._item("electrical", "Structured cabling cat6A — data points", "point", max(8, int(gfa / 9)), "data_point_cat6a", 82))
-
-        # ── HVAC ─────────────────────────────────────────────────────────────
-        hvac_kw = round(gfa * 0.08, 1)  # 80W/m² rule of thumb
-        boq.items.append(self._item("hvac", f"VRF HVAC system — {hvac_kw}kW capacity (installed)", "kW", hvac_kw, "hvac_vrf", 85, "Confirm with HVAC engineer"))
-
-        # ── FIRE PROTECTION ──────────────────────────────────────────────────
-        boq.items.append(self._item("fire", "Sprinkler system (installed)", "m²", round(gfa), "fire_sprinkler", 88))
-        boq.items.append(self._item("fire", "Fire detection & alarm system", "m²", round(gfa), "fire_detection", 85))
-        boq.items.append(self._item("fire", "Portable fire extinguishers", "no", max(4, int(gfa / 50)), "fire_extinguisher", 90))
-
-        # ── PAINTING ─────────────────────────────────────────────────────────
-        # Wall area = perimeters × height (or estimate from GFA)
-        total_wall_area = internal_wall_area + (gfa * 0.5)  # Add external wall faces
-        boq.items.append(self._item("painting", "Interior paint — 2 coats walls & ceilings", "m²", round(total_wall_area), "paint_interior", 92))
+        # ── PAINTING: wall faces of painted rooms (every face, so shared walls count once per side),
+        # less openings and wall tiles. Ceilings aren't painted here.
+        painted = [r for r in rooms if not (r.wall_finish or "").lower().startswith(("tile", "acoustic", "feature"))]
+        if painted:
+            faces = sum(_perim(r) * (r.height or 2.7) for r in painted)
+            area = max(0.0, faces - 2 * door_area - window_area - wall_tiles)
+            boq.items.append(self._item("painting", "Interior paint — 2 coats walls", "m²", area,
+                                        "paint_interior", 95, f"Room wall faces less openings and tiles. {h_note}"))
 
         logger.info(f"BOQ generated: {len(boq.items)} items, net total R{boq.net_total:,.0f}")
         return boq
