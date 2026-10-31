@@ -261,11 +261,44 @@ tag, AGPL after it, and no later commits may be pulled.
    -- Export it first if you might ever need to undo that cleanup.
    drop table if exists public.vula_cleanup_log_20261002;
    ```
-2. **Delete the test rows from the rate table:** `delete from public.vula_material_rates where coalesce(source,'') = '';` (10 rows)
+2. **Delete the test rows** the suite wrote to production before `tests/conftest.py` was fixed:
+   `delete from public.vula_material_rates where coalesce(source,'') = '';` (10 rows) and
+   `delete from public.vula_takeoff_jobs where id in ('j1','4aaf1e62-6b3');` (2 rows)
 3. **Record migrations, then apply 240 + 241** with the runner (commands in the checklist). 241 only sets
    `search_path`. It changes no ledger behaviour.
 4. **Railway:** nothing is required. Optional: `GRAPH_API_VERSION` (default v25.0), `TAKEOFF_RETENTION_DAYS`
    (default 90). `WHATSAPP_API_URL` is no longer read. After any change, run `railway up`.
+
+## No double work: what other sessions built (checked 31 Oct, end of day)
+
+| Session / branch | What it built | Overlap | Action taken |
+|---|---|---|---|
+| "Vula takeoff accuracy audit", `ccr-d6954993-0a7b3b` (6 commits) | OpenTakeoff sidecar + client; a **second** takeoff corpus in the same `evals/takeoff_plans/` folder with its own truth format and scorer | Benchmark duplicated mine | **Merged into one:** its 6 real public plans and its truth format now feed `evals/takeoff_bench.py`. The sidecar, its client and its scorer stay on that branch for 4e. That session said it has stopped takeoff work. |
+| "Vula system architecture review" (no commits) | A handoff note: Ian gives the takeoff build to the takeoff-audit session, and this session drops Phase 4. Plus 10 defects and v1 scope | **Ownership conflict:** written 19:20, but the takeoff-audit session handed the work here at 19:25, probably without seeing the note | **Paused takeoff building here until you confirm the owner.** The 10 defects are listed below for whoever owns it. |
+| `ccr-d78dd68e`, `ccr-6f483bd1` | already squash-merged to master (#237, #217, #212) | none | none |
+| other `claude/*`, `ccr-ee325c00`, `ccr-e31cb0f5` | old, unrelated | none | none |
+
+**Retention.** Nothing else in the codebase deletes data on a schedule, so the takeoff purge duplicates
+nothing. Retention and purge are one mechanism: `vula/retention.py` (one daily sweep, one `Rule` per
+kind of data) replaced the takeoff-only loop, so the next kind of expiring data adds a rule, not a
+41st loop. Candidates waiting for your decision are in `docs/security-model.md` › Retention.
+
+**Takeoff defects from the architecture-review note, still open (for whoever owns takeoff):**
+1. `plan_reader._llm_extract` calls Ollama without Cloudflare Access headers, a task label or a cloud
+   fallback, so in production the AI reader probably gets `{}` (no rooms, GFA 0). Since `3ddc00c` such a
+   job is held for review instead of producing a ~R50k BOQ from fixed minimums, but the reader still
+   needs to go through `core/llm_router`.
+2. Every scheduled plumbing fixture is priced as a full bathroom (~R60k) (`boq_generator.py`, plumbing).
+3. Windows are priced as solid doors; "glass" is a count priced per m².
+4. Counted twice: wet-room tiles in flooring and in tiling. Σ perimeter × height counts shared walls
+   twice. Ceilings are priced over full GFA even for "exposed".
+5. `BOQ.to_dict` drops rate range, source and by-trade, so the Excel Source column and the Trade Summary are empty.
+6. PO numbers restart per job (`PO-YYYYMM-001`) and are the SQLite key.
+7. Suppliers keyed by id only, and the `/suppliers` routes take an unchecked `tenant_id` (default "default").
+8. Concurrent jobs share `/tmp/vula_sheet_{i}.png`.
+9. RFQ sender hard-coded to one client. `/send` is a stub.
+10. Test rows in production `vula_takeoff_jobs`: **cause fixed** (`tests/conftest.py`, the suite can no
+    longer reach Supabase). Rows to delete: `delete from public.vula_takeoff_jobs where id in ('j1','4aaf1e62-6b3');`
 
 ## What Richard must do manually
 
