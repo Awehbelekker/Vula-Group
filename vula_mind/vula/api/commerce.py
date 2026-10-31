@@ -3764,7 +3764,66 @@ async def admin_project_tracker(tenant_id: str, project: str):
         out["proposed_slips"] = await asyncio.to_thread(pc.proposed_slips, tenant_id, project)
     except Exception:
         out["clients"], out["proposed_slips"] = [], []
+    from vula.commerce import decisions
+    out["decisions"] = await asyncio.to_thread(decisions.for_project, tenant_id, project)
     return out
+
+
+@router.get("/{tenant_id}/admin/employees")
+async def admin_employees(tenant_id: str):
+    """The business's AI employees and its settings for each (core/skills/employees.py)."""
+    import asyncio
+    from core.skills import employees
+    return {"employees": await asyncio.to_thread(employees.team_view, tenant_id)}
+
+
+class EmployeeIn(BaseModel):
+    enabled: Optional[bool] = None
+    instructions: Optional[str] = None
+    by: Optional[str] = None
+
+
+@router.put("/{tenant_id}/admin/employees/{employee}")
+async def admin_employee_update(tenant_id: str, employee: str, body: EmployeeIn):
+    """Switch an AI employee on or off, or set its instructions. Read back."""
+    import asyncio
+    from core.skills import employees
+    try:
+        return await asyncio.to_thread(employees.save, tenant_id, employee, enabled=body.enabled,
+                                       instructions=body.instructions, by=body.by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class DecisionIn(BaseModel):
+    decision: str
+    project: Optional[str] = None
+    subject: Optional[str] = None
+    amount: Optional[float] = None     # Rands as typed; stored as integer cents
+    by: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/projects/decisions")
+async def admin_project_decision_add(tenant_id: str, body: DecisionIn):
+    """Record the owner's ruling in the decision log (vula/commerce/decisions.py). Read back."""
+    import asyncio
+    from vula.commerce import decisions
+    cents = int(round(body.amount * 100)) if body.amount is not None else None
+    try:
+        return await asyncio.to_thread(decisions.record, tenant_id, body.decision, project=body.project,
+                                       subject=body.subject, amount_cents=cents, made_by=body.by,
+                                       role="owner", source="dashboard")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/projects/decisions/{decision_id}/withdraw")
+async def admin_project_decision_withdraw(tenant_id: str, decision_id: str):
+    import asyncio
+    from vula.commerce import decisions
+    if not await asyncio.to_thread(decisions.withdraw, tenant_id, decision_id):
+        raise HTTPException(status_code=404, detail="No such decision, or it was already taken back.")
+    return {"withdrawn": True}
 
 
 class ProjectClientIn(BaseModel):
@@ -3807,7 +3866,8 @@ async def admin_project_client_slip_decide(tenant_id: str, payment_id: str, body
     import asyncio
     from vula import open_questions as oq
     from vula.commerce import project_client as pc
-    row = await asyncio.to_thread(pc.decide_slip, tenant_id, payment_id, body.approve)
+    row = await asyncio.to_thread(pc.decide_slip, tenant_id, payment_id, body.approve,
+                                  source="dashboard")
     if row is None:
         raise HTTPException(status_code=409, detail="That slip was already decided.")
     oq.close_for(tenant_id, payment_id, status="answered")

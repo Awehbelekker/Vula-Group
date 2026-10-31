@@ -10,9 +10,9 @@ import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Uploa
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
-import { PROJECT_TABS, addDirectPayment, addProjectClient, createShare, decideClientSlip, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
+import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
   fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject,
-  useProjects } from "./useProjects";
+  useProjects, withdrawDecision } from "./useProjects";
 import "./projects.css";
 
 const STATUS = { active: { label: "Active", tone: "ok" }, on_hold: { label: "On hold", tone: "highlight" }, complete: { label: "Complete", tone: "muted" } };
@@ -557,6 +557,7 @@ function ProjectMoney({ tenantId, project }) {
         ))}
       </Section>
       <ProjectClients tenantId={tenantId} project={project} clients={t.clients || []} defaultView={view} onChange={load} />
+      <Decisions tenantId={tenantId} project={project} decisions={t.decisions || []} onChange={load} />
     </>
   );
 }
@@ -610,6 +611,37 @@ function ProjectClients({ tenantId, project, clients, defaultView, onChange }) {
           </Select>
         </Field>
         <div className="vpj-go"><Button disabled={!f.phone} onClick={add}>Add client</Button></div>
+        {note && <p className="vpj-sub" role="status">{note}</p>}
+      </div>
+    </Section>
+  );
+}
+
+/** The decision log: the owner's rulings on this project, which Vula follows and quotes when asked why. */
+function Decisions({ tenantId, project, decisions, onChange }) {
+  const [text, setText] = useState("");
+  const [note, setNote] = useState("");
+  const add = async () => {
+    const r = await addDecision(tenantId, { project, decision: text });
+    if (r.error) { setNote(r.error); return; }
+    setNote(r.already_known ? "That's already noted." : "Noted. Vula follows it and gives it as the reason when asked.");
+    setText("");
+    onChange();
+  };
+  return (
+    <Section title={`Decisions · ${decisions.length}`}
+      hint="What you've settled on this project — who paid, what's in or out, why a figure is what it is. Vula follows these and quotes them when someone asks why. Corrections made on WhatsApp land here too.">
+      {decisions.length === 0 && <Empty>No decisions noted yet.</Empty>}
+      {decisions.map((d) => (
+        <Line key={d.id}
+          label={<span>{d.subject ? <strong>{d.subject}: </strong> : null}{d.decision}<span className="vpj-sub"> — {String(d.created_at || "").slice(0, 10)}{d.made_by ? `, ${d.made_by}` : ""}</span></span>}
+          value={<Button size="sm" variant="secondary" onClick={async () => { if (await withdrawDecision(tenantId, d.id)) onChange(); }}>Take back</Button>} />
+      ))}
+      <div className="vpj-form vpj-pad">
+        <Field label="Note a decision" hint="In your own words, e.g. “DIGG paid the R3,700 plumbing change.”">
+          <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} />
+        </Field>
+        <div className="vpj-go"><Button disabled={!text.trim()} onClick={add}>Note it</Button></div>
         {note && <p className="vpj-sub" role="status">{note}</p>}
       </div>
     </Section>

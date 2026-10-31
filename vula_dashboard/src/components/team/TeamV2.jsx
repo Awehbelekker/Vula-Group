@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import { Cake, History, KeyRound, Plus, RotateCcw, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
 import { MERCHANT_GROUPS, withV2Moves } from "../../navConfig.jsx";
 import { Button, Card, EmptyState, Field, Input, PageHeader, SectionTabs, Select, StatusChip } from "../ui/index.jsx";
+import EmployeesV2 from "./EmployeesV2";
 import NoticesV2 from "./NoticesV2";
 import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, toggle, useTeam } from "./useTeam";
 import "./team.css";
@@ -76,8 +77,9 @@ export default function TeamV2({ tenantId }) {
     <div>
       <PageHeader sub="Add people, give each their own WhatsApp, and choose what they see and get notified about. Send them notices, birthday wishes and public holiday reminders." />
       <SectionTabs label="Team" active={tab} onChange={setTab}
-        tabs={[{ id: "people", label: "People" }, { id: "notices", label: "Notices" }]} />
-      {tab === "notices" ? <NoticesV2 tenantId={tenantId} /> : <People tenantId={tenantId} />}
+        tabs={[{ id: "people", label: "People" }, { id: "ai", label: "AI employees" }, { id: "notices", label: "Notices" }]} />
+      {tab === "notices" ? <NoticesV2 tenantId={tenantId} />
+        : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <People tenantId={tenantId} />}
     </div>
   );
 }

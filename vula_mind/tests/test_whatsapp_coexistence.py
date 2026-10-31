@@ -226,12 +226,7 @@ def meta(monkeypatch):
     monkeypatch.setattr(settings, "whatsapp_register_on_connect", True)
     monkeypatch.setattr(settings, "whatsapp_registration_pin", "123456")
     monkeypatch.setattr("vula.email_imap.credentials.encrypt_secret", lambda s: f"enc:{s}")
-    monkeypatch.setattr("vula.integrations.platform_support.ensure_template", lambda tid: _noop())
     return calls
-
-
-async def _noop():
-    return None
 
 
 @pytest.mark.asyncio

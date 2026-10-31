@@ -340,9 +340,10 @@ def stage_slip(tenant_id: str, link: Dict[str, Any], *, supplier: str, amount_ce
     return rows[0]
 
 
-def decide_slip(tenant_id: str, payment_id: str, approve: bool) -> Optional[Dict[str, Any]]:
+def decide_slip(tenant_id: str, payment_id: str, approve: bool, *, by_phone: Optional[str] = None,
+                source: str = "whatsapp") -> Optional[Dict[str, Any]]:
     """The owner's answer to a client's slip: 'proposed' → 'paid' (counts from now) or 'removed'.
-    None when it was already decided. Read back."""
+    None when it was already decided. Read back, then kept in the decision log."""
     db = _client()
     rows = (db.table(_DIRECT).select("id,project,supplier,amount_cents,paid_on,status,created_by")
             .eq("tenant_id", tenant_id).eq("id", payment_id).limit(1).execute().data or [])
@@ -355,7 +356,18 @@ def decide_slip(tenant_id: str, payment_id: str, approve: bool) -> Optional[Dict
     want = "paid" if approve else "removed"
     if not back or back[0].get("status") != want:
         raise RuntimeError("the decision was not saved")
-    return back[0]
+    r = back[0]
+    try:
+        from vula.commerce import decisions
+        decisions.record(
+            tenant_id, (f"The client's slip for {r['supplier']} {_r(r['amount_cents'])} is accepted: "
+                        "recorded as paid by the client directly." if approve else
+                        f"The client's slip for {r['supplier']} {_r(r['amount_cents'])} is left out."),
+            project=r.get("project"), subject="Client's slip", amount_cents=r.get("amount_cents"),
+            refs=[{"table": _DIRECT, "id": r["id"]}], phone=by_phone, role="owner", source=source)
+    except Exception as exc:  # noqa: BLE001 — the slip is decided either way
+        log.debug("slip decision not logged: %s", exc)
+    return r
 
 
 def proposed_slips(tenant_id: str, project: Optional[str] = None) -> List[Dict[str, Any]]:

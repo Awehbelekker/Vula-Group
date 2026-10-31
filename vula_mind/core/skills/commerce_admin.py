@@ -113,6 +113,18 @@ def _not_confirmed(message: str) -> Dict[str, Any]:
     return {"error": message, "reply_verbatim": f"⚠️ {message}"}
 
 
+def _note_decision(tid: str, ctx: Optional[Dict[str, Any]], decision: str, **kw: Any) -> None:
+    """A correction a tool just made, kept in the decision log with its reason (migration 235).
+    Best-effort: the change itself is already done and read back."""
+    try:
+        from vula.commerce import decisions
+        ctx = ctx or {}
+        decisions.record(tid, decision, made_by=ctx.get("caller_name"), role=ctx.get("caller_role"),
+                         phone=ctx.get("phone"), **kw)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("decision not logged: %s", exc)
+
+
 def _r(cents: Any) -> str:
     try:
         return f"R{int(cents) / 100:,.2f}"
@@ -856,6 +868,48 @@ KNOWLEDGE_TOOLS = [
             "match": {"type": "string", "description": "Part of the rule or its topic."}},
             "required": ["match"]}}},
 ]
+# 31 Oct 2026 (Ian, DIGG): the decision log (vula/commerce/decisions.py, migration 235). The
+# owner's rulings on Belladonna's final account (DIGG paid the R3,700 plumbing change, take out the
+# extra tile labour, every Pudlo invoice was Belladonna) left the right figures in the books but no
+# reason Vula could give, so "why is the plumbing R9,700?" had no answer.
+DECISION_TOOLS = [
+    {"type": "function", "function": {
+        "name": "record_decision",
+        "description": (
+            "Save a RULING the owner or manager has just made about how something is booked, who "
+            "paid, what's in or out of a project or account — e.g. 'the 3700 was paid by DIGG', "
+            "'take out the extra tile labour', 'Sea Point Hire was Belladonna', 'further painting "
+            "is billed separately'. Save it in their words with the project it's about, then say "
+            "what you noted. Not for a question, and not for a standing instruction about how to "
+            "do future work (that's remember_rule). If it changes an earlier decision, it replaces it."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "decision": {"type": "string", "description": "What was settled, in the owner's words."},
+            "project": {"type": "string", "description": "The project it's about, if any."},
+            "subject": {"type": "string", "description": "Short label, e.g. 'Plumbing change'."},
+            "amount": {"type": "number", "description": "The amount in Rands it's about, if any."},
+            "replaces": {"type": "string", "description": "Part of an earlier decision this one "
+                                                         "changes, if the owner said so."}},
+            "required": ["decision"]}}},
+    {"type": "function", "function": {
+        "name": "decision_log",
+        "description": (
+            "Look up the owner's past decisions — call this for 'why is X this figure?', 'why was "
+            "this left out?', 'what did we decide about …', or 'what's been decided on <project>'. "
+            "Answer from what it returns, with the date of each decision; never invent a reason."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string"},
+            "about": {"type": "string", "description": "The figure or topic asked about, e.g. "
+                                                       "'plumbing 9700' or 'tile labour'."}}}}},
+    {"type": "function", "function": {
+        "name": "withdraw_decision",
+        "description": "Take back a decision the owner says was wrong or no longer applies — "
+                       "matched by a fragment of it, or 'last' for the one just recorded.",
+        "parameters": {"type": "object", "properties": {
+            "match": {"type": "string", "description": "Part of the decision, or 'last'."}},
+            "required": ["match"]}}},
+]
 DRAFT_TOOLS = [
     {"type": "function", "function": {
         "name": "draft_letter",
@@ -1571,7 +1625,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_DOC_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS)  # always on
     try:
         from vula.api.tenants import tenant_profile
         profile = tenant_profile(tenant_id)
@@ -1690,6 +1744,52 @@ def _preview_was_shown(tenant_id: str, phone: Optional[str], tool: str) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.warning("pending-confirmation check failed, previewing instead: %s", exc)
         return False
+
+
+class HandOver(Exception):
+    """An employee called hand_over: the request is another colleague's job (employees.py)."""
+
+    def __init__(self, reason: str = ""):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _turn_note(step: str, **detail: Any) -> None:
+    try:
+        from vula import turns
+        turns.note(step, **detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str]) -> List[Dict[str, Any]]:
+    """The whole team's tools for this caller: today's set, minus what only a switched-off
+    employee does."""
+    from core.skills import employees
+    tools = _restrict_to_access(_tools_for(tenant_id, role=role, message=message),
+                                _member_access(tenant_id, phone))
+    settings = employees.settings_for(tenant_id)
+    return employees.without_switched_off(tools, {k for k, v in settings.items() if v["enabled"]})
+
+
+def _pick_employee(tenant_id: str, message: str, tools: List[Dict[str, Any]]):
+    """(tools, employee or None, prompt note) — the front desk. Best-effort: on any error the
+    whole team keeps today's tools."""
+    try:
+        from core.skills import employees
+        settings = employees.settings_for(tenant_id)
+        enabled = {k for k, v in settings.items() if v["enabled"]}
+        team = employees.without_switched_off(tools, enabled)
+        emp = employees.pick(message, enabled)
+        if emp is None:
+            _turn_note("employee", name="team")
+            return team, None, ""
+        _turn_note("employee", name=emp.id)
+        return (employees.narrow(team, emp), emp,
+                employees.job_block(emp, settings[emp.id]["instructions"]))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("employee pick skipped: %s", exc)
+        return tools, None, ""
 
 
 class ConfirmationRequired(Exception):
@@ -1865,12 +1965,32 @@ class CommerceAdminSkill(BaseSkill):
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         if caller_role != "sales_rep":   # reps already get their own narrow set
             tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
+        lang = inp.metadata.get("preferred_language", "")
+        # The team of AI employees (core/skills/employees.py): the front desk hands a clear
+        # message to one employee with only its job's tools; anything unclear stays with the team.
+        employee, emp_note = None, ""
+        if caller_role != "sales_rep":
+            tools, employee, emp_note = _pick_employee(inp.tenant_id, inp.question or "", tools)
         system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
-                                         lang=inp.metadata.get("preferred_language", ""))
+                                         lang=lang, role_label=employee.title if employee else None)
+        if caller_role != "sales_rep":
+            system_msg += self._decisions_block(inp.tenant_id, inp.question or "") + emp_note
         collected_sources: List[Dict[str, Any]] = []
         try:
-            answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
-                                            tools, sources=collected_sources)
+            try:
+                answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
+                                                tools, sources=collected_sources)
+            except HandOver as ho:
+                # The employee was given someone else's job: the whole team takes the turn, once.
+                logger.info("commerce_admin: %s handed over (%s)", employee.id if employee else "-", ho.reason)
+                _turn_note("employee_hand_over", name=employee.id if employee else None)
+                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"])
+                system_msg = (self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
+                                                  lang=lang)
+                              + self._decisions_block(inp.tenant_id, inp.question or ""))
+                collected_sources.clear()
+                answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
+                                                tools, sources=collected_sources)
             if not answer:
                 raise RuntimeError("empty answer from admin agent loop")
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
@@ -1946,6 +2066,16 @@ class CommerceAdminSkill(BaseSkill):
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
     @staticmethod
+    def _decisions_block(tenant_id: str, message: str) -> str:
+        """The owner's decisions on the project the message names (migration 235). Best-effort."""
+        try:
+            from vula.commerce import decisions
+            return decisions.block_for_prompt(tenant_id, message)
+        except Exception as exc:
+            logger.debug("decisions block skipped: %s", exc)
+            return ""
+
+    @staticmethod
     def _rules_block(tenant_id: str) -> str:
         """The owner's standing instructions, applied to every answer (migration 152).
         Best-effort — a rules lookup must never take down a real reply."""
@@ -1957,7 +2087,7 @@ class CommerceAdminSkill(BaseSkill):
             return ""
 
     def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None,
-                       lang: str = "") -> str:
+                       lang: str = "", role_label: Optional[str] = None) -> str:
         # Ground the model in the real current date — without this it has no way to resolve
         # "next Tuesday"/"tomorrow"/relative phrases at all, and (confirmed live, 2026-08-26) will
         # either ask the user what today's date is or silently guess wrong. Still never trust the
@@ -2011,7 +2141,7 @@ class CommerceAdminSkill(BaseSkill):
                 + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
                 + self._rules_block(tenant_id)
             )
-        role_label = _role_label(tenant_id)
+        role_label = role_label or _role_label(tenant_id)
         return (
             today_line +
             f"You are the owner's {role_label}, reachable on WhatsApp like any other colleague "
@@ -2103,6 +2233,8 @@ class CommerceAdminSkill(BaseSkill):
         offered = {t["function"]["name"] for t in tools} if restrict else self._TOOL_NAMES
 
         async def _dispatch(name: str, args: Dict[str, Any]) -> Any:
+            if name == "hand_over" and name in offered:
+                raise HandOver(str(args.get("reason") or ""))
             if name not in offered:
                 logger.warning("commerce_admin: refused tool %s — not offered to this caller", name)
                 return {"error": f"{name} isn't available here. Use one of the tools you were given, "
@@ -2490,7 +2622,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
             if name == "cash_summary":       return await self._cash_summary(tid, args)
             if name == "bank_payments":      return self._bank_payments(tid, args)
-            if name == "move_to_project":    return self._move_to_project(tid, args)
+            if name == "move_to_project":    return self._move_to_project(tid, args, ctx)
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
@@ -2561,6 +2693,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "calculate": return self._calculate(args)
             if name in ("remember_rule", "list_rules", "forget_rule"):
                 return self._rule_tool(name, tid, args, ctx)
+            if name in ("record_decision", "decision_log", "withdraw_decision"):
+                return self._decision_tool(name, tid, args, ctx)
             if name == "project_profit":
                 from vula.commerce.job_costing import project_profit
                 # Sent as the tool wrote it: a model re-stating it dropped the overhead share, so
@@ -3398,6 +3532,12 @@ class CommerceAdminSkill(BaseSkill):
                                           description=args.get("description"), by=(ctx or {}).get("phone"))
         except ValueError as exc:
             return {"status": "need_info", "message": str(exc)}
+        _note_decision(tid, ctx, f"The client {what} {row['supplier']} R{row['amount_cents'] / 100:,.2f} "
+                                 "directly: it counts in the project's spend, not as our cost or fee."
+                                 + (f" {args['description']}" if args.get("description") else ""),
+                       project=row["project"], subject=f"Paid directly by the client: {row['supplier']}",
+                       amount_cents=row["amount_cents"],
+                       refs=[{"table": "vula_project_direct_payments", "id": row["id"]}])
         return {"reply_verbatim": (f"✅ Recorded on *{row['project']}*: the client {what} *{row['supplier']}* "
                                    f"R{row['amount_cents'] / 100:,.2f} directly."), "payment_id": row["id"]}
 
@@ -4781,7 +4921,8 @@ class CommerceAdminSkill(BaseSkill):
         # a space-preserving key would report as two different suppliers.
         return re.sub(r"\s+", "", s) or "unknown"
 
-    def _move_to_project(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _move_to_project(self, tid: str, args: Dict[str, Any],
+                         ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """A bill or document filed under the wrong project, moved with everything tied to it
         (vula/integrations/doc_filing.move_to_project). Preview first; the move is read back."""
         from vula.integrations.doc_filing import move_to_project, move_summary
@@ -4822,6 +4963,14 @@ class CommerceAdminSkill(BaseSkill):
         _readback_gate(tid, "move_to_project", ok, {"project": res.get("to")}, {"moved": res.get("moved")})
         if not ok:
             return _not_confirmed(res.get("error") or "The move didn't read back. Not confirmed.")
+        what = (f"{bill['invoice_number']} ({bill.get('supplier') or 'supplier'})" if bill
+                else (doc.get("filename") or "a document"))
+        _note_decision(tid, ctx, f"{what} belongs to {res.get('to') or to}, not "
+                                 f"{res.get('from') or 'no project'}: moved with its document, expense and prices.",
+                       project=res.get("to") or to, subject="Moved to project",
+                       amount_cents=int(bill.get("total_cents") or 0) if bill else None,
+                       refs=[{"table": "commerce_invoices", "id": bill["id"]}] if bill
+                       else [{"table": "vula_filed_documents", "id": doc["id"]}])
         return _checked(res, "✅ " + move_summary(res))
 
     def _bank_payments(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -4998,6 +5147,64 @@ class CommerceAdminSkill(BaseSkill):
         ok = br.archive_rule(tid, found["id"])
         return ({"status": "forgotten", "rule": found.get("rule")} if ok
                 else {"error": "Couldn't remove that rule just now."})
+
+    def _decision_tool(self, name: str, tid: str, args: Dict[str, Any],
+                       ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The decision log (vula/commerce/decisions.py). Recording and withdrawing are an owner's
+        or manager's call; anyone with the agent can look a decision up."""
+        from vula.commerce import decisions
+        ctx = ctx or {}
+        role = (ctx.get("caller_role") or "").lower()
+        phone = ctx.get("phone") or ""
+        if name == "decision_log":
+            about = (args.get("about") or "").strip()
+            project = (args.get("project") or "").strip() or None
+            rows = (decisions.search(tid, about, project=project) if about
+                    else decisions.for_project(tid, project, limit=30))
+            if not rows:
+                where = f" on {project}" if project else ""
+                return {"count": 0, "message": f"No decision{where} recorded about that. The figure "
+                                               "comes from the books as booked — say what was decided "
+                                               "and I'll note it."}
+            return {"count": len(rows), "decisions": [
+                {"date": (r.get("created_at") or "")[:10], "project": r.get("project"),
+                 "subject": r.get("subject"), "decision": r.get("decision"),
+                 "amount": (r["amount_cents"] / 100) if r.get("amount_cents") else None,
+                 "made_by": r.get("made_by")} for r in rows]}
+        if role not in _FULL_ACCESS_ROLES:
+            return {"error": "Only the owner or a manager can record or take back a decision."}
+        if name == "withdraw_decision":
+            match = (args.get("match") or "").strip()
+            found = (decisions.last_by(tid, phone) if match.lower() in ("last", "that", "undo", "")
+                     else decisions.find(tid, match))
+            if not found:
+                return {"error": "No decision matching that. Call decision_log to see them."}
+            ok = decisions.withdraw(tid, found["id"])
+            _readback_gate(tid, "withdraw_decision", ok, {"status": "withdrawn"}, {"id": found["id"]})
+            if not ok:
+                return _not_confirmed("The decision wasn't taken back. Not confirmed.")
+            return _checked({"ok": True}, f"✅ Taken back: {found.get('decision')}")
+        replaces = None
+        if (args.get("replaces") or "").strip():
+            old = decisions.find(tid, args["replaces"])
+            replaces = old["id"] if old else None
+        try:
+            amount = args.get("amount")
+            row = decisions.record(
+                tid, args.get("decision", ""), project=args.get("project"), subject=args.get("subject"),
+                amount_cents=int(round(float(amount) * 100)) if amount not in (None, "") else None,
+                made_by=ctx.get("caller_name"), role=role, phone=phone, supersedes=replaces)
+        except ValueError as exc:
+            return {"status": "need_info", "message": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — not saved, never claimed
+            logger.warning("decision not saved for %s: %s", tid, exc)
+            return _not_confirmed("I couldn't save that decision just now. Not saved.")
+        where = f" on *{row['project']}*" if row.get("project") else ""
+        if row.get("already_known"):
+            return {"reply_verbatim": f"Already noted{where}: {row['decision']}"}
+        return {"reply_verbatim": f"📝 Noted{where}: {row['decision']}"
+                                  + ("\n(It replaces the earlier decision.)" if replaces else "")
+                                  + "\nSay *undo* if that's not right.", "decision_id": row["id"]}
 
     def _calculate(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Exact arithmetic, reusing calculations.py's AST evaluator (no eval, no LLM).
