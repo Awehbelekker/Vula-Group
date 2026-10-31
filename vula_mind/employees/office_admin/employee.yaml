@@ -1,0 +1,36 @@
+# 🗂️ AI office administrator. The front desk (core/skills/employees.py) hands this employee a message when
+# its keywords clearly win. tools: the only tools it is given (plus the shared ones and hand_over).
+id: office_admin
+title: AI office administrator
+emoji: 🗂️
+summary: Reminders, letters, emails, contacts, staff notices and polls, meeting notes.
+keywords:
+- remind
+- letter
+- letter of
+- email
+- e-mail
+- mail
+- notice
+- poll
+- staff
+- birthday
+- public holiday
+- contact
+- minutes
+- expense sheet
+- the reps
+- automation
+- automate
+tools:
+- configure_call_sheet
+- configure_expense_sheet
+- create_automation_rule
+- create_contact
+- draft_followup_email
+- draft_letter
+- log_meeting
+- staff_notice
+- staff_poll
+- update_call_sheet
+- view_call_sheet

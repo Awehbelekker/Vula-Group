@@ -1,0 +1,8 @@
+title: Project bill / final account for the client
+summary: Budget against actual against paid for one project, what the client paid suppliers directly, and the balance due.
+# Words that pick this task once the bookkeeper has the message (clear winner only).
+triggers: [final account, project bill, budget vs actual, budget against actual, balance due,
+           what does the client owe, how much does the client owe, client statement, where the money went,
+           over budget, under budget, close out, close the project]
+tools: [project_profit, share_project, client_paid_direct, bank_payments, outstanding_invoices,
+        create_invoice, send_invoice, move_to_project, list_suppliers, cost_sheet]

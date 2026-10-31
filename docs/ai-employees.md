@@ -1,6 +1,6 @@
 # How Vula's AI employees work
 
-_Generated on 31 Oct 2026 from the code (`core/skills/employees.py`, `core/skills/commerce_admin.py`). The tables of tools and keywords are read from the code, so they match what runs._
+_Generated on 31 Oct 2026 from the employee files (`vula_mind/employees/`) and the code (`core/skills/employees.py`, `core/skills/commerce_admin.py`). The tables of tasks, tools and keywords are read from what runs, so they match it._
 
 Every business has one WhatsApp number. Behind it Vula works as a team: five AI employees for the owner and staff, a customer assistant for customers, and a project assistant for a project's client. A front desk hands each message to the right one.
 
@@ -17,7 +17,10 @@ flowchart TD
   D --> H[_tools_for: tools for this business's modules]
   H --> I[_restrict_to_access: this staff member's access]
   I --> J{Front desk: employees.pick}
-  J -->|clear fit| K[One employee: only its job's tools + shared memory + hand_over]
+  J -->|clear fit| T{Task: employees.pick_task}
+  T -->|one task| K[The task's prompt + its tools + shared memory + hand_over]
+  T -->|two tasks or none| K2[The employee's whole job: its tools + shared memory + hand_over]
+  K2 --> M
   J -->|unclear, yes/confirm, photo, mixed| L[Whole team: every tool]
   K --> M[Prompt: role, rules, behaviour, persona, standing rules, decisions, job + owner instructions]
   L --> M
@@ -35,14 +38,65 @@ flowchart TD
 3. **Tools for this business:** `_tools_for` starts from the always-on tools, removes shop-only tools for a business that doesn't sell products, adds project tools for a project business, and adds the module groups (invoices, products, bookings, …) the business has switched on.
 4. **Tools for this person:** `_restrict_to_access` keeps only the tools for the dashboard areas the staff member was given. Owners and managers keep everything. Sales reps have their own small set.
 5. **Front desk** (`employees.pick`): each employee's keywords are counted in the message. Only a clear winner gets it; a tie, no match, "yes"/"confirm", a number reply, or a photo goes to the whole team with every tool, as before the team existed. An employee the owner switched off is never picked.
-6. **Narrowing** (`employees.narrow`): the employee keeps its job's tools, the shared memory tools and `hand_over`. It only ever removes tools; it never adds one the person couldn't already use.
-7. **The prompt** is put together (section 4) and the model works through `_agent_loop`, calling tools.
-8. **hand_over:** if the employee was given someone else's job, it calls `hand_over` and the turn runs once more with the whole team.
-9. **Money and messages wait for a yes:** a tool that spends money, sends to customers or can't be undone first returns a preview; the owner gets Confirm / Cancel buttons; on Confirm the stored action runs and is read back from the database before Vula says it's done.
-10. **Reply checks** before sending: degenerate output is replaced, internal tool names are never shown, a price not found in a tool's result is withheld, and any arithmetic in the answer is recomputed.
-11. **Recorded:** each turn's steps (route, employee, tools, model) go to `vula_turns` (`vula/turns.py`) for review.
+6. **The task** (`employees.pick_task`): inside the employee's job, a task is picked by its trigger words only when no other task's words appear. A message that touches two tasks, or none, keeps the whole job. A task the owner switched off is never picked.
+7. **Narrowing** (`employees.narrow`): the employee keeps its task's tools (or its whole job's), the shared memory tools and `hand_over`. It only ever removes tools; it never adds one the person couldn't already use.
+8. **The prompt** is put together (section 4) and the model works through `_agent_loop`, calling tools.
+9. **hand_over:** if the employee was given someone else's job, it calls `hand_over` and the turn runs once more with the whole team.
+10. **Money and messages wait for a yes:** a tool that spends money, sends to customers or can't be undone first returns a preview; the owner gets Confirm / Cancel buttons; on Confirm the stored action runs and is read back from the database before Vula says it's done.
+11. **Reply checks** before sending: degenerate output is replaced, internal tool names are never shown, a price not found in a tool's result is withheld, and any arithmetic in the answer is recomputed.
+12. **Recorded:** each turn's steps (route, employee, task, tools, model) go to `vula_turns` (`vula/turns.py`) for review.
 
 ## 2. The file tree
+
+**The employees are files, not code.** Each employee is a folder; each thing it does is a task folder with its own prompt, tools, examples and reference data. A file can be changed without touching the code, a business can add its own instructions per task in the dashboard, and the examples are re-checked on every change, so a new model is tested against the same cases instead of the prompts being rewritten.
+
+```
+vula_mind/employees/
+├── team.yaml                           The order of the team and the tools every employee shares
+├── bookkeeper/                         📒 AI bookkeeper
+│   ├── employee.yaml                   Title, summary, front-desk words, the tools of the job
+│   ├── job.md                          The job description (in its prompt)
+│   └── tasks/
+│       ├── bank-and-payments/          The bank and payments received
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   └── cases.yaml              Example messages, checked on every change
+│       ├── fix-a-record/               Fix a record
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   └── cases.yaml              Example messages, checked on every change
+│       ├── month-end/                  Month-end and the reports
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   └── cases.yaml              Example messages, checked on every change
+│       ├── payment-chase/              Chase payments
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   └── cases.yaml              Example messages, checked on every change
+│       ├── project-bill/               Project bill / final account for the client
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   ├── cases.yaml              Example messages, checked on every change
+│       │   └── data/                   Reference files (e.g. the business's own layout)
+│       └── slips-and-expenses/         Slips and expenses
+│           ├── task.yaml               When to use it (trigger words) and its tools
+│           ├── prompt.md               How to do it, step by step
+│           └── cases.yaml              Example messages, checked on every change
+├── sales/                              🤝 AI sales and customer service assistant
+│   ├── employee.yaml                   Title, summary, front-desk words, the tools of the job
+│   └── job.md                          The job description (in its prompt)
+├── office_admin/                       🗂️ AI office administrator
+│   ├── employee.yaml                   Title, summary, front-desk words, the tools of the job
+│   └── job.md                          The job description (in its prompt)
+├── marketing/                          📣 AI marketing assistant
+│   ├── employee.yaml                   Title, summary, front-desk words, the tools of the job
+│   └── job.md                          The job description (in its prompt)
+└── operations/                         📦 AI operations assistant
+    ├── employee.yaml                   Title, summary, front-desk words, the tools of the job
+    └── job.md                          The job description (in its prompt)
+```
+
+The code around it:
 
 ```
 vula_mind/
@@ -60,7 +114,7 @@ vula_mind/
 │   └── skills/
 │       ├── base.py                 SkillInput/SkillOutput and the shared behaviour rules (the "Soul")
 │       ├── commerce_admin.py       The owner/staff agent: ~95 tools, the loop, previews, read-backs
-│       ├── employees.py            The AI employees, the front desk, owner settings
+│       ├── employees.py            Loads employees/, the front desk, task picking, owner settings
 │       ├── commerce_assistant.py   The customer agent
 │       ├── finance_admin.py, email_admin.py, draft_admin.py, clickup_admin.py,
 │       │   google_admin.py, microsoft_admin.py, calculations.py, standards_lookup.py,
@@ -72,7 +126,7 @@ vula_mind/
 │   ├── decisions.py                The decision log: rulings with their reason
 │   └── project_client.py           A project's client on WhatsApp
 ├── vula/turns.py                   One record per message: route, employee, tools, model
-├── migrations/235_decisions.sql, 236_employees.sql
+├── migrations/235_decisions.sql, 236_employees.sql, 237_employee_tasks.sql
 ├── evals/cases/employees.yaml      81 labelled messages for the front desk
 ├── evals/cases/tool_choice.yaml    The right first tool for real requests
 └── tests/test_employee_routing.py  The accuracy checks (run on every change)
@@ -90,7 +144,112 @@ _Invoices and payments, slips and expenses, the bank, project costs, VAT and tax
 
 > You are the business's bookkeeper. You keep the books right: invoices and who has paid, slips and expenses booked to the right account and project, bank lines matched, what a project cost against what the client paid, VAT and tax, and the reports. Every figure comes from a tool or the calculate tool — never from your head. When the owner corrects something or settles who paid what, note it with record_decision, and give the decision as the reason when someone asks why a figure is what it is. If a number doesn't add up, say so plainly instead of smoothing it over.
 
-**Front-desk words:** 'invoice', 'bill', 'paid', 'payment', 'pay', 'owe', 'owing', 'outstanding', 'debtor', 'expense', 'spent', 'spend', 'receipt', 'slip', 'bank', 'statement', 'reconcil', 'vat', 'tax', 'sars', 'profit', 'p&l', 'income statement', 'balance sheet', 'cash', 'money', 'budget', 'bookkeep', 'reimburse', 'petty cash', 'credit note', 'refund', 'final account', 'paid directly', 'wrong project', 'filed under', 'boq', 'bill of quantities', 'costs', 'turnover', 'revenue', 'account', 'eft', 'deposit', 'overdue', 'payment reminder'
+**Front-desk words** (with its tasks' trigger words): 'invoice', 'bill', 'paid', 'payment', 'pay', 'owe', 'owing', 'outstanding', 'debtor', 'expense', 'spent', 'spend', 'receipt', 'slip', 'bank', 'statement', 'reconcil', 'vat', 'tax', 'sars', 'profit', 'p&l', 'income statement', 'balance sheet', 'cash', 'money', 'budget', 'bookkeep', 'reimburse', 'petty cash', 'credit note', 'refund', 'final account', 'paid directly', 'wrong project', 'filed under', 'boq', 'bill of quantities', 'costs', 'turnover', 'revenue', 'account', 'eft', 'deposit', 'overdue', 'payment reminder', 'chase', 'statements', 'bank lines', 'paid us', 'has paid', 'payment from', 'reconcile', 'move it', 'move bill', 'move the', 'belongs to', 'should be on', 'not ours', 'duplicate', 'booked wrong', 'booked twice', 'correct the', 'fix the', 'profit and loss', 'month end', 'month-end', 'financial report', 'financial statements', 'cash flow', 'money in and out', 'how did we do', 'who owes', 'owes us', 'owe us', 'remind them to pay', 'debtors', 'unpaid invoice', 'payment link', 'still owes', 'project bill', 'budget vs actual', 'budget against actual', 'balance due', 'what does the client owe', 'how much does the client owe', 'client statement', 'where the money went', 'over budget', 'under budget', 'close out', 'close the project', 'paid out of pocket', 'my own card', 'pay me back', 'pay her back', 'diesel', 'fuel'
+
+**Tasks:**
+
+| Task | When | Tools |
+|---|---|---|
+| **The bank and payments received** (`bank-and-payments`) — Find payments on the bank statements, and record what customers have paid. | 'bank', 'statement', 'statements', 'bank lines', 'eft', 'deposit', 'paid us', 'has paid', 'payment from', 'reconcile' | `bank_payments`, `cash_summary`, `client_paid_direct`, `move_to_project`, `outstanding_invoices`, `record_payment` |
+| **Fix a record** (`fix-a-record`) — Correct something booked wrongly — the project, who paid, a duplicate — and keep the reason. | 'wrong project', 'filed under', 'move it', 'move bill', 'move the', 'belongs to', 'should be on', 'not ours', 'duplicate', 'booked wrong', 'booked twice', 'correct the', 'fix the' | `bank_payments`, `client_paid_direct`, `credit_note`, `move_to_project`, `record_payment` |
+| **Month-end and the reports** (`month-end`) — Profit and loss, cash in and out, VAT and tax, from the business's own books. | 'p&l', 'profit and loss', 'income statement', 'balance sheet', 'month end', 'month-end', 'financial report', 'financial statements', 'vat', 'tax', 'sars', 'cash flow', 'money in and out', 'how did we do' | `cash_summary`, `finance_insights`, `finance_settings`, `financial_report`, `outstanding_invoices`, `sales_summary`, `set_tax_regime`, `set_vat_registration`, `tax_calendar`, `tax_estimate`, `vat_position` |
+| **Chase payments** (`payment-chase`) — Who owes the business, how overdue, and reminders or a payment link — previewed first. | 'who owes', 'owes us', 'owe us', 'overdue', 'chase', 'payment reminder', 'remind them to pay', 'debtors', 'unpaid invoice', 'payment link', 'still owes' | `bank_payments`, `outstanding_invoices`, `payment_link`, `record_payment`, `send_invoice`, `send_payment_reminders` |
+| **Project bill / final account for the client** (`project-bill`) — Budget against actual against paid for one project, what the client paid suppliers directly, and the balance due. | 'final account', 'project bill', 'budget vs actual', 'budget against actual', 'balance due', 'what does the client owe', 'how much does the client owe', 'client statement', 'where the money went', 'over budget', 'under budget', 'close out', 'close the project' | `bank_payments`, `client_paid_direct`, `cost_sheet`, `create_invoice`, `list_suppliers`, `move_to_project`, `outstanding_invoices`, `project_profit`, `send_invoice`, `share_project` |
+| **Slips and expenses** (`slips-and-expenses`) — Book a slip or an expense to the right account and project, and what the business owes people who paid. | 'slip', 'receipt', 'spent', 'expense', 'petty cash', 'reimburse', 'paid out of pocket', 'my own card', 'pay me back', 'pay her back', 'diesel', 'fuel' | `add_expense`, `bank_payments`, `confirm_expense`, `list_suppliers`, `move_to_project`, `reimbursement_balance` |
+
+<details><summary>The bank and payments received: the task prompt</summary>
+
+```
+THE TASK — the bank and money received.
+
+1. bank_payments searches the statement lines by name and says up to which date the statements go. Quote that date,
+   so the owner knows if a newer statement is needed (they upload it under Bank in the dashboard).
+2. A customer payment against an invoice: record_payment (preview first). Money the client paid a supplier directly:
+   client_paid_direct, never record_payment.
+3. A bank line on the wrong project: move_to_project, and the reason is kept as a decision.
+4. If a payment can't be found, say so and ask for the proof of payment — never assume it arrived.
+```
+</details>
+
+<details><summary>Fix a record: the task prompt</summary>
+
+```
+THE TASK — fixing a record that was booked wrongly.
+
+1. Find exactly which record (find_document, bank_payments) before changing anything; if two could match, ask.
+2. What can be fixed here: the project (move_to_project — its document, expense and prices move with it), money the
+   client paid directly (client_paid_direct), a customer invoice (credit_note). Each previews first.
+3. Something these tools can't change (an expense's account, cancelling a duplicate): say exactly what is wrong and
+   where the owner changes it in the dashboard — never claim it was fixed.
+4. Keep the owner's reason with record_decision, so the same mistake isn't made again and the figure can be explained.
+```
+</details>
+
+<details><summary>Month-end and the reports: the task prompt</summary>
+
+```
+THE TASK — the reports and month-end.
+
+1. financial_report for the statements (P&L, cash flow, VAT, balance sheet) with its PDF link; send its reply as is.
+2. VAT and tax from vat_position, tax_estimate and tax_calendar — the business's own figures and SARS dates.
+3. Say plainly what the books don't have yet (unbooked slips, a missing statement) instead of guessing around it.
+4. Changing VAT registration or the tax regime previews first and needs the owner's yes.
+```
+</details>
+
+<details><summary>Chase payments: the task prompt</summary>
+
+```
+THE TASK — chasing money owed to the business.
+
+1. outstanding_invoices first: who owes what, and how many days the oldest is overdue. Quote its figures as given.
+2. Before chasing, check the bank (bank_payments) for anyone who says they have paid — record_payment if it is there.
+3. Reminders (send_payment_reminders) and payment links (payment_link) go out only after the owner has seen the
+   preview and said yes. Name who will be messaged and for how much.
+4. Never threaten or add fees the owner hasn't set. Keep the tone the business's own.
+```
+</details>
+
+<details><summary>Project bill / final account for the client: the task prompt</summary>
+
+```
+THE TASK — the project bill (final account) for one project.
+
+How a good bookkeeper does it:
+1. Be sure which project. If the message doesn't name exactly one, ask which.
+2. Get the money picture from the tools, never from memory:
+   - project_profit for what the business spent and received on the project (from the bank);
+   - the project's decisions (decision_log, project = that project) — they explain why figures are what they are;
+   - client_paid_direct only to RECORD a direct payment the owner tells you about;
+   - bank_payments to check a payment someone mentions ("what has the client paid us").
+3. Lay it out the way this business's project bill looks — the owner's instructions for this task say so when they
+   have their own; otherwise the layout in data/layout.yaml (Trade / Responsible | Item | Area | Budget | Actual |
+   Paid to date | Outstanding | Extra | Variance | Notes | Status, one section per trade with a subtotal, then what the
+   client paid suppliers directly, what they paid the business, and the summary down to "Balance due"). On WhatsApp
+   give the summary lines; the full picture is on the project page in the dashboard (Projects › the project).
+4. Work the balance with the calculate tool: total cost − paid directly by the client − still to pay directly −
+   paid to the business = balance due. Never do the sums in your head.
+5. Where the books and the owner's figures differ (a supplier invoice not in the books, a payment you can't find),
+   list each difference as a question for the owner — never pick one silently and never estimate.
+6. Quote decisions as the reason ("Plumbing change R1,500 — paid by the business, decided 3 March").
+7. Nothing goes to the client until the owner has seen it and said yes. A client link (share_project) only on their word.
+```
+</details>
+
+<details><summary>Slips and expenses: the task prompt</summary>
+
+```
+THE TASK — booking slips and expenses.
+
+1. Every expense needs: the amount (from the slip or the owner, never guessed), the date, the supplier, what it was
+   for, and the project if the business works in projects. Ask for what is missing, one thing at a time.
+2. Materials and stock suppliers (tiles, hardware, plumbing supplies) are never "casual labour".
+3. Who paid matters: the business's card or account, a person's own money (then it is owed back — reimbursement_balance),
+   or the client (then it is a direct payment, not the business's cost).
+4. add_expense and confirm_expense preview first; book only after a yes. Then say what was booked.
+5. If a slip is already on the bank statement (bank_payments), don't book it twice — say it is already there.
+```
+</details>
 
 | Tool | What it does |
 |---|---|
@@ -141,7 +300,7 @@ _Quotes, orders, customers and follow-ups, meetings, bookings and subscriptions.
 
 > You look after sales and customers: quotes, orders and their status, who the customers are and what they've bought, follow-ups after a meeting, call sheets, bookings and standing orders. Be quick and friendly with customer details, never invent a price — prices come from lookup_business_info or a tool — and nothing goes to a customer until the owner has seen the preview and said yes.
 
-**Front-desk words:** 'quote', 'quotation', 'order', 'customer', 'lead', 'prospect', 'follow up', 'follow-up', 'followup', 'meeting', 'call sheet', 'visit', 'booking', 'appointment', 'book in', 'slot', 'sold', 'sales', 'sell', 'subscription', 'standing order', 'crm', 'dynamics', 'price list', 'datasheet', 'spec sheet', 'brochure'
+**Front-desk words** (with its tasks' trigger words): 'quote', 'quotation', 'order', 'customer', 'lead', 'prospect', 'follow up', 'follow-up', 'followup', 'meeting', 'call sheet', 'visit', 'booking', 'appointment', 'book in', 'slot', 'sold', 'sales', 'sell', 'subscription', 'standing order', 'crm', 'dynamics', 'price list', 'datasheet', 'spec sheet', 'brochure'
 
 | Tool | What it does |
 |---|---|
@@ -186,7 +345,7 @@ _Reminders, letters, emails, contacts, staff notices and polls, meeting notes._
 
 > You run the office: reminders, letters on the letterhead, finding and summarising emails, saving contacts, meeting notes, staff notices and polls. Keep things short and clear, confirm dates and times back, and never send anything to staff or outsiders without the preview first.
 
-**Front-desk words:** 'remind', 'letter', 'letter of', 'email', 'e-mail', 'mail', 'notice', 'poll', 'staff', 'birthday', 'public holiday', 'contact', 'minutes', 'expense sheet', 'the reps', 'automation', 'automate'
+**Front-desk words** (with its tasks' trigger words): 'remind', 'letter', 'letter of', 'email', 'e-mail', 'mail', 'notice', 'poll', 'staff', 'birthday', 'public holiday', 'contact', 'minutes', 'expense sheet', 'the reps', 'automation', 'automate'
 
 | Tool | What it does |
 |---|---|
@@ -210,7 +369,7 @@ _Promotions and broadcasts, posts in your own voice, discounts, your website pag
 
 > You do the marketing: promotions and broadcasts in the business's own voice and layout, product photos, discount codes, the website pages, and a look at what competitors charge. Use the business's real products and prices, never made-up ones, and nothing goes out to customers until the owner has seen the preview and said yes.
 
-**Front-desk words:** 'promo', 'promotion', 'broadcast', 'blast', 'campaign', 'marketing', 'post', 'caption', 'advert', 'discount', 'coupon', 'voucher', 'special', 'website', 'web page', 'storefront', 'instagram', 'facebook', 'social', 'my voice', 'tone', 'competitor', 'flyer', 'newsletter', 'everyone', 'all customers', 'all our customers', 'all my customers', 'all clients', 'all our clients', 'mass message', 'photo'
+**Front-desk words** (with its tasks' trigger words): 'promo', 'promotion', 'broadcast', 'blast', 'campaign', 'marketing', 'post', 'caption', 'advert', 'discount', 'coupon', 'voucher', 'special', 'website', 'web page', 'storefront', 'instagram', 'facebook', 'social', 'my voice', 'tone', 'competitor', 'flyer', 'newsletter', 'everyone', 'all customers', 'all our customers', 'all my customers', 'all clients', 'all our clients', 'mass message', 'photo'
 
 | Tool | What it does |
 |---|---|
@@ -240,7 +399,7 @@ _Stock, products, suppliers and purchase orders, production and costing, booking
 
 > You run operations: stock and what's running low, products, suppliers and purchase orders, deliveries received, production batches, recipes and what things cost to make, and the bookings calendar. Stock and cost figures come from the tools; anything that orders from a supplier or changes stock waits for the owner's yes on the preview.
 
-**Front-desk words:** 'stock', 'inventory', 'running low', 'run out', 'restock', 'reorder', 'supplier', 'purchaseorder', 'po', 'recipe', 'batch', 'production', 'material', 'ingredient', 'costing', 'cost sheet', 'cost to make', 'product', 'catalogue', 'catalog', 'dispatch', 'deliver', 'received', 'arrived', 'wastage', 'reject', 'roster', 'schedule'
+**Front-desk words** (with its tasks' trigger words): 'stock', 'inventory', 'running low', 'run out', 'restock', 'reorder', 'supplier', 'purchaseorder', 'po', 'recipe', 'batch', 'production', 'material', 'ingredient', 'costing', 'cost sheet', 'cost to make', 'product', 'catalogue', 'catalog', 'dispatch', 'deliver', 'received', 'arrived', 'wastage', 'reject', 'roster', 'schedule'
 
 | Tool | What it does |
 |---|---|
@@ -286,7 +445,7 @@ For an owner or staff member, in this order (`CommerceAdminSkill._system_prompt`
 5. **The business's persona** (its tone, from the dashboard) if it has one.
 6. **Standing instructions** the owner gave (`business_rules.py`), applied to every answer.
 7. **Decisions on the project the message names** (`decisions.py`), with dates, to follow and to quote when asked why a figure is what it is.
-8. **The employee's job description and the owner's instructions for it** (`employees.job_block`), and "call hand_over rather than saying you can't".
+8. **The employee's job description and the owner's instructions for it** (`employees.job_block`), then, when a task was picked, **the task's prompt and the owner's instructions for that task**, and "call hand_over rather than saying you can't".
 
 The opening of each shared rule, as written in the code:
 
@@ -303,10 +462,12 @@ The opening of each shared rule, as written in the code:
 - **Confirm before acting** on money and messages; the stored action runs on Confirm and is read back.
 - **Figures come from tools**; the answer's arithmetic is recomputed and a price that no tool returned is withheld.
 - **Each business is separate:** every query is scoped to the business, every table has row-level security, and one business's settings, rules and decisions never reach another.
-- **Checked on every change** (`tests/test_employee_routing.py`): the 81 labelled messages route exactly as labelled; every tool-choice example keeps the tool it needs; every owner tool belongs to an employee; switch-off, instructions and hand_over behave as described.
+- **A task only when it is clear:** inside a job, a message that touches two tasks keeps the whole job, so it never loses a tool it needs.
+- **A broken file is refused, not half-used:** a task that names a tool outside its employee's job stops the load; Vula then answers with the whole team, as before the team existed.
+- **Checked on every change** (`tests/test_employee_routing.py`): the 81 labelled messages route exactly as labelled; every task's examples (`cases.yaml`) reach that task with the tool they need; every tool-choice example keeps the tool it needs; every owner tool belongs to an employee; switch-off, instructions and hand_over behave as described.
 
 ## 6. What the owner controls
 
-- **Team › AI employees** in the dashboard: switch an employee off, or give it instructions in plain words ("Always quote on 30-day terms"). Everything is on by default.
+- **Team › AI employees** in the dashboard: switch an employee off, or give it instructions in plain words ("Always quote on 30-day terms"). Under each employee, its **tasks**: switch one off, or add your own instructions for that task only. Everything is on by default.
 - **Standing rules:** tell Vula on WhatsApp "from now on…" (remember_rule); list or forget them the same way.
 - **Decisions:** on WhatsApp ("the 3700 was paid by DIGG") or on a project's Decisions list; "undo" or *Take back* removes one.

@@ -1,0 +1,5 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Can we do the final account for Seaview", expect: project-bill, tool: project_profit}
+- {prompt: "What is the balance due on Oak Street for the client", expect: project-bill, tool: project_profit}
+- {prompt: "Show me budget vs actual on Main Road", expect: project-bill, tool: project_profit}
+- {prompt: "Share Seaview with Sam so he can see where the money went, open book", expect: project-bill, tool: share_project}

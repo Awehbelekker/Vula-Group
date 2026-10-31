@@ -1,0 +1,5 @@
+title: Chase payments
+summary: Who owes the business, how overdue, and reminders or a payment link — previewed first.
+triggers: [who owes, owes us, owe us, overdue, chase, payment reminder, remind them to pay, debtors,
+           unpaid invoice, payment link, still owes]
+tools: [outstanding_invoices, send_payment_reminders, payment_link, record_payment, bank_payments, send_invoice]

@@ -6,6 +6,10 @@
  * switches one off, or gives it instructions in plain words. Every message still goes to the same
  * WhatsApp number; Vula hands it to the right employee. Backend: vula/api/commerce.py
  * (/admin/employees).
+ *
+ * Each employee's tasks (vula_mind/employees/<employee>/tasks/ — e.g. the bookkeeper's project bill,
+ * chasing payments, month-end) are listed under it: the owner switches a task off or adds their own
+ * instructions for that task only (PUT /admin/employees/{employee}/tasks/{task}).
  */
 import { useCallback, useEffect, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
@@ -16,6 +20,39 @@ async function call(path, opts = {}) {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.detail || d.error || `Request failed (${r.status})`);
   return d;
+}
+
+function Task({ tenantId, emp, t, onSaved }) {
+  const [text, setText] = useState(t.instructions || "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setText(t.instructions || ""), [t.instructions]);
+  const save = async (patch) => {
+    setBusy(true);
+    try {
+      await call(`/v1/commerce/${tenantId}/admin/employees/${emp.id}/tasks/${t.id}`, { method: "PUT", body: JSON.stringify(patch) });
+      onSaved();
+      toast("Saved");
+    } catch (err) {
+      toast(err.message || "That couldn't be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li className="vtm-task">
+      <strong>{t.title}</strong>{!t.enabled && <> <StatusChip>Off</StatusChip></>}
+      <p className="vtm-sub">{t.summary}</p>
+      <Field label="Your instructions for this task" hint="Only used for this task, e.g. “Show the extras for the client to decide separately.”">
+        <Textarea rows={2} maxLength={600} value={text} onChange={(ev) => setText(ev.target.value)} />
+      </Field>
+      <div className="vtm-go">
+        <Button size="sm" disabled={busy || text === (t.instructions || "")} onClick={() => save({ instructions: text })}>Save</Button>{" "}
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => save({ enabled: !t.enabled })}>
+          {t.enabled ? "Switch task off" : "Switch task on"}
+        </Button>
+      </div>
+    </li>
+  );
 }
 
 function Employee({ tenantId, e, onSaved }) {
@@ -48,6 +85,14 @@ function Employee({ tenantId, e, onSaved }) {
           {e.enabled ? "Switch off" : "Switch on"}
         </Button>
       </div>
+      {(e.tasks || []).length > 0 && (
+        <details className="vtm-tasks">
+          <summary>Tasks ({e.tasks.length}) — how this employee does each job</summary>
+          <ul>
+            {e.tasks.map((t) => <Task key={t.id} tenantId={tenantId} emp={e} t={t} onSaved={onSaved} />)}
+          </ul>
+        </details>
+      )}
     </Card>
   );
 }

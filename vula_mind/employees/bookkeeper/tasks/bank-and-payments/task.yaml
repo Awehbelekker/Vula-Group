@@ -1,0 +1,4 @@
+title: The bank and payments received
+summary: Find payments on the bank statements, and record what customers have paid.
+triggers: [bank, statement, statements, bank lines, eft, deposit, paid us, has paid, payment from, reconcile]
+tools: [bank_payments, record_payment, cash_summary, move_to_project, client_paid_direct, outstanding_invoices]

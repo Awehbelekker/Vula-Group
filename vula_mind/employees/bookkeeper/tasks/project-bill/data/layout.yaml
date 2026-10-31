@@ -1,0 +1,11 @@
+# The default project bill layout for a building project — the one the client receives. A business with its own
+# layout says so in its instructions for this task (Team › AI employees › Bookkeeper › Project bill).
+columns: [Trade / Responsible, Item, Area, Budget Allowance (R), Actual (R), Paid to Date (R), Outstanding (R),
+          Extra (R), Variance (Budget − Actual) (R), Notes, Status]
+legend: {grey: budget allowance, green: paid, coral: still outstanding, amber: extra (not in original budget)}
+sections: one per trade (Site Management, Building Labour, Building Materials, Electrical, Plumbing, Sanitaryware,
+          Joinery, Tiles, Aluminium Windows & Doors, Ironmongery, Contingency), each with a subtotal
+after_total: [payments by the client — paid directly to suppliers, paid to the business]
+summary: [Total project cost (Actual), Original budget allowance, Over / (under) budget, Of which extras,
+          Paid directly to suppliers, Paid to the business, Still to pay directly, Balance due to the business]
+footer: company registration line; "Not VAT registered" where it applies

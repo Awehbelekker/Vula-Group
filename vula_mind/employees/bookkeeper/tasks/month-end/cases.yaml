@@ -1,0 +1,3 @@
+- {prompt: "Send me this month's P&L", expect: month-end, tool: financial_report}
+- {prompt: "What's our VAT position this quarter?", expect: month-end, tool: vat_position}
+- {prompt: "When is the next VAT return due to SARS?", expect: month-end, tool: tax_calendar}

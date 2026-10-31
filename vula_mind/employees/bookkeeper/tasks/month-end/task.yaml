@@ -1,0 +1,6 @@
+title: Month-end and the reports
+summary: Profit and loss, cash in and out, VAT and tax, from the business's own books.
+triggers: [p&l, profit and loss, income statement, balance sheet, month end, month-end, financial report,
+           financial statements, vat, tax, sars, cash flow, money in and out, how did we do]
+tools: [financial_report, finance_insights, cash_summary, vat_position, tax_estimate, tax_calendar,
+        set_vat_registration, set_tax_regime, sales_summary, outstanding_invoices, finance_settings]
