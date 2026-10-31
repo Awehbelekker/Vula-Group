@@ -3,3 +3,4 @@
 - {prompt: "What is the balance due on Oak Street for the client", expect: project-bill, tool: project_profit}
 - {prompt: "Show me budget vs actual on Main Road", expect: project-bill, tool: project_profit}
 - {prompt: "Share Seaview with Sam so he can see where the money went, open book", expect: project-bill, tool: share_project}
+- {prompt: "Make me the final account for Seaview as a spreadsheet", expect: project-bill, tool: project_bill_file}

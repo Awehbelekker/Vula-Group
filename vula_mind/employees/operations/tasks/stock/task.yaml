@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Stock
+summary: What's in stock, what's running low, and correcting a count.
+triggers:
+- stock
+- inventory
+- running low
+- run out
+- restock
+- how many left
+tools:
+- stock_status
+- update_stock
+- receive_stock
+- reorder_suggestions

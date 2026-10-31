@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Tell all staff the office is closed on Friday", expect: staff-messages, tool: staff_notice}
+- {prompt: "Ask the staff to vote: Fri 5 Dec or Sat 6 Dec for the year-end function", expect: staff-messages, tool: staff_poll}

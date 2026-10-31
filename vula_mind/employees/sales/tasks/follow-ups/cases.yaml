@@ -1,0 +1,4 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Log my meeting with Dick at the depot: they want samples by Friday", expect: follow-ups, tool: log_meeting}
+- {prompt: "What's on my call sheet this week?", expect: follow-ups, tool: view_call_sheet}
+- {prompt: "Draft a follow-up email to sarah@example.com after the meeting today", expect: follow-ups, tool: draft_followup_email}

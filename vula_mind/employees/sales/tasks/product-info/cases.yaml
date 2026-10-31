@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Send me the datasheet for the Round Drop-In Basin", expect: product-info, tool: find_product_document}
+- {prompt: "Do we have a brochure for the oval range?", expect: product-info, tool: find_product_document}

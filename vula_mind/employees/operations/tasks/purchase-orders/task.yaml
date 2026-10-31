@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Purchase orders
+summary: What to order, a purchase order to a supplier, and booking it in when it arrives.
+triggers:
+- purchase order
+- 'po '
+- reorder
+- order from
+tools:
+- reorder_suggestions
+- create_purchase_order
+- send_purchase_order
+- list_purchase_orders
+- update_po_status
+- list_suppliers

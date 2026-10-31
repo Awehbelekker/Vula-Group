@@ -1,0 +1,4 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Make a quotation for Sam: 2 round basins and 1 oval basin", expect: quote, tool: create_invoice}
+- {prompt: "Which quotes are still waiting for an answer?", expect: quote, tool: list_quotes}
+- {prompt: "Sam said yes to quote QUO-00012, mark it accepted", expect: quote, tool: update_quote_status}

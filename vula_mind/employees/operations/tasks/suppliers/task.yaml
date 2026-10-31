@@ -1,0 +1,10 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Suppliers
+summary: The business's suppliers and their details.
+triggers:
+- supplier
+- suppliers
+tools:
+- list_suppliers
+- upsert_supplier
+- delete_supplier

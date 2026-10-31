@@ -1,0 +1,2 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Learn my voice so you sound more like me", expect: voice, tool: learn_my_voice}

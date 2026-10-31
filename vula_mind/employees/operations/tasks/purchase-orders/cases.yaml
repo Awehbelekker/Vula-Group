@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Make a purchase order to Cape Cement for 40 bags", expect: purchase-orders, tool: create_purchase_order}
+- {prompt: "What should I reorder?", expect: purchase-orders, tool: reorder_suggestions}

@@ -1,0 +1,17 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Quote a customer
+summary: Make, follow and win quotes — priced from the business's own products and costs.
+triggers:
+- quote
+- quotation
+- estimate
+tools:
+- create_invoice
+- list_quotes
+- update_quote_status
+- convert_quote_to_invoice
+- send_invoice
+- price_advice
+- customer_lookup
+- find_product_document
+- stock_status

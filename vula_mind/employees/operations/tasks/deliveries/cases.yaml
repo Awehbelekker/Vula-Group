@@ -1,0 +1,2 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Mark OTH-00042 as dispatched", expect: deliveries, tool: update_order_status}

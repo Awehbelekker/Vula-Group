@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Create a discount code WINTER15 for 15% off", expect: discount-codes, tool: create_discount_code}
+- {prompt: "Switch off the coupon SUMMER10", expect: discount-codes, tool: update_discount_code}

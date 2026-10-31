@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: The website
+summary: Change the storefront's pages and add sections like an FAQ or a booking calendar.
+triggers:
+- website
+- web page
+- storefront
+- landing page
+- home page
+- faq
+- pricing table
+tools:
+- list_storefront_pages
+- draft_storefront_page
+- add_storefront_section

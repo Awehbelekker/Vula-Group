@@ -1,0 +1,12 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Discount codes
+summary: Create, change and switch off discount codes.
+triggers:
+- discount
+- coupon
+- voucher
+tools:
+- create_discount_code
+- list_discount_codes
+- update_discount_code
+- delete_discount_code

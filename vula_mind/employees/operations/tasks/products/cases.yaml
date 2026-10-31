@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Add a new product: smoked snoek, R95", expect: products, tool: create_product}
+- {prompt: "Change the price of the oval basin to R1,650", expect: products, tool: update_product}

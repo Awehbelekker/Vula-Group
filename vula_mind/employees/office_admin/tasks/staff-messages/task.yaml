@@ -1,0 +1,11 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Notices and polls for the staff
+summary: Tell the staff something on WhatsApp, or ask them to vote.
+triggers:
+- staff
+- notice
+- poll
+- vote
+tools:
+- staff_notice
+- staff_poll

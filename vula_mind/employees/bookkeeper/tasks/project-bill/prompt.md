@@ -12,6 +12,9 @@ How a good bookkeeper does it:
    Paid to date | Outstanding | Extra | Variance | Notes | Status, one section per trade with a subtotal, then what the
    client paid suppliers directly, what they paid the business, and the summary down to "Balance due"). On WhatsApp
    give the summary lines; the full picture is on the project page in the dashboard (Projects › the project).
+   When the owner wants the bill as a file (spreadsheet / PDF / "the final account to send"), call
+   project_bill_file: it builds both from the books, checks the spreadsheet adds up to them, and returns private
+   links for the owner. Send its reply as it is.
 4. Work the balance with the calculate tool: total cost − paid directly by the client − still to pay directly −
    paid to the business = balance due. Never do the sums in your head.
 5. Where the books and the owner's figures differ (a supplier invoice not in the books, a payment you can't find),

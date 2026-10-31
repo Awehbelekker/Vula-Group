@@ -1,0 +1,2 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "What are our competitors charging for hake in Kalk Bay?", expect: competitors, tool: competitor_check}
