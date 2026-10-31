@@ -214,7 +214,7 @@ logs).
 | **4b** calibration | **DONE** | `DrawingSheet.scale_ratio / scale_method / scale_verified_by`. DXF uses `$INSUNITS`. Review can record "dimension checked". |
 | **4c** measured confidence | **DONE** | `vula/takeoff/accuracy.py`. Constants removed (test asserts it). |
 | **4d** review gate | **DONE** | `needs_review` → `POST /takeoff/{id}/review`. `BOQGenerator` raises `ReviewRequired`. Dashboard review card. |
-| **4e** sidecar decision | **NOT YET DECIDED: skipped for now** | See below |
+| **4e** sidecar decision | **DECIDED: don't add** (measured 20–36% under on a real plan) | See below |
 | **4f** flooring | **NOT BUILT** | Waiting for your answer: no tenant uses takeoff for vinyl/LVT yet (Gerflor is CRM-only) |
 | **4g** POPIA | **DONE** | 90-day retention (daily loop), `DELETE /takeoff/{id}`, safe file names |
 | NEW-T1 DXF units | **FIXED** | `test_takeoff_measure_fixes.py` |
@@ -235,6 +235,22 @@ quantities, so the gate stays on the job row, as proposed. If you want takeoff a
 QS's WhatsApp too, the job can raise a `vula_approvals` row as well.
 
 ### 4e — sidecar decision
+
+**Update (31 Oct, measured):** the takeoff-audit session ran the OpenTakeoff sidecar in GitHub
+Actions against the same public-plan corpus (branch `ccr-d6954993-0a7b3b`, workflow
+`takeoff-sidecar.yml`, details in its `docs/takeoff-audit.md`). Results:
+- Synthetic: +1.53% per room (pass).
+- Roseburg NTS: correctly refused (pass).
+- **St Cloud (a real finish plan): 20–36% under on 4 rooms, 1 room missed.**
+- **Porterville: 0 rooms.**
+
+Its automatic room detection is **outside the 2% tolerance on real plans**, so wiring it in wouldn't help.
+**Decision: don't add the sidecar.** Its exact geometry could later measure outlines a person confirms
+at the 4d review step. That is a separate, smaller feature, for later. The AI reader's own error on the same
+plans still needs a run with a model (`python -m evals.takeoff_bench --live`). That number decides whether
+the reader needs work.
+
+Earlier reasoning, kept for the record:
 
 **Don't add it yet.** The benchmark exists, but it has only synthetic plans. The DXF reader and the PDF
 room-schedule reader measure them exactly (0.00% error), but synthetic plans can't tell us how far
