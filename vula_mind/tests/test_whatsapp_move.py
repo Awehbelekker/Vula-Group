@@ -51,9 +51,6 @@ def world(monkeypatch):
         alerts.append(text)
         return True
 
-    async def _noop(*a, **k):
-        return None
-
     monkeypatch.setattr(whatsapp_connect.httpx, "AsyncClient", _Client)
     monkeypatch.setattr(whatsapp_connect, "_supabase", lambda: d)
     monkeypatch.setattr("vula.commerce.service._client", lambda: d)
@@ -62,7 +59,6 @@ def world(monkeypatch):
     monkeypatch.setattr(settings, "whatsapp_register_on_connect", False)    # a move registers anyway
     monkeypatch.setattr(settings, "whatsapp_registration_pin", "123456")
     monkeypatch.setattr("vula.email_imap.credentials.encrypt_secret", lambda s: f"enc:{s}")
-    monkeypatch.setattr("vula.integrations.platform_support.ensure_template", _noop)
     monkeypatch.setattr("vula.integrations.platform_support.alert_operator", _alert)
     return d, calls, alerts, meta
 

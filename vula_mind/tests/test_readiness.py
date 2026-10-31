@@ -33,7 +33,8 @@ def setup(monkeypatch):
                  "whatsapp_token": "t", "openrouter_api_key": "o", "enforce_tenant_auth": True,
                  "platform_support_phone": "27820000000", "tap_reminder_template": "",
                  "vapid_public_key": "", "vapid_private_key": "", "tap_hash_pepper": "",
-                 "tap_to_pay_tenants": ""}.items():
+                 "tap_to_pay_tenants": "", "platform_wa_phone_id": "pnid", "platform_waba_id": "waba",
+                 "platform_wa_token": "tok"}.items():
         monkeypatch.setattr(s, k, v)
     monkeypatch.setattr("vula.api.tenants.is_active", lambda t: t != "suspended")
     monkeypatch.setattr(startup_checks, "unready_payment_tenants", lambda: ["bakery"])
@@ -108,7 +109,53 @@ def test_ready_needs_the_api_key():
 
 
 def test_same_gaps_alert_once_across_redeploys(tmp_path, monkeypatch):
+    """Without migration 234 it falls back to a file (wiped by a deploy on Railway)."""
+    def _no_db():
+        raise RuntimeError("no db")
+    monkeypatch.setattr("vula.commerce.service._client", _no_db)
     monkeypatch.setattr(readiness.settings, "data_dir", tmp_path)
     assert readiness.is_new("🔧 Vula setup: 1 thing(s)")
     assert not readiness.is_new("🔧 Vula setup: 1 thing(s)")
     assert readiness.is_new("🔧 Vula setup: 2 thing(s)")
+
+
+def test_last_alert_is_kept_in_the_database_so_a_redeploy_does_not_resend(tmp_path, monkeypatch):
+    """31 Oct 2026: the Railway service has no volume, so the file was wiped by every deploy and
+    the same list went to the operator each time. The digest now lives in vula_platform_state."""
+    store = {}
+
+    class _T:
+        def __init__(self):
+            self._key = None
+
+        def select(self, _c):
+            return self
+
+        def eq(self, _k, v):
+            self._key = v
+            return self
+
+        def limit(self, _n):
+            return self
+
+        def upsert(self, row, on_conflict=None):
+            store[row["key"]] = row["value"]
+            return self
+
+        def execute(self):
+            rows = [{"value": store[self._key]}] if self._key in store else []
+            return type("R", (), {"data": rows})()
+
+    monkeypatch.setattr("vula.commerce.service._client", lambda: type("D", (), {"table": lambda self, n: _T()})())
+    monkeypatch.setattr(readiness.settings, "data_dir", tmp_path / "first-deploy")
+    assert readiness.is_new("🔧 Vula setup: 1 thing(s)")
+    monkeypatch.setattr(readiness.settings, "data_dir", tmp_path / "after-redeploy")   # disk wiped
+    assert not readiness.is_new("🔧 Vula setup: 1 thing(s)")
+    assert readiness.is_new("🔧 Vula setup: 2 thing(s)")
+    assert not (tmp_path / "first-deploy").exists()
+
+
+def test_missing_vula_number_is_a_platform_gap(setup, monkeypatch):
+    monkeypatch.setattr(readiness.settings, "platform_wa_phone_id", "")
+    gaps = readiness.platform_gaps([])
+    assert any("Vula's own WhatsApp number" in g["what"] for g in gaps)

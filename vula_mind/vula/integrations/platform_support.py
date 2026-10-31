@@ -1,26 +1,26 @@
 """
-vula/integrations/platform_support.py — a tenant owner/team message about the VULA PLATFORM
-itself (not their business) reaches Ian directly, through that tenant's own WhatsApp number.
+vula/integrations/platform_support.py — messages for Ian about the VULA PLATFORM itself: a tenant
+owner/team member's feedback about Vula (forward), and the platform's own health alerts
+(alert_operator: setup gaps, the local AI computer down, a stalled server, cloud AI down,
+trials ending, a stuck WhatsApp move, knowledge-base checks).
 
 Detection is natural-language keywords (+ an explicit "vula support" trigger as a guaranteed
 fallback), gated to team/owner only — the same is_team check already used for bank-review and
 escalation answers, so a customer ordering fish can never trigger this.
 
-Delivery is three-layered: durable (always logs to vula_platform_feedback — Ian can never miss
-one), then an approved WhatsApp TEMPLATE (works regardless of the 24h window — see
-vula/commerce/wa_templates.py), then a free-form fallback (works only if Ian already has an
-open 24h window with that specific tenant's number).
-
-ensure_template() provisions the template for a tenant's WABA — called once for every existing
-tenant, and automatically every time a NEW tenant finishes connecting WhatsApp
-(vula/api/whatsapp_connect.py). Meta templates are WABA-wide, not tenant-scoped, so sibling
-tenants sharing one Meta Business Account (confirmed: digg-demo and off-the-hook share a WABA)
-only need one real Meta submission between them — ensure_template still gives each tenant its
-own commerce_wa_templates row for the dashboard's per-tenant grouping either way.
+Feedback is logged durably first (vula_platform_feedback — Ian can never miss one). Then both
+kinds go to platform_support_phone from VULA'S OWN WhatsApp number (settings.platform_wa_*, on
+Vula's own Meta Business account): the approved vula_operator_alert template, which arrives
+outside Meta's 24-hour window, with free text as the fallback. 31 Oct 2026 (Ian): they used to go
+out on a tenant's number (Off the Hook's), so a client's line carried Vula's alerts and other
+clients' names. Now a business's number is never used; until Vula's number is set, alerts are
+logged only. ensure_operator_template() submits the template to Vula's WABA at boot.
 """
 from __future__ import annotations
 
 import logging
+import re
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -46,65 +46,98 @@ def detect(text: str) -> bool:
     return any(k in low for k in _KEYWORDS)
 
 
-TEMPLATE_NAME = "vula_platform_feedback"   # one param: "From {sender} ({phone}) on {tenant}: {message}"
-_TEMPLATE_BODY = (
-    "\U0001F4E3 New Vula platform feedback:\n\n{{1}}\n\n"
-    "Please follow up with the sender directly."
-)
-_TEMPLATE_EXAMPLE = ("From Staci Brits (27821234567) on off-the-hook: "
-                     "The bank tab is a bit confusing, could you check it?")
+OPERATOR_TEMPLATE = "vula_operator_alert"   # one param: the alert line
+_OPERATOR_BODY = "\U0001F527 Vula alert:\n\n{{1}}\n\nSent by Vula's own monitoring."
+_OPERATOR_EXAMPLE = "The local AI computer has been unreachable for 15 minutes."
+GRAPH_BASE = "https://graph.facebook.com/v19.0"
 
 
-async def ensure_template(tenant_id: str) -> dict:
-    """Make sure this tenant's WABA has TEMPLATE_NAME; submit it if not. Safe to call
-    repeatedly — a tenant reconnecting WhatsApp, or two sibling tenants sharing one WABA,
-    just find it already there. Never raises."""
+def _platform_creds() -> Optional[dict]:
+    """Vula's own number (settings.platform_wa_*), or None. Never a business's number: a client's
+    line only ever carries that client's own conversations (31 Oct 2026, Ian)."""
+    from config import settings
+    if settings.platform_wa_phone_id and settings.platform_wa_token:
+        return {"phone_id": settings.platform_wa_phone_id, "token": settings.platform_wa_token,
+                "waba_id": settings.platform_waba_id}
+    return None
+
+
+def _number(to: str) -> str:
+    n = re.sub(r"\D", "", to or "")
+    return "27" + n[1:] if n.startswith("0") else n
+
+
+async def _post(creds: dict, body: dict) -> bool:
+    import httpx
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(f"{GRAPH_BASE}/{creds['phone_id']}/messages",
+                                 headers={"Authorization": f"Bearer {creds['token']}"}, json=body)
+    if not resp.is_success:
+        logger.info("operator alert send failed: %s", resp.text[:200])
+    return resp.is_success
+
+
+async def _send_platform(to: str, text: str) -> bool:
+    """The approved operator template first (arrives outside Meta's 24-hour window), free text as
+    the fallback, both from Vula's own number."""
+    creds = _platform_creds()
+    if not creds:
+        return False
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", to, OPERATOR_TEMPLATE):   # capability benchmark: never sent
+        return True
+    number = _number(to)
+    # Meta refuses a template parameter with a newline, a tab or more than 4 spaces in a row
+    # (the stalled-server alert carries a stack trace), so the template gets it on one line.
+    param = re.sub(r"\s+", " ", text).strip()[:1000]
     try:
-        from vula.commerce import wa_templates
-        creds = await wa_templates._waba_creds(tenant_id)
-        if not creds:
-            return {"skipped": "no WABA connected"}
+        if await _post(creds, {"messaging_product": "whatsapp", "to": number, "type": "template",
+                               "template": {"name": OPERATOR_TEMPLATE, "language": {"code": "en"},
+                                            "components": [{"type": "body", "parameters": [
+                                                {"type": "text", "text": param}]}]}}):
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("operator alert template send failed: %s", exc)
+    try:
+        return await _post(creds, {"messaging_product": "whatsapp", "to": number, "type": "text",
+                                   "text": {"body": text[:4000]}})
+    except Exception as exc:  # noqa: BLE001
+        logger.info("operator alert WhatsApp send failed: %s", exc)
+        return False
 
-        import httpx
-        live = []
-        try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.get(
-                    f"{wa_templates.GRAPH_BASE}/{creds['waba_id']}/message_templates",
-                    headers={"Authorization": f"Bearer {creds['token']}"},
-                    params={"fields": "name,status", "name": TEMPLATE_NAME},
-                )
-                if resp.is_success:
-                    live = resp.json().get("data", [])
-        except Exception as exc:
-            logger.debug("template existence check failed for %s: %s", tenant_id, exc)
 
-        if live:
-            # Already on this WABA (possibly via a sibling tenant) — just make sure THIS
-            # tenant has its own local row too, for the dashboard's per-tenant grouping.
-            try:
-                wa_templates._client().table("commerce_wa_templates").upsert({
-                    "tenant_id": tenant_id, "name": TEMPLATE_NAME, "category": "UTILITY",
-                    "language": "en", "body_text": _TEMPLATE_BODY, "param_count": 1,
-                    "example": [_TEMPLATE_EXAMPLE], "created_by": "system:platform_support",
-                }, on_conflict="tenant_id,name").execute()
-            except Exception as exc:
-                logger.debug("template local row upsert skipped for %s: %s", tenant_id, exc)
-            return {"already_exists": True, "status": live[0].get("status")}
-
-        return await wa_templates.create_template(
-            tenant_id, TEMPLATE_NAME, _TEMPLATE_BODY, category="UTILITY", language="en",
-            example_params=[_TEMPLATE_EXAMPLE], created_by="system:platform_support",
-        )
-    except Exception as exc:
-        logger.warning("ensure_template failed for %s: %s", tenant_id, exc)
-        return {"error": str(exc)}
+async def ensure_operator_template() -> dict:
+    """Make sure Vula's own WABA has OPERATOR_TEMPLATE; submit it for review if not. Safe to call
+    at every boot. Never raises."""
+    creds = _platform_creds()
+    if not creds or not creds.get("waba_id"):
+        return {"skipped": "Vula's own number is not set"}
+    import httpx
+    url = f"{GRAPH_BASE}/{creds['waba_id']}/message_templates"
+    headers = {"Authorization": f"Bearer {creds['token']}"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(url, headers=headers,
+                                    params={"fields": "name,status", "name": OPERATOR_TEMPLATE})
+            live = resp.json().get("data", []) if resp.is_success else []
+            if live:
+                return {"already_exists": True, "status": live[0].get("status")}
+            resp = await client.post(url, headers=headers, json={
+                "name": OPERATOR_TEMPLATE, "language": "en", "category": "UTILITY",
+                "components": [{"type": "BODY", "text": _OPERATOR_BODY,
+                                "example": {"body_text": [[_OPERATOR_EXAMPLE]]}}]})
+            data = resp.json()
+        if not resp.is_success:
+            return {"error": (data.get("error") or {}).get("message") or "template submit failed"}
+        return {"name": OPERATOR_TEMPLATE, "status": data.get("status", "PENDING")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("operator template check failed: %s", exc)
+        return {"error": type(exc).__name__}
 
 
 async def forward(tenant_id: str, phone: str, sender_name: str, text: str) -> None:
-    """Log durably, then WhatsApp Ian — approved template first (works regardless of the 24h
-    window), free-form as a fallback. Never raises — this must never block or break the
-    tenant's normal conversation."""
+    """Log durably, then WhatsApp Ian from Vula's own number (alert_operator). Never raises —
+    this must never block or break the tenant's normal conversation."""
     try:
         _client().table("vula_platform_feedback").insert({
             "tenant_id": tenant_id, "phone": phone, "sender_name": sender_name or "",
@@ -113,46 +146,24 @@ async def forward(tenant_id: str, phone: str, sender_name: str, text: str) -> No
     except Exception as exc:
         logger.warning("platform feedback log failed (run migration 076?): %s", exc)
 
-    from config import settings
-    if not settings.platform_support_phone:
-        return
     who = f"{sender_name} ({phone})" if sender_name else phone
-    try:
-        from vula.api.whatsapp import _send_wa_template
-        detail = f"From {who} on {tenant_id}: {text}"
-        if await _send_wa_template(tenant_id, settings.platform_support_phone, TEMPLATE_NAME, detail):
-            return
-    except Exception as exc:
-        logger.info("platform feedback template send failed (%s): %s", tenant_id, exc)
-    try:
-        from vula.api.whatsapp import _send_reply
-        msg = f"📣 Platform feedback from {who} on {tenant_id}:\n\n{text}"
-        await _send_reply(settings.platform_support_phone, msg, tenant_id=tenant_id)
-    except Exception as exc:
-        # Expected to fail with Meta's re-engagement error if the template above isn't
-        # approved yet (or doesn't exist for this tenant) AND Ian has no open 24h window with
-        # this tenant's number — the DB log above already guarantees the message isn't lost.
-        logger.info("platform feedback WhatsApp forward skipped (%s): %s", tenant_id, exc)
+    # The message itself is in vula_platform_feedback; keep it out of the server log.
+    await alert_operator(f"Feedback from {who} on {tenant_id}: {text}", log_text=False)
 
 
-async def alert_operator(text: str) -> bool:
-    """A platform health alert (one line) to platform_support_phone: the approved template first,
-    so it arrives outside Meta's 24-hour window, free text as a fallback. Sent from
-    settings.local_llm_alert_tenant's number (the template lives on that tenant's WABA). Never
-    raises; False when nothing was delivered."""
+async def alert_operator(text: str, log_text: bool = True) -> bool:
+    """A platform alert (one line) to platform_support_phone, from Vula's own WhatsApp number
+    only. Without that number it is logged, not sent: never from a business's number, never
+    from the env default number. Never raises; False when nothing was delivered."""
     from config import settings
     to = settings.platform_support_phone
-    if not to:
+    if not to or not _platform_creds():
+        logger.warning("operator alert (not sent: %s): %s",
+                       "PLATFORM_SUPPORT_PHONE is not set" if not to else "Vula's own number is not set",
+                       text[:500] if log_text else "(feedback, kept in vula_platform_feedback)")
         return False
-    tenant = settings.local_llm_alert_tenant or ""
-    from vula.api.whatsapp import _send_reply, _send_wa_template
     try:
-        if await _send_wa_template(tenant, to, TEMPLATE_NAME, text):
-            return True
+        return await _send_platform(to, text)
     except Exception as exc:  # noqa: BLE001
-        logger.info("operator alert template send failed: %s", exc)
-    try:
-        return bool(await _send_reply(to, text, tenant_id=tenant))
-    except Exception as exc:  # noqa: BLE001
-        logger.info("operator alert WhatsApp send failed: %s", exc)
+        logger.info("operator alert not sent: %s", exc)
         return False

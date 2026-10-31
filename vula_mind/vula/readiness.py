@@ -38,6 +38,9 @@ def platform_gaps(schema_missing: Optional[list] = None) -> list[dict]:
         gaps.append(_gap("Tenant admin routes are not access-checked", "Set ENFORCE_TENANT_AUTH=true"))
     if not settings.platform_support_phone:
         gaps.append(_gap("Operator alerts have nowhere to go", "Set PLATFORM_SUPPORT_PHONE"))
+    if not (settings.platform_wa_phone_id and settings.platform_wa_token and settings.platform_waba_id):
+        gaps.append(_gap("Vula's own WhatsApp number is not set: operator alerts are only logged",
+                         "Set PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN"))
     for m in schema_missing or []:
         gaps.append(_gap(f"Database is missing {m}", "Apply that migrations/*.sql in the Supabase SQL editor"))
     return gaps
@@ -151,12 +154,30 @@ def summary(rep: dict) -> Optional[str]:
     return f"🔧 Vula setup: {len(parts)} thing(s) still to do. {shown}. Full list: GET /ready"
 
 
+_STATE_KEY = "readiness_last"
+
+
 def is_new(line: str) -> bool:
-    """True when `line` differs from the last summary sent (kept on the data volume, so a
-    redeploy with the same gaps doesn't alert again). Records it."""
+    """True when `line` differs from the last summary sent. Records it in vula_platform_state
+    (migration 234), so a redeploy with the same gaps doesn't alert again: the service has no
+    volume, so a file on disk was wiped by every deploy and the same list went out each time.
+    Falls back to the file when the table isn't there."""
     import hashlib
-    path = settings.data_dir / "readiness_last.txt"
     digest = hashlib.sha256(line.encode()).hexdigest()
+    try:
+        from vula.commerce import service
+        db = service._client()
+        rows = (db.table("vula_platform_state").select("value").eq("key", _STATE_KEY)
+                .limit(1).execute().data or [])
+        if rows and (rows[0].get("value") or "") == digest:
+            return False
+        db.table("vula_platform_state").upsert(
+            {"key": _STATE_KEY, "value": digest, "updated_at": datetime.now(timezone.utc).isoformat()},
+            on_conflict="key").execute()
+        return True
+    except Exception as exc:  # noqa: BLE001 — no DB or no migration 234: the file below
+        logger.debug("readiness: platform state unavailable (%s)", type(exc).__name__)
+    path = settings.data_dir / "readiness_last.txt"
     try:
         if path.exists() and path.read_text().strip() == digest:
             return False

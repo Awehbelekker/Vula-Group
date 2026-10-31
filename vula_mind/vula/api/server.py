@@ -1699,11 +1699,12 @@ async def lifespan(app: FastAPI):
             try:
                 from core.mass_mind.health import should_alert
                 from vula import readiness
-                from vula.integrations.platform_support import alert_operator
+                from vula.integrations.platform_support import alert_operator, ensure_operator_template
+                log.info("operator alert template: %s", await ensure_operator_template())
                 line = readiness.summary(await __a.to_thread(readiness.report))
                 if line:
                     log.warning("%s", line)
-                    if readiness.is_new(line) and should_alert("readiness"):
+                    if await __a.to_thread(readiness.is_new, line) and should_alert("readiness"):
                         await alert_operator(line)
             except Exception as exc:
                 log.info("readiness check skipped: %s", type(exc).__name__)

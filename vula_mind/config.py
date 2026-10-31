@@ -153,10 +153,16 @@ class Settings(BaseSettings):
     # Local-LLM watch (vula/local_llm_watch.py, 2026-10-19): WhatsApp platform_support_phone when
     # the local Ollama tunnel has been unreachable this many minutes, again every
     # local_llm_alert_repeat_h hours while it stays down, and once when it's back. The alert goes
-    # out on local_llm_alert_tenant's WhatsApp number (empty = the platform's own number).
+    # out on Vula's own number (platform_wa_* below).
     local_llm_alert_after_min: int = 15
     local_llm_alert_repeat_h: float = 6.0
-    local_llm_alert_tenant: str = ""
+    local_llm_alert_tenant: str = ""   # no longer used for sending (31 Oct): kept so an old env var still parses
+    # Vula's own WhatsApp number, on Vula's own Meta Business account (31 Oct 2026, Ian): every
+    # operator alert and forwarded platform feedback goes out from it, never from a business's
+    # number. Unset = operator alerts are logged only. Entered in Railway by Ian.
+    platform_wa_phone_id: str = ""
+    platform_waba_id: str = ""
+    platform_wa_token: str = ""
     # Weekly customer-view guard (vula/kb_maintenance.weekly_guard, 2026-10-20): re-check once a
     # week that customers see only public documents; WhatsApp platform_support_phone if not.
     kb_customer_view_weekly: bool = True

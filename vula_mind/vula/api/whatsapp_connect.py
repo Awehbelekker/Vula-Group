@@ -313,14 +313,8 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         body.tenant_id, phone_number, waba_id
     )
 
-    # Best-effort: make sure this tenant can reach Ian with platform feedback from day one —
-    # never blocks the connect flow if it fails (e.g. Meta template review hiccup).
-    try:
-        from vula.integrations.platform_support import ensure_template
-        tmpl_result = await ensure_template(body.tenant_id)
-        log.info("platform-feedback template ensured for %s: %s", body.tenant_id, tmpl_result)
-    except Exception as exc:
-        log.warning("platform-feedback template provisioning skipped for %s: %s", body.tenant_id, exc)
+    # (No template is submitted to the business's account any more: platform feedback reaches
+    # Ian from Vula's own number, vula/integrations/platform_support.py.)
 
     return ConnectResponse(
         tenant_id=body.tenant_id,
