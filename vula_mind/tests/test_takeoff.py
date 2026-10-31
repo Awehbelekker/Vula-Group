@@ -57,10 +57,12 @@ def _room(name: str, area: float, wet: bool = False, floor_finish: str = "lvt",
 def test_boq_totals_correct():
     boq = BOQ(project_name="Test", tenant_id="t1", markup_pct=15.0)
     boq.items.append(BOQItem("A_001", "flooring", "LVT", "m²", 100, 280, 520, 400, 40000, "test", 90))
+    # line_total is worked out from qty × rate (50 × R97 = R4,850), never taken from the caller —
+    # this test used to pass R4,875 in and assert it back.
     boq.items.append(BOQItem("A_002", "painting", "Paint", "m²", 50, 65, 130, 97, 4875, "test", 92))
-    assert boq.net_total == pytest.approx(44875.0)
-    assert boq.markup_amount == pytest.approx(44875.0 * 0.15)
-    assert boq.grand_total == pytest.approx(44875.0 * 1.15)
+    assert boq.net_total == pytest.approx(44850.0)
+    assert boq.markup_amount == pytest.approx(44850.0 * 0.15)
+    assert boq.grand_total == pytest.approx(44850.0 * 1.15)
 
 
 def test_boq_empty_totals_zero():

@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sqlite3
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -59,6 +61,19 @@ class BOQItem:
     notes: str = ""
     requires_specialist: bool = False
     supplier_key: str = ""  # Links to OrderManager
+    rate_cents: int = 0
+    line_total_cents: int = 0
+
+    def __post_init__(self):
+        # Money is integer cents, worked out here (CLAUDE.md non-negotiable; NEW-T4 in
+        # docs/golive-and-takeoff-audit.md). Same rounding as the online BOQ —
+        # vula/commerce/boq_online.amount_cents — so a takeoff bill and an online bill of the
+        # same lines agree to the cent. line_total stays as rands for existing readers.
+        from vula.commerce.boq_online import amount_cents
+        self.rate_cents = int((Decimal(str(self.rate_used or 0)) * 100)
+                              .quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        self.line_total_cents = amount_cents(Decimal(str(self.qty or 0)), self.rate_cents)
+        self.line_total = self.line_total_cents / 100
 
 
 @dataclass
@@ -69,16 +84,29 @@ class BOQ:
     markup_pct: float = 15.0
 
     @property
+    def net_total_cents(self) -> int:
+        return sum(i.line_total_cents for i in self.items)
+
+    @property
+    def markup_cents(self) -> int:
+        return int((Decimal(self.net_total_cents) * Decimal(str(self.markup_pct)) / 100)
+                   .quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    @property
+    def grand_total_cents(self) -> int:
+        return self.net_total_cents + self.markup_cents
+
+    @property
     def net_total(self) -> float:
-        return sum(i.line_total for i in self.items)
+        return self.net_total_cents / 100
 
     @property
     def markup_amount(self) -> float:
-        return self.net_total * self.markup_pct / 100
+        return self.markup_cents / 100
 
     @property
     def grand_total(self) -> float:
-        return self.net_total + self.markup_amount
+        return self.grand_total_cents / 100
 
     @property
     def by_trade(self) -> Dict[str, List[BOQItem]]:
@@ -98,6 +126,9 @@ class BOQ:
             "markup_pct": self.markup_pct,
             "markup_amount": self.markup_amount,
             "grand_total": self.grand_total,
+            "net_total_cents": self.net_total_cents,
+            "markup_cents": self.markup_cents,
+            "grand_total_cents": self.grand_total_cents,
             "items": [
                 {
                     "id": i.id,
@@ -107,6 +138,8 @@ class BOQ:
                     "qty": round(i.qty, 2),
                     "rate_used": round(i.rate_used, 2),
                     "line_total": round(i.line_total, 2),
+                    "rate_cents": i.rate_cents,
+                    "line_total_cents": i.line_total_cents,
                     "confidence": i.confidence,
                     "notes": i.notes,
                     "requires_specialist": i.requires_specialist,
@@ -165,25 +198,101 @@ class RateLookup:
         "paving_brick":          (280,   520,  "m²",     "AECOM 2025/26"),
     }
 
+    # What a scraped rate's LABEL must say to stand in for a BOQ key (NEW-T2). Scraped keys are
+    # slugs of whatever label the page used ("porcelain_tiles_600x600__laid_"), so the old
+    # `key LIKE '%tiles_porcelain_floor%'` never matched one and every line quietly priced from
+    # FALLBACK — while a loose substring could match the wrong item. Each group is "any of these
+    # words"; every group must appear. Same unit is required, and the price must sit within
+    # BAND of the reference rate (a mis-read page doesn't become a quote).
+    TERMS: Dict[str, List[List[str]]] = {
+        "demolition_light": [["demolition", "strip"]],
+        "concrete_30mpa": [["concrete"], ["30mpa", "30 mpa", "30"]],
+        "structural_steel": [["structural"], ["steel"]],
+        "brickwork_face": [["face"], ["brick"]],
+        "brickwork_plaster": [["brick"], ["plaster"]],
+        "waterproofing": [["waterproof"]],
+        "drywall_single": [["drywall", "partition", "gypsum", "plasterboard"], ["single"]],
+        "drywall_double": [["drywall", "partition", "gypsum", "plasterboard"], ["double", "acoustic"]],
+        "ceiling_standard": [["ceiling"], ["suspended", "grid", "standard"]],
+        "ceiling_acoustic": [["ceiling"], ["acoustic"]],
+        "screed_50mm": [["screed"]],
+        "lvt_vinyl": [["lvt", "vinyl"]],
+        "carpet_commercial": [["carpet"]],
+        "epoxy_coating": [["epoxy"]],
+        "tiles_porcelain_floor": [["porcelain"], ["tile"]],
+        "tiles_ceramic_wall": [["ceramic"], ["tile"], ["wall"]],
+        "tile_adhesive_grout": [["adhesive", "grout"]],
+        "door_hollow_core": [["door"], ["hollow"]],
+        "door_solid": [["door"], ["solid"]],
+        "door_fire_60": [["door"], ["fire"], ["60"]],
+        "door_fire_120": [["door"], ["fire"], ["120"]],
+        "door_acoustic": [["door"], ["acoustic"]],
+        "glass_partition": [["glass", "glazed"], ["partition"]],
+        "window_alu_dg": [["window"], ["alumin"]],
+        "kitchen_unit": [["kitchen"]],
+        "paint_interior": [["paint"], ["interior", "internal", "wall"]],
+        "paving_brick": [["paving", "paver"]],
+        "fire_sprinkler": [["sprinkler"]],
+        "fire_detection": [["detection", "detector", "alarm"]],
+        "fire_extinguisher": [["extinguisher"]],
+        "data_point_cat6a": [["data", "cat6"]],
+        "hvac_vrf": [["vrf"]],
+        "hvac_split": [["split"]],
+    }
+    # Words that mean a different item even when every TERMS group matched.
+    EXCLUDE: Dict[str, List[str]] = {
+        "door_solid": ["fire", "acoustic", "hollow"],
+        "door_hollow_core": ["fire", "acoustic"],
+        "drywall_single": ["double", "acoustic"],
+        "ceiling_standard": ["acoustic"],
+        "paint_interior": ["exterior", "external", "roof"],
+    }
+    BAND = (0.25, 4.0)
+
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
 
-    def get(self, key: str) -> tuple:
-        """Returns (low, high, unit, source) — DB first, fallback second."""
-        if self.db_path.exists():
+    def _rows(self) -> List[tuple]:
+        if not self.db_path.exists():
+            return []
+        try:
+            conn = sqlite3.connect(self.db_path)
             try:
-                conn = sqlite3.connect(self.db_path)
-                row = conn.execute(
-                    "SELECT low, high, unit, source FROM material_rates WHERE key LIKE ? LIMIT 1",
-                    (f"%{key}%",)
-                ).fetchone()
+                return conn.execute("SELECT label, unit, low, high, source FROM material_rates").fetchall()
+            finally:
                 conn.close()
-                if row:
-                    return float(row[0]), float(row[1]), row[2], row[3]
-            except Exception:
-                pass
+        except Exception:
+            return []
 
-        return self.FALLBACK.get(key, (0, 0, "item", "Estimate"))
+    def _matches(self, key: str, label: str) -> bool:
+        groups = self.TERMS.get(key)
+        if not groups:
+            return False
+        text = " " + re.sub(r"[^a-z0-9]+", " ", (label or "").lower()) + " "
+        if any(f" {w}" in text for w in self.EXCLUDE.get(key, [])):
+            return False
+        return all(any(f" {w}" in text for w in group) for group in groups)
+
+    def get(self, key: str, unit: Optional[str] = None) -> tuple:
+        """Returns (low, high, unit, source) — a scraped market rate for the same item in the same
+        unit when one is on file, else the reference FALLBACK."""
+        ref = self.FALLBACK.get(key)
+        want = _unit_key(unit or (ref[2] if ref else ""))
+        for label, row_unit, low, high, source in self._rows():
+            if not self._matches(key, label) or _unit_key(row_unit) != want:
+                continue
+            try:
+                low, high = float(low), float(high or low)
+            except (TypeError, ValueError):
+                continue
+            if low <= 0:
+                continue
+            if ref and ref[0] > 0:
+                ref_mid, mid = (ref[0] + ref[1]) / 2, (low + high) / 2
+                if not (self.BAND[0] * ref_mid <= mid <= self.BAND[1] * ref_mid):
+                    continue
+            return low, high, row_unit, source
+        return ref or (0, 0, unit or "item", "Estimate")
 
 
 # ─── BOQ Generator ────────────────────────────────────────────────────────────
@@ -252,7 +361,7 @@ class BOQGenerator:
         if own:
             low, high, mid, source = own
         else:
-            low, high, _, source = self.rates.get(rate_key)
+            low, high, _, source = self.rates.get(rate_key, unit)
             mid = (low + high) / 2
         return BOQItem(
             id=self._next_id(trade[:3].upper()),
@@ -263,7 +372,7 @@ class BOQGenerator:
             rate_low=low,
             rate_high=high,
             rate_used=mid,
-            line_total=round(mid * qty, 2),
+            line_total=0,           # worked out in cents by BOQItem.__post_init__
             source=source,
             confidence=confidence,
             notes=notes,
@@ -294,7 +403,9 @@ class BOQGenerator:
         mez_rooms = [r for r in rooms if "mezzanine" in r.name.lower() or "mezz" in r.name.lower()]
         if mez_rooms:
             mez_area = sum(r.area for r in mez_rooms)
-            boq.items.append(self._item("concrete", "Mezzanine concrete slab 150mm thk", "m²", mez_area, "concrete_30mpa", 85, "Pending structural engineer sign-off"))
+            # concrete_30mpa is a per-m³ rate: measure the slab as a volume (NEW-T3 — it was m² × an m³
+            # rate, ~6.7× too high for a 150mm slab).
+            boq.items.append(self._item("concrete", "Mezzanine concrete slab 150mm thk", "m³", mez_area * 0.15, "concrete_30mpa", 85, f"{mez_area:.1f}m² × 0.15m. Pending structural engineer sign-off"))
             boq.items.append(self._item("concrete", "Mezzanine steel structure (erected)", "tonne", round(mez_area * 0.035, 1), "structural_steel", 70, "Estimate — structural BOQ required", True))
 
         # ── WET WORKS ───────────────────────────────────────────────────────

@@ -282,11 +282,45 @@ class DXFReader:
     Most accurate for vector measurements.
     """
 
+    # $INSUNITS → metres per drawing unit (AutoCAD codes). NEW-T1: areas were taken in raw drawing
+    # units and reported as m² — a plan drawn in mm (the SA norm) came out 1,000,000× too big.
+    _INSUNITS = {1: ("in", 0.0254), 2: ("ft", 0.3048), 4: ("mm", 0.001), 5: ("cm", 0.01),
+                 6: ("m", 1.0), 14: ("dm", 0.1)}
+
+    def __init__(self):
+        self.last_units: Dict[str, object] = {}
+
+    def _units(self, doc, msp) -> Dict[str, object]:
+        code = int(doc.header.get("$INSUNITS", 0) or 0)
+        if code in self._INSUNITS:
+            name, k = self._INSUNITS[code]
+            return {"units": name, "to_metres": k, "method": "dxf_units", "verified": True}
+        # Unitless: infer from the drawing's size. A building plan's extent is metres-to-hundreds
+        # of metres; in millimetres that's thousands-to-hundreds-of-thousands. Never trusted —
+        # marked unverified so the job goes to review (vula/takeoff/accuracy.py).
+        extent = 0.0
+        for e in msp.query("LWPOLYLINE POLYLINE"):
+            for x, y in self._points(e):
+                extent = max(extent, abs(x), abs(y))
+        name, k = ("mm", 0.001) if extent > 1000 else ("m", 1.0)
+        return {"units": name, "to_metres": k, "method": "inferred_from_extent", "verified": False}
+
+    @staticmethod
+    def _block_kind(name: str) -> str:
+        words = set(re.split(r"[^A-Z0-9]+", name.upper()))
+        if words & {"DOOR", "DR", "DOORS"} or re.match(r"^D\d+$", name.upper()):
+            return "door"
+        if words & {"WINDOW", "WD", "WIN", "WINDOWS"} or re.match(r"^W\d+$", name.upper()):
+            return "window"
+        return ""
+
     async def read(self, path: Path) -> Tuple[List[Room], List[DoorWindow]]:
         try:
             import ezdxf
             doc = ezdxf.readfile(str(path))
             msp = doc.modelspace()
+            self.last_units = self._units(doc, msp)
+            k = float(self.last_units["to_metres"])
 
             rooms = []
             doors = []
@@ -294,29 +328,20 @@ class DXFReader:
             # Extract closed polylines as room boundaries
             for entity in msp.query("LWPOLYLINE POLYLINE"):
                 if hasattr(entity, "is_closed") and entity.is_closed:
-                    area = self._polyline_area(entity)
-                    if area > 2:  # Ignore tiny entities
+                    area = self._polyline_area(entity) * k * k
+                    if area > 2:  # Ignore tiny entities (m²)
                         rooms.append(Room(
                             name=f"Room_{len(rooms)+1}",
                             area=round(area, 2),
-                            perimeter=round(self._polyline_perimeter(entity), 2),
+                            perimeter=round(self._polyline_perimeter(entity) * k, 2),
                         ))
 
-            # Extract text annotations for room labels
-            texts = []
-            for entity in msp.query("TEXT MTEXT"):
-                txt = getattr(entity, "plain_mtext", lambda: getattr(entity, "dxf", None) and entity.dxf.text)
-                if callable(txt):
-                    txt = txt()
-                if isinstance(txt, str) and txt.strip():
-                    texts.append(txt.strip())
-
-            # Extract blocks for doors/windows
+            # Extract blocks for doors/windows — whole words only (NEW-T7: "DR" in "DRAIN" was a door)
             for entity in msp.query("INSERT"):
-                block_name = entity.dxf.name.upper()
-                if "DOOR" in block_name or "DR" in block_name:
+                kind = self._block_kind(entity.dxf.name)
+                if kind == "door":
                     doors.append(DoorWindow(ref=f"D{len(doors)+1}", type_="solid", width=0.9, height=2.1))
-                elif "WINDOW" in block_name or "WD" in block_name:
+                elif kind == "window":
                     doors.append(DoorWindow(ref=f"W{len(doors)+1}", type_="window", width=1.2, height=1.2))
 
             return rooms, doors
@@ -328,40 +353,38 @@ class DXFReader:
             logger.error(f"DXF read failed: {e}")
             return [], []
 
-    def _polyline_area(self, entity) -> float:
-        """Calculate area of closed polyline using shoelace formula."""
+    @staticmethod
+    def _points(entity) -> List[Tuple[float, float]]:
+        """(x, y) of a polyline's vertices. NEW-T9 (2026-10-31): the old code read `.x`/`.y` off
+        LWPOLYLINE.vertices(), which yields plain tuples — the AttributeError was swallowed, so
+        every LWPOLYLINE (what modern CAD writes) measured 0 m² and no DXF ever produced a room."""
         try:
-            pts = list(entity.vertices())
-            n = len(pts)
-            if n < 3:
-                return 0.0
-            area = 0.0
-            for i in range(n):
-                j = (i + 1) % n
-                xi, yi = pts[i].x, pts[i].y
-                xj, yj = pts[j].x, pts[j].y
-                area += xi * yj
-                area -= xj * yi
-            return abs(area) / 2.0
+            if entity.dxftype() == "LWPOLYLINE":
+                return [(float(x), float(y)) for x, y in entity.get_points("xy")]
+            return [(float(p[0]), float(p[1])) for p in entity.points()]
         except Exception:
+            return []
+
+    def _polyline_area(self, entity) -> float:
+        """Area of a closed polyline (shoelace), in drawing units²."""
+        pts = self._points(entity)
+        n = len(pts)
+        if n < 3:
             return 0.0
+        area = 0.0
+        for i in range(n):
+            xi, yi = pts[i]
+            xj, yj = pts[(i + 1) % n]
+            area += xi * yj - xj * yi
+        return abs(area) / 2.0
 
     def _polyline_perimeter(self, entity) -> float:
-        """Calculate perimeter of polyline."""
-        try:
-            pts = list(entity.vertices())
-            n = len(pts)
-            if n < 2:
-                return 0.0
-            total = 0.0
-            for i in range(n):
-                j = (i + 1) % n
-                dx = pts[j].x - pts[i].x
-                dy = pts[j].y - pts[i].y
-                total += math.sqrt(dx*dx + dy*dy)
-            return total
-        except Exception:
+        """Perimeter of a closed polyline, in drawing units."""
+        pts = self._points(entity)
+        n = len(pts)
+        if n < 2:
             return 0.0
+        return sum(math.dist(pts[i], pts[(i + 1) % n]) for i in range(n))
 
 
 # ─── AI Extraction Engine ─────────────────────────────────────────────────────
