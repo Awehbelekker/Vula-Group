@@ -112,3 +112,19 @@ def test_sheet_errors_unscaled_and_withheld_seeds_are_explained():
     assert not s.ok
     assert "sheet A1-101: engine error: Unknown scale label" in s.notes
     assert "sheet A1-101: engine withheld 5 seed(s) {'bubble': 3, 'implausible': 2, 'min_area_sf': 5}" in s.notes
+
+
+def test_require_gates_only_the_named_cases(monkeypatch):
+    import evals.takeoff_sidecar as ev
+    good = ev.CaseScore(case="synthetic-four-room", plan_type="synthetic_control", ok=True)
+    bad = ev.CaseScore(case="va-stcloud-af101", plan_type="healthcare_finish_plan", ok=False)
+
+    async def fake_run(only, sensitivity=None):
+        return [good, bad]
+    monkeypatch.setattr(ev, "_run", fake_run)
+    from config import settings
+    monkeypatch.setattr(settings, "opentakeoff_url", "http://sidecar:8790")
+    assert ev.main(["--require", "synthetic-four-room"]) == 0
+    assert ev.main([]) == 1
+    assert ev.main(["--require", "va-stcloud-af101"]) == 1
+    assert ev.main(["--require", "no-such-case"]) == 2

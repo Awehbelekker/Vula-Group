@@ -114,9 +114,33 @@ session.
 - `vula/takeoff/opentakeoff_client.py`: `measure_plan()` (fail-open), conversion to metres, and
   `apply_measurements()`, which fills the existing `ExtractedProject` and returns AI-vs-measured
   `agreements`. Those agreements are the input for measured confidence (item 4) and the review gate (item 5).
-- **Not yet run end to end.** The bridge and Docker image were not executed in this session
-  (running upstream code was blocked here). The Python side is covered by mocked tests. The first
-  real run belongs on staging with a known plan.
+- **Run end to end in CI** (`.github/workflows/takeoff-sidecar.yml`: builds the pinned image,
+  starts it, checks the API-key lock, then scores it against `vula_mind/evals/takeoff_plans`).
+
+### Item 1: measured results (CI runs 1-2, 31 Oct 2026)
+
+| Case | Result |
+|---|---|
+| synthetic four-room (analytic truth) | **pass**, every room +1.53% (2% tolerance) |
+| VA Roseburg A-03a, not to scale | **pass**: correctly left unmeasured |
+| VA St Cloud AF101, real finish plan | **fail**: 4 rooms 20-36% *under*, 1 missed. The engine withheld 20 seeds (12 "unowned", 8 label bubbles) |
+| Porterville ADU A1-101, real residential | **fail**: nothing measured. 12 seeds withheld (8 unowned, 3 duplicate, 1 bubble) |
+| VA Dublin A-601 counts / VA Shreveport C-300 lengths | not covered: the bridge measures rooms only |
+
+The engine's flood sensitivity at 0.8 gave identical results.
+
+**What this means:**
+- OpenTakeoff's *measuring* is exact, but its *automatic room finding* (`detect_rooms`, which
+  upstream gates off by default for exactly this reason) is not usable on real plans yet.
+  Feeding it into pricing would make the takeoff worse.
+- So the sidecar stays **not wired** into `PlanReader.read`. This agrees with the go-live session's
+  rule: wire it only when the benchmark justifies it.
+- CI enforces only what is proven (synthetic + NTS refusal) and reports the real-plan cases on
+  every run. A case moves into `--require` once it passes on merit.
+- Where it can still earn its place: measuring outlines a person draws or confirms in the dashboard.
+  Upstream's own known-answer runs put supplied rings within 0.75% (`measure_polygon`), so the
+  engine's maths can be trusted once a person confirms the boundary. That fits the item-5 review
+  gate, not automatic pricing.
 
 ## Decisions I need from you before building
 

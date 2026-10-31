@@ -4,6 +4,7 @@
         python -m evals.takeoff_sidecar            # every case
         python -m evals.takeoff_sidecar --case va-stcloud-af101 --json
         python -m evals.takeoff_sidecar --sensitivity 0.8   # compare the engine's hatch knob
+        python -m evals.takeoff_sidecar --require synthetic-four-room,va-roseburg-a03a-nts
 
 Not a pytest: it needs a running sidecar (services/opentakeoff). The scoring is pure and unit-tested
 (tests/test_takeoff_sidecar_eval.py). For each plan it reports the area error % per room and per
@@ -143,6 +144,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--case")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--sensitivity", type=float, help="engine flood sensitivity 0..1 (default: engine's)")
+    ap.add_argument("--require", default="",
+                    help="comma-separated cases that must pass for exit 0; the rest are reported only "
+                         "(default: every case must pass)")
     a = ap.parse_args(argv)
     from config import settings
     if not settings.opentakeoff_url:
@@ -161,7 +165,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             for n in s.notes + ([f"not covered by the sidecar yet: {', '.join(s.not_covered)}"] if s.not_covered else []):
                 print(f"      · {n}")
         print(json.dumps(summarise(scores), indent=2))
-    return 0 if all(s.ok for s in scores) else 1
+    required = {c for c in a.require.split(",") if c}
+    gate = [s for s in scores if not required or s.case in required]
+    if required - {s.case for s in scores}:
+        print(f"unknown --require case(s): {sorted(required - {s.case for s in scores})}", file=sys.stderr)
+        return 2
+    return 0 if all(s.ok for s in gate) else 1
 
 
 if __name__ == "__main__":

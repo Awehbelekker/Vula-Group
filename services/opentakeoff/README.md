@@ -30,6 +30,13 @@ converts to metres and fills the existing `ExtractedProject`, so the rest of the
 `detect_rooms` is gated upstream while its flood engine is re-validated, and the bridge enables it.
 Vula owns that validation: the takeoff benchmark plus the review gate that runs before any pricing.
 
+## Measured accuracy (CI, 31 Oct 2026)
+
+Exact on clean geometry (synthetic plan +1.53%), and it correctly refuses a not-to-scale sheet.
+**Automatic room detection on real plans is not good enough yet**: VA St Cloud rooms came out
+20-36% under, and Porterville measured nothing. Do not feed `detect_rooms` results into pricing.
+The details and next steps are in `docs/takeoff-audit.md`. CI re-scores on every change.
+
 ## Deploy (Railway)
 
 1. New service from this repo. Set the root directory to `services/opentakeoff` and use its Dockerfile.
