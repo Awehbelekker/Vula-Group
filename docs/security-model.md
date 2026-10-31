@@ -76,3 +76,26 @@ metadata only and doesn't change what the triggers do.
 - **Leaked-password protection.** A Supabase dashboard toggle (Authentication › Policies /
   Providers › Email, "leaked password protection"). No migration or API can set it; switch it on
   by hand in each project (production and the staging branch).
+
+## Retention (POPIA s14)
+
+One daily sweep, `vula/retention.py::run_all` (started as `_retention_loop` in
+`vula/api/server.py`), deletes data past its period. Each kind of expiring data is one `Rule`
+there: a name, the setting that holds its period in days (0 keeps it), and the function that
+deletes. There is deliberately one sweep, not a loop per feature.
+
+| Rule | Setting | Default | Deletes |
+|---|---|---|---|
+| `takeoff_plans` | `TAKEOFF_RETENTION_DAYS` | 90 | uploaded drawings on the volume, `vula_takeoff_jobs` rows, in-memory jobs |
+
+Data that is **not** swept, and why:
+
+- Invoices, quotes, bank lines, expenses, payroll and other accounting records: kept at least 5
+  years (Tax Administration Act s29).
+- Filed documents (`vula/api/server.py` upload dir, Supabase storage): business records, the
+  owner's to keep or delete.
+
+Candidates waiting for an owner decision (each would be one more `Rule`): WhatsApp message
+dedupe rows (`vula_wa_msg_dedup`), app error reports (`vula_app_errors`), WhatsApp login requests
+(`vula_wa_login_requests`), website leads that never converted (`vula_website_leads`),
+conversation turns (`vula_turns`, `vula_kb_turns`).

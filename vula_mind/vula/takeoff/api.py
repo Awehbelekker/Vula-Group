@@ -343,7 +343,7 @@ def purge_expired(days: Optional[int] = None, now: Optional[float] = None) -> Di
     a file whose row is already gone (or the other way round) is still cleared."""
     import time as _time
     from datetime import datetime, timezone
-    days = settings.takeoff_retention_days if days is None else days
+    days = settings.takeoff_retention_days if days is None else days  # run by vula/retention.py
     if not days or days <= 0:
         return {"files": 0, "jobs": 0}
     now = now if now is not None else _time.time()

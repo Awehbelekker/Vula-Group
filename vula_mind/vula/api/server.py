@@ -239,18 +239,19 @@ async def _weekly_rates_loop() -> None:
         await _asyncio.sleep(7 * 24 * 3600)  # sleep one week
 
 
-async def _takeoff_retention_loop() -> None:
-    """POPIA: delete uploaded plans and takeoff jobs past settings.takeoff_retention_days. Daily."""
+async def _retention_loop() -> None:
+    """POPIA: one daily sweep of every retention rule (vula/retention.py) — data past its period
+    is deleted. New kinds of expiring data add a rule there, not another loop here."""
     import asyncio as _asyncio
     await _asyncio.sleep(900)
     while True:
         try:
-            from vula.takeoff.api import purge_expired
-            res = purge_expired()
-            if res["files"] or res["jobs"]:
-                log.info("Takeoff retention: deleted %d plan file(s), %d job(s)", res["files"], res["jobs"])
+            from vula.retention import run_all
+            for name, counts in run_all().items():
+                if any(counts.values()):
+                    log.info("Retention %s: %s", name, counts)
         except Exception as exc:
-            log.warning("Takeoff retention purge failed: %s", exc)
+            log.warning("Retention sweep failed: %s", exc)
         await _asyncio.sleep(24 * 3600)
 
 
@@ -1614,7 +1615,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))
-    _scheduled_job_tasks.append(_asyncio.create_task(_takeoff_retention_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_retention_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_call_sheet_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_expense_sheet_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_trial_expiry_loop()))
