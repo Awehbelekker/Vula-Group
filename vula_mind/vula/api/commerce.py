@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from vula.commerce import service
+from vula.meta_graph import graph_url
 from vula.commerce.models import (
     AddToCartRequest,
     DeliverySlot,
@@ -6280,7 +6281,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                     if tpl_components:
                         tpl_payload["components"] = tpl_components
                     resp = await client.post(
-                        f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                        graph_url(f"{creds['phone_id']}/messages"),
                         headers={"Authorization": f"Bearer {creds['token']}",
                                  "Content-Type": "application/json"},
                         json={

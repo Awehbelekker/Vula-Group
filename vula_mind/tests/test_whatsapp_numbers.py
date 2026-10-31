@@ -158,3 +158,77 @@ async def test_health_of_a_disconnected_number_reads_nothing(db, monkeypatch):
 def test_health_route_is_tenant_guarded():
     from vula.api import server
     assert any(r.match("/v1/whatsapp/health/off-the-hook") for r in server._TENANT_GUARD_RES)
+
+
+# ── disconnect removes Vula's webhook subscription (31 Oct) ─────────────────
+# Disconnect used to null the token and keep the row, but Vula's app stayed subscribed to the
+# business's WhatsApp account, so Meta kept sending its webhooks. Now a best-effort
+# DELETE {graph}/{waba}/subscribed_apps with the number's own token, only when no other connected
+# number is on that account. Never fails the disconnect.
+
+class _MetaClient:
+    calls: list = []
+    fail: object = None
+
+    def __init__(self, *a, **k): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+
+    async def delete(self, url, headers=None):
+        _MetaClient.calls.append((url, headers))
+        if isinstance(_MetaClient.fail, Exception):
+            raise _MetaClient.fail
+        return _Resp(_MetaClient.fail or 200, {"success": True})
+
+
+@pytest.fixture()
+def meta(monkeypatch):
+    _MetaClient.calls, _MetaClient.fail = [], None
+    monkeypatch.setattr(whatsapp_connect.httpx, "AsyncClient", _MetaClient)
+    return _MetaClient
+
+
+def _with_waba(db, **extra):
+    row = db.tables["vula_whatsapp_accounts"][0]
+    row.update({"waba_id": "WABA-1", "access_token": "business-token", **extra})
+    return row
+
+
+@pytest.mark.asyncio
+async def test_disconnect_unsubscribes_vula_from_the_whatsapp_account(db, meta):
+    row = _with_waba(db)
+    res = await whatsapp_connect.disconnect_whatsapp("off-the-hook")
+    assert res["status"] == "disconnected"
+    from vula.meta_graph import graph_url
+    assert meta.calls == [(graph_url("WABA-1/subscribed_apps"), {"Authorization": "Bearer business-token"})]
+    assert row["access_token"] is None and row["status"] == "disconnected"     # row kept, token cleared
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [500, RuntimeError("Meta down")])
+async def test_a_failed_unsubscribe_never_fails_the_disconnect(db, meta, fail):
+    row = _with_waba(db)
+    meta.fail = fail
+    res = await whatsapp_connect.disconnect_whatsapp("off-the-hook")
+    assert res["status"] == "disconnected" and row["access_token"] is None and len(meta.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_account_with_another_connected_number_stays_subscribed(db, meta):
+    _with_waba(db)
+    db.tables["vula_whatsapp_accounts"].append({
+        "tenant_id": "off-the-hook", "phone_number_id": "OTHER", "waba_id": "WABA-1",
+        "access_token": "business-token", "status": "connected", "route_mode": "commerce"})
+    res = await whatsapp_connect.disconnect_whatsapp("off-the-hook", phone_number_id=PNID)
+    assert res["status"] == "connected" and meta.calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_token_or_vulas_own_account_is_never_unsubscribed(db, meta, monkeypatch):
+    _with_waba(db, access_token=None)
+    await whatsapp_connect.disconnect_whatsapp("off-the-hook")
+    assert meta.calls == []
+    row = _with_waba(db, status="connected")
+    monkeypatch.setattr(settings, "platform_waba_id", "WABA-1")
+    await whatsapp_connect.disconnect_whatsapp("off-the-hook")
+    assert meta.calls == [] and row["status"] == "disconnected"

@@ -242,7 +242,6 @@ async def test_send_reply_normalises_sa_number():
     ):
         mock_settings.whatsapp_token = "token"
         mock_settings.whatsapp_phone_id = "12345"
-        mock_settings.whatsapp_api_url = "https://graph.facebook.com/v19.0"
         from vula.api.whatsapp import _send_reply
         result = await _send_reply("0821234567", "Test reply")
 
@@ -271,7 +270,6 @@ async def test_send_reply_truncates_long_message():
     ):
         mock_settings.whatsapp_token = "token"
         mock_settings.whatsapp_phone_id = "12345"
-        mock_settings.whatsapp_api_url = "https://graph.facebook.com/v19.0"
         from vula.api.whatsapp import _send_reply
         await _send_reply("27821234567", long_message)
 

@@ -44,6 +44,15 @@ WhatsApp → Configuration → Webhook:
   their phone, so Vula goes quiet in that chat), `history` (the chats they chose to share) and
   `smb_app_state_sync` (their contacts' names). Without these three, a shared number still
   works, but Vula would talk over the owner.
+- Also subscribe to the account-health fields: `account_update` (account banned, restricted or
+  disabled), `message_template_status_update` (a template approved, rejected, paused or disabled),
+  `phone_number_quality_update` (quality rating / daily limit changes) and
+  `template_category_update`. Vula logs each one and sends an operator alert
+  (docs/operator-alerts.md) for a rejected/paused/disabled template, a quality downgrade
+  (RED/YELLOW) or a banned/restricted/disabled account (`vula/api/whatsapp_account_events.py`).
+- **Graph API version:** every Graph call uses `GRAPH_API_VERSION` on Railway (default `v25.0`,
+  set in `vula_mind/config.py`), and the dashboard's FB SDK uses `VITE_FB_GRAPH_VERSION` on Vercel
+  (default `v25.0`). Keep the two the same, and move both before Meta retires the version.
 
 ### 2c. Embedded Signup configuration (v4)
 Meta retired Embedded Signup v2 and v3 on 15 Oct 2026. The version comes from the
@@ -73,7 +82,9 @@ In Settings → WhatsApp number, the owner picks one of two buttons:
   per chat, text only. When the owner replies from the phone, Vula goes quiet in that chat.
   It picks the chat up again after 2 hours of silence, the same as an Inbox handoff.
 - **Connect a new number**: the usual Embedded Signup. The number must not be on WhatsApp
-  yet. Meta sends a code by SMS or call, and Vula registers it.
+  yet. Meta sends a code by SMS or call. Vula registers it for the Cloud API (`/register`) only
+  when Railway has `WHATSAPP_REGISTER_ON_CONNECT=true` **and** `WHATSAPP_REGISTRATION_PIN` (the
+  number's two-step PIN) set; otherwise the number has to be registered by hand before it can send.
 
 ### 2f. Several numbers per business, each with a purpose
 Settings → WhatsApp number lists every number with what it's for:
@@ -145,13 +156,19 @@ messaging = send/receive).
   content for processing replies.
 - **Why stored:** to route and answer the merchant's customer messages and send
   order updates.
-- **Deletion:** merchants can disconnect (token revoked + record cleared) from
-  Settings → WhatsApp; data-deletion endpoint at `/#/data-deletion`.
+- **Deletion:** merchants can disconnect from Settings → WhatsApp. Vula deletes the stored
+  access token and marks the number disconnected (the account row is kept, without the token,
+  so the history of which number belonged to which business stays). When no connected number is
+  left on that WhatsApp Business Account, Vula also removes its app's webhook subscription
+  (`DELETE /{waba_id}/subscribed_apps`, best effort). The token itself is not revoked at Meta; the
+  merchant can remove Vula's access in Meta Business Settings. Data-deletion endpoint at
+  `/#/data-deletion`.
 
 ---
 
 ## Step 4 — After approval (Vula dev)
-1. Receive the **Configuration ID** → set `VITE_FB_CONFIG_ID` on Vercel → redeploy dashboard.
+1. Make sure the **Configuration ID** you created yourself in the portal (Step 2c — Meta doesn't
+   send one) is set as `VITE_FB_CONFIG_ID` on Vercel → redeploy dashboard.
 2. Switch the app to **Live** mode (toggle, developers.facebook.com).
 3. Test: a real tenant self-connects from Settings → WhatsApp.
 

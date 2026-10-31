@@ -24,7 +24,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-GRAPH_BASE = "https://graph.facebook.com/v19.0"
+from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version lives in config)
 BATCH = 1000                      # Meta allows 5,000 a request and suggests under 3,000
 
 
@@ -101,7 +101,7 @@ async def sync(tenant_id: str, catalog_id: Optional[str] = None) -> Dict[str, An
     handles, errors = [], []
     async with httpx.AsyncClient(timeout=60.0) as client:
         for i in range(0, len(requests), BATCH):
-            resp = await client.post(f"{GRAPH_BASE}/{catalog_id}/items_batch",
+            resp = await client.post(graph_url(f"{catalog_id}/items_batch"),
                                      headers={"Authorization": f"Bearer {creds['token']}"},
                                      json={"item_type": "PRODUCT_ITEM", "requests": requests[i:i + BATCH]})
             body = {}

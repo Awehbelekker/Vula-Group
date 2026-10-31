@@ -37,7 +37,7 @@ from config import settings
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["whatsapp-connect"])
 
-GRAPH_BASE = "https://graph.facebook.com/v19.0"
+from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version lives in config)
 
 
 # ── Supabase helper ───────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ class ConnectRequest(BaseModel):
     tenant_id: str
     code: str                    # Short-lived code from Meta Embedded Signup
     connected_by: Optional[str] = None  # email of the admin who clicked Connect
-    # From Embedded Signup's session-info message (sessionInfoVersion 2): the WhatsApp account
+    # From Embedded Signup's session-info message (sessionInfoVersion 3): the WhatsApp account
     # and number the owner actually picked. Without these the first number found on ANY of the
     # token's businesses was used — the wrong one for an owner with several.
     waba_id: Optional[str] = None
@@ -121,7 +121,7 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Step 1 — exchange short-lived code for long-lived token
         token_resp = await client.get(
-            f"{GRAPH_BASE}/oauth/access_token",
+            graph_url("oauth/access_token"),
             params={
                 "client_id": app_id,
                 "client_secret": app_secret,
@@ -146,7 +146,7 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
 
         # Step 2a — the number the owner chose in the signup popup, when the frontend sent it.
         if body.waba_id and body.phone_number_id:
-            chosen = await client.get(f"{GRAPH_BASE}/{body.phone_number_id}",
+            chosen = await client.get(graph_url(f"{body.phone_number_id}"),
                                       params={"fields": "id,display_phone_number,verified_name"},
                                       headers=auth_headers)
             if chosen.is_success:
@@ -161,19 +161,19 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         businesses = []
         if not phone_number_id:
             waba_resp = await client.get(
-                f"{GRAPH_BASE}/me/businesses",
+                graph_url("me/businesses"),
                 headers=auth_headers,
             )
             businesses = waba_resp.json().get("data", [])
 
         for biz in businesses:
             wa_resp = await client.get(
-                f"{GRAPH_BASE}/{biz['id']}/whatsapp_business_accounts",
+                graph_url(f"{biz['id']}/whatsapp_business_accounts"),
                 headers=auth_headers,
             )
             for waba in wa_resp.json().get("data", []):
                 phones_resp = await client.get(
-                    f"{GRAPH_BASE}/{waba['id']}/phone_numbers",
+                    graph_url(f"{waba['id']}/phone_numbers"),
                     params={"fields": "id,display_phone_number,verified_name,status"},
                     headers=auth_headers,
                 )
@@ -212,7 +212,7 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         registered = None
         if (((settings.whatsapp_register_on_connect or moving) and settings.whatsapp_registration_pin)
                 and not body.coexistence):
-            reg = await client.post(f"{GRAPH_BASE}/{phone_number_id}/register", headers=auth_headers,
+            reg = await client.post(graph_url(f"{phone_number_id}/register"), headers=auth_headers,
                                     json={"messaging_product": "whatsapp",
                                           "pin": settings.whatsapp_registration_pin})
             registered = reg.is_success
@@ -224,7 +224,7 @@ async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(def
         # Step 3 — register Vula's webhook with Meta for this WABA
         webhook_registered = False
         webhook_resp = await client.post(
-            f"{GRAPH_BASE}/{waba_id}/subscribed_apps",
+            graph_url(f"{waba_id}/subscribed_apps"),
             headers=auth_headers,
         )
         if webhook_resp.is_success:
@@ -363,12 +363,45 @@ async def list_whatsapp_accounts():
     return {"accounts": result.data or [], "count": len(result.data or [])}
 
 
+async def _unsubscribe_wabas(db, gone: list) -> None:
+    """Best effort: stop Meta sending this WhatsApp account's webhooks to Vula
+    (DELETE {graph}/{waba}/subscribed_apps) with the disconnected number's own token, read before
+    disconnect cleared it. Skipped for an account that still has a connected number (any business)
+    and for Vula's own account. Never raises: a failure here never fails the disconnect."""
+    from vula.email_imap.credentials import decrypt_secret
+    done = set()
+    for r in gone:
+        waba = r.get("waba_id")
+        if not waba or waba in done or waba == settings.platform_waba_id:
+            continue
+        try:
+            token = decrypt_secret(r.get("access_token") or "")
+            if not token:
+                continue
+            done.add(waba)
+            still = (db.table("vula_whatsapp_accounts").select("phone_number_id")
+                     .eq("waba_id", waba).eq("status", "connected").execute().data or [])
+            if still:
+                continue
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.delete(graph_url(f"{waba}/subscribed_apps"),
+                                           headers={"Authorization": f"Bearer {token}"})
+            if resp.is_success:
+                log.info("Unsubscribed Vula from WABA %s", waba)
+            else:
+                log.warning("Unsubscribe from WABA %s failed (non-fatal): HTTP %s", waba, resp.status_code)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Unsubscribe from WABA %s failed (non-fatal): %s", waba, type(exc).__name__)
+
+
 @router.delete("/disconnect/{tenant_id}")
 async def disconnect_whatsapp(tenant_id: str, phone_number_id: Optional[str] = None):
     """Disconnect one of a business's numbers (phone_number_id), or all of them (marks them
     disconnected, keeps the record). Messages stop at once on this worker; within _WA_CREDS_TTL
     on the other (whatsapp._get_tenant_wa_creds). When the main number goes, another customer
-    number becomes the main one."""
+    number becomes the main one. The token is cleared locally, and when no connected number is
+    left on that WhatsApp Business Account Vula's app is unsubscribed from it (best effort,
+    _unsubscribe_wabas), so Meta stops sending its webhooks."""
     from vula import whatsapp_numbers as nums
     db = _supabase()
     rows = nums.rows_for(tenant_id, db)
@@ -378,7 +411,10 @@ async def disconnect_whatsapp(tenant_id: str, phone_number_id: Optional[str] = N
         if not any(r.get("phone_number_id") == phone_number_id for r in rows):
             raise HTTPException(status_code=404, detail="That number isn't one of this business's.")
         q = q.eq("phone_number_id", phone_number_id)
+    # The tokens are read before the update clears them.
+    gone = [dict(r) for r in rows if not phone_number_id or r.get("phone_number_id") == phone_number_id]
     q.execute()
+    await _unsubscribe_wabas(db, gone)
     from vula.api import whatsapp as wa
     for r in rows:
         wa._forget_wa_number(tenant_id, r.get("phone_number_id"))
@@ -563,7 +599,7 @@ async def whatsapp_health(tenant_id: str, phone_number_id: Optional[str] = None)
         return {"tenant_id": tenant_id, "connected": False, "rows": []}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{GRAPH_BASE}/{creds['phone_id']}", params={"fields": _HEALTH_FIELDS},
+            resp = await client.get(graph_url(f"{creds['phone_id']}"), params={"fields": _HEALTH_FIELDS},
                                     headers={"Authorization": f"Bearer {creds['token']}"})
         if not resp.is_success:
             log.info("number health read failed for %s: HTTP %s", tenant_id, resp.status_code)
@@ -610,7 +646,7 @@ async def link_existing_number(tenant_id: str, phone_number_id: str, pin: Option
     async with httpx.AsyncClient(timeout=20.0) as client:
         found_waba, phone = None, None
         for waba in wabas:
-            resp = await client.get(f"{GRAPH_BASE}/{waba}/phone_numbers", headers=headers,
+            resp = await client.get(graph_url(f"{waba}/phone_numbers"), headers=headers,
                                     params={"fields": "id,display_phone_number,verified_name,"
                                                       "code_verification_status,name_status,status",
                                             "limit": 100})
@@ -625,7 +661,7 @@ async def link_existing_number(tenant_id: str, phone_number_id: str, pin: Option
                                   "Manager first, then copy its phone number ID.")
         registered = None
         if (phone.get("status") or "").upper() != "CONNECTED" and pin:
-            reg = await client.post(f"{GRAPH_BASE}/{pnid}/register", headers=headers,
+            reg = await client.post(graph_url(f"{pnid}/register"), headers=headers,
                                     json={"messaging_product": "whatsapp", "pin": str(pin).strip()})
             registered = reg.is_success
             if not reg.is_success:

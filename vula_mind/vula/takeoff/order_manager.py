@@ -454,7 +454,7 @@ Professional Architectural Technologist — PAT44740093
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
-                    f"https://graph.facebook.com/v19.0/{WA_PHONE_ID}/messages",
+                    f"{_settings.graph_base}/{WA_PHONE_ID}/messages",
                     headers={"Authorization": f"Bearer {WA_TOKEN}"},
                     json={
                         "messaging_product": "whatsapp",

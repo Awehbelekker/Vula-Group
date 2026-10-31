@@ -22,7 +22,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-GRAPH_BASE = "https://graph.facebook.com/v19.0"
+from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version lives in config)
 
 
 def _client():
@@ -73,14 +73,14 @@ async def _upload_media_handle(url: str, token: str) -> tuple[Optional[str], Opt
             mime = img.headers.get("content-type", "image/jpeg").split(";")[0]
 
             session = await client.post(
-                f"{GRAPH_BASE}/{app_id}/uploads",
+                graph_url(f"{app_id}/uploads"),
                 params={"file_length": len(content), "file_type": mime, "access_token": token},
             )
             session.raise_for_status()
             session_id = session.json()["id"]  # "upload:<...>"
 
             up = await client.post(
-                f"{GRAPH_BASE}/{session_id}",
+                graph_url(f"{session_id}"),
                 headers={"Authorization": f"OAuth {token}", "file_offset": "0"},
                 content=content,
             )
@@ -166,7 +166,7 @@ async def create_template(
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{GRAPH_BASE}/{creds['waba_id']}/message_templates",
+                graph_url(f"{creds['waba_id']}/message_templates"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json=payload,
             )
@@ -208,7 +208,7 @@ async def _create_raw(tenant_id: str, creds: Dict[str, str], payload: Dict[str, 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{GRAPH_BASE}/{creds['waba_id']}/message_templates",
+                graph_url(f"{creds['waba_id']}/message_templates"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json=payload)
             data = resp.json()
@@ -245,7 +245,7 @@ async def list_templates(tenant_id: str) -> List[Dict[str, Any]]:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.get(
-                    f"{GRAPH_BASE}/{creds['waba_id']}/message_templates",
+                    graph_url(f"{creds['waba_id']}/message_templates"),
                     headers={"Authorization": f"Bearer {creds['token']}"},
                     params={"fields": "name,status,category,rejected_reason", "limit": 200},
                 )
@@ -274,7 +274,7 @@ async def delete_template(tenant_id: str, name: str) -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.delete(
-                f"{GRAPH_BASE}/{creds['waba_id']}/message_templates",
+                graph_url(f"{creds['waba_id']}/message_templates"),
                 headers={"Authorization": f"Bearer {creds['token']}"},
                 params={"name": name},
             )
@@ -442,7 +442,7 @@ def standard_templates(tenant_id: str, modules: Optional[set] = None,
 async def _waba_template_names(creds: Dict[str, str]) -> Optional[set]:
     """Every template name already on the WABA (any tenant's), or None if Meta can't be read."""
     names: set = set()
-    url = f"{GRAPH_BASE}/{creds['waba_id']}/message_templates"
+    url = graph_url(f"{creds['waba_id']}/message_templates")
     params: Optional[dict] = {"fields": "name", "limit": 200}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -473,7 +473,7 @@ async def login_template_status(creds: Dict[str, str]) -> Optional[str]:
     from vula.api.wa_login import AUTH_TEMPLATE
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(f"{GRAPH_BASE}/{creds['waba_id']}/message_templates",
+            resp = await client.get(graph_url(f"{creds['waba_id']}/message_templates"),
                                     headers={"Authorization": f"Bearer {creds['token']}"},
                                     params={"name": AUTH_TEMPLATE, "fields": "name,status"})
         if not resp.is_success:
