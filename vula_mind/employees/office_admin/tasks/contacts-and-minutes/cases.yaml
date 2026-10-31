@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Save this contact: Nomsa Dlamini, 082 555 0101, Acme Ltd", expect: contacts-and-minutes, tool: create_contact}
+- {prompt: "Write up the minutes: we agreed to start the Main Road site on Monday", expect: contacts-and-minutes, tool: log_meeting}

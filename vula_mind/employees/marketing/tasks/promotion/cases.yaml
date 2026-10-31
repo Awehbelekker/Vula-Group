@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Send everyone our winter special, 15% off hake this weekend", expect: promotion, tool: picture_promotion}
+- {prompt: "Preview the broadcast audience for the weekend promo", expect: promotion, tool: preview_broadcast}

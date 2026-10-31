@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Add Cape Cement as a supplier, phone 021 555 0199", expect: suppliers, tool: upsert_supplier}
+- {prompt: "List our suppliers", expect: suppliers, tool: list_suppliers}

@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Write a letter of appointment for our new site manager", expect: letters, tool: draft_letter}
+- {prompt: "Draft a letter to the body corporate about the noise on Saturdays", expect: letters, tool: draft_letter}

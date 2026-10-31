@@ -1,0 +1,11 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Contacts and minutes
+summary: Save a new contact, and write up the minutes of a meeting.
+triggers:
+- contact
+- business card
+- minutes
+tools:
+- create_contact
+- log_meeting
+- draft_followup_email

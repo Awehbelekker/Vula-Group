@@ -1,0 +1,12 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Dispatch and delivery
+summary: Orders ready to go out, and marking them dispatched or delivered.
+triggers:
+- dispatch
+- dispatched
+- deliver
+- delivery
+- delivered
+tools:
+- recent_orders
+- update_order_status

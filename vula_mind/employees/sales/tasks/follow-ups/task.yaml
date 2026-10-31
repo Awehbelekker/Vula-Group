@@ -1,0 +1,21 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Meetings and follow-ups
+summary: Log a client meeting, send the follow-up, and keep the weekly call sheet.
+triggers:
+- meeting
+- follow up
+- follow-up
+- followup
+- call sheet
+- visit
+- met with
+tools:
+- log_meeting
+- draft_followup_email
+- view_call_sheet
+- update_call_sheet
+- configure_call_sheet
+- create_contact
+- customer_lookup
+- dynamics_lookup
+- find_product_document

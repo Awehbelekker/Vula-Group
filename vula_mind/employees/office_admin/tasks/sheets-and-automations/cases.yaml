@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Send my claim sheet to Thandi on the 25th of every month", expect: sheets-and-automations, tool: configure_expense_sheet}
+- {prompt: "Can you automate a monthly message to the reps?", expect: sheets-and-automations, tool: create_automation_rule}

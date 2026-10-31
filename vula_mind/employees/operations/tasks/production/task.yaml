@@ -1,0 +1,19 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Production and materials
+summary: Batches made, recipes, and the raw materials they use.
+triggers:
+- batch
+- recipe
+- production
+- reject
+- wastage
+- material
+- ingredient
+tools:
+- log_batch
+- undo_last_batch
+- set_recipe
+- add_material
+- price_material
+- receive_material
+- cost_sheet

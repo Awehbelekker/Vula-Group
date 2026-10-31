@@ -1,0 +1,9 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Competitors
+summary: What a rival business charges and offers, from the web.
+triggers:
+- competitor
+- competitors
+- rival
+tools:
+- competitor_check

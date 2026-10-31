@@ -1,0 +1,11 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Reminders
+summary: Remind the owner or the team of something at a set time, and keep the list.
+triggers:
+- remind
+- reminder
+- reminders
+tools:
+- create_reminder
+- list_reminders
+- complete_reminder

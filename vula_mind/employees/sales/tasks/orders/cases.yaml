@@ -1,0 +1,5 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Show me today's orders", expect: orders, tool: recent_orders}
+- {prompt: "Thandi phoned in an order: 3 kg hake, she'll collect at 4", expect: orders, tool: create_manual_order}
+- {prompt: "Mark order OTH-00042 as packed", expect: orders, tool: update_order_status}
+- {prompt: "Set up a standing order for Mr Pillay: 2 kg prawns every Friday", expect: orders, tool: create_subscription}

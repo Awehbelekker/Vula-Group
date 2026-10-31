@@ -312,3 +312,11 @@ async def test_a_task_setting_that_cannot_be_saved_is_a_clear_error_not_a_crash(
     with pytest.raises(HTTPException) as e:          # e.g. before migration 237: 503, no internals
         await api.admin_employee_task_update("t1", "bookkeeper", "month-end", api.EmployeeIn(enabled=False))
     assert e.value.status_code == 503 and "relation" not in e.value.detail
+
+
+def test_every_employee_has_its_tasks_and_every_task_has_examples():
+    for e in em.TEAM:
+        assert len(e.tasks) >= 3, e.id
+        for t in e.tasks:
+            cases = yaml.safe_load((em.ROOT / e.id / "tasks" / t.id / "cases.yaml").read_text()) or []
+            assert cases and all(c["expect"] == t.id for c in cases), (e.id, t.id)

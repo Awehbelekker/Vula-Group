@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Costing and margins
+summary: What a product costs to make, its margin, and the labour and overhead rates.
+triggers:
+- cost to make
+- cost sheet
+- costing
+- margin on
+- overhead
+- labour rate
+tools:
+- cost_sheet
+- costing_settings
+- price_material
+- set_recipe

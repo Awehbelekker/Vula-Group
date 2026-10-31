@@ -1,0 +1,23 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Promotions to customers
+summary: A picture promotion or broadcast to the business's customers, in its own style.
+triggers:
+- promo
+- promotion
+- special
+- broadcast
+- blast
+- campaign
+- everyone
+- all customers
+- all our customers
+- all my customers
+- mass message
+tools:
+- recent_promotions
+- generate_marketing
+- picture_promotion
+- preview_broadcast
+- send_broadcast
+- list_discount_codes
+- sales_summary

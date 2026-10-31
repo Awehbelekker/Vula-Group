@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: The catalogue
+summary: Add a product, change a price or a name.
+triggers:
+- new product
+- add a product
+- catalogue
+- catalog
+- change the price
+- rename
+tools:
+- create_product
+- update_product
+- find_product_document
+- stock_status

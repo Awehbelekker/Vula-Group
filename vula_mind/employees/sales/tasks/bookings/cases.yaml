@@ -1,0 +1,4 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "What slots are free on Friday?", expect: bookings, tool: booking_availability}
+- {prompt: "Book in Lerato for Tuesday at 10:00 for a fitting", expect: bookings, tool: create_booking}
+- {prompt: "Cancel Sipho's appointment tomorrow", expect: bookings, tool: cancel_booking}

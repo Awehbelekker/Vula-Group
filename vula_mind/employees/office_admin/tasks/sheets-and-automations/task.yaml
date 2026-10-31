@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Expense sheet and automations
+summary: The monthly expense claim sheet, and standing automations.
+triggers:
+- expense sheet
+- expense claim
+- claim sheet
+- automation
+- automate
+tools:
+- configure_expense_sheet
+- create_automation_rule
+- configure_call_sheet
+- view_call_sheet
+- update_call_sheet

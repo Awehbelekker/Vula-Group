@@ -1,0 +1,9 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Letters and proposals
+summary: A business letter or proposal on the letterhead, as a PDF or Word document.
+triggers:
+- letter
+- proposal
+- letterhead
+tools:
+- draft_letter

@@ -1,0 +1,16 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Posts and captions
+summary: Social posts, captions, flyers and newsletter text in the business's style.
+triggers:
+- post
+- caption
+- instagram
+- facebook
+- social
+- flyer
+- newsletter
+- advert
+- product description
+tools:
+- generate_marketing
+- recent_promotions

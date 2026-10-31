@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "What's running low?", expect: stock, tool: stock_status}
+- {prompt: "Set the stock of round basins to 12", expect: stock, tool: update_stock}

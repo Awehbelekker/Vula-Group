@@ -1136,6 +1136,20 @@ PROJECT_TOOLS = [
             "view": {"type": "string", "enum": ["price", "open_book", "qs"]},
             "confirm": {"type": "boolean"}},
             "required": ["project"]}}},
+    # 31 Oct: the project bill (final account) as files the owner can check and forward.
+    {"type": "function", "function": {
+        "name": "project_bill_file",
+        "description": "The project's bill (final account) as a spreadsheet and a PDF, from the books: "
+                       "budget, actual and paid per trade, what the client paid suppliers directly, "
+                       "what they paid the business, and the balance due, with the project's "
+                       "decisions as notes. The spreadsheet is checked against the books before the "
+                       "links are given. Use for 'do the final account for X as a spreadsheet', "
+                       "'send me the project bill for Y', 'make the final account PDF'. The links go "
+                       "to the owner only — they forward it to the client themselves. The reply is "
+                       "sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "Project name as the user said it."}},
+            "required": ["project"]}}},
     # 27 Oct (DIGG, Belladonna): Rudi paid Flush, Edward and Elyas himself — the project's spend,
     # never the business's cost. Nothing could record it.
     {"type": "function", "function": {
@@ -1642,7 +1656,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         with_projects = True
     tools += [t for t in PROJECT_TOOLS
               if with_projects or t["function"]["name"] not in ("project_profit", "boq_template", "share_project",
-                                                                   "client_paid_direct")]
+                                                                   "client_paid_direct", "project_bill_file")]
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1674,7 +1688,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -2725,6 +2739,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._boq_template(tid)
             if name == "share_project":
                 return await self._share_project(tid, args, ctx)
+            if name == "project_bill_file":
+                return await self._project_bill_file(tid, args)
             if name == "client_paid_direct":
                 return await self._client_paid_direct(tid, args, ctx)
             if name == "price_advice":
@@ -3504,6 +3520,36 @@ class CommerceAdminSkill(BaseSkill):
             "It always shows the books as they are now. It works until "
             f"{str(share['expires_at'])[:10]}; switch it off any time from Projects › Money in the dashboard."),
             "share_id": share["id"]}
+
+    async def _project_bill_file(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """The project bill as xlsx + PDF, checked against the books before the links are given
+        (vula/commerce/project_bill.py). To the owner only — never sent to the client from here."""
+        import asyncio
+        from vula.api.tenants import display_name
+        from vula.commerce import project_bill
+        from vula.commerce.service import canonical_project, project_key, registered_projects
+        raw = (args.get("project") or "").strip()
+        project = canonical_project(tid, raw) or raw
+        known = {project_key(r.get("name")) for r in registered_projects(tid)}
+        if not project or (known and project_key(project) not in known):
+            return {"status": "need_info", "message": f"I can't find a project called '{raw}'. Which project?"}
+        try:
+            out = await asyncio.to_thread(project_bill.build, tid, project, display_name(tid))
+        except RuntimeError:
+            return {"error": "The spreadsheet didn't add up to the books, so I haven't sent it. "
+                             "The figures are on the project page (Projects › the project)."}
+        except Exception as exc:  # noqa: BLE001
+            logger.error("project bill failed for %s/%s: %s", tid, project, exc)
+            return {"error": "I couldn't make the project bill just now — please try again shortly."}
+        links = out["links"]
+        if not links.get("xlsx"):
+            return {"error": "The project bill was made but couldn't be stored just now — please try again."}
+        text = project_bill.summary(out["project"], out["figures"])
+        text += f"\n\n📊 Spreadsheet: {links['xlsx']}"
+        text += f"\n📄 PDF: {links['pdf']}" if links.get("pdf") else "\n(The PDF couldn't be made just now.)"
+        text += ("\n\nChecked against the books. Have a look before you send it to the client — "
+                 "the links are for you and last a week.")
+        return {"reply_verbatim": text, "balance_cents": out["figures"]["balance"]}
 
     async def _client_paid_direct(self, tid: str, args: Dict[str, Any],
                                   ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

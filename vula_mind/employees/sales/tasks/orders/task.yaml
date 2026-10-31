@@ -1,0 +1,18 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Customer orders and standing orders
+summary: Orders taken by phone or in person, order status, and regular standing orders.
+triggers:
+- order
+- orders
+- subscription
+- standing order
+tools:
+- recent_orders
+- create_manual_order
+- update_order_status
+- order_payment
+- customer_lookup
+- stock_status
+- payment_link
+- create_subscription
+- list_subscriptions

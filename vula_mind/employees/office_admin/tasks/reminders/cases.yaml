@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Remind me to call the plumber at 3pm", expect: reminders, tool: create_reminder}
+- {prompt: "What reminders do I have this week?", expect: reminders, tool: list_reminders}

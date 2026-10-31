@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Product documents for a client
+summary: Data sheets, spec sheets, brochures and price lists to forward to a client.
+triggers:
+- datasheet
+- data sheet
+- spec sheet
+- technical sheet
+- brochure
+- price list
+- installation guide
+tools:
+- find_product_document
+- stock_status
+- customer_lookup

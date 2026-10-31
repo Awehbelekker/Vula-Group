@@ -108,11 +108,12 @@ def load(root: Path = ROOT) -> Tuple[Tuple[Employee, ...], FrozenSet[str]]:
 
 def _with_triggers(keywords: tuple, tasks: tuple) -> tuple:
     """The front-desk words plus every task's trigger words: a message that is clearly one of this
-    employee's tasks reaches this employee, without keeping two lists in step by hand."""
-    seen, out = set(), []
-    for k in list(keywords) + [k for t in tasks for k in t.triggers]:
-        if k not in seen:
-            seen.add(k)
+    employee's tasks reaches this employee, without keeping two lists in step by hand. A trigger
+    that already contains a front-desk word ("remind me" with "remind") adds nothing — it would
+    only count the same words twice and tip the front desk."""
+    out = list(keywords)
+    for k in (k for t in tasks for k in t.triggers):
+        if k not in out and not any(w in k for w in out):
             out.append(k)
     return tuple(out)
 

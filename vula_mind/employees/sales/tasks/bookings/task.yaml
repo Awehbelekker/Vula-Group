@@ -1,0 +1,15 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Bookings and appointments
+summary: Free slots, booking a customer in, and cancelling or moving an appointment.
+triggers:
+- booking
+- appointment
+- book in
+- slot
+- reschedule
+tools:
+- booking_availability
+- create_booking
+- cancel_booking
+- list_bookings
+- customer_lookup

@@ -1,0 +1,11 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Sound like the owner
+summary: Learn how the owner writes, and use that tone in Vula's messages.
+triggers:
+- my voice
+- tone
+- sound like me
+- sound more like me
+tools:
+- learn_my_voice
+- apply_voice_persona
