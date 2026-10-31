@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,23 @@ from core.thinkmesh.graph import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _meter_classifier_call(model: str, t0: float, ok: bool, usage: Any, backend: str = "cloud") -> None:
+    """The skill classifier calls the model directly (not through litellm), so the per-call
+    measuring log (system vula-llm-call) never saw it. One row per attempt, no text."""
+    try:
+        from vula.integrations import metering
+        u = usage if isinstance(usage, dict) else {}
+        pt, ct = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
+        pin, pout = metering._price(("openrouter/" if backend == "cloud" else "ollama/") + model)
+        metering.log_call({"task": "skill_classifier", "latency_ms": int((time.perf_counter() - t0) * 1000),
+                           "prompt_tokens": pt, "completion_tokens": ct,
+                           "est_cost_usd": round((pt / 1e6) * pin + (ct / 1e6) * pout, 8),
+                           "model": model, "backend": backend, "ok": ok},
+                          metering.get_request_tenant())
+    except Exception:
+        pass
 
 SKILL_REGISTRY_PATH = Path(__file__).parent.parent / "skills" / "registry.json"
 
@@ -372,6 +390,7 @@ class HRMOrchestrator:
         pass instead — logged through the router's audit trail with reason local_unreachable,
         the same sanctioned reason generation uses. Before this, every keyword miss silently
         became `reasoning` for as long as the box was down."""
+        t0 = time.perf_counter()
         try:
             from core.llm_router import _ollama_headers
             # CF-Access headers: the Ollama tunnel rejects requests without the service token,
@@ -388,14 +407,33 @@ class HRMOrchestrator:
                 timeout=8,
             )
             resp.raise_for_status()
-            return self._skill_in(resp.json().get("response") or "")
+            data = resp.json()
+            _meter_classifier_call(self.model, t0, True, {"prompt_tokens": data.get("prompt_eval_count"),
+                                                          "completion_tokens": data.get("eval_count")}, "local")
+            return self._skill_in(data.get("response") or "")
         except Exception as exc:
+            _meter_classifier_call(self.model, t0, False, None, "local")
             log.debug("local skill classification unavailable (%s) — trying cloud", exc)
         return self._cloud_classify_skill(prompt)
 
+    @staticmethod
+    def _cloud_classifier_models() -> list[str]:
+        """The configured cloud classifier, then one other model from cloud_model_fallbacks to try
+        if it errors or answers with nothing. Empty config = no cloud fallback at all."""
+        first = (settings.skill_classifier_cloud_model or "").strip()
+        if not first:
+            return []
+        models = [first]
+        for m in (settings.cloud_model_fallbacks or "").split(","):
+            m = m.strip().removeprefix("openrouter/")
+            if m and m not in models:
+                models.append(m)
+                break
+        return models
+
     def _cloud_classify_skill(self, prompt: str) -> str | None:
-        model = (settings.skill_classifier_cloud_model or "").strip()
-        if not model or not settings.openrouter_api_key:
+        models = self._cloud_classifier_models()
+        if not models or not settings.openrouter_api_key:
             return None
         try:
             import uuid
@@ -404,19 +442,38 @@ class HRMOrchestrator:
                           escalated=True, backend="cloud", reason="local_unreachable")
         except Exception:
             pass
-        body: dict = {"model": model, "temperature": 0, "max_tokens": 10,
-                      "messages": [{"role": "user", "content": self._classifier_prompt(prompt)}]}
-        if settings.openrouter_zdr:
-            body["provider"] = {"data_collection": "deny", "zdr": True}
-        try:
-            resp = httpx.post("https://openrouter.ai/api/v1/chat/completions",
-                              headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-                              json=body, timeout=6)
-            resp.raise_for_status()
-            return self._skill_in(resp.json()["choices"][0]["message"]["content"] or "")
-        except Exception as exc:
-            log.debug("cloud skill classification failed, falling back to reasoning: %s", exc)
-            return None
+        failures = []
+        for model in models:
+            # 31 Oct 2026: max_tokens was 10, which a thinking model (gemini-2.5-flash) spends
+            # before it writes anything — every answer came back empty. A one-word answer from a
+            # plain model stops early, so the larger cap costs nothing there.
+            body: dict = {"model": model, "temperature": 0, "max_tokens": 256,
+                          "messages": [{"role": "user", "content": self._classifier_prompt(prompt)}]}
+            if settings.openrouter_zdr:
+                body["provider"] = {"data_collection": "deny", "zdr": True}
+            t0 = time.perf_counter()
+            ok, usage, answer = False, None, ""
+            try:
+                resp = httpx.post("https://openrouter.ai/api/v1/chat/completions",
+                                  headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                                  json=body, timeout=6)
+                resp.raise_for_status()
+                data = resp.json()
+                usage = data.get("usage")
+                answer = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                ok = bool(answer.strip())
+                if not ok:
+                    failures.append(f"{model}: empty answer")
+            except Exception as exc:
+                failures.append(f"{model}: {type(exc).__name__}")
+            _meter_classifier_call(model, t0, ok, usage)
+            if ok:
+                skill = self._skill_in(answer)
+                # A real answer that names no skill ('none') is the answer — don't ask again.
+                return skill
+        log.warning("cloud skill classification gave no answer, falling back to reasoning: %s",
+                    "; ".join(failures))
+        return None
 
     def _select_model(self, complexity: int, routing_hints: dict,
                       tenant_id: str = "", skill_name: str = "") -> ModelTier:
