@@ -1,8 +1,8 @@
 /**
  * useTakeoff.js — Vula Takeoff (shared by VulaTakeoff and TakeoffV2): upload plans, poll the
  * takeoff job, the BOQ with per-line rate overrides and markup, totals by trade, the Excel
- * download and the live SA rates table. Moved verbatim out of VulaTakeoff.jsx; the demo data
- * shows until a real job loads. Trade colours stay in VulaTakeoff.jsx (the current look's).
+ * download and the live SA rates table. The demo data
+ * shows until a real job loads.
  */
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { VULA_API } from "../../lib/authFetch";
@@ -55,14 +55,11 @@ export const MOCK_TAKEOFF = {
     { name: "Corridors / Circulation", area: 33, floor: "vinyl_lvt", ceiling: "standard", walls: "painted_plaster" },
   ],
   items: [
-    { id: "d1", trade: "demolition", description: "Strip out existing fit-out — full scope", unit: "m²", qty: 597, rate: 0, rateRange: [120, 280], source: "AECOM 2025/26", confidence: 95 },
     { id: "s1", trade: "concrete", description: "Mezzanine concrete slab — 150mm thk", unit: "m²", qty: 84, rate: 0, rateRange: [1850, 2600], source: "AfriSam 2025", confidence: 90 },
-    { id: "s2", trade: "concrete", description: "Steel mezzanine structure (erected)", unit: "tonne", qty: 3.2, rate: 0, rateRange: [38000, 55000], source: "AECOM 2025/26", confidence: 75, notes: "Estimate pending structural engineer BOQ" },
     { id: "dry1", trade: "drywall", description: "Partition walls — single skin 70mm", unit: "m²", qty: 312, rate: 0, rateRange: [420, 680], source: "Gyproc 2025", confidence: 92 },
     { id: "dry2", trade: "drywall", description: "Partition walls — acoustic double skin", unit: "m²", qty: 86, rate: 0, rateRange: [650, 980], source: "AECOM 2025/26", confidence: 88, notes: "Studio and boardroom boundaries" },
     { id: "dry3", trade: "drywall", description: "Suspended ceiling — standard 600×600 grid", unit: "m²", qty: 298, rate: 0, rateRange: [380, 580], source: "Sky Ceilings 2025", confidence: 95 },
     { id: "dry4", trade: "drywall", description: "Suspended ceiling — acoustic tile", unit: "m²", qty: 196, rate: 0, rateRange: [680, 1200], source: "AECOM 2025/26", confidence: 88 },
-    { id: "fl1", trade: "flooring", description: "Sand/cement screed 50mm — general", unit: "m²", qty: 485, rate: 0, rateRange: [95, 160], source: "AECOM 2025/26", confidence: 95 },
     { id: "fl2", trade: "flooring", description: "LVT / Vinyl Plank — office & kitchen", unit: "m²", qty: 271, rate: 0, rateRange: [280, 520], source: "Polyflor SA 2025", confidence: 90 },
     { id: "fl3", trade: "flooring", description: "Commercial carpet — boardroom & mezzanine", unit: "m²", qty: 120, rate: 0, rateRange: [220, 480], source: "Belgotex 2025", confidence: 88 },
     { id: "til1", trade: "tiling", description: "Porcelain floor tiles 600×600 — reception", unit: "m²", qty: 32, rate: 0, rateRange: [380, 650], source: "Italtile 2025", confidence: 95 },
@@ -71,10 +68,6 @@ export const MOCK_TAKEOFF = {
     { id: "joi2", trade: "joinery", description: "Fire door 60-min rated — stairway & studio", unit: "no", qty: 4, rate: 0, rateRange: [12000, 22000], source: "AECOM 2025/26", confidence: 95 },
     { id: "plb1", trade: "plumbing", description: "Bathroom fit-out — male (3 WC, 3 URI, 3 WHB)", unit: "no", qty: 1, rate: 0, rateRange: [45000, 85000], source: "AECOM 2025/26", confidence: 85 },
     { id: "plb2", trade: "plumbing", description: "Bathroom fit-out — female (3 WC, 3 WHB)", unit: "no", qty: 1, rate: 0, rateRange: [35000, 65000], source: "AECOM 2025/26", confidence: 85 },
-    { id: "ele1", trade: "electrical", description: "DB board — 3-phase (main distribution)", unit: "no", qty: 1, rate: 0, rateRange: [12000, 22000], source: "AECOM 2025/26", confidence: 88 },
-    { id: "ele2", trade: "electrical", description: "Electrical fitout — office areas", unit: "m²", qty: 597, rate: 0, rateRange: [450, 900], source: "AECOM 2025/26", confidence: 85 },
-    { id: "hva1", trade: "hvac", description: "VRF HVAC system — office areas", unit: "kW", qty: 45, rate: 0, rateRange: [5500, 9000], source: "ExtraAir 2025", confidence: 88 },
-    { id: "fir1", trade: "fire", description: "Sprinkler system — office & mezzanine", unit: "m²", qty: 513, rate: 0, rateRange: [380, 650], source: "AECOM 2025/26", confidence: 88 },
     { id: "pnt1", trade: "painting", description: "Interior paint — 2 coats walls & ceilings", unit: "m²", qty: 1840, rate: 0, rateRange: [65, 130], source: "Plascon / Dulux 2025", confidence: 95 },
   ],
 };

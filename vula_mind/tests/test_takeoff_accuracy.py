@@ -250,3 +250,31 @@ def test_member_scope_beats_the_query_param():
     req = SimpleNamespace(state=SimpleNamespace(auth_tenant="tenant-b"))
     _stage("rv7", tenant="tenant-a")
     assert api._job_for("rv7", authorized_tenant(req) or "tenant-a") is None
+
+
+def test_review_confirms_the_wall_height_and_external_walls():
+    _stage("rv9")
+    seen = {}
+
+    async def fake_price(job_id, project, tenant_id, markup):
+        seen["h"] = {r.height for r in project.rooms}
+        seen["ext"] = project.external_walls_m
+    with patch.object(api, "_price", fake_price):
+        r = client.post("/takeoff/rv9/review", json={"decision": "approve", "wall_height": 3.0,
+                                                     "external_walls_m": 42.5})
+    assert r.status_code == 200
+    assert seen == {"h": {3.0}, "ext": 42.5}
+    assert api._jobs["rv9"]["review"]["edits"] == {"wall_height": 3.0, "external_walls_m": 42.5}
+
+
+def test_an_impossible_wall_height_is_refused():
+    _stage("rv10")
+    assert client.post("/takeoff/rv10/review", json={"decision": "approve", "wall_height": 27}).status_code == 400
+
+
+def test_the_bill_says_whether_the_height_was_confirmed():
+    p = ExtractedProject(rooms=[Room(name="A", area=20, perimeter=18, floor_finish="carpet")],
+                         confidence_overall=1.0, review={"status": "approved", "edits": {"wall_height": 2.7}})
+    boq = asyncio.run(BOQGenerator(p).generate())
+    paint = next(i for i in boq.items if i.trade == "painting")
+    assert "confirmed at review" in paint.notes

@@ -99,6 +99,8 @@ class ReviewDecision(BaseModel):
     gross_floor_area: Optional[float] = None
     use_measured: bool = False                      # take the deterministic reading's rooms
     scale_confirmed: bool = False                   # the person checked a known dimension
+    wall_height: Optional[float] = None             # m, floor to ceiling, confirmed for every room
+    external_walls_m: Optional[float] = None        # m, so internal partitions can be measured
     note: str = ""
 
 
@@ -120,6 +122,7 @@ def _project_summary(project) -> dict:
                        "ceiling": r.ceiling_finish, "walls": r.wall_finish}
                       for r in project.rooms],
         "gfa": project.gross_floor_area,
+        "external_walls_m": getattr(project, "external_walls_m", 0) or 0,
         "confidence": round((project.confidence_overall or 0) * 100, 1),
         "confidence_signals": getattr(project, "confidence_signals", {}) or {},
         "measured_rooms": [{"name": n, "area": a} for n, a in (getattr(project, "deterministic_rooms", None) or [])],
@@ -454,6 +457,17 @@ async def review_takeoff(job_id: str, body: ReviewDecision, request: Request,
             raise HTTPException(400, "Gross floor area must be above 0 m².")
         project.gross_floor_area = float(body.gross_floor_area)
         edits["gross_floor_area"] = project.gross_floor_area
+    if body.wall_height is not None:
+        if not (1.8 <= body.wall_height <= 12):
+            raise HTTPException(400, "Wall height must be between 1.8 m and 12 m.")
+        for r in project.rooms:
+            r.height = float(body.wall_height)
+        edits["wall_height"] = float(body.wall_height)
+    if body.external_walls_m is not None:
+        if body.external_walls_m <= 0:
+            raise HTTPException(400, "External wall length must be above 0 m.")
+        project.external_walls_m = float(body.external_walls_m)
+        edits["external_walls_m"] = project.external_walls_m
     if body.scale_confirmed:
         for s in project.sheets:
             s.scale_method = s.scale_method if s.scale_method == "dxf_units" else "dimension_check"

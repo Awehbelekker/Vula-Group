@@ -451,8 +451,9 @@ class BOQGenerator:
         door_width = sum(d.width * (d.count or 1) for d in doors)
         window_area = sum(d.width * d.height * (d.count or 1) for d in windows)
         heights = sorted({round(r.height or 2.7, 2) for r in rooms})
+        h_ok = "wall_height" in ((p.review or {}).get("edits") or {})
         h_note = (f"Wall height {heights[0]:.2f} m" if len(heights) == 1 else "Wall heights per room") + \
-            (" (confirmed at review)" if status == "approved" else " (assumed — confirm at review)")
+            (" (confirmed at review)" if h_ok else " (assumed — confirm at review)")
         wet = [r for r in rooms if r.is_wet]
         boq.excluded = [
             "Electrical, HVAC and fire protection — not measured from plans (v1); price from the engineers' schedules.",

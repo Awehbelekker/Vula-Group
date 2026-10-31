@@ -85,6 +85,8 @@ const FINISHES = ["", "lvt", "vinyl_lvt", "carpet", "porcelain_tile", "tile", "e
 function Review({ x, job }) {
   const p = job.project || {};
   const [finish, setFinish] = useState({});
+  const [wallHeight, setWallHeight] = useState("");
+  const [extWalls, setExtWalls] = useState(p.external_walls_m ? String(p.external_walls_m) : "");
   const reasons = job.review?.reasons || [];
   const measured = p.measured_rooms || [];
   const ai = p.ai_rooms || [];
@@ -98,8 +100,11 @@ function Review({ x, job }) {
       floor_finish: finish[r.name] ?? (p.room_list || []).find((x) => x.name === r.name)?.floor ?? "" }));
   };
   const edited = Object.keys(finish).length > 0;
+  const num = (v) => (String(v).trim() === "" ? undefined : Number(String(v).replace(",", ".")));
   const approve = (useMeasured) => x.submitReview("approve", {
     scale_confirmed: dxfUnitsUnsure,
+    ...(num(wallHeight) ? { wall_height: num(wallHeight) } : {}),
+    ...(num(extWalls) ? { external_walls_m: num(extWalls) } : {}),
     ...(edited ? { rooms: roomsFrom(useMeasured) } : { use_measured: useMeasured }) });
   return (
     <Card className="ves-card" role="region" aria-labelledby="ves-review">
@@ -118,6 +123,14 @@ function Review({ x, job }) {
           })}
           </tbody>
         </table>)}
+      <div className="ves-row">
+        <Field label="Wall height (m), floor to ceiling">
+          <Input inputMode="decimal" value={wallHeight} placeholder="2.7 if left empty" onChange={(e) => setWallHeight(e.target.value)} aria-label="Wall height in metres" />
+        </Field>
+        <Field label="External wall length (m)">
+          <Input inputMode="decimal" value={extWalls} placeholder="for partition walls" onChange={(e) => setExtWalls(e.target.value)} aria-label="External wall length in metres" />
+        </Field>
+      </div>
       <div className="ves-row">
         {measured.length > 0 && <Button disabled={x.reviewing} onClick={() => approve(true)}>Use measured areas and price</Button>}
         {ai.length > 0 && <Button variant="secondary" disabled={x.reviewing} onClick={() => approve(false)}>Use the AI reading</Button>}
