@@ -91,8 +91,11 @@ def test_supplier_edits_survive_a_new_container(cloud, tmp_path):
     s.email = "quotes@extraair.co.za"
     db.upsert_supplier(s, tenant_id="digg-demo")
     fresh = SupplierDatabase(tmp_path / "b.db")
-    got = next(x for x in fresh.get_all("digg-demo") if x.id == "sup_hva")
-    assert got.email == "quotes@extraair.co.za"
+    # The business's edit is its own copy of the default (<tenant>__<id>), so it survives the
+    # restart without changing the shared default other businesses see.
+    got = next(x for x in fresh.get_all("digg-demo") if x.id.endswith("sup_hva"))
+    assert got.id == "digg-demo__sup_hva" and got.email == "quotes@extraair.co.za"
+    assert next(x for x in fresh.get_all("off-the-hook") if x.id == "sup_hva").email != "quotes@extraair.co.za"
 
 
 def test_takeoff_job_is_reloaded_after_a_restart(cloud):
