@@ -15,7 +15,11 @@ Legend: **DONE** = in code and covered by a test. **PARTIAL** = in code, but a g
 `pytest tests/` on Python 3.11 (the same version CI uses, `.github/workflows/ci.yml`), with
 `requirements-dev.txt` installed:
 
-RESULT_PLACEHOLDER
+**6,741 passed, 2 skipped, 0 failed** (183 s). The other CI checks also pass locally:
+`ruff check vula/ core/`, `tools/check_migrations_rls.py`, `tools/check_migration_sentinels.py`.
+
+None of these tests measure takeoff accuracy (see Phase 4). A green suite says nothing about
+whether a room area is right.
 
 Note: `pip install -r requirements.txt` **fails on Python 3.13**. `http-ece` (pulled in by
 `pywebpush`) does not build (`AttributeError: install_layout`). CI and the Dockerfile use 3.11,
