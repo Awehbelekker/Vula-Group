@@ -101,3 +101,14 @@ def test_sidecar_down_fails_and_summary_groups_by_plan_type():
     summ = summarise([down, up])
     assert summ["passed"] == 1
     assert summ["area_error_pct_by_plan_type"]["synthetic_control"]["max"] == 1.44
+
+
+def test_sheet_errors_unscaled_and_withheld_seeds_are_explained():
+    t = _case("porterville-adu-a1-101")
+    cal = SheetCalibration(page=1, sheet_number="A1-101", detected_scale=None, scale_label=None, method=None,
+                           m_per_px=None, error="Unknown scale label",
+                           withheld={"total": 5, "bubble": 3, "implausible": 2, "min_area_sf": 5})
+    s = score_case(t, MeasuredPlan(engine={}, sheets=[cal], rooms=[]))
+    assert not s.ok
+    assert "sheet A1-101: engine error: Unknown scale label" in s.notes
+    assert "sheet A1-101: engine withheld 5 seed(s) {'bubble': 3, 'implausible': 2, 'min_area_sf': 5}" in s.notes

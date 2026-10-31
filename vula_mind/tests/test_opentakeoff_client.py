@@ -141,3 +141,16 @@ async def test_measure_plan_fails_open_on_sidecar_error(tmp_path, monkeypatch):
     cm, _ = _client_returning(exc=ot.httpx.ConnectError("down"))
     with patch.object(ot.httpx, "AsyncClient", return_value=cm):
         assert await ot.measure_plan(f) is None
+
+
+@pytest.mark.asyncio
+async def test_measure_plan_passes_sensitivity_only_when_given(tmp_path, monkeypatch):
+    f = tmp_path / "plan.pdf"; f.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(ot.settings, "opentakeoff_url", "http://sidecar:8790")
+    resp = MagicMock(); resp.json.return_value = _raw([])
+    cm, client = _client_returning(resp)
+    with patch.object(ot.httpx, "AsyncClient", return_value=cm):
+        await ot.measure_plan(f, sensitivity=0.8)
+        assert client.post.call_args.kwargs["params"] == {"sensitivity": "0.8"}
+        await ot.measure_plan(f)
+        assert client.post.call_args.kwargs["params"] is None

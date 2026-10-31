@@ -60,6 +60,14 @@ jobs:
           python -m evals.takeoff_sidecar --json > ../sidecar-report.json || true
           python -m evals.takeoff_sidecar | tee ../sidecar-report.txt
 
+      # Report only: the engine's flood-sensitivity knob, for comparison. Never the pass/fail
+      # number. Tuning a knob on the same six plans it is scored on would be overfitting.
+      - name: Compare engine sensitivity 0.8 (report only)
+        if: always()
+        continue-on-error: true
+        working-directory: vula_mind
+        run: python -m evals.takeoff_sidecar --sensitivity 0.8 | tee ../sidecar-report-s08.txt
+
       - name: Sidecar logs
         if: always()
         run: docker logs ot 2>&1 | tail -100
@@ -71,3 +79,4 @@ jobs:
           path: |
             sidecar-report.txt
             sidecar-report.json
+            sidecar-report-s08.txt

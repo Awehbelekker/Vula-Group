@@ -136,17 +136,22 @@ def parse_response(raw: Dict[str, Any]) -> MeasuredPlan:
 
 # ─── the call ─────────────────────────────────────────────────────────────────
 
-async def measure_plan(path: Path, scales: Optional[Dict[int, str]] = None) -> Optional[MeasuredPlan]:
+async def measure_plan(path: Path, scales: Optional[Dict[int, str]] = None,
+                       sensitivity: Optional[float] = None) -> Optional[MeasuredPlan]:
     """Measure a PDF plan with the sidecar. `scales` overrides a sheet's scale by page (e.g. a
     person's calibration: {2: "1:50"}). None = not configured, not a PDF, or the sidecar failed;
     the caller carries on with the AI-read figures, as before."""
     base = (settings.opentakeoff_url or "").rstrip("/")
     if not base or path.suffix.lower() != ".pdf":
         return None
-    params = {"scales": json.dumps({str(k): v for k, v in scales.items()})} if scales else None
+    params: Dict[str, str] = {}
+    if scales:
+        params["scales"] = json.dumps({str(k): v for k, v in scales.items()})
+    if sensitivity is not None:
+        params["sensitivity"] = str(sensitivity)
     try:
         async with httpx.AsyncClient(timeout=settings.opentakeoff_timeout_s) as client:
-            resp = await client.post(f"{base}/measure", params=params, content=path.read_bytes(),
+            resp = await client.post(f"{base}/measure", params=params or None, content=path.read_bytes(),
                                      headers={"content-type": "application/pdf",
                                               "x-api-key": settings.opentakeoff_api_key or ""})
             resp.raise_for_status()

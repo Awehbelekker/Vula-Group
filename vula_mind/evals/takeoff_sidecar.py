@@ -3,6 +3,7 @@
     OPENTAKEOFF_URL=http://localhost:8790 OPENTAKEOFF_API_KEY=... \
         python -m evals.takeoff_sidecar            # every case
         python -m evals.takeoff_sidecar --case va-stcloud-af101 --json
+        python -m evals.takeoff_sidecar --sensitivity 0.8   # compare the engine's hatch knob
 
 Not a pytest: it needs a running sidecar (services/opentakeoff). The scoring is pure and unit-tested
 (tests/test_takeoff_sidecar_eval.py). For each plan it reports the area error % per room and per
@@ -74,6 +75,14 @@ def score_case(truth: dict, plan) -> CaseScore:
         cs.notes.append("sidecar returned nothing (unreachable, refused, or failed)")
         return cs
 
+    for c in plan.sheets:      # why a sheet measured nothing, or skipped rooms: say so
+        if c.error:
+            cs.notes.append(f"sheet {c.sheet_number or c.page}: engine error: {c.error}")
+        elif truth["expect"]["measurable"] and not c.scale_label:
+            cs.notes.append(f"sheet {c.sheet_number or c.page}: no scale applied (detected: {c.detected_scale or 'none'})")
+        if c.withheld and c.withheld.get("total"):
+            why = {k: v for k, v in c.withheld.items() if isinstance(v, int) and v and k != "total"}
+            cs.notes.append(f"sheet {c.sheet_number or c.page}: engine withheld {c.withheld['total']} seed(s) {why}")
     if not truth["expect"]["measurable"]:
         if plan.rooms:
             cs.ok = False
@@ -118,12 +127,13 @@ def summarise(scores: List[CaseScore]) -> dict:
     }
 
 
-async def _run(only: Optional[str]) -> List[CaseScore]:
+async def _run(only: Optional[str], sensitivity: Optional[float] = None) -> List[CaseScore]:
     from vula.takeoff.opentakeoff_client import measure_plan
     out = []
     for t in load_cases(only):
         label = t["scale"].get("label")
-        plan = await measure_plan(Path(t["_dir"]) / t["file"], scales={t["page"]: label} if label else None)
+        plan = await measure_plan(Path(t["_dir"]) / t["file"], scales={t["page"]: label} if label else None,
+                                 sensitivity=sensitivity)
         out.append(score_case(t, plan))
     return out
 
@@ -132,12 +142,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--case")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--sensitivity", type=float, help="engine flood sensitivity 0..1 (default: engine's)")
     a = ap.parse_args(argv)
     from config import settings
     if not settings.opentakeoff_url:
         print("OPENTAKEOFF_URL is not set: start services/opentakeoff and point this at it.", file=sys.stderr)
         return 2
-    scores = asyncio.run(_run(a.case))
+    scores = asyncio.run(_run(a.case, a.sensitivity))
     if a.json:
         print(json.dumps({"summary": summarise(scores), "cases": [asdict(s) for s in scores]}, indent=2))
     else:

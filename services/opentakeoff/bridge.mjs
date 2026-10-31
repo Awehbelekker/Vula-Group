@@ -5,6 +5,7 @@
 //
 //   POST /measure   body: the plan PDF (application/pdf), header X-API-Key
 //                   optional ?scales={"1":"1:100","3":"1:50"}  (page → scale label override)
+//                   optional ?sensitivity=0..1  (the engine's hatch/flood knob; default = engine default)
 //   GET  /health    liveness, plus the pinned engine tag/commit
 //
 // Per request: a FRESH engine process (no state shared between plans or tenants) → load_plan →
@@ -62,7 +63,7 @@ async function call(client, name, args) {
   try { return JSON.parse(text); } catch { return { text }; }
 }
 
-async function measure(pdfPath, scales, holder) {
+async function measure(pdfPath, scales, holder, sensitivity) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["dist/server.js"],
@@ -89,7 +90,8 @@ async function measure(pdfPath, scales, holder) {
           out.scale = { label: set.label ?? null, source: override ? "user_label" : "detected",
                         engine_source: set.source, confirmed: !!set.confirmed, upp_ft: set.upp,
                         warning: set.warning ?? null };
-          const det = await call(client, "detect_rooms", { sheet: s.sheet, condition: "floor" });
+          const det = await call(client, "detect_rooms", { sheet: s.sheet, condition: "floor",
+                                                          ...(sensitivity !== undefined ? { sensitivity } : {}) });
           out.withheld = det.withheld ?? null;
           out.rooms = (det.rooms || []).filter((r) => typeof r.area_sf === "number").map((r) => ({
             label: r.label, merged_labels: r.merged_labels ?? [], area_sf: r.area_sf,
@@ -116,6 +118,11 @@ createServer(async (req, res) => {
   if (running >= MAX_CONCURRENT) return send(res, 503, { error: "busy" });
 
   let scales = {};
+  let sensitivity;
+  if (url.searchParams.has("sensitivity")) {
+    sensitivity = Number(url.searchParams.get("sensitivity"));
+    if (!(sensitivity >= 0 && sensitivity <= 1)) return send(res, 400, { error: "sensitivity must be 0..1" });
+  }
   try { scales = url.searchParams.get("scales") ? JSON.parse(url.searchParams.get("scales")) : {}; }
   catch { return send(res, 400, { error: "scales must be JSON {page: label}" }); }
 
@@ -129,7 +136,7 @@ createServer(async (req, res) => {
     const pdf = join(dir, "plan.pdf");                  // fixed name: no caller-controlled paths
     await writeFile(pdf, body);
     const result = await Promise.race([
-      measure(pdf, scales, holder),
+      measure(pdf, scales, holder, sensitivity),
       new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error("timed out"), { status: 504 })), TIMEOUT_MS); }),
     ]);
     send(res, 200, result);
