@@ -106,8 +106,26 @@ def test_scraped_rate_with_a_label_key_prices_the_boq_line(tmp_path):
     assert (low, high, source) == (400, 600, "Scraped")
 
 
+def test_a_supply_only_retail_price_never_prices_a_laid_line(tmp_path):
+    # Real production rows (2026-10-31): retail supply prices, not laid rates. The Italtile one sits
+    # inside the sanity band, so only the "laid/installed" rule keeps it out.
+    db = _rates_db(tmp_path / "r.db", [
+        ("italtile_floor_tiles_porcelain", "Italtile - Floor Tiles - Porcelain", "m²", 39.99, 399.99),
+        ("porcelain_tile_600x600", "Porcelain Tile - 600x600mm", "m²", 99.99, 99.99)])
+    assert RateLookup(db).get("tiles_porcelain_floor", "m²")[3] != "Scraped"
+
+
+def test_a_row_with_no_source_is_never_used(tmp_path):
+    db = _rates_db(tmp_path / "r.db", [("porcelain_tiles", "Porcelain Tiles (laid)", "m²", 400, 600)])
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE material_rates SET source=''")
+    conn.commit()
+    conn.close()
+    assert RateLookup(db).get("tiles_porcelain_floor", "m²")[3] != ""
+
+
 def test_scraped_rate_in_a_different_unit_is_never_used(tmp_path):
-    db = _rates_db(tmp_path / "r.db", [("paint_interior_5l", "Interior paint 5L", "no", 900, 1100)])
+    db = _rates_db(tmp_path / "r.db", [("paint_interior_5l", "Interior paint 5L installed", "no", 900, 1100)])
     low, high, unit, source = RateLookup(db).get("paint_interior", "m²")
     assert source != "Scraped"
     assert unit == "m²"
@@ -115,13 +133,13 @@ def test_scraped_rate_in_a_different_unit_is_never_used(tmp_path):
 
 def test_scraped_rate_far_outside_the_reference_band_is_ignored(tmp_path):
     # A mis-parsed price (R65,000 per m² of paint) must not replace the reference rate.
-    db = _rates_db(tmp_path / "r.db", [("interior_paint", "Interior paint 2 coats", "m²", 65000, 70000)])
+    db = _rates_db(tmp_path / "r.db", [("interior_paint", "Interior paint 2 coats applied", "m²", 65000, 70000)])
     assert RateLookup(db).get("paint_interior", "m²")[3] != "Scraped"
 
 
 def test_loose_substring_never_matches_another_item(tmp_path):
     # Old lookup: LIKE '%door_solid%' — and 'door_solid_core_fire_rated…' would match a fire door.
-    db = _rates_db(tmp_path / "r.db", [("door_solid_fire_60", "Fire door 60 min solid", "no", 14000, 20000)])
+    db = _rates_db(tmp_path / "r.db", [("door_solid_fire_60", "Fire door 60 min solid installed", "no", 14000, 20000)])
     assert RateLookup(db).get("door_solid", "no")[3] != "Scraped"
 
 

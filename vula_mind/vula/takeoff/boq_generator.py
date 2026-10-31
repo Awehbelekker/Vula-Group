@@ -248,6 +248,12 @@ class RateLookup:
         "paint_interior": ["exterior", "external", "roof"],
     }
     BAND = (0.25, 4.0)
+    # Every FALLBACK rate is a laid / installed / erected rate. The scraped catalogue
+    # (vula_material_rates, checked 2026-10-31) is mostly retail SUPPLY prices — a porcelain tile
+    # at R40–R150/m² against R380–R650/m² laid — so a scraped row only stands in when its label
+    # says it includes the work. Rows with no source (test rows found in production) never do.
+    INSTALLED = ["laid", "installed", "install", "fixed", "supply and fix", "supply fix",
+                 "erected", "applied", "complete", "fitted", "incl labour", "including labour"]
 
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
@@ -271,6 +277,8 @@ class RateLookup:
         text = " " + re.sub(r"[^a-z0-9]+", " ", (label or "").lower()) + " "
         if any(f" {w}" in text for w in self.EXCLUDE.get(key, [])):
             return False
+        if not any(f" {w} " in text or f" {w}" in text for w in self.INSTALLED):
+            return False
         return all(any(f" {w}" in text for w in group) for group in groups)
 
     def get(self, key: str, unit: Optional[str] = None) -> tuple:
@@ -285,7 +293,7 @@ class RateLookup:
                 low, high = float(low), float(high or low)
             except (TypeError, ValueError):
                 continue
-            if low <= 0:
+            if low <= 0 or not (source or "").strip():
                 continue
             if ref and ref[0] > 0:
                 ref_mid, mid = (ref[0] + ref[1]) / 2, (low + high) / 2
