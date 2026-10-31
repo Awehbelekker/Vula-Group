@@ -37,12 +37,12 @@ import json
 import logging
 import math
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import httpx
 
 from config import settings
 from vula.takeoff.accuracy import measured_confidence, parse_scale, review_reasons, schedule_rooms_from_text
@@ -190,11 +190,11 @@ class PDFReader:
                         markdown, source = full_text, "ocr_skipped"
                     elif len(full_text) < 50:
                         # Scanned page — extract image and OCR
-                        img_path = Path(f"/tmp/vula_sheet_{i}.png")
-                        img = page.to_image(resolution=200)
-                        img.save(str(img_path))
-                        markdown = await self._ocr_image(img_path)
-                        img_path.unlink(missing_ok=True)
+                        # Own temp file per page and job (#8: concurrent jobs shared /tmp/vula_sheet_{n}.png).
+                        with tempfile.TemporaryDirectory(prefix="vula_sheet_") as td:
+                            img_path = Path(td) / f"page_{i}.png"
+                            page.to_image(resolution=200).save(str(img_path))
+                            markdown = await self._ocr_image(img_path)
                         source = "ocr"
                     else:
                         markdown = full_text
@@ -221,30 +221,29 @@ class PDFReader:
         return sheets
 
     async def _ocr_image(self, img_path: Path) -> str:
-        """GLM-OCR on a page image."""
-        with open(img_path, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode()
-        payload = {
-            "model": OCR_MODEL,
-            "prompt": (
-                "You are reading an architectural drawing. "
-                "Extract ALL text, numbers, dimensions, room names, "
-                "schedules, and annotations. Preserve table structure. "
-                "Return clean markdown."
-            ),
-            "images": [img_b64],
-            "stream": False,
-            # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx cap
-            # (core/llm_router.py) — set it explicitly here too.
-            "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
-        }
+        """Read a page image with the vision route (local OCR model first, cloud vision when the
+        local one is unreachable) — core/llm_router.resolve_vision_route, like the Smart Scanner.
+        2026-10-31: was a raw httpx POST to Ollama with no Cloudflare Access headers."""
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                resp = await client.post(f"{OLLAMA_BASE}/api/generate", json=payload)
-                resp.raise_for_status()
-                return resp.json().get("response", "")
+            import litellm
+            from core.llm_router import generation_kwargs, resolve_vision_route
+            with open(img_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode()
+            model, api_key, api_base = await resolve_vision_route()
+            # The router's kwargs win (its local timeout sits under Cloudflare's 100 s tunnel limit).
+            kw = {"timeout": 90, "temperature": 0.1, "max_tokens": 4096, **generation_kwargs(model)}
+            resp = await litellm.acompletion(
+                model=model, api_key=api_key, api_base=api_base, **kw,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": (
+                        "You are reading an architectural drawing. Extract ALL text, numbers, "
+                        "dimensions, room names, schedules, and annotations. Preserve table "
+                        "structure. Return clean markdown.")},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                ]}])
+            return resp.choices[0].message.content or ""
         except Exception as e:
-            logger.warning(f"GLM-OCR failed: {e}")
+            logger.warning(f"Plan OCR failed: {e}")
             return ""
 
     async def _full_ocr_fallback(self, path: Path) -> List[DrawingSheet]:
@@ -254,10 +253,10 @@ class PDFReader:
             images = convert_from_path(str(path), dpi=200)
             sheets = []
             for i, img in enumerate(images):
-                img_path = Path(f"/tmp/vula_ocr_{i}.png")
-                img.save(str(img_path))
-                markdown = await self._ocr_image(img_path)
-                img_path.unlink(missing_ok=True)
+                with tempfile.TemporaryDirectory(prefix="vula_ocr_") as td:
+                    img_path = Path(td) / f"page_{i}.png"
+                    img.save(str(img_path))
+                    markdown = await self._ocr_image(img_path)
                 sheets.append(DrawingSheet(
                     sheet_number=f"SH{i+1:03d}",
                     title=f"Sheet {i+1}",
@@ -634,31 +633,34 @@ class DrawingIntelligence:
         )
 
     async def _llm_extract(self, text: str, instruction: str, schema: str, model: str = FAST_MODEL) -> Dict:
-        prompt = (
-            f"{instruction}\n\n"
-            f"Drawing content:\n{text[:6000]}\n\n"
-            f"Return ONLY valid JSON matching this schema (no other text):\n{schema}"
-        )
-
+        """One structured read of drawing text, through core/llm_router: local-first, the
+        Cloudflare Access headers the router installs, and a logged cloud retry when the local
+        call fails. 2026-10-31: was a raw httpx POST to Ollama that returned {} in production —
+        no rooms, GFA 0. Nothing is priced from it unreviewed (vula/takeoff/accuracy.py)."""
+        from core.prompt_safety import UNTRUSTED_CONTENT_RULE
+        messages = [
+            {"role": "system", "content": UNTRUSTED_CONTENT_RULE +
+                "You extract quantities from architectural drawings. Copy numbers exactly as "
+                "printed; never estimate a figure that isn't on the drawing. Return ONLY valid JSON."},
+            {"role": "user", "content": f"{instruction}\n\nDrawing content:\n{text[:6000]}\n\n"
+                                        f"Return ONLY valid JSON matching this schema:\n{schema}"},
+        ]
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                resp = await client.post(
-                    f"{OLLAMA_BASE}/api/generate",
-                    # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx cap
-                    # (core/llm_router.py) — set it explicitly here too.
-                    json={"model": model, "prompt": prompt, "stream": False,
-                          "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 8192}},
-                )
-                resp.raise_for_status()
-                raw = resp.json().get("response", "")
-
+            import litellm
+            from core.llm_router import complete_local_first, resolve_generation_route
+            litellm.drop_params = True
+            route = await resolve_generation_route(model, task_type="takeoff_extraction", messages=messages)
+            # No timeout here: complete_local_first sets the local one (a second one is a TypeError
+            # that silently sent every call to the cloud).
+            resp, _ = await complete_local_first(route, task_type="takeoff_extraction", messages=messages,
+                                                 temperature=0.1, max_tokens=2048)
+            raw = resp.choices[0].message.content or ""
             raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if match:
                 return json.loads(match.group())
         except Exception as e:
-            logger.error(f"LLM extraction failed: {e}")
-
+            logger.error(f"Plan extraction failed: {e}")
         return {}
 
 
