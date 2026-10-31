@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     chunk_overlap: int = 64
     max_file_mb: int = 50
 
+    # POPIA (2026-10-31): uploaded plans and their takeoff jobs are deleted this many days after
+    # upload (vula/takeoff/api.purge_expired, run daily). 0 keeps them forever — not recommended.
+    takeoff_retention_days: int = 90
     # ── KB retrieval (2026-10-16, KB retrieval phase 1 — evals/RETRIEVAL.md) ────
     # Minimum similarity for a chunk to count. Were hard-coded in pipeline.py (0.30, and 0.35 for
     # authoritative-only queries); same defaults, now tunable on the retrieval eval. A score is

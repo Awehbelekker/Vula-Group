@@ -20,6 +20,8 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import re
+import time
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -286,7 +288,7 @@ async def upload_plans(
         raise HTTPException(413, "File too large (max 100MB)")
 
     job_id = str(uuid.uuid4())[:12]
-    file_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
+    file_path = UPLOAD_DIR / f"{job_id}_{_safe_name(file.filename)}"
     file_path.write_bytes(content)
 
     _jobs[job_id] = {
@@ -295,6 +297,7 @@ async def upload_plans(
         "tenant_id": tenant_id,
         "markup": markup,
         "file_path": str(file_path),
+        "uploaded_at": time.time(),
     }
 
     _save_job(job_id)
@@ -306,6 +309,64 @@ async def upload_plans(
         "status": "queued",
         "message": f"Plans uploaded. Processing takes 2–5 minutes. Poll /takeoff/{job_id} for status.",
     }
+
+
+def _safe_name(filename: Optional[str]) -> str:
+    """The upload's name as a single safe path component (no directories, no odd characters)."""
+    name = Path(filename or "plan").name
+    stem, suffix = Path(name).stem, Path(name).suffix.lower()
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")[:80] or "plan"
+    return f"{stem}{suffix}"
+
+
+def _delete_job(job_id: str, job: Optional[dict]) -> int:
+    """Delete a job's plan file, its durable row and its memory copy. Returns files removed."""
+    removed = 0
+    fp = (job or {}).get("file_path")
+    if fp:
+        p = Path(fp)
+        try:
+            if p.resolve().parent == UPLOAD_DIR.resolve() and p.exists():
+                p.unlink()
+                removed = 1
+        except OSError as exc:
+            logger.warning("Takeoff %s: could not delete plan file: %s", job_id, exc)
+    durable.delete("vula_takeoff_jobs", id=job_id)
+    _jobs.pop(job_id, None)
+    return removed
+
+
+def purge_expired(days: Optional[int] = None, now: Optional[float] = None) -> Dict[str, int]:
+    """POPIA retention (Phase 4g): plans and their takeoff jobs older than
+    settings.takeoff_retention_days are deleted — the file on the volume, the vula_takeoff_jobs
+    row and the in-memory copy. Files are judged by their modified time, rows by updated_at, so
+    a file whose row is already gone (or the other way round) is still cleared."""
+    import time as _time
+    from datetime import datetime, timezone
+    days = settings.takeoff_retention_days if days is None else days
+    if not days or days <= 0:
+        return {"files": 0, "jobs": 0}
+    now = now if now is not None else _time.time()
+    cutoff = now - days * 86400
+    files = jobs = 0
+    for f in UPLOAD_DIR.glob("*"):
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                files += 1
+        except OSError:
+            continue
+    for job_id, job in list(_jobs.items()):
+        if (job.get("uploaded_at") or now) < cutoff:
+            _jobs.pop(job_id, None)
+    try:
+        from vula.commerce.service import _client
+        iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+        res = _client().table("vula_takeoff_jobs").delete().lt("updated_at", iso).execute()
+        jobs = len(res.data or [])
+    except Exception as exc:  # noqa: BLE001 — no Supabase (tests/dev): files still cleared
+        logger.info("Takeoff retention: job rows not purged (%s)", exc)
+    return {"files": files, "jobs": jobs}
 
 
 def _job_for(job_id: str, tenant_id: Optional[str]) -> Optional[dict]:
@@ -331,6 +392,17 @@ async def get_job_status(job_id: str, request: Request, tenant_id: Optional[str]
         "review": job.get("review"),
         "error": job.get("error"),
     }
+
+
+@router.delete("/{job_id}")
+async def delete_takeoff(job_id: str, request: Request, tenant_id: Optional[str] = None):
+    """Delete a takeoff now: the uploaded plan, the job and everything read from it (POPIA —
+    a data subject's or the owner's request, without waiting for the retention period)."""
+    job = _job_for(job_id, authorized_tenant(request) or tenant_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    removed = _delete_job(job_id, job)
+    return {"job_id": job_id, "deleted": True, "plan_file_removed": bool(removed)}
 
 
 @router.post("/{job_id}/review")
