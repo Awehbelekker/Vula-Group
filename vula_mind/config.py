@@ -409,6 +409,13 @@ class Settings(BaseSettings):
     # When the local box can't be reached, the same one-word classification goes to this cheap
     # OpenRouter model instead (logged as local_unreachable). Empty = no cloud fallback.
     skill_classifier_cloud_model: str = "google/gemini-2.5-flash"
+    # 31 Oct 2026: TypeSafe's Jev decision model via OpenRouter (core/decision_client.py). Used by
+    # the decision benchmark only; nothing live calls it until Ian turns shadow mode on. The key is
+    # the existing OPENROUTER_API_KEY. Alias tracks the newest version; pin e.g. typesafe/jev-1.14.
+    decision_model: str = "~typesafe/jev-latest"
+    decision_api_url: str = "https://openrouter.ai/api/alpha/decisions"
+    decision_timeout_s: float = 1.0
+    decision_min_confidence: float = 0.75
     # Monday-morning advisor WhatsApp to each owner (vula/owner_advisor.py). Off until the team
     # has previewed it per tenant in Master › Conversations.
     owner_advisor_enabled: bool = False
