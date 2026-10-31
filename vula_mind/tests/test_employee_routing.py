@@ -40,7 +40,8 @@ def test_the_corpus_covers_every_employee_and_the_whole_team():
 @pytest.mark.parametrize("case", TOOL_CHOICE, ids=lambda c: c["prompt"][:50])
 def test_no_tool_choice_case_loses_its_tool(case, all_modules):
     full = ca._tools_for("eval-tenant", role=case.get("role"), message=case["prompt"])
-    narrowed = {t["function"]["name"] for t in em.narrow(full, em.pick(case["prompt"]))}
+    emp = em.pick(case["prompt"])
+    narrowed = {t["function"]["name"] for t in em.narrow(full, emp, em.pick_task(emp, case["prompt"]))}
     if case.get("expect"):
         assert case["expect"] in narrowed
     full_names = {t["function"]["name"] for t in full}
@@ -108,7 +109,7 @@ class _FakeTable:
         rows = self.db.setdefault(self.name, [])
         if self.op == "upsert":
             for r in rows:
-                if r["tenant_id"] == self.payload["tenant_id"] and r["employee"] == self.payload["employee"]:
+                if all(r.get(k) == self.payload.get(k) for k in ("tenant_id", "employee", "task")):
                     r.update(self.payload)
                     break
             else:
@@ -126,16 +127,16 @@ def fake_db(monkeypatch):
 
 
 def test_settings_default_on_save_and_read_back_per_business(fake_db):
-    assert all(v == {"enabled": True, "instructions": ""} for v in em.settings_for("digg-demo").values())
-    em.save("digg-demo", "marketing", enabled=False, by="Ian")
-    em.save("digg-demo", "sales", instructions="Always quote on   30-day terms.")
-    s = em.settings_for("digg-demo")
+    assert all(v == {"enabled": True, "instructions": ""} for v in em.settings_for("tenant-a").values())
+    em.save("tenant-a", "marketing", enabled=False, by="Owner")
+    em.save("tenant-a", "sales", instructions="Always quote on   30-day terms.")
+    s = em.settings_for("tenant-a")
     assert s["marketing"]["enabled"] is False and s["sales"]["instructions"] == "Always quote on 30-day terms."
     assert em.settings_for("off-the-hook")["marketing"]["enabled"] is True     # another business
     with pytest.raises(ValueError):
-        em.save("digg-demo", "astronaut", enabled=False)
+        em.save("tenant-a", "astronaut", enabled=False)
     with pytest.raises(ValueError):
-        em.save("digg-demo", "sales", instructions="x" * 700)
+        em.save("tenant-a", "sales", instructions="x" * 700)
 
 
 def test_settings_before_the_migration_are_the_defaults(monkeypatch):
@@ -143,7 +144,7 @@ def test_settings_before_the_migration_are_the_defaults(monkeypatch):
         def table(self, _n):
             raise RuntimeError("relation vula_employees does not exist")
     monkeypatch.setattr("vula.commerce.service._client", lambda: _Broken())
-    assert em.settings_for("digg-demo")["bookkeeper"]["enabled"] is True
+    assert em.settings_for("tenant-a")["bookkeeper"]["enabled"] is True
 
 
 # ── in the admin agent ──────────────────────────────────────────────────────
@@ -207,3 +208,107 @@ def test_the_team_page_api_is_behind_the_admin_auth():
     src = inspect.getsource(commerce)
     assert '@router.get("/{tenant_id}/admin/employees")' in src
     assert '@router.put("/{tenant_id}/admin/employees/{employee}")' in src
+
+
+# ── the file tree and tasks (31 Oct: workflow → task → prompt / tools / data) ──
+
+TASK_CASES = [(e.id, t.id, c) for e in em.TEAM for t in e.tasks
+              for c in (yaml.safe_load((em.ROOT / e.id / "tasks" / t.id / "cases.yaml").read_text()) or [])]
+
+
+def test_the_team_loads_from_the_file_tree():
+    team, shared = em.load()
+    assert [e.id for e in team] == ["bookkeeper", "sales", "office_admin", "marketing", "operations"]
+    assert "hand_over" in shared and all(e.job and e.tools and e.keywords for e in team)
+    assert {t.id for t in em.BY_ID["bookkeeper"].tasks} == {
+        "project-bill", "payment-chase", "slips-and-expenses", "month-end", "bank-and-payments", "fix-a-record"}
+
+
+def test_every_task_has_a_prompt_cases_and_only_its_employees_tools():
+    for e in em.TEAM:
+        for t in e.tasks:
+            assert t.title and t.triggers and t.tools and len(t.prompt) > 80, (e.id, t.id)
+            assert t.tools <= e.tools | em.SHARED_TOOLS, (e.id, t.id)
+            assert (em.ROOT / e.id / "tasks" / t.id / "cases.yaml").exists()
+
+
+@pytest.mark.parametrize("emp_id,task_id,case", TASK_CASES, ids=lambda x: x["prompt"][:40] if isinstance(x, dict) else x)
+def test_every_task_case_reaches_its_task_with_the_tool_it_needs(emp_id, task_id, case, all_modules):
+    emp = em.pick(case["prompt"])
+    assert emp is not None and emp.id == emp_id, em.scores(case["prompt"])
+    task = em.pick_task(emp, case["prompt"])
+    assert task is not None and task.id == case["expect"]
+    full = ca._tools_for("eval-tenant", role="owner", message=case["prompt"])
+    names = {t["function"]["name"] for t in em.narrow(full, emp, task)}
+    assert case["tool"] in names
+
+
+def test_an_unclear_message_inside_the_job_keeps_the_whole_job():
+    emp = em.BY_ID["bookkeeper"]
+    assert em.pick_task(emp, "Cancel OTH-00077 and refund her") is None
+    assert em.pick_task(emp, "yes") is None
+    assert em.pick_task(emp, "Who owes us, and send me the P&L") is None        # two tasks
+    assert em.pick_task(emp, "What does the client owe us on Oak Street, balance due") is None
+
+
+def test_a_switched_off_task_is_never_picked():
+    emp = em.BY_ID["bookkeeper"]
+    assert em.pick_task(emp, "Send me this month's P&L").id == "month-end"
+    assert em.pick_task(emp, "Send me this month's P&L", off={"month-end"}) is None
+
+
+def test_the_task_prompt_and_its_instructions_go_into_the_job_block():
+    emp = em.BY_ID["bookkeeper"]
+    task = next(t for t in emp.tasks if t.id == "project-bill")
+    block = em.job_block(emp, "", task, "No VAT line on our final accounts.")
+    assert "THE TASK — the project bill" in block and "No VAT line" in block
+    assert "THE TASK" not in em.job_block(emp, "")
+
+
+def test_a_broken_task_file_is_refused_with_its_name(tmp_path):
+    import shutil
+    shutil.copytree(em.ROOT, tmp_path / "employees")
+    bad = tmp_path / "employees" / "bookkeeper" / "tasks" / "month-end" / "task.yaml"
+    bad.write_text(bad.read_text().replace("tools: [", "tools: [send_broadcast, "))
+    with pytest.raises(ValueError, match="month-end"):
+        em.load(tmp_path / "employees")
+
+
+def test_task_settings_per_business(fake_db):
+    em.save_task("tenant-a", "bookkeeper", "month-end", enabled=False, by="Owner")
+    em.save_task("tenant-a", "bookkeeper", "project-bill", instructions="Our layout, no VAT line.")
+    ts = em.task_settings("tenant-a")
+    assert em.tasks_off(ts, "bookkeeper") == {"month-end"}
+    assert ts[("bookkeeper", "project-bill")]["instructions"] == "Our layout, no VAT line."
+    assert em.task_settings("off-the-hook") == {}
+    view = {e["id"]: e for e in em.team_view("tenant-a")}
+    pb = next(t for t in view["bookkeeper"]["tasks"] if t["id"] == "project-bill")
+    assert pb["instructions"] == "Our layout, no VAT line." and pb["enabled"] is True
+    with pytest.raises(ValueError):
+        em.save_task("tenant-a", "bookkeeper", "fly-to-mars", enabled=False)
+
+
+def test_the_agent_narrows_to_the_task(all_modules, fake_db):
+    full = ca._tools_for("eval-tenant", role="owner", message="Send me this month's P&L")
+    tools, emp, note = ca._pick_employee("eval-tenant", "Send me this month's P&L", full)
+    names = {t["function"]["name"] for t in tools}
+    assert emp.id == "bookkeeper" and "THE TASK — the reports and month-end" in note
+    assert "financial_report" in names and "add_expense" not in names and "hand_over" in names
+
+
+
+@pytest.mark.asyncio
+async def test_a_task_setting_that_cannot_be_saved_is_a_clear_error_not_a_crash(monkeypatch):
+    from fastapi import HTTPException
+    from vula.api import commerce as api
+
+    with pytest.raises(HTTPException) as e:          # an unknown task is the caller's mistake: 400
+        await api.admin_employee_task_update("t1", "bookkeeper", "nope", api.EmployeeIn(enabled=False))
+    assert e.value.status_code == 400
+
+    def boom(*a, **k):
+        raise RuntimeError("relation vula_employee_tasks does not exist")
+    monkeypatch.setattr(em, "save_task", boom)
+    with pytest.raises(HTTPException) as e:          # e.g. before migration 237: 503, no internals
+        await api.admin_employee_task_update("t1", "bookkeeper", "month-end", api.EmployeeIn(enabled=False))
+    assert e.value.status_code == 503 and "relation" not in e.value.detail

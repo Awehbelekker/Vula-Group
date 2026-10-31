@@ -1,0 +1,2 @@
+- {prompt: "Can you track all payment for Rudolf on the statements", expect: bank-and-payments, tool: bank_payments}
+- {prompt: "Regan paid R2,300 against INV-00020 by EFT", expect: bank-and-payments, tool: record_payment}

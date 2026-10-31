@@ -1,0 +1,5 @@
+title: Fix a record
+summary: Correct something booked wrongly — the project, who paid, a duplicate — and keep the reason.
+triggers: [wrong project, filed under, move it, move bill, move the, belongs to, should be on, not ours, duplicate,
+           booked wrong, booked twice, correct the, fix the]
+tools: [move_to_project, client_paid_direct, bank_payments, record_payment, credit_note]

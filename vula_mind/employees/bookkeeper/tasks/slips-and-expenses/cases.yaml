@@ -1,0 +1,2 @@
+- {prompt: "I spent R450 on diesel for the bakkie", expect: slips-and-expenses, tool: add_expense}
+- {prompt: "How much do we owe Thandi for the expenses she paid?", expect: slips-and-expenses, tool: reimbursement_balance}

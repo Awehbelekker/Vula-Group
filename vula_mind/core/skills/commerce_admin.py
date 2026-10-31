@@ -1784,9 +1784,12 @@ def _pick_employee(tenant_id: str, message: str, tools: List[Dict[str, Any]]):
         if emp is None:
             _turn_note("employee", name="team")
             return team, None, ""
-        _turn_note("employee", name=emp.id)
-        return (employees.narrow(team, emp), emp,
-                employees.job_block(emp, settings[emp.id]["instructions"]))
+        tsets = employees.task_settings(tenant_id)
+        task = employees.pick_task(emp, message, employees.tasks_off(tsets, emp.id))
+        _turn_note("employee", name=emp.id, task=task.id if task else None)
+        task_note = (tsets.get((emp.id, task.id)) or {}).get("instructions", "") if task else ""
+        return (employees.narrow(team, emp, task), emp,
+                employees.job_block(emp, settings[emp.id]["instructions"], task, task_note))
     except Exception as exc:  # noqa: BLE001
         logger.debug("employee pick skipped: %s", exc)
         return tools, None, ""

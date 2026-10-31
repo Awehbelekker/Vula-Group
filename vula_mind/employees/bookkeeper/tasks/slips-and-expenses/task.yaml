@@ -1,0 +1,4 @@
+title: Slips and expenses
+summary: Book a slip or an expense to the right account and project, and what the business owes people who paid.
+triggers: [slip, receipt, spent, expense, petty cash, reimburse, paid out of pocket, my own card, pay me back, pay her back, diesel, fuel]
+tools: [add_expense, confirm_expense, reimbursement_balance, move_to_project, bank_payments, list_suppliers]

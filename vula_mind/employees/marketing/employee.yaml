@@ -1,0 +1,57 @@
+# 📣 AI marketing assistant. The front desk (core/skills/employees.py) hands this employee a message when
+# its keywords clearly win. tools: the only tools it is given (plus the shared ones and hand_over).
+id: marketing
+title: AI marketing assistant
+emoji: 📣
+summary: Promotions and broadcasts, posts in your own voice, discounts, your website pages.
+keywords:
+- promo
+- promotion
+- broadcast
+- blast
+- campaign
+- marketing
+- post
+- caption
+- advert
+- discount
+- coupon
+- voucher
+- special
+- website
+- web page
+- storefront
+- instagram
+- facebook
+- social
+- my voice
+- tone
+- competitor
+- flyer
+- newsletter
+- everyone
+- all customers
+- all our customers
+- all my customers
+- all clients
+- all our clients
+- mass message
+- photo
+tools:
+- add_storefront_section
+- apply_voice_persona
+- competitor_check
+- create_discount_code
+- delete_discount_code
+- draft_storefront_page
+- generate_marketing
+- learn_my_voice
+- list_discount_codes
+- list_storefront_pages
+- picture_promotion
+- preview_broadcast
+- recent_promotions
+- sales_summary
+- send_broadcast
+- set_product_photo
+- update_discount_code

@@ -1,0 +1,67 @@
+# 🤝 AI sales and customer service assistant. The front desk (core/skills/employees.py) hands this employee a message when
+# its keywords clearly win. tools: the only tools it is given (plus the shared ones and hand_over).
+id: sales
+title: AI sales and customer service assistant
+emoji: 🤝
+summary: Quotes, orders, customers and follow-ups, meetings, bookings and subscriptions.
+keywords:
+- quote
+- quotation
+- order
+- customer
+- lead
+- prospect
+- follow up
+- follow-up
+- followup
+- meeting
+- call sheet
+- visit
+- booking
+- appointment
+- book in
+- slot
+- sold
+- sales
+- sell
+- subscription
+- standing order
+- crm
+- dynamics
+- price list
+- datasheet
+- spec sheet
+- brochure
+tools:
+- booking_availability
+- cancel_booking
+- configure_call_sheet
+- convert_quote_to_invoice
+- create_booking
+- create_contact
+- create_invoice
+- create_manual_order
+- create_subscription
+- customer_lookup
+- draft_followup_email
+- dynamics_lookup
+- find_product_document
+- list_bookings
+- list_discount_codes
+- list_quotes
+- list_subscriptions
+- log_meeting
+- order_payment
+- outstanding_invoices
+- payment_link
+- price_advice
+- recent_orders
+- recurring_invoice
+- sales_summary
+- send_invoice
+- send_payment_reminders
+- stock_status
+- update_call_sheet
+- update_order_status
+- update_quote_status
+- view_call_sheet

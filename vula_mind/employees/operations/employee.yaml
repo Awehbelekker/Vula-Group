@@ -1,0 +1,66 @@
+# 📦 AI operations assistant. The front desk (core/skills/employees.py) hands this employee a message when
+# its keywords clearly win. tools: the only tools it is given (plus the shared ones and hand_over).
+id: operations
+title: AI operations assistant
+emoji: 📦
+summary: Stock, products, suppliers and purchase orders, production and costing, bookings.
+keywords:
+- stock
+- inventory
+- running low
+- run out
+- restock
+- reorder
+- supplier
+- purchaseorder
+- 'po '
+- recipe
+- batch
+- production
+- material
+- ingredient
+- costing
+- cost sheet
+- cost to make
+- product
+- catalogue
+- catalog
+- dispatch
+- deliver
+- received
+- arrived
+- wastage
+- reject
+- roster
+- schedule
+tools:
+- add_material
+- booking_availability
+- cancel_booking
+- cost_sheet
+- costing_settings
+- create_automation_rule
+- create_booking
+- create_product
+- create_purchase_order
+- delete_supplier
+- find_product_document
+- list_bookings
+- list_purchase_orders
+- list_suppliers
+- log_batch
+- price_material
+- receive_material
+- receive_stock
+- recent_orders
+- reorder_suggestions
+- send_purchase_order
+- set_product_photo
+- set_recipe
+- stock_status
+- undo_last_batch
+- update_order_status
+- update_po_status
+- update_product
+- update_stock
+- upsert_supplier

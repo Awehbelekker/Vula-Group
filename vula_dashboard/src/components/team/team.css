@@ -56,3 +56,9 @@
 @media (max-width: 600px) { .vtm-obs { grid-template-columns: minmax(0, 1fr); } }
 .vtm-start { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--fs-caption); color: var(--muted); }
 .vtm-start .vula-input { width: auto !important; }
+/* AI employees › tasks (team/EmployeesV2.jsx) */
+.vtm-tasks { margin-top: var(--space-3); border-top: 1px solid var(--line); padding-top: var(--space-2); }
+.vtm-tasks > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-size: var(--fs-body); color: var(--ink); }
+.vtm-tasks > ul { list-style: none; margin: 0; padding: 0; }
+.vtm-task { padding: var(--space-2) 0; border-bottom: 1px solid var(--line); color: var(--ink); }
+.vtm-task:last-child { border-bottom: 0; }

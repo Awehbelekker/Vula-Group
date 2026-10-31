@@ -1,0 +1,3 @@
+- {prompt: "Who still owes us money?", expect: payment-chase, tool: outstanding_invoices}
+- {prompt: "Chase everyone who is overdue", expect: payment-chase, tool: send_payment_reminders}
+- {prompt: "Send Sam a payment link for R1,200", expect: payment-chase, tool: payment_link}

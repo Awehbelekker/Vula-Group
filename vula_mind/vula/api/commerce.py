@@ -3793,6 +3793,24 @@ async def admin_employee_update(tenant_id: str, employee: str, body: EmployeeIn)
                                        instructions=body.instructions, by=body.by)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — e.g. the settings table isn't there yet
+        log.warning("AI employee settings not saved for %s: %s", tenant_id, exc)
+        raise HTTPException(status_code=503, detail="That couldn't be saved just now — please try again.")
+
+
+@router.put("/{tenant_id}/admin/employees/{employee}/tasks/{task}")
+async def admin_employee_task_update(tenant_id: str, employee: str, task: str, body: EmployeeIn):
+    """Switch one of an AI employee's tasks on or off, or give it instructions. Read back."""
+    import asyncio
+    from core.skills import employees
+    try:
+        return await asyncio.to_thread(employees.save_task, tenant_id, employee, task, enabled=body.enabled,
+                                       instructions=body.instructions, by=body.by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — e.g. the settings table isn't there yet
+        log.warning("AI employee settings not saved for %s: %s", tenant_id, exc)
+        raise HTTPException(status_code=503, detail="That couldn't be saved just now — please try again.")
 
 
 class DecisionIn(BaseModel):

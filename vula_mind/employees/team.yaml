@@ -1,0 +1,24 @@
+# Vula's AI employees (31 Oct 2026). Each folder is one employee:
+#   <employee>/employee.yaml   title, emoji, summary, front-desk keywords, tools
+#   <employee>/job.md          the job description in its prompt
+#   <employee>/tasks/<task>/   task.yaml (title, triggers, tools), prompt.md (how to do it),
+#                              cases.yaml (example messages, checked in CI), data/ (reference files)
+# Loaded by core/skills/employees.py. A business can switch an employee or a task off and give it
+# instructions (Team › AI employees); these files are the defaults every business starts from.
+order: [bookkeeper, sales, office_admin, marketing, operations]
+# Tools every employee keeps: the business's memory, exact arithmetic, reminders, and hand_over.
+shared_tools:
+- calculate
+- complete_reminder
+- create_reminder
+- decision_log
+- email_thread_summary
+- find_document
+- forget_rule
+- hand_over
+- list_reminders
+- list_rules
+- lookup_business_info
+- record_decision
+- remember_rule
+- withdraw_decision

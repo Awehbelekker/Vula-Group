@@ -1,0 +1,93 @@
+# 📒 AI bookkeeper. The front desk (core/skills/employees.py) hands this employee a message when
+# its keywords clearly win. tools: the only tools it is given (plus the shared ones and hand_over).
+id: bookkeeper
+title: AI bookkeeper
+emoji: 📒
+summary: Invoices and payments, slips and expenses, the bank, project costs, VAT and tax, reports.
+keywords:
+- invoice
+- bill
+- paid
+- payment
+- 'pay '
+- owe
+- owing
+- outstanding
+- debtor
+- expense
+- spent
+- spend
+- receipt
+- slip
+- bank
+- statement
+- reconcil
+- vat
+- tax
+- sars
+- profit
+- p&l
+- income statement
+- balance sheet
+- cash
+- money
+- budget
+- bookkeep
+- reimburse
+- petty cash
+- credit note
+- refund
+- final account
+- paid directly
+- wrong project
+- filed under
+- boq
+- bill of quantities
+- costs
+- turnover
+- revenue
+- account
+- eft
+- deposit
+- overdue
+- payment reminder
+- chase
+tools:
+- add_expense
+- bank_payments
+- boq_template
+- cash_summary
+- client_paid_direct
+- confirm_expense
+- convert_quote_to_invoice
+- cost_sheet
+- create_invoice
+- create_subscription
+- credit_note
+- finance_insights
+- finance_settings
+- financial_report
+- list_quotes
+- list_subscriptions
+- list_suppliers
+- move_to_project
+- order_payment
+- outstanding_invoices
+- payment_link
+- price_advice
+- project_profit
+- recent_orders
+- record_payment
+- recurring_invoice
+- reimbursement_balance
+- sales_summary
+- send_invoice
+- send_payment_reminders
+- set_tax_regime
+- set_vat_registration
+- share_project
+- tax_calendar
+- tax_estimate
+- update_order_status
+- update_quote_status
+- vat_position

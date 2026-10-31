@@ -157,6 +157,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("234", "vula_platform_state", None),
     ("235", "vula_decisions", None),
     ("236", "vula_employees", None),
+    ("237", "vula_employee_tasks", None),
 ]
 
 
