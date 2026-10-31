@@ -11,21 +11,21 @@ ready to send to suppliers via:
 
 Supplier routing:
     Each BOQ trade is mapped to preferred and alternative suppliers.
-    Judy maintains her supplier list in the Vula dashboard.
+    The owner keeps the supplier list in the Vula dashboard.
     Discounts and preferred rates stored per supplier.
 
 Order workflow:
     1. BOQ generated from plans
     2. OrderManager groups items by supplier/trade
-    3. Judy reviews order list in Vula Takeoff UI
+    3. The owner reviews the order list in Vula Takeoff
     4. Clicks "Send RFQ" — Vula sends request for quotation
     5. Supplier replies → Vula captures quote
-    6. Vula compares quotes → shows cheapest vs Judy's estimate
-    7. Judy approves → Vula sends purchase order
+    6. Vula compares quotes → shows cheapest vs the estimate
+    7. The owner approves → Vula sends the purchase order
 
 Usage:
     boq = await BOQGenerator(project).generate()
-    manager = OrderManager(boq, tenant_id="digg_001")
+    manager = OrderManager(boq, tenant_id="acme")
     orders = manager.build_orders()
     await manager.send_rfqs(orders)
 """
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -52,7 +53,7 @@ DB_PATH = _settings.data_dir / "suppliers.db"
 
 # ─── Supplier routing map ────────────────────────────────────────────────────
 # Maps BOQ trade → preferred supplier category
-# Judy builds her actual supplier list in the UI; these are defaults
+# Each business builds its own supplier list in the UI; these are defaults
 
 TRADE_SUPPLIER_MAP = {
     "demolition":  ["general_contractor"],
@@ -65,7 +66,7 @@ TRADE_SUPPLIER_MAP = {
     "glazing":     ["glazing_contractor"],
     "plumbing":    ["plumbing_contractor"],
     "electrical":  ["electrical_contractor"],
-    "hvac":        ["hvac_contractor"],          # ExtraAir in Judy's case
+    "hvac":        ["hvac_contractor"],          # the appointed HVAC contractor
     "fire":        ["fire_protection_contractor"],
     "painting":    ["painting_contractor", "general_contractor"],
     "external":    ["general_contractor"],
@@ -143,7 +144,8 @@ class OrderPackage:
 # ─── Supplier database ────────────────────────────────────────────────────────
 
 class SupplierDatabase:
-    """SQLite store for Judy's supplier contacts and discount terms."""
+    """SQLite store (written through to vula_takeoff_suppliers) for a business's supplier contacts
+    and discount terms, over a set of shared default suppliers."""
 
     DEFAULT_SUPPLIERS = [
         Supplier("sup_gc",    "General Contractor (TBC)",  "general_contractor",    discount_pct=0),
@@ -221,6 +223,19 @@ class SupplierDatabase:
         conn.commit()
         conn.close()
 
+    # A business's own copy of a default supplier is stored as "<tenant>__<default id>" (2026-10-31:
+    # suppliers were keyed by id alone, so one business editing a default re-tagged it as theirs and
+    # every other business lost it). The copy shadows the default for that business only.
+    @staticmethod
+    def _own_id(tenant_id: str, supplier_id: str) -> str:
+        base = supplier_id.split("__", 1)[-1]
+        return f"{tenant_id}__{base}"
+
+    def _visible(self, rows, tenant_id: str) -> List[Supplier]:
+        own = {r[0].split("__", 1)[-1] for r in rows if r[9] == tenant_id}
+        keep = [r for r in rows if r[9] == tenant_id or (r[9] == "default" and r[0] not in own)]
+        return [self._row_to_supplier(r) for r in keep]
+
     def get_by_category(self, category: str, tenant_id: str = "default") -> List[Supplier]:
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute(
@@ -228,15 +243,17 @@ class SupplierDatabase:
             (category, tenant_id)
         ).fetchall()
         conn.close()
-        return [self._row_to_supplier(r) for r in rows]
+        return self._visible(rows, tenant_id)
 
     def get_all(self, tenant_id: str = "default") -> List[Supplier]:
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute("SELECT * FROM suppliers WHERE tenant_id=? OR tenant_id='default'", (tenant_id,)).fetchall()
         conn.close()
-        return [self._row_to_supplier(r) for r in rows]
+        return self._visible(rows, tenant_id)
 
     def upsert_supplier(self, supplier: Supplier, tenant_id: str = "default"):
+        if tenant_id and tenant_id != "default":
+            supplier.id = self._own_id(tenant_id, supplier.id)
         conn = sqlite3.connect(self.db_path)
         conn.execute("""
             INSERT OR REPLACE INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -279,6 +296,11 @@ class SupplierDatabase:
         )
 
 
+def _from_address() -> str:
+    m = re.search(r"<([^>]+)>", _settings.from_email or "")
+    return m.group(1) if m else (_settings.from_email or "hello@vula.ai")
+
+
 # ─── Order Manager ────────────────────────────────────────────────────────────
 
 class OrderManager:
@@ -286,11 +308,15 @@ class OrderManager:
     Builds and sends purchase orders / RFQs from a BOQ.
     """
 
-    def __init__(self, boq: BOQ, tenant_id: str = "default"):
+    def __init__(self, boq: BOQ, tenant_id: str = "default", job_id: Optional[str] = None):
         self.boq = boq
         self.tenant_id = tenant_id
         self.db = SupplierDatabase()
         self._po_counter = 1
+        # PO numbers carry the job (2026-10-31: PO-YYYYMM-001 restarted on every job, and the PO
+        # number alone is the store's key, so a second job overwrote the first's orders).
+        import uuid as _uuid
+        self._po_tag = re.sub(r"[^A-Za-z0-9]", "", job_id or "")[:8].upper() or _uuid.uuid4().hex[:8].upper()
 
     def build_orders(self) -> OrderPackage:
         """Group BOQ items by supplier and build PO package."""
@@ -337,7 +363,7 @@ class OrderManager:
             ]
 
             po = PurchaseOrder(
-                po_number=f"PO-{datetime.now().strftime('%Y%m')}-{self._po_counter:03d}",
+                po_number=f"PO-{datetime.now().strftime('%Y%m')}-{self._po_tag}-{self._po_counter:02d}",
                 project_name=self.boq.project_name,
                 supplier=supplier,
                 lines=lines,
@@ -373,6 +399,14 @@ class OrderManager:
 
         return results
 
+    def _sender(self) -> str:
+        """The business the RFQ comes from — its brand name, as on its invoices."""
+        try:
+            from vula.commerce.boq_template import brand
+            return brand(self.tenant_id).get("display_name") or self.tenant_id
+        except Exception:  # noqa: BLE001
+            return self.tenant_id
+
     async def _send_rfq_email(self, po: PurchaseOrder) -> bool:
         """Send RFQ via Resend email API."""
         # From settings like every other Resend caller, so /ready's email check covers it.
@@ -386,6 +420,7 @@ class OrderManager:
             for i, ln in enumerate(po.lines)
         )
 
+        sender = self._sender()
         body = f"""Dear {po.supplier.contact_name or po.supplier.name},
 
 We are requesting your quotation for the following works for:
@@ -402,8 +437,7 @@ Total estimated value: R{po.estimated_total:,.0f} (excl. VAT)
 Please provide your best quotation by return email.
 
 Kind regards,
-DIGG | Judy Downing
-Professional Architectural Technologist — PAT44740093
+{sender}
 """
 
         try:
@@ -412,7 +446,9 @@ Professional Architectural Technologist — PAT44740093
                     "https://api.resend.com/emails",
                     headers={"Authorization": f"Bearer {RESEND_KEY}"},
                     json={
-                        "from": "Judy Downing <judy@digg.co.za>",
+                        # Sent from Vula's verified address in the business's name (never a
+                        # hard-coded client's).
+                        "from": f"{sender} via Vula <{_from_address()}>",
                         "to": [po.supplier.email],
                         "subject": f"RFQ — {po.project_name} — {po.supplier.category.replace('_',' ').title()}",
                         "text": body,
@@ -447,7 +483,7 @@ Professional Architectural Technologist — PAT44740093
             f"{lines_text}\n\n"
             f"Est. value: R{po.estimated_total:,.0f} excl. VAT\n\n"
             f"Reply with your best price. Full RFQ doc to follow by email.\n\n"
-            f"Judy Downing | DIGG | PAT44740093"
+            f"{self._sender()}"
         )
 
         number = (po.supplier.whatsapp or "").replace(" ", "").replace("+", "")
@@ -470,7 +506,7 @@ Professional Architectural Technologist — PAT44740093
             return False
 
     def order_summary_text(self, package: OrderPackage) -> str:
-        """Plain text order summary for Judy to review."""
+        """Plain text order summary for the owner to review."""
         lines = [
             f"VULA ORDER PACKAGE — {package.project_name}",
             f"Generated: {datetime.now().strftime('%d %B %Y %H:%M')}",

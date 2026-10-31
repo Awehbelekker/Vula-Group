@@ -165,7 +165,7 @@ async def _price(job_id: str, project, tenant_id: str, markup: float):
 
     _jobs[job_id]["status"] = "building_orders"
     _save_job(job_id)
-    order_mgr = OrderManager(boq, tenant_id=tenant_id)
+    order_mgr = OrderManager(boq, tenant_id=tenant_id, job_id=job_id)
     package = order_mgr.build_orders()
     _jobs[job_id]["orders"] = {
         "count": len(package.orders),
@@ -527,17 +527,31 @@ async def send_rfqs(job_id: str, request: SendRFQRequest, http_request: Request,
     if not job or job["status"] != "complete":
         raise HTTPException(404, "Job not found or not complete")
 
-    # Reconstruct from stored data (in production: load from DB)
+    if not request.dry_run:
+        # Sending RFQs reaches suppliers outside the business: it needs the confirm-before-send
+        # gate every other outward message has. Not built — said plainly, not faked.
+        raise HTTPException(501, "Sending RFQs to suppliers isn't available yet. Download the order "
+                                 "sheet and send it yourself.")
     return {
         "job_id": job_id,
-        "dry_run": request.dry_run,
-        "message": "In production, this sends emails/WhatsApp to all suppliers in the order package.",
-        "orders_count": job.get("orders", {}).get("count", 0),
+        "dry_run": True,
+        "would_send": job.get("orders", {}).get("count", 0),
+        "message": "Dry run: nothing was sent.",
     }
 
 
+def _supplier_tenant(request: Request, tenant_id: Optional[str]) -> str:
+    """The business whose suppliers these are. Required: without it a server/master caller edited
+    the shared defaults every business sees."""
+    t = authorized_tenant(request) or (tenant_id or "")
+    if not t or t == "default":
+        raise HTTPException(400, "Say which business: ?tenant_id=")
+    return t
+
+
 @router.get("/suppliers/list")
-async def list_suppliers(tenant_id: str = "default"):
+async def list_suppliers(request: Request, tenant_id: Optional[str] = None):
+    tenant_id = _supplier_tenant(request, tenant_id)
     db = SupplierDatabase()
     suppliers = db.get_all(tenant_id)
     return {
@@ -558,7 +572,9 @@ async def list_suppliers(tenant_id: str = "default"):
 
 
 @router.put("/suppliers/{supplier_id}")
-async def update_supplier(supplier_id: str, update: SupplierUpdate, tenant_id: str = "default"):
+async def update_supplier(supplier_id: str, update: SupplierUpdate, request: Request,
+                          tenant_id: Optional[str] = None):
+    tenant_id = _supplier_tenant(request, tenant_id)
     db = SupplierDatabase()
     suppliers = db.get_all(tenant_id)
     supplier = next((s for s in suppliers if s.id == supplier_id), None)
@@ -581,4 +597,4 @@ async def update_supplier(supplier_id: str, update: SupplierUpdate, tenant_id: s
         supplier.notes = update.notes
 
     db.upsert_supplier(supplier, tenant_id)
-    return {"status": "updated", "supplier_id": supplier_id}
+    return {"status": "updated", "supplier_id": supplier.id}
