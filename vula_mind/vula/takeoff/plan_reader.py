@@ -164,6 +164,11 @@ class PDFReader:
     3. Extract page images at 200 DPI for GLM-OCR processing
     """
 
+    def __init__(self, ocr: bool = True):
+        # ocr=False: pages with no text layer are kept, unread, instead of sent to the OCR model
+        # (the model-free benchmark, evals/takeoff_bench.py).
+        self.ocr = ocr
+
     async def read(self, path: Path) -> List[DrawingSheet]:
         sheets = []
         try:
@@ -181,7 +186,9 @@ class PDFReader:
                     # Identify sheet info from title block
                     sheet_num, title, scale, discipline = self._parse_title_block(full_text)
 
-                    if len(full_text) < 50:
+                    if len(full_text) < 50 and not self.ocr:
+                        markdown, source = full_text, "ocr_skipped"
+                    elif len(full_text) < 50:
                         # Scanned page — extract image and OCR
                         img_path = Path(f"/tmp/vula_sheet_{i}.png")
                         img = page.to_image(resolution=200)

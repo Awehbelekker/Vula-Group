@@ -1,4 +1,5 @@
 {
+  "case": "dxf_unitless_mm",
   "plan_type": "dxf",
   "synthetic": {
     "kind": "dxf",
@@ -88,21 +89,40 @@
     ],
     "blocks": []
   },
+  "source": {
+    "description": "Synthetic. Same unit with no declared units: measured by inference, but must be held for review.",
+    "licence": "Synthetic, Vula",
+    "via": "evals/takeoff_bench.py::_build"
+  },
+  "expect": {
+    "measurable": true,
+    "review": true
+  },
   "rooms": [
     {
-      "name": "Lounge",
-      "area": 48.0
+      "label": "Lounge",
+      "area_m2": 48.0,
+      "truth": "analytic"
     },
     {
-      "name": "Bedroom",
-      "area": 20.0
+      "label": "Bedroom",
+      "area_m2": 20.0,
+      "truth": "analytic"
     },
     {
-      "name": "Bathroom",
-      "area": 12.0
+      "label": "Bathroom",
+      "area_m2": 12.0,
+      "truth": "analytic"
     }
   ],
-  "gfa": 80.0,
-  "expect_review": true,
-  "note": "Synthetic. Same unit with no declared units: measured by inference, but must be held for review."
+  "gfa_m2": 80.0,
+  "review": {
+    "human_reviewed": true,
+    "prepared_by": "analytic: exact by construction"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
 }

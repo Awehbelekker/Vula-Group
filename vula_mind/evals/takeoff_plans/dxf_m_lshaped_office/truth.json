@@ -1,4 +1,5 @@
 {
+  "case": "dxf_m_lshaped_office",
   "plan_type": "dxf",
   "synthetic": {
     "kind": "dxf",
@@ -141,29 +142,50 @@
       }
     ]
   },
+  "source": {
+    "description": "Synthetic. 20m x 15m floor in metres ($INSUNITS=6) with an L-shaped office (14x6 + 8x9 = 156). Held for review: a DXF has no floor finishes, so flooring would go unpriced.",
+    "licence": "Synthetic, Vula",
+    "via": "evals/takeoff_bench.py::_build"
+  },
+  "expect": {
+    "measurable": true,
+    "review": true
+  },
   "rooms": [
     {
-      "name": "Open Plan Office",
-      "area": 156.0
+      "label": "Open Plan Office",
+      "area_m2": 156.0,
+      "truth": "analytic"
     },
     {
-      "name": "Boardroom",
-      "area": 36.0
+      "label": "Boardroom",
+      "area_m2": 36.0,
+      "truth": "analytic"
     },
     {
-      "name": "Kitchen",
-      "area": 30.0
+      "label": "Kitchen",
+      "area_m2": 30.0,
+      "truth": "analytic"
     },
     {
-      "name": "Store",
-      "area": 24.0
+      "label": "Store",
+      "area_m2": 24.0,
+      "truth": "analytic"
     },
     {
-      "name": "Reception",
-      "area": 54.0
+      "label": "Reception",
+      "area_m2": 54.0,
+      "truth": "analytic"
     }
   ],
-  "gfa": 300.0,
-  "expect_review": true,
-  "note": "Synthetic. 20m x 15m floor in metres ($INSUNITS=6) with an L-shaped office (14x6 + 8x9 = 156). Held for review: a DXF has no floor finishes, so flooring would go unpriced."
+  "gfa_m2": 300.0,
+  "review": {
+    "human_reviewed": true,
+    "prepared_by": "analytic: exact by construction"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
 }

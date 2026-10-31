@@ -1,0 +1,59 @@
+{
+  "case": "synthetic-four-room",
+  "file": "plan.pdf",
+  "sha256": "8bddc98ecd11f4dde7b6e3c606fbc45eda18bb7319b5413a9102b2f984f35c14",
+  "page": 1,
+  "plan_type": "synthetic_control",
+  "source": {
+    "description": "Original synthetic A-101 four-room sheet (demo/make_sample_plan.py)",
+    "licence": "Apache-2.0 (OpenTakeoff)",
+    "via": "OpenTakeoff apache-2.0-final @ 84c7f48e (Apache-2.0): demo/sample-plan.pdf"
+  },
+  "scale": {
+    "label": "1/4\" = 1'-0\"",
+    "drawn_to_scale": true,
+    "m_per_px": 0.008466666666666667
+  },
+  "expect": {
+    "measurable": true
+  },
+  "rooms": [
+    {
+      "label": "OFFICE 101",
+      "finish": null,
+      "area_m2": 40.077,
+      "truth": "analytic",
+      "perimeter_m": 26.213
+    },
+    {
+      "label": "OFFICE 102",
+      "finish": null,
+      "area_m2": 40.077,
+      "truth": "analytic",
+      "perimeter_m": 26.213
+    },
+    {
+      "label": "BREAK 103",
+      "finish": null,
+      "area_m2": 40.077,
+      "truth": "analytic",
+      "perimeter_m": 26.213
+    },
+    {
+      "label": "CORRIDOR 104",
+      "finish": null,
+      "area_m2": 40.077,
+      "truth": "analytic",
+      "perimeter_m": 26.213
+    }
+  ],
+  "review": {
+    "human_reviewed": false,
+    "prepared_by": "analytic: exact by construction"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}

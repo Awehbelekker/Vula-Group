@@ -1,0 +1,43 @@
+{
+  "case": "va-shreveport-c300-lengths",
+  "file": "plan.pdf",
+  "sha256": "70734211d5fb945f13b516c83d131692684f1ac00c56e6bee240b05254afea8a",
+  "page": 1,
+  "plan_type": "civil_site_utility",
+  "source": {
+    "description": "VA 667-23-113 Fisher House Site Prep, Overton Brooks VAMC Shreveport — sheet C-300 (SAM.gov 7a75c7c60b0d49638a80b7f9ea67d06e, sheet 6 of 16)",
+    "licence": "US federal solicitation drawing posted publicly on SAM.gov; A/E retains its rights; redistributed for engineering test purposes only",
+    "via": "OpenTakeoff apache-2.0-final @ 84c7f48e (Apache-2.0): evals/four-asks-2026-09-02/sheets/va-shreveport-fisher-house-site-utility-C300.pdf"
+  },
+  "scale": {
+    "label": "1\" = 20'",
+    "drawn_to_scale": true,
+    "basis": "drawn scale note on the sheet"
+  },
+  "expect": {
+    "measurable": true
+  },
+  "lengths": [
+    {
+      "label": "8\" sewer line MH to MH",
+      "length_m": 121.92,
+      "truth": "printed",
+      "printed": "400' OF 8\" SEWER LINE @ 0.4%"
+    },
+    {
+      "label": "6\" sewer service line",
+      "length_m": 30.48,
+      "truth": "printed_nominal",
+      "printed": "100' OF 6\" SEWER SERVICE LINE @ 1.0% MIN. (a rounded call-out)"
+    }
+  ],
+  "review": {
+    "human_reviewed": false,
+    "prepared_by": "the sheet's own printed lengths"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}

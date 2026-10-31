@@ -1,0 +1,68 @@
+{
+  "case": "va-stcloud-af101",
+  "file": "plan.pdf",
+  "sha256": "53aa2a44efc8f9a2e625ed223fcfbf9ee19d15eb8469ba57183874b6a8e2a56f",
+  "page": 1,
+  "plan_type": "healthcare_finish_plan",
+  "source": {
+    "description": "VA 656-19-306 Renovate Bldg 28 1st Floor East RRTP, St. Cloud VAMC — sheet AF101 First Floor Finish Plan (page 2 is the AF600 finish schedule)",
+    "licence": "US federal solicitation drawing posted publicly on SAM.gov; A/E retains its rights; redistributed for engineering test purposes only",
+    "via": "OpenTakeoff apache-2.0-final @ 84c7f48e (Apache-2.0): demo/sample-finish-plan.pdf"
+  },
+  "scale": {
+    "label": "1/8\" = 1'-0\"",
+    "drawn_to_scale": true,
+    "m_per_px": 0.016933333333333335
+  },
+  "expect": {
+    "measurable": true
+  },
+  "rooms": [
+    {
+      "label": "CONFERENCE/BREAK ROOM 134",
+      "finish": "CPT-1",
+      "area_m2": 25.877,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "CONFERENCE/BREAK ROOM 134",
+      "finish": "VCT-1",
+      "area_m2": 5.335,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "STORAGE 134A",
+      "finish": "CPT-1",
+      "area_m2": 1.519,
+      "truth": "reference_ring",
+      "printed_area_m2": 1.486
+    },
+    {
+      "label": "OFFICE 136",
+      "finish": "CPT-1",
+      "area_m2": 12.042,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "PATIENT ROOM 137",
+      "finish": "CPT-1",
+      "area_m2": 23.406,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "TOILET 137A",
+      "finish": "PT-1/PT-2",
+      "area_m2": 5.655,
+      "truth": "reference_ring"
+    }
+  ],
+  "review": {
+    "human_reviewed": false,
+    "prepared_by": "AI agent from the PDF vector linework (OpenTakeoff plan-set v2); every vertex cites its source segments. Not yet checked by a person."
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}

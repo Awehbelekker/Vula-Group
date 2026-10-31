@@ -11,9 +11,32 @@ from vula.takeoff.plan_reader import DXFReader, Room
 
 def test_every_model_free_case_passes():
     report = asyncio.run(bench.run())
-    failed = [(r["id"], r["checks"]) for r in report["results"] if not r.get("skipped") and not r["passed"]]
-    assert report["summary"]["cases"] >= 4
+    covered = [r for r in report["results"] if not r.get("skipped") and r.get("covered", True)]
+    failed = [(r["id"], r["checks"]) for r in covered if not r["passed"]]
+    assert report["summary"]["cases"] >= 5
     assert not failed, failed
+    assert not report["summary"]["skipped"]         # every real plan matches its sha256
+
+
+def test_the_not_to_scale_sheet_comes_back_unmeasured():
+    r = asyncio.run(bench.run_case(bench.load_cases("va-roseburg-a03a-nts")[0]))
+    assert r["covered"] and r["passed"] and r["checks"] == {"unmeasured": True}
+
+
+def test_real_plans_are_intact_and_licensed():
+    import hashlib
+    real = [c for c in bench.load_cases() if c.get("file")]
+    assert len(real) >= 6
+    for c in real:
+        assert hashlib.sha256((c["dir"] / c["file"]).read_bytes()).hexdigest() == c["sha256"], c["id"]
+        assert (c.get("source") or {}).get("licence"), c["id"]
+        assert c.get("tolerances", {}).get("area_pct") == 2.0, c["id"]
+
+
+def test_an_uncovered_case_is_never_a_pass():
+    truth = {"rooms": [{"label": "LIVING", "area_m2": 23.854}]}
+    s = bench.score(SimpleNamespace(rooms=[], review={"status": "pending"}), truth)
+    assert s["covered"] is False and s["passed"] is False
 
 
 def test_the_benchmark_catches_millimetres_read_as_metres(monkeypatch):

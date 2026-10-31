@@ -1,4 +1,5 @@
 {
+  "case": "dxf_mm_apartment",
   "plan_type": "dxf",
   "synthetic": {
     "kind": "dxf",
@@ -128,25 +129,44 @@
       }
     ]
   },
+  "source": {
+    "description": "Synthetic. 10m x 8m unit drawn in mm ($INSUNITS=4): lounge 6x8, bedroom 4x5, bath 4x3. A drain block must not count as a door. Held for review: a DXF has no floor finishes, so flooring would go unpriced.",
+    "licence": "Synthetic, Vula",
+    "via": "evals/takeoff_bench.py::_build"
+  },
+  "expect": {
+    "measurable": true,
+    "review": true
+  },
   "rooms": [
     {
-      "name": "Lounge",
-      "area": 48.0
+      "label": "Lounge",
+      "area_m2": 48.0,
+      "truth": "analytic"
     },
     {
-      "name": "Bedroom",
-      "area": 20.0
+      "label": "Bedroom",
+      "area_m2": 20.0,
+      "truth": "analytic"
     },
     {
-      "name": "Bathroom",
-      "area": 12.0
+      "label": "Bathroom",
+      "area_m2": 12.0,
+      "truth": "analytic"
     }
   ],
-  "gfa": 80.0,
-  "counts": {
+  "gfa_m2": 80.0,
+  "opening_counts": {
     "doors": 2,
     "windows": 3
   },
-  "expect_review": true,
-  "note": "Synthetic. 10m x 8m unit drawn in mm ($INSUNITS=4): lounge 6x8, bedroom 4x5, bath 4x3. A drain block must not count as a door. Held for review: a DXF has no floor finishes, so flooring would go unpriced."
+  "review": {
+    "human_reviewed": true,
+    "prepared_by": "analytic: exact by construction"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
 }
