@@ -84,6 +84,40 @@ or QS-view path.
 8. **Item 3: benchmark.** Add `tests/benchmarks/takeoff/` fixtures and a pytest that reports area,
    length and count error % per plan type and fails above tolerance.
 
+## Who builds what (31 Oct 2026, so the work isn't done twice)
+
+A second session ("Vula-Group go-live and takeoff", branch `ccr-f7a53584-worzz4`,
+`docs/golive-and-takeoff-audit.md` Phase 4) audited the same takeoff items and is building them.
+To avoid two builds of the same thing:
+
+| Work | Owner |
+|---|---|
+| Items 2-7, fixes A-D (DXF units, rates matching, cents, calibration, confidence, benchmark, review gate, flooring BOQ, `_job_for`, dashboard): `plan_reader.py`, `boq_generator.py`, `api.py`, `TakeoffV2.jsx` | **go-live session** (`ccr-f7a53584-worzz4`) |
+| Item 1, OpenTakeoff sidecar: `services/opentakeoff/`, `vula/takeoff/opentakeoff_client.py` (new files only) | **this session** (`ccr-d6954993-0a7b3b`), **done** |
+| Wiring the sidecar into `PlanReader.read` (a ~3-line call) | go-live session, next to its calibration/confidence code |
+
+Findings 1-5 from this audit (fail-open `_job_for`, DXF rooms replacing named rooms, the mock-drawings
+bug, migration 013 as a gate option, OpenTakeoff's own roll/waste/scale provenance) were sent to that
+session.
+
+### Item 1: what was built
+
+- `services/opentakeoff/Dockerfile` builds OpenTakeoff at tag `apache-2.0-final` = `84c7f48e…`
+  (verified on GitHub: the LICENSE at that commit is Apache-2.0 and the NOTICE file is present).
+  The build re-checks both. Upstream LICENSE, NOTICE and THIRD-PARTY-NOTICES ship unchanged in the
+  image, and no upstream source is in the repo. `tests/test_opentakeoff_sidecar_pin.py` fails CI if
+  the pin moves.
+- `services/opentakeoff/bridge.mjs` is Vula's HTTP wrapper around the engine's MCP stdio server
+  (`POST /measure`). It starts a fresh engine per plan, takes the scale from an override or the
+  drawn note (unscaled sheets are not measured), runs `detect_rooms`, and returns the engine's
+  units. It is locked without `OPENTAKEOFF_API_KEY`.
+- `vula/takeoff/opentakeoff_client.py`: `measure_plan()` (fail-open), conversion to metres, and
+  `apply_measurements()`, which fills the existing `ExtractedProject` and returns AI-vs-measured
+  `agreements`. Those agreements are the input for measured confidence (item 4) and the review gate (item 5).
+- **Not yet run end to end.** The bridge and Docker image were not executed in this session
+  (running upstream code was blocked here). The Python side is covered by mocked tests. The first
+  real run belongs on staging with a known plan.
+
 ## Decisions I need from you before building
 
 1. **Gate table (item 5).** Migration 137 cannot hold a takeoff review without a schema change.
