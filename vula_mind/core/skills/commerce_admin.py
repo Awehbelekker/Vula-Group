@@ -1078,6 +1078,52 @@ REMINDER_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
 ]
+# 31 Oct 2026: a spreadsheet the owner describes in words (vula/commerce/sheet_builder.py). The
+# model writes only the layout (the spec); the rows and every total come from the books.
+SHEET_TOOLS = [
+    {"type": "function", "function": {
+        "name": "custom_sheet",
+        "description": "Build a spreadsheet the owner describes in their own words — 'every Tile Co "
+                       "invoice this year by project, VAT split, per month', 'bank lines for Seaview "
+                       "in October in excel', 'a sheet of all expenses on my own card'. Steps: "
+                       "action 'design' with a spec (source, filters, columns, group_by, totals, title) "
+                       "shows the owner what was understood and a preview; when they ask for a change, "
+                       "call 'design' again with the whole revised spec; 'build' (on 'build it' / 'yes') "
+                       "makes the file from the last preview; 'save' keeps the layout under a name; "
+                       "'use' re-runs a saved one (with a new period); 'list' shows the saved ones. Use the "
+                       "owner's words for filters (supplier, project, customer as said); never put a "
+                       "figure in the spec. Sources and their columns — supplier_invoices: date, number, "
+                       "supplier, project, excl_vat, vat, total, category, status; supplier_lines: date, "
+                       "number, supplier, project, description, quantity, unit_price, line_total; bank: "
+                       "date, description, payee, reference, money_in, money_out, amount, project, account, "
+                       "status; expenses: date, supplier, description, amount, vat, account, project, "
+                       "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
+                       "date, due, project, excl_vat, vat, total, paid, owed, status; orders: number, date, "
+                       "customer, channel, status, subtotal, delivery, total. The reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["design", "build", "save", "use", "list"]},
+            "request": {"type": "string", "description": "The owner's request in their words."},
+            "name": {"type": "string", "description": "For save/use: the sheet's name, e.g. 'Tile Co monthly'."},
+            "spec": {"type": "object", "properties": {
+                "source": {"type": "string", "enum": ["supplier_invoices", "supplier_lines", "bank", "expenses",
+                                                      "customer_invoices", "orders"]},
+                "columns": {"type": "array", "items": {"type": "string"}},
+                "group_by": {"type": "string", "enum": ["none", "month", "project", "supplier", "customer",
+                                                        "account", "status"]},
+                "totals": {"type": "array", "items": {"type": "string"},
+                           "description": "Money columns to total; omit for all of them."},
+                "title": {"type": "string"},
+                "filters": {"type": "object", "properties": {
+                    "period": {"type": "string", "enum": ["this_month", "last_month", "this_year", "last_year",
+                                                          "tax_year", "last_tax_year", "last_12_months", "all"]},
+                    "since": {"type": "string", "description": "YYYY-MM-DD"},
+                    "until": {"type": "string", "description": "YYYY-MM-DD"},
+                    "supplier": {"type": "string"}, "project": {"type": "string"},
+                    "customer": {"type": "string"}, "account": {"type": "string"},
+                    "status": {"type": "string"}, "type": {"type": "string"}}}}}},
+            "required": ["action"]}}},
+]
+
 # 2026-09-28 (DIGG): the QS agent's figures — job costing from the bank (received / cost by
 # trade / overhead share / profit vs the cost-plus fee) and pricing advice from what the business
 # actually paid (vula/commerce/job_costing.py). Read-only; every number comes from the tool.
@@ -1398,7 +1444,7 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
-                   + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS)
+                   + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS)
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1639,7 +1685,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_DOC_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS + SHEET_TOOLS)  # always on
     try:
         from vula.api.tenants import tenant_profile
         profile = tenant_profile(tenant_id)
@@ -1688,7 +1734,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "custom_sheet": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -1899,6 +1945,9 @@ async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any]
     search."""
     if tool != "find_document" or not isinstance(result, dict):
         return None
+    from core.skills.base import wants_custom_layout
+    if wants_custom_layout(question or ""):
+        return None                    # the owner's own layout: the model goes on to custom_sheet
     if looks_like_supplier_history_question(question or ""):
         # Never label (or name the file) after the model's own search words — 2026-09-26.
         supplier = service.supplier_label(result)
@@ -1945,7 +1994,11 @@ class CommerceAdminSkill(BaseSkill):
         # supplier-history answer) is answered from the numbers with no model call, and an
         # explicit "in excel"/"spreadsheet" ask gets a real .xlsx — see
         # vula.commerce.service.answer_supplier_history/answer_supplier_history_continuation.
-        if looks_like_supplier_history_question(inp.question or ""):
+        from core.skills.base import wants_custom_layout
+        custom_layout = wants_custom_layout(inp.question or "")
+        if custom_layout:
+            pass                       # a sheet in the owner's own layout: the sheet builder (custom_sheet)
+        elif looks_like_supplier_history_question(inp.question or ""):
             try:
                 direct = await service.answer_supplier_history(inp.tenant_id, inp.question, phone=phone)
             except Exception as exc:  # noqa: BLE001 — fall through to the tool-calling loop
@@ -2741,6 +2794,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._share_project(tid, args, ctx)
             if name == "project_bill_file":
                 return await self._project_bill_file(tid, args)
+            if name == "custom_sheet":
+                return await self._custom_sheet(tid, args, ctx)
             if name == "client_paid_direct":
                 return await self._client_paid_direct(tid, args, ctx)
             if name == "price_advice":
@@ -3550,6 +3605,127 @@ class CommerceAdminSkill(BaseSkill):
         text += ("\n\nChecked against the books. Have a look before you send it to the client — "
                  "the links are for you and last a week.")
         return {"reply_verbatim": text, "balance_cents": out["figures"]["balance"]}
+
+    async def _custom_sheet(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The sheet builder (vula/commerce/sheet_builder.py): design → preview, build → the file
+        checked against the books, save / use / list the business's own layouts."""
+        import asyncio
+        from vula.commerce import sheet_builder as sb
+        ctx = ctx or {}
+        phone = ctx.get("phone") or ""
+        by = phone or "dashboard"
+        access = _member_access(tid, phone or None)
+        action = args.get("action") or "design"
+
+        def refused(spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            src = sb.SOURCES[spec["source"]]
+            if access is not None and src.scope not in access:
+                return {"status": "need_info", "message": f"Your access doesn't include {src.label.lower()} — "
+                                                          "ask the owner to give you that area in Team."}
+            return None
+
+        async def preview(spec: Dict[str, Any], request: str, template_id: Optional[str] = None,
+                          lead: str = "") -> Dict[str, Any]:
+            spec = sb.validate(spec)
+            no = refused(spec)
+            if no:
+                return no
+            resolved = await sb.resolve(tid, spec)
+            rows = await asyncio.to_thread(sb.rows_for, tid, spec, resolved)
+            tot = sb.totals(spec, rows)
+            text = lead + sb.preview_text(spec, resolved, rows)
+            try:
+                await asyncio.to_thread(sb.save_draft, tid, spec, request, by, tot, len(rows), template_id)
+            except Exception as exc:  # noqa: BLE001 — e.g. before migration 238
+                logger.warning("sheet draft not kept for %s: %s", tid, exc)
+                text += "\n\n(I couldn't keep this draft just now, so I can't build it yet — please try again shortly.)"
+            return {"reply_verbatim": text, "spec": spec, "rows": len(rows)}
+
+        try:
+            if action == "list":
+                ts = await asyncio.to_thread(sb.templates, tid)
+                if not ts:
+                    return {"reply_verbatim": "You have no saved sheets yet. Describe one and, once it's right, "
+                                              "say *save it as* and a name."}
+                return {"reply_verbatim": "📊 Your saved sheets:\n" + "\n".join(
+                    f"• *{t['name']}* — {sb.SOURCES.get((t.get('spec') or {}).get('source'), sb.SOURCES['bank']).label}"
+                    + (f", last made {str(t['last_built_at'])[:10]}" if t.get("last_built_at") else "")
+                    for t in ts) + "\n\nSay e.g. “the " + ts[0]["name"] + " for last month”."}
+            if action == "use":
+                t = await asyncio.to_thread(sb.find_template, tid, args.get("name") or "")
+                if not t:
+                    names = [x["name"] for x in await asyncio.to_thread(sb.templates, tid)]
+                    return {"status": "need_info", "message": "I don't have a saved sheet by that name"
+                            + (f" — saved ones: {', '.join(names)}." if names else ".")}
+                spec = dict(t.get("spec") or {})
+                over = ((args.get("spec") or {}).get("filters") or {})
+                if any(over.get(k) for k in ("period", "since", "until")):
+                    spec["filters"] = {**{k: v for k, v in (spec.get("filters") or {}).items()
+                                          if k not in ("period", "since", "until")},
+                                       **{k: over[k] for k in ("period", "since", "until") if over.get(k)}}
+                return await preview(spec, args.get("request") or ctx.get("message") or "", t["id"])
+            if action == "design":
+                return await preview(args.get("spec") or {}, args.get("request") or ctx.get("message") or "")
+            if action == "save":
+                d = await asyncio.to_thread(sb.latest_draft, tid, by, True)
+                if not d:
+                    return {"status": "need_info", "message": "Which sheet? Describe it first, then save it."}
+                t = await asyncio.to_thread(sb.save_template, tid, d, args.get("name") or "", by)
+                return {"reply_verbatim": f"✅ Saved as *{t['name']}*" + (" (replacing the old one)" if t["replaced"] else "")
+                        + f". Next time just say “the {t['name']} for October” (or any period)."}
+            if action == "build":
+                d = await asyncio.to_thread(sb.latest_draft, tid, by)
+                if not d:
+                    return {"status": "need_info", "message": "Which sheet? Describe what you want in it and I'll show you a preview first."}
+                stored = d.get("spec") or {}
+                spec = sb.validate({k: v for k, v in stored.items() if not k.startswith("_")})
+                no = refused(spec)
+                if no:
+                    return no
+                resolved = await sb.resolve(tid, spec)
+                rows = await asyncio.to_thread(sb.rows_for, tid, spec, resolved)
+                tot = sb.totals(spec, rows)
+                if tot != (stored.get("_preview_totals") or {}) or len(rows) != stored.get("_rows"):
+                    return await preview(spec, d.get("request") or "", d.get("template_id"),
+                                         lead="The books changed since the preview, so here it is again:\n\n")
+                if not rows:
+                    return {"status": "need_info", "message": "There's nothing in that sheet — change the period, supplier or project."}
+                from vula.api.tenants import display_name
+                from vula.commerce import xlsx_check
+                accent = await service._brand_accent(tid)
+                data, want = await asyncio.to_thread(sb.workbook, display_name(tid), spec, resolved, rows, accent)
+                wrong = xlsx_check.mismatches(data, want)
+                if wrong:
+                    logger.error("custom sheet read-back failed for %s: %s", tid, wrong)
+                    return {"error": "The spreadsheet didn't add up to the books, so I haven't sent it."}
+                from vula.api.whatsapp import _send_invoice_document, _upload_to_storage
+                from vula.storage_links import SHARE_TTL, signed
+                stem = re.sub(r"[^A-Za-z0-9]+", "_", spec["title"]).strip("_")[:60] or "Sheet"
+                fname = f"{stem}_{datetime.now(timezone.utc).date().isoformat()}.xlsx"
+                ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                url = await asyncio.to_thread(_upload_to_storage, "documents", f"{tid}/sheets/{d['id']}/{fname}", data, ctype)
+                link = signed(url, SHARE_TTL) if url else None
+                sent = False
+                if phone:
+                    try:
+                        sent = await _send_invoice_document(phone, data, fname, spec["title"], tid, content_type=ctype)
+                    except Exception as exc:  # noqa: BLE001 — the link still works
+                        logger.warning("custom sheet send failed for %s: %s", tid, exc)
+                if not (sent or link):
+                    return {"error": "The sheet was made but couldn't be sent or stored just now — please try again."}
+                await asyncio.to_thread(sb.mark_built, tid, d)
+                src = sb.SOURCES[spec["source"]]
+                text = (f"📊 *{spec['title']}* — {len(rows):,} row(s), checked against the books."
+                        + ("\nTotals: " + " · ".join(f"{src.fields[c].label} {sb._r(v)}" for c, v in tot.items()) if tot else "")
+                        + ("\nIt's in the file above." if sent else "")
+                        + (f"\nDownload (for a week): {link}" if link else "")
+                        + "\n\nWant it again another month? Reply *save it as* and a name.")
+                return {"reply_verbatim": text}
+            return {"status": "need_info", "message": "Do you want me to design, build, save or list a sheet?"}
+        except sb.SpecError as exc:
+            return {"status": "need_info", "message": str(exc)}
+        except RuntimeError as exc:
+            return {"error": f"That couldn't be saved — {exc}."}
 
     async def _client_paid_direct(self, tid: str, args: Dict[str, Any],
                                   ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

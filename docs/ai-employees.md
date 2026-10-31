@@ -61,6 +61,10 @@ vula_mind/employees/
 │       │   ├── task.yaml               When to use it (trigger words) and its tools
 │       │   ├── prompt.md               How to do it, step by step
 │       │   └── cases.yaml              Example messages, checked on every change
+│       ├── custom-sheet/               A spreadsheet in the owner's own layout
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   └── cases.yaml              Example messages, checked on every change
 │       ├── fix-a-record/               Fix a record
 │       │   ├── task.yaml               When to use it (trigger words) and its tools
 │       │   ├── prompt.md               How to do it, step by step
@@ -230,7 +234,7 @@ vula_mind/
 
 ## 3. The AI employees
 
-**Shared by every employee:** `calculate`, `complete_reminder`, `create_reminder`, `decision_log`, `email_thread_summary`, `find_document`, `forget_rule`, `hand_over`, `list_reminders`, `list_rules`, `lookup_business_info`, `record_decision`, `remember_rule`, `withdraw_decision`. That is the business's memory (what it sells, its rules and decisions, filed documents and emails), exact arithmetic, reminders, and hand_over.
+**Shared by every employee:** `calculate`, `complete_reminder`, `create_reminder`, `custom_sheet`, `decision_log`, `email_thread_summary`, `find_document`, `forget_rule`, `hand_over`, `list_reminders`, `list_rules`, `lookup_business_info`, `record_decision`, `remember_rule`, `withdraw_decision`. That is the business's memory (what it sells, its rules and decisions, filed documents and emails), exact arithmetic, reminders, a spreadsheet in the owner's own layout (custom_sheet, previewed and checked against the books), and hand_over.
 
 ### 📒 AI bookkeeper (`bookkeeper`)
 
@@ -240,13 +244,14 @@ _Invoices and payments, slips and expenses, the bank, project costs, VAT and tax
 
 > You are the business's bookkeeper. You keep the books right: invoices and who has paid, slips and expenses booked to the right account and project, bank lines matched, what a project cost against what the client paid, VAT and tax, and the reports. Every figure comes from a tool or the calculate tool — never from your head. When the owner corrects something or settles who paid what, note it with record_decision, and give the decision as the reason when someone asks why a figure is what it is. If a number doesn't add up, say so plainly instead of smoothing it over.
 
-**Front-desk words** (with its tasks' trigger words): 'invoice', 'bill', 'paid', 'payment', 'pay', 'owe', 'owing', 'outstanding', 'debtor', 'expense', 'spent', 'spend', 'receipt', 'slip', 'bank', 'statement', 'reconcil', 'vat', 'tax', 'sars', 'profit', 'p&l', 'income statement', 'balance sheet', 'cash', 'money', 'budget', 'bookkeep', 'reimburse', 'petty cash', 'credit note', 'refund', 'final account', 'paid directly', 'wrong project', 'filed under', 'boq', 'bill of quantities', 'costs', 'turnover', 'revenue', 'account', 'eft', 'deposit', 'overdue', 'payment reminder', 'chase', 'move it', 'move the', 'belongs to', 'should be on', 'not ours', 'duplicate', 'booked wrong', 'booked twice', 'correct the', 'fix the', 'month end', 'month-end', 'financial report', 'how did we do', 'remind them to pay', 'balance due', 'close out', 'close the project', 'my own card', 'diesel', 'fuel'
+**Front-desk words** (with its tasks' trigger words): 'invoice', 'bill', 'paid', 'payment', 'pay', 'owe', 'owing', 'outstanding', 'debtor', 'expense', 'spent', 'spend', 'receipt', 'slip', 'bank', 'statement', 'reconcil', 'vat', 'tax', 'sars', 'profit', 'p&l', 'income statement', 'balance sheet', 'cash', 'money', 'budget', 'bookkeep', 'reimburse', 'petty cash', 'credit note', 'refund', 'final account', 'paid directly', 'wrong project', 'filed under', 'boq', 'bill of quantities', 'costs', 'turnover', 'revenue', 'account', 'eft', 'deposit', 'overdue', 'payment reminder', 'chase', 'spreadsheet', 'excel', 'xlsx', 'csv', 'a sheet of', 'in a sheet', 'as a sheet', 'saved sheet', 'my sheets', 'build it', 'move it', 'move the', 'belongs to', 'should be on', 'not ours', 'duplicate', 'booked wrong', 'booked twice', 'correct the', 'fix the', 'month end', 'month-end', 'financial report', 'how did we do', 'remind them to pay', 'balance due', 'close out', 'close the project', 'my own card', 'diesel', 'fuel'
 
 **Tasks:**
 
 | Task | When | Tools |
 |---|---|---|
 | **The bank and payments received** (`bank-and-payments`) — Find payments on the bank statements, and record what customers have paid. | 'bank', 'statement', 'statements', 'bank lines', 'eft', 'deposit', 'paid us', 'has paid', 'payment from', 'reconcile' | `bank_payments`, `cash_summary`, `client_paid_direct`, `move_to_project`, `outstanding_invoices`, `record_payment` |
+| **A spreadsheet in the owner's own layout** (`custom-sheet`) — Any sheet the owner describes — supplier invoices, bank lines, expenses, customer invoices or orders — previewed, then built from the books. | 'spreadsheet', 'excel', 'xlsx', 'csv', 'a sheet of', 'in a sheet', 'as a sheet', 'saved sheet', 'my sheets', 'build it' | `custom_sheet`, `find_document` |
 | **Fix a record** (`fix-a-record`) — Correct something booked wrongly — the project, who paid, a duplicate — and keep the reason. | 'wrong project', 'filed under', 'move it', 'move bill', 'move the', 'belongs to', 'should be on', 'not ours', 'duplicate', 'booked wrong', 'booked twice', 'correct the', 'fix the' | `bank_payments`, `client_paid_direct`, `credit_note`, `move_to_project`, `record_payment` |
 | **Month-end and the reports** (`month-end`) — Profit and loss, cash in and out, VAT and tax, from the business's own books. | 'p&l', 'profit and loss', 'income statement', 'balance sheet', 'month end', 'month-end', 'financial report', 'financial statements', 'vat', 'tax', 'sars', 'cash flow', 'money in and out', 'how did we do' | `cash_summary`, `finance_insights`, `finance_settings`, `financial_report`, `outstanding_invoices`, `sales_summary`, `set_tax_regime`, `set_vat_registration`, `tax_calendar`, `tax_estimate`, `vat_position` |
 | **Chase payments** (`payment-chase`) — Who owes the business, how overdue, and reminders or a payment link — previewed first. | 'who owes', 'owes us', 'owe us', 'overdue', 'chase', 'payment reminder', 'remind them to pay', 'debtors', 'unpaid invoice', 'payment link', 'still owes' | `bank_payments`, `outstanding_invoices`, `payment_link`, `record_payment`, `send_invoice`, `send_payment_reminders` |
@@ -264,6 +269,28 @@ THE TASK — the bank and money received.
    client_paid_direct, never record_payment.
 3. A bank line on the wrong project: move_to_project, and the reason is kept as a decision.
 4. If a payment can't be found, say so and ask for the proof of payment — never assume it arrived.
+```
+</details>
+
+<details><summary>A spreadsheet in the owner's own layout: the task prompt</summary>
+
+```
+THE TASK — a spreadsheet the owner describes in their own words.
+
+1. Turn the request into a spec for custom_sheet (action "design"): the source (supplier_invoices,
+   supplier_lines, bank, expenses, customer_invoices or orders), the filters in the owner's own words
+   (supplier, project, customer, category) and the period (a named period, or exact dates for a month
+   they name), the columns they asked for (or leave columns out for the usual ones), how to group it
+   (per month, per project…), and a short title. Never put a figure in the spec.
+2. The tool replies with what it understood and a preview. Send it as it is and wait.
+3. When the owner asks for a change ("only one project", "drop VAT", "per project instead"), call design
+   again with the WHOLE revised spec — the preview above lists the current one.
+4. On "build it" / "yes" / "send it": custom_sheet action "build". It makes the file from the last preview,
+   checks it against the books and sends it.
+5. "Save it as …": action "save" with the name. "The Tile Co sheet for October": action "use" with the name
+   and the new period. "What sheets do I have": action "list".
+6. If the tool says a column or filter isn't possible, tell the owner what is — never make the sheet some
+   other way.
 ```
 </details>
 
