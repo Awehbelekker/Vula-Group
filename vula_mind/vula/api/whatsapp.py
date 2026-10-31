@@ -7073,7 +7073,7 @@ async def _research_missing_contact_details(name: str, company: str) -> dict:
         import litellm
         from core.llm_router import resolve_generation_route
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="contact_research")
         prompt = (
             "Using ONLY the web page excerpts below, find a phone number and/or email address "
             f"for \"{name or company}\"" + (f" at \"{company}\"" if name and company else "") +
@@ -7170,7 +7170,7 @@ async def _research_missing_address(business_name: str) -> dict:
         import litellm
         from core.llm_router import resolve_generation_route
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="address_research")
         prompt = (
             "Using ONLY the web page excerpts below, find the physical/street address for "
             f"\"{business_name}\". Return STRICT JSON only: {{\"address\": string|null}}. "
@@ -9674,7 +9674,7 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         from core.llm_router import resolve_generation_route, looks_degenerate
         from core.prompt_safety import fence
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="confirm_summary")
         resp = await litellm.acompletion(
             model=model, temperature=0.2, max_tokens=300, api_key=api_key, api_base=api_base,
             messages=[

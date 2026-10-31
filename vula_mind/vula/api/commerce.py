@@ -5740,7 +5740,7 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
         import litellm
         from core.llm_router import resolve_generation_route
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="broadcast_draft")
 
         resp = await litellm.acompletion(
             model=model,

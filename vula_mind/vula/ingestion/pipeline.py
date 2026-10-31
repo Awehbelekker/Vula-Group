@@ -1091,7 +1091,7 @@ async def expand_query(question: str, tenant_id: str = "") -> List[str]:
         import litellm
         from core.llm_router import resolve_generation_route, escalate_to_cloud
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="query_expansion")
         # The local 8B model invents domain context here: asked to rewrite "How stocks
         # creations" for a flooring rep it produced "What are the stock creation processes for
         # SAP ERP?", and "Which importer does the creation range" became "What is the creation
@@ -2081,7 +2081,7 @@ class VulaIngestionPipeline:
             litellm.drop_params = True
 
             # Local-first route (Ollama) with OpenRouter fallback when local is down
-            model, api_key, api_base = await resolve_generation_route()
+            model, api_key, api_base = await resolve_generation_route(task_type="rag_answer")
 
             resp = await litellm.acompletion(
                 model=model,

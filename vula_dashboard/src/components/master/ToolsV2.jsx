@@ -142,7 +142,59 @@ export function AuditV2({ onError, onViewDetail }) {
 
 /* ── Benchmark (+ go-live test) ── */
 export function BenchmarkV2({ onError }) {
-  return <section className="vms" aria-label="Benchmark"><GoLiveV2 onError={onError} /><Benchmark onError={onError} /></section>
+  return <section className="vms" aria-label="Benchmark"><GoLiveV2 onError={onError} /><Benchmark onError={onError} />
+    <DecisionBench onError={onError} /></section>
+}
+
+/* ── Decision benchmark: Jev against today's classifiers (vula/decision_bench.py) ── */
+const DECISION_LABEL = { skill: 'Which skill answers', escalation: 'Wants a person / upset', expense_purpose: 'Expense purpose' }
+function DecisionBench({ onError }) {
+  const [state, setState] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const load = () => authFetch('/v1/master/decision-bench').then(setState).catch(e => onError?.(e.message))
+  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!state?.running) return undefined
+    const t = setInterval(load, 10000)
+    return () => clearInterval(t)
+  }, [state?.running])
+  const start = async () => {
+    setBusy(true)
+    try {
+      const r = await authFetch('/v1/master/decision-bench', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      if (r.detail) onError?.(r.detail)
+      await load()
+    } catch (e) { onError?.(e.message) } finally { setBusy(false) }
+  }
+  const s = state?.summary
+  const rows = s ? Object.entries(s.results || {}).flatMap(([d, r]) => ['jev', 'current'].map(p => ({
+    key: `${d}-${p}`, decision: DECISION_LABEL[d] || d, provider: p === 'jev' ? 'Jev' : 'Today', verdict: p === 'jev' ? r.verdict : '', ...(r[p] || {}) }))) : []
+  const ms = (v) => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`)
+  return (
+    <>
+      <Card className="vms-form">
+        <h3 className="vms-h"><FlaskConical size={16} aria-hidden="true" className="vms-ic" />Decision benchmark — Jev against today</h3>
+        <p className="vms-muted">About 600 made-up, labelled messages (which skill answers, wants a person / upset in seven languages, expense purpose) through Jev and through today's classifiers. Nothing is sent to anyone and no business data is used. Jev is recommended for a decision only within 2 points of today's accuracy and with under 20% fallback.</p>
+        <Button Icon={Play} disabled={busy || state?.running} onClick={start}>
+          {state?.running ? 'Running… (about 10 minutes)' : busy ? 'Starting…' : 'Run decision benchmark'}</Button>
+        {state?.failed && <p className="vms-muted" role="alert">The last run stopped with an error — see the server log.</p>}
+      </Card>
+      {s && (
+        <Card pad={0}>
+          <DataTable caption={`Decision benchmark — ${when(s.finished_at)} · ${s.decision_model}`} rows={rows} rowKey="key" columns={[
+            { key: 'decision', label: 'Decision' },
+            { key: 'provider', label: 'Model' },
+            { key: 'accuracy', label: 'Accuracy', render: (r) => (r.accuracy == null ? '—' : <StatusChip tone={pctTone(r.accuracy)}>{r.accuracy}%</StatusChip>) },
+            { key: 'p50_ms', label: 'p50 / p95', render: (r) => `${ms(r.p50_ms)} / ${ms(r.p95_ms)}` },
+            { key: 'fallback_rate', label: 'Fallback', render: (r) => (r.fallback_rate == null ? '—' : `${Math.round(r.fallback_rate * 100)}%`) },
+            { key: 'cost_per_1k_usd', label: 'Cost / 1k', render: (r) => (r.cost_per_1k_usd == null ? '—' : `$${r.cost_per_1k_usd}`) },
+            { key: 'by_lang', label: 'By language', render: (r) => <span className="vms-muted">{Object.entries(r.by_lang || {}).map(([l, a]) => `${l} ${a}%`).join(' · ')}{r.lagging_languages?.length ? ` — behind in ${r.lagging_languages.join(', ')}` : ''}</span> },
+            { key: 'verdict', label: 'Verdict', render: (r) => (r.verdict ? <StatusChip tone={r.verdict === 'flip' ? 'ok' : 'warn'}>{r.verdict === 'flip' ? 'Jev ready' : r.verdict === 'keep current' ? 'Keep today' : r.verdict}</StatusChip> : '') },
+          ]} />
+        </Card>)}
+    </>
+  )
 }
 
 function GoLiveV2({ onError }) {

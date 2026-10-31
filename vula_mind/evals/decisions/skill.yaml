@@ -1,0 +1,831 @@
+# Made-up, labelled cases for the decision benchmark (vula/decision_bench.py). No real customer
+# or business messages. Non-English lines were machine-written (by Claude), not by a native speaker:
+# have them checked before their scores are trusted (field review: native-speaker).
+- lang: en
+  text: Put 'order tiles for Seaview' on my to-do board
+  expect: clickup_admin
+  id: skill-001
+- lang: en
+  text: What's on my list in ClickUp this week?
+  expect: clickup_admin
+  id: skill-002
+- lang: en
+  text: Move the snag-list job to done
+  expect: clickup_admin
+  id: skill-003
+- lang: en
+  text: Assign the drawings check to Thandi on our board
+  expect: clickup_admin
+  id: skill-004
+- lang: en
+  text: Show my overdue jobs on the project board
+  expect: clickup_admin
+  id: skill-005
+- lang: en
+  text: Add a reminder card for the council submission
+  expect: clickup_admin
+  id: skill-006
+- lang: en
+  text: What tasks are due Friday?
+  expect: clickup_admin
+  id: skill-007
+- lang: en
+  text: Mark the plumbing inspection item complete
+  expect: clickup_admin
+  id: skill-008
+- lang: af
+  text: Ek wil 'n taak byvoeg vir die dakwerk
+  expect: clickup_admin
+  id: skill-009
+- lang: en
+  text: Create a to-do for calling the client back
+  expect: clickup_admin
+  id: skill-010
+- lang: en
+  text: List everything assigned to me
+  expect: clickup_admin
+  id: skill-011
+- lang: en
+  text: Give the Main Road site visit a due date of Tuesday
+  expect: clickup_admin
+  id: skill-012
+- lang: en
+  text: Write a fee proposal for the Oak Street extension
+  expect: draft_admin
+  id: skill-013
+- lang: en
+  text: Prepare a scope of works for a bathroom refit
+  expect: draft_admin
+  id: skill-014
+- lang: en
+  text: Draft an appointment letter for our new site foreman
+  expect: draft_admin
+  id: skill-015
+- lang: en
+  text: I need a tender invitation for three builders
+  expect: draft_admin
+  id: skill-016
+- lang: en
+  text: Write up minutes from today's site meeting
+  expect: draft_admin
+  id: skill-017
+- lang: en
+  text: Put together a cover letter for the council submission
+  expect: draft_admin
+  id: skill-018
+- lang: en
+  text: Make me a letter confirming the client's variation
+  expect: draft_admin
+  id: skill-019
+- lang: en
+  text: Draft a notice of practical completion
+  expect: draft_admin
+  id: skill-020
+- lang: af
+  text: Skryf 'n brief aan die kliënt oor die vertraging
+  expect: draft_admin
+  id: skill-021
+- lang: en
+  text: Prepare a professional services agreement
+  expect: draft_admin
+  id: skill-022
+- lang: en
+  text: Write a letter terminating the subcontractor
+  expect: draft_admin
+  id: skill-023
+- lang: en
+  text: Draw up a quote cover letter for the renovation
+  expect: draft_admin
+  id: skill-024
+- lang: en
+  text: Do you have yellowtail in today?
+  expect: commerce_assistant
+  id: skill-025
+- lang: en
+  text: I'd like to get 3 crayfish for Saturday
+  expect: commerce_assistant
+  id: skill-026
+- lang: en
+  text: Can I add squid to what I'm buying?
+  expect: commerce_assistant
+  id: skill-027
+- lang: en
+  text: Is the kingklip available?
+  expect: commerce_assistant
+  id: skill-028
+- lang: en
+  text: How do I pay for my basket?
+  expect: commerce_assistant
+  id: skill-029
+- lang: af
+  text: Ek wil graag 2kg kalamari koop
+  expect: commerce_assistant
+  id: skill-030
+- lang: en
+  text: What's the price of salmon fillets?
+  expect: commerce_assistant
+  id: skill-031
+- lang: en
+  text: Can I collect instead of delivery?
+  expect: commerce_assistant
+  id: skill-032
+- lang: en
+  text: Do you still have smoked snoek?
+  expect: commerce_assistant
+  id: skill-033
+- lang: en
+  text: Add another kilo of prawns please
+  expect: commerce_assistant
+  id: skill-034
+- lang: en
+  text: What fish do you have this week?
+  expect: commerce_assistant
+  id: skill-035
+- lang: en
+  text: Can I pay with SnapScan?
+  expect: commerce_assistant
+  id: skill-036
+- lang: en
+  text: Find the Seaview drawings in my OneDrive
+  expect: microsoft_admin
+  id: skill-037
+- lang: en
+  text: What's in my Outlook calendar tomorrow?
+  expect: microsoft_admin
+  id: skill-038
+- lang: en
+  text: Open the budget workbook from SharePoint
+  expect: microsoft_admin
+  id: skill-039
+- lang: en
+  text: Check my Outlook for the engineer's reply
+  expect: microsoft_admin
+  id: skill-040
+- lang: en
+  text: Save this to my OneDrive
+  expect: microsoft_admin
+  id: skill-041
+- lang: en
+  text: Pull the tender pack from SharePoint
+  expect: microsoft_admin
+  id: skill-042
+- lang: af
+  text: Kyk in my Outlook vir die bouer se e-pos
+  expect: microsoft_admin
+  id: skill-043
+- lang: en
+  text: Find the latest spec in OneDrive
+  expect: microsoft_admin
+  id: skill-044
+- lang: en
+  text: Look in Teams files for the floor plan
+  expect: microsoft_admin
+  id: skill-045
+- lang: en
+  text: What meetings are in my Outlook diary this week?
+  expect: microsoft_admin
+  id: skill-046
+- lang: en
+  text: Get the contract from my company OneDrive
+  expect: microsoft_admin
+  id: skill-047
+- lang: en
+  text: Is the SharePoint folder for Oak Street shared?
+  expect: microsoft_admin
+  id: skill-048
+- lang: en
+  text: What did we pay out last month?
+  expect: finance_admin
+  id: skill-049
+- lang: en
+  text: How much came in from clients in October?
+  expect: finance_admin
+  id: skill-050
+- lang: en
+  text: Show me our biggest expenses this quarter
+  expect: finance_admin
+  id: skill-051
+- lang: en
+  text: What's our cash position?
+  expect: finance_admin
+  id: skill-052
+- lang: af
+  text: Hoeveel het ons hierdie maand uitgegee?
+  expect: finance_admin
+  id: skill-053
+- lang: en
+  text: How much did we pay Cape Cement this year?
+  expect: finance_admin
+  id: skill-054
+- lang: en
+  text: Which invoices are still unpaid?
+  expect: finance_admin
+  id: skill-055
+- lang: en
+  text: What's the VAT on last month's sales?
+  expect: finance_admin
+  id: skill-056
+- lang: en
+  text: Total spend on fuel since June?
+  expect: finance_admin
+  id: skill-057
+- lang: en
+  text: How much has the Seaview client paid us?
+  expect: finance_admin
+  id: skill-058
+- lang: en
+  text: Are we in profit this month?
+  expect: finance_admin
+  id: skill-059
+- lang: en
+  text: List the payments to subcontractors in September
+  expect: finance_admin
+  id: skill-060
+- lang: en
+  text: Did the engineer reply to me?
+  expect: email_admin
+  id: skill-061
+- lang: en
+  text: Summarise the messages from the council
+  expect: email_admin
+  id: skill-062
+- lang: en
+  text: Reply to Sam saying Tuesday works
+  expect: email_admin
+  id: skill-063
+- lang: en
+  text: Any new mail from the bank?
+  expect: email_admin
+  id: skill-064
+- lang: en
+  text: Write back to the supplier asking for a new quote
+  expect: email_admin
+  id: skill-065
+- lang: af
+  text: Het die kliënt my e-pos beantwoord?
+  expect: email_admin
+  id: skill-066
+- lang: en
+  text: What did Thandi send me yesterday?
+  expect: email_admin
+  id: skill-067
+- lang: en
+  text: Forward the invoice email to the accountant
+  expect: email_admin
+  id: skill-068
+- lang: en
+  text: Check if there's a message from the architect
+  expect: email_admin
+  id: skill-069
+- lang: en
+  text: Send the client a note about the delay
+  expect: email_admin
+  id: skill-070
+- lang: en
+  text: Any unread messages from suppliers?
+  expect: email_admin
+  id: skill-071
+- lang: en
+  text: Show me the last mail from the municipality
+  expect: email_admin
+  id: skill-072
+- lang: en
+  text: Find the Seaview spreadsheet in Google Drive
+  expect: google_admin
+  id: skill-073
+- lang: en
+  text: Open my Google Doc with the specs
+  expect: google_admin
+  id: skill-074
+- lang: en
+  text: Is the photo folder in my Drive?
+  expect: google_admin
+  id: skill-075
+- lang: en
+  text: Pull the budget sheet from Google Sheets
+  expect: google_admin
+  id: skill-076
+- lang: af
+  text: Kry die tekeninge in my Google Drive
+  expect: google_admin
+  id: skill-077
+- lang: en
+  text: Share the Drive folder with the client
+  expect: google_admin
+  id: skill-078
+- lang: en
+  text: What's in my Google Calendar on Friday?
+  expect: google_admin
+  id: skill-079
+- lang: en
+  text: Upload this to my Drive
+  expect: google_admin
+  id: skill-080
+- lang: en
+  text: Find the contract PDF in Google Drive
+  expect: google_admin
+  id: skill-081
+- lang: en
+  text: Open the Google Slides for the client pitch
+  expect: google_admin
+  id: skill-082
+- lang: en
+  text: Where's the snag list Google Sheet?
+  expect: google_admin
+  id: skill-083
+- lang: en
+  text: Copy the template from my Drive
+  expect: google_admin
+  id: skill-084
+- lang: en
+  text: What does SANS 10400 say about stair widths?
+  expect: standards_lookup
+  id: skill-085
+- lang: en
+  text: Which regulation covers fire escapes in offices?
+  expect: standards_lookup
+  id: skill-086
+- lang: en
+  text: What's the minimum window area for a habitable room?
+  expect: standards_lookup
+  id: skill-087
+- lang: en
+  text: Is a handrail required on a three-step stair?
+  expect: standards_lookup
+  id: skill-088
+- lang: af
+  text: Wat is die vereiste vir branddeure?
+  expect: standards_lookup
+  id: skill-089
+- lang: en
+  text: Which part of the building regs covers energy efficiency?
+  expect: standards_lookup
+  id: skill-090
+- lang: en
+  text: What's the rule for balustrade height?
+  expect: standards_lookup
+  id: skill-091
+- lang: en
+  text: Minimum ceiling height for a bedroom?
+  expect: standards_lookup
+  id: skill-092
+- lang: en
+  text: Which SANS covers glazing in doors?
+  expect: standards_lookup
+  id: skill-093
+- lang: en
+  text: What's the requirement for disabled parking bays?
+  expect: standards_lookup
+  id: skill-094
+- lang: en
+  text: Do I need a fire wall between the garage and house?
+  expect: standards_lookup
+  id: skill-095
+- lang: en
+  text: What's the drainage fall requirement?
+  expect: standards_lookup
+  id: skill-096
+- lang: en
+  text: How many seats fit in a 120 m2 restaurant?
+  expect: calculations
+  id: skill-097
+- lang: en
+  text: Work out the parking bays for a 2000 m2 office
+  expect: calculations
+  id: skill-098
+- lang: en
+  text: How many bricks for a 3 m by 2.4 m wall?
+  expect: calculations
+  id: skill-099
+- lang: en
+  text: What's the floor area of a 6 by 4.5 room?
+  expect: calculations
+  id: skill-100
+- lang: af
+  text: Hoeveel mense pas in 'n saal van 200 m2?
+  expect: calculations
+  id: skill-101
+- lang: en
+  text: Calculate the occupancy for a 90 m2 shop
+  expect: calculations
+  id: skill-102
+- lang: en
+  text: How many tiles for a 12 m2 floor with 600x600 tiles?
+  expect: calculations
+  id: skill-103
+- lang: en
+  text: What's 15% VAT on R42,500?
+  expect: calculations
+  id: skill-104
+- lang: en
+  text: Convert 3.5 m2 to square feet
+  expect: calculations
+  id: skill-105
+- lang: en
+  text: How much paint for 85 m2 of wall, two coats?
+  expect: calculations
+  id: skill-106
+- lang: en
+  text: How many toilets does a 150-seat hall need?
+  expect: calculations
+  id: skill-107
+- lang: en
+  text: What's the volume of a 4 by 3 by 0.2 m slab?
+  expect: calculations
+  id: skill-108
+- lang: en
+  text: Do we need NHBRC enrolment for this house?
+  expect: architecture_planning
+  id: skill-109
+- lang: en
+  text: Which JBCC contract suits a small renovation?
+  expect: architecture_planning
+  id: skill-110
+- lang: en
+  text: What does SACAP say about fee scales?
+  expect: architecture_planning
+  id: skill-111
+- lang: en
+  text: Is CIDB grading needed for this tender?
+  expect: architecture_planning
+  id: skill-112
+- lang: af
+  text: Ons beplan 'n tweede verdieping, wat is die proses?
+  expect: architecture_planning
+  id: skill-113
+- lang: en
+  text: What approvals do I need for a granny flat?
+  expect: architecture_planning
+  id: skill-114
+- lang: en
+  text: How do I lodge building plans with the City?
+  expect: architecture_planning
+  id: skill-115
+- lang: en
+  text: What's the process for a rezoning application?
+  expect: architecture_planning
+  id: skill-116
+- lang: en
+  text: Which consultants do I need for a small office block?
+  expect: architecture_planning
+  id: skill-117
+- lang: en
+  text: Do we need a heritage permit in Bo-Kaap?
+  expect: architecture_planning
+  id: skill-118
+- lang: en
+  text: What's the timeline for municipal plan approval?
+  expect: architecture_planning
+  id: skill-119
+- lang: en
+  text: Can we build over the building line?
+  expect: architecture_planning
+  id: skill-120
+- lang: en
+  text: What's the latest news on load shedding?
+  expect: web_search
+  id: skill-121
+- lang: af
+  text: Find tenders for school renovations in the Western Cape
+  expect: web_search
+  id: skill-122
+- lang: en
+  text: What's the current prime rate?
+  expect: web_search
+  id: skill-123
+- lang: en
+  text: Look online for steel prices this month
+  expect: web_search
+  id: skill-124
+- lang: af
+  text: Wat is die nuutste oor die petrolprys?
+  expect: web_search
+  id: skill-125
+- lang: en
+  text: Search for building suppliers in Paarl
+  expect: web_search
+  id: skill-126
+- lang: en
+  text: What's the weather in Cape Town tomorrow?
+  expect: web_search
+  id: skill-127
+- lang: en
+  text: Find the municipality's new tariff list
+  expect: web_search
+  id: skill-128
+- lang: en
+  text: Any news about the new building regulations?
+  expect: web_search
+  id: skill-129
+- lang: en
+  text: Look up the exchange rate for euros
+  expect: web_search
+  id: skill-130
+- lang: en
+  text: Find reviews for Cape Cement
+  expect: web_search
+  id: skill-131
+- lang: en
+  text: What's trending in kitchen design?
+  expect: web_search
+  id: skill-132
+- lang: en
+  text: 'Run this Python for me: print(sum(range(10)))'
+  expect: code_execution
+  id: skill-133
+- lang: en
+  text: Execute this script and tell me the output
+  expect: code_execution
+  id: skill-134
+- lang: en
+  text: Can you run a quick calculation in code?
+  expect: code_execution
+  id: skill-135
+- lang: en
+  text: Test this function and show the result
+  expect: code_execution
+  id: skill-136
+- lang: af
+  text: Voer hierdie kode uit
+  expect: code_execution
+  id: skill-137
+- lang: en
+  text: Run the snippet below
+  expect: code_execution
+  id: skill-138
+- lang: en
+  text: Execute this SQL-like logic in Python
+  expect: code_execution
+  id: skill-139
+- lang: en
+  text: Can you run a script to sort these numbers?
+  expect: code_execution
+  id: skill-140
+- lang: en
+  text: Run this code and fix the error
+  expect: code_execution
+  id: skill-141
+- lang: en
+  text: Write and run code to count the words
+  expect: code_execution
+  id: skill-142
+- lang: en
+  text: 'Execute this for me: [x*2 for x in range(5)]'
+  expect: code_execution
+  id: skill-143
+- lang: en
+  text: Run my Python and show the plot
+  expect: code_execution
+  id: skill-144
+- lang: en
+  text: What did I tell you about the Seaview client last week?
+  expect: memory_recall
+  id: skill-145
+- lang: en
+  text: Remind me what we decided on the tiles
+  expect: memory_recall
+  id: skill-146
+- lang: en
+  text: What did we talk about yesterday?
+  expect: memory_recall
+  id: skill-147
+- lang: en
+  text: Last time you said the budget was what?
+  expect: memory_recall
+  id: skill-148
+- lang: af
+  text: Wat het ek jou laas gesê oor die dak?
+  expect: memory_recall
+  id: skill-149
+- lang: en
+  text: Which supplier did I say to avoid?
+  expect: memory_recall
+  id: skill-150
+- lang: en
+  text: What was my previous instruction about quotes?
+  expect: memory_recall
+  id: skill-151
+- lang: en
+  text: Did I mention the client's deadline before?
+  expect: memory_recall
+  id: skill-152
+- lang: en
+  text: What did we agree with the plumber?
+  expect: memory_recall
+  id: skill-153
+- lang: en
+  text: Recall the note I gave you about Oak Street
+  expect: memory_recall
+  id: skill-154
+- lang: en
+  text: What did I ask you to remember?
+  expect: memory_recall
+  id: skill-155
+- lang: en
+  text: What did we discuss about the parking?
+  expect: memory_recall
+  id: skill-156
+- lang: en
+  text: Read this PDF and tell me the total
+  expect: file_parse
+  id: skill-157
+- lang: en
+  text: Summarise the attached document
+  expect: file_parse
+  id: skill-158
+- lang: en
+  text: Pull the line items out of this file
+  expect: file_parse
+  id: skill-159
+- lang: en
+  text: What does this contract say about penalties?
+  expect: file_parse
+  id: skill-160
+- lang: af
+  text: Lees hierdie dokument en som dit op
+  expect: file_parse
+  id: skill-161
+- lang: en
+  text: Extract the dates from this attachment
+  expect: file_parse
+  id: skill-162
+- lang: en
+  text: What's the total on the invoice I just sent?
+  expect: file_parse
+  id: skill-163
+- lang: en
+  text: Go through this spreadsheet and list the suppliers
+  expect: file_parse
+  id: skill-164
+- lang: en
+  text: What's in the file I uploaded?
+  expect: file_parse
+  id: skill-165
+- lang: en
+  text: Get the measurements out of this BOQ
+  expect: file_parse
+  id: skill-166
+- lang: en
+  text: Summarise this report in five points
+  expect: file_parse
+  id: skill-167
+- lang: en
+  text: Read the attached quote
+  expect: file_parse
+  id: skill-168
+- lang: en
+  text: What's in this photo?
+  expect: image_analysis
+  id: skill-169
+- lang: en
+  text: Look at this picture of the crack in the wall
+  expect: image_analysis
+  id: skill-170
+- lang: en
+  text: Read the screenshot I sent
+  expect: image_analysis
+  id: skill-171
+- lang: en
+  text: Is this damp on the wall in the image?
+  expect: image_analysis
+  id: skill-172
+- lang: af
+  text: Kyk na hierdie foto van die dak
+  expect: image_analysis
+  id: skill-173
+- lang: en
+  text: What does this diagram show?
+  expect: image_analysis
+  id: skill-174
+- lang: en
+  text: Can you see the serial number in the picture?
+  expect: image_analysis
+  id: skill-175
+- lang: en
+  text: Check this photo of the tiles for damage
+  expect: image_analysis
+  id: skill-176
+- lang: en
+  text: Describe the image
+  expect: image_analysis
+  id: skill-177
+- lang: en
+  text: What colour is the door in the photo?
+  expect: image_analysis
+  id: skill-178
+- lang: en
+  text: Is the wiring in this picture safe?
+  expect: image_analysis
+  id: skill-179
+- lang: en
+  text: Read the text in this image
+  expect: image_analysis
+  id: skill-180
+- lang: en
+  text: Should we take the cheaper quote or the faster one?
+  expect: financial_reasoning
+  id: skill-181
+- lang: en
+  text: Is this project going to make money?
+  expect: financial_reasoning
+  id: skill-182
+- lang: en
+  text: How do I improve our cash flow?
+  expect: financial_reasoning
+  id: skill-183
+- lang: en
+  text: What would a 10% price rise do to our margin?
+  expect: financial_reasoning
+  id: skill-184
+- lang: af
+  text: Moet ons die bakkie koop of huur?
+  expect: financial_reasoning
+  id: skill-185
+- lang: en
+  text: Is our overhead too high for our size?
+  expect: financial_reasoning
+  id: skill-186
+- lang: en
+  text: How should I price a job to make 20% margin?
+  expect: financial_reasoning
+  id: skill-187
+- lang: en
+  text: Can we afford another staff member?
+  expect: financial_reasoning
+  id: skill-188
+- lang: en
+  text: What's a healthy profit for a small builder?
+  expect: financial_reasoning
+  id: skill-189
+- lang: en
+  text: How much should I keep aside for tax?
+  expect: financial_reasoning
+  id: skill-190
+- lang: en
+  text: Is it worth taking on this low-margin client?
+  expect: financial_reasoning
+  id: skill-191
+- lang: en
+  text: How do I plan the budget for next year?
+  expect: financial_reasoning
+  id: skill-192
+- lang: en
+  text: Hi there
+  expect: none
+  id: skill-193
+- lang: en
+  text: Good morning!
+  expect: none
+  id: skill-194
+- lang: en
+  text: Thanks, that's all
+  expect: none
+  id: skill-195
+- lang: en
+  text: Ok cool
+  expect: none
+  id: skill-196
+- lang: en
+  text: Haha nice one
+  expect: none
+  id: skill-197
+- lang: af
+  text: Goeie môre
+  expect: none
+  id: skill-198
+- lang: en
+  text: Sharp
+  expect: none
+  id: skill-199
+- lang: en
+  text: 👍
+  expect: none
+  id: skill-200
+- lang: en
+  text: See you tomorrow
+  expect: none
+  id: skill-201
+- lang: en
+  text: Never mind
+  expect: none
+  id: skill-202
+- lang: en
+  text: Sorry wrong chat
+  expect: none
+  id: skill-203
+- lang: en
+  text: Hello?
+  expect: none
+  id: skill-204
+- lang: af
+  text: Baie dankie
+  expect: none
+  id: skill-205
+- lang: en
+  text: Ok
+  expect: none
+  id: skill-206
+- lang: en
+  text: Cheers
+  expect: none
+  id: skill-207

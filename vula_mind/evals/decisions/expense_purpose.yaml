@@ -1,0 +1,1203 @@
+# Made-up, labelled cases for the decision benchmark (vula/decision_bench.py). No real customer
+# or business messages. Non-English lines were machine-written (by Claude), not by a native speaker:
+# have them checked before their scores are trusted (field review: native-speaker).
+- lang: en
+  text: 'Vendor: Engen Constantia. Amount: R450.00'
+  vendor: Engen Constantia
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-001
+- lang: en
+  text: 'Vendor: Engen Constantia. Amount: R873.50'
+  vendor: Engen Constantia
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-002
+- lang: en
+  text: 'Vendor: Engen Constantia. Amount: R1,200.00'
+  vendor: Engen Constantia
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-003
+- lang: en
+  text: 'Vendor: Engen Constantia. Amount: R632.10'
+  vendor: Engen Constantia
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-004
+- lang: en
+  text: 'Vendor: Engen Constantia. Amount: R955.00'
+  vendor: Engen Constantia
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-005
+- lang: en
+  text: 'Vendor: Shell Ultra City N1. Amount: R450.00'
+  vendor: Shell Ultra City N1
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-006
+- lang: en
+  text: 'Vendor: Shell Ultra City N1. Amount: R873.50'
+  vendor: Shell Ultra City N1
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-007
+- lang: en
+  text: 'Vendor: Shell Ultra City N1. Amount: R1,200.00'
+  vendor: Shell Ultra City N1
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-008
+- lang: en
+  text: 'Vendor: Shell Ultra City N1. Amount: R632.10'
+  vendor: Shell Ultra City N1
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-009
+- lang: en
+  text: 'Vendor: Shell Ultra City N1. Amount: R955.00'
+  vendor: Shell Ultra City N1
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-010
+- lang: en
+  text: 'Vendor: BP Rondebosch. Amount: R450.00'
+  vendor: BP Rondebosch
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-011
+- lang: en
+  text: 'Vendor: BP Rondebosch. Amount: R873.50'
+  vendor: BP Rondebosch
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-012
+- lang: en
+  text: 'Vendor: BP Rondebosch. Amount: R1,200.00'
+  vendor: BP Rondebosch
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-013
+- lang: en
+  text: 'Vendor: BP Rondebosch. Amount: R632.10'
+  vendor: BP Rondebosch
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-014
+- lang: en
+  text: 'Vendor: BP Rondebosch. Amount: R955.00'
+  vendor: BP Rondebosch
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-015
+- lang: en
+  text: 'Vendor: Sasol Paarl. Amount: R450.00'
+  vendor: Sasol Paarl
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-016
+- lang: en
+  text: 'Vendor: Sasol Paarl. Amount: R873.50'
+  vendor: Sasol Paarl
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-017
+- lang: en
+  text: 'Vendor: Sasol Paarl. Amount: R1,200.00'
+  vendor: Sasol Paarl
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-018
+- lang: en
+  text: 'Vendor: Sasol Paarl. Amount: R632.10'
+  vendor: Sasol Paarl
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-019
+- lang: en
+  text: 'Vendor: Sasol Paarl. Amount: R955.00'
+  vendor: Sasol Paarl
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-020
+- lang: en
+  text: 'Vendor: Caltex Bellville. Amount: R450.00'
+  vendor: Caltex Bellville
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-021
+- lang: en
+  text: 'Vendor: Caltex Bellville. Amount: R873.50'
+  vendor: Caltex Bellville
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-022
+- lang: en
+  text: 'Vendor: Caltex Bellville. Amount: R1,200.00'
+  vendor: Caltex Bellville
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-023
+- lang: en
+  text: 'Vendor: Caltex Bellville. Amount: R632.10'
+  vendor: Caltex Bellville
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-024
+- lang: en
+  text: 'Vendor: Caltex Bellville. Amount: R955.00'
+  vendor: Caltex Bellville
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-025
+- lang: en
+  text: 'Vendor: TotalEnergies Tokai. Amount: R450.00'
+  vendor: TotalEnergies Tokai
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-026
+- lang: en
+  text: 'Vendor: TotalEnergies Tokai. Amount: R873.50'
+  vendor: TotalEnergies Tokai
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-027
+- lang: en
+  text: 'Vendor: TotalEnergies Tokai. Amount: R1,200.00'
+  vendor: TotalEnergies Tokai
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-028
+- lang: en
+  text: 'Vendor: TotalEnergies Tokai. Amount: R632.10'
+  vendor: TotalEnergies Tokai
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-029
+- lang: en
+  text: 'Vendor: TotalEnergies Tokai. Amount: R955.00'
+  vendor: TotalEnergies Tokai
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-030
+- lang: en
+  text: 'Vendor: Astron Energy Durbanville. Amount: R450.00'
+  vendor: Astron Energy Durbanville
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-031
+- lang: en
+  text: 'Vendor: Astron Energy Durbanville. Amount: R873.50'
+  vendor: Astron Energy Durbanville
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-032
+- lang: en
+  text: 'Vendor: Astron Energy Durbanville. Amount: R1,200.00'
+  vendor: Astron Energy Durbanville
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-033
+- lang: en
+  text: 'Vendor: Astron Energy Durbanville. Amount: R632.10'
+  vendor: Astron Energy Durbanville
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-034
+- lang: en
+  text: 'Vendor: Astron Energy Durbanville. Amount: R955.00'
+  vendor: Astron Energy Durbanville
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-035
+- lang: en
+  text: 'Vendor: Engen 1-Stop Wilderness. Amount: R450.00'
+  vendor: Engen 1-Stop Wilderness
+  amount_cents: 45000
+  expect: petrol
+  id: expense_purpose-036
+- lang: en
+  text: 'Vendor: Engen 1-Stop Wilderness. Amount: R873.50'
+  vendor: Engen 1-Stop Wilderness
+  amount_cents: 87350
+  expect: petrol
+  id: expense_purpose-037
+- lang: en
+  text: 'Vendor: Engen 1-Stop Wilderness. Amount: R1,200.00'
+  vendor: Engen 1-Stop Wilderness
+  amount_cents: 120000
+  expect: petrol
+  id: expense_purpose-038
+- lang: en
+  text: 'Vendor: Engen 1-Stop Wilderness. Amount: R632.10'
+  vendor: Engen 1-Stop Wilderness
+  amount_cents: 63210
+  expect: petrol
+  id: expense_purpose-039
+- lang: en
+  text: 'Vendor: Engen 1-Stop Wilderness. Amount: R955.00'
+  vendor: Engen 1-Stop Wilderness
+  amount_cents: 95500
+  expect: petrol
+  id: expense_purpose-040
+- lang: en
+  text: 'Vendor: Ocean Basket V&A. Amount: R385.00'
+  vendor: Ocean Basket V&A
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-041
+- lang: en
+  text: 'Vendor: Ocean Basket V&A. Amount: R720.00'
+  vendor: Ocean Basket V&A
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-042
+- lang: en
+  text: 'Vendor: Ocean Basket V&A. Amount: R1,450.90'
+  vendor: Ocean Basket V&A
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-043
+- lang: en
+  text: 'Vendor: Ocean Basket V&A. Amount: R210.00'
+  vendor: Ocean Basket V&A
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-044
+- lang: en
+  text: 'Vendor: Ocean Basket V&A. Amount: R564.00'
+  vendor: Ocean Basket V&A
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-045
+- lang: en
+  text: 'Vendor: Spur Steak Ranch Cavendish. Amount: R385.00'
+  vendor: Spur Steak Ranch Cavendish
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-046
+- lang: en
+  text: 'Vendor: Spur Steak Ranch Cavendish. Amount: R720.00'
+  vendor: Spur Steak Ranch Cavendish
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-047
+- lang: en
+  text: 'Vendor: Spur Steak Ranch Cavendish. Amount: R1,450.90'
+  vendor: Spur Steak Ranch Cavendish
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-048
+- lang: en
+  text: 'Vendor: Spur Steak Ranch Cavendish. Amount: R210.00'
+  vendor: Spur Steak Ranch Cavendish
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-049
+- lang: en
+  text: 'Vendor: Spur Steak Ranch Cavendish. Amount: R564.00'
+  vendor: Spur Steak Ranch Cavendish
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-050
+- lang: en
+  text: 'Vendor: Nando''s Kloof St. Amount: R385.00'
+  vendor: Nando's Kloof St
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-051
+- lang: en
+  text: 'Vendor: Nando''s Kloof St. Amount: R720.00'
+  vendor: Nando's Kloof St
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-052
+- lang: en
+  text: 'Vendor: Nando''s Kloof St. Amount: R1,450.90'
+  vendor: Nando's Kloof St
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-053
+- lang: en
+  text: 'Vendor: Nando''s Kloof St. Amount: R210.00'
+  vendor: Nando's Kloof St
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-054
+- lang: en
+  text: 'Vendor: Nando''s Kloof St. Amount: R564.00'
+  vendor: Nando's Kloof St
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-055
+- lang: en
+  text: 'Vendor: Mugg & Bean Canal Walk. Amount: R385.00'
+  vendor: Mugg & Bean Canal Walk
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-056
+- lang: en
+  text: 'Vendor: Mugg & Bean Canal Walk. Amount: R720.00'
+  vendor: Mugg & Bean Canal Walk
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-057
+- lang: en
+  text: 'Vendor: Mugg & Bean Canal Walk. Amount: R1,450.90'
+  vendor: Mugg & Bean Canal Walk
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-058
+- lang: en
+  text: 'Vendor: Mugg & Bean Canal Walk. Amount: R210.00'
+  vendor: Mugg & Bean Canal Walk
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-059
+- lang: en
+  text: 'Vendor: Mugg & Bean Canal Walk. Amount: R564.00'
+  vendor: Mugg & Bean Canal Walk
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-060
+- lang: en
+  text: 'Vendor: Vida e Caffe Claremont. Amount: R385.00'
+  vendor: Vida e Caffe Claremont
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-061
+- lang: en
+  text: 'Vendor: Vida e Caffe Claremont. Amount: R720.00'
+  vendor: Vida e Caffe Claremont
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-062
+- lang: en
+  text: 'Vendor: Vida e Caffe Claremont. Amount: R1,450.90'
+  vendor: Vida e Caffe Claremont
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-063
+- lang: en
+  text: 'Vendor: Vida e Caffe Claremont. Amount: R210.00'
+  vendor: Vida e Caffe Claremont
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-064
+- lang: en
+  text: 'Vendor: Vida e Caffe Claremont. Amount: R564.00'
+  vendor: Vida e Caffe Claremont
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-065
+- lang: en
+  text: 'Vendor: Tashas Constantia. Amount: R385.00'
+  vendor: Tashas Constantia
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-066
+- lang: en
+  text: 'Vendor: Tashas Constantia. Amount: R720.00'
+  vendor: Tashas Constantia
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-067
+- lang: en
+  text: 'Vendor: Tashas Constantia. Amount: R1,450.90'
+  vendor: Tashas Constantia
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-068
+- lang: en
+  text: 'Vendor: Tashas Constantia. Amount: R210.00'
+  vendor: Tashas Constantia
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-069
+- lang: en
+  text: 'Vendor: Tashas Constantia. Amount: R564.00'
+  vendor: Tashas Constantia
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-070
+- lang: en
+  text: 'Vendor: Wimpy Somerset West. Amount: R385.00'
+  vendor: Wimpy Somerset West
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-071
+- lang: en
+  text: 'Vendor: Wimpy Somerset West. Amount: R720.00'
+  vendor: Wimpy Somerset West
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-072
+- lang: en
+  text: 'Vendor: Wimpy Somerset West. Amount: R1,450.90'
+  vendor: Wimpy Somerset West
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-073
+- lang: en
+  text: 'Vendor: Wimpy Somerset West. Amount: R210.00'
+  vendor: Wimpy Somerset West
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-074
+- lang: en
+  text: 'Vendor: Wimpy Somerset West. Amount: R564.00'
+  vendor: Wimpy Somerset West
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-075
+- lang: en
+  text: 'Vendor: Col''Cacchio Sea Point. Amount: R385.00'
+  vendor: Col'Cacchio Sea Point
+  amount_cents: 38500
+  expect: clients
+  id: expense_purpose-076
+- lang: en
+  text: 'Vendor: Col''Cacchio Sea Point. Amount: R720.00'
+  vendor: Col'Cacchio Sea Point
+  amount_cents: 72000
+  expect: clients
+  id: expense_purpose-077
+- lang: en
+  text: 'Vendor: Col''Cacchio Sea Point. Amount: R1,450.90'
+  vendor: Col'Cacchio Sea Point
+  amount_cents: 145090
+  expect: clients
+  id: expense_purpose-078
+- lang: en
+  text: 'Vendor: Col''Cacchio Sea Point. Amount: R210.00'
+  vendor: Col'Cacchio Sea Point
+  amount_cents: 21000
+  expect: clients
+  id: expense_purpose-079
+- lang: en
+  text: 'Vendor: Col''Cacchio Sea Point. Amount: R564.00'
+  vendor: Col'Cacchio Sea Point
+  amount_cents: 56400
+  expect: clients
+  id: expense_purpose-080
+- lang: en
+  text: 'Vendor: City Lodge Hotel Durban. Amount: R1,280.00'
+  vendor: City Lodge Hotel Durban
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-081
+- lang: en
+  text: 'Vendor: City Lodge Hotel Durban. Amount: R2,450.00'
+  vendor: City Lodge Hotel Durban
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-082
+- lang: en
+  text: 'Vendor: City Lodge Hotel Durban. Amount: R899.00'
+  vendor: City Lodge Hotel Durban
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-083
+- lang: en
+  text: 'Vendor: City Lodge Hotel Durban. Amount: R3,100.00'
+  vendor: City Lodge Hotel Durban
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-084
+- lang: en
+  text: 'Vendor: City Lodge Hotel Durban. Amount: R1,655.00'
+  vendor: City Lodge Hotel Durban
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-085
+- lang: en
+  text: 'Vendor: Protea Hotel by Marriott Stellenbosch. Amount: R1,280.00'
+  vendor: Protea Hotel by Marriott Stellenbosch
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-086
+- lang: en
+  text: 'Vendor: Protea Hotel by Marriott Stellenbosch. Amount: R2,450.00'
+  vendor: Protea Hotel by Marriott Stellenbosch
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-087
+- lang: en
+  text: 'Vendor: Protea Hotel by Marriott Stellenbosch. Amount: R899.00'
+  vendor: Protea Hotel by Marriott Stellenbosch
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-088
+- lang: en
+  text: 'Vendor: Protea Hotel by Marriott Stellenbosch. Amount: R3,100.00'
+  vendor: Protea Hotel by Marriott Stellenbosch
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-089
+- lang: en
+  text: 'Vendor: Protea Hotel by Marriott Stellenbosch. Amount: R1,655.00'
+  vendor: Protea Hotel by Marriott Stellenbosch
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-090
+- lang: en
+  text: 'Vendor: Southern Sun Cape Sun. Amount: R1,280.00'
+  vendor: Southern Sun Cape Sun
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-091
+- lang: en
+  text: 'Vendor: Southern Sun Cape Sun. Amount: R2,450.00'
+  vendor: Southern Sun Cape Sun
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-092
+- lang: en
+  text: 'Vendor: Southern Sun Cape Sun. Amount: R899.00'
+  vendor: Southern Sun Cape Sun
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-093
+- lang: en
+  text: 'Vendor: Southern Sun Cape Sun. Amount: R3,100.00'
+  vendor: Southern Sun Cape Sun
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-094
+- lang: en
+  text: 'Vendor: Southern Sun Cape Sun. Amount: R1,655.00'
+  vendor: Southern Sun Cape Sun
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-095
+- lang: en
+  text: 'Vendor: Road Lodge Bloemfontein. Amount: R1,280.00'
+  vendor: Road Lodge Bloemfontein
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-096
+- lang: en
+  text: 'Vendor: Road Lodge Bloemfontein. Amount: R2,450.00'
+  vendor: Road Lodge Bloemfontein
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-097
+- lang: en
+  text: 'Vendor: Road Lodge Bloemfontein. Amount: R899.00'
+  vendor: Road Lodge Bloemfontein
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-098
+- lang: en
+  text: 'Vendor: Road Lodge Bloemfontein. Amount: R3,100.00'
+  vendor: Road Lodge Bloemfontein
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-099
+- lang: en
+  text: 'Vendor: Road Lodge Bloemfontein. Amount: R1,655.00'
+  vendor: Road Lodge Bloemfontein
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-100
+- lang: en
+  text: 'Vendor: Sun City Cabanas. Amount: R1,280.00'
+  vendor: Sun City Cabanas
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-101
+- lang: en
+  text: 'Vendor: Sun City Cabanas. Amount: R2,450.00'
+  vendor: Sun City Cabanas
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-102
+- lang: en
+  text: 'Vendor: Sun City Cabanas. Amount: R899.00'
+  vendor: Sun City Cabanas
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-103
+- lang: en
+  text: 'Vendor: Sun City Cabanas. Amount: R3,100.00'
+  vendor: Sun City Cabanas
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-104
+- lang: en
+  text: 'Vendor: Sun City Cabanas. Amount: R1,655.00'
+  vendor: Sun City Cabanas
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-105
+- lang: en
+  text: 'Vendor: Mount Grace Country House. Amount: R1,280.00'
+  vendor: Mount Grace Country House
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-106
+- lang: en
+  text: 'Vendor: Mount Grace Country House. Amount: R2,450.00'
+  vendor: Mount Grace Country House
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-107
+- lang: en
+  text: 'Vendor: Mount Grace Country House. Amount: R899.00'
+  vendor: Mount Grace Country House
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-108
+- lang: en
+  text: 'Vendor: Mount Grace Country House. Amount: R3,100.00'
+  vendor: Mount Grace Country House
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-109
+- lang: en
+  text: 'Vendor: Mount Grace Country House. Amount: R1,655.00'
+  vendor: Mount Grace Country House
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-110
+- lang: en
+  text: 'Vendor: Garden Court Kimberley. Amount: R1,280.00'
+  vendor: Garden Court Kimberley
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-111
+- lang: en
+  text: 'Vendor: Garden Court Kimberley. Amount: R2,450.00'
+  vendor: Garden Court Kimberley
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-112
+- lang: en
+  text: 'Vendor: Garden Court Kimberley. Amount: R899.00'
+  vendor: Garden Court Kimberley
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-113
+- lang: en
+  text: 'Vendor: Garden Court Kimberley. Amount: R3,100.00'
+  vendor: Garden Court Kimberley
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-114
+- lang: en
+  text: 'Vendor: Garden Court Kimberley. Amount: R1,655.00'
+  vendor: Garden Court Kimberley
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-115
+- lang: en
+  text: 'Vendor: Lagoon View Guest House Knysna. Amount: R1,280.00'
+  vendor: Lagoon View Guest House Knysna
+  amount_cents: 128000
+  expect: accommodation
+  id: expense_purpose-116
+- lang: en
+  text: 'Vendor: Lagoon View Guest House Knysna. Amount: R2,450.00'
+  vendor: Lagoon View Guest House Knysna
+  amount_cents: 245000
+  expect: accommodation
+  id: expense_purpose-117
+- lang: en
+  text: 'Vendor: Lagoon View Guest House Knysna. Amount: R899.00'
+  vendor: Lagoon View Guest House Knysna
+  amount_cents: 89900
+  expect: accommodation
+  id: expense_purpose-118
+- lang: en
+  text: 'Vendor: Lagoon View Guest House Knysna. Amount: R3,100.00'
+  vendor: Lagoon View Guest House Knysna
+  amount_cents: 310000
+  expect: accommodation
+  id: expense_purpose-119
+- lang: en
+  text: 'Vendor: Lagoon View Guest House Knysna. Amount: R1,655.00'
+  vendor: Lagoon View Guest House Knysna
+  amount_cents: 165500
+  expect: accommodation
+  id: expense_purpose-120
+- lang: en
+  text: 'Vendor: Avis Car Rental OR Tambo. Amount: R520.00'
+  vendor: Avis Car Rental OR Tambo
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-121
+- lang: en
+  text: 'Vendor: Avis Car Rental OR Tambo. Amount: R95.00'
+  vendor: Avis Car Rental OR Tambo
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-122
+- lang: en
+  text: 'Vendor: Avis Car Rental OR Tambo. Amount: R349.90'
+  vendor: Avis Car Rental OR Tambo
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-123
+- lang: en
+  text: 'Vendor: Avis Car Rental OR Tambo. Amount: R1,850.00'
+  vendor: Avis Car Rental OR Tambo
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-124
+- lang: en
+  text: 'Vendor: Avis Car Rental OR Tambo. Amount: R28.00'
+  vendor: Avis Car Rental OR Tambo
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-125
+- lang: en
+  text: 'Vendor: Europcar Cape Town Airport. Amount: R520.00'
+  vendor: Europcar Cape Town Airport
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-126
+- lang: en
+  text: 'Vendor: Europcar Cape Town Airport. Amount: R95.00'
+  vendor: Europcar Cape Town Airport
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-127
+- lang: en
+  text: 'Vendor: Europcar Cape Town Airport. Amount: R349.90'
+  vendor: Europcar Cape Town Airport
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-128
+- lang: en
+  text: 'Vendor: Europcar Cape Town Airport. Amount: R1,850.00'
+  vendor: Europcar Cape Town Airport
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-129
+- lang: en
+  text: 'Vendor: Europcar Cape Town Airport. Amount: R28.00'
+  vendor: Europcar Cape Town Airport
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-130
+- lang: en
+  text: 'Vendor: Bidvest Parking ORTIA. Amount: R520.00'
+  vendor: Bidvest Parking ORTIA
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-131
+- lang: en
+  text: 'Vendor: Bidvest Parking ORTIA. Amount: R95.00'
+  vendor: Bidvest Parking ORTIA
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-132
+- lang: en
+  text: 'Vendor: Bidvest Parking ORTIA. Amount: R349.90'
+  vendor: Bidvest Parking ORTIA
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-133
+- lang: en
+  text: 'Vendor: Bidvest Parking ORTIA. Amount: R1,850.00'
+  vendor: Bidvest Parking ORTIA
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-134
+- lang: en
+  text: 'Vendor: Bidvest Parking ORTIA. Amount: R28.00'
+  vendor: Bidvest Parking ORTIA
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-135
+- lang: en
+  text: 'Vendor: PNA Stationery Tyger Valley. Amount: R520.00'
+  vendor: PNA Stationery Tyger Valley
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-136
+- lang: en
+  text: 'Vendor: PNA Stationery Tyger Valley. Amount: R95.00'
+  vendor: PNA Stationery Tyger Valley
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-137
+- lang: en
+  text: 'Vendor: PNA Stationery Tyger Valley. Amount: R349.90'
+  vendor: PNA Stationery Tyger Valley
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-138
+- lang: en
+  text: 'Vendor: PNA Stationery Tyger Valley. Amount: R1,850.00'
+  vendor: PNA Stationery Tyger Valley
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-139
+- lang: en
+  text: 'Vendor: PNA Stationery Tyger Valley. Amount: R28.00'
+  vendor: PNA Stationery Tyger Valley
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-140
+- lang: en
+  text: 'Vendor: Tiger Wheel & Tyre Montague Gardens. Amount: R520.00'
+  vendor: Tiger Wheel & Tyre Montague Gardens
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-141
+- lang: en
+  text: 'Vendor: Tiger Wheel & Tyre Montague Gardens. Amount: R95.00'
+  vendor: Tiger Wheel & Tyre Montague Gardens
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-142
+- lang: en
+  text: 'Vendor: Tiger Wheel & Tyre Montague Gardens. Amount: R349.90'
+  vendor: Tiger Wheel & Tyre Montague Gardens
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-143
+- lang: en
+  text: 'Vendor: Tiger Wheel & Tyre Montague Gardens. Amount: R1,850.00'
+  vendor: Tiger Wheel & Tyre Montague Gardens
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-144
+- lang: en
+  text: 'Vendor: Tiger Wheel & Tyre Montague Gardens. Amount: R28.00'
+  vendor: Tiger Wheel & Tyre Montague Gardens
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-145
+- lang: en
+  text: 'Vendor: Midas Parow. Amount: R520.00'
+  vendor: Midas Parow
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-146
+- lang: en
+  text: 'Vendor: Midas Parow. Amount: R95.00'
+  vendor: Midas Parow
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-147
+- lang: en
+  text: 'Vendor: Midas Parow. Amount: R349.90'
+  vendor: Midas Parow
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-148
+- lang: en
+  text: 'Vendor: Midas Parow. Amount: R1,850.00'
+  vendor: Midas Parow
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-149
+- lang: en
+  text: 'Vendor: Midas Parow. Amount: R28.00'
+  vendor: Midas Parow
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-150
+- lang: en
+  text: 'Vendor: Waltons Office Supplies. Amount: R520.00'
+  vendor: Waltons Office Supplies
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-151
+- lang: en
+  text: 'Vendor: Waltons Office Supplies. Amount: R95.00'
+  vendor: Waltons Office Supplies
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-152
+- lang: en
+  text: 'Vendor: Waltons Office Supplies. Amount: R349.90'
+  vendor: Waltons Office Supplies
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-153
+- lang: en
+  text: 'Vendor: Waltons Office Supplies. Amount: R1,850.00'
+  vendor: Waltons Office Supplies
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-154
+- lang: en
+  text: 'Vendor: Waltons Office Supplies. Amount: R28.00'
+  vendor: Waltons Office Supplies
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-155
+- lang: en
+  text: 'Vendor: Postnet Kenilworth. Amount: R520.00'
+  vendor: Postnet Kenilworth
+  amount_cents: 52000
+  expect: other
+  id: expense_purpose-156
+- lang: en
+  text: 'Vendor: Postnet Kenilworth. Amount: R95.00'
+  vendor: Postnet Kenilworth
+  amount_cents: 9500
+  expect: other
+  id: expense_purpose-157
+- lang: en
+  text: 'Vendor: Postnet Kenilworth. Amount: R349.90'
+  vendor: Postnet Kenilworth
+  amount_cents: 34990
+  expect: other
+  id: expense_purpose-158
+- lang: en
+  text: 'Vendor: Postnet Kenilworth. Amount: R1,850.00'
+  vendor: Postnet Kenilworth
+  amount_cents: 185000
+  expect: other
+  id: expense_purpose-159
+- lang: en
+  text: 'Vendor: Postnet Kenilworth. Amount: R28.00'
+  vendor: Postnet Kenilworth
+  amount_cents: 2800
+  expect: other
+  id: expense_purpose-160
+- lang: en
+  text: 'Vendor: Checkers Hyper Brackenfell. Amount: R312.50'
+  vendor: Checkers Hyper Brackenfell
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-161
+- lang: en
+  text: 'Vendor: Checkers Hyper Brackenfell. Amount: R789.60'
+  vendor: Checkers Hyper Brackenfell
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-162
+- lang: en
+  text: 'Vendor: Checkers Hyper Brackenfell. Amount: R124.99'
+  vendor: Checkers Hyper Brackenfell
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-163
+- lang: en
+  text: 'Vendor: Checkers Hyper Brackenfell. Amount: R543.00'
+  vendor: Checkers Hyper Brackenfell
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-164
+- lang: en
+  text: 'Vendor: Checkers Hyper Brackenfell. Amount: R1,030.00'
+  vendor: Checkers Hyper Brackenfell
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-165
+- lang: en
+  text: 'Vendor: Pick n Pay Kenilworth. Amount: R312.50'
+  vendor: Pick n Pay Kenilworth
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-166
+- lang: en
+  text: 'Vendor: Pick n Pay Kenilworth. Amount: R789.60'
+  vendor: Pick n Pay Kenilworth
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-167
+- lang: en
+  text: 'Vendor: Pick n Pay Kenilworth. Amount: R124.99'
+  vendor: Pick n Pay Kenilworth
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-168
+- lang: en
+  text: 'Vendor: Pick n Pay Kenilworth. Amount: R543.00'
+  vendor: Pick n Pay Kenilworth
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-169
+- lang: en
+  text: 'Vendor: Pick n Pay Kenilworth. Amount: R1,030.00'
+  vendor: Pick n Pay Kenilworth
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-170
+- lang: en
+  text: 'Vendor: Woolworths Gardens. Amount: R312.50'
+  vendor: Woolworths Gardens
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-171
+- lang: en
+  text: 'Vendor: Woolworths Gardens. Amount: R789.60'
+  vendor: Woolworths Gardens
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-172
+- lang: en
+  text: 'Vendor: Woolworths Gardens. Amount: R124.99'
+  vendor: Woolworths Gardens
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-173
+- lang: en
+  text: 'Vendor: Woolworths Gardens. Amount: R543.00'
+  vendor: Woolworths Gardens
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-174
+- lang: en
+  text: 'Vendor: Woolworths Gardens. Amount: R1,030.00'
+  vendor: Woolworths Gardens
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-175
+- lang: en
+  text: 'Vendor: SPAR Hout Bay. Amount: R312.50'
+  vendor: SPAR Hout Bay
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-176
+- lang: en
+  text: 'Vendor: SPAR Hout Bay. Amount: R789.60'
+  vendor: SPAR Hout Bay
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-177
+- lang: en
+  text: 'Vendor: SPAR Hout Bay. Amount: R124.99'
+  vendor: SPAR Hout Bay
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-178
+- lang: en
+  text: 'Vendor: SPAR Hout Bay. Amount: R543.00'
+  vendor: SPAR Hout Bay
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-179
+- lang: en
+  text: 'Vendor: SPAR Hout Bay. Amount: R1,030.00'
+  vendor: SPAR Hout Bay
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-180
+- lang: en
+  text: 'Vendor: Dis-Chem Canal Walk. Amount: R312.50'
+  vendor: Dis-Chem Canal Walk
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-181
+- lang: en
+  text: 'Vendor: Dis-Chem Canal Walk. Amount: R789.60'
+  vendor: Dis-Chem Canal Walk
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-182
+- lang: en
+  text: 'Vendor: Dis-Chem Canal Walk. Amount: R124.99'
+  vendor: Dis-Chem Canal Walk
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-183
+- lang: en
+  text: 'Vendor: Dis-Chem Canal Walk. Amount: R543.00'
+  vendor: Dis-Chem Canal Walk
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-184
+- lang: en
+  text: 'Vendor: Dis-Chem Canal Walk. Amount: R1,030.00'
+  vendor: Dis-Chem Canal Walk
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-185
+- lang: en
+  text: 'Vendor: Clicks Claremont. Amount: R312.50'
+  vendor: Clicks Claremont
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-186
+- lang: en
+  text: 'Vendor: Clicks Claremont. Amount: R789.60'
+  vendor: Clicks Claremont
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-187
+- lang: en
+  text: 'Vendor: Clicks Claremont. Amount: R124.99'
+  vendor: Clicks Claremont
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-188
+- lang: en
+  text: 'Vendor: Clicks Claremont. Amount: R543.00'
+  vendor: Clicks Claremont
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-189
+- lang: en
+  text: 'Vendor: Clicks Claremont. Amount: R1,030.00'
+  vendor: Clicks Claremont
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-190
+- lang: en
+  text: 'Vendor: Makro Milnerton. Amount: R312.50'
+  vendor: Makro Milnerton
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-191
+- lang: en
+  text: 'Vendor: Makro Milnerton. Amount: R789.60'
+  vendor: Makro Milnerton
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-192
+- lang: en
+  text: 'Vendor: Makro Milnerton. Amount: R124.99'
+  vendor: Makro Milnerton
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-193
+- lang: en
+  text: 'Vendor: Makro Milnerton. Amount: R543.00'
+  vendor: Makro Milnerton
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-194
+- lang: en
+  text: 'Vendor: Makro Milnerton. Amount: R1,030.00'
+  vendor: Makro Milnerton
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-195
+- lang: en
+  text: 'Vendor: Game Cape Gate. Amount: R312.50'
+  vendor: Game Cape Gate
+  amount_cents: 31250
+  expect: uncertain
+  id: expense_purpose-196
+- lang: en
+  text: 'Vendor: Game Cape Gate. Amount: R789.60'
+  vendor: Game Cape Gate
+  amount_cents: 78960
+  expect: uncertain
+  id: expense_purpose-197
+- lang: en
+  text: 'Vendor: Game Cape Gate. Amount: R124.99'
+  vendor: Game Cape Gate
+  amount_cents: 12499
+  expect: uncertain
+  id: expense_purpose-198
+- lang: en
+  text: 'Vendor: Game Cape Gate. Amount: R543.00'
+  vendor: Game Cape Gate
+  amount_cents: 54300
+  expect: uncertain
+  id: expense_purpose-199
+- lang: en
+  text: 'Vendor: Game Cape Gate. Amount: R1,030.00'
+  vendor: Game Cape Gate
+  amount_cents: 103000
+  expect: uncertain
+  id: expense_purpose-200

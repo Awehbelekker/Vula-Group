@@ -17,6 +17,54 @@ logger = logging.getLogger(__name__)
 
 # Set at request entry (chat / doc analysis) → read inside the litellm callback.
 _current_tenant: contextvars.ContextVar = contextvars.ContextVar("vula_tenant", default=None)
+# 31 Oct 2026 (measuring): the task label of the model call about to run — set by
+# core/llm_router.resolve_generation_route(), read by the callback so each call's time, tokens
+# and cost are logged under what it was for. A label, never prompt content (POPIA).
+_current_task: contextvars.ContextVar = contextvars.ContextVar("vula_llm_task", default=None)
+
+
+def set_current_task(task: Optional[str]) -> None:
+    try:
+        _current_task.set(task or None)
+    except Exception:
+        pass
+
+
+def _seconds(start, end) -> Optional[float]:
+    try:
+        d = end - start
+        return d.total_seconds() if hasattr(d, "total_seconds") else float(d)
+    except Exception:
+        return None
+
+
+def call_record(kwargs: dict, response_obj, start_time, end_time, ok: bool = True) -> dict:
+    """One model call as the measuring log keeps it: what it was for, how long it took, the
+    tokens and the estimated cost. No prompt or reply text."""
+    model = _callback_model(kwargs)
+    u = getattr(response_obj, "usage", None) if ok else None
+    pt = int(getattr(u, "prompt_tokens", 0) or 0)
+    ct = int(getattr(u, "completion_tokens", 0) or 0)
+    pin, pout = _price(model)
+    secs = _seconds(start_time, end_time)
+    return {"task": _current_task.get() or "unspecified",
+            "latency_ms": int(round(secs * 1000)) if secs is not None else None,
+            "prompt_tokens": pt, "completion_tokens": ct,
+            "est_cost_usd": round((pt / 1e6) * pin + (ct / 1e6) * pout, 8),
+            "model": re.sub(r"^(openrouter|ollama_chat|ollama)/", "", model or ""),
+            "backend": "local" if (model or "").startswith(("ollama/", "ollama_chat/")) else "cloud",
+            "ok": ok}
+
+
+def log_call(rec: dict, tenant_id: Optional[str]) -> None:
+    """Write one call record to the measuring log (vula_reasoning_telemetry, system vula-llm-call)."""
+    try:
+        from core import reasoning_telemetry
+        reasoning_telemetry.emit(system="vula-llm-call", task=rec["task"], outcome="ok" if rec["ok"] else "error",
+                                 tenant_id=tenant_id if tenant_id and tenant_id != "_unattributed" else None,
+                                 extra={k: v for k, v in rec.items() if k != "task"})
+    except Exception:
+        pass
 
 
 def set_request_tenant(tenant_id: str) -> None:
@@ -163,6 +211,14 @@ def install_metering() -> None:
                     pt = getattr(u, "prompt_tokens", 0) or 0
                     ct = getattr(u, "completion_tokens", 0) or 0
                     record_llm(tid, _callback_model(kwargs), int(pt), int(ct))
+                    log_call(call_record(kwargs, response_obj, start_time, end_time), _current_tenant.get())
+                except Exception:
+                    pass
+
+            async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                try:
+                    log_call(call_record(kwargs, response_obj, start_time, end_time, ok=False),
+                             _current_tenant.get())
                 except Exception:
                     pass
 
