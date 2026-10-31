@@ -2046,6 +2046,53 @@ async def _read_client_slip(path, mime_type: str) -> Optional[dict]:
             "paid_on": fin.get("date"), "reference": fin.get("reference")}
 
 
+def _form_approvers(tenant_id: str) -> list:
+    """Who confirms a returned form: the business's owners and managers."""
+    from vula.integrations import notify
+    to = [notify._digits(m["whatsapp"]) for m in notify._members(tenant_id)
+          if (m.get("role") or "").lower() in ("owner", "manager") and m.get("whatsapp")]
+    return list(dict.fromkeys(t for t in to if t))
+
+
+async def _returned_form_first(tenant_id: str, phone: str, local_path) -> bool:
+    """True when the file was one of this business's forms sent back by its own team, and has
+    been handled (read, checked, staged with Confirm buttons for an owner or manager). False for
+    any other spreadsheet, another business's form, or a sender who isn't on the team: the file
+    is then filed as a normal document."""
+    try:
+        from vula import team_index
+        from vula.commerce import forms
+        member = team_index.member_for_phone(tenant_id, phone)
+        if not (member or _is_tenant_owner(tenant_id, phone)):
+            return False
+        res = await forms.stage(tenant_id, local_path, phone)
+    except Exception as exc:  # noqa: BLE001 — never lose the file: it is filed as usual
+        logger.warning("returned form check failed for %s: %s", tenant_id, exc)
+        return False
+    if res is None:
+        return False
+    if not res.get("bookable"):
+        await _send_reply(phone, res["text"], tenant_id)
+        _note_handler("returned_form")
+        return True
+    fid = res["form"]["id"]
+    role = ((member or {}).get("role") or "").lower()
+    sender_digits = "".join(ch for ch in phone if ch.isdigit())
+    approvers = [phone] if role in ("owner", "manager") else _form_approvers(tenant_id)
+    if not approvers:
+        await _send_reply(phone, res["text"] + "\n\nThere's no owner or manager number on file to approve it — "
+                          "ask the owner to add one in Team.", tenant_id)
+        return True
+    for to in approvers:
+        await _ask_admin_confirm(to, tenant_id, "form_book", {"form_id": fid}, {}, caller_role="owner",
+                                 summary=res["text"], labels=("Book it", "Not now"))
+    if sender_digits not in {"".join(ch for ch in a if ch.isdigit()) for a in approvers}:
+        await _send_reply(phone, "Thanks — I've read the form and sent it to the owner to approve. "
+                                 "Nothing is booked until they do.", tenant_id)
+    _note_handler("returned_form")
+    return True
+
+
 def _slip_approvers(tenant_id: str) -> list:
     from vula.integrations import notify
     to = notify.recipients_for(tenant_id, "payment_received")
@@ -3082,6 +3129,11 @@ async def _handle_document_ingest(
         # statement sent again is re-checked, not turned away as "Already got".
         if local_path.suffix.lower() == ".pdf" and await _bank_statement_first(
                 tenant_id, phone, local_path):
+            return
+
+        # A filled-in Vula form (vula/commerce/forms.py) from this business's own team: read,
+        # checked and staged; the owner confirms before anything is booked.
+        if local_path.suffix.lower() == ".xlsx" and await _returned_form_first(tenant_id, phone, local_path):
             return
 
         # No Meta sha256 on the webhook → hash the bytes now and claim before any real work.

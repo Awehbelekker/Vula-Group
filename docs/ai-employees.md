@@ -234,7 +234,7 @@ vula_mind/
 
 ## 3. The AI employees
 
-**Shared by every employee:** `calculate`, `complete_reminder`, `create_reminder`, `custom_sheet`, `decision_log`, `email_thread_summary`, `find_document`, `forget_rule`, `hand_over`, `list_reminders`, `list_rules`, `lookup_business_info`, `record_decision`, `remember_rule`, `withdraw_decision`. That is the business's memory (what it sells, its rules and decisions, filed documents and emails), exact arithmetic, reminders, a spreadsheet in the owner's own layout (custom_sheet, previewed and checked against the books), and hand_over.
+**Shared by every employee:** `calculate`, `complete_reminder`, `create_reminder`, `custom_sheet`, `decision_log`, `email_thread_summary`, `fill_in_form`, `find_document`, `forget_rule`, `hand_over`, `list_reminders`, `list_rules`, `lookup_business_info`, `record_decision`, `remember_rule`, `timesheet_summary`, `withdraw_decision`. That is the business's memory (what it sells, its rules and decisions, filed documents and emails), exact arithmetic, reminders, a spreadsheet in the owner's own layout (custom_sheet, previewed and checked against the books), and hand_over.
 
 ### 📒 AI bookkeeper (`bookkeeper`)
 
