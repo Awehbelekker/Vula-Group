@@ -762,7 +762,7 @@ _STAT_FUNC = {"count": "COUNT", "average": "AVERAGE", "min": "MIN", "max": "MAX"
 
 
 def workbook(business: str, spec: Dict[str, Any], resolved: Dict[str, Any], rows: List[Dict[str, Any]],
-             accent: Optional[str] = None, today: Optional[date] = None
+             accent: Optional[str] = None, today: Optional[date] = None, logo: Optional[bytes] = None
              ) -> Tuple[bytes, Dict[str, int], Dict[str, Optional[float]]]:
     """The xlsx, and every cell the read-back must check: ref -> cents (money), and ref -> a plain
     number or None (counts, averages, percentages, quantities; None = must be blank)."""
@@ -830,6 +830,14 @@ def workbook(business: str, spec: Dict[str, Any], resolved: Dict[str, Any], rows
         safe_text(ws["A4"], f"From the books, as at {(today or date.today()).isoformat()}. Totals are formulas."
                   + (f" Calculations: {how}." if how else ""))
         ws["A4"].font = X._MUTED
+        if logo:
+            try:
+                from openpyxl.drawing.image import Image as XLImage
+                img = XLImage(io.BytesIO(logo))
+                img.width, img.height = int(img.width * 48 / img.height), 48
+                ws.add_image(img, f"{get_column_letter(max(len(cols), 2) + 1)}1")
+            except Exception as exc:  # noqa: BLE001 — the sheet goes without it
+                log.info("sheet logo not placed: %s", exc)
         head = 6
         widths = []
         for c in cols:

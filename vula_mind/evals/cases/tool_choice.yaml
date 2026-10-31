@@ -32,6 +32,9 @@
    expect: custom_sheet, forbid: [find_document], note: "sheet builder: the owner's own layout, previewed first"}
 - {skill: commerce_admin, role: owner, prompt: "A spreadsheet of the bank lines for Seaview in October",
    expect: custom_sheet, forbid: [bank_payments]}
+- {skill: commerce_admin, role: owner, prompt: "Send me a timesheet for the guys to fill in this week",
+   expect: fill_in_form, note: "item 2: a form the team fills in, read back on return"}
+- {skill: commerce_admin, role: owner, prompt: "What do I owe the workers for last week?", expect: timesheet_summary}
 - {skill: commerce_admin, role: owner, prompt: "Send everyone a promo for the fresh tuna", expect: picture_promotion,
    forbid: [preview_broadcast], note: "2026-10-24 OTH: drafted in the shop's own post layout"}
 - {skill: commerce_admin, role: owner, prompt: "Can you track all payment for Rudolf on the statments",

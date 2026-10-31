@@ -1142,6 +1142,34 @@ SHEET_TOOLS = [
             "required": ["action"]}}},
 ]
 
+# 31 Oct 2026 (item 2): forms the team fills in (vula/commerce/forms.py). A returned form is read
+# in the WhatsApp document path and booked only on the owner's Confirm (form_book, dispatch only).
+FORM_TOOLS = [
+    {"type": "function", "function": {
+        "name": "fill_in_form",
+        "description": "Make a spreadsheet form for the team to fill in and send back on WhatsApp: "
+                       "'quote' (a quote / order form with the product list and prices), "
+                       "'site_checklist' (a project's checklist: Done / Not done / N/A), 'timesheet' "
+                       "(days worked per worker and project, with their rates) or 'stock_count' (every "
+                       "product with its system count, to be counted). It has the business's logo, "
+                       "dropdowns and the sums built in. When it comes back filled in, Vula reads it and "
+                       "asks the owner before anything is booked. action 'list' shows recent forms. "
+                       "The reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["make", "list"]},
+            "form": {"type": "string", "enum": ["quote", "site_checklist", "timesheet", "stock_count"]},
+            "project": {"type": "string", "description": "For a site checklist (needed) or a quote."},
+            "items": {"type": "array", "items": {"type": "string"},
+                      "description": "The checklist's items, if the owner listed them."}}}}},
+    {"type": "function", "function": {
+        "name": "timesheet_summary",
+        "description": "What the confirmed timesheets say is owed to each worker for a period — "
+                       "'what do I owe the workers this week', 'days worked on Seaview in October'. "
+                       "Dates as YYYY-MM-DD. The reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "since": {"type": "string"}, "until": {"type": "string"}, "project": {"type": "string"}}}}},
+]
+
 # 2026-09-28 (DIGG): the QS agent's figures — job costing from the bank (received / cost by
 # trade / overhead share / profit vs the cost-plus fee) and pricing advice from what the business
 # actually paid (vula/commerce/job_costing.py). Read-only; every number comes from the tool.
@@ -1462,7 +1490,8 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
-                   + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS)
+                   + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS
+                   + FORM_TOOLS)
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1703,7 +1732,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_DOC_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS + SHEET_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS + SHEET_TOOLS + FORM_TOOLS)  # always on
     try:
         from vula.api.tenants import tenant_profile
         profile = tenant_profile(tenant_id)
@@ -1752,7 +1781,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "custom_sheet": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "custom_sheet": "finances", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -2814,6 +2843,16 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._project_bill_file(tid, args)
             if name == "custom_sheet":
                 return await self._custom_sheet(tid, args, ctx)
+            if name == "fill_in_form":
+                return await self._fill_in_form(tid, args, ctx)
+            if name == "form_book":
+                return await self._form_book(tid, args, ctx)
+            if name == "timesheet_summary":
+                import asyncio
+                from vula.commerce import forms
+                res = await asyncio.to_thread(forms.pay_due, tid, args.get("since") or None,
+                                              args.get("until") or None, args.get("project") or None)
+                return {**res, "reply_verbatim": res["text"]}
             if name == "client_paid_direct":
                 return await self._client_paid_direct(tid, args, ctx)
             if name == "price_advice":
@@ -3624,6 +3663,76 @@ class CommerceAdminSkill(BaseSkill):
                  "the links are for you and last a week.")
         return {"reply_verbatim": text, "balance_cents": out["figures"]["balance"]}
 
+    async def _fill_in_form(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Make one of the fill-in forms and send it (vula/commerce/forms.py)."""
+        import asyncio
+        from vula.commerce import forms
+        ctx = ctx or {}
+        phone = ctx.get("phone") or ""
+        if (args.get("action") or "make") == "list":
+            rows = (service._client().table(forms.TABLE).select("form_type,project,status,created_at")
+                    .eq("tenant_id", tid).order("created_at", desc=True).limit(10).execute().data or [])
+            if not rows:
+                return {"reply_verbatim": "No forms yet. Ask for a quote form, a site checklist, a timesheet or a stock count."}
+            label = {"sent": "waiting to come back", "returned": "back, waiting for approval", "booked": "booked",
+                     "cancelled": "cancelled"}
+            return {"reply_verbatim": "📋 Recent forms:\n" + "\n".join(
+                f"• {forms.TYPES[r['form_type']][0]}" + (f" — {r['project']}" if r.get("project") else "")
+                + f", {str(r['created_at'])[:10]}: {label.get(r['status'], r['status'])}" for r in rows)}
+        kind = args.get("form") or ""
+        if kind not in forms.TYPES:
+            return {"status": "need_info", "message": "Which form — a quote / order form, a site checklist, a timesheet or a stock count?"}
+        title, scope = forms.TYPES[kind]
+        access = _member_access(tid, phone or None)
+        if scope and access is not None and scope not in access:
+            return {"status": "need_info", "message": f"Your access doesn't include the {title.lower()} — ask the owner."}
+        try:
+            out = await forms.make(tid, kind, project=args.get("project") or None, items=args.get("items") or None,
+                                   by=phone or "dashboard")
+        except forms.FormError as exc:
+            return {"status": "need_info", "message": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — e.g. before migration 239
+            logger.warning("form not made for %s: %s", tid, exc)
+            return {"error": "I couldn't make the form just now — please try again shortly."}
+        from vula.api.whatsapp import _send_invoice_document, _upload_to_storage
+        from vula.storage_links import SHARE_TTL, signed
+        ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        url = await asyncio.to_thread(_upload_to_storage, "documents",
+                                      f"{tid}/forms/{out['form_id']}/{out['filename']}", out["bytes"], ctype)
+        link = signed(url, SHARE_TTL) if url else None
+        sent = False
+        if phone:
+            try:
+                sent = await _send_invoice_document(phone, out["bytes"], out["filename"], out["title"], tid,
+                                                    content_type=ctype)
+            except Exception as exc:  # noqa: BLE001 — the link still works
+                logger.warning("form send failed for %s: %s", tid, exc)
+        if not (sent or link):
+            return {"error": "The form was made but couldn't be sent or stored just now — please try again."}
+        return {"reply_verbatim": (
+            f"📋 *{out['title']}*" + (f" — {out['project']}" if out.get("project") else "") + " is ready"
+            + (" (the file above)." if sent else ".") + (f"\nDownload (for a week): {link}" if link else "")
+            + "\n\nFill in the yellow cells and send the file back here. I'll read it and show the owner "
+              "what it would book — nothing is booked until they confirm.")}
+
+    async def _form_book(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Book a returned form (the owner's Confirm on its preview). Without confirm: the preview again."""
+        from vula.commerce import forms
+        fid = str(args.get("form_id") or "")
+        if not args.get("confirm"):
+            rows = (service._client().table(forms.TABLE).select("*").eq("tenant_id", tid).eq("id", fid)
+                    .limit(1).execute().data or [])
+            if not rows or not rows[0].get("staged"):
+                return {"status": "need_info", "message": "That form hasn't come back filled in yet."}
+            return {"preview": True, "reply_verbatim": forms.preview_text(rows[0], rows[0]["staged"])}
+        try:
+            return {"reply_verbatim": await forms.book(tid, fid, by=(ctx or {}).get("phone"))}
+        except forms.FormError as exc:
+            return {"reply_verbatim": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            logger.error("form booking failed for %s/%s: %s", tid, fid, exc)
+            return {"reply_verbatim": "That couldn't be booked just now — nothing was booked. Please try Confirm again later."}
+
     async def _custom_sheet(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """The sheet builder (vula/commerce/sheet_builder.py): design → preview, build → the file
         checked against the books, save / use / list the business's own layouts."""
@@ -3711,7 +3820,14 @@ class CommerceAdminSkill(BaseSkill):
                 from vula.api.tenants import display_name
                 from vula.commerce import xlsx_check
                 accent = await service._brand_accent(tid)
-                data, want, exact = await asyncio.to_thread(sb.workbook, display_name(tid), spec, resolved, rows, accent)
+                try:
+                    from vula.commerce import boq_template
+                    logo = await asyncio.to_thread(boq_template._logo_bytes,
+                                                   (await asyncio.to_thread(boq_template.brand, tid)).get("logo_url"))
+                except Exception:  # noqa: BLE001 — a logo is never why a sheet fails
+                    logo = None
+                data, want, exact = await asyncio.to_thread(sb.workbook, display_name(tid), spec, resolved, rows,
+                                                            accent, None, logo)
                 wrong = xlsx_check.mismatches(data, want, exact=exact)
                 if wrong:
                     logger.error("custom sheet read-back failed for %s: %s", tid, wrong)
