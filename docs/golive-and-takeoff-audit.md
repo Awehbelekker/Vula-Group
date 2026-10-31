@@ -172,6 +172,139 @@ token must 403), an unauthenticated tenant route (must 401), and optionally a si
 6. **NEW-M1 (Graph v19.0):** OK to centralise and bump to the current Graph version? It touches
    every WhatsApp call, so it should go through staging first.
 
-## Final status
+## Final status (2026-10-31, end of this pass)
 
-_Updated at the end of each phase._
+Branch `ccr-f7a53584-worzz4`. Full suite **6,853 passed, 2 skipped, 0 failed** (start of day: 6,741 / 2 /
+0). Also green: `ruff check vula/ core/`, import check, `check_migrations_rls.py`,
+`check_migration_sentinels.py`, `check_client_secrets.py`, `python -m evals.takeoff_bench` (4/4),
+dashboard `npm run build` + `npm run test:unit` (38/38) + size and token checks. **Nothing in
+production was changed.** Production was only read (Supabase SQL selects and advisors, Railway
+logs).
+
+### Verified against production (read-only)
+
+| Item | Result | How |
+|---|---|---|
+| `ENFORCE_TENANT_AUTH` on in production | **VERIFIED ON** | Production booted ≥6 times on 31 Oct (Railway logs "Application startup complete"). The boot error `ENFORCE_TENANT_AUTH is off…` (`vula/api/server.py:1732`) appears **zero** times since 24 Oct. |
+| Live WhatsApp token works | **VERIFIED** | Meta's recent error responses are `132001 Template name does not exist`. That is a template error after the token authenticated. There are no 190 (invalid token) errors since 28 Oct. The 4 connected numbers in `vula_whatsapp_accounts` carry no per-tenant token (they use the platform token). The 3 rows in `ops_wa_token_backup_20261022` are old per-tenant **user** tokens, stored in plain text. |
+| **NEW-P1:** two scheduled templates fail twice a day | **OPEN** | `seedleme_delivery_briefing` (~04:30 UTC) and `seedleme_sales_summary` (~16:00 UTC) fail every day since at least 28 Oct with 132001. The templates don't exist (or aren't approved) on that WABA. Owner messages aren't arriving. |
+| Advisors | as audited | 54 × `rls_enabled_no_policy` (INFO), 3 × `function_search_path_mutable`, 1 × security-definer `vula_storage_can_write`, leaked-password protection off. |
+| **NEW-P2:** test rows in production's rate table | **OPEN** | `vula_material_rates` has 10 rows with an empty `source` ("Item 0".."Item 4", "OK Item", "Test Tile", "Porcelain Tiles"…). Test data reached production at some point. The takeoff now ignores them. |
+| **NEW-P3:** the scraped rates are supply prices | **FINDING** | Every scraped row is a retail supply price (or an AECOM building-type cost per m²). None is a laid/installed trade rate, so no BOQ line can be priced from them. Since `1feefaa` the takeoff refuses to use them, uses the reference table, and labels the line with that source. Pricing BOQ lines from market data needs installed-rate sources (or a materials + labour split). That is a product decision, not a bug fix. |
+
+### Phase-by-phase
+
+| Item | Final | Evidence |
+|---|---|---|
+| **P0** suite + blockers | DONE | as above; blockers table at the top stands, plus the production checks |
+| **P1** migration runner | **DONE (code)** | `tools/migrate.py`, `vula/migrations_files.py`, migration 240, `tests/test_migrate_tool.py` (19). End-to-end run on a throwaway Postgres 16. Not run against any Supabase project. |
+| **P1** smoke test | **DONE (code)** | `tools/smoke.py`, `tests/test_smoke_tool.py` (8). Can't reach production from this sandbox (egress blocked). Run it yourself, see the checklist. |
+| **P1** readiness gaps | **DONE** | `/ready` "settings" list: PUBLIC_BASE_URL, email, PayFast, Yoco (never failing). Fails staging on prod PUBLIC_BASE_URL. `tests/test_readiness.py` +3. |
+| **P1** staging env itself | **NOT CREATED** | No Supabase branch exists (`list_branches` → none). Creating one is billed hourly, so it's on your checklist with exact steps (`docs/staging.md`). |
+| **P2** search_path | **DONE (migration written, not applied)** | `migrations/241_trigger_search_path.sql` |
+| **P2** `vula_storage_can_write` | **KEEP: documented** | `docs/security-model.md` |
+| **P2** backup/cleanup tables | **PROPOSED, needs your OK** | SQL below |
+| **P2** RLS-no-policy doc | **DONE** | `docs/security-model.md` |
+| **P3** Graph API version | **DONE** | `vula/meta_graph.py`, `GRAPH_API_VERSION` default v25.0, `tests/test_graph_api_version.py` |
+| **P3** account-health webhooks | **DONE** | `vula/api/whatsapp_account_events.py`, `tests/test_whatsapp_account_events.py` (22) |
+| **P3** disconnect | **DONE** | unsubscribes the WABA when its last number goes. Doc corrected. |
+| **P3** Embedded Signup v4 | **DONE (already)** | Config ID flow, see table above |
+| **P3** go-live eval per tenant | **BLOCKED** | Needs staging (P1) and a model. Not run. Command in the checklist. |
+| **4a** benchmark | **DONE, synthetic only** | `evals/takeoff_bench.py`, CI step, `tests/test_takeoff_bench.py`. **No real plans yet**, so there is no real error % to report. |
+| **4b** calibration | **DONE** | `DrawingSheet.scale_ratio / scale_method / scale_verified_by`. DXF uses `$INSUNITS`. Review can record "dimension checked". |
+| **4c** measured confidence | **DONE** | `vula/takeoff/accuracy.py`. Constants removed (test asserts it). |
+| **4d** review gate | **DONE** | `needs_review` → `POST /takeoff/{id}/review`. `BOQGenerator` raises `ReviewRequired`. Dashboard review card. |
+| **4e** sidecar decision | **NOT YET DECIDED: skipped for now** | See below |
+| **4f** flooring | **NOT BUILT** | Waiting for your answer: no tenant uses takeoff for vinyl/LVT yet (Gerflor is CRM-only) |
+| **4g** POPIA | **DONE** | 90-day retention (daily loop), `DELETE /takeoff/{id}`, safe file names |
+| NEW-T1 DXF units | **FIXED** | `test_takeoff_measure_fixes.py` |
+| NEW-T9 LWPOLYLINE read as 0 m², so **no DXF ever produced a room** | **FIXED** | same |
+| NEW-T2 scraped rates never matched | **FIXED** (match by label + unit + band + "installed") | same, using real production labels |
+| NEW-T3 slab m² × m³ rate | **FIXED** | same |
+| NEW-T4 float money | **FIXED** (integer cents, half-up) | same |
+| NEW-T5 two pricing paths | OPEN | takeoff → `vula_boq_drafts` hand-off not built (next step) |
+| NEW-T6 plans kept forever | **FIXED** (4g) | |
+| NEW-T7 DRAIN = door | **FIXED** | |
+| NEW-T8 GFA lines priced unchecked | **FIXED** by 4d | |
+| DXF rooms with no finishes priced without flooring | **FIXED** | held for review; finishes set on the review card |
+
+**Correction to the audit (RULE 0).** Migration 013 `vula_approvals` (`vula/commerce/approvals.py`) is
+an existing generic approval engine, and I missed it in the first pass. It is WhatsApp/phone-based
+multi-approver (`approver_phone` required). The takeoff review is a dashboard check that *edits*
+quantities, so the gate stays on the job row, as proposed. If you want takeoff approvals to reach a
+QS's WhatsApp too, the job can raise a `vula_approvals` row as well.
+
+### 4e — sidecar decision
+
+**Don't add it yet.** The benchmark exists, but it has only synthetic plans. The DXF reader and the PDF
+room-schedule reader measure them exactly (0.00% error), but synthetic plans can't tell us how far
+the **AI reader** is off on real drawings. That is the number your rule depends on. Once you send
+real plans + hand measurements, run `python -m evals.takeoff_bench --dir evals/takeoff_plans/real
+--live`. If `pdf_text`/`pdf_scanned` mean area error is within 2%, skip the sidecar. If it isn't, add it.
+
+Another session ("Vula takeoff accuracy audit", branch `ccr-d6954993-0a7b3b`, commits `574e6b4`,
+`76d1ace`) has already built an OpenTakeoff sidecar pinned to `apache-2.0-final` (84c7f48e), with
+LICENSE/NOTICE kept. Its bridge and Docker image were **never executed**, and it is **not merged or wired
+in** here. If 4e says yes, that branch is the starting point (a three-line hook in
+`PlanReader.read`). **A lawyer should confirm the licence position** before it ships: Apache-2.0 at that
+tag, AGPL after it, and no later commits may be pulled.
+
+### Production changes awaiting your OK (exact; none run)
+
+1. **Drop the hand-made backup tables** (0 dependents, no code reads them; checked 31 Oct):
+   ```sql
+   -- 3 rows: old per-tenant WhatsApp USER tokens in plain text (22 Oct). Live numbers use the platform token.
+   drop table if exists public.ops_wa_token_backup_20261022;
+   -- 45 rows: restore point for the 26 Oct DIGG self-supplier cleanup. Drop once DIGG's suppliers look right.
+   drop table if exists public.ops_digg_self_supplier_backup_20261026;
+   -- 1,512 rows (id, field, old_value, new_value, at, tbl): undo log of the 2 Oct data cleanup.
+   -- Export it first if you might ever need to undo that cleanup.
+   drop table if exists public.vula_cleanup_log_20261002;
+   ```
+2. **Delete the test rows from the rate table:** `delete from public.vula_material_rates where coalesce(source,'') = '';` (10 rows)
+3. **Record migrations, then apply 240 + 241** with the runner (commands in the checklist). 241 only sets
+   `search_path`. It changes no ledger behaviour.
+4. **Railway:** nothing is required. Optional: `GRAPH_API_VERSION` (default v25.0), `TAKEOFF_RETENTION_DAYS`
+   (default 90). `WHATSAPP_API_URL` is no longer read. After any change, run `railway up`.
+
+## What Richard must do manually
+
+**This week, before go-live**
+- [ ] Review and merge this branch (`ccr-f7a53584-worzz4`). Deploy, then `railway up`.
+- [ ] Say OK (or not) to each production change above. I'll run the SQL once you approve.
+- [ ] Fix the two failing scheduled templates: create and get approval for `seedleme_delivery_briefing` and
+      `seedleme_sales_summary` in WhatsApp Manager on that tenant's WABA (or switch those jobs off).
+- [ ] Supabase › Authentication › Policies: **turn on leaked-password protection**.
+- [ ] After deploy, from `vula_mind/`:
+      `PROD_API_KEY=… python tools/smoke.py --base-url https://vula-group-production.up.railway.app --api-key-env PROD_API_KEY`
+
+**Migrations (once, then the runner replaces pasting SQL)**
+- [ ] Get the production Postgres URI (Supabase › Connect › Session pooler, port 5432). Then:
+      `export DATABASE_URL=…`
+      `python tools/migrate.py baseline --target production --upto 239 --yes --i-mean-production`
+      `python tools/migrate.py apply --target production` (dry run, should list 240, 241)
+      `python tools/migrate.py apply --target production --yes --i-mean-production`
+
+**Staging (docs/staging.md)**
+- [ ] Supabase: create branch `staging` on `vula-production` (billed per hour). Run `migrate.py apply --target staging --yes`.
+- [ ] Railway: new environment `staging` (duplicate the service). Set the branch's Supabase keys, a different `API_KEY`,
+      `VULA_ENV=staging`, staging's own `PUBLIC_BASE_URL`, Yoco **test** keys, PayFast **sandbox**, `ENFORCE_TENANT_AUTH=true`. Then `railway up`.
+- [ ] Meta: add the free test number, add the team's phones as recipients, point its webhook at the staging URL.
+- [ ] Vercel: Preview env var `VITE_API_URL` = staging URL (scoped to the staging branch).
+- [ ] Run `tools/smoke.py` against staging. Then run the go-live eval per tenant (`digg-demo`, `off-the-hook`, `awake-sa`)
+      from Master › Go-live and check each is **≥ 85%**.
+
+**Meta portal (docs/META_WHATSAPP_LAUNCH.md)**
+- [ ] Business Verification (Security Centre).
+- [ ] App Review: Advanced Access for `whatsapp_business_management` and `whatsapp_business_messaging`, with the screencast.
+- [ ] Facebook Login for Business › Configurations: the v4 Embedded Signup configuration. Copy its ID to Vercel
+      `VITE_FB_CONFIG_ID` and redeploy.
+- [ ] Webhook fields: `messages`, `smb_message_echoes`, `history`, `smb_app_state_sync`, and now also `account_update`,
+      `message_template_status_update`, `phone_number_quality_update`, `template_category_update`.
+- [ ] Railway has `VULA_FB_APP_ID` and `VULA_FB_APP_SECRET` (webhook signatures need the secret).
+
+**Takeoff**
+- [ ] Send 3–10 anonymised plans (DXF, CAD PDF, scanned PDF) with hand measurements. They go in `evals/takeoff_plans/real/`.
+      That gives the real error % and decides 4e.
+- [ ] Tell me whether any tenant will price sheet vinyl/LVT through takeoff (4f). If so, send one real Gerflor job.
+- [ ] If 4e ends up needing the OpenTakeoff sidecar: get a lawyer to confirm the Apache-2.0 position first.
