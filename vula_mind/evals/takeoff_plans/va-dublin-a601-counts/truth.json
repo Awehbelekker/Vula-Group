@@ -1,0 +1,60 @@
+{
+  "case": "va-dublin-a601-counts",
+  "file": "plan.pdf",
+  "sha256": "1a23fbc600afa8443d88046c491d922f34885a485e7dd8d617617738d12c0a60",
+  "page": 1,
+  "plan_type": "admin_finish_plan_with_schedule",
+  "source": {
+    "description": "VA 557-21-703 Renovate Bldg 9A, Carl Vinson VAMC Dublin GA — sheet A-601 (SAM.gov 85e50629af6f4e62885e766bc9e6f009, RFP Attachment 13)",
+    "licence": "US federal solicitation drawing posted publicly on SAM.gov; A/E retains its rights; redistributed for engineering test purposes only",
+    "via": "OpenTakeoff apache-2.0-final @ 84c7f48e (Apache-2.0): evals/four-asks-2026-09-02/sheets/va-dublin-bldg9a-finish-plan-A601.pdf"
+  },
+  "scale": {
+    "label": "1/8\" = 1'-0\"",
+    "drawn_to_scale": true,
+    "basis": "title block (no drawn note detected)"
+  },
+  "expect": {
+    "measurable": true
+  },
+  "counts": [
+    {
+      "label": "RESTROOM",
+      "count": 4,
+      "truth": "hand_count",
+      "rooms": [
+        "110",
+        "111",
+        "112",
+        "113"
+      ]
+    },
+    {
+      "label": "MECHANICAL",
+      "count": 2,
+      "truth": "hand_count",
+      "rooms": [
+        "101",
+        "109"
+      ]
+    },
+    {
+      "label": "IV TESTING",
+      "count": 2,
+      "truth": "hand_count",
+      "rooms": [
+        "103",
+        "106"
+      ]
+    }
+  ],
+  "review": {
+    "human_reviewed": false,
+    "prepared_by": "hand count published with OpenTakeoff evals/four-asks"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}
