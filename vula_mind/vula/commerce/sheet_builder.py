@@ -129,6 +129,59 @@ class SpecError(ValueError):
 
 # ── the spec ───────────────────────────────────────────────────────────────
 
+SUMMARIES = ("count", "average", "min", "max")
+CHARTS = ("bar", "line", "pie")
+MAX_COMPUTED = 5
+
+
+def fields_for(spec: Dict[str, Any]) -> Dict[str, Field]:
+    """The source's fields plus this sheet's own calculated columns and running balance."""
+    src = SOURCES[spec["source"]]
+    out = dict(src.fields)
+    for c in spec.get("computed") or []:
+        out[c["id"]] = Field(c["id"], c["label"], c["kind"])
+    if spec.get("running"):
+        out["running"] = Field("running", f"Running balance ({out[spec['running']].label})", "money")
+    return out
+
+
+def _computed(spec: Dict[str, Any], src: Source) -> List[Dict[str, Any]]:
+    from vula.commerce import sheet_calc as calc
+    raw = spec.get("computed") or []
+    if not isinstance(raw, list):
+        raise SpecError("Calculated columns need a name and a calculation each.")
+    if len(raw) > MAX_COMPUTED:
+        raise SpecError(f"A sheet can have up to {MAX_COMPUTED} calculated columns.")
+    kinds = {i: f.kind for i, f in src.fields.items() if f.kind in ("money", "number")}
+    out = []
+    for n, c in enumerate(raw, start=1):
+        c = c if isinstance(c, dict) else {"formula": str(c)}
+        label = re.sub(r"\s+", " ", str(c.get("label") or "")).strip()[:40] or f"Calculation {n}"
+        formula = str(c.get("formula") or "")
+        try:
+            tree = calc.parse(formula, kinds)
+            kind = c.get("kind") if c.get("kind") in calc.KINDS else calc.kind_of(tree, kinds)
+        except calc.FormulaError as exc:
+            raise SpecError(f"“{label}”: {exc}")
+        cid = f"calc{n}"
+        out.append({"id": cid, "label": label, "formula": formula, "kind": kind,
+                    "uses": sorted(calc.refs(tree))})
+        kinds[cid] = "number" if kind == "percent" else kind
+    return out
+
+
+def tree_of(c: Dict[str, Any], spec: Dict[str, Any]):
+    """A calculated column's formula as a tree (parsed again from its text: the spec stores only text)."""
+    from vula.commerce import sheet_calc as calc
+    src = SOURCES[spec["source"]]
+    kinds = {i: f.kind for i, f in src.fields.items() if f.kind in ("money", "number")}
+    for x in spec.get("computed") or []:
+        if x["id"] == c["id"]:
+            break
+        kinds[x["id"]] = "number" if x["kind"] == "percent" else x["kind"]
+    return calc.parse(c["formula"], kinds)
+
+
 def validate(spec: Dict[str, Any]) -> Dict[str, Any]:
     """A clean spec, or SpecError naming what's wrong and what is allowed."""
     if not isinstance(spec, dict):
@@ -136,22 +189,60 @@ def validate(spec: Dict[str, Any]) -> Dict[str, Any]:
     src = SOURCES.get(str(spec.get("source") or ""))
     if not src:
         raise SpecError("Which data should the sheet hold? " + ", ".join(s.label.lower() for s in SOURCES.values()) + ".")
-    cols = [str(c) for c in (spec.get("columns") or [])] or list(src.default_columns)
-    bad = [c for c in cols if c not in src.fields]
+    computed = _computed(spec, src)
+    known = dict(src.fields)
+    for c in computed:
+        known[c["id"]] = Field(c["id"], c["label"], c["kind"])
+    cols = [str(c) for c in (spec.get("columns") or []) if str(c) != "running"] or list(src.default_columns)
+    bad = [c for c in cols if c not in known]
     if bad:
         raise SpecError(f"{src.label} can't have the column(s) {', '.join(bad)}. Columns it can have: "
                         + ", ".join(f"{f.id} ({f.label})" for f in src.fields.values()) + ".")
     cols = list(dict.fromkeys(cols))
+    for c in computed:                      # a calculation's inputs must be in the sheet for its formula
+        for u in c["uses"]:
+            if u not in cols:
+                cols.insert(cols.index(c["id"]) if c["id"] in cols else len(cols), u)
+        if c["id"] not in cols:
+            cols.append(c["id"])
+    running = str(spec.get("running") or "")
+    if running:
+        if running not in known or known[running].kind != "money":
+            raise SpecError("A running balance needs a money column, e.g. amount or total.")
+        if running not in cols:
+            cols.append(running)
+        cols.append("running")
     group = str(spec.get("group_by") or "none")
     if group not in GROUPS:
         raise SpecError("It can be grouped by " + ", ".join(GROUPS[1:]) + ", or not at all.")
     if group != "none" and _GROUP_FIELD[group] not in src.fields:
         raise SpecError(f"{src.label} can't be grouped by {group}.")
-    money = [c for c in cols if src.fields[c].money]
+    summable = [c for c in cols if c in known and known[c].kind in ("money", "number")]
+    money = [c for c in summable if known[c].kind == "money"]
     totals = [str(t) for t in (spec.get("totals") or [])] or [c for c in money if c != "unit_price"]
-    bad = [t for t in totals if t not in money]
+    bad = [t for t in totals if t not in summable]
     if bad:
-        raise SpecError(f"Only money columns in the sheet can be totalled: {', '.join(money) or 'none'}.")
+        raise SpecError(f"Only money and number columns in the sheet can be totalled: {', '.join(summable) or 'none'}.")
+    detail = spec.get("detail") is not False
+    if not detail and group == "none":
+        raise SpecError("A summary (one line each) needs a grouping — per supplier, per project or per month?")
+    summary = [str(x) for x in (spec.get("summary") or [])]
+    if any(x not in SUMMARIES for x in summary):
+        raise SpecError("Under the totals it can add: " + ", ".join(SUMMARIES) + ".")
+    if summary and not detail:
+        raise SpecError("Counts and averages need the rows in the sheet — I've added a row count per line instead.")
+    chart = str(spec.get("chart") or "") or None
+    chart_of = None
+    if chart:
+        if chart not in CHARTS:
+            raise SpecError("The chart can be a bar, line or pie chart.")
+        if group == "none":
+            raise SpecError("A chart needs a grouping — per month, per supplier or per project?")
+        money_totals = [t for t in totals if known[t].kind == "money"]
+        usual = [t for t in money_totals if t in ("total", "amount", "line_total")]
+        chart_of = str(spec.get("chart_of") or "") or (usual or money_totals[-1:] or [None])[0]
+        if chart_of not in totals:
+            raise SpecError("The chart shows one of the totalled money columns: " + (", ".join(money_totals) or "none") + ".")
     raw = spec.get("filters") or {}
     filters: Dict[str, Any] = {}
     for k, v in raw.items():
@@ -173,8 +264,19 @@ def validate(spec: Dict[str, Any]) -> Dict[str, Any]:
                             + ", ".join(src.filters) + ".")
         filters[k] = str(v).strip()[:120]
     title = re.sub(r"\s+", " ", str(spec.get("title") or "")).strip()[:90] or src.label
-    return {"source": src.id, "columns": cols, "group_by": group, "totals": totals,
-            "filters": filters, "title": title}
+    out = {"source": src.id, "columns": cols, "group_by": group, "totals": totals,
+           "filters": filters, "title": title}
+    if computed:
+        out["computed"] = [{k: c[k] for k in ("id", "label", "formula", "kind")} for c in computed]
+    if running:
+        out["running"] = running
+    if summary:
+        out["summary"] = summary
+    if not detail:
+        out["detail"] = False
+    if chart:
+        out["chart"], out["chart_of"] = chart, chart_of
+    return out
 
 
 def period_range(filters: Dict[str, Any], today: Optional[date] = None) -> Tuple[Optional[str], Optional[str]]:
@@ -440,7 +542,37 @@ def rows_for(tenant_id: str, spec: Dict[str, Any], resolved: Dict[str, Any],
     if len(out) > MAX_ROWS:
         raise SpecError(f"That's {len(out):,} rows — more than a sheet should hold. Narrow it down "
                         "(a period, a supplier or a project).")
+    enrich(spec, out)
     return out
+
+
+def _row_values(spec: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Any]:
+    """A row's numbers as a calculation sees them: money in rands, others as they are."""
+    from decimal import Decimal
+    fields = fields_for(spec)
+    vals: Dict[str, Any] = {}
+    for k, f in fields.items():
+        v = row.get(k)
+        if f.kind in ("money", "number", "percent") and v is not None and v != "":
+            vals[k] = Decimal(int(v)) / 100 if f.kind == "money" else Decimal(str(v))
+        else:
+            vals[k] = None
+    return vals
+
+
+def enrich(spec: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
+    """Each row's calculated columns, then the running balance in sheet order (per group)."""
+    from vula.commerce import sheet_calc as calc
+    for c in spec.get("computed") or []:
+        tree = tree_of(c, spec)
+        for r in rows:
+            r[c["id"]] = calc.stored(calc.evaluate(tree, _row_values(spec, r)), c["kind"])
+    if spec.get("running"):
+        for _key, grows in arrange(spec, rows):
+            run = 0
+            for r in grows:
+                run += int(r.get(spec["running"]) or 0)
+                r["running"] = run
 
 
 def _group_key(group: str, row: Dict[str, Any]) -> str:
@@ -463,8 +595,30 @@ def arrange(spec: Dict[str, Any], rows: List[Dict[str, Any]]) -> List[Tuple[str,
     return sorted(groups.items(), key=lambda kv: kv[0].lower())
 
 
-def totals(spec: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, int]:
-    return {c: sum(int(r.get(c) or 0) for r in rows) for c in spec["totals"]}
+def totals(spec: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Each totalled column's sum: money in cents; a number column (a quantity) rounded to 4 places."""
+    fields = fields_for(spec)
+    out: Dict[str, Any] = {}
+    for c in spec["totals"]:
+        if fields[c].kind == "money":
+            out[c] = sum(int(r.get(c) or 0) for r in rows)
+        else:
+            out[c] = round(sum(float(r.get(c) or 0) for r in rows), 4)
+    return out
+
+
+def ratio_on(spec: Dict[str, Any], c: Dict[str, Any], tot: Dict[str, Any]) -> Optional[float]:
+    """A percentage column on a subtotal/total line: its formula applied to the totals (margin % on
+    the total, not a sum of percentages). None when a column it uses isn't totalled."""
+    from decimal import Decimal
+
+    from vula.commerce import sheet_calc as calc
+    tree = tree_of(c, spec)
+    if not calc.refs(tree) <= set(tot):
+        return None
+    fields = fields_for(spec)
+    vals = {k: (Decimal(int(v)) / 100 if fields[k].kind == "money" else Decimal(str(v))) for k, v in tot.items()}
+    return calc.stored(calc.evaluate(tree, vals), "percent")
 
 
 # ── what the owner sees first ──────────────────────────────────────────────
@@ -483,11 +637,19 @@ def _when(d: Optional[str]) -> str:
 
 
 def _cell_text(field: Field, v: Any) -> str:
-    if field.money:
-        return _r(v)
     if v is None or v == "":
         return "—"
+    if field.money:
+        return _r(v)
+    if field.kind == "percent":
+        return f"{float(v) * 100:.1f}%"
+    if field.kind == "number" and isinstance(v, float):
+        return f"{v:,.4f}".rstrip("0").rstrip(".")
     return str(v)
+
+
+def _bar(v: int, top: int, width: int = 12) -> str:
+    return "▇" * max(1 if v else 0, round(abs(v) / top * width)) if top else ""
 
 
 def understood(spec: Dict[str, Any], resolved: Dict[str, Any], today: Optional[date] = None) -> List[str]:
@@ -517,44 +679,141 @@ def understood(spec: Dict[str, Any], resolved: Dict[str, Any], today: Optional[d
     return out
 
 
+def group_totals(spec: Dict[str, Any], rows: List[Dict[str, Any]]) -> List[Tuple[str, Dict[str, Any], int]]:
+    """(group, its totals, its row count) in sheet order."""
+    return [(k, totals(spec, g), len(g)) for k, g in arrange(spec, rows)]
+
+
+def stats(spec: Dict[str, Any], rows: List[Dict[str, Any]], col: str) -> Dict[str, Any]:
+    """Count / average / min / max of one column over the rows that have it (money in cents;
+    the average in rands, as the file shows it)."""
+    from decimal import Decimal
+    money = fields_for(spec)[col].kind == "money"
+    vals = [r.get(col) for r in rows if r.get(col) is not None]
+    out: Dict[str, Any] = {"count": len(vals)}
+    if vals:
+        nums = [Decimal(int(v)) / 100 if money else Decimal(str(v)) for v in vals]
+        out["average"] = float(sum(nums) / len(nums))
+        out["min"], out["max"] = min(vals), max(vals)
+    return out
+
+
 def preview_text(spec: Dict[str, Any], resolved: Dict[str, Any], rows: List[Dict[str, Any]],
                  today: Optional[date] = None) -> str:
-    src = SOURCES[spec["source"]]
+    fields = fields_for(spec)
     tot = totals(spec, rows)
     lines = [f"📊 *{spec['title']}* — here's what I understood:", *understood(spec, resolved, today),
-             "Columns: " + " | ".join(src.fields[c].label for c in spec["columns"])]
+             "Columns: " + " | ".join(fields[c].label for c in spec["columns"])]
+    for c in spec.get("computed") or []:
+        lines.append(f"• {c['label']} = {c['formula']}" + (" (as a %)" if c["kind"] == "percent" else ""))
     if not rows:
         lines.append("\nNothing in the books matches that. Tell me what to change (a different period, "
                      "supplier or project).")
         return "\n".join(lines)
-    lines.append(f"\n{len(rows):,} row(s). The first {min(PREVIEW_ROWS, len(rows))}:")
-    for r in sorted(rows, key=lambda r: str(r.get("date") or ""))[:PREVIEW_ROWS]:
-        lines.append("– " + " · ".join(_cell_text(src.fields[c], r.get(c)) for c in spec["columns"][:6]))
+    groups = group_totals(spec, rows) if spec["group_by"] != "none" else []
+    if spec.get("detail") is False:
+        lines.append(f"\nOne line per {spec['group_by']}: {len(groups)} lines from {len(rows):,} row(s).")
+    else:
+        lines.append(f"\n{len(rows):,} row(s). The first {min(PREVIEW_ROWS, len(rows))}:")
+        for r in sorted(rows, key=lambda r: str(r.get("date") or ""))[:PREVIEW_ROWS]:
+            lines.append("– " + " · ".join(_cell_text(fields[c], r.get(c)) for c in spec["columns"][:7]))
     if tot:
-        lines.append("\nTotals: " + " · ".join(f"{src.fields[c].label} {_r(v)}" for c, v in tot.items()))
-    if spec["group_by"] != "none" and spec["totals"]:
-        first = spec["totals"][-1]
-        groups = arrange(spec, rows)
-        shown = " · ".join(f"{k or '—'} {_r(sum(int(r.get(first) or 0) for r in g))}" for k, g in groups[:8])
-        lines.append(f"{src.fields[first].label} per {spec['group_by']}: {shown}" + (" …" if len(groups) > 8 else ""))
+        lines.append("\nTotals: " + " · ".join(f"{fields[c].label} {_cell_text(fields[c], v)}" for c, v in tot.items()))
+    for c in spec.get("computed") or []:
+        if c["kind"] == "percent":
+            v = ratio_on(spec, c, tot)
+            if v is not None:
+                lines.append(f"{c['label']} on the total: {_cell_text(fields[c['id']], v)}")
+    if spec.get("summary") and spec["totals"]:
+        col = spec["totals"][-1]
+        st = stats(spec, rows, col)
+        shown = []
+        for k in spec["summary"]:
+            if k == "count":
+                shown.append(f"count {st['count']:,}")
+            elif k in st:
+                shown.append(f"{k} {_cell_text(fields[col], st[k]) if k != 'average' else _avg(fields[col], st[k])}")
+        lines.append(f"{fields[col].label}: " + " · ".join(shown))
+    if groups and spec["totals"]:
+        col = spec.get("chart_of") or spec["totals"][-1]
+        if fields[col].kind == "money":
+            top = max(abs(int(t[col])) for _k, t, _n in groups) or 1
+            for k, t, n in groups[:8]:
+                lines.append(f"{k or '—'} " + (_bar(int(t[col]), top) + " " if spec.get("chart") else "")
+                             + f"{_r(int(t[col]))}" + (f" ({n})" if spec.get("detail") is False else ""))
+            if len(groups) > 8:
+                lines.append(f"… and {len(groups) - 8} more")
+    if spec.get("chart"):
+        lines.append(f"With a {spec['chart']} chart of {fields[spec['chart_of']].label} per {spec['group_by']}.")
     lines.append("\nReply *build it*, or tell me what to change (e.g. “only one project”, “drop VAT”, "
-                 "“per project instead”).")
+                 "“add margin %”, “with a bar chart”).")
     return "\n".join(lines)
+
+
+def _avg(field: Field, v: float) -> str:
+    return f"R{v:,.2f}" if field.money else f"{v:,.2f}"
 
 
 # ── the file ───────────────────────────────────────────────────────────────
 
+_GROUP_LABEL = {"month": "Month", "project": "Project", "supplier": "Supplier", "customer": "Customer",
+                "account": "Category", "status": "Status"}
+_STAT_FUNC = {"count": "COUNT", "average": "AVERAGE", "min": "MIN", "max": "MAX"}
+
+
 def workbook(business: str, spec: Dict[str, Any], resolved: Dict[str, Any], rows: List[Dict[str, Any]],
-             accent: Optional[str] = None, today: Optional[date] = None) -> Tuple[bytes, Dict[str, int]]:
-    """The xlsx and the cells holding each grand total (ref -> cents) for the read-back."""
+             accent: Optional[str] = None, today: Optional[date] = None
+             ) -> Tuple[bytes, Dict[str, int], Dict[str, Optional[float]]]:
+    """The xlsx, and every cell the read-back must check: ref -> cents (money), and ref -> a plain
+    number or None (counts, averages, percentages, quantities; None = must be blank)."""
     from openpyxl import Workbook
+    from openpyxl.chart import BarChart, LineChart, PieChart, Reference
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
 
+    from vula.commerce import sheet_calc as calc
     from vula.commerce import xlsx as X
     from vula.commerce.xlsx_check import safe_text
-    src = SOURCES[spec["source"]]
-    cols = spec["columns"]
+    fields = fields_for(spec)
+    detail = spec.get("detail") is not False
+    grouped = spec["group_by"] != "none"
+    computed = spec.get("computed") or []
+    trees = {c["id"]: tree_of(c, spec) for c in computed}
+    pct = [c for c in computed if c["kind"] == "percent"]
+    if detail:
+        cols = list(spec["columns"])
+    else:
+        cols = ["_group"] + list(spec["totals"]) + [c["id"] for c in pct if c["id"] not in spec["totals"]] + ["_rows"]
+    label = {**{c: fields[c].label for c in cols if c in fields},
+             "_group": _GROUP_LABEL.get(spec["group_by"], "Group"), "_rows": "Rows"}
+    letter = {c: get_column_letter(i + 1) for i, c in enumerate(cols)}
+    tot_cols = [c for c in spec["totals"] if c in letter]
+    want: Dict[str, int] = {}
+    exact: Dict[str, Optional[float]] = {}
+
+    def fmt(cell, kind: str) -> None:
+        cell.number_format = {"money": X._MONEY_FMT, "percent": "0.0%", "number": "#,##0.00"}.get(kind, cell.number_format)
+
+    def expect(ref: str, kind: str, v: Any) -> None:
+        if kind == "money":
+            want[ref] = int(v)
+        else:
+            exact[ref] = None if v is None else float(v)
+
+    def ratio_cells(row: int, sheet_tot: Dict[str, Any]) -> None:
+        for c in pct:
+            if c["id"] not in letter:
+                continue
+            ref = f"{letter[c['id']]}{row}"
+            v = ratio_on(spec, c, sheet_tot)
+            if v is None:
+                continue
+            cell = ws[ref]
+            cell.value = calc.cell_formula(trees[c["id"]], "percent", lambda x: f"{letter[x]}{row}")
+            fmt(cell, "percent")
+            cell.font = X._BOLD
+            exact[ref] = v
+
     fill = X._fill_for(accent)
     token = X._fill_var.set(fill)
     try:
@@ -567,65 +826,153 @@ def workbook(business: str, spec: Dict[str, Any], resolved: Dict[str, Any], rows
         ws["A2"].font = Font(bold=True, size=11)
         safe_text(ws["A3"], "  ".join(s.lstrip("• ") for s in understood(spec, resolved, today)))
         ws["A3"].font = X._MUTED
-        ws["A4"] = f"From the books, as at {(today or date.today()).isoformat()}. Totals are formulas."
+        how = "; ".join(f"{c['label']} = {c['formula']}" for c in computed)
+        safe_text(ws["A4"], f"From the books, as at {(today or date.today()).isoformat()}. Totals are formulas."
+                  + (f" Calculations: {how}." if how else ""))
         ws["A4"].font = X._MUTED
         head = 6
-        widths = [max(10, min(48, len(src.fields[c].label) + 4 if not src.fields[c].money else 15)) for c in cols]
-        for i, c in enumerate(cols):
-            if c in ("description", "supplier", "customer", "project", "account"):
-                widths[i] = 32 if c == "description" else 24
-        X._table(ws, head, [src.fields[c].label for c in cols], widths)
-        money_cols = [i + 1 for i, c in enumerate(cols) if c in spec["totals"]]
+        widths = []
+        for c in cols:
+            f = fields.get(c)
+            w = 24 if c in ("_group", "supplier", "customer", "project", "account") else 32 if c == "description" else \
+                15 if (f and f.kind in ("money", "percent", "number")) or c == "_rows" else max(10, min(48, len(label[c]) + 4))
+            widths.append(w)
+        X._table(ws, head, [label[c] for c in cols], widths)
         r = head + 1
-        sub_cells: Dict[int, List[str]] = {col: [] for col in money_cols}
+        anchor_rows: List[int] = []          # each group's subtotal row (or its line in a summary)
+        data_ranges: List[Tuple[int, int]] = []
         groups = arrange(spec, rows)
-        for key, grows in groups:
-            if spec["group_by"] != "none":
-                safe_text(ws.cell(row=r, column=1), key or "—")
-                ws.cell(row=r, column=1).font = X._BOLD
-                r += 1
-            first = r
-            for row in grows:
-                for i, c in enumerate(cols, start=1):
-                    fld, v = src.fields[c], row.get(c)
-                    cell = ws.cell(row=r, column=i)
-                    if fld.money:
-                        X._money(cell, v)
-                    elif fld.kind == "date":
-                        cell.value = X._as_date(v) if v else None
-                        cell.number_format = X._DATE_FMT
-                    elif fld.kind == "number":
-                        cell.value = v
+        if detail:
+            for key, grows in groups:
+                if grouped:
+                    safe_text(ws.cell(row=r, column=1), key or "—")
+                    ws.cell(row=r, column=1).font = X._BOLD
+                    r += 1
+                first = r
+                for row in grows:
+                    for c in cols:
+                        cell, f, v = ws[f"{letter[c]}{r}"], fields[c], row.get(c)
+                        if c in trees:
+                            cell.value = calc.cell_formula(trees[c], f.kind, lambda x, rr=r: f"{letter[x]}{rr}")
+                            fmt(cell, f.kind)
+                        elif c == "running":
+                            src_l = letter[spec["running"]]
+                            cell.value = f"={src_l}{r}" if r == first else f"={letter['running']}{r - 1}+{src_l}{r}"
+                            fmt(cell, "money")
+                        elif f.money:
+                            X._money(cell, v)
+                        elif f.kind == "date":
+                            cell.value = X._as_date(v) if v else None
+                            cell.number_format = X._DATE_FMT
+                        elif f.kind == "number":
+                            cell.value = v
+                        else:
+                            safe_text(cell, v if v not in (None, "") else None)
+                    r += 1
+                last = r - 1
+                data_ranges.append((first, last))
+                if spec.get("running") and grows:
+                    want[f"{letter['running']}{last}"] = sum(int(x.get(spec["running"]) or 0) for x in grows)
+                if grouped and (tot_cols or pct):
+                    safe_text(ws.cell(row=r, column=1), f"Subtotal {key or '—'} ({len(grows)} row{'s' if len(grows) != 1 else ''})")
+                    ws.cell(row=r, column=1).font = X._BOLD
+                    g_tot = totals(spec, grows)
+                    for c in tot_cols:
+                        L = letter[c]
+                        cell = ws.cell(row=r, column=cols.index(c) + 1, value=f"=SUM({L}{first}:{L}{last})")
+                        fmt(cell, fields[c].kind)
+                        cell.font = X._BOLD
+                    ratio_cells(r, g_tot)
+                    anchor_rows.append(r)
+                    r += 2
+            if rows and (tot_cols or pct):
+                tot = totals(spec, rows)
+                ws.cell(row=r, column=1, value="TOTAL").font = X._BOLD
+                for c in tot_cols:
+                    L = letter[c]
+                    formula = ("=" + "+".join(f"{L}{a}" for a in anchor_rows)) if grouped and anchor_rows \
+                        else f"=SUM({L}{head + 1}:{L}{r - 1})"
+                    cell = ws.cell(row=r, column=cols.index(c) + 1, value=formula)
+                    fmt(cell, fields[c].kind)
+                    cell.font = X._BOLD
+                    expect(f"{L}{r}", fields[c].kind, tot[c])
+                ratio_cells(r, tot)
+                for k in spec.get("summary") or []:
+                    r += 1
+                    ws.cell(row=r, column=1, value={"count": "Count", "average": "Average", "min": "Lowest",
+                                                    "max": "Highest"}[k]).font = X._BOLD
+                    for c in tot_cols:
+                        L = letter[c]
+                        ranges = ",".join(f"{L}{a}:{L}{b}" for a, b in data_ranges)
+                        inner = f"{_STAT_FUNC[k]}({ranges})"
+                        cell = ws.cell(row=r, column=cols.index(c) + 1,
+                                       value=f'=IFERROR({inner},"")' if k == "average" else f"={inner}")
+                        st = stats(spec, rows, c)
+                        if k == "count":
+                            cell.number_format = "0"
+                            exact[f"{L}{r}"] = float(st["count"])
+                        elif k == "average":
+                            cell.number_format = X._MONEY_FMT if fields[c].money else "#,##0.00"
+                            exact[f"{L}{r}"] = st.get("average")
+                        else:
+                            fmt(cell, fields[c].kind)
+                            if fields[c].money:
+                                want[f"{L}{r}"] = int(st.get(k) or 0)
+                            else:
+                                exact[f"{L}{r}"] = float(st.get(k) or 0)
+        else:
+            for key, grows in groups:
+                g_tot = totals(spec, grows)
+                safe_text(ws[f"A{r}"], key or "—")
+                for c in tot_cols:
+                    cell = ws[f"{letter[c]}{r}"]
+                    if fields[c].money:
+                        X._money(cell, g_tot[c])
                     else:
-                        safe_text(cell, v if v not in (None, "") else None)
+                        cell.value = g_tot[c]
+                        fmt(cell, "number")
+                ratio_cells(r, g_tot)
+                ws[f"{letter['_rows']}{r}"] = len(grows)
+                anchor_rows.append(r)
                 r += 1
-            last = r - 1
-            if spec["group_by"] != "none" and money_cols:
-                safe_text(ws.cell(row=r, column=1), f"Subtotal {key or '—'}")
-                ws.cell(row=r, column=1).font = X._BOLD
-                for col in money_cols:
-                    L = get_column_letter(col)
-                    cell = ws.cell(row=r, column=col, value=f"=SUM({L}{first}:{L}{last})")
-                    cell.number_format, cell.font = X._MONEY_FMT, X._BOLD
-                    sub_cells[col].append(f"{L}{r}")
-                r += 2
-        want: Dict[str, int] = {}
-        if money_cols and rows:
-            ws.cell(row=r, column=1, value="TOTAL").font = X._BOLD
-            tot = totals(spec, rows)
-            for col in money_cols:
-                L = get_column_letter(col)
-                if spec["group_by"] != "none":
-                    formula = "=" + "+".join(sub_cells[col]) if sub_cells[col] else 0
-                else:
-                    formula = f"=SUM({L}{head + 1}:{L}{r - 1})"
-                cell = ws.cell(row=r, column=col, value=formula)
-                cell.number_format, cell.font = X._MONEY_FMT, X._BOLD
-                want[f"{L}{r}"] = tot[cols[col - 1]]
+            if groups:
+                tot = totals(spec, rows)
+                ws.cell(row=r, column=1, value="TOTAL").font = X._BOLD
+                for c in tot_cols + ["_rows"]:
+                    L = letter[c]
+                    cell = ws[f"{L}{r}"]
+                    cell.value = f"=SUM({L}{head + 1}:{L}{r - 1})"
+                    cell.font = X._BOLD
+                    if c == "_rows":
+                        exact[f"{L}{r}"] = float(len(rows))
+                    else:
+                        fmt(cell, fields[c].kind)
+                        expect(f"{L}{r}", fields[c].kind, tot[c])
+                ratio_cells(r, tot)
         X._finish_table(ws, head, max(r - 1, head), len(cols))
+
+        if spec.get("chart") and groups and anchor_rows:
+            cc = len(cols) + 2
+            lc, vc = get_column_letter(cc), get_column_letter(cc + 1)
+            ws[f"{lc}{head}"] = label.get("_group") if not detail else _GROUP_LABEL.get(spec["group_by"], "Group")
+            ws[f"{vc}{head}"] = fields[spec["chart_of"]].label
+            ws[f"{lc}{head}"].font = ws[f"{vc}{head}"].font = X._BOLD
+            for i, (key, grows) in enumerate(groups):
+                row = head + 1 + i
+                safe_text(ws[f"{lc}{row}"], key or "—")
+                ws[f"{vc}{row}"] = f"={letter[spec['chart_of']]}{anchor_rows[i]}"
+                ws[f"{vc}{row}"].number_format = X._MONEY_FMT
+                want[f"{vc}{row}"] = totals(spec, grows)[spec["chart_of"]]
+            chart = {"bar": BarChart, "line": LineChart, "pie": PieChart}[spec["chart"]]()
+            chart.title = f"{fields[spec['chart_of']].label} per {spec['group_by']}"
+            chart.add_data(Reference(ws, min_col=cc + 1, min_row=head, max_row=head + len(groups)), titles_from_data=True)
+            chart.set_categories(Reference(ws, min_col=cc, min_row=head + 1, max_row=head + len(groups)))
+            chart.width, chart.height = 18, 9
+            ws.column_dimensions[lc].width, ws.column_dimensions[vc].width = 18, 15
+            ws.add_chart(chart, f"{get_column_letter(cc + 3)}{head}")
         buf = io.BytesIO()
         wb.save(buf)
-        return buf.getvalue(), want
+        return buf.getvalue(), want, exact
     finally:
         X._fill_var.reset(token)
 

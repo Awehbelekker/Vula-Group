@@ -1099,7 +1099,10 @@ SHEET_TOOLS = [
                        "status; expenses: date, supplier, description, amount, vat, account, project, "
                        "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
                        "date, due, project, excl_vat, vat, total, paid, owed, status; orders: number, date, "
-                       "customer, channel, status, subtotal, delivery, total. The reply is sent exactly as returned.",
+                       "customer, channel, status, subtotal, delivery, total. Maths the owner asks for ('total minus "
+                       "VAT', 'margin %', 'quantity times price') goes in computed; 'running balance' in running; "
+                       "'average/count/highest' in summary; 'totals per supplier only' is detail false with "
+                       "group_by; 'with a chart' is chart (needs a grouping). The reply is sent exactly as returned.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["design", "build", "save", "use", "list"]},
             "request": {"type": "string", "description": "The owner's request in their words."},
@@ -1113,6 +1116,21 @@ SHEET_TOOLS = [
                 "totals": {"type": "array", "items": {"type": "string"},
                            "description": "Money columns to total; omit for all of them."},
                 "title": {"type": "string"},
+                "computed": {"type": "array", "description": "Calculated columns, e.g. "
+                             "{label: 'Margin %', formula: '(total - vat) / total'}. Formulas use the source's "
+                             "money/number column ids, numbers, + - * / and brackets only; a later one may use "
+                             "an earlier one as calc1, calc2. kind (money, number, percent) is worked out if left out.",
+                             "items": {"type": "object", "properties": {
+                                 "label": {"type": "string"}, "formula": {"type": "string"},
+                                 "kind": {"type": "string", "enum": ["money", "number", "percent"]}},
+                                 "required": ["label", "formula"]}},
+                "running": {"type": "string", "description": "A money column to keep a running balance of."},
+                "summary": {"type": "array", "items": {"type": "string", "enum": ["count", "average", "min", "max"]},
+                            "description": "Lines under the totals."},
+                "detail": {"type": "boolean", "description": "false = one line per group with its totals "
+                                                               "('total per supplier'), not every row."},
+                "chart": {"type": "string", "enum": ["bar", "line", "pie"], "description": "Needs group_by."},
+                "chart_of": {"type": "string", "description": "The totalled money column the chart shows."},
                 "filters": {"type": "object", "properties": {
                     "period": {"type": "string", "enum": ["this_month", "last_month", "this_year", "last_year",
                                                           "tax_year", "last_tax_year", "last_12_months", "all"]},
@@ -3693,8 +3711,8 @@ class CommerceAdminSkill(BaseSkill):
                 from vula.api.tenants import display_name
                 from vula.commerce import xlsx_check
                 accent = await service._brand_accent(tid)
-                data, want = await asyncio.to_thread(sb.workbook, display_name(tid), spec, resolved, rows, accent)
-                wrong = xlsx_check.mismatches(data, want)
+                data, want, exact = await asyncio.to_thread(sb.workbook, display_name(tid), spec, resolved, rows, accent)
+                wrong = xlsx_check.mismatches(data, want, exact=exact)
                 if wrong:
                     logger.error("custom sheet read-back failed for %s: %s", tid, wrong)
                     return {"error": "The spreadsheet didn't add up to the books, so I haven't sent it."}
@@ -3714,9 +3732,9 @@ class CommerceAdminSkill(BaseSkill):
                 if not (sent or link):
                     return {"error": "The sheet was made but couldn't be sent or stored just now — please try again."}
                 await asyncio.to_thread(sb.mark_built, tid, d)
-                src = sb.SOURCES[spec["source"]]
+                fields = sb.fields_for(spec)
                 text = (f"📊 *{spec['title']}* — {len(rows):,} row(s), checked against the books."
-                        + ("\nTotals: " + " · ".join(f"{src.fields[c].label} {sb._r(v)}" for c, v in tot.items()) if tot else "")
+                        + ("\nTotals: " + " · ".join(f"{fields[c].label} {sb._cell_text(fields[c], v)}" for c, v in tot.items()) if tot else "")
                         + ("\nIt's in the file above." if sent else "")
                         + (f"\nDownload (for a week): {link}" if link else "")
                         + "\n\nWant it again another month? Reply *save it as* and a name.")
