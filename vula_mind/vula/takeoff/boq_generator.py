@@ -295,6 +295,10 @@ class RateLookup:
         return ref or (0, 0, unit or "item", "Estimate")
 
 
+class ReviewRequired(Exception):
+    """Raised by BOQGenerator.generate for a project whose quantities await (or failed) review."""
+
+
 # ─── BOQ Generator ────────────────────────────────────────────────────────────
 
 def _unit_key(unit) -> str:
@@ -382,6 +386,10 @@ class BOQGenerator:
 
     async def generate(self) -> BOQ:
         p = self.project
+        # Phase 4d: quantities a person hasn't confirmed are never priced (vula/takeoff/accuracy.py).
+        status = (getattr(p, "review", None) or {}).get("status", "not_required")
+        if status in ("pending", "rejected"):
+            raise ReviewRequired(f"Takeoff quantities are {status} review — not priced.")
         boq = BOQ(
             project_name=p.title_block.project_name or "Untitled Project",
             tenant_id=self.tenant_id,

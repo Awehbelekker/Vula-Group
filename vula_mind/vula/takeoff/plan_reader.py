@@ -45,6 +45,7 @@ from typing import Dict, List, Optional, Tuple
 import httpx
 
 from config import settings
+from vula.takeoff.accuracy import measured_confidence, parse_scale, review_reasons, schedule_rooms_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,17 @@ class DrawingSheet:
     raw_markdown: str           # OCR markdown
     image_path: Optional[str] = None
     status: str = "pending"     # pending | read | failed
+    # Not a confidence any more: kept for old job rows. Measured confidence is per project
+    # (vula/takeoff/accuracy.measured_confidence).
     confidence: float = 0.0
+    source: str = ""            # text | ocr | dxf | image — how the content was read
+    # Calibration (Phase 4b): the scale as a number, how it was established, and who confirmed it.
+    # dxf_units — declared $INSUNITS (true size); inferred_from_extent — unitless DXF, guessed;
+    # title_block — "SCALE 1:100" printed on the sheet (never checked against a dimension);
+    # user_two_point / dimension_check — set when a person confirms a known dimension at review.
+    scale_ratio: Optional[float] = None
+    scale_method: str = ""
+    scale_verified_by: str = ""
 
 
 @dataclass
@@ -132,6 +143,13 @@ class ExtractedProject:
     confidence_overall: float = 0.0
     extraction_notes: List[str] = field(default_factory=list)
     raw_ai_response: str = ""
+    # Phase 4c/4d (vula/takeoff/accuracy.py): the AI reader's rooms kept apart from the
+    # deterministic reading (DXF geometry / the room schedule's printed areas), what confidence
+    # was measured from, and the review gate's state.
+    ai_rooms: List[Room] = field(default_factory=list)
+    deterministic_rooms: List[Tuple[str, float]] = field(default_factory=list)
+    confidence_signals: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    review: Dict[str, object] = field(default_factory=lambda: {"status": "not_required", "reasons": []})
 
 
 # ─── PDF Reader ───────────────────────────────────────────────────────────────
@@ -170,10 +188,10 @@ class PDFReader:
                         img.save(str(img_path))
                         markdown = await self._ocr_image(img_path)
                         img_path.unlink(missing_ok=True)
-                        confidence = 0.70
+                        source = "ocr"
                     else:
                         markdown = full_text
-                        confidence = 0.90
+                        source = "text"
 
                     sheets.append(DrawingSheet(
                         sheet_number=sheet_num or f"SH{i+1:03d}",
@@ -183,7 +201,9 @@ class PDFReader:
                         raw_text=text,
                         raw_markdown=markdown,
                         status="read",
-                        confidence=confidence,
+                        source=source,
+                        scale_ratio=parse_scale(scale),
+                        scale_method="title_block" if scale else "",
                     ))
 
         except ImportError:
@@ -239,7 +259,7 @@ class PDFReader:
                     raw_text="",
                     raw_markdown=markdown,
                     status="read",
-                    confidence=0.65,
+                    source="ocr",
                 ))
             return sheets
         except ImportError:
@@ -273,6 +293,35 @@ class PDFReader:
         return sheet, title, scale, discipline
 
 
+# ─── Plane geometry (metres) ─────────────────────────────────────────────────
+
+def _shoelace(pts: List[Tuple[float, float]]) -> float:
+    n = len(pts)
+    return abs(sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+                   for i in range(n))) / 2.0 if n >= 3 else 0.0
+
+
+def _perimeter(pts: List[Tuple[float, float]]) -> float:
+    n = len(pts)
+    return sum(math.dist(pts[i], pts[(i + 1) % n]) for i in range(n)) if n >= 2 else 0.0
+
+
+def _centroid(pts: List[Tuple[float, float]]) -> Tuple[float, float]:
+    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+
+
+def _inside(pt: Tuple[float, float], poly: List[Tuple[float, float]]) -> bool:
+    """Ray-casting point-in-polygon."""
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        (x1, y1), (x2, y2) = poly[i], poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
 # ─── DXF/DWG Reader ──────────────────────────────────────────────────────────
 
 class DXFReader:
@@ -289,6 +338,8 @@ class DXFReader:
 
     def __init__(self):
         self.last_units: Dict[str, object] = {}
+        self.last_outline_area: float = 0.0      # m², the building outline when one was drawn
+        self.last_unlabelled: int = 0
 
     def _units(self, doc, msp) -> Dict[str, object]:
         code = int(doc.header.get("$INSUNITS", 0) or 0)
@@ -322,19 +373,45 @@ class DXFReader:
             self.last_units = self._units(doc, msp)
             k = float(self.last_units["to_metres"])
 
+            # Closed polylines, in metres.
+            polys: List[List[Tuple[float, float]]] = []
+            for entity in msp.query("LWPOLYLINE POLYLINE"):
+                if getattr(entity, "is_closed", False):
+                    pts = [(x * k, y * k) for x, y in self._points(entity)]
+                    if len(pts) >= 3 and _shoelace(pts) > 2:      # ignore tiny entities (m²)
+                        polys.append(pts)
+
+            # Room labels: TEXT/MTEXT whose insertion point falls inside a polygon.
+            labels: List[Tuple[Tuple[float, float], str]] = []
+            for entity in msp.query("TEXT MTEXT"):
+                try:
+                    txt = entity.plain_text() if entity.dxftype() == "MTEXT" else entity.dxf.text
+                    ins = entity.dxf.insert
+                except Exception:
+                    continue
+                if isinstance(txt, str) and txt.strip():
+                    labels.append(((float(ins[0]) * k, float(ins[1]) * k), txt.strip().splitlines()[0]))
+
+            # A polygon that contains the centre of two or more others is the building outline
+            # (or a zone boundary), not a room: counting it too double-counts every room inside.
+            # Its area is the measured gross floor area.
+            centres = [_centroid(p) for p in polys]
+            outline_idx = {i for i, p in enumerate(polys)
+                           if sum(1 for j, c in enumerate(centres) if j != i and _inside(c, p)) >= 2}
+            self.last_outline_area = round(max((_shoelace(polys[i]) for i in outline_idx), default=0.0), 2)
+
             rooms = []
             doors = []
-
-            # Extract closed polylines as room boundaries
-            for entity in msp.query("LWPOLYLINE POLYLINE"):
-                if hasattr(entity, "is_closed") and entity.is_closed:
-                    area = self._polyline_area(entity) * k * k
-                    if area > 2:  # Ignore tiny entities (m²)
-                        rooms.append(Room(
-                            name=f"Room_{len(rooms)+1}",
-                            area=round(area, 2),
-                            perimeter=round(self._polyline_perimeter(entity) * k, 2),
-                        ))
+            self.last_unlabelled = 0
+            for i, pts in enumerate(polys):
+                if i in outline_idx:
+                    continue
+                name = next((t for (pt, t) in labels if _inside(pt, pts)), "")
+                if not name:
+                    self.last_unlabelled += 1
+                    name = f"Unlabelled {self.last_unlabelled}"
+                rooms.append(Room(name=name, area=round(_shoelace(pts), 2),
+                                  perimeter=round(_perimeter(pts), 2)))
 
             # Extract blocks for doors/windows — whole words only (NEW-T7: "DR" in "DRAIN" was a door)
             for entity in msp.query("INSERT"):
@@ -367,24 +444,11 @@ class DXFReader:
 
     def _polyline_area(self, entity) -> float:
         """Area of a closed polyline (shoelace), in drawing units²."""
-        pts = self._points(entity)
-        n = len(pts)
-        if n < 3:
-            return 0.0
-        area = 0.0
-        for i in range(n):
-            xi, yi = pts[i]
-            xj, yj = pts[(i + 1) % n]
-            area += xi * yj - xj * yi
-        return abs(area) / 2.0
+        return _shoelace(self._points(entity))
 
     def _polyline_perimeter(self, entity) -> float:
         """Perimeter of a closed polyline, in drawing units."""
-        pts = self._points(entity)
-        n = len(pts)
-        if n < 2:
-            return 0.0
-        return sum(math.dist(pts[i], pts[(i + 1) % n]) for i in range(n))
+        return _perimeter(self._points(entity))
 
 
 # ─── AI Extraction Engine ─────────────────────────────────────────────────────
@@ -433,7 +497,6 @@ class DrawingIntelligence:
             project.net_floor_area   = areas.get("nfa", 0)
 
         project.sheets = sheets
-        project.confidence_overall = sum(s.confidence for s in sheets) / max(len(sheets), 1)
         return project
 
     async def _extract_rooms(self, sheets: List[DrawingSheet]) -> List[Room]:
@@ -627,6 +690,21 @@ def geometry_reconciled(project: "ExtractedProject") -> Tuple[bool, List[str]]:
     return (len(warnings) == 0, warnings)
 
 
+def assess(project: "ExtractedProject", tenant_id: str = "", history: Optional[float] = None,
+           use_history: bool = True) -> "ExtractedProject":
+    """Measured confidence + the review gate (vula/takeoff/accuracy.py), in place."""
+    ok, warnings = geometry_reconciled(project)
+    if not ok:
+        project.extraction_notes.extend(warnings)
+        for w in warnings:
+            logger.warning("[%s] plan reading quality check: %s", tenant_id, w)
+    project.confidence_overall, project.confidence_signals = measured_confidence(
+        project, history=history, use_history=use_history)
+    reasons = review_reasons(project, warnings)
+    project.review = {"status": "pending" if reasons else "not_required", "reasons": reasons}
+    return project
+
+
 # ─── Main PlanReader ──────────────────────────────────────────────────────────
 
 class PlanReader:
@@ -660,12 +738,15 @@ class PlanReader:
 
         elif suffix == ".dxf":
             rooms_from_vector, doors_from_vector = await self.dxf_reader.read(file_path)
-            # Also extract text as a single "sheet"
+            u = self.dxf_reader.last_units
             sheets = [DrawingSheet(
                 sheet_number="DXF001", title="DXF Drawing",
-                scale="1:100", discipline="arch",
+                scale=f"true size ({u.get('units', '?')})", discipline="arch",
                 raw_text="", raw_markdown="DXF file — geometry extracted directly",
-                status="read", confidence=0.85,
+                status="read", source="dxf",
+                scale_ratio=1.0 if u else None,
+                scale_method=str(u.get("method", "")),
+                scale_verified_by="dxf_header" if u.get("verified") else "",
             )]
 
         elif suffix in (".png", ".jpg", ".jpeg", ".tiff"):
@@ -676,31 +757,34 @@ class PlanReader:
                 sheet_number="IMG001", title="Scanned Drawing",
                 scale="unknown", discipline="arch",
                 raw_text="", raw_markdown=markdown,
-                status="read", confidence=0.70,
+                status="read", source="image",
             )]
 
         else:
             logger.warning(f"Unsupported format: {suffix}")
             return ExtractedProject(extraction_notes=[f"Unsupported format: {suffix}"])
 
-        # AI extraction
-        project = await self.intelligence.extract_all(sheets)
+        if suffix == ".dxf":
+            # The geometry IS the reading: no text for a model to read, and asking one anyway
+            # only invites an invented GFA.
+            project = ExtractedProject(sheets=sheets, rooms=rooms_from_vector,
+                                       doors_windows=doors_from_vector,
+                                       gross_floor_area=self.dxf_reader.last_outline_area)
+            project.deterministic_rooms = [(r.name, r.area) for r in rooms_from_vector]
+            if self.dxf_reader.last_unlabelled:
+                project.extraction_notes.append(
+                    f"{self.dxf_reader.last_unlabelled} closed shape(s) have no room label inside.")
+        else:
+            project = await self.intelligence.extract_all(sheets)
+            project.ai_rooms = list(project.rooms)
+            # The room schedule's printed areas, read without a model — the second reading the
+            # AI's rooms are checked against.
+            arch_text = "\n".join(s.raw_markdown or s.raw_text for s in sheets if s.discipline == "arch")
+            project.deterministic_rooms = schedule_rooms_from_text(arch_text)
+            if not project.rooms and project.deterministic_rooms:
+                project.rooms = [Room(name=n, area=a) for n, a in project.deterministic_rooms]
 
-        # Merge vector data if available
-        if rooms_from_vector:
-            project.rooms = rooms_from_vector
-        if doors_from_vector:
-            project.doors_windows = doors_from_vector
-
-        ok, warnings = geometry_reconciled(project)
-        if not ok:
-            project.extraction_notes.extend(warnings)
-            # Halve confidence rather than a hardcoded per-method constant standing
-            # unchallenged — a real (if coarse) signal beats a fixed label when the
-            # independently-extracted numbers actually disagree.
-            project.confidence_overall = round(project.confidence_overall * 0.5, 2)
-            for w in warnings:
-                logger.warning("[%s] plan reading quality check: %s", self.tenant_id, w)
+        assess(project, self.tenant_id)
 
         elapsed = round(time.time() - started, 1)
         logger.info(f"[{self.tenant_id}] Plan reading complete in {elapsed}s: "

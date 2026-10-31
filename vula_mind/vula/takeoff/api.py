@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from config import settings
 from vula.api.master_auth import authorized_tenant
 from vula import durable
-from vula.takeoff.plan_reader import PlanReader
+from vula.takeoff.plan_reader import PlanReader, Room
 from vula.takeoff.boq_generator import BOQGenerator
 from vula.takeoff.order_manager import OrderManager, SupplierDatabase
 from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper, RatesDatabase
@@ -47,7 +47,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # In-memory job store, written through to Supabase vula_takeoff_jobs (migration 180): memory alone
 # lost every job on each Railway deploy, so a finished BOQ 404'd the moment the service restarted.
 _jobs: Dict[str, dict] = {}
-_DONE = ("complete", "failed")
+_DONE = ("complete", "failed", "needs_review", "rejected")
 
 
 def _save_job(job_id: str) -> None:
@@ -82,6 +82,24 @@ class SupplierUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class ReviewRoom(BaseModel):
+    name: str
+    area: float
+    floor_finish: Optional[str] = None
+    ceiling_finish: Optional[str] = None
+    wall_finish: Optional[str] = None
+    is_wet: Optional[bool] = None
+
+
+class ReviewDecision(BaseModel):
+    decision: str                                   # approve | reject
+    rooms: Optional[List[ReviewRoom]] = None        # the corrected room schedule, if edited
+    gross_floor_area: Optional[float] = None
+    use_measured: bool = False                      # take the deterministic reading's rooms
+    scale_confirmed: bool = False                   # the person checked a known dimension
+    note: str = ""
+
+
 class SendRFQRequest(BaseModel):
     dry_run: bool = True
     selected_trades: Optional[List[str]] = None
@@ -89,59 +107,108 @@ class SendRFQRequest(BaseModel):
 
 # ─── Background job ───────────────────────────────────────────────────────────
 
+def _project_summary(project) -> dict:
+    return {
+        "title": project.title_block.project_name,
+        "sheets": len(project.sheets),
+        "rooms": len(project.rooms),
+        # The rooms themselves — the dashboard's room schedule showed demo rooms for every
+        # real job because only the count was returned.
+        "room_list": [{"name": r.name, "area": round(r.area or 0, 1), "floor": r.floor_finish,
+                       "ceiling": r.ceiling_finish, "walls": r.wall_finish}
+                      for r in project.rooms],
+        "gfa": project.gross_floor_area,
+        "confidence": round((project.confidence_overall or 0) * 100, 1),
+        "confidence_signals": getattr(project, "confidence_signals", {}) or {},
+        "measured_rooms": [{"name": n, "area": a} for n, a in (getattr(project, "deterministic_rooms", None) or [])],
+        "ai_rooms": [{"name": r.name, "area": round(r.area or 0, 2)} for r in (getattr(project, "ai_rooms", None) or [])],
+        "scale": [{"sheet": getattr(s, "sheet_number", ""), "scale": getattr(s, "scale", ""),
+                   "method": getattr(s, "scale_method", ""),
+                   "verified_by": getattr(s, "scale_verified_by", "")} for s in project.sheets],
+        "notes": project.extraction_notes,
+    }
+
+
+def _project_to_state(project) -> dict:
+    from dataclasses import asdict
+    return asdict(project)
+
+
+def _project_from_state(d: dict):
+    """An ExtractedProject back from a job row — what was read, so an approval prices exactly the
+    quantities the person saw (no second read of the drawings)."""
+    from vula.takeoff.plan_reader import (DoorWindow, DrawingSheet, ExtractedProject, MEPSchedule,
+                                          Room, TitleBlock)
+    d = dict(d)
+    p = ExtractedProject(**{k: v for k, v in d.items()
+                            if k not in ("title_block", "sheets", "rooms", "doors_windows",
+                                         "mep_schedules", "ai_rooms", "deterministic_rooms")})
+    p.title_block = TitleBlock(**(d.get("title_block") or {}))
+    p.sheets = [DrawingSheet(**s) for s in d.get("sheets") or []]
+    p.rooms = [Room(**r) for r in d.get("rooms") or []]
+    p.ai_rooms = [Room(**r) for r in d.get("ai_rooms") or []]
+    p.doors_windows = [DoorWindow(**x) for x in d.get("doors_windows") or []]
+    p.mep_schedules = [MEPSchedule(**x) for x in d.get("mep_schedules") or []]
+    p.deterministic_rooms = [tuple(x) for x in d.get("deterministic_rooms") or []]
+    return p
+
+
+async def _price(job_id: str, project, tenant_id: str, markup: float):
+    """BOQ → orders, for a project whose quantities need no review or have been approved."""
+    _jobs[job_id]["status"] = "generating_boq"
+    _save_job(job_id)
+    generator = BOQGenerator(project, tenant_id=tenant_id, markup=markup)
+    boq = await generator.generate()
+    _jobs[job_id]["boq"] = boq.to_dict()
+
+    _jobs[job_id]["status"] = "building_orders"
+    _save_job(job_id)
+    order_mgr = OrderManager(boq, tenant_id=tenant_id)
+    package = order_mgr.build_orders()
+    _jobs[job_id]["orders"] = {
+        "count": len(package.orders),
+        "total_estimated": round(package.total_estimated),
+        "total_net": round(package.total_net_discounted),
+        "total_savings": round(package.total_savings),
+        "orders": [
+            {
+                "po_number": o.po_number,
+                "supplier": o.supplier.name,
+                "trade": o.supplier.category,
+                "discount_pct": o.supplier.discount_pct,
+                "lines": len(o.lines),
+                "estimated_total": round(o.estimated_total),
+                "net_after_discount": round(o.net_after_discount),
+                "status": o.status,
+            }
+            for o in package.orders
+        ],
+    }
+    _jobs[job_id]["order_summary"] = order_mgr.order_summary_text(package)
+    _jobs[job_id]["status"] = "complete"
+    _save_job(job_id)
+
+
 async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: float):
-    """Full pipeline: read → BOQ → orders. Runs in background."""
+    """Full pipeline: read → (review, when needed) → BOQ → orders. Runs in background."""
     try:
         _jobs[job_id]["status"] = "reading_plans"
         _save_job(job_id)
         reader = PlanReader(tenant_id=tenant_id)
         project = await reader.read(file_path)
-        _jobs[job_id]["project"] = {
-            "title": project.title_block.project_name,
-            "sheets": len(project.sheets),
-            "rooms": len(project.rooms),
-            # The rooms themselves — the dashboard's room schedule showed demo rooms for every
-            # real job because only the count was returned.
-            "room_list": [{"name": r.name, "area": round(r.area or 0, 1), "floor": r.floor_finish,
-                           "ceiling": r.ceiling_finish, "walls": r.wall_finish}
-                          for r in project.rooms],
-            "gfa": project.gross_floor_area,
-            "confidence": round(project.confidence_overall * 100, 1),
-            "notes": project.extraction_notes,
-        }
+        _jobs[job_id]["project"] = _project_summary(project)
+        _jobs[job_id]["review"] = dict(getattr(project, "review", None) or {"status": "not_required"})
 
-        _jobs[job_id]["status"] = "generating_boq"
-        _save_job(job_id)
-        generator = BOQGenerator(project, tenant_id=tenant_id, markup=markup)
-        boq = await generator.generate()
-        _jobs[job_id]["boq"] = boq.to_dict()
+        if _jobs[job_id]["review"].get("status") == "pending":
+            # Phase 4d — the propose-confirm gate (same pattern as migration 137's automation
+            # firings: staged, a person approves or rejects, decided_at + who recorded). Nothing
+            # is priced or ordered until POST /takeoff/{job_id}/review approves it.
+            _jobs[job_id]["extracted"] = _project_to_state(project)
+            _jobs[job_id]["status"] = "needs_review"
+            _save_job(job_id)
+            return
 
-        _jobs[job_id]["status"] = "building_orders"
-        _save_job(job_id)
-        order_mgr = OrderManager(boq, tenant_id=tenant_id)
-        package = order_mgr.build_orders()
-        _jobs[job_id]["orders"] = {
-            "count": len(package.orders),
-            "total_estimated": round(package.total_estimated),
-            "total_net": round(package.total_net_discounted),
-            "total_savings": round(package.total_savings),
-            "orders": [
-                {
-                    "po_number": o.po_number,
-                    "supplier": o.supplier.name,
-                    "trade": o.supplier.category,
-                    "discount_pct": o.supplier.discount_pct,
-                    "lines": len(o.lines),
-                    "estimated_total": round(o.estimated_total),
-                    "net_after_discount": round(o.net_after_discount),
-                    "status": o.status,
-                }
-                for o in package.orders
-            ],
-        }
-        _jobs[job_id]["order_summary"] = order_mgr.order_summary_text(package)
-        _jobs[job_id]["status"] = "complete"
-        _save_job(job_id)
+        await _price(job_id, project, tenant_id, markup)
 
     except Exception as e:
         logger.error(f"Takeoff job {job_id} failed: {e}")
@@ -261,8 +328,81 @@ async def get_job_status(job_id: str, request: Request, tenant_id: Optional[str]
         "status": job["status"],
         "filename": job.get("filename"),
         "project": job.get("project"),
+        "review": job.get("review"),
         "error": job.get("error"),
     }
+
+
+@router.post("/{job_id}/review")
+async def review_takeoff(job_id: str, body: ReviewDecision, request: Request,
+                         background_tasks: BackgroundTasks, tenant_id: Optional[str] = None):
+    """Approve (optionally with corrected quantities) or reject a takeoff held at needs_review.
+    Only an approved takeoff is priced; the decision, who made it, when, and any edits are kept
+    on the job."""
+    from datetime import datetime, timezone
+    from vula.api.commerce import _actor
+    job = _job_for(job_id, authorized_tenant(request) or tenant_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.get("status") != "needs_review" or not job.get("extracted"):
+        raise HTTPException(409, f"This takeoff isn't waiting for review (status: {job.get('status')}).")
+    decision = body.decision.strip().lower()
+    if decision not in ("approve", "reject"):
+        raise HTTPException(400, "decision must be approve or reject")
+    by = _actor(request)
+    review = dict(job.get("review") or {})
+    review.update({"decided_by": by, "decided_at": datetime.now(timezone.utc).isoformat(),
+                   "note": body.note[:500]})
+    if decision == "reject":
+        review["status"] = "rejected"
+        job["review"], job["status"] = review, "rejected"
+        _save_job(job_id)
+        return {"job_id": job_id, "status": "rejected"}
+
+    project = _project_from_state(job["extracted"])
+    edits: Dict[str, object] = {}
+    if body.use_measured and project.deterministic_rooms:
+        project.rooms = [Room(name=n, area=a) for n, a in project.deterministic_rooms]
+        edits["rooms"] = "measured"
+    if body.rooms is not None:
+        bad = [r.name for r in body.rooms if not (r.area and r.area > 0)]
+        if bad:
+            raise HTTPException(400, f"Every room needs an area above 0 m² ({', '.join(bad[:5])}).")
+        old = {r.name: r for r in project.rooms}
+        project.rooms = [Room(name=r.name, area=float(r.area),
+                              floor_finish=r.floor_finish if r.floor_finish is not None else getattr(old.get(r.name), "floor_finish", ""),
+                              ceiling_finish=r.ceiling_finish if r.ceiling_finish is not None else getattr(old.get(r.name), "ceiling_finish", ""),
+                              wall_finish=r.wall_finish if r.wall_finish is not None else getattr(old.get(r.name), "wall_finish", ""),
+                              is_wet=r.is_wet if r.is_wet is not None else bool(getattr(old.get(r.name), "is_wet", False)),
+                              perimeter=getattr(old.get(r.name), "perimeter", 0.0))
+                         for r in body.rooms]
+        edits["rooms"] = [{"name": r.name, "area": r.area} for r in project.rooms]
+    if body.gross_floor_area is not None:
+        if body.gross_floor_area <= 0:
+            raise HTTPException(400, "Gross floor area must be above 0 m².")
+        project.gross_floor_area = float(body.gross_floor_area)
+        edits["gross_floor_area"] = project.gross_floor_area
+    if body.scale_confirmed:
+        for s in project.sheets:
+            s.scale_method = s.scale_method if s.scale_method == "dxf_units" else "dimension_check"
+            s.scale_verified_by = by
+        edits["scale_confirmed_by"] = by
+    review.update({"status": "approved", "edits": edits})
+    project.review = review
+    job["review"] = review
+    job["project"] = _project_summary(project)
+    job["status"] = "approved"
+    _save_job(job_id)
+
+    async def _run():
+        try:
+            await _price(job_id, project, job.get("tenant_id") or "default", float(job.get("markup") or 15.0))
+        except Exception as e:  # noqa: BLE001
+            logger.error("Takeoff job %s failed after review: %s", job_id, e)
+            job["status"], job["error"] = "failed", str(e)
+            _save_job(job_id)
+    background_tasks.add_task(_run)
+    return {"job_id": job_id, "status": "approved", "edits": edits}
 
 
 @router.get("/{job_id}/boq")
