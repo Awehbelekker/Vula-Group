@@ -1,0 +1,1131 @@
+# Made-up, labelled cases for the decision benchmark (vula/decision_bench.py). No real customer
+# or business messages. Non-English lines were machine-written (by Claude), not by a native speaker:
+# have them checked before their scores are trusted (field review: native-speaker).
+- lang: en
+  text: Can I please speak to the manager?
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-001
+- lang: en
+  text: I want to talk to a real person
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-002
+- lang: en
+  text: Please call me back
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-003
+- lang: en
+  text: Can someone from the shop phone me
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-004
+- lang: en
+  text: Put me through to the owner please
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-005
+- lang: en
+  text: I need to speak to a person, not a bot
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-006
+- lang: en
+  text: This is the worst service ever
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-007
+- lang: en
+  text: I'm really fed up now
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-008
+- lang: en
+  text: I am so angry with you people
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-009
+- lang: en
+  text: My order still hasn't come, this is ridiculous
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-010
+- lang: en
+  text: You charged me twice, not happy at all
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-011
+- lang: en
+  text: Third time I'm asking, useless
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-012
+- lang: en
+  text: What time do you open on Saturday?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-013
+- lang: en
+  text: How much is the hake per kg?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-014
+- lang: en
+  text: Do you deliver to Sea Point?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-015
+- lang: en
+  text: I'd like to order 2kg prawns
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-016
+- lang: en
+  text: Thanks, got it!
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-017
+- lang: en
+  text: Is the tuna fresh today?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-018
+- lang: en
+  text: This is the worst service ever. Can I please speak to the manager?
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-019
+- lang: en
+  text: I'm really fed up now. I want to talk to a real person
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-020
+- lang: en
+  text: I am so angry with you people. Please call me back
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-021
+- lang: en
+  text: My order still hasn't come, this is ridiculous. Can someone from the shop phone me
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-022
+- lang: en
+  text: You charged me twice, not happy at all. Put me through to the owner please
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-023
+- lang: en
+  text: Third time I'm asking, useless. I need to speak to a person, not a bot
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-024
+- lang: af
+  text: Kan ek asseblief met die bestuurder praat?
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-025
+- lang: af
+  text: Ek wil met 'n regte mens praat
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-026
+- lang: af
+  text: Bel my asseblief terug
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-027
+- lang: af
+  text: Kan iemand van die winkel my bel
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-028
+- lang: af
+  text: Ek wil met die eienaar praat asseblief
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-029
+- lang: af
+  text: Ek moet met iemand praat, nie 'n robot nie
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-030
+- lang: af
+  text: Dit is die swakste diens ooit
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-031
+- lang: af
+  text: Ek is nou regtig gatvol
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-032
+- lang: af
+  text: Ek is so kwaad vir julle
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-033
+- lang: af
+  text: My bestelling het nog steeds nie gekom nie, belaglik
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-034
+- lang: af
+  text: Julle het my twee keer gedebiteer, glad nie gelukkig nie
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-035
+- lang: af
+  text: Derde keer wat ek vra, nutteloos
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-036
+- lang: af
+  text: Hoe laat maak julle Saterdag oop?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-037
+- lang: af
+  text: Hoeveel is die stokvis per kg?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-038
+- lang: af
+  text: Lewer julle in Seepunt af?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-039
+- lang: af
+  text: Ek wil graag 2kg garnale bestel
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-040
+- lang: af
+  text: Dankie, het dit!
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-041
+- lang: af
+  text: Is die tuna vandag vars?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-042
+- lang: af
+  text: Dit is die swakste diens ooit. Kan ek asseblief met die bestuurder praat?
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-043
+- lang: af
+  text: Ek is nou regtig gatvol. Ek wil met 'n regte mens praat
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-044
+- lang: af
+  text: Ek is so kwaad vir julle. Bel my asseblief terug
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-045
+- lang: af
+  text: My bestelling het nog steeds nie gekom nie, belaglik. Kan iemand van die winkel my bel
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-046
+- lang: af
+  text: Julle het my twee keer gedebiteer, glad nie gelukkig nie. Ek wil met die eienaar praat asseblief
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-047
+- lang: af
+  text: Derde keer wat ek vra, nutteloos. Ek moet met iemand praat, nie 'n robot nie
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-048
+- lang: zu
+  text: Ngicela ukukhuluma nomphathi
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-049
+- lang: zu
+  text: Ngifuna ukukhuluma nomuntu
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-050
+- lang: zu
+  text: Ngicela ningishayele
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-051
+- lang: zu
+  text: Ngicela umuntu wasesitolo angifonele
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-052
+- lang: zu
+  text: Ngicela ukukhuluma nomnikazi
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-053
+- lang: zu
+  text: Ngifuna umuntu, hhayi umshini
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-054
+- lang: zu
+  text: Le yinkonzo embi kakhulu
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-055
+- lang: zu
+  text: Sengikhathele manje
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-056
+- lang: zu
+  text: Ngithukuthele kakhulu
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-057
+- lang: zu
+  text: I-oda yami ayikafiki namanje
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-058
+- lang: zu
+  text: Ningikhokhise kabili, angijabule neze
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-059
+- lang: zu
+  text: Okwesithathu ngibuza, aniwusizo
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-060
+- lang: zu
+  text: Nivula ngasikhathi sini ngoMgqibelo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-061
+- lang: zu
+  text: Yimalini inhlanzi ngekhilo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-062
+- lang: zu
+  text: Niyaletha eSea Point?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-063
+- lang: zu
+  text: Ngicela ukuthenga ama-prawns angu-2kg
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-064
+- lang: zu
+  text: Ngiyabonga, ngikutholile!
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-065
+- lang: zu
+  text: Ingabe i-tuna intsha namuhla?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-066
+- lang: zu
+  text: Le yinkonzo embi kakhulu. Ngicela ukukhuluma nomphathi
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-067
+- lang: zu
+  text: Sengikhathele manje. Ngifuna ukukhuluma nomuntu
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-068
+- lang: zu
+  text: Ngithukuthele kakhulu. Ngicela ningishayele
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-069
+- lang: zu
+  text: I-oda yami ayikafiki namanje. Ngicela umuntu wasesitolo angifonele
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-070
+- lang: zu
+  text: Ningikhokhise kabili, angijabule neze. Ngicela ukukhuluma nomnikazi
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-071
+- lang: zu
+  text: Okwesithathu ngibuza, aniwusizo. Ngifuna umuntu, hhayi umshini
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-072
+- lang: xh
+  text: Ndicela ukuthetha nomphathi
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-073
+- lang: xh
+  text: Ndifuna ukuthetha nomntu
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-074
+- lang: xh
+  text: Ndicela ninditsalele umnxeba
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-075
+- lang: xh
+  text: Ndicela umntu wevenkile anditsalele
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-076
+- lang: xh
+  text: Ndicela ukuthetha nomnini
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-077
+- lang: xh
+  text: Ndifuna umntu, hayi umatshini
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-078
+- lang: xh
+  text: Le yinkonzo embi kakhulu
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-079
+- lang: xh
+  text: Ndidiniwe ngoku
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-080
+- lang: xh
+  text: Ndinomsindo kakhulu
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-081
+- lang: xh
+  text: I-odolo yam ayikafiki nangoku
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-082
+- lang: xh
+  text: Nindihlawulise kabini, andonwabanga konke
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-083
+- lang: xh
+  text: Okwesithathu ndibuza, aniluncedo
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-084
+- lang: xh
+  text: Nivula nini ngoMgqibelo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-085
+- lang: xh
+  text: Yimalini intlanzi ngekhilo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-086
+- lang: xh
+  text: Niyazisa eSea Point?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-087
+- lang: xh
+  text: Ndicela ukuthenga ii-prawns ezi-2kg
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-088
+- lang: xh
+  text: Enkosi, ndiyifumene!
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-089
+- lang: xh
+  text: Ingaba i-tuna intsha namhlanje?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-090
+- lang: xh
+  text: Le yinkonzo embi kakhulu. Ndicela ukuthetha nomphathi
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-091
+- lang: xh
+  text: Ndidiniwe ngoku. Ndifuna ukuthetha nomntu
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-092
+- lang: xh
+  text: Ndinomsindo kakhulu. Ndicela ninditsalele umnxeba
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-093
+- lang: xh
+  text: I-odolo yam ayikafiki nangoku. Ndicela umntu wevenkile anditsalele
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-094
+- lang: xh
+  text: Nindihlawulise kabini, andonwabanga konke. Ndicela ukuthetha nomnini
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-095
+- lang: xh
+  text: Okwesithathu ndibuza, aniluncedo. Ndifuna umntu, hayi umatshini
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-096
+- lang: st
+  text: Ke kopa ho bua le mookamedi
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-097
+- lang: st
+  text: Ke batla ho bua le motho
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-098
+- lang: st
+  text: Ke kopa le ntetsetse
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-099
+- lang: st
+  text: Ke kopa motho wa lebenkele a ntetsetse
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-100
+- lang: st
+  text: Ke kopa ho bua le mong'a lebenkele
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-101
+- lang: st
+  text: Ke batla motho, eseng mochine
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-102
+- lang: st
+  text: Ena ke tshebeletso e mpe haholo
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-103
+- lang: st
+  text: Ke kgathetse jwale
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-104
+- lang: st
+  text: Ke halefile haholo
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-105
+- lang: st
+  text: Odara ya ka ha e eso fihle le jwale
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-106
+- lang: st
+  text: Le ntefisitse habedi, ha ke thabe ho hang
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-107
+- lang: st
+  text: Lekgetlo la boraro ke botsa, ha le thuse
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-108
+- lang: st
+  text: Le bula ka nako mang ka Moqebelo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-109
+- lang: st
+  text: Hlapi ke bokae ka kilo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-110
+- lang: st
+  text: Na le isa Sea Point?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-111
+- lang: st
+  text: Ke kopa ho reka di-prawns tsa 2kg
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-112
+- lang: st
+  text: Ke a leboha, ke e fumane!
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-113
+- lang: st
+  text: Na tuna e ntjha kajeno?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-114
+- lang: st
+  text: Ena ke tshebeletso e mpe haholo. Ke kopa ho bua le mookamedi
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-115
+- lang: st
+  text: Ke kgathetse jwale. Ke batla ho bua le motho
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-116
+- lang: st
+  text: Ke halefile haholo. Ke kopa le ntetsetse
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-117
+- lang: st
+  text: Odara ya ka ha e eso fihle le jwale. Ke kopa motho wa lebenkele a ntetsetse
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-118
+- lang: st
+  text: Le ntefisitse habedi, ha ke thabe ho hang. Ke kopa ho bua le mong'a lebenkele
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-119
+- lang: st
+  text: Lekgetlo la boraro ke botsa, ha le thuse. Ke batla motho, eseng mochine
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-120
+- lang: nso
+  text: Ke kgopela go bolela le molaodi
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-121
+- lang: nso
+  text: Ke nyaka go bolela le motho
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-122
+- lang: nso
+  text: Ke kgopela le mpietše mogala
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-123
+- lang: nso
+  text: Ke kgopela motho wa lebenkele a ntletšetše
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-124
+- lang: nso
+  text: Ke kgopela go bolela le mong wa lebenkele
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-125
+- lang: nso
+  text: Ke nyaka motho, e sego motšhene
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-126
+- lang: nso
+  text: Ye ke tirelo ye mpe kudu
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-127
+- lang: nso
+  text: Ke lapile bjale
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-128
+- lang: nso
+  text: Ke befetšwe kudu
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-129
+- lang: nso
+  text: Odara ya ka ga se ya fihla le bjale
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-130
+- lang: nso
+  text: Le ntefišitše gabedi, ga ke thabe le gatee
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-131
+- lang: nso
+  text: Lekga la boraro ke botšiša, ga le thuše
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-132
+- lang: nso
+  text: Le bula neng ka Mokibelo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-133
+- lang: nso
+  text: Hlapi ke bokae ka kilo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-134
+- lang: nso
+  text: Na le iša Sea Point?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-135
+- lang: nso
+  text: Ke kgopela go reka di-prawns tša 2kg
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-136
+- lang: nso
+  text: Ke a leboga, ke e hweditše!
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-137
+- lang: nso
+  text: Na tuna e mpsha lehono?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-138
+- lang: nso
+  text: Ye ke tirelo ye mpe kudu. Ke kgopela go bolela le molaodi
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-139
+- lang: nso
+  text: Ke lapile bjale. Ke nyaka go bolela le motho
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-140
+- lang: nso
+  text: Ke befetšwe kudu. Ke kgopela le mpietše mogala
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-141
+- lang: nso
+  text: Odara ya ka ga se ya fihla le bjale. Ke kgopela motho wa lebenkele a ntletšetše
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-142
+- lang: nso
+  text: Le ntefišitše gabedi, ga ke thabe le gatee. Ke kgopela go bolela le mong wa lebenkele
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-143
+- lang: nso
+  text: Lekga la boraro ke botšiša, ga le thuše. Ke nyaka motho, e sego motšhene
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-144
+- lang: tn
+  text: Ke kopa go bua le mookamedi
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-145
+- lang: tn
+  text: Ke batla go bua le motho
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-146
+- lang: tn
+  text: Ke kopa lo ntetsetse
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-147
+- lang: tn
+  text: Ke kopa motho wa lebenkele a ntetsetse
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-148
+- lang: tn
+  text: Ke kopa go bua le mong wa lebenkele
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-149
+- lang: tn
+  text: Ke batla motho, e seng motšhine
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-150
+- lang: tn
+  text: Ke tirelo e e maswe thata
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-151
+- lang: tn
+  text: Ke lapile jaanong
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-152
+- lang: tn
+  text: Ke galefile thata
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-153
+- lang: tn
+  text: Odara ya me ga e ise e goroge le jaanong
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-154
+- lang: tn
+  text: Lo ntuetsitse gabedi, ga ke itumele gotlhelele
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-155
+- lang: tn
+  text: Lekga la boraro ke botsa, ga lo thuse
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-156
+- lang: tn
+  text: Lo bula leng ka Lamatlhatso?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-157
+- lang: tn
+  text: Tlhapi ke bokae ka kilo?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-158
+- lang: tn
+  text: A lo isa Sea Point?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-159
+- lang: tn
+  text: Ke kopa go reka di-prawns tsa 2kg
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-160
+- lang: tn
+  text: Ke a leboga, ke e amogetse!
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-161
+- lang: tn
+  text: A tuna e ntšha gompieno?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-162
+- lang: tn
+  text: Ke tirelo e e maswe thata. Ke kopa go bua le mookamedi
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-163
+- lang: tn
+  text: Ke lapile jaanong. Ke batla go bua le motho
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-164
+- lang: tn
+  text: Ke galefile thata. Ke kopa lo ntetsetse
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-165
+- lang: tn
+  text: Odara ya me ga e ise e goroge le jaanong. Ke kopa motho wa lebenkele a ntetsetse
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-166
+- lang: tn
+  text: Lo ntuetsitse gabedi, ga ke itumele gotlhelele. Ke kopa go bua le mong wa lebenkele
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-167
+- lang: tn
+  text: Lekga la boraro ke botsa, ga lo thuse. Ke batla motho, e seng motšhine
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-168
+- lang: mixed
+  text: Eish my order hasn't arrived, ngifuna ukukhuluma ne manager
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-169
+- lang: mixed
+  text: Ag man ek is gatvol, call me asseblief
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-170
+- lang: mixed
+  text: Sawubona, how much is the hake today?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-171
+- lang: mixed
+  text: Molo, ndicela ukuthenga 2kg prawns please
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-172
+- lang: mixed
+  text: Dumela, ke batla go bua le manager now
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-173
+- lang: mixed
+  text: Hayi bo, you guys charged me twice!
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-174
+- lang: mixed
+  text: Thanks bru, sharp sharp
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-175
+- lang: mixed
+  text: Ngiyabonga for the quick delivery
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-176
+- lang: mixed
+  text: Can someone phone me, ke kopa
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-177
+- lang: mixed
+  text: This is nonsense, ek wil die eienaar spreek
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-178
+- lang: mixed
+  text: Hello, do you deliver ko Soweto?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-179
+- lang: mixed
+  text: Kwanele manje, worst service ever
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-180
+- lang: mixed
+  text: Jo, the fish was off, ndinomsindo
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-181
+- lang: mixed
+  text: Please phone me back, siyabonga
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-182
+- lang: mixed
+  text: Is julle oop on Sunday?
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-183
+- lang: mixed
+  text: Bathong, my order is late again
+  expect:
+    wants_person: false
+    upset: true
+  id: escalation-184
+- lang: mixed
+  text: I need to talk to a human, asseblief
+  expect:
+    wants_person: true
+    upset: false
+  id: escalation-185
+- lang: mixed
+  text: Ke a leboga, see you tomorrow
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-186
+- lang: mixed
+  text: Useless! Ngifuna umphathi now
+  expect:
+    wants_person: true
+    upset: true
+  id: escalation-187
+- lang: mixed
+  text: Can I get 1kg kingklip, ngiyacela
+  expect:
+    wants_person: false
+    upset: false
+  id: escalation-188

@@ -1562,3 +1562,39 @@ async def master_turns(tenant_id: Optional[str] = None, phone: Optional[str] = N
     except Exception as exc:
         return {"turns": [], "error": f"turn record unavailable (run migration 195?): {exc}"}
     return {"turns": rows}
+
+
+# ── Decision benchmark (31 Oct 2026): Jev against today's classifiers ───────────────────────
+# Started by the operator from the master panel; runs here because this server holds the
+# OpenRouter key. Results land in vula_reasoning_telemetry (vula/decision_bench.py).
+_BENCH_TASKS: dict = {}
+
+
+@router.post("/decision-bench")
+async def decision_bench_start(body: Optional[dict] = None):
+    """Start one benchmark run in the background. One at a time."""
+    import uuid
+    from vula import decision_bench
+    if any(not t.done() for t in _BENCH_TASKS.values()):
+        raise HTTPException(status_code=409, detail="A benchmark is already running.")
+    body = body or {}
+    run_id = "bench-" + uuid.uuid4().hex[:10]
+    decisions = [d for d in (body.get("decisions") or []) if d in ("skill", "escalation", "expense_purpose")] or None
+    limit = int(body["limit"]) if str(body.get("limit") or "").isdigit() else None
+    _BENCH_TASKS[run_id] = asyncio.create_task(decision_bench.run(run_id, decisions=decisions, limit=limit))
+    return {"run_id": run_id, "started": True}
+
+
+@router.get("/decision-bench")
+async def decision_bench_status(run_id: Optional[str] = None):
+    """Whether a run is going, and the newest summary (or that run's)."""
+    from vula import decision_bench
+    task = _BENCH_TASKS.get(run_id) if run_id else next(iter(reversed(list(_BENCH_TASKS.values()))), None)
+    running = bool(task and not task.done())
+    failed = bool(task and task.done() and not task.cancelled() and task.exception() is not None)
+    try:
+        summary = await asyncio.to_thread(decision_bench.latest, run_id)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("benchmark summary unreadable: %s", exc)
+        summary = None
+    return {"running": running, "failed": failed, "summary": summary}
