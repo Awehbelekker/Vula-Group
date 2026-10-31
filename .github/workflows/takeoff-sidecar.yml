@@ -1,0 +1,73 @@
+name: Takeoff sidecar benchmark
+
+# Builds the OpenTakeoff sidecar (pinned to its last Apache-2.0 commit, services/opentakeoff) and
+# scores its measurements against the free public-plan corpus (vula_mind/evals/takeoff_plans):
+# area error % per room and per plan type, 2% tolerance. Report: the job log and the
+# takeoff-sidecar-report artifact.
+
+on:
+  push:
+    paths:
+      - "services/opentakeoff/**"
+      - "vula_mind/vula/takeoff/**"
+      - "vula_mind/evals/takeoff_plans/**"
+      - "vula_mind/evals/takeoff_sidecar.py"
+      - ".github/workflows/takeoff-sidecar.yml"
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: Sidecar vs public plans
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      OPENTAKEOFF_API_KEY: ci-sidecar-key
+      OPENTAKEOFF_URL: http://localhost:8790
+      OLLAMA_BASE: http://localhost:11434
+      QDRANT_BASE: http://localhost:6333
+      API_KEY: ci-test
+      DEBUG: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sidecar (pinned apache-2.0-final)
+        run: docker build -t vula-opentakeoff services/opentakeoff
+
+      - name: Licence files are in the image
+        run: docker run --rm --entrypoint ls vula-opentakeoff /app/licenses/opentakeoff
+
+      - name: Start sidecar
+        run: |
+          docker run -d --name ot -p 8790:8790 -e OPENTAKEOFF_API_KEY vula-opentakeoff
+          for i in $(seq 1 30); do curl -sf localhost:8790/health && exit 0; sleep 2; done
+          docker logs ot; exit 1
+
+      - name: Refuses without the key
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' -X POST --data-binary @vula_mind/evals/takeoff_plans/synthetic-four-room/plan.pdf localhost:8790/measure)" = 401
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: vula_mind
+        run: pip install -r requirements-dev.txt
+
+      - name: Score against the corpus
+        working-directory: vula_mind
+        run: |
+          set -o pipefail
+          python -m evals.takeoff_sidecar --json > ../sidecar-report.json || true
+          python -m evals.takeoff_sidecar | tee ../sidecar-report.txt
+
+      - name: Sidecar logs
+        if: always()
+        run: docker logs ot 2>&1 | tail -100
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: takeoff-sidecar-report
+          path: |
+            sidecar-report.txt
+            sidecar-report.json
