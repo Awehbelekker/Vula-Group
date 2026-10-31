@@ -1,0 +1,108 @@
+{
+  "plan_type": "dxf",
+  "synthetic": {
+    "kind": "dxf",
+    "insunits": 0,
+    "outline": [
+      [
+        0,
+        0
+      ],
+      [
+        10000,
+        0
+      ],
+      [
+        10000,
+        8000
+      ],
+      [
+        0,
+        8000
+      ]
+    ],
+    "rooms": [
+      {
+        "name": "Lounge",
+        "pts": [
+          [
+            0,
+            0
+          ],
+          [
+            6000,
+            0
+          ],
+          [
+            6000,
+            8000
+          ],
+          [
+            0,
+            8000
+          ]
+        ]
+      },
+      {
+        "name": "Bedroom",
+        "pts": [
+          [
+            6000,
+            0
+          ],
+          [
+            10000,
+            0
+          ],
+          [
+            10000,
+            5000
+          ],
+          [
+            6000,
+            5000
+          ]
+        ]
+      },
+      {
+        "name": "Bathroom",
+        "pts": [
+          [
+            6000,
+            5000
+          ],
+          [
+            10000,
+            5000
+          ],
+          [
+            10000,
+            8000
+          ],
+          [
+            6000,
+            8000
+          ]
+        ]
+      }
+    ],
+    "blocks": []
+  },
+  "rooms": [
+    {
+      "name": "Lounge",
+      "area": 48.0
+    },
+    {
+      "name": "Bedroom",
+      "area": 20.0
+    },
+    {
+      "name": "Bathroom",
+      "area": 12.0
+    }
+  ],
+  "gfa": 80.0,
+  "expect_review": true,
+  "note": "Synthetic. Same unit with no declared units: measured by inference, but must be held for review."
+}

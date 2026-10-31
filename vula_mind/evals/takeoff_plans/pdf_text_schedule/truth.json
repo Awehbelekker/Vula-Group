@@ -1,0 +1,42 @@
+{
+  "plan_type": "pdf_text",
+  "synthetic": {
+    "kind": "pdf_text",
+    "lines": [
+      "A101  GROUND FLOOR PLAN",
+      "SCALE 1:100",
+      "",
+      "ROOM SCHEDULE",
+      "01 Reception | 24.50 m2",
+      "02 Boardroom | 36.00 m2",
+      "03 Open Plan Office | 180.25 m2",
+      "04 Kitchen | 18.00 m2",
+      "05 Ablutions | 12.75 m2",
+      "TOTAL | 271.50 m2",
+      "GFA 290 m2"
+    ]
+  },
+  "rooms": [
+    {
+      "name": "Reception",
+      "area": 24.5
+    },
+    {
+      "name": "Boardroom",
+      "area": 36.0
+    },
+    {
+      "name": "Open Plan Office",
+      "area": 180.25
+    },
+    {
+      "name": "Kitchen",
+      "area": 18.0
+    },
+    {
+      "name": "Ablutions",
+      "area": 12.75
+    }
+  ],
+  "note": "Synthetic. A CAD-exported PDF's printed room schedule; no model in the default mode."
+}

@@ -1,0 +1,169 @@
+{
+  "plan_type": "dxf",
+  "synthetic": {
+    "kind": "dxf",
+    "insunits": 6,
+    "outline": [
+      [
+        0,
+        0
+      ],
+      [
+        20,
+        0
+      ],
+      [
+        20,
+        15
+      ],
+      [
+        0,
+        15
+      ]
+    ],
+    "rooms": [
+      {
+        "name": "Open Plan Office",
+        "pts": [
+          [
+            0,
+            0
+          ],
+          [
+            14,
+            0
+          ],
+          [
+            14,
+            6
+          ],
+          [
+            8,
+            6
+          ],
+          [
+            8,
+            15
+          ],
+          [
+            0,
+            15
+          ]
+        ],
+        "label_at": [
+          4,
+          10
+        ]
+      },
+      {
+        "name": "Boardroom",
+        "pts": [
+          [
+            14,
+            0
+          ],
+          [
+            20,
+            0
+          ],
+          [
+            20,
+            6
+          ],
+          [
+            14,
+            6
+          ]
+        ]
+      },
+      {
+        "name": "Kitchen",
+        "pts": [
+          [
+            8,
+            6
+          ],
+          [
+            14,
+            6
+          ],
+          [
+            14,
+            11
+          ],
+          [
+            8,
+            11
+          ]
+        ]
+      },
+      {
+        "name": "Store",
+        "pts": [
+          [
+            8,
+            11
+          ],
+          [
+            14,
+            11
+          ],
+          [
+            14,
+            15
+          ],
+          [
+            8,
+            15
+          ]
+        ]
+      },
+      {
+        "name": "Reception",
+        "pts": [
+          [
+            14,
+            6
+          ],
+          [
+            20,
+            6
+          ],
+          [
+            20,
+            15
+          ],
+          [
+            14,
+            15
+          ]
+        ]
+      }
+    ]
+  },
+  "rooms": [
+    {
+      "name": "Open Plan Office",
+      "area": 156.0
+    },
+    {
+      "name": "Boardroom",
+      "area": 36.0
+    },
+    {
+      "name": "Kitchen",
+      "area": 30.0
+    },
+    {
+      "name": "Store",
+      "area": 24.0
+    },
+    {
+      "name": "Reception",
+      "area": 54.0
+    }
+  ],
+  "gfa": 300.0,
+  "expect_review": false,
+  "note": "Synthetic. 20m x 15m floor in metres ($INSUNITS=6) with an L-shaped office (14x6 + 8x9 = 156)."
+}

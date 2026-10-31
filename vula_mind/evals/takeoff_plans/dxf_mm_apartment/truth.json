@@ -1,0 +1,152 @@
+{
+  "plan_type": "dxf",
+  "synthetic": {
+    "kind": "dxf",
+    "insunits": 4,
+    "outline": [
+      [
+        0,
+        0
+      ],
+      [
+        10000,
+        0
+      ],
+      [
+        10000,
+        8000
+      ],
+      [
+        0,
+        8000
+      ]
+    ],
+    "rooms": [
+      {
+        "name": "Lounge",
+        "pts": [
+          [
+            0,
+            0
+          ],
+          [
+            6000,
+            0
+          ],
+          [
+            6000,
+            8000
+          ],
+          [
+            0,
+            8000
+          ]
+        ]
+      },
+      {
+        "name": "Bedroom",
+        "pts": [
+          [
+            6000,
+            0
+          ],
+          [
+            10000,
+            0
+          ],
+          [
+            10000,
+            5000
+          ],
+          [
+            6000,
+            5000
+          ]
+        ]
+      },
+      {
+        "name": "Bathroom",
+        "pts": [
+          [
+            6000,
+            5000
+          ],
+          [
+            10000,
+            5000
+          ],
+          [
+            10000,
+            8000
+          ],
+          [
+            6000,
+            8000
+          ]
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "name": "DOOR_813",
+        "at": [
+          [
+            3000,
+            10
+          ],
+          [
+            6010,
+            2500
+          ]
+        ]
+      },
+      {
+        "name": "WINDOW_1200",
+        "at": [
+          [
+            1000,
+            10
+          ],
+          [
+            8000,
+            10
+          ],
+          [
+            9990,
+            6500
+          ]
+        ]
+      },
+      {
+        "name": "DRAIN_GULLY",
+        "at": [
+          [
+            8000,
+            6000
+          ]
+        ]
+      }
+    ]
+  },
+  "rooms": [
+    {
+      "name": "Lounge",
+      "area": 48.0
+    },
+    {
+      "name": "Bedroom",
+      "area": 20.0
+    },
+    {
+      "name": "Bathroom",
+      "area": 12.0
+    }
+  ],
+  "gfa": 80.0,
+  "counts": {
+    "doors": 2,
+    "windows": 3
+  },
+  "expect_review": false,
+  "note": "Synthetic. 10m x 8m unit drawn in mm ($INSUNITS=4): lounge 6x8, bedroom 4x5, bath 4x3. A drain block must not count as a door."
+}
