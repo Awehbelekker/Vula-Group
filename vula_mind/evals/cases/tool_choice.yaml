@@ -28,6 +28,10 @@
 - {skill: commerce_admin, role: owner, prompt: "Invoice Regan for 2kg angelfish at R100/kg", expect: create_invoice,
    forbid: [find_document]}
 - {skill: commerce_admin, role: owner, prompt: "Remind me to call the fish supplier tomorrow at 9", expect: create_reminder}
+- {skill: commerce_admin, role: owner, prompt: "Every Tile Co invoice this year by project, VAT split, per month in excel",
+   expect: custom_sheet, forbid: [find_document], note: "sheet builder: the owner's own layout, previewed first"}
+- {skill: commerce_admin, role: owner, prompt: "A spreadsheet of the bank lines for Seaview in October",
+   expect: custom_sheet, forbid: [bank_payments]}
 - {skill: commerce_admin, role: owner, prompt: "Send everyone a promo for the fresh tuna", expect: picture_promotion,
    forbid: [preview_broadcast], note: "2026-10-24 OTH: drafted in the shop's own post layout"}
 - {skill: commerce_admin, role: owner, prompt: "Can you track all payment for Rudolf on the statments",

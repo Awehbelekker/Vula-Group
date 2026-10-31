@@ -199,39 +199,7 @@ def workbook(business: str, project: str, f: Dict[str, Any], decisions: List[Dic
     return buf.getvalue(), cells
 
 
-_TOKEN = re.compile(r"\s*(SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)|[A-Z]+\d+|\d+(?:\.\d+)?|[+-])")
-
-
-def evaluate(ws, ref: str, _depth: int = 0) -> float:
-    """The value of a cell in a workbook this module wrote: a number, or a formula of cell
-    references, SUM(range), + and −. Read back from the saved file, not from the figures."""
-    if _depth > 50:
-        raise ValueError("formula loop")
-    v = ws[ref].value
-    if v is None:
-        return 0.0
-    if not isinstance(v, str):
-        return float(v)
-    if not v.startswith("="):
-        raise ValueError(f"{ref} is not a number")
-    expr, pos, total, sign = v[1:], 0, 0.0, 1
-    while pos < len(expr):
-        m = _TOKEN.match(expr, pos)
-        if not m:
-            raise ValueError(f"{ref}: can't read {expr[pos:]!r}")
-        tok, pos = m.group(1), m.end()
-        if tok in "+-":
-            sign = 1 if tok == "+" else -1
-            continue
-        if tok.startswith("SUM("):
-            col, a, b = m.group(2), int(m.group(3)), int(m.group(5))
-            val = sum(evaluate(ws, f"{col}{i}", _depth + 1) for i in range(a, b + 1))
-        elif tok[0].isdigit():
-            val = float(tok)
-        else:
-            val = evaluate(ws, tok, _depth + 1)
-        total += sign * val
-    return total
+from vula.commerce.xlsx_check import evaluate  # noqa: E402 — shared with the sheet builder
 
 
 def read_back(data: bytes, cells: Dict[str, str], f: Dict[str, Any]) -> List[str]:

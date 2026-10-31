@@ -1,0 +1,4 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Send me every Tile Co invoice this year by project in excel", expect: custom-sheet, tool: custom_sheet}
+- {prompt: "Put the Seaview costs per month in a spreadsheet", expect: custom-sheet, tool: custom_sheet}
+- {prompt: "Which of my sheets are saved? Send the list of my sheets", expect: custom-sheet, tool: custom_sheet}

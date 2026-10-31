@@ -58,7 +58,7 @@ def test_every_tool_belongs_to_an_employee(all_modules):
 def test_every_listed_tool_exists():
     real = {t["function"]["name"] for t in ca._ALL_TOOL_SPECS} | {
         t["function"]["name"] for t in ca.PROJECT_TOOLS + ca.DECISION_TOOLS + ca.MANUFACTURING_TOOLS
-        + ca.AUTOMATION_TOOLS + ca.PRODUCT_DOC_TOOLS + ca.REMINDER_TOOLS} | {"hand_over"}
+        + ca.AUTOMATION_TOOLS + ca.PRODUCT_DOC_TOOLS + ca.REMINDER_TOOLS + ca.SHEET_TOOLS} | {"hand_over"}
     for e in em.TEAM:
         assert e.tools - real == set(), e.id
     assert em.SHARED_TOOLS - real == set()
@@ -221,7 +221,8 @@ def test_the_team_loads_from_the_file_tree():
     assert [e.id for e in team] == ["bookkeeper", "sales", "office_admin", "marketing", "operations"]
     assert "hand_over" in shared and all(e.job and e.tools and e.keywords for e in team)
     assert {t.id for t in em.BY_ID["bookkeeper"].tasks} == {
-        "project-bill", "payment-chase", "slips-and-expenses", "month-end", "bank-and-payments", "fix-a-record"}
+        "project-bill", "payment-chase", "slips-and-expenses", "month-end", "bank-and-payments", "fix-a-record",
+        "custom-sheet"}
 
 
 def test_every_task_has_a_prompt_cases_and_only_its_employees_tools():
@@ -320,3 +321,14 @@ def test_every_employee_has_its_tasks_and_every_task_has_examples():
         for t in e.tasks:
             cases = yaml.safe_load((em.ROOT / e.id / "tasks" / t.id / "cases.yaml").read_text()) or []
             assert cases and all(c["expect"] == t.id for c in cases), (e.id, t.id)
+
+
+def test_a_sheet_of_another_tasks_data_keeps_the_whole_job_and_the_sheet_builder(all_modules):
+    """'a spreadsheet of the bank lines' touches the bank task and the sheet task: the whole
+    bookkeeper job, and custom_sheet is there (every employee keeps it)."""
+    msg = "I want a spreadsheet of the bank lines for Seaview in October"
+    emp = em.pick(msg)
+    assert emp.id == "bookkeeper" and em.pick_task(emp, msg) is None
+    full = ca._tools_for("eval-tenant", role="owner", message=msg)
+    for e in em.TEAM:
+        assert "custom_sheet" in {t["function"]["name"] for t in em.narrow(full, e)}

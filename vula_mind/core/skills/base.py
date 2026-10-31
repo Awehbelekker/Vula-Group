@@ -859,6 +859,27 @@ def looks_like_supplier_history_question(text: str) -> bool:
             and not _NOT_SUPPLIER_HISTORY_RE.search(t) and not _SPECIFIC_DOCUMENT_RE.search(t))
 
 
+# 31 Oct 2026 (sheet builder, vula/commerce/sheet_builder.py): a file asked for in a layout of the
+# owner's own — "every Tile Co invoice this year by project, VAT split, per month in excel". The fixed
+# supplier export ignores period, grouping and columns, so such a request goes to the sheet
+# builder instead; a plain "Tile Co invoices in excel" still gets the fixed export.
+_SHEET_FILE_RE = re.compile(r"\b(excel|spreadsheet|xlsx|csv|(?:a|in a|as a|the)\s+sheet|sheet\s+(?:of|with|showing))\b",
+                            re.IGNORECASE)
+_SHEET_LAYOUT_RE = re.compile(
+    r"\b(?:per|by|each|every)\s+(?:month|week|quarter|project|job|supplier|category|account|customer|client)\b"
+    r"|\bgroup(?:ed)?\b|\bcolumns?\b|\bsplit\b|\bsub-?totals?\b|\bbetween\b|\bfrom\s+\w+\s+to\b"
+    r"|\b(?:this|last)\s+(?:month|year|quarter)\b|\btax\s+year\b|\bsince\b|\bonly\b"
+    r"|\b(?:jan(?:uary)?|feb(?:ruary)?|march|apr(?:il)?|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?"
+    r"|nov(?:ember)?|dec(?:ember)?)\b",
+    re.IGNORECASE)
+
+
+def wants_custom_layout(text: str) -> bool:
+    """A spreadsheet asked for with a layout the owner described (a period, a grouping, columns)."""
+    t = text or ""
+    return bool(_SHEET_FILE_RE.search(t) and _SHEET_LAYOUT_RE.search(t))
+
+
 # ── How much of each retrieved chunk reaches a prompt ─────────────────────────
 # 2026-10-16 (KB retrieval phase 1, evals/RETRIEVAL.md). Every skill cut each chunk to its first
 # 900 characters — in five places, plus 400/500/600 in commerce_assistant. A full chunk is 512

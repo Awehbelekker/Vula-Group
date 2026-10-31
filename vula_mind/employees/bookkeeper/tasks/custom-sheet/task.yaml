@@ -1,0 +1,5 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: A spreadsheet in the owner's own layout
+summary: Any sheet the owner describes — supplier invoices, bank lines, expenses, customer invoices or orders — previewed, then built from the books.
+triggers: [spreadsheet, excel, xlsx, csv, a sheet of, in a sheet, as a sheet, saved sheet, my sheets, build it]
+tools: [custom_sheet, find_document]
