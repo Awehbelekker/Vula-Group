@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     api_key: str = ""                   # require this header: X-API-Key
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     debug: bool = False
+    # Which deployment this is: "production" or "staging" (docs/staging.md). Read by
+    # vula/readiness.py (a staging service still on production's PUBLIC_BASE_URL would mint
+    # production pay links) and tools/migrate.py's production guard.
+    vula_env: str = "production"
     # "json": one JSON object per log line, so Railway labels warnings as warnings and can filter
     # by tenant / request (vula/log_streams.py). "text" for reading logs in a terminal; DEBUG=true
     # also switches to text.

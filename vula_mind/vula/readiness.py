@@ -41,9 +41,63 @@ def platform_gaps(schema_missing: Optional[list] = None) -> list[dict]:
     if not (settings.platform_wa_phone_id and settings.platform_wa_token and settings.platform_waba_id):
         gaps.append(_gap("Vula's own WhatsApp number is not set: operator alerts are only logged",
                          "Set PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN"))
+    if _is_staging() and settings.public_base_url.rstrip("/") == _PROD_BASE_URL.rstrip("/"):
+        gaps.append(_gap("VULA_ENV is staging but PUBLIC_BASE_URL is still production's: pay links, "
+                         "receipts and OAuth/webhook callbacks would point at production",
+                         "Set PUBLIC_BASE_URL to the staging service's own URL"))
     for m in schema_missing or []:
-        gaps.append(_gap(f"Database is missing {m}", "Apply that migrations/*.sql in the Supabase SQL editor"))
+        gaps.append(_gap(f"Database is missing {m}",
+                         "Run tools/migrate.py apply (or apply that migrations/*.sql in the Supabase SQL editor)"))
     return gaps
+
+
+# config.py's default PUBLIC_BASE_URL is the production Railway service.
+_PROD_BASE_URL = type(settings).model_fields["public_base_url"].default
+
+
+def _is_staging() -> bool:
+    return (settings.vula_env or "").strip().lower() == "staging"
+
+
+def _setting(what: str, state: str, note: str) -> dict:
+    return {"what": what, "state": state, "note": note}
+
+
+def _group(what: str, names: dict[str, str], off_note: str) -> dict:
+    """'set' / 'partly set' / 'off by design' for a group of env vars. Only NAMES are reported,
+    never values (these are credentials)."""
+    missing = [env for env, val in names.items() if not (val or "").strip()]
+    if not missing:
+        return _setting(what, "set", "All of " + ", ".join(names) + " are set")
+    if len(missing) == len(names):
+        return _setting(what, "off by design", off_note)
+    return _setting(what, "partly set", "Not set: " + ", ".join(missing))
+
+
+def optional_settings() -> list[dict]:
+    """Platform settings that may be off on purpose. Informational: none of these makes /ready
+    fail (the one that can — staging on production's PUBLIC_BASE_URL — is in platform_gaps)."""
+    s = settings
+    kind = "production default" if s.public_base_url.rstrip("/") == _PROD_BASE_URL.rstrip("/") else "custom"
+    out = [_setting("PUBLIC_BASE_URL", "set",
+                    f"{s.public_base_url} ({kind}; VULA_ENV={s.vula_env or 'production'})")]
+    if s.resend_api_key:
+        note = f"Sending as {s.from_email or '(FROM_EMAIL not set)'}"
+        if not s.team_email:
+            note += "; TEAM_EMAIL not set, so team notifications and the weekly digest go nowhere"
+        out.append(_setting("Email (Resend)", "set", note))
+    else:
+        out.append(_setting("Email (Resend)", "off by design",
+                            "RESEND_API_KEY not set: no email goes out (FROM_EMAIL, TEAM_EMAIL unused)"))
+    out.append(_group("PayFast (platform account)",
+                      {"PAYFAST_MERCHANT_ID": s.payfast_merchant_id, "PAYFAST_MERCHANT_KEY": s.payfast_merchant_key,
+                       "PAYFAST_PASSPHRASE": s.payfast_passphrase},
+                      "Vula's own PayFast account (signup subscription payments) is off; tenants connect their own under Settings › Payments"))
+    out.append(_group("Yoco (platform keys)",
+                      {"YOCO_SECRET_KEY": s.yoco_secret_key, "YOCO_PUBLIC_KEY": s.yoco_public_key,
+                       "YOCO_WEBHOOK_SECRET": s.yoco_webhook_secret},
+                      "No platform Yoco keys; tenants connect their own Yoco account"))
+    return out
 
 
 def _rows(client, table: str, cols: str, **eq) -> list[dict]:
@@ -139,6 +193,7 @@ def report() -> dict:
         "ready": not platform,
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "platform": platform,
+        "settings": optional_settings(),
         "tenants": {t: g for t, g in tenants.items() if g},
         "tenants_ready": sorted(t for t, g in tenants.items() if not g),
     }
