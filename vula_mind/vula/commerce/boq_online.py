@@ -167,6 +167,33 @@ def save(tenant_id: str, project: str, raw_lines: List[Dict[str, Any]], by: Opti
     return load(tenant_id, name)
 
 
+_TAKEOFF_SECTION = {
+    "concrete": "Concrete, formwork and reinforcement", "wet_works": "Waterproofing",
+    "drywall": "Ceilings, partitions and access flooring", "flooring": "Floor coverings",
+    "tiling": "Tiling", "joinery": "Carpentry and joinery", "glazing": "Glazing",
+    "plumbing": "Plumbing and drainage", "painting": "Paintwork",
+}
+
+
+def from_takeoff(boq: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A reviewed, priced takeoff (vula/takeoff BOQ.to_dict) as working-bill lines: each under its
+    ASAQS trade, the takeoff's rate in cents (blank when it had none, so the line is priced here),
+    and kind "takeoff" so it's clear where the quantity came from. Amounts are worked out again by
+    clean_lines, never copied."""
+    from vula.commerce.boq_template import trade_of
+    lines = []
+    for it in (boq or {}).get("items") or []:
+        desc = it.get("description") or ""
+        rate = it.get("rate_cents")
+        lines.append({
+            "section": trade_of(desc, _TAKEOFF_SECTION.get(it.get("trade") or "")) or
+                       _TAKEOFF_SECTION.get(it.get("trade") or "", "General"),
+            "key": it.get("id"), "description": desc, "unit": it.get("unit"),
+            "qty": it.get("qty"), "rate_cents": rate if rate else None, "kind": "takeoff",
+        })
+    return clean_lines(lines)
+
+
 def from_filed_bill(tenant_id: str, project: str) -> List[Dict[str, Any]]:
     """The filed bill's lines as working lines — not saved until the owner saves them."""
     from vula.commerce.boq_template import trade_of, unit_label

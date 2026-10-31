@@ -8,7 +8,7 @@
 import { useState } from "react";
 import { AlertTriangle, ClipboardCopy, Download, FileUp, RefreshCw, X } from "lucide-react";
 import { formatMoney } from "../../lib/money";
-import { Button, Card, EmptyState, Field, Input, PillTabs, Skeleton, StatCard, StatusChip } from "../ui/index.jsx";
+import { Button, Card, EmptyState, Field, Input, PillTabs, Skeleton, StatCard, StatusChip, confirmDialog, toast } from "../ui/index.jsx";
 import { MOCK_TAKEOFF, TRADE_LABELS, copyOrderSheet, mid, net, orderGroups, useTakeoff, useTakeoffRates } from "./useTakeoff";
 import "./estimating.css";
 
@@ -34,6 +34,7 @@ export default function TakeoffV2({ tenantId }) {
       </div>
 
       {job?.status === "needs_review" && <Review x={x} job={job} />}
+      {job?.status === "complete" && <ToProject x={x} />}
 
       {job && !["complete", "needs_review"].includes(job.status) && (
         <p className={job.status === "failed" ? "ves-error" : "ves-note"} role="status">
@@ -76,6 +77,35 @@ export default function TakeoffV2({ tenantId }) {
         : `Demo data: ${MOCK_TAKEOFF.drawings.length} drawing sheets, AECOM 2025/26 rates. Upload real plans for a live BOQ.`}
         {" "}Confidence: high 90% and up, review 75–89%, specialist needed below 75%.</p>
     </section>
+  );
+}
+
+/** A priced takeoff becomes the project's working BOQ — one bill, edited and used as the budget there. */
+function ToProject({ x }) {
+  const [project, setProject] = useState("");
+  const [busy, setBusy] = useState(false);
+  const send = async (replace) => {
+    setBusy(true);
+    try {
+      const r = await x.toProject(project, replace);
+      if (r?.exists) {
+        if (await confirmDialog(`${r.detail} Replace that project's BOQ with this takeoff?`)) await send(true);
+        return;
+      }
+      if (r) toast(`Sent ${r.lines} lines to ${r.project}'s BOQ. Open Projects › BOQ to edit, price and use it as the budget.`);
+    } catch (e) {
+      toast(`Not sent: ${e.message}`, "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ves-row" role="group" aria-label="Send to a project">
+      <Field label="Project">
+        <Input value={project} onChange={(e) => setProject(e.target.value)} placeholder="Project name" aria-label="Project name" />
+      </Field>
+      <Button variant="secondary" disabled={busy || !project.trim()} onClick={() => send(false)}>Make this the project's BOQ</Button>
+    </div>
   );
 }
 

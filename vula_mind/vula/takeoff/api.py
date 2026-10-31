@@ -104,6 +104,11 @@ class ReviewDecision(BaseModel):
     note: str = ""
 
 
+class ToProject(BaseModel):
+    project: str
+    replace: bool = False
+
+
 class SendRFQRequest(BaseModel):
     dry_run: bool = True
     selected_trades: Optional[List[str]] = None
@@ -499,6 +504,31 @@ async def get_boq(job_id: str, request: Request, tenant_id: Optional[str] = None
     if job["status"] not in ("complete",):
         raise HTTPException(202, detail=f"BOQ not ready yet — status: {job['status']}")
     return {"job_id": job_id, "boq": job.get("boq")}
+
+
+@router.post("/{job_id}/to-project")
+async def takeoff_to_project(job_id: str, body: ToProject, request: Request, tenant_id: Optional[str] = None):
+    """Make a priced takeoff a project's working BOQ (vula_boq_drafts, migration 227) — one bill,
+    edited, printed and used as the budget in the online BOQ, priced from the business's own rate
+    library there. An existing bill is only replaced when asked."""
+    import asyncio
+    from vula.commerce import boq_online
+    job = _job_for(job_id, authorized_tenant(request) or tenant_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.get("status") != "complete":
+        raise HTTPException(409, f"The takeoff isn't priced yet (status: {job.get('status')}).")
+    tenant = job.get("tenant_id") or ""
+    if not tenant or tenant == "default" or not body.project.strip():
+        raise HTTPException(400, "Say which business and project.")
+    current = await asyncio.to_thread(boq_online.load, tenant, body.project)
+    if (current or {}).get("lines") and not body.replace:
+        raise HTTPException(409, "That project already has a BOQ. Send replace=true to replace it.")
+    lines = boq_online.from_takeoff(job.get("boq") or {})
+    from vula.api.commerce import _actor
+    saved = await asyncio.to_thread(boq_online.save, tenant, body.project, lines, f"takeoff:{_actor(request)}")
+    return {"job_id": job_id, "project": saved.get("project", body.project), "lines": len(lines),
+            "total_cents": saved.get("total_cents")}
 
 
 @router.get("/{job_id}/orders")

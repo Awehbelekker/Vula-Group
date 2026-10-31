@@ -210,6 +210,19 @@ export function useTakeoff({ tenantId = "" }) {
     }
   }, [apiHost, liveJob?.job_id, tenantId]);
 
+  // ── Make the priced takeoff a project's working BOQ (the online BOQ editor takes it from there) ──
+  const toProject = useCallback(async (project, replace = false) => {
+    if (!liveJob?.job_id || !project?.trim()) return null;
+    const resp = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}/to-project`, tenantId), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: project.trim(), replace }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 409 && !replace) return { exists: true, detail: data.detail };
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    return data;
+  }, [apiHost, liveJob?.job_id, tenantId]);
+
   // ── Totals ─────────────────────────────────────────────────────────────────
   const filtered = displayItems.filter(i => selectedTrades.includes(i.trade));
 
@@ -267,7 +280,7 @@ export function useTakeoff({ tenantId = "" }) {
     complete:        "Complete",
     failed:          "Failed",
   };
-  return { reviewing, submitReview, tab, setTab, markup, setMarkup, selectedTrades, setSelectedTrades, itemRates, setItemRates, apiHost, liveJob, setLiveJob, uploading, setUploading, fileRef, pollRef, liveItems, displayItems, liveRooms, rooms, areas, isLive, projectName, handleFileSelected, handleUploadClick, filtered, totals, downloadExcel, copyTSV, toggleTrade, TABS, statusLabel };
+  return { toProject, reviewing, submitReview, tab, setTab, markup, setMarkup, selectedTrades, setSelectedTrades, itemRates, setItemRates, apiHost, liveJob, setLiveJob, uploading, setUploading, fileRef, pollRef, liveItems, displayItems, liveRooms, rooms, areas, isLive, projectName, handleFileSelected, handleUploadClick, filtered, totals, downloadExcel, copyTSV, toggleTrade, TABS, statusLabel };
 }
 
 export function useTakeoffRates({ apiHost, tenantId }) {
