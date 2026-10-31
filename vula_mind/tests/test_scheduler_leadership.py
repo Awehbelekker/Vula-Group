@@ -26,7 +26,7 @@ _LOOP_NAMES = (
     "_scheduled_campaigns_loop", "_automations_loop", "_subscriptions_loop",
     "_recurring_bills_loop", "_daily_commerce_jobs_loop", "_hourly_customer_jobs_loop", "_programme_briefs_loop", "_tap_sweep_loop", "_shopify_sync_loop", "_master_digest_loop", "_owner_digest_loop", "_staff_notices_loop", "_document_quality_loop", "_shared_kb_loop", "_conversation_check_loop", "_owner_advisor_loop", "_email_sync_loop",
     "_clickup_sync_loop", "_onedrive_sync_loop",
-    "_weekly_rates_loop", "_call_sheet_loop", "_expense_sheet_loop",
+    "_weekly_rates_loop", "_takeoff_retention_loop", "_call_sheet_loop", "_expense_sheet_loop",
     "_daily_trial_expiry_loop", "_commerce_jobs_scheduler_loop",
     "_stale_escalation_scheduler_loop", "_stale_handoff_scheduler_loop",
     "_voice_retry_scheduler_loop", "_inbound_redrive_loop", "_mass_mind_health_watch_loop", "_local_llm_watch_loop", "_kb_customer_view_weekly_loop",

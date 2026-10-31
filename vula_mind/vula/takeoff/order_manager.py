@@ -375,8 +375,8 @@ class OrderManager:
 
     async def _send_rfq_email(self, po: PurchaseOrder) -> bool:
         """Send RFQ via Resend email API."""
-        import os
-        RESEND_KEY = os.getenv("RESEND_API_KEY", "")
+        # From settings like every other Resend caller, so /ready's email check covers it.
+        RESEND_KEY = _settings.resend_api_key
         if not RESEND_KEY:
             logger.warning("RESEND_API_KEY not set")
             return False
