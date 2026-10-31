@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     # Railway sets DATA_DIR=/data (volume mount). Locally falls back to home dir.
     upload_dir: Path = Path("/data/uploads") if Path("/data").exists() else Path(tempfile.gettempdir()) / "vula_uploads"
     takeoff_upload_dir: Path = Path("/data/takeoff") if Path("/data").exists() else Path(tempfile.gettempdir()) / "vula_takeoff"
+    # OpenTakeoff measurement sidecar (services/opentakeoff). Unset URL = PDF geometry stays AI-read
+    # only, exactly as before. Private Railway networking, e.g. http://opentakeoff.railway.internal:8790
+    opentakeoff_url: str = ""
+    opentakeoff_api_key: str = ""
+    opentakeoff_timeout_s: float = 300.0
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
