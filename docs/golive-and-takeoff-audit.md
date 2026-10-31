@@ -299,22 +299,39 @@ nothing. Retention and purge are one mechanism: `vula/retention.py` (one daily s
 kind of data) replaced the takeoff-only loop, so the next kind of expiring data adds a rule, not a
 41st loop. Candidates waiting for your decision are in `docs/security-model.md` › Retention.
 
-**Takeoff defects from the architecture-review note, still open (for whoever owns takeoff):**
-1. `plan_reader._llm_extract` calls Ollama without Cloudflare Access headers, a task label or a cloud
-   fallback, so in production the AI reader probably gets `{}` (no rooms, GFA 0). Since `3ddc00c` such a
-   job is held for review instead of producing a ~R50k BOQ from fixed minimums, but the reader still
-   needs to go through `core/llm_router`.
-2. Every scheduled plumbing fixture is priced as a full bathroom (~R60k) (`boq_generator.py`, plumbing).
-3. Windows are priced as solid doors; "glass" is a count priced per m².
-4. Counted twice: wet-room tiles in flooring and in tiling. Σ perimeter × height counts shared walls
-   twice. Ceilings are priced over full GFA even for "exposed".
-5. `BOQ.to_dict` drops rate range, source and by-trade, so the Excel Source column and the Trade Summary are empty.
-6. PO numbers restart per job (`PO-YYYYMM-001`) and are the SQLite key.
-7. Suppliers keyed by id only, and the `/suppliers` routes take an unchecked `tenant_id` (default "default").
-8. Concurrent jobs share `/tmp/vula_sheet_{i}.png`.
-9. RFQ sender hard-coded to one client. `/send` is a stub.
-10. Test rows in production `vula_takeoff_jobs`: **cause fixed** (`tests/conftest.py`, the suite can no
-    longer reach Supabase). Rows to delete: `delete from public.vula_takeoff_jobs where id in ('j1','4aaf1e62-6b3');`
+**Ownership: this session owns takeoff (owner, 31 Oct).** The architecture-review note's defects, now fixed:
+
+| # | Defect | Status | Commit / test |
+|---|---|---|---|
+| 1 | Reader posted raw to Ollama (no Cloudflare Access headers, no fallback), so production read nothing | **FIXED**: via `core/llm_router` (`resolve_generation_route` + `complete_local_first`, vision via `resolve_vision_route`). Also fixed a duplicate `timeout` that would have sent every call to the cloud. | `6863da2`, `tests/test_takeoff_reader_routing.py` |
+| 2 | Each plumbing fixture priced as a full bathroom (~R60k) | **FIXED**: a fixture point, sanitaryware separate | `1c7d401`, `tests/test_takeoff_pricing_defects.py` |
+| 3 | Windows priced as doors; glass as a count | **FIXED**: both by area, own rates | same |
+| 4 | Counted twice: wet floor tiles; shared walls; ceilings over GFA | **FIXED**: tiles once; partitions = (Σ perimeters − external) / 2 × height; ceilings per room, none where exposed | same |
+| 5 | `to_dict` dropped rate range, source, by-trade | **FIXED** (+ VAT in cents) | same |
+| 6 | PO numbers restarted per job | **FIXED**: `PO-YYYYMM-<job>-NN` | `675bc5a`, `tests/test_takeoff_orders.py` |
+| 7 | Editing a default supplier re-tagged it to one business; routes took an unchecked tenant | **FIXED**: per-business copy; routes need a named business. Production's supplier table is empty, so there's nothing to migrate. | same |
+| 8 | Shared `/tmp/vula_sheet_{n}.png` | **FIXED**: temp dir per job | `6863da2` |
+| 9 | RFQ sender hard-coded to one client; `/send` a stub | **FIXED**: signed with the business's brand. `/send dry_run=false` refuses (501) instead of pretending. | `675bc5a` |
+| 10 | Test rows in production | **Cause FIXED** (`7f43225`). The rows' delete is in the production SQL list. | |
+
+**v1 scope (owner's answers), done:** room floors, walls and skirting (perimeter × **confirmed** wall
+height − openings), ceilings, doors and windows. Nothing guessed from floor area: electrical, HVAC,
+fire, demolition, screed, door counts, kitchen runs and mezzanine steel are listed in `BOQ.excluded`.
+The owner confirms quantities before pricing (review gate; wall height and external walls are set
+there). The old Takeoff page is replaced by TakeoffV2. **NEW-T5 done:** a priced takeoff becomes the
+project's one working BOQ (`POST /takeoff/{id}/to-project` → `vula_boq_drafts`), where it's priced from
+the business's own rates and used as the budget.
+
+**Still open in takeoff:**
+- **WhatsApp first:** a plan sent on WhatsApp → preview → correct → confirm. The owner asked for it. The
+  hooks exist (`_handle_document_ingest`, `_send_wa_image`, `_ask_admin_confirm`), but it isn't built.
+- **AI-reader error on real plans:** run `python -m evals.takeoff_bench --live` where a model is reachable.
+- **Default supplier list:** it carries one client's real terms (an "appointed" HVAC contractor, a "12%
+  confirmed" tile account, an "appointed" flooring supplier), and every business sees them. Proposal: move
+  them into that client's own copies and make the defaults generic. That needs the owner's OK, because it
+  changes that client's pricing defaults.
+- **Heavy drawing packs** should run in a child process (as `vula/ingestion/pdf_extract.py` does). They still
+  run in the web worker.
 
 ## What Richard must do manually
 
