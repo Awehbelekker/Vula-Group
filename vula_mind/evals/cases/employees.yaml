@@ -1,0 +1,91 @@
+# The front desk (core/skills/employees.py::pick), 31 Oct 2026. Each owner/staff message is
+# labelled with the AI employee that should take it, or null: unclear, a continuation, or a mix
+# of jobs — the whole team takes it with today's full tool set. Deterministic: runs in CI
+# (tests/test_employee_routing.py). Made-up names and figures.
+# Bookkeeper
+- {prompt: "Who still owes us money?", expect: bookkeeper}
+- {prompt: "Send me this month's P&L", expect: bookkeeper}
+- {prompt: "I spent R450 on diesel for the bakkie", expect: bookkeeper}
+- {prompt: "Invoice Regan for 2kg angelfish at R100/kg", expect: bookkeeper}
+- {prompt: "Regan paid R2,300 against INV-00020 by EFT", expect: bookkeeper}
+- {prompt: "What's our VAT position this quarter?", expect: bookkeeper}
+- {prompt: "How much tax will we owe this year?", expect: bookkeeper}
+- {prompt: "Show me the bank lines for last week", expect: bookkeeper}
+- {prompt: "Can you track all payment for Rudolf on the statements", expect: bookkeeper}
+- {prompt: "Move BILL-00134 to Belladonna, it was filed under the wrong project", expect: bookkeeper}
+- {prompt: "What's the profit on the Porterfield job?", expect: bookkeeper}
+- {prompt: "The client paid the tiler R4,000 directly", expect: bookkeeper}
+- {prompt: "Send payment reminders to everyone overdue", expect: bookkeeper}
+- {prompt: "How much cash do we have?", expect: bookkeeper}
+- {prompt: "Book this slip under materials", expect: null, note: "slip (bookkeeper) and materials (operations): unclear, so the whole team"}
+- {prompt: "Give me a balance sheet", expect: bookkeeper}
+- {prompt: "Make a credit note for INV-00031", expect: bookkeeper}
+- {prompt: "Bill Bokaap Holdings again every month", expect: bookkeeper}
+- {prompt: "What did we spend on fuel in October?", expect: bookkeeper}
+- {prompt: "How much do I owe Judy for the expenses she paid?", expect: bookkeeper}
+- {prompt: "Send me a BOQ template for the new job", expect: bookkeeper}
+- {prompt: "Are we over budget on Belladonna?", expect: bookkeeper}
+- {prompt: "When is the next VAT return due to SARS?", expect: bookkeeper}
+- {prompt: "Record that the R3,700 plumbing change was paid by us", expect: bookkeeper}
+# Sales & customer service
+- {prompt: "How were sales today?", expect: sales}
+- {prompt: "Make a quote for Sam, 3 days tiling at R2500 a day", expect: sales}
+- {prompt: "Mark quote Q-0012 as accepted", expect: sales}
+- {prompt: "Show me the last ten orders", expect: sales}
+- {prompt: "Look up the customer Thandi Mokoena", expect: sales}
+- {prompt: "Log my meeting with Coastal Builders, they want a follow up next week", expect: sales}
+- {prompt: "Draft a follow-up after my visit to Atlantis Tiles", expect: sales}
+- {prompt: "What did the customer order last time?", expect: sales}
+- {prompt: "Set up a standing order for Mrs Pillay every Friday", expect: sales}
+- {prompt: "Turn quote Q-0040 into an invoice", expect: null, note: "quote (sales) and invoice (bookkeeper) — both have the tool; the team takes it"}
+- {prompt: "Any new leads this week?", expect: sales}
+- {prompt: "Send me the datasheet for the vinyl plank", expect: sales}
+- {prompt: "Who are my best customers?", expect: sales}
+- {prompt: "Put a manual order in for Bongani: 2kg hake", expect: sales}
+- {prompt: "Cancel the appointment for Lerato", expect: sales}
+# Office administrator
+- {prompt: "Remind me tomorrow at 9 to phone the bank manager", expect: null, note: "remind (office) and bank (bookkeeper); reminders are shared anyway"}
+- {prompt: "Remind me on Monday to renew the licence", expect: office_admin}
+- {prompt: "Write a letter to the landlord about the lease renewal", expect: office_admin}
+- {prompt: "Send a notice to all staff that we close early on Friday", expect: office_admin}
+- {prompt: "Run a staff poll: pizza or braai for the year-end?", expect: office_admin}
+- {prompt: "Save Peter's contact, 082 555 0101, he's the electrician", expect: office_admin}
+- {prompt: "Summarise the emails from Coastal Hire", expect: office_admin}
+- {prompt: "Draft a letter of appointment for the new site manager", expect: office_admin}
+- {prompt: "Set up the expense sheet for the reps", expect: office_admin}
+- {prompt: "What reminders do I have this week?", expect: office_admin}
+# Marketing
+- {prompt: "Send everyone a promo for the fresh tuna", expect: marketing}
+- {prompt: "Write an Instagram post about our new kitchen range", expect: marketing}
+- {prompt: "Make a 10% discount code for December", expect: marketing}
+- {prompt: "Update the website home page with our new opening hours", expect: marketing}
+- {prompt: "Learn my voice from my old posts", expect: marketing}
+- {prompt: "What are competitors charging for prawns?", expect: marketing}
+- {prompt: "Broadcast the weekend special to all our customers", expect: marketing}
+- {prompt: "Show me the last promotions we ran", expect: marketing}
+- {prompt: "Write a flyer for the open day", expect: marketing}
+- {prompt: "Use this photo for the yellowtail", expect: marketing}
+# Operations
+- {prompt: "What's running low?", expect: operations}
+- {prompt: "We received 20 boxes of tiles from the supplier", expect: operations}
+- {prompt: "Make a purchase order for 50 bags of cement", expect: operations}
+- {prompt: "What should I reorder this week?", expect: operations}
+- {prompt: "Log a batch of 40 loaves", expect: operations}
+- {prompt: "Set the recipe for the sourdough", expect: operations}
+- {prompt: "What does it cost to make one cake?", expect: operations}
+- {prompt: "Add a new product: smoked snoek, R95/kg", expect: operations}
+- {prompt: "Set the hake stock to 12kg", expect: operations}
+- {prompt: "Mark OTH-00042 as dispatched", expect: operations}
+- {prompt: "Add Coastal Timber as a supplier", expect: operations}
+- {prompt: "What's in stock?", expect: operations}
+# The whole team (null): unclear, continuations, mixed
+- {prompt: "yes", expect: null}
+- {prompt: "Confirm", expect: null}
+- {prompt: "thanks!", expect: null}
+- {prompt: "ok send it", expect: null}
+- {prompt: "2", expect: null}
+- {prompt: "Hi Vula", expect: null}
+- {prompt: "What's happening today?", expect: null}
+- {prompt: "Send invoice INV-00031 to the customer", expect: null, note: "invoice + customer: bookkeeper and sales both have send_invoice"}
+- {prompt: "[What's in the photo: a till slip from Builders for R1,250]", expect: null}
+- {prompt: "Help", expect: null}

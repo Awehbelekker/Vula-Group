@@ -1364,7 +1364,10 @@ def _digits_za(p: str) -> str:
 # Roles that make the sender part of the business rather than a customer of it — used to keep
 # customer-facing framing (the "Client:" history label, the "let me check with the team" hold
 # message, the "A customer asked:" helper ping) away from the people who ARE the team.
-_INSIDER_ROLES = {"owner", "manager", "admin", "staff", "sales_rep"}
+# 31 Oct: "operations" and "bookkeeper" are team roles too (they reach the admin agent on a
+# commerce line, _ADMIN_AGENT_ROLES) but were missing here, so on a knowledge line they got the
+# customer framing.
+_INSIDER_ROLES = {"owner", "manager", "admin", "staff", "sales_rep", "operations", "bookkeeper"}
 
 
 def _is_insider(caller_role: Optional[str]) -> bool:

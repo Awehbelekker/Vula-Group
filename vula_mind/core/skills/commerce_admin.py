@@ -1746,6 +1746,52 @@ def _preview_was_shown(tenant_id: str, phone: Optional[str], tool: str) -> bool:
         return False
 
 
+class HandOver(Exception):
+    """An employee called hand_over: the request is another colleague's job (employees.py)."""
+
+    def __init__(self, reason: str = ""):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _turn_note(step: str, **detail: Any) -> None:
+    try:
+        from vula import turns
+        turns.note(step, **detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str]) -> List[Dict[str, Any]]:
+    """The whole team's tools for this caller: today's set, minus what only a switched-off
+    employee does."""
+    from core.skills import employees
+    tools = _restrict_to_access(_tools_for(tenant_id, role=role, message=message),
+                                _member_access(tenant_id, phone))
+    settings = employees.settings_for(tenant_id)
+    return employees.without_switched_off(tools, {k for k, v in settings.items() if v["enabled"]})
+
+
+def _pick_employee(tenant_id: str, message: str, tools: List[Dict[str, Any]]):
+    """(tools, employee or None, prompt note) — the front desk. Best-effort: on any error the
+    whole team keeps today's tools."""
+    try:
+        from core.skills import employees
+        settings = employees.settings_for(tenant_id)
+        enabled = {k for k, v in settings.items() if v["enabled"]}
+        team = employees.without_switched_off(tools, enabled)
+        emp = employees.pick(message, enabled)
+        if emp is None:
+            _turn_note("employee", name="team")
+            return team, None, ""
+        _turn_note("employee", name=emp.id)
+        return (employees.narrow(team, emp), emp,
+                employees.job_block(emp, settings[emp.id]["instructions"]))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("employee pick skipped: %s", exc)
+        return tools, None, ""
+
+
 class ConfirmationRequired(Exception):
     """Raised from _agent_loop when a dispatched tool returns {"preview": True, ...} (22 tools
     use this exact shape — update_stock, record_payment, create_purchase_order, ...). Caught in
@@ -1919,14 +1965,32 @@ class CommerceAdminSkill(BaseSkill):
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         if caller_role != "sales_rep":   # reps already get their own narrow set
             tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
-        system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
-                                         lang=inp.metadata.get("preferred_language", ""))
+        lang = inp.metadata.get("preferred_language", "")
+        # The team of AI employees (core/skills/employees.py): the front desk hands a clear
+        # message to one employee with only its job's tools; anything unclear stays with the team.
+        employee, emp_note = None, ""
         if caller_role != "sales_rep":
-            system_msg += self._decisions_block(inp.tenant_id, inp.question or "")
+            tools, employee, emp_note = _pick_employee(inp.tenant_id, inp.question or "", tools)
+        system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
+                                         lang=lang, role_label=employee.title if employee else None)
+        if caller_role != "sales_rep":
+            system_msg += self._decisions_block(inp.tenant_id, inp.question or "") + emp_note
         collected_sources: List[Dict[str, Any]] = []
         try:
-            answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
-                                            tools, sources=collected_sources)
+            try:
+                answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
+                                                tools, sources=collected_sources)
+            except HandOver as ho:
+                # The employee was given someone else's job: the whole team takes the turn, once.
+                logger.info("commerce_admin: %s handed over (%s)", employee.id if employee else "-", ho.reason)
+                _turn_note("employee_hand_over", name=employee.id if employee else None)
+                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"])
+                system_msg = (self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
+                                                  lang=lang)
+                              + self._decisions_block(inp.tenant_id, inp.question or ""))
+                collected_sources.clear()
+                answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
+                                                tools, sources=collected_sources)
             if not answer:
                 raise RuntimeError("empty answer from admin agent loop")
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
@@ -2023,7 +2087,7 @@ class CommerceAdminSkill(BaseSkill):
             return ""
 
     def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None,
-                       lang: str = "") -> str:
+                       lang: str = "", role_label: Optional[str] = None) -> str:
         # Ground the model in the real current date — without this it has no way to resolve
         # "next Tuesday"/"tomorrow"/relative phrases at all, and (confirmed live, 2026-08-26) will
         # either ask the user what today's date is or silently guess wrong. Still never trust the
@@ -2077,7 +2141,7 @@ class CommerceAdminSkill(BaseSkill):
                 + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
                 + self._rules_block(tenant_id)
             )
-        role_label = _role_label(tenant_id)
+        role_label = role_label or _role_label(tenant_id)
         return (
             today_line +
             f"You are the owner's {role_label}, reachable on WhatsApp like any other colleague "
@@ -2169,6 +2233,8 @@ class CommerceAdminSkill(BaseSkill):
         offered = {t["function"]["name"] for t in tools} if restrict else self._TOOL_NAMES
 
         async def _dispatch(name: str, args: Dict[str, Any]) -> Any:
+            if name == "hand_over" and name in offered:
+                raise HandOver(str(args.get("reason") or ""))
             if name not in offered:
                 logger.warning("commerce_admin: refused tool %s — not offered to this caller", name)
                 return {"error": f"{name} isn't available here. Use one of the tools you were given, "

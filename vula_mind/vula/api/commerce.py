@@ -3769,6 +3769,32 @@ async def admin_project_tracker(tenant_id: str, project: str):
     return out
 
 
+@router.get("/{tenant_id}/admin/employees")
+async def admin_employees(tenant_id: str):
+    """The business's AI employees and its settings for each (core/skills/employees.py)."""
+    import asyncio
+    from core.skills import employees
+    return {"employees": await asyncio.to_thread(employees.team_view, tenant_id)}
+
+
+class EmployeeIn(BaseModel):
+    enabled: Optional[bool] = None
+    instructions: Optional[str] = None
+    by: Optional[str] = None
+
+
+@router.put("/{tenant_id}/admin/employees/{employee}")
+async def admin_employee_update(tenant_id: str, employee: str, body: EmployeeIn):
+    """Switch an AI employee on or off, or set its instructions. Read back."""
+    import asyncio
+    from core.skills import employees
+    try:
+        return await asyncio.to_thread(employees.save, tenant_id, employee, enabled=body.enabled,
+                                       instructions=body.instructions, by=body.by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 class DecisionIn(BaseModel):
     decision: str
     project: Optional[str] = None
