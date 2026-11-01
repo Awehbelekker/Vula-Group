@@ -36,7 +36,7 @@ _CURRENT_ROW: ContextVar = ContextVar("kb_maintenance_row", default=None)
 JOBS = ("stats", "exposure", "backfill_preview", "backfill_apply", "mark_public", "customer_view", "kb_learning",
         "contextualize_preview", "contextualize", "contextualize_revert", "retrieval_diag_ctx",
         "enrich_documents", "supplier_details_preview", "supplier_details",
-        "retrieval_live", "retrieval_diag")
+        "retrieval_live", "retrieval_diag", "retrieval_compare")
 
 
 async def _stats() -> Dict[str, Any]:
@@ -263,6 +263,13 @@ async def _retrieval_live() -> Dict[str, Any]:
     return rep
 
 
+async def _retrieval_compare() -> Dict[str, Any]:
+    """The live retrieval cases under candidate search settings, side by side (phase A, measure
+    only — evals/retrieval.py::run_compare)."""
+    from evals import retrieval
+    return await retrieval.run_compare()
+
+
 def _ctx_baseline() -> str:
     from config import settings
     return settings.kb_ctx_baseline or ""
@@ -395,6 +402,7 @@ async def run_job(job: str, by: str = "boot") -> Dict[str, Any]:
           "backfill_apply": lambda: _backfill(True), "mark_public": _mark_public,
           "customer_view": _customer_view,
           "retrieval_live": _retrieval_live, "retrieval_diag": _retrieval_diag,
+          "retrieval_compare": _retrieval_compare,
           "kb_learning": _kb_learning,
           "contextualize_preview": lambda: _contextualize(dry_run=True),
           "contextualize": _contextualize,

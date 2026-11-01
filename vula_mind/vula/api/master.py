@@ -1252,7 +1252,8 @@ async def master_kb_maintenance_reports(limit: int = 10) -> dict:
             .limit(max(1, min(limit, 30))).execute().data or [])
     return {"runs": [{**{k: r.get(k) for k in ("id", "skill", "status", "error", "created_by", "created_at",
                                                  "finished_at")},
-                      "summary": (r.get("report") or {}).get("summary")} for r in rows]}
+                      "summary": (r.get("report") or {}).get("summary"),
+                      "score_bands": (r.get("report") or {}).get("score_bands")} for r in rows]}
 
 
 @router.post("/benchmark")

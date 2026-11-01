@@ -67,6 +67,12 @@ def build() -> Dict[str, Any]:
                      "open_escalations": t.get("open_escalations") or 0,
                      "stuck_documents": stuck.get(t["tenant_id"], 0)})
     rows.sort(key=lambda r: (_ORDER.get(r["health"], 9), r["name"].lower()))
+    try:
+        from vula.weekly_benchmark import latest_comparison
+        benchmark = latest_comparison()
+    except Exception as exc:
+        log.debug("digest: benchmark section skipped: %s", exc)
+        benchmark = None
     active = [r for r in rows if r["health"] != "off"]
     return {
         "generated_at": datetime.now(SAST).isoformat(timespec="minutes"),
@@ -74,6 +80,7 @@ def build() -> Dict[str, Any]:
         "counts": {h: sum(1 for r in rows if r["health"] == h) for h in ("red", "amber", "green", "off")},
         "dormant": [r["name"] for r in active if r["dormant"]],
         "missing_migrations": missing,
+        "benchmark": benchmark,
     }
 
 
@@ -93,6 +100,9 @@ def render_text(d: Dict[str, Any]) -> str:
     if d["missing_migrations"]:
         lines += ["", "Missing in production (Master › Health › Copy SQL):"]
         lines += [f"  - {m}" for m in d["missing_migrations"]]
+    if d.get("benchmark"):
+        from vula.weekly_benchmark import render_lines
+        lines += [""] + render_lines(d["benchmark"])
     return "\n".join(lines)
 
 
@@ -110,6 +120,12 @@ def render_html(d: Dict[str, Any]) -> str:
         items = "".join(f"<li>{html.escape(m)}</li>" for m in d["missing_migrations"])
         extra = ('<p style="margin:20px 0 6px;font-weight:600;">Missing in production '
                  '(Master › Health › Copy SQL)</p><ul style="margin:0;">' + items + "</ul>")
+    if d.get("benchmark"):
+        from vula.weekly_benchmark import render_lines
+        items = render_lines(d["benchmark"])
+        extra += ('<p style="margin:20px 0 6px;font-weight:600;">' + html.escape(items[0]) + "</p>"
+                  + ("<ul style=\"margin:0;\">" + "".join(f"<li>{html.escape(x)}</li>" for x in items[1:]) + "</ul>"
+                     if items[1:] else ""))
     return ('<div style="font-family:-apple-system,Segoe UI,sans-serif;font-size:14px;color:#101828;">'
             f'<p style="font-size:16px;font-weight:700;margin:0 0 12px;">{html.escape(_headline(d))}</p>'
             f'<table cellpadding="0" cellspacing="0">{rows}</table>{extra}</div>')

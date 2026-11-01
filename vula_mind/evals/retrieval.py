@@ -600,6 +600,114 @@ def benchmark_rows(rep: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+# ── Settings comparison (document search phase A, 1 Nov 2026) ─────────────────
+# Live, 22 cases: no "unanswerable" question abstained (0/13). The reason is in
+# VulaIngestionPipeline.query: with no vector hit above the floor, every word-match hit is kept,
+# even one sharing a single common word. Before changing that, run the same live cases under the
+# candidate settings side by side and pick from numbers. Measures only — the settings apply to
+# this task (pipeline.kb_overrides), never to a real request.
+
+COMPARE_VARIANTS: Dict[str, Dict[str, Any]] = {
+    "today": {},
+    "floor 0.40": {"score_threshold": 0.40},
+    "floor 0.45": {"score_threshold": 0.45},
+    "floor 0.50": {"score_threshold": 0.50},
+    "word match needs 2 terms": {"lone_keyword_min_overlap": 2},
+    "2 terms + floor 0.40": {"lone_keyword_min_overlap": 2, "score_threshold": 0.40},
+    "2 terms + floor 0.45": {"lone_keyword_min_overlap": 2, "score_threshold": 0.45},
+    "re-rank (lexical)": {"rerank": "lexical"},
+    "2 terms + 0.40 + re-rank": {"lone_keyword_min_overlap": 2, "score_threshold": 0.40, "rerank": "lexical"},
+}
+_COMPARE_KEYS = ("passed", "cases", "errors", "abstention", "false_abstention", "in_prompt",
+                 "fact_in_prompt", "recall@5", "mrr", "p50_ms", "context_tokens")
+
+
+@contextmanager
+def _same_rewrites() -> Iterator[None]:
+    """Every variant sees the same query rewrites: the model's rewrites vary call to call, which
+    would otherwise blur the difference the setting makes."""
+    from vula.ingestion import pipeline
+    orig = pipeline.expand_query
+    memo: Dict[tuple, List[str]] = {}
+
+    async def _memo(question: str, tenant_id: str, *a, **kw):
+        key = (tenant_id, question)
+        if key not in memo:
+            memo[key] = await orig(question, tenant_id, *a, **kw)
+        return list(memo[key])
+
+    with patch.object(pipeline, "expand_query", _memo):
+        yield
+
+
+async def _score_probe(case: Dict[str, Any]) -> Dict[str, Any]:
+    """The best vector score the production query sees for this case, with no floor at all."""
+    from vula.ingestion.pipeline import kb_overrides
+    probe: Dict[str, Any] = {}
+    customer = case.get("entry", "owner") == "customer"
+    try:
+        with kb_overrides(score_threshold=0.0, probe=probe):
+            await (_customer_retrieval if customer else _owner_retrieval)(case["tenant"], case["question"])
+    except Exception as exc:  # noqa: BLE001
+        probe["error"] = type(exc).__name__
+    return {"id": case.get("id"), "tenant": case["tenant"], "type": case.get("type"),
+            "question": case["question"], **probe}
+
+
+def score_bands(scores: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Top vector scores for questions the documents answer vs ones they don't: where a floor
+    would separate them (a floor above every 'absent' score and below every 'present' one)."""
+    def band(rows):
+        vals = sorted(r["top_vector"] for r in rows if isinstance(r.get("top_vector"), (int, float)))
+        if not vals:
+            return None
+        return {"n": len(vals), "min": vals[0], "p50": vals[len(vals) // 2], "max": vals[-1]}
+    absent = [r for r in scores if r.get("type") == "unanswerable"]
+    present = [r for r in scores if r.get("type") not in ("unanswerable", "sensitive")]
+    out = {"present": band(present), "absent": band(absent)}
+    if out["present"] and out["absent"]:
+        out["clean_split"] = out["absent"]["max"] < out["present"]["min"]
+    return out
+
+
+async def run_compare(cases: Optional[List[Dict[str, Any]]] = None,
+                      variants: Optional[Dict[str, Dict[str, Any]]] = None,
+                      tenant: Optional[str] = None) -> Dict[str, Any]:
+    """The live cases under each setting, plus each case's best vector score. Read-only."""
+    fixture = load_fixture()
+    cases = [c for c in (cases or load_cases())
+             if c["tenant"] not in fixture and (not tenant or c["tenant"] == tenant)]
+    return await _compare(cases, variants or COMPARE_VARIANTS, "live")
+
+
+async def run_compare_fixture(variants: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """The same comparison on the offline fixture (CI): checks the machinery, not quality."""
+    fixture = load_fixture()
+    cases = [c for c in load_cases() if c["tenant"] in fixture]
+    with offline():
+        await build_fixture(fixture)
+        return await _compare(cases, variants or COMPARE_VARIANTS, "fixture")
+
+
+async def _compare(cases: List[Dict[str, Any]], variants: Dict[str, Dict[str, Any]],
+                   mode: str) -> Dict[str, Any]:
+    from vula.ingestion.pipeline import kb_overrides
+    summary: Dict[str, Dict[str, Any]] = {}
+    matrix: Dict[str, Dict[str, bool]] = {}
+    with _same_rewrites():
+        scores = [await _score_probe(c) for c in cases]
+        for name, ov in variants.items():
+            with kb_overrides(**ov):
+                rows = [await run_case(c) for c in cases]
+            s = summarize(rows)
+            summary[name] = {k: s.get(k) for k in _COMPARE_KEYS}
+            for r in rows:
+                matrix.setdefault(str(r.get("id") or r["question"][:40]), {})[name] = bool(r.get("ok"))
+    return {"layer": "retrieval_compare", "mode": mode, "variants": {k: dict(v) for k, v in variants.items()},
+            "summary": summary, "score_bands": score_bands(scores), "scores": scores, "matrix": matrix,
+            "cases": len(cases)}
+
+
 # ── Customer view: can a customer's search ever reach a staff/owner chunk? ─────
 # KB retrieval 1b (2026-10-17). Not a ranking test — a FILTER test. Every probe is searched as a
 # customer twice, once per path (vector with no score floor, and the literal keyword pass), and
