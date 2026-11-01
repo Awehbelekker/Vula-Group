@@ -192,6 +192,27 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def run_in_progress(max_age_min: int = 20) -> Optional[str]:
+    """A run another server worker is still on: its newest answer is under `max_age_min` old and
+    it has no summary yet. The in-process task list only sees this worker's runs (two overlapped on
+    31 Oct). Fail-open: None when the table can't be read."""
+    try:
+        from datetime import datetime, timedelta, timezone
+        from vula.commerce import service
+        since = (datetime.now(timezone.utc) - timedelta(minutes=max_age_min)).isoformat()
+        rows = (service._client().table("vula_reasoning_telemetry").select("run_id")
+                .eq("system", SYSTEM).gte("created_at", since)
+                .order("created_at", desc=True).limit(1).execute().data or [])
+        if not rows:
+            return None
+        rid = rows[0]["run_id"]
+        done = (service._client().table("vula_reasoning_telemetry").select("run_id")
+                .eq("system", SYSTEM).eq("run_id", rid).eq("outcome", "summary").limit(1).execute().data or [])
+        return None if done else rid
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def latest(run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The newest benchmark summary (or a given run's), from the telemetry table."""
     from vula.commerce import service
