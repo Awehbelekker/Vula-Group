@@ -448,6 +448,26 @@ def _amount(s: str) -> Optional[float]:
         return None
 
 
+# 1 Nov 2026 (capability benchmark, flooring data sheets): "R10" is a slip-resistance class
+# (DIN 51130: R9-R13), not R10.00. The price check read "Slip resistance R10" as an unconfirmed
+# price and replaced a product-spec answer with "couldn't confirm the exact price".
+_SLIP_WORDS = re.compile(r"slip|ramp|din\s?51130|en\s?16165|r[- ]?rating|r[- ]?value|classif", re.I)
+
+
+def _is_slip_rating(text: str, m: "re.Match") -> bool:
+    raw = m.group(0)
+    if re.search(r"[.,]", raw):
+        return False
+    try:
+        n = int(re.sub(r"\D", "", raw))
+    except ValueError:
+        return False
+    if not 9 <= n <= 13:
+        return False
+    window = text[max(0, m.start() - 60): m.end() + 60]
+    return bool(_SLIP_WORDS.search(window))
+
+
 def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tools: set, *,
                       strict: bool = False, also_trusted: str = "") -> List[str]:
     """Any R-prefixed price stated in `answer` whose numeric value doesn't match (as a rounded
@@ -465,11 +485,14 @@ def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tool
                              if s.get("name") in grounding_tools and s.get("text"))
     if strict:
         relevant_text = f"{relevant_text} {also_trusted or ''}".strip()
-    if not relevant_text and not (strict and _PRICE_RE.search(answer or "")):
+    if not relevant_text and not (strict and any(not _is_slip_rating(answer, m)
+                                                  for m in _PRICE_RE.finditer(answer or ""))):
         return []
     source_amounts = {a for a in (_amount(n) for n in _NUM_RE.findall(relevant_text)) if a is not None}
     bad = []
     for m in _PRICE_RE.finditer(answer):
+        if _is_slip_rating(answer, m):
+            continue
         amount = _amount(re.sub(r"[^\d.,]", "", m.group(0)))
         if amount is not None and amount not in source_amounts:
             bad.append(m.group(0))

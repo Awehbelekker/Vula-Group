@@ -451,11 +451,23 @@ class FinanceAdminSkill(BaseSkill):
         ans_nums = self._money_shaped_numbers(answer)
         if not ans_nums:
             return (None, [])
+        # 1 Nov 2026 (capability benchmark): "R212,883.38 came in and R559,967.10 went out — a net
+        # outflow of R347,083.72" was flagged because the net is worked out, not returned. A
+        # figure that is the sum or difference of two returned figures is anchored too (a wrong
+        # sum is still caught — by this check and by wrong_arithmetic below).
+        verified = self._verified
+        derived: List[float] = []
+        if len(verified) <= 300:
+            uniq = sorted({round(v, 2) for v in verified if abs(v) >= 10})
+            derived = [x + y for i, x in enumerate(uniq) for y in uniq[i:]] + \
+                      [abs(x - y) for i, x in enumerate(uniq) for y in uniq[i + 1:]]
         unmatched = []
         for a in ans_nums:
             tol = max(0.5, abs(a) * 0.01)
-            if not any(abs(a - v) <= tol for v in self._verified):
-                unmatched.append(a)
+            if not any(abs(a - v) <= tol for v in verified):
+                # derived figures must match to the cent: a sum within 1% of anything is too loose
+                if not any(abs(abs(a) - d) <= 0.01 for d in derived):
+                    unmatched.append(a)
         return (len(unmatched) == 0, unmatched)
 
     # ── tools ──────────────────────────────────────────────────────────────────
