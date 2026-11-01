@@ -152,6 +152,10 @@ class ExtractedProject:
     review: Dict[str, object] = field(default_factory=lambda: {"status": "not_required", "reasons": []})
 
 
+class PlanTooHeavy(Exception):
+    """The drawing set took too long to read safely (child process timed out or was killed)."""
+
+
 # ─── PDF Reader ───────────────────────────────────────────────────────────────
 
 class PDFReader:
@@ -170,6 +174,39 @@ class PDFReader:
         self.ocr = ocr
 
     async def read(self, path: Path) -> List[DrawingSheet]:
+        """The PDF's sheets. PyMuPDF runs in a child process with a hard timeout
+        (vula/ingestion/pdf_extract.run, shared with document ingestion): a drawing pack with tens
+        of thousands of vector paths once held a web worker's GIL until it was killed (23 Sep).
+        pdfplumber in-process is only the fallback when PyMuPDF isn't installed."""
+        from vula.ingestion import pdf_extract
+        render_dir = tempfile.mkdtemp(prefix="vula_plan_")
+        try:
+            try:
+                pages = await pdf_extract.run(path, render_dir, settings.pdf_extract_timeout_s)
+            except pdf_extract.TooHeavy as exc:
+                raise PlanTooHeavy(str(exc))
+            except ImportError:
+                return await self._read_pdfplumber(path)
+            sheets = []
+            for page_no, text, png in pages:
+                source = "text"
+                if png:
+                    if self.ocr:
+                        text, source = await self._ocr_image(Path(png)), "ocr"
+                    else:
+                        source = "ocr_skipped"
+                sheet_num, title, scale, discipline = self._parse_title_block(text or "")
+                sheets.append(DrawingSheet(
+                    sheet_number=sheet_num or f"SH{page_no:03d}", title=title or f"Sheet {page_no}",
+                    scale=scale or "unknown", discipline=discipline,
+                    raw_text=text or "", raw_markdown=text or "", status="read", source=source,
+                    scale_ratio=parse_scale(scale), scale_method="title_block" if scale else ""))
+            return sheets
+        finally:
+            import shutil
+            shutil.rmtree(render_dir, ignore_errors=True)
+
+    async def _read_pdfplumber(self, path: Path) -> List[DrawingSheet]:
         sheets = []
         try:
             import pdfplumber
@@ -748,7 +785,14 @@ class PlanReader:
         doors_from_vector = []
 
         if suffix == ".pdf":
-            sheets = await self.pdf_reader.read(file_path)
+            try:
+                sheets = await self.pdf_reader.read(file_path)
+            except PlanTooHeavy as exc:
+                logger.warning("[%s] plan too heavy to read: %s", self.tenant_id, exc)
+                project = ExtractedProject(extraction_notes=[
+                    f"This drawing set is too heavy to read safely ({exc}). Send the floor-plan "
+                    "sheets on their own, or a DXF."])
+                return assess(project, self.tenant_id, use_history=False)
 
         elif suffix == ".dxf":
             rooms_from_vector, doors_from_vector = await self.dxf_reader.read(file_path)
