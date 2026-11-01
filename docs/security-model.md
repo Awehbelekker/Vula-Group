@@ -109,8 +109,13 @@ SADAG Suicide Crisis Helpline **0800 567 567** (free, 24 hours), Lifeline **0861
 asked to check in, with the number but never the message. Logs carry no content. On by default;
 `CRISIS_SUPPORT_ENABLED=false` switches it off.
 
-Not covered yet, an owner decision:
-- phrases in isiZulu, isiXhosa, Sesotho and the other SA languages (the escalation AI check could
-  carry a crisis flag for those);
-- addiction and gender-based-violence lines (numbers to be verified before they're added);
-- a follow-up if the business doesn't check in.
+Also covered (1 Nov):
+- **Other SA languages:** isiZulu, isiXhosa, Sesotho, Sepedi, Setswana and the rest go through the
+  escalation AI check (`escalation.classify_customer_message`), which now carries a `crisis` flag.
+  It's cached per message, so the escalation path doesn't call the model a second time.
+- **Abuse / GBV:** the GBV Command Centre **0800 428 428** (24 hours; SMS "HELP" to 31531) and
+  10111 / 112. The business is **not** told: the person causing harm may be connected to it.
+- **Substance abuse:** SADAG's Substance Abuse Helpline **0800 12 13 14** (24 hours).
+
+Still open: abuse and substance phrases in languages other than English and Afrikaans, and a
+follow-up if the business doesn't check in after a self-harm alert.

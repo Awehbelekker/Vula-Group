@@ -28,6 +28,14 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="vula_test_data_"))
 
 
 @pytest.fixture(autouse=True)
+def _fresh_classifier_cache():
+    """The escalation AI check caches per message text (vula/escalation.py); never across tests."""
+    from vula import escalation
+    escalation._CLASSIFY_CACHE.clear()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_tenant_db(tmp_path, monkeypatch):
     """Give every test its own empty tenant registry.
 

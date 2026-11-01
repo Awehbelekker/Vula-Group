@@ -59,3 +59,59 @@ def test_it_runs_before_any_assistant_reply():
     from vula.api import whatsapp
     src = inspect.getsource(whatsapp._handle_message)
     assert src.index("safety.handle") < src.index("_OPTOUT_RE.match")
+
+
+@pytest.mark.parametrize("text,kind", [
+    ("my husband hits me every night", "abuse"), ("I was raped last week", "abuse"),
+    ("hy slaan my", "abuse"), ("I'm addicted to tik and need help", "substance"),
+    ("I have a drinking problem", "substance"), ("ek is verslaaf aan drank", "substance"),
+])
+def test_abuse_and_substance_are_recognised(text, kind):
+    assert safety.kind_of(text) == kind
+
+
+@pytest.mark.parametrize("text", [
+    "I'm addicted to your prawns", "the driver hit my car", "can't stop eating these chips",
+    "my husband will collect the order",
+])
+def test_and_their_everyday_lookalikes_are_not(text):
+    assert safety.kind_of(text) is None
+
+
+def test_abuse_gets_the_gbv_line_and_the_business_is_not_told():
+    with patch("vula.api.whatsapp._send_reply", AsyncMock()) as send, \
+         patch("vula.escalation._pick_helper") as pick:
+        assert asyncio.run(safety.handle("27820000001", "my boyfriend beats me", "t1")) is True
+    assert send.await_count == 1 and "0800 428 428" in send.await_args.args[1]
+    pick.assert_not_called()
+
+
+def test_substance_gets_the_sadag_substance_line():
+    with patch("vula.api.whatsapp._send_reply", AsyncMock()) as send:
+        assert asyncio.run(safety.handle("27820000001", "I can't stop drinking", "t1")) is True
+    assert "0800 12 13 14" in send.await_args.args[1]
+
+
+def test_other_sa_languages_go_through_the_ai_check(monkeypatch):
+    from vula import escalation as esc
+    monkeypatch.setattr(esc, "needs_classifier", lambda t: True)
+    with patch.object(esc, "classify_customer_message",
+                      AsyncMock(return_value={"wants_person": False, "upset": False, "crisis": True})), \
+         patch("vula.api.whatsapp._send_reply", AsyncMock()) as send, \
+         patch("vula.escalation._pick_helper", return_value=None):
+        assert asyncio.run(safety.handle("27820000001", "ngifuna ukufa", "t1")) is True
+    assert "0800 567 567" in send.await_args.args[1]
+
+
+def test_the_ai_check_runs_once_per_message(monkeypatch):
+    from vula import escalation as esc
+    esc._CLASSIFY_CACHE.clear()
+    calls = []
+
+    async def fake(text, timeout):
+        calls.append(text)
+        return {"wants_person": True, "upset": False, "crisis": False}
+    monkeypatch.setattr(esc, "_classify", fake)
+    a = asyncio.run(esc.classify_customer_message("sawubona ngicela umuntu"))
+    b = asyncio.run(esc.classify_customer_message("sawubona ngicela umuntu"))
+    assert a == b and len(calls) == 1
