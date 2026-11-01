@@ -174,7 +174,7 @@ token must 403), an unauthenticated tenant route (must 401), and optionally a si
 
 ## Final status (2026-10-31, end of this pass)
 
-Branch `ccr-f7a53584-worzz4`. Full suite **6,853 passed, 2 skipped, 0 failed** (start of day: 6,741 / 2 /
+Branch `ccr-f7a53584-worzz4`. Full suite (1 Nov) **6,905 passed, 2 skipped, 0 failed**; earlier **6,853 passed, 2 skipped, 0 failed** (start of day: 6,741 / 2 /
 0). Also green: `ruff check vula/ core/`, import check, `check_migrations_rls.py`,
 `check_migration_sentinels.py`, `check_client_secrets.py`, `python -m evals.takeoff_bench` (4/4),
 dashboard `npm run build` + `npm run test:unit` (38/38) + size and token checks. **Nothing in
@@ -323,15 +323,17 @@ project's one working BOQ (`POST /takeoff/{id}/to-project` → `vula_boq_drafts`
 the business's own rates and used as the budget.
 
 **Still open in takeoff:**
-- **WhatsApp first:** a plan sent on WhatsApp → preview → correct → confirm. The owner asked for it. The
-  hooks exist (`_handle_document_ingest`, `_send_wa_image`, `_ask_admin_confirm`), but it isn't built.
+- ~~WhatsApp first~~ **DONE** (`1063e5a`, `vula/takeoff/whatsapp_flow.py`, `tests/test_takeoff_whatsapp.py`).
+  The team of a business with Estimating on sends a DXF or a drawing PDF, gets the measured rooms, what
+  to check and a link to correct them, then taps **Price it**. **Every takeoff now waits for the owner**
+  (dashboard too), per the owner's rule.
 - **AI-reader error on real plans:** run `python -m evals.takeoff_bench --live` where a model is reachable.
 - **Default supplier list:** it carries one client's real terms (an "appointed" HVAC contractor, a "12%
   confirmed" tile account, an "appointed" flooring supplier), and every business sees them. Proposal: move
   them into that client's own copies and make the defaults generic. That needs the owner's OK, because it
   changes that client's pricing defaults.
-- **Heavy drawing packs** should run in a child process (as `vula/ingestion/pdf_extract.py` does). They still
-  run in the web worker.
+- ~~Heavy drawing packs~~ **DONE** (`7ebd258`): read through `vula/ingestion/pdf_extract.run`, the same
+  child process document ingestion uses. A set that's too heavy is held with a plain reason.
 
 ## What Richard must do manually
 
