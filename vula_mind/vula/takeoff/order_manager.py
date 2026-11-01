@@ -147,6 +147,9 @@ class SupplierDatabase:
     """SQLite store (written through to vula_takeoff_suppliers) for a business's supplier contacts
     and discount terms, over a set of shared default suppliers."""
 
+    # Generic placeholders every business starts from. 2026-11-01: three of these carried one
+    # client's real terms (an appointed HVAC contractor, a 12% tile account, an appointed flooring
+    # supplier) and every business saw them; those now live as that client's own copies.
     DEFAULT_SUPPLIERS = [
         Supplier("sup_gc",    "General Contractor (TBC)",  "general_contractor",    discount_pct=0),
         Supplier("sup_dw",    "Drywall Specialist",         "drywall_contractor",    discount_pct=5),
@@ -156,13 +159,13 @@ class SupplierDatabase:
         Supplier("sup_glz",   "Glazing Contractor",         "glazing_contractor",    discount_pct=0),
         Supplier("sup_plb",   "Plumbing Contractor",        "plumbing_contractor",   discount_pct=0),
         Supplier("sup_ele",   "Electrical Contractor",      "electrical_contractor", discount_pct=0),
-        Supplier("sup_hva",   "ExtraAir (HVAC)",            "hvac_contractor",       discount_pct=5, preferred=True, notes="Appointed HVAC contractor — confirmed Phase 1"),
+        Supplier("sup_hva",   "HVAC Contractor",            "hvac_contractor",       discount_pct=0),
         Supplier("sup_fire",  "Fire Protection Contractor", "fire_protection_contractor", discount_pct=0),
         Supplier("sup_pnt",   "Painting Contractor",        "painting_contractor",   discount_pct=5),
         Supplier("sup_wtp",   "Waterproofing Specialist",   "waterproofing_specialist", discount_pct=0),
         Supplier("sup_str",   "Structural Engineer",        "structural_engineer",   discount_pct=0),
-        Supplier("sup_tile_s","Italtile (tiles)",           "tile_supplier",         discount_pct=12, preferred=True, notes="Trade account — 12% discount confirmed"),
-        Supplier("sup_fl_s",  "Polyflor SA (flooring)",     "flooring_supplier",     discount_pct=15, preferred=True, notes="Appointed supplier"),
+        Supplier("sup_tile_s","Tile Supplier",              "tile_supplier",         discount_pct=0),
+        Supplier("sup_fl_s",  "Floor Covering Supplier",    "flooring_supplier",     discount_pct=0),
     ]
 
     def __init__(self, db_path: Path = DB_PATH):
@@ -201,16 +204,16 @@ class SupplierDatabase:
         """)
         conn.commit()
 
-        # Seed defaults if empty
-        count = conn.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0]
-        if count == 0:
-            for s in self.DEFAULT_SUPPLIERS:
-                conn.execute(
-                    "INSERT OR IGNORE INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,'default')",
-                    (s.id, s.name, s.category, s.email, s.whatsapp, s.contact_name,
-                     s.discount_pct, int(s.preferred), s.notes)
-                )
-            conn.commit()
+        # The defaults are always the code's (a business's edits are its own <tenant>__<id> copies,
+        # so refreshing these never overwrites anyone's changes — and an old volume can't keep
+        # terms that were removed from the defaults).
+        for s in self.DEFAULT_SUPPLIERS:
+            conn.execute(
+                "INSERT OR REPLACE INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,'default')",
+                (s.id, s.name, s.category, s.email, s.whatsapp, s.contact_name,
+                 s.discount_pct, int(s.preferred), s.notes)
+            )
+        conn.commit()
         # 2026-09-27: the file is wiped on every Railway deploy (no volume attached), which reset
         # every supplier edit to the defaults above. Edits are written through to Supabase
         # (vula_takeoff_suppliers, migration 180) and re-applied here on every start.

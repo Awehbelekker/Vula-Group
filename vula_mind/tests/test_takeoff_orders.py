@@ -71,3 +71,25 @@ def test_sending_rfqs_for_real_is_refused_not_faked():
     assert r.status_code == 501
     r = client.post("/takeoff/rfq1/send?tenant_id=t1", json={"dry_run": True})
     assert r.status_code == 200 and r.json()["dry_run"] is True
+
+
+def test_the_shared_defaults_carry_no_client_s_terms(tmp_path):
+    db = om.SupplierDatabase(tmp_path / "d.db")
+    for s in db.get_all("any-business"):
+        assert s.discount_pct == 0 or s.id in ("sup_dw", "sup_fl", "sup_joi", "sup_pnt")   # generic trade terms
+        assert not s.preferred and not s.notes
+    src = inspect.getsource(om)
+    for name in ("ExtraAir", "Italtile", "Polyflor"):
+        assert name not in src
+
+
+def test_an_old_volume_gets_the_current_defaults(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    om.SupplierDatabase(path)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE suppliers SET name='Old client terms', discount_pct=12, preferred=1 WHERE id='sup_tile_s'")
+    conn.commit()
+    conn.close()
+    s = next(x for x in om.SupplierDatabase(path).get_all("t1") if x.id == "sup_tile_s")
+    assert (s.name, s.discount_pct, s.preferred) == ("Tile Supplier", 0, False)
