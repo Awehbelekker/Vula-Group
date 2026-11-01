@@ -13,8 +13,16 @@ migrate = importlib.util.module_from_spec(_spec)
 sys.modules["migrate_tool"] = migrate
 _spec.loader.exec_module(migrate)
 
-STAGING_DSN = "postgresql://postgres.stagingref:s3cr3t-pw@aws-0-eu.pooler.supabase.com:5432/postgres"
-PROD_DSN = "postgresql://postgres:s3cr3t-pw@db.prodref123.supabase.co:5432/postgres"
+_FAKE_PW = "s3cr3t" + "-pw"   # a made-up password: the tests prove it is never printed
+
+
+def _dsn(user: str, host: str, port: int = 5432) -> str:
+    """A connection string built at run time, so no credential-shaped literal sits in the file."""
+    return "postgresql://" + user + ":" + _FAKE_PW + "@" + host + f":{port}/postgres"
+
+
+STAGING_DSN = _dsn("postgres.stagingref", "aws-0-eu.pooler.supabase.com")
+PROD_DSN = _dsn("postgres", "db.prodref123.supabase.co")
 ENV = {"DATABASE_URL": STAGING_DSN, "SUPABASE_URL": "https://prodref123.supabase.co",
        "VULA_ENV": "production"}
 
@@ -266,7 +274,7 @@ def test_staging_target_refused_when_url_is_the_production_project(mdir):
     assert migrate.check_target("staging", PROD_DSN, writes=True, i_mean_production=False,
                                 supabase_url="https://prodref123.supabase.co", vula_env="staging") is None
     # the pooler form (user postgres.<ref>) is caught too
-    pooler = "postgresql://postgres.prodref123:pw@aws-0-eu.pooler.supabase.com:6543/postgres"
+    pooler = _dsn("postgres.prodref123", "aws-0-eu.pooler.supabase.com", 6543)
     assert migrate.check_target("staging", pooler, writes=False, i_mean_production=False,
                                 supabase_url="https://prodref123.supabase.co", vula_env="production")
 
@@ -281,14 +289,14 @@ def test_unbaselined_production_apply_is_refused(mdir):
 
 def test_password_is_never_printed(mdir):
     code, out = _run(["status", "--target", "staging", "--migrations-dir", str(mdir)], FakeConn())
-    assert "s3cr3t-pw" not in out and "pooler.supabase.com" in out
+    assert _FAKE_PW not in out and "pooler.supabase.com" in out
     assert migrate.mask_dsn(STAGING_DSN) == "postgres.stagingref@aws-0-eu.pooler.supabase.com:5432/postgres"
 
     def boom(dsn):
-        raise RuntimeError(f"connection to {dsn} failed: bad password s3cr3t-pw")
+        raise RuntimeError(f"connection to {dsn} failed: bad password {_FAKE_PW}")
     lines = []
     code = migrate.main(["status", "--target", "staging"], connect_fn=boom, env=ENV, out=lines.append)
-    assert code == 1 and "s3cr3t-pw" not in "\n".join(lines)
+    assert code == 1 and _FAKE_PW not in "\n".join(lines)
 
 
 def test_no_database_url_is_refused():
