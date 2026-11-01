@@ -43,6 +43,15 @@ def platform_gaps(schema_missing: Optional[list] = None) -> list[dict]:
                          "Set PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN"))
     for m in schema_missing or []:
         gaps.append(_gap(f"Database is missing {m}", "Apply that migrations/*.sql in the Supabase SQL editor"))
+    try:
+        from core.llm_router import unavailable_models
+        skipped = unavailable_models()
+    except Exception:
+        skipped = []
+    if skipped:
+        gaps.append(_gap(f"Cloud model with no endpoint for these calls, being skipped: {', '.join(skipped)}",
+                         "Point CLOUD_MODEL_BY_TASK / MODEL_WORKER_CLOUD at a model that works under zero "
+                         "retention (e.g. anthropic/claude-sonnet-5), then railway up"))
     return gaps
 
 

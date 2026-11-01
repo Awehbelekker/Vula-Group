@@ -1577,6 +1577,10 @@ async def decision_bench_start(body: Optional[dict] = None):
     from vula import decision_bench
     if any(not t.done() for t in _BENCH_TASKS.values()):
         raise HTTPException(status_code=409, detail="A benchmark is already running.")
+    # This list only sees this worker's runs; another worker may be on one (two overlapped, 31 Oct).
+    other = await asyncio.to_thread(decision_bench.run_in_progress)
+    if other:
+        raise HTTPException(status_code=409, detail=f"A benchmark is already running ({other}).")
     body = body or {}
     run_id = "bench-" + uuid.uuid4().hex[:10]
     decisions = [d for d in (body.get("decisions") or []) if d in ("skill", "escalation", "expense_purpose")] or None
@@ -1592,6 +1596,8 @@ async def decision_bench_status(run_id: Optional[str] = None):
     task = _BENCH_TASKS.get(run_id) if run_id else next(iter(reversed(list(_BENCH_TASKS.values()))), None)
     running = bool(task and not task.done())
     failed = bool(task and task.done() and not task.cancelled() and task.exception() is not None)
+    if not running and not run_id:
+        running = bool(await asyncio.to_thread(decision_bench.run_in_progress))
     try:
         summary = await asyncio.to_thread(decision_bench.latest, run_id)
     except Exception as exc:  # noqa: BLE001
