@@ -47,7 +47,7 @@ async def test_sends_read_status_and_typing_in_one_post():
     assert body["status"] == "read"
     assert body["message_id"] == "wamid.ABC"
     assert body["typing_indicator"] == {"type": "text"}
-    assert sink[0]["url"] == "https://graph.facebook.com/v19.0/PHONE-1/messages"
+    assert sink[0]["url"] == "https://graph.facebook.com/v25.0/PHONE-1/messages"
     assert sink[0]["headers"]["Authorization"] == "Bearer tok-123"
 
 

@@ -159,3 +159,62 @@ def test_missing_vula_number_is_a_platform_gap(setup, monkeypatch):
     monkeypatch.setattr(readiness.settings, "platform_wa_phone_id", "")
     gaps = readiness.platform_gaps([])
     assert any("Vula's own WhatsApp number" in g["what"] for g in gaps)
+
+
+# ── Optional platform settings: reported, never failing /ready (one exception, below) ─────
+
+_PROD_URL = type(readiness.settings).model_fields["public_base_url"].default
+
+
+def _optional(monkeypatch, **values):
+    base = {"vula_env": "production", "public_base_url": _PROD_URL, "resend_api_key": "",
+            "from_email": "Vula Group <hello@vula.ai>", "team_email": "", "payfast_merchant_id": "",
+            "payfast_merchant_key": "", "payfast_passphrase": "", "yoco_secret_key": "",
+            "yoco_public_key": "", "yoco_webhook_secret": ""}
+    for k, v in {**base, **values}.items():
+        monkeypatch.setattr(readiness.settings, k, v)
+
+
+def _by_what(rep):
+    return {i["what"]: i for i in rep["settings"]}
+
+
+def test_off_by_design_settings_are_listed_but_ready_stays_true(setup, monkeypatch):
+    _optional(monkeypatch)
+    rep = readiness.report()
+    assert rep["ready"] and rep["platform"] == []
+    items = _by_what(rep)
+    assert items["Email (Resend)"]["state"] == "off by design"
+    assert items["PayFast (platform account)"]["state"] == "off by design"
+    assert items["Yoco (platform keys)"]["state"] == "off by design"
+    assert items["PUBLIC_BASE_URL"]["state"] == "set" and _PROD_URL in items["PUBLIC_BASE_URL"]["note"]
+    # the summary line only counts real gaps
+    assert readiness.summary(rep).startswith("🔧 Vula setup: 4 thing(s)")
+
+
+def test_set_and_partly_set_settings_name_what_is_missing_without_values(setup, monkeypatch):
+    _optional(monkeypatch, resend_api_key="re_secret_value", team_email="",
+              payfast_merchant_id="10000100", payfast_merchant_key="pf-secret-key",
+              payfast_passphrase="", yoco_secret_key="sk_secret", yoco_public_key="pk_x",
+              yoco_webhook_secret="whsec_x")
+    rep = readiness.report()
+    items = _by_what(rep)
+    assert items["Email (Resend)"]["state"] == "set" and "TEAM_EMAIL" in items["Email (Resend)"]["note"]
+    assert items["PayFast (platform account)"]["state"] == "partly set"
+    assert "PAYFAST_PASSPHRASE" in items["PayFast (platform account)"]["note"]
+    assert items["Yoco (platform keys)"]["state"] == "set"
+    assert rep["ready"]
+    text = repr(rep["settings"])
+    assert not any(s in text for s in ("re_secret_value", "pf-secret-key", "sk_secret", "whsec_x"))
+
+
+def test_staging_on_production_public_base_url_fails_ready(setup, monkeypatch):
+    """Staging still on production's PUBLIC_BASE_URL would mint production pay links."""
+    _optional(monkeypatch, vula_env="staging")
+    rep = readiness.report()
+    assert not rep["ready"]
+    assert any("PUBLIC_BASE_URL" in g["what"] and "staging" in g["what"] for g in rep["platform"])
+    _optional(monkeypatch, vula_env="staging",
+              public_base_url="https://vula-group-staging.up.railway.app")
+    rep = readiness.report()
+    assert rep["ready"] and _by_what(rep)["PUBLIC_BASE_URL"]["state"] == "set"

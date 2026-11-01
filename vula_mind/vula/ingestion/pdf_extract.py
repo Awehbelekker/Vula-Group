@@ -60,6 +60,38 @@ def extract(pdf: str, render_dir: str) -> list:
     return out
 
 
+class TooHeavy(Exception):
+    """The child timed out or was killed by a signal — the document itself is the problem."""
+
+
+async def run(path, render_dir: str, timeout: float) -> list:
+    """Run extract() in a child interpreter with a hard timeout; the [page_no, text, png] list.
+    Raises TooHeavy (timeout / signal), ImportError (no pymupdf) or RuntimeError (other failure).
+    Shared by document ingestion (pipeline._parse_pdf_fitz) and Takeoff (plan_reader.PDFReader)
+    so a heavy drawing never runs on a web worker's event loop."""
+    import asyncio
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "vula.ingestion.pdf_extract", str(path), render_dir,
+        cwd=str(Path(__file__).resolve().parents[2]),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise TooHeavy(f"text extraction took over {timeout:.0f}s")
+    if proc.returncode and proc.returncode < 0:
+        raise TooHeavy(f"text extraction died (signal {-proc.returncode})")
+    if proc.returncode:
+        tail = (err or b"").decode(errors="replace").strip().splitlines()[-1:] or [""]
+        if "No module named 'pymupdf'" in tail[0]:
+            raise ImportError(tail[0])
+        raise RuntimeError(f"pymupdf extraction failed: {tail[0][:200]}")
+    # Last line only: PyMuPDF can print its own notices to stdout before the JSON.
+    lines = (out or b"").decode(errors="replace").strip().splitlines()
+    return json.loads(lines[-1] if lines else "{}").get("pages", [])
+
+
 if __name__ == "__main__":
     result = {"pages": extract(sys.argv[1], sys.argv[2])}
     sys.stdout.write("\n" + json.dumps(result) + "\n")

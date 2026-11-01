@@ -472,35 +472,18 @@ class DocumentParser:
         timeout — see that module for the 2026-09-23 incident where one drawing pack killed a
         web worker every few minutes. Raises PdfTooHeavy when the child times out or dies from
         a signal, so _parse_pdf doesn't retry the same document in-process."""
-        import json
         import shutil
-        import sys
+
+        from vula.ingestion import pdf_extract
 
         render_dir = tempfile.mkdtemp(prefix="vula_fitz_")
         try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "vula.ingestion.pdf_extract", str(path), render_dir,
-                cwd=str(Path(__file__).resolve().parents[2]),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             try:
-                out, err = await asyncio.wait_for(proc.communicate(),
-                                                  timeout=settings.pdf_extract_timeout_s)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                raise PdfTooHeavy(f"text extraction took over {settings.pdf_extract_timeout_s}s")
-            if proc.returncode and proc.returncode < 0:
-                raise PdfTooHeavy(f"text extraction died (signal {-proc.returncode})")
-            if proc.returncode:
-                tail = (err or b"").decode(errors="replace").strip().splitlines()[-1:] or [""]
-                if "No module named 'pymupdf'" in tail[0]:
-                    raise ImportError(tail[0])
-                raise RuntimeError(f"pymupdf extraction failed: {tail[0][:200]}")
-
+                raw = await pdf_extract.run(path, render_dir, settings.pdf_extract_timeout_s)
+            except pdf_extract.TooHeavy as exc:
+                raise PdfTooHeavy(str(exc))
             pages: List[tuple[int, str]] = []
-            # Last line only: PyMuPDF can print its own notices to stdout before the JSON.
-            lines = (out or b"").decode(errors="replace").strip().splitlines()
-            for page_no, text, png in json.loads(lines[-1] if lines else "{}").get("pages", []):
+            for page_no, text, png in raw:
                 if png:
                     text = (await self.ocr.process_image(Path(png)) or "").strip()
                     if text:

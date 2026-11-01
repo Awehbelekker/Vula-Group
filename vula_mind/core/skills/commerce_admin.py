@@ -2860,6 +2860,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._fill_in_form(tid, args, ctx)
             if name == "form_book":
                 return await self._form_book(tid, args, ctx)
+            if name == "takeoff_approve":
+                return await self._takeoff_approve(tid, args, ctx)
             if name == "timesheet_summary":
                 import asyncio
                 from vula.commerce import forms
@@ -3727,6 +3729,20 @@ class CommerceAdminSkill(BaseSkill):
             + (" (the file above)." if sent else ".") + (f"\nDownload (for a week): {link}" if link else "")
             + "\n\nFill in the yellow cells and send the file back here. I'll read it and show the owner "
               "what it would book — nothing is booked until they confirm.")}
+
+    async def _takeoff_approve(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Price a takeoff sent on WhatsApp (the owner's Price it on its measured-rooms preview;
+        dispatch only — vula/takeoff/whatsapp_flow.py). Without confirm: the preview again."""
+        from vula.takeoff import api as takeoff_api
+        from vula.takeoff import whatsapp_flow
+        job_id = str(args.get("job_id") or "")
+        if not args.get("confirm"):
+            job = takeoff_api._job_for(job_id, tid)
+            if not job or job.get("status") != "needs_review":
+                return {"status": "need_info", "message": "That takeoff isn't waiting for a check."}
+            from vula.api.tenants import dashboard_link
+            return {"preview": True, "reply_verbatim": whatsapp_flow.preview_text(job, dashboard_link(tid, "takeoff"))}
+        return {"reply_verbatim": await whatsapp_flow.approve(tid, job_id, (ctx or {}).get("phone"))}
 
     async def _form_book(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Book a returned form (the owner's Confirm on its preview). Without confirm: the preview again."""

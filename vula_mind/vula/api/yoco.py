@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from config import settings
+from vula.meta_graph import graph_url
 from vula.commerce import service as commerce
 
 log = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ async def _notify_order_paid(
                 number = "27" + number[1:]
             try:
                 await client.post(
-                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                    graph_url(f"{phone_id}/messages"),
                     headers=headers,
                     json={
                         "messaging_product": "whatsapp",

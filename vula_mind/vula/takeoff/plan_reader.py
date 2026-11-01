@@ -37,14 +37,15 @@ import json
 import logging
 import math
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import httpx
 
 from config import settings
+from vula.takeoff.accuracy import measured_confidence, parse_scale, review_reasons, schedule_rooms_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,17 @@ class DrawingSheet:
     raw_markdown: str           # OCR markdown
     image_path: Optional[str] = None
     status: str = "pending"     # pending | read | failed
+    # Not a confidence any more: kept for old job rows. Measured confidence is per project
+    # (vula/takeoff/accuracy.measured_confidence).
     confidence: float = 0.0
+    source: str = ""            # text | ocr | dxf | image — how the content was read
+    # Calibration (Phase 4b): the scale as a number, how it was established, and who confirmed it.
+    # dxf_units — declared $INSUNITS (true size); inferred_from_extent — unitless DXF, guessed;
+    # title_block — "SCALE 1:100" printed on the sheet (never checked against a dimension);
+    # user_two_point / dimension_check — set when a person confirms a known dimension at review.
+    scale_ratio: Optional[float] = None
+    scale_method: str = ""
+    scale_verified_by: str = ""
 
 
 @dataclass
@@ -132,6 +143,17 @@ class ExtractedProject:
     confidence_overall: float = 0.0
     extraction_notes: List[str] = field(default_factory=list)
     raw_ai_response: str = ""
+    # Phase 4c/4d (vula/takeoff/accuracy.py): the AI reader's rooms kept apart from the
+    # deterministic reading (DXF geometry / the room schedule's printed areas), what confidence
+    # was measured from, and the review gate's state.
+    ai_rooms: List[Room] = field(default_factory=list)
+    deterministic_rooms: List[Tuple[str, float]] = field(default_factory=list)
+    confidence_signals: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    review: Dict[str, object] = field(default_factory=lambda: {"status": "not_required", "reasons": []})
+
+
+class PlanTooHeavy(Exception):
+    """The drawing set took too long to read safely (child process timed out or was killed)."""
 
 
 # ─── PDF Reader ───────────────────────────────────────────────────────────────
@@ -146,7 +168,45 @@ class PDFReader:
     3. Extract page images at 200 DPI for GLM-OCR processing
     """
 
+    def __init__(self, ocr: bool = True):
+        # ocr=False: pages with no text layer are kept, unread, instead of sent to the OCR model
+        # (the model-free benchmark, evals/takeoff_bench.py).
+        self.ocr = ocr
+
     async def read(self, path: Path) -> List[DrawingSheet]:
+        """The PDF's sheets. PyMuPDF runs in a child process with a hard timeout
+        (vula/ingestion/pdf_extract.run, shared with document ingestion): a drawing pack with tens
+        of thousands of vector paths once held a web worker's GIL until it was killed (23 Sep).
+        pdfplumber in-process is only the fallback when PyMuPDF isn't installed."""
+        from vula.ingestion import pdf_extract
+        render_dir = tempfile.mkdtemp(prefix="vula_plan_")
+        try:
+            try:
+                pages = await pdf_extract.run(path, render_dir, settings.pdf_extract_timeout_s)
+            except pdf_extract.TooHeavy as exc:
+                raise PlanTooHeavy(str(exc))
+            except ImportError:
+                return await self._read_pdfplumber(path)
+            sheets = []
+            for page_no, text, png in pages:
+                source = "text"
+                if png:
+                    if self.ocr:
+                        text, source = await self._ocr_image(Path(png)), "ocr"
+                    else:
+                        source = "ocr_skipped"
+                sheet_num, title, scale, discipline = self._parse_title_block(text or "")
+                sheets.append(DrawingSheet(
+                    sheet_number=sheet_num or f"SH{page_no:03d}", title=title or f"Sheet {page_no}",
+                    scale=scale or "unknown", discipline=discipline,
+                    raw_text=text or "", raw_markdown=text or "", status="read", source=source,
+                    scale_ratio=parse_scale(scale), scale_method="title_block" if scale else ""))
+            return sheets
+        finally:
+            import shutil
+            shutil.rmtree(render_dir, ignore_errors=True)
+
+    async def _read_pdfplumber(self, path: Path) -> List[DrawingSheet]:
         sheets = []
         try:
             import pdfplumber
@@ -163,17 +223,19 @@ class PDFReader:
                     # Identify sheet info from title block
                     sheet_num, title, scale, discipline = self._parse_title_block(full_text)
 
-                    if len(full_text) < 50:
+                    if len(full_text) < 50 and not self.ocr:
+                        markdown, source = full_text, "ocr_skipped"
+                    elif len(full_text) < 50:
                         # Scanned page — extract image and OCR
-                        img_path = Path(f"/tmp/vula_sheet_{i}.png")
-                        img = page.to_image(resolution=200)
-                        img.save(str(img_path))
-                        markdown = await self._ocr_image(img_path)
-                        img_path.unlink(missing_ok=True)
-                        confidence = 0.70
+                        # Own temp file per page and job (#8: concurrent jobs shared /tmp/vula_sheet_{n}.png).
+                        with tempfile.TemporaryDirectory(prefix="vula_sheet_") as td:
+                            img_path = Path(td) / f"page_{i}.png"
+                            page.to_image(resolution=200).save(str(img_path))
+                            markdown = await self._ocr_image(img_path)
+                        source = "ocr"
                     else:
                         markdown = full_text
-                        confidence = 0.90
+                        source = "text"
 
                     sheets.append(DrawingSheet(
                         sheet_number=sheet_num or f"SH{i+1:03d}",
@@ -183,7 +245,9 @@ class PDFReader:
                         raw_text=text,
                         raw_markdown=markdown,
                         status="read",
-                        confidence=confidence,
+                        source=source,
+                        scale_ratio=parse_scale(scale),
+                        scale_method="title_block" if scale else "",
                     ))
 
         except ImportError:
@@ -194,30 +258,29 @@ class PDFReader:
         return sheets
 
     async def _ocr_image(self, img_path: Path) -> str:
-        """GLM-OCR on a page image."""
-        with open(img_path, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode()
-        payload = {
-            "model": OCR_MODEL,
-            "prompt": (
-                "You are reading an architectural drawing. "
-                "Extract ALL text, numbers, dimensions, room names, "
-                "schedules, and annotations. Preserve table structure. "
-                "Return clean markdown."
-            ),
-            "images": [img_b64],
-            "stream": False,
-            # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx cap
-            # (core/llm_router.py) — set it explicitly here too.
-            "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
-        }
+        """Read a page image with the vision route (local OCR model first, cloud vision when the
+        local one is unreachable) — core/llm_router.resolve_vision_route, like the Smart Scanner.
+        2026-10-31: was a raw httpx POST to Ollama with no Cloudflare Access headers."""
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                resp = await client.post(f"{OLLAMA_BASE}/api/generate", json=payload)
-                resp.raise_for_status()
-                return resp.json().get("response", "")
+            import litellm
+            from core.llm_router import generation_kwargs, resolve_vision_route
+            with open(img_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode()
+            model, api_key, api_base = await resolve_vision_route()
+            # The router's kwargs win (its local timeout sits under Cloudflare's 100 s tunnel limit).
+            kw = {"timeout": 90, "temperature": 0.1, "max_tokens": 4096, **generation_kwargs(model)}
+            resp = await litellm.acompletion(
+                model=model, api_key=api_key, api_base=api_base, **kw,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": (
+                        "You are reading an architectural drawing. Extract ALL text, numbers, "
+                        "dimensions, room names, schedules, and annotations. Preserve table "
+                        "structure. Return clean markdown.")},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                ]}])
+            return resp.choices[0].message.content or ""
         except Exception as e:
-            logger.warning(f"GLM-OCR failed: {e}")
+            logger.warning(f"Plan OCR failed: {e}")
             return ""
 
     async def _full_ocr_fallback(self, path: Path) -> List[DrawingSheet]:
@@ -227,10 +290,10 @@ class PDFReader:
             images = convert_from_path(str(path), dpi=200)
             sheets = []
             for i, img in enumerate(images):
-                img_path = Path(f"/tmp/vula_ocr_{i}.png")
-                img.save(str(img_path))
-                markdown = await self._ocr_image(img_path)
-                img_path.unlink(missing_ok=True)
+                with tempfile.TemporaryDirectory(prefix="vula_ocr_") as td:
+                    img_path = Path(td) / f"page_{i}.png"
+                    img.save(str(img_path))
+                    markdown = await self._ocr_image(img_path)
                 sheets.append(DrawingSheet(
                     sheet_number=f"SH{i+1:03d}",
                     title=f"Sheet {i+1}",
@@ -239,7 +302,7 @@ class PDFReader:
                     raw_text="",
                     raw_markdown=markdown,
                     status="read",
-                    confidence=0.65,
+                    source="ocr",
                 ))
             return sheets
         except ImportError:
@@ -273,6 +336,35 @@ class PDFReader:
         return sheet, title, scale, discipline
 
 
+# ─── Plane geometry (metres) ─────────────────────────────────────────────────
+
+def _shoelace(pts: List[Tuple[float, float]]) -> float:
+    n = len(pts)
+    return abs(sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+                   for i in range(n))) / 2.0 if n >= 3 else 0.0
+
+
+def _perimeter(pts: List[Tuple[float, float]]) -> float:
+    n = len(pts)
+    return sum(math.dist(pts[i], pts[(i + 1) % n]) for i in range(n)) if n >= 2 else 0.0
+
+
+def _centroid(pts: List[Tuple[float, float]]) -> Tuple[float, float]:
+    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+
+
+def _inside(pt: Tuple[float, float], poly: List[Tuple[float, float]]) -> bool:
+    """Ray-casting point-in-polygon."""
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        (x1, y1), (x2, y2) = poly[i], poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
 # ─── DXF/DWG Reader ──────────────────────────────────────────────────────────
 
 class DXFReader:
@@ -282,41 +374,99 @@ class DXFReader:
     Most accurate for vector measurements.
     """
 
+    # $INSUNITS → metres per drawing unit (AutoCAD codes). NEW-T1: areas were taken in raw drawing
+    # units and reported as m² — a plan drawn in mm (the SA norm) came out 1,000,000× too big.
+    _INSUNITS = {1: ("in", 0.0254), 2: ("ft", 0.3048), 4: ("mm", 0.001), 5: ("cm", 0.01),
+                 6: ("m", 1.0), 14: ("dm", 0.1)}
+
+    def __init__(self):
+        self.last_units: Dict[str, object] = {}
+        self.last_outline_area: float = 0.0      # m², the building outline when one was drawn
+        self.last_outline_perimeter: float = 0.0
+        self.last_unlabelled: int = 0
+
+    def _units(self, doc, msp) -> Dict[str, object]:
+        code = int(doc.header.get("$INSUNITS", 0) or 0)
+        if code in self._INSUNITS:
+            name, k = self._INSUNITS[code]
+            return {"units": name, "to_metres": k, "method": "dxf_units", "verified": True}
+        # Unitless: infer from the drawing's size. A building plan's extent is metres-to-hundreds
+        # of metres; in millimetres that's thousands-to-hundreds-of-thousands. Never trusted —
+        # marked unverified so the job goes to review (vula/takeoff/accuracy.py).
+        extent = 0.0
+        for e in msp.query("LWPOLYLINE POLYLINE"):
+            for x, y in self._points(e):
+                extent = max(extent, abs(x), abs(y))
+        name, k = ("mm", 0.001) if extent > 1000 else ("m", 1.0)
+        return {"units": name, "to_metres": k, "method": "inferred_from_extent", "verified": False}
+
+    @staticmethod
+    def _block_kind(name: str) -> str:
+        words = set(re.split(r"[^A-Z0-9]+", name.upper()))
+        if words & {"DOOR", "DR", "DOORS"} or re.match(r"^D\d+$", name.upper()):
+            return "door"
+        if words & {"WINDOW", "WD", "WIN", "WINDOWS"} or re.match(r"^W\d+$", name.upper()):
+            return "window"
+        return ""
+
     async def read(self, path: Path) -> Tuple[List[Room], List[DoorWindow]]:
         try:
             import ezdxf
             doc = ezdxf.readfile(str(path))
             msp = doc.modelspace()
+            self.last_units = self._units(doc, msp)
+            k = float(self.last_units["to_metres"])
+
+            # Closed polylines, in metres.
+            polys: List[List[Tuple[float, float]]] = []
+            for entity in msp.query("LWPOLYLINE POLYLINE"):
+                if getattr(entity, "is_closed", False):
+                    pts = [(x * k, y * k) for x, y in self._points(entity)]
+                    if len(pts) >= 3 and _shoelace(pts) > 2:      # ignore tiny entities (m²)
+                        polys.append(pts)
+
+            # Room labels: TEXT/MTEXT whose insertion point falls inside a polygon.
+            labels: List[Tuple[Tuple[float, float], str]] = []
+            for entity in msp.query("TEXT MTEXT"):
+                try:
+                    txt = entity.plain_text() if entity.dxftype() == "MTEXT" else entity.dxf.text
+                    ins = entity.dxf.insert
+                except Exception:
+                    continue
+                if isinstance(txt, str) and txt.strip():
+                    labels.append(((float(ins[0]) * k, float(ins[1]) * k), txt.strip().splitlines()[0]))
+
+            # A polygon that contains the centre of two or more others is the building outline
+            # (or a zone boundary), not a room: counting it too double-counts every room inside.
+            # Its area is the measured gross floor area.
+            centres = [_centroid(p) for p in polys]
+            outline_idx = {i for i, p in enumerate(polys)
+                           if sum(1 for j, c in enumerate(centres) if j != i and _inside(c, p)) >= 2}
+            outline = max(outline_idx, key=lambda i: _shoelace(polys[i]), default=None)
+            self.last_outline_area = round(_shoelace(polys[outline]), 2) if outline is not None else 0.0
+            # The outline's perimeter is the external wall length — what tells internal partitions
+            # apart from external walls when the bill is priced (boq_generator, partitions).
+            self.last_outline_perimeter = round(_perimeter(polys[outline]), 2) if outline is not None else 0.0
 
             rooms = []
             doors = []
+            self.last_unlabelled = 0
+            for i, pts in enumerate(polys):
+                if i in outline_idx:
+                    continue
+                name = next((t for (pt, t) in labels if _inside(pt, pts)), "")
+                if not name:
+                    self.last_unlabelled += 1
+                    name = f"Unlabelled {self.last_unlabelled}"
+                rooms.append(Room(name=name, area=round(_shoelace(pts), 2),
+                                  perimeter=round(_perimeter(pts), 2)))
 
-            # Extract closed polylines as room boundaries
-            for entity in msp.query("LWPOLYLINE POLYLINE"):
-                if hasattr(entity, "is_closed") and entity.is_closed:
-                    area = self._polyline_area(entity)
-                    if area > 2:  # Ignore tiny entities
-                        rooms.append(Room(
-                            name=f"Room_{len(rooms)+1}",
-                            area=round(area, 2),
-                            perimeter=round(self._polyline_perimeter(entity), 2),
-                        ))
-
-            # Extract text annotations for room labels
-            texts = []
-            for entity in msp.query("TEXT MTEXT"):
-                txt = getattr(entity, "plain_mtext", lambda: getattr(entity, "dxf", None) and entity.dxf.text)
-                if callable(txt):
-                    txt = txt()
-                if isinstance(txt, str) and txt.strip():
-                    texts.append(txt.strip())
-
-            # Extract blocks for doors/windows
+            # Extract blocks for doors/windows — whole words only (NEW-T7: "DR" in "DRAIN" was a door)
             for entity in msp.query("INSERT"):
-                block_name = entity.dxf.name.upper()
-                if "DOOR" in block_name or "DR" in block_name:
+                kind = self._block_kind(entity.dxf.name)
+                if kind == "door":
                     doors.append(DoorWindow(ref=f"D{len(doors)+1}", type_="solid", width=0.9, height=2.1))
-                elif "WINDOW" in block_name or "WD" in block_name:
+                elif kind == "window":
                     doors.append(DoorWindow(ref=f"W{len(doors)+1}", type_="window", width=1.2, height=1.2))
 
             return rooms, doors
@@ -328,40 +478,25 @@ class DXFReader:
             logger.error(f"DXF read failed: {e}")
             return [], []
 
-    def _polyline_area(self, entity) -> float:
-        """Calculate area of closed polyline using shoelace formula."""
+    @staticmethod
+    def _points(entity) -> List[Tuple[float, float]]:
+        """(x, y) of a polyline's vertices. NEW-T9 (2026-10-31): the old code read `.x`/`.y` off
+        LWPOLYLINE.vertices(), which yields plain tuples — the AttributeError was swallowed, so
+        every LWPOLYLINE (what modern CAD writes) measured 0 m² and no DXF ever produced a room."""
         try:
-            pts = list(entity.vertices())
-            n = len(pts)
-            if n < 3:
-                return 0.0
-            area = 0.0
-            for i in range(n):
-                j = (i + 1) % n
-                xi, yi = pts[i].x, pts[i].y
-                xj, yj = pts[j].x, pts[j].y
-                area += xi * yj
-                area -= xj * yi
-            return abs(area) / 2.0
+            if entity.dxftype() == "LWPOLYLINE":
+                return [(float(x), float(y)) for x, y in entity.get_points("xy")]
+            return [(float(p[0]), float(p[1])) for p in entity.points()]
         except Exception:
-            return 0.0
+            return []
+
+    def _polyline_area(self, entity) -> float:
+        """Area of a closed polyline (shoelace), in drawing units²."""
+        return _shoelace(self._points(entity))
 
     def _polyline_perimeter(self, entity) -> float:
-        """Calculate perimeter of polyline."""
-        try:
-            pts = list(entity.vertices())
-            n = len(pts)
-            if n < 2:
-                return 0.0
-            total = 0.0
-            for i in range(n):
-                j = (i + 1) % n
-                dx = pts[j].x - pts[i].x
-                dy = pts[j].y - pts[i].y
-                total += math.sqrt(dx*dx + dy*dy)
-            return total
-        except Exception:
-            return 0.0
+        """Perimeter of a closed polyline, in drawing units."""
+        return _perimeter(self._points(entity))
 
 
 # ─── AI Extraction Engine ─────────────────────────────────────────────────────
@@ -410,7 +545,6 @@ class DrawingIntelligence:
             project.net_floor_area   = areas.get("nfa", 0)
 
         project.sheets = sheets
-        project.confidence_overall = sum(s.confidence for s in sheets) / max(len(sheets), 1)
         return project
 
     async def _extract_rooms(self, sheets: List[DrawingSheet]) -> List[Room]:
@@ -541,31 +675,34 @@ class DrawingIntelligence:
         )
 
     async def _llm_extract(self, text: str, instruction: str, schema: str, model: str = FAST_MODEL) -> Dict:
-        prompt = (
-            f"{instruction}\n\n"
-            f"Drawing content:\n{text[:6000]}\n\n"
-            f"Return ONLY valid JSON matching this schema (no other text):\n{schema}"
-        )
-
+        """One structured read of drawing text, through core/llm_router: local-first, the
+        Cloudflare Access headers the router installs, and a logged cloud retry when the local
+        call fails. 2026-10-31: was a raw httpx POST to Ollama that returned {} in production —
+        no rooms, GFA 0. Nothing is priced from it unreviewed (vula/takeoff/accuracy.py)."""
+        from core.prompt_safety import UNTRUSTED_CONTENT_RULE
+        messages = [
+            {"role": "system", "content": UNTRUSTED_CONTENT_RULE +
+                "You extract quantities from architectural drawings. Copy numbers exactly as "
+                "printed; never estimate a figure that isn't on the drawing. Return ONLY valid JSON."},
+            {"role": "user", "content": f"{instruction}\n\nDrawing content:\n{text[:6000]}\n\n"
+                                        f"Return ONLY valid JSON matching this schema:\n{schema}"},
+        ]
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                resp = await client.post(
-                    f"{OLLAMA_BASE}/api/generate",
-                    # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx cap
-                    # (core/llm_router.py) — set it explicitly here too.
-                    json={"model": model, "prompt": prompt, "stream": False,
-                          "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 8192}},
-                )
-                resp.raise_for_status()
-                raw = resp.json().get("response", "")
-
+            import litellm
+            from core.llm_router import complete_local_first, resolve_generation_route
+            litellm.drop_params = True
+            route = await resolve_generation_route(model, task_type="takeoff_extraction", messages=messages)
+            # No timeout here: complete_local_first sets the local one (a second one is a TypeError
+            # that silently sent every call to the cloud).
+            resp, _ = await complete_local_first(route, task_type="takeoff_extraction", messages=messages,
+                                                 temperature=0.1, max_tokens=2048)
+            raw = resp.choices[0].message.content or ""
             raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if match:
                 return json.loads(match.group())
         except Exception as e:
-            logger.error(f"LLM extraction failed: {e}")
-
+            logger.error(f"Plan extraction failed: {e}")
         return {}
 
 
@@ -604,6 +741,21 @@ def geometry_reconciled(project: "ExtractedProject") -> Tuple[bool, List[str]]:
     return (len(warnings) == 0, warnings)
 
 
+def assess(project: "ExtractedProject", tenant_id: str = "", history: Optional[float] = None,
+           use_history: bool = True) -> "ExtractedProject":
+    """Measured confidence + the review gate (vula/takeoff/accuracy.py), in place."""
+    ok, warnings = geometry_reconciled(project)
+    if not ok:
+        project.extraction_notes.extend(warnings)
+        for w in warnings:
+            logger.warning("[%s] plan reading quality check: %s", tenant_id, w)
+    project.confidence_overall, project.confidence_signals = measured_confidence(
+        project, history=history, use_history=use_history)
+    reasons = review_reasons(project, warnings)
+    project.review = {"status": "pending" if reasons else "not_required", "reasons": reasons}
+    return project
+
+
 # ─── Main PlanReader ──────────────────────────────────────────────────────────
 
 class PlanReader:
@@ -633,16 +785,26 @@ class PlanReader:
         doors_from_vector = []
 
         if suffix == ".pdf":
-            sheets = await self.pdf_reader.read(file_path)
+            try:
+                sheets = await self.pdf_reader.read(file_path)
+            except PlanTooHeavy as exc:
+                logger.warning("[%s] plan too heavy to read: %s", self.tenant_id, exc)
+                project = ExtractedProject(extraction_notes=[
+                    f"This drawing set is too heavy to read safely ({exc}). Send the floor-plan "
+                    "sheets on their own, or a DXF."])
+                return assess(project, self.tenant_id, use_history=False)
 
         elif suffix == ".dxf":
             rooms_from_vector, doors_from_vector = await self.dxf_reader.read(file_path)
-            # Also extract text as a single "sheet"
+            u = self.dxf_reader.last_units
             sheets = [DrawingSheet(
                 sheet_number="DXF001", title="DXF Drawing",
-                scale="1:100", discipline="arch",
+                scale=f"true size ({u.get('units', '?')})", discipline="arch",
                 raw_text="", raw_markdown="DXF file — geometry extracted directly",
-                status="read", confidence=0.85,
+                status="read", source="dxf",
+                scale_ratio=1.0 if u else None,
+                scale_method=str(u.get("method", "")),
+                scale_verified_by="dxf_header" if u.get("verified") else "",
             )]
 
         elif suffix in (".png", ".jpg", ".jpeg", ".tiff"):
@@ -653,31 +815,35 @@ class PlanReader:
                 sheet_number="IMG001", title="Scanned Drawing",
                 scale="unknown", discipline="arch",
                 raw_text="", raw_markdown=markdown,
-                status="read", confidence=0.70,
+                status="read", source="image",
             )]
 
         else:
             logger.warning(f"Unsupported format: {suffix}")
             return ExtractedProject(extraction_notes=[f"Unsupported format: {suffix}"])
 
-        # AI extraction
-        project = await self.intelligence.extract_all(sheets)
+        if suffix == ".dxf":
+            # The geometry IS the reading: no text for a model to read, and asking one anyway
+            # only invites an invented GFA.
+            project = ExtractedProject(sheets=sheets, rooms=rooms_from_vector,
+                                       doors_windows=doors_from_vector,
+                                       gross_floor_area=self.dxf_reader.last_outline_area,
+                                       external_walls_m=self.dxf_reader.last_outline_perimeter)
+            project.deterministic_rooms = [(r.name, r.area) for r in rooms_from_vector]
+            if self.dxf_reader.last_unlabelled:
+                project.extraction_notes.append(
+                    f"{self.dxf_reader.last_unlabelled} closed shape(s) have no room label inside.")
+        else:
+            project = await self.intelligence.extract_all(sheets)
+            project.ai_rooms = list(project.rooms)
+            # The room schedule's printed areas, read without a model — the second reading the
+            # AI's rooms are checked against.
+            arch_text = "\n".join(s.raw_markdown or s.raw_text for s in sheets if s.discipline == "arch")
+            project.deterministic_rooms = schedule_rooms_from_text(arch_text)
+            if not project.rooms and project.deterministic_rooms:
+                project.rooms = [Room(name=n, area=a) for n, a in project.deterministic_rooms]
 
-        # Merge vector data if available
-        if rooms_from_vector:
-            project.rooms = rooms_from_vector
-        if doors_from_vector:
-            project.doors_windows = doors_from_vector
-
-        ok, warnings = geometry_reconciled(project)
-        if not ok:
-            project.extraction_notes.extend(warnings)
-            # Halve confidence rather than a hardcoded per-method constant standing
-            # unchallenged — a real (if coarse) signal beats a fixed label when the
-            # independently-extracted numbers actually disagree.
-            project.confidence_overall = round(project.confidence_overall * 0.5, 2)
-            for w in warnings:
-                logger.warning("[%s] plan reading quality check: %s", self.tenant_id, w)
+        assess(project, self.tenant_id)
 
         elapsed = round(time.time() - started, 1)
         logger.info(f"[{self.tenant_id}] Plan reading complete in {elapsed}s: "

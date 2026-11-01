@@ -14,6 +14,10 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+GRAPH_HOST = "https://graph.facebook.com"
+DEFAULT_GRAPH_API_VERSION = "v25.0"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -77,6 +81,10 @@ class Settings(BaseSettings):
     api_key: str = ""                   # require this header: X-API-Key
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     debug: bool = False
+    # Which deployment this is: "production" or "staging" (docs/staging.md). Read by
+    # vula/readiness.py (a staging service still on production's PUBLIC_BASE_URL would mint
+    # production pay links) and tools/migrate.py's production guard.
+    vula_env: str = "production"
     # "json": one JSON object per log line, so Railway labels warnings as warnings and can filter
     # by tenant / request (vula/log_streams.py). "text" for reading logs in a terminal; DEBUG=true
     # also switches to text.
@@ -92,6 +100,9 @@ class Settings(BaseSettings):
     # Railway sets DATA_DIR=/data (volume mount). Locally falls back to home dir.
     upload_dir: Path = Path("/data/uploads") if Path("/data").exists() else Path(tempfile.gettempdir()) / "vula_uploads"
     takeoff_upload_dir: Path = Path("/data/takeoff") if Path("/data").exists() else Path(tempfile.gettempdir()) / "vula_takeoff"
+    # POPIA (2026-10-31): uploaded plans and their takeoff jobs are deleted this many days after
+    # upload (vula/takeoff/api.purge_expired, run daily). 0 keeps them forever — not recommended.
+    takeoff_retention_days: int = 90
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
@@ -143,7 +154,12 @@ class Settings(BaseSettings):
     # ── Onboarding / Tenant provisioning ────────────────────────────────────
     supabase_url: str = ""
     supabase_service_key: str = ""
-    whatsapp_api_url: str = "https://graph.facebook.com/v19.0"
+    # Meta Graph API version for every WhatsApp / Graph call (GRAPH_API_VERSION). The one place it
+    # is set: every URL is built by vula/meta_graph.py::graph_url (tests/test_graph_api_version.py
+    # fails on a versioned graph.facebook.com literal anywhere else). v19.0 was hard-coded ~25
+    # times and left Meta's support window on 21 May 2026. The legacy WHATSAPP_API_URL env var is
+    # no longer read; settings.whatsapp_api_url is now derived from this.
+    graph_api_version: str = DEFAULT_GRAPH_API_VERSION
     whatsapp_phone_id: str = ""
     whatsapp_token: str = ""
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
@@ -259,6 +275,9 @@ class Settings(BaseSettings):
     # customer writes in an African language the phrase lists only partly cover
     # (vula/escalation.py::classify_customer_message). Off = phrase lists only.
     escalation_classifier_enabled: bool = True
+    # Crisis support (vula/safety.py): a message suggesting self-harm gets South Africa's crisis
+    # lines and the business is asked to check in — before any assistant reply. On by default.
+    crisis_support_enabled: bool = True
     cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash"
     # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
     # grades. Empty = rules only.
@@ -365,6 +384,17 @@ class Settings(BaseSettings):
     # e.g. '{"off-the-hook": "https://offthehook.co.za"}'
     store_urls_json: str = '{"off-the-hook": "https://offthehook.co.za", "awake-sa": "https://awakesa.co.za"}'
     whatsapp_phone_number_id: str = ""   # Meta phone_number_id for primary WhatsApp
+
+    @property
+    def graph_base(self) -> str:
+        """https://graph.facebook.com/<version>: "25.0" gets its "v"; blank → the default."""
+        v = (self.graph_api_version or "").strip().strip("/") or DEFAULT_GRAPH_API_VERSION
+        return f"{GRAPH_HOST}/{v if v.startswith('v') else 'v' + v}"
+
+    @property
+    def whatsapp_api_url(self) -> str:
+        """Legacy name for graph_base (was a WHATSAPP_API_URL setting pinned to v19.0)."""
+        return self.graph_base
 
     @property
     def store_urls(self) -> dict[str, str]:

@@ -62,9 +62,13 @@ def _model_says(monkeypatch, content=None, exc=None):
 @pytest.mark.asyncio
 async def test_classifier_reads_the_models_json(monkeypatch):
     _model_says(monkeypatch, 'Sure: {"wants_person": true, "upset": false}')
-    assert await esc.classify_customer_message("x") == {"wants_person": True, "upset": False}
+    assert await esc.classify_customer_message("x") == {"wants_person": True, "upset": False, "crisis": False}
+    esc._CLASSIFY_CACHE.clear()                             # same text again: a fresh call
     _model_says(monkeypatch, "I think so")                  # no JSON: neither
-    assert await esc.classify_customer_message("x") == {"wants_person": False, "upset": False}
+    assert await esc.classify_customer_message("x") == {"wants_person": False, "upset": False, "crisis": False}
+    esc._CLASSIFY_CACHE.clear()
+    _model_says(monkeypatch, '{"wants_person": false, "upset": false, "crisis": true}')
+    assert (await esc.classify_customer_message("x"))["crisis"] is True
 
 
 @pytest.mark.asyncio

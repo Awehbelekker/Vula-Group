@@ -1,7 +1,8 @@
 # Staging environment
 
 Written 2026-09-27. Vula has no staging environment. Every merge goes straight to the live
-businesses, and migrations are applied by hand in the Supabase SQL editor. Changes that alter
+businesses, and migrations were applied by hand in the Supabase SQL editor (since 31 Oct 2026,
+`vula_mind/tools/migrate.py` applies and records them). Changes that alter
 behaviour, such as `ENFORCE_TENANT_AUTH` or the route-auth protections added in PR #76, need
 somewhere to fail first. This guide sets one up. Nothing below is created automatically, and
 each step says where it costs money.
@@ -23,9 +24,27 @@ It's a copy of production that talks to nothing real:
 1. In the Supabase dashboard for `vula-production`, open **Branches** and create a branch (e.g.
    `staging`). A branch starts with the schema but no production data, which is what you want:
    test tenants only.
-2. Open the branch's SQL editor and apply migrations. The quickest way: point staging's
-   dashboard at the staging API (step 3), sign in as master, open **Master › Health**, press
-   **Copy SQL to apply**, then paste and run it. Every migration is idempotent.
+2. Apply migrations with the runner (`vula_mind/tools/migrate.py`). It needs the branch's
+   Postgres connection string (branch › Project settings › Database › Connection string, the
+   direct or session-pooler URI, port 5432) in `DATABASE_URL`. It prints the host with the
+   password removed, and every command is a dry run until you add `--yes`. From `vula_mind/`:
+
+   ```bash
+   export DATABASE_URL='postgresql://postgres.<branch-ref>:<password>@<host>:5432/postgres'
+   python tools/migrate.py status --target staging
+   # Only if the branch already has the migrations (it copied production's schema): record
+   # 1..239 as applied without running them. Skip this on an empty database.
+   python tools/migrate.py baseline --target staging --upto 239          # shows the list
+   python tools/migrate.py baseline --target staging --upto 239 --yes
+   python tools/migrate.py apply --target staging                        # shows what would run
+   python tools/migrate.py apply --target staging --yes
+   python tools/migrate.py status --target staging                       # 0 pending
+   ```
+
+   Each file runs in its own transaction and the runner stops at the first failure, recording
+   nothing for that file. `--target staging` is refused if `DATABASE_URL` names the production
+   project. Fallback without a connection string: **Master › Health › Copy SQL to apply** and
+   paste it into the branch's SQL editor (every migration is idempotent).
 3. Create one test tenant through the normal signup flow, so the signup path is exercised too.
 
 **Cost:** Supabase branches are billed per hour while they exist. See Supabase's
@@ -51,6 +70,8 @@ It's a copy of production that talks to nothing real:
    | `RUN_SCHEDULED_JOBS` | `true` (staging runs a single service) |
    | `DEBUG` | `false`, so staging behaves like production (webhook signatures required) |
    | `SENTRY_DSN` | Empty, or a separate Sentry environment |
+   | `VULA_ENV` | `staging` |
+   | `PUBLIC_BASE_URL` | The staging service's own URL. Left on production's, pay links and callbacks point at production, and `/ready` reports it as a gap |
    | `OPENROUTER_API_KEY` | Same key is fine. Set a small spend cap on the test tenant |
 
 4. Run `railway up` in the staging environment after any env change. Env changes alone
@@ -81,9 +102,24 @@ variables (scoped to that branch). Sign in with a user on the staging branch's d
 
 ## 5. Smoke checklist before promoting to production
 
-Run this on staging for any PR that changes auth, payments, migrations or the WhatsApp paths:
+Run this on staging for any PR that changes auth, payments, migrations or the WhatsApp paths.
 
-- [ ] **Master › Health** shows no migrations pending.
+First the automatic part, from `vula_mind/` (the API key is read from the named variable and
+never printed):
+
+```bash
+export STAGING_API_KEY='<staging API_KEY>'
+python tools/smoke.py --base-url https://<staging-railway-url> --api-key-env STAGING_API_KEY
+```
+
+It checks `/status` (200), `/ready` (200, or 503 with the gap list summarised), that the WhatsApp
+webhook refuses a wrong verify token and an unsigned POST (403), and that a tenant admin route
+and `/takeoff/rates` refuse a request with no credentials (401). It exits non-zero if any check
+fails. Then by hand:
+
+- [ ] `python tools/smoke.py …` above passes.
+- [ ] `python tools/migrate.py status --target staging` shows 0 pending, and **Master › Health**
+      shows no migrations pending.
 - [ ] **Customer WhatsApp:** browse, add to cart, place an order (delivery and collection),
       track it, send STOP then START.
 - [ ] **Owner WhatsApp:** sales today, mark an order paid (confirm button), add an expense,

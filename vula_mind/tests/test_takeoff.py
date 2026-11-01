@@ -57,10 +57,12 @@ def _room(name: str, area: float, wet: bool = False, floor_finish: str = "lvt",
 def test_boq_totals_correct():
     boq = BOQ(project_name="Test", tenant_id="t1", markup_pct=15.0)
     boq.items.append(BOQItem("A_001", "flooring", "LVT", "m²", 100, 280, 520, 400, 40000, "test", 90))
+    # line_total is worked out from qty × rate (50 × R97 = R4,850), never taken from the caller —
+    # this test used to pass R4,875 in and assert it back.
     boq.items.append(BOQItem("A_002", "painting", "Paint", "m²", 50, 65, 130, 97, 4875, "test", 92))
-    assert boq.net_total == pytest.approx(44875.0)
-    assert boq.markup_amount == pytest.approx(44875.0 * 0.15)
-    assert boq.grand_total == pytest.approx(44875.0 * 1.15)
+    assert boq.net_total == pytest.approx(44850.0)
+    assert boq.markup_amount == pytest.approx(44850.0 * 0.15)
+    assert boq.grand_total == pytest.approx(44850.0 * 1.15)
 
 
 def test_boq_empty_totals_zero():
@@ -132,31 +134,37 @@ def test_rate_lookup_all_fallback_keys_have_valid_rates():
 
 @pytest.mark.asyncio
 async def test_generate_returns_boq_with_items():
-    project = _project(gfa=150.0)
-    gen = BOQGenerator(project, tenant_id="t1")
-    boq = await gen.generate()
+    project = _project(rooms=[_room("Office", 150.0)], gfa=150.0)
+    boq = await BOQGenerator(project, tenant_id="t1").generate()
     assert isinstance(boq, BOQ)
     assert len(boq.items) > 0
 
 
 @pytest.mark.asyncio
 async def test_generate_totals_positive():
-    project = _project(gfa=200.0)
-    gen = BOQGenerator(project, tenant_id="t1")
-    boq = await gen.generate()
+    project = _project(rooms=[_room("Office", 200.0)], gfa=200.0)
+    boq = await BOQGenerator(project, tenant_id="t1").generate()
     assert boq.net_total > 0
     assert boq.grand_total > boq.net_total
 
 
 @pytest.mark.asyncio
-async def test_generate_includes_mandatory_trades():
-    """Every BOQ must have at least: demolition, drywall, electrical, fire."""
-    project = _project(gfa=300.0)
-    gen = BOQGenerator(project, tenant_id="t1")
-    boq = await gen.generate()
+async def test_floor_area_alone_prices_nothing():
+    """2026-10-31: a GFA with no rooms used to produce a ~R50k 'complete' BOQ of fixed minimums
+    (DB board, emergency lights, data points, extinguishers, a door). Nothing measured → nothing priced."""
+    boq = await BOQGenerator(_project(gfa=300.0), tenant_id="t1").generate()
+    assert boq.items == [] and boq.net_total_cents == 0
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_guessed_from_floor_area():
+    """v1 scope: electrical, HVAC, fire, demolition and screed aren't measured from plans — they're
+    listed as excluded, never priced from GFA."""
+    boq = await BOQGenerator(_project(rooms=[_room("Office", 300.0)], gfa=300.0), tenant_id="t1").generate()
     trades = {item.trade for item in boq.items}
-    for required in ("demolition", "drywall", "electrical", "fire"):
-        assert required in trades, f"Missing trade: {required}"
+    assert not trades & {"demolition", "electrical", "hvac", "fire"}
+    assert not any("screed" in i.description.lower() for i in boq.items)
+    assert any("Electrical" in e for e in boq.excluded)
 
 
 @pytest.mark.asyncio
@@ -217,7 +225,8 @@ async def test_generate_mezzanine_adds_structural():
     trades = {item.trade for item in boq.items}
     assert "concrete" in trades
     mez_items = [i for i in boq.items if "mezzanine" in i.description.lower()]
-    assert len(mez_items) >= 2  # slab + steel
+    assert [i.unit for i in mez_items] == ["m³"]      # the measured slab; steel isn't guessed
+    assert any("steel" in e.lower() for e in boq.excluded)
 
 
 @pytest.mark.asyncio
@@ -249,32 +258,11 @@ async def test_generate_door_schedule_creates_joinery_items():
 
 
 @pytest.mark.asyncio
-async def test_generate_no_door_schedule_estimates_from_gfa():
-    project = _project(gfa=250.0)  # No doors
-    gen = BOQGenerator(project, tenant_id="t1")
-    boq = await gen.generate()
-    joinery_items = [i for i in boq.items if i.trade == "joinery"]
-    # Should have at least 1 estimated door item
-    assert len(joinery_items) >= 1
-    estimated = [i for i in joinery_items if "estimated" in i.description.lower()]
-    assert len(estimated) >= 1
-
-
-# ── BOQGenerator — kitchen ────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_generate_kitchen_room_adds_joinery_and_plumbing():
-    rooms = [
-        _room("Kitchen", 15.0, floor_finish="tile"),
-        _room("Office", 185.0, floor_finish="lvt"),
-    ]
-    project = _project(rooms=rooms, gfa=200.0)
-    gen = BOQGenerator(project, tenant_id="t1")
-    boq = await gen.generate()
-    kitchen_joinery = [i for i in boq.items if "kitchen" in i.description.lower() and i.trade == "joinery"]
-    assert len(kitchen_joinery) >= 1
-    kitchen_plumb = [i for i in boq.items if "kitchen" in i.description.lower() and i.trade == "plumbing"]
-    assert len(kitchen_plumb) >= 1
+async def test_generate_no_door_schedule_estimates_nothing():
+    project = _project(rooms=[_room("Office", 250.0)], gfa=250.0)  # No doors
+    boq = await BOQGenerator(project, tenant_id="t1").generate()
+    assert not [i for i in boq.items if "door" in i.description.lower()]
+    assert any("Doors and windows" in e for e in boq.excluded)
 
 
 # ── BOQGenerator — MEP from schedule ─────────────────────────────────────────

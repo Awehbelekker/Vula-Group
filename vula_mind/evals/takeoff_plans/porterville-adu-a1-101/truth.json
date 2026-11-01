@@ -1,0 +1,68 @@
+{
+  "case": "porterville-adu-a1-101",
+  "file": "plan.pdf",
+  "sha256": "4f35c62a9adcf8d2eb42e632a4d1ae9b1d314bb426297e4ac13ae0a32897f6b7",
+  "page": 1,
+  "plan_type": "residential_adu",
+  "source": {
+    "description": "City of Porterville CA Pre-Approved ADU prototypes (07/05/23), sheet A1-101",
+    "licence": "Public domain (stated on the sheet by the City of Porterville)",
+    "via": "OpenTakeoff apache-2.0-final @ 84c7f48e (Apache-2.0): evals/mcp-workflow-bench/plan-set/porterville/porterville-adu-a1-101.pdf"
+  },
+  "scale": {
+    "label": "1/4\" = 1'-0\"",
+    "drawn_to_scale": true,
+    "m_per_px": 0.008466666666666667,
+    "basis": "checked against six printed dimension strings (all within 0.3 px)"
+  },
+  "expect": {
+    "measurable": true
+  },
+  "rooms": [
+    {
+      "label": "LIVING",
+      "finish": "LVP",
+      "area_m2": 23.854,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "BATH",
+      "finish": "CT",
+      "area_m2": 4.802,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "PANTRY",
+      "finish": "LVP",
+      "area_m2": 0.418,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "W/D",
+      "finish": "LVP",
+      "area_m2": 0.639,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "CL.",
+      "finish": "CPT",
+      "area_m2": 1.198,
+      "truth": "reference_ring"
+    },
+    {
+      "label": "OPT. BEDROOM",
+      "finish": "CPT",
+      "area_m2": 8.682,
+      "truth": "reference_ring"
+    }
+  ],
+  "review": {
+    "human_reviewed": false,
+    "prepared_by": "AI agent from the PDF vector linework (OpenTakeoff plan-set v2); every vertex cites its source segments. Not yet checked by a person."
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}

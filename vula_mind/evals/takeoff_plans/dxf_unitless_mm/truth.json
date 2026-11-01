@@ -1,0 +1,128 @@
+{
+  "case": "dxf_unitless_mm",
+  "plan_type": "dxf",
+  "synthetic": {
+    "kind": "dxf",
+    "insunits": 0,
+    "outline": [
+      [
+        0,
+        0
+      ],
+      [
+        10000,
+        0
+      ],
+      [
+        10000,
+        8000
+      ],
+      [
+        0,
+        8000
+      ]
+    ],
+    "rooms": [
+      {
+        "name": "Lounge",
+        "pts": [
+          [
+            0,
+            0
+          ],
+          [
+            6000,
+            0
+          ],
+          [
+            6000,
+            8000
+          ],
+          [
+            0,
+            8000
+          ]
+        ]
+      },
+      {
+        "name": "Bedroom",
+        "pts": [
+          [
+            6000,
+            0
+          ],
+          [
+            10000,
+            0
+          ],
+          [
+            10000,
+            5000
+          ],
+          [
+            6000,
+            5000
+          ]
+        ]
+      },
+      {
+        "name": "Bathroom",
+        "pts": [
+          [
+            6000,
+            5000
+          ],
+          [
+            10000,
+            5000
+          ],
+          [
+            10000,
+            8000
+          ],
+          [
+            6000,
+            8000
+          ]
+        ]
+      }
+    ],
+    "blocks": []
+  },
+  "source": {
+    "description": "Synthetic. Same unit with no declared units: measured by inference, but must be held for review.",
+    "licence": "Synthetic, Vula",
+    "via": "evals/takeoff_bench.py::_build"
+  },
+  "expect": {
+    "measurable": true,
+    "review": true
+  },
+  "rooms": [
+    {
+      "label": "Lounge",
+      "area_m2": 48.0,
+      "truth": "analytic"
+    },
+    {
+      "label": "Bedroom",
+      "area_m2": 20.0,
+      "truth": "analytic"
+    },
+    {
+      "label": "Bathroom",
+      "area_m2": 12.0,
+      "truth": "analytic"
+    }
+  ],
+  "gfa_m2": 80.0,
+  "review": {
+    "human_reviewed": true,
+    "prepared_by": "analytic: exact by construction"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}
