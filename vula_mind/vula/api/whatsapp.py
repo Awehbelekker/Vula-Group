@@ -2290,6 +2290,13 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     from core.sentry_utils import tag_tenant
     tag_tenant(tenant_id)
 
+    # ── Someone who may be at risk of harming themselves: help first, never a sales reply
+    # (vula/safety.py — fixed text with the crisis lines, and a person at the business told).
+    from vula import safety
+    if await safety.handle(phone, text, tenant_id):
+        _note_handler("crisis_support")
+        return
+
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _OPTOUT_RE.match(text):
         await _handle_opt_out(phone, tenant_id)

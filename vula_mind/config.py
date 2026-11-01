@@ -275,6 +275,9 @@ class Settings(BaseSettings):
     # customer writes in an African language the phrase lists only partly cover
     # (vula/escalation.py::classify_customer_message). Off = phrase lists only.
     escalation_classifier_enabled: bool = True
+    # Crisis support (vula/safety.py): a message suggesting self-harm gets South Africa's crisis
+    # lines and the business is asked to check in — before any assistant reply. On by default.
+    crisis_support_enabled: bool = True
     cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash"
     # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
     # grades. Empty = rules only.

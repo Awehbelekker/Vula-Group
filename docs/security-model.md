@@ -99,3 +99,18 @@ Candidates waiting for an owner decision (each would be one more `Rule`): WhatsA
 dedupe rows (`vula_wa_msg_dedup`), app error reports (`vula_app_errors`), WhatsApp login requests
 (`vula_wa_login_requests`), website leads that never converted (`vula_website_leads`),
 conversation turns (`vula_turns`, `vula_kb_turns`).
+
+## Crisis support (self-harm)
+
+`vula/safety.py` runs on every inbound WhatsApp text before anything else answers it. A message
+that suggests self-harm gets a fixed reply (never model-written) with South Africa's crisis lines:
+SADAG Suicide Crisis Helpline **0800 567 567** (free, 24 hours), Lifeline **0861 322 322**, and
+**10111 / 112** for immediate danger. One person at the business (`escalation._pick_helper`) is
+asked to check in, with the number but never the message. Logs carry no content. On by default;
+`CRISIS_SUPPORT_ENABLED=false` switches it off.
+
+Not covered yet, an owner decision:
+- phrases in isiZulu, isiXhosa, Sesotho and the other SA languages (the escalation AI check could
+  carry a crisis flag for those);
+- addiction and gender-based-violence lines (numbers to be verified before they're added);
+- a follow-up if the business doesn't check in.
