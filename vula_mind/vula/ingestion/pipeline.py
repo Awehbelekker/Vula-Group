@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -1198,6 +1198,27 @@ def kb_audience(audience: Optional[str]):
         _KB_AUDIENCE.reset(token)
 
 
+# 1 Nov 2026 (document search, phase A — measure before changing anything): the retrieval
+# comparison (evals/retrieval.py::run_compare) runs the live cases under several settings side by
+# side. The settings are set here, per task, so a comparison run can never change what a real
+# customer's search does while it runs. Empty for every live request.
+#   score_threshold          vector similarity floor (else kb_score_threshold())
+#   rerank                   off | lexical | llm (else settings.kb_rerank)
+#   lone_keyword_min_overlap with NO vector hit, a word-match hit must share at least this many of
+#                            the question's terms (or an identifier). Today: 1 — anything.
+#   probe                    a dict query() fills with what it saw (top vector score, counts)
+_KB_OVERRIDES: ContextVar[Dict[str, Any]] = ContextVar("kb_overrides", default={})
+
+
+@contextmanager
+def kb_overrides(**overrides: Any):
+    token = _KB_OVERRIDES.set({**_KB_OVERRIDES.get(), **overrides})
+    try:
+        yield
+    finally:
+        _KB_OVERRIDES.reset(token)
+
+
 def effective_audience(audience: Optional[str]) -> Optional[str]:
     return "public" if _KB_AUDIENCE.get() == "public" else audience
 
@@ -1971,8 +1992,9 @@ class VulaIngestionPipeline:
         best top_k are returned (vula/ingestion/rerank.py). None = settings.kb_rerank.
         """
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
+        ov = _KB_OVERRIDES.get()
         # Inside one picked document every chunk is a candidate: the person already said which.
-        threshold = 0.0 if doc_id else kb_score_threshold(authoritative_only)
+        threshold = 0.0 if doc_id else float(ov.get("score_threshold", kb_score_threshold(authoritative_only)))
         audience = effective_audience(audience)
 
         variants = [question]
@@ -1986,7 +2008,8 @@ class VulaIngestionPipeline:
             variants += await expand_query(question, self.tenant_id)
 
         from vula.ingestion import rerank as _rerank
-        mode = (rerank if rerank is not None else getattr(settings, "kb_rerank", "off")) or "off"
+        mode = (rerank if rerank is not None
+                else ov.get("rerank") or getattr(settings, "kb_rerank", "off")) or "off"
         # A second look needs the top 20 to choose from, not just enough to fill top_k.
         depth = max(top_k * 2, 8, _rerank.CANDIDATES if mode != "off" else 0)
 
@@ -2022,9 +2045,16 @@ class VulaIngestionPipeline:
         if doc_id:
             keyword_hits = [h for h in keyword_hits if str(h.get("doc_id") or "") == doc_id]
         idents = [t for t in terms if any(ch.isdigit() for ch in t)]
-        if any(runs):
-            keyword_hits = [h for h in keyword_hits if h.get("_overlap", 0) >= 2
+        lone_min = 2 if any(runs) else int(ov.get("lone_keyword_min_overlap", 1))
+        if lone_min > 1:
+            keyword_hits = [h for h in keyword_hits if h.get("_overlap", 0) >= lone_min
                             or any(i in (h.get("text") or "").lower() for i in idents)]
+        probe = ov.get("probe")
+        if isinstance(probe, dict):
+            scores = [h.get("score") or 0.0 for r in runs for h in r]
+            probe.update(top_vector=round(max(scores), 4) if scores else None,
+                         vector_hits=sum(len(r) for r in runs), keyword_hits=len(keyword_hits),
+                         keyword_only=not any(runs) and bool(keyword_hits))
 
         fused = _fuse(runs[0], runs[1:], keyword_hits)
         if mode != "off" and len(fused) > top_k:

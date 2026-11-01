@@ -143,7 +143,63 @@ export function AuditV2({ onError, onViewDetail }) {
 /* ── Benchmark (+ go-live test) ── */
 export function BenchmarkV2({ onError }) {
   return <section className="vms" aria-label="Benchmark"><GoLiveV2 onError={onError} /><Benchmark onError={onError} />
-    <DecisionBench onError={onError} /></section>
+    <DecisionBench onError={onError} /><SearchCompare onError={onError} /></section>
+}
+
+/* ── Document search: the live cases under candidate settings (evals/retrieval.py::run_compare) ── */
+const pctOf = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`)
+function SearchCompare({ onError }) {
+  const [runs, setRuns] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const load = () => authFetch('/v1/master/kb-maintenance?limit=30')
+    .then(d => setRuns((d.runs || []).filter(r => r.skill === 'retrieval_compare'))).catch(e => onError?.(e.message))
+  useEffect(() => { load() }, [])
+  const running = (runs || []).some(r => r.status === 'running')
+  useEffect(() => {
+    if (!running) return undefined
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, [running])
+  const start = async () => {
+    setBusy(true)
+    try {
+      const r = await authFetch('/v1/master/kb-maintenance', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs: ['retrieval_compare'] }) })
+      if (r.detail) onError?.(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
+      await load()
+    } catch (e) { onError?.(e.message) } finally { setBusy(false) }
+  }
+  const last = (runs || []).find(r => r.status === 'done')
+  const rows = last ? Object.entries(last.summary || {}).map(([name, v]) => ({ key: name, name, ...v })) : []
+  const b = last?.score_bands
+  return (
+    <>
+      <Card className="vms-form">
+        <h3 className="vms-h"><FlaskConical size={16} aria-hidden="true" className="vms-ic" />Document search — compare settings</h3>
+        <p className="vms-muted">The live document-search questions under several search settings, side by side: today's, a higher similarity floor, word matches that must share two terms, and the re-ranker. Nothing changes for any business — it only measures. "Says it doesn't know" should be high; "misses a real answer" low.</p>
+        <Button Icon={Play} disabled={busy || running} onClick={start}>
+          {running ? 'Running… (10–20 minutes)' : busy ? 'Starting…' : 'Compare search settings'}</Button>
+        {(runs || [])[0]?.status === 'failed' && <p className="vms-muted" role="alert">The last comparison stopped: {(runs || [])[0].error}</p>}
+      </Card>
+      {last && (
+        <Card pad={0}>
+          <DataTable caption={`Search settings — ${when(last.finished_at)}`} rows={rows} rowKey="key" columns={[
+            { key: 'name', label: 'Setting' },
+            { key: 'passed', label: 'Passed', render: (r) => `${r.passed ?? '—'}/${r.cases ?? '—'}` },
+            { key: 'abstention', label: "Says it doesn't know", render: (r) => pctOf(r.abstention) },
+            { key: 'false_abstention', label: 'Misses a real answer', render: (r) => pctOf(r.false_abstention) },
+            { key: 'in_prompt', label: 'Right document used', render: (r) => pctOf(r.in_prompt) },
+            { key: 'fact_in_prompt', label: 'Fact reaches the model', render: (r) => pctOf(r.fact_in_prompt) },
+          ]} />
+          {b?.present && b?.absent && (
+            <p className="vms-muted" style={{ padding: '8px 16px' }}>
+              Best similarity score — questions the documents answer: {b.present.min}–{b.present.max} (middle {b.present.p50});
+              questions they don't: {b.absent.min}–{b.absent.max} (middle {b.absent.p50}).
+              {b.clean_split ? ' A floor between them separates the two cleanly.' : " They overlap, so a floor alone can't separate them."}
+            </p>)}
+        </Card>)}
+    </>
+  )
 }
 
 /* ── Decision benchmark: Jev against today's classifiers (vula/decision_bench.py) ── */
