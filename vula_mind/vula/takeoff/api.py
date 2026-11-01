@@ -200,25 +200,25 @@ async def _price(job_id: str, project, tenant_id: str, markup: float):
 
 
 async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: float):
-    """Full pipeline: read → (review, when needed) → BOQ → orders. Runs in background."""
+    """Read the plans and hold them for the owner's confirmation. Pricing (BOQ → orders) runs
+    only after the review approves (decide → price_approved)."""
     try:
         _jobs[job_id]["status"] = "reading_plans"
         _save_job(job_id)
         reader = PlanReader(tenant_id=tenant_id)
         project = await reader.read(file_path)
         _jobs[job_id]["project"] = _project_summary(project)
-        _jobs[job_id]["review"] = dict(getattr(project, "review", None) or {"status": "not_required"})
-
-        if _jobs[job_id]["review"].get("status") == "pending":
-            # Phase 4d — the propose-confirm gate (same pattern as migration 137's automation
-            # firings: staged, a person approves or rejects, decided_at + who recorded). Nothing
-            # is priced or ordered until POST /takeoff/{job_id}/review approves it.
-            _jobs[job_id]["extracted"] = _project_to_state(project)
-            _jobs[job_id]["status"] = "needs_review"
-            _save_job(job_id)
-            return
-
-        await _price(job_id, project, tenant_id, markup)
+        # Phase 4d — the propose-confirm gate (same pattern as migration 137's automation firings:
+        # staged, a person approves or rejects, decided_at + who recorded). 2026-11-01, owner's
+        # rule: the measured rooms are ALWAYS confirmed before anything is priced (preview →
+        # correct → confirm), not only when a check flags them. `checked` says whether the
+        # independent readings agreed; the reasons say what to look at when they didn't.
+        review = dict(getattr(project, "review", None) or {})
+        reasons = list(review.get("reasons") or [])
+        _jobs[job_id]["review"] = {"status": "pending", "reasons": reasons, "checked": not reasons}
+        _jobs[job_id]["extracted"] = _project_to_state(project)
+        _jobs[job_id]["status"] = "needs_review"
+        _save_job(job_id)
 
     except Exception as e:
         logger.error(f"Takeoff job {job_id} failed: {e}")
@@ -275,6 +275,109 @@ async def trigger_rates_update(background_tasks: BackgroundTasks):
     }
 
 
+ALLOWED = {".pdf", ".dxf", ".dwg", ".png", ".jpg", ".jpeg", ".tiff"}
+
+
+def create_job(tenant_id: str, filename: str, content: bytes, markup: float = 15.0, source: str = "dashboard"):
+    """Store an uploaded plan and register its job (queued). Returns (job_id, file_path). Shared by
+    the dashboard upload and a plan sent on WhatsApp (vula/takeoff/whatsapp_flow.py)."""
+    job_id = str(uuid.uuid4())[:12]
+    file_path = UPLOAD_DIR / f"{job_id}_{_safe_name(filename)}"
+    file_path.write_bytes(content)
+    _jobs[job_id] = {
+        "status": "queued",
+        "filename": filename,
+        "tenant_id": tenant_id,
+        "markup": markup,
+        "file_path": str(file_path),
+        "uploaded_at": time.time(),
+        "source": source,
+    }
+    _save_job(job_id)
+    return job_id, file_path
+
+
+class ReviewError(ValueError):
+    """A review that can't be applied (bad edit, wrong state). The message is for the person."""
+
+
+def decide(job_id: str, job: dict, body: "ReviewDecision", by: str):
+    """Apply a review decision to a job held at needs_review. Returns (status, project, edits);
+    project is None when rejected. Raises ReviewError. Shared by the dashboard route and the
+    WhatsApp confirm (commerce_admin takeoff_approve)."""
+    from datetime import datetime, timezone
+    if job.get("status") != "needs_review" or not job.get("extracted"):
+        raise ReviewError(f"This takeoff isn't waiting for review (status: {job.get('status')}).")
+    decision = body.decision.strip().lower()
+    if decision not in ("approve", "reject"):
+        raise ReviewError("decision must be approve or reject")
+    review = dict(job.get("review") or {})
+    review.update({"decided_by": by, "decided_at": datetime.now(timezone.utc).isoformat(),
+                   "note": body.note[:500]})
+    if decision == "reject":
+        review["status"] = "rejected"
+        job["review"], job["status"] = review, "rejected"
+        _save_job(job_id)
+        return "rejected", None, {}
+
+    project = _project_from_state(job["extracted"])
+    edits: Dict[str, object] = {}
+    if body.use_measured and project.deterministic_rooms:
+        project.rooms = [Room(name=n, area=a) for n, a in project.deterministic_rooms]
+        edits["rooms"] = "measured"
+    if body.rooms is not None:
+        bad = [r.name for r in body.rooms if not (r.area and r.area > 0)]
+        if bad:
+            raise ReviewError(f"Every room needs an area above 0 m² ({', '.join(bad[:5])}).")
+        old = {r.name: r for r in project.rooms}
+        project.rooms = [Room(name=r.name, area=float(r.area),
+                              floor_finish=r.floor_finish if r.floor_finish is not None else getattr(old.get(r.name), "floor_finish", ""),
+                              ceiling_finish=r.ceiling_finish if r.ceiling_finish is not None else getattr(old.get(r.name), "ceiling_finish", ""),
+                              wall_finish=r.wall_finish if r.wall_finish is not None else getattr(old.get(r.name), "wall_finish", ""),
+                              is_wet=r.is_wet if r.is_wet is not None else bool(getattr(old.get(r.name), "is_wet", False)),
+                              perimeter=getattr(old.get(r.name), "perimeter", 0.0))
+                         for r in body.rooms]
+        edits["rooms"] = [{"name": r.name, "area": r.area} for r in project.rooms]
+    if body.gross_floor_area is not None:
+        if body.gross_floor_area <= 0:
+            raise ReviewError("Gross floor area must be above 0 m².")
+        project.gross_floor_area = float(body.gross_floor_area)
+        edits["gross_floor_area"] = project.gross_floor_area
+    if body.wall_height is not None:
+        if not (1.8 <= body.wall_height <= 12):
+            raise ReviewError("Wall height must be between 1.8 m and 12 m.")
+        for r in project.rooms:
+            r.height = float(body.wall_height)
+        edits["wall_height"] = float(body.wall_height)
+    if body.external_walls_m is not None:
+        if body.external_walls_m <= 0:
+            raise ReviewError("External wall length must be above 0 m.")
+        project.external_walls_m = float(body.external_walls_m)
+        edits["external_walls_m"] = project.external_walls_m
+    if body.scale_confirmed:
+        for s in project.sheets:
+            s.scale_method = s.scale_method if s.scale_method == "dxf_units" else "dimension_check"
+            s.scale_verified_by = by
+        edits["scale_confirmed_by"] = by
+    review.update({"status": "approved", "edits": edits})
+    project.review = review
+    job["review"] = review
+    job["project"] = _project_summary(project)
+    job["status"] = "approved"
+    _save_job(job_id)
+    return "approved", project, edits
+
+
+async def price_approved(job_id: str, job: dict, project) -> None:
+    """Price an approved takeoff (BOQ → orders); a failure is recorded on the job."""
+    try:
+        await _price(job_id, project, job.get("tenant_id") or "default", float(job.get("markup") or 15.0))
+    except Exception as e:  # noqa: BLE001
+        logger.error("Takeoff job %s failed after review: %s", job_id, e)
+        job["status"], job["error"] = "failed", str(e)
+        _save_job(job_id)
+
+
 @router.post("/upload")
 async def upload_plans(
     background_tasks: BackgroundTasks,
@@ -286,29 +389,15 @@ async def upload_plans(
     Upload architectural drawings. Supports PDF, DXF, DWG, PNG, JPG.
     Returns job_id — poll /takeoff/{job_id} for status.
     """
-    allowed = {".pdf", ".dxf", ".dwg", ".png", ".jpg", ".jpeg", ".tiff"}
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in allowed:
-        raise HTTPException(400, f"Unsupported file type: {suffix}. Supported: {allowed}")
+    if suffix not in ALLOWED:
+        raise HTTPException(400, f"Unsupported file type: {suffix}. Supported: {ALLOWED}")
 
     content = await file.read()
     if len(content) > 100 * 1024 * 1024:  # 100MB limit
         raise HTTPException(413, "File too large (max 100MB)")
 
-    job_id = str(uuid.uuid4())[:12]
-    file_path = UPLOAD_DIR / f"{job_id}_{_safe_name(file.filename)}"
-    file_path.write_bytes(content)
-
-    _jobs[job_id] = {
-        "status": "queued",
-        "filename": file.filename,
-        "tenant_id": tenant_id,
-        "markup": markup,
-        "file_path": str(file_path),
-        "uploaded_at": time.time(),
-    }
-
-    _save_job(job_id)
+    job_id, file_path = create_job(tenant_id, file.filename, content, markup)
     background_tasks.add_task(_process_plans, job_id, file_path, tenant_id, markup)
 
     return {
@@ -419,80 +508,18 @@ async def review_takeoff(job_id: str, body: ReviewDecision, request: Request,
     """Approve (optionally with corrected quantities) or reject a takeoff held at needs_review.
     Only an approved takeoff is priced; the decision, who made it, when, and any edits are kept
     on the job."""
-    from datetime import datetime, timezone
     from vula.api.commerce import _actor
     job = _job_for(job_id, authorized_tenant(request) or tenant_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    if job.get("status") != "needs_review" or not job.get("extracted"):
-        raise HTTPException(409, f"This takeoff isn't waiting for review (status: {job.get('status')}).")
-    decision = body.decision.strip().lower()
-    if decision not in ("approve", "reject"):
-        raise HTTPException(400, "decision must be approve or reject")
-    by = _actor(request)
-    review = dict(job.get("review") or {})
-    review.update({"decided_by": by, "decided_at": datetime.now(timezone.utc).isoformat(),
-                   "note": body.note[:500]})
-    if decision == "reject":
-        review["status"] = "rejected"
-        job["review"], job["status"] = review, "rejected"
-        _save_job(job_id)
+    try:
+        status, project, edits = decide(job_id, job, body, _actor(request))
+    except ReviewError as exc:
+        code = 409 if "isn't waiting" in str(exc) else 400
+        raise HTTPException(code, str(exc))
+    if status == "rejected":
         return {"job_id": job_id, "status": "rejected"}
-
-    project = _project_from_state(job["extracted"])
-    edits: Dict[str, object] = {}
-    if body.use_measured and project.deterministic_rooms:
-        project.rooms = [Room(name=n, area=a) for n, a in project.deterministic_rooms]
-        edits["rooms"] = "measured"
-    if body.rooms is not None:
-        bad = [r.name for r in body.rooms if not (r.area and r.area > 0)]
-        if bad:
-            raise HTTPException(400, f"Every room needs an area above 0 m² ({', '.join(bad[:5])}).")
-        old = {r.name: r for r in project.rooms}
-        project.rooms = [Room(name=r.name, area=float(r.area),
-                              floor_finish=r.floor_finish if r.floor_finish is not None else getattr(old.get(r.name), "floor_finish", ""),
-                              ceiling_finish=r.ceiling_finish if r.ceiling_finish is not None else getattr(old.get(r.name), "ceiling_finish", ""),
-                              wall_finish=r.wall_finish if r.wall_finish is not None else getattr(old.get(r.name), "wall_finish", ""),
-                              is_wet=r.is_wet if r.is_wet is not None else bool(getattr(old.get(r.name), "is_wet", False)),
-                              perimeter=getattr(old.get(r.name), "perimeter", 0.0))
-                         for r in body.rooms]
-        edits["rooms"] = [{"name": r.name, "area": r.area} for r in project.rooms]
-    if body.gross_floor_area is not None:
-        if body.gross_floor_area <= 0:
-            raise HTTPException(400, "Gross floor area must be above 0 m².")
-        project.gross_floor_area = float(body.gross_floor_area)
-        edits["gross_floor_area"] = project.gross_floor_area
-    if body.wall_height is not None:
-        if not (1.8 <= body.wall_height <= 12):
-            raise HTTPException(400, "Wall height must be between 1.8 m and 12 m.")
-        for r in project.rooms:
-            r.height = float(body.wall_height)
-        edits["wall_height"] = float(body.wall_height)
-    if body.external_walls_m is not None:
-        if body.external_walls_m <= 0:
-            raise HTTPException(400, "External wall length must be above 0 m.")
-        project.external_walls_m = float(body.external_walls_m)
-        edits["external_walls_m"] = project.external_walls_m
-    if body.scale_confirmed:
-        for s in project.sheets:
-            s.scale_method = s.scale_method if s.scale_method == "dxf_units" else "dimension_check"
-            s.scale_verified_by = by
-        edits["scale_confirmed_by"] = by
-    review.update({"status": "approved", "edits": edits})
-    project.review = review
-    job["review"] = review
-    job["project"] = _project_summary(project)
-    job["status"] = "approved"
-    _save_job(job_id)
-
-    async def _run():
-        try:
-            await _price(job_id, project, job.get("tenant_id") or "default", float(job.get("markup") or 15.0))
-        except Exception as e:  # noqa: BLE001
-            logger.error("Takeoff job %s failed after review: %s", job_id, e)
-            job["status"], job["error"] = "failed", str(e)
-            _save_job(job_id)
-    background_tasks.add_task(_run)
+    background_tasks.add_task(price_approved, job_id, job, project)
     return {"job_id": job_id, "status": "approved", "edits": edits}
 
 

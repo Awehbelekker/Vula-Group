@@ -1072,6 +1072,7 @@ async def receive_message(
                             _run_bg(_one_at_a_time(route_tenant, phone, _handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
                                 content_sha=doc.get("sha256") or None, route_mode=route_mode,
+                                caption=doc.get("caption") or "",
                             )), label="document_ingest", turn={
                                 "tenant_id": route_tenant, "phone": phone, "kind": "document",
                                 "text": filename, "wamid": msg_id})
@@ -3011,7 +3012,7 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
 async def _handle_document_ingest(
     phone: str, media_id: str, filename: str, mime_type: str,
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
-    route_mode: Optional[str] = None,
+    route_mode: Optional[str] = None, caption: str = "",
 ) -> None:
     """Ingest a document/image sent by a tenant into their knowledge base.
 
@@ -3081,7 +3082,9 @@ async def _handle_document_ingest(
         "image/png",
         "image/webp",
     }
-    if mime_type and mime_type not in _INGESTABLE_MIMES:
+    # A DXF drawing arrives as application/dxf, image/vnd.dxf or octet-stream — Takeoff reads it.
+    is_dxf = (filename or "").lower().endswith(".dxf")
+    if mime_type and mime_type not in _INGESTABLE_MIMES and not is_dxf:
         await _send_reply(
             phone,
             f"I can't ingest '{filename or 'that file'}' yet. "
@@ -3144,6 +3147,23 @@ async def _handle_document_ingest(
         # checked and staged; the owner confirms before anything is booked.
         if local_path.suffix.lower() == ".xlsx" and await _returned_form_first(tenant_id, phone, local_path):
             return
+
+        # A building plan from the business's own team (Estimating on): measured, previewed, and
+        # priced only when they tap Price it (vula/takeoff/whatsapp_flow.py). Anything else is
+        # filed as before.
+        if local_path.suffix.lower() in (".pdf", ".dxf"):
+            from vula import team_index
+            from vula.takeoff.whatsapp_flow import plan_first
+            # The business's own team only — on a knowledge-mode line anyone may send a file.
+            on_team = bool(_is_tenant_owner(tenant_id, phone) or team_index.member_for_phone(tenant_id, phone))
+            if await plan_first(tenant_id, phone, local_path, filename, caption, is_staff=on_team):
+                _note_handler("takeoff_plan")
+                return
+            if local_path.suffix.lower() == ".dxf":
+                await _send_reply(phone, "That's a DXF drawing. I read drawings in Takeoff, which "
+                                         "isn't switched on for this business — ask Vula to turn on "
+                                         "Estimating.", tenant_id)
+                return
 
         # No Meta sha256 on the webhook → hash the bytes now and claim before any real work.
         # (Still after the ack in this path, but it stops the expensive scan/ingest/reply

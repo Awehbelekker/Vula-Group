@@ -139,7 +139,9 @@ function Review({ x, job }) {
   return (
     <Card className="ves-card" role="region" aria-labelledby="ves-review">
       <h3 id="ves-review" className="ves-h"><AlertTriangle size={16} aria-hidden="true" /> Check these quantities before Vula prices them</h3>
-      <ul>{reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+      {reasons.length
+        ? <ul>{reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+        : <p className="ves-note">The independent readings agree. Check the rooms and confirm to price them.</p>}
       <p className="ves-muted">Measured confidence {p.confidence ?? "—"}%. Nothing is priced or ordered until you approve.</p>
       {names.length > 0 && (
         <table className="ves-table">
