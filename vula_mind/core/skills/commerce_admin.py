@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 from config import settings
 from core.llm_router import (
     generation_kwargs, is_local_model, resolve_generation_route, escalate_to_cloud,
-    substitute_if_degenerate,
+    substitute_if_degenerate, looks_degenerate, next_cloud_model,
 )
 from core.prompt_safety import fence
 from vula.storage_links import SHARE_TTL, signed
@@ -2376,6 +2376,7 @@ class CommerceAdminSkill(BaseSkill):
                 f"same topic)\n{history}")})
         messages.append({"role": "user", "content": question})
 
+        retried_garbled = False
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(
                 model=model, messages=messages, tools=tools, tool_choice="auto",
@@ -2421,6 +2422,18 @@ class CommerceAdminSkill(BaseSkill):
                     )})
                     continue
                 answer = (msg.content or "").strip()
+                # 1 Nov 2026 (capability benchmark): with the first cloud model unavailable, the
+                # fallback answered ~900 '!' characters on 6 admin turns, and the owner would have
+                # got "something went wrong". A garbled reply gets one more try on the next model
+                # in the cloud chain before that fallback text (substitute_if_degenerate, in run()).
+                if looks_degenerate(answer) and not retried_garbled and not is_local_model(model):
+                    nxt = next_cloud_model(model, getattr(resp, "model", None), with_tools=True)
+                    if nxt:
+                        logger.warning("commerce_admin: garbled reply from %s — trying %s once",
+                                       getattr(resp, "model", None) or model, nxt)
+                        _turn_note("garbled_reply_retry", model=nxt)
+                        model, retried_garbled = nxt, True
+                        continue
                 # 2026-08-24: considered porting reasoning.py's blanket "no tool + tenant-data-
                 # shaped question -> decline" guard here too, and deliberately did NOT. Unlike
                 # reasoning.py (zero tools — a match is unconditionally unanswerable) or

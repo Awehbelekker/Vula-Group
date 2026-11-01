@@ -157,12 +157,59 @@ def cloud_fallback_chain(model: str, messages=None) -> list:
     return chain
 
 
+# 1 Nov 2026 (capability benchmark): every tool-calling call to the admin agent's cloud model
+# (gemini-2.5-flash) came back NotFoundError — no OpenRouter endpoint serves that request (tools
+# under zero retention), though the same model answers plain chat. Each turn paid a failed call
+# before the fallback. A model that answers NotFound is skipped for this kind of request (with or
+# without tools) for a while, and named once in the log and in /ready.
+_UNAVAILABLE_FOR_S = 1800
+_unavailable: dict = {}   # (openrouter/model, with_tools) -> time.monotonic() it may be tried again
+
+
+def _is_not_found(exc: BaseException) -> bool:
+    return "NotFoundError" in {c.__name__ for c in type(exc).__mro__}
+
+
+def _skipped(model: str, with_tools: bool) -> bool:
+    until = _unavailable.get((model, with_tools))
+    return bool(until and until > time.monotonic())
+
+
+def unavailable_models() -> list:
+    """Cloud models currently skipped because they had no endpoint for a request, for /ready."""
+    return sorted({f"{m.removeprefix('openrouter/')}{' (tool calls)' if t else ''}"
+                   for (m, t) in list(_unavailable) if _skipped(m, t)})
+
+
+def next_cloud_model(requested: str, answered_by: Optional[str] = None, *,
+                     with_tools: bool = False) -> Optional[str]:
+    """The openrouter/ model after the one that answered (`answered_by`, as litellm reports it;
+    else the first one that would be tried for `requested`), skipping unavailable ones. Used to
+    retry a garbled reply on a different model. None when there's nothing left to try."""
+    chain = [m for m in cloud_fallback_chain(requested) if not _skipped(m, with_tools)]
+    if not chain:
+        return None
+    names = [m.removeprefix("openrouter/") for m in chain]
+    used = (answered_by or "").removeprefix("openrouter/")
+    idx = next((i for i, n in enumerate(names) if used and (used == n or used.startswith(n + ":"))), 0)
+    return chain[idx + 1] if idx + 1 < len(chain) else None
+
+
 async def _with_cloud_fallback(call, kwargs: dict):
-    chain = cloud_fallback_chain(kwargs["model"], kwargs.get("messages"))
+    with_tools = bool(kwargs.get("tools"))
+    full = cloud_fallback_chain(kwargs["model"], kwargs.get("messages"))
+    chain = [m for m in full if not _skipped(m, with_tools)] or full
     for i, model in enumerate(chain):
         try:
             return await call(**{**kwargs, "model": model})
         except Exception as exc:
+            if _is_not_found(exc):
+                if not _skipped(model, with_tools):
+                    logger.warning("cloud model %s has no endpoint for this request%s (NotFoundError; "
+                                   "not served under zero retention?) — skipping it for %d min",
+                                   model, " with tool calls" if with_tools else "",
+                                   _UNAVAILABLE_FOR_S // 60)
+                _unavailable[(model, with_tools)] = time.monotonic() + _UNAVAILABLE_FOR_S
             if not _worth_another_model(exc):
                 raise
             last = i == len(chain) - 1

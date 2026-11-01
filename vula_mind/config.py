@@ -434,8 +434,13 @@ class Settings(BaseSettings):
     # qwen2.5:3b wasn't necessarily pulled there).
     skill_classifier_model: str = ""
     # When the local box can't be reached, the same one-word classification goes to this cheap
-    # OpenRouter model instead (logged as local_unreachable). Empty = no cloud fallback.
-    skill_classifier_cloud_model: str = "google/gemini-2.5-flash"
+    # OpenRouter model instead (logged as local_unreachable). Empty = no cloud fallback. If it
+    # errors or answers with nothing, the first other model in cloud_model_fallbacks is tried once.
+    # 31 Oct 2026: was google/gemini-2.5-flash with a 10-token reply, which came back empty on
+    # every one of 207 benchmark cases (a thinking model spends those tokens thinking) — so every
+    # keyword miss silently became `reasoning`. Llama 3.3 70B is what cloud generation already
+    # uses successfully under zero retention.
+    skill_classifier_cloud_model: str = "meta-llama/llama-3.3-70b-instruct"
     # 31 Oct 2026: TypeSafe's Jev decision model via OpenRouter (core/decision_client.py). Used by
     # the decision benchmark only; nothing live calls it until Ian turns shadow mode on. The key is
     # the existing OPENROUTER_API_KEY. Alias tracks the newest version; pin e.g. typesafe/jev-1.14.
