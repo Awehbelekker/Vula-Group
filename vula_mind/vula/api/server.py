@@ -973,6 +973,23 @@ async def _master_digest_loop() -> None:
         await _asyncio.sleep(900)
 
 
+async def _weekly_benchmark_loop() -> None:
+    """Sunday 22:00–23:59 SAST: the capability benchmark runs itself (vula/weekly_benchmark.py).
+    Checks every 15 minutes; a run marked created_by 'weekly' this week means it has started, so
+    restarts and second workers never start another."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(300)
+    while True:
+        try:
+            from vula import weekly_benchmark as _wb
+            res = await _wb.start()
+            if res.get("started"):
+                log.info("weekly benchmark finished: %s", res.get("id"))
+        except Exception as exc:
+            log.warning("weekly benchmark loop error: %s", exc)
+        await _asyncio.sleep(900)
+
+
 async def _hourly_customer_jobs_loop() -> None:
     """Hourly, per tenant: WhatsApp reminders for bookings in the next 24h (send_due_reminders
     existed but only ran if something called POST /v1/bookings/{t}/jobs/reminders — nothing
@@ -1589,6 +1606,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_tap_sweep_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shopify_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_weekly_benchmark_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_staff_notices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
