@@ -1,0 +1,31 @@
+{
+  "case": "va-roseburg-a03a-nts",
+  "file": "plan.pdf",
+  "sha256": "ff80f35af4702e874d823d5da04f1de141af710559173083b6a9b10e4e73135f",
+  "page": 1,
+  "plan_type": "clinic_office_not_to_scale",
+  "source": {
+    "description": "VA 653-24-103 Replace Finishes B1AC D-Wing, Roseburg — sheet A-03a (SAM.gov c71cd5d50c0b488daf648b2f744a3d62, Attachment 6)",
+    "licence": "US federal solicitation drawing posted publicly on SAM.gov (in-house VA); redistributed for engineering test purposes only",
+    "via": "OpenTakeoff apache-2.0-final @ 84c7f48e (Apache-2.0): evals/mcp-workflow-bench/plan-set/roseburg/va-roseburg-a03a.pdf"
+  },
+  "scale": {
+    "label": null,
+    "drawn_to_scale": false,
+    "basis": "Sheet is marked NTS and its room boxes contradict the printed net SF. No scale exists to measure with."
+  },
+  "expect": {
+    "measurable": false,
+    "why": "An NTS sheet must come back unmeasured and flagged — never measured at a guessed scale."
+  },
+  "rooms": [],
+  "review": {
+    "human_reviewed": false,
+    "prepared_by": "AI agent from the PDF vector linework (OpenTakeoff plan-set v2); every vertex cites its source segments. Not yet checked by a person."
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}

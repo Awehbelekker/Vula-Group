@@ -31,7 +31,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-GRAPH_BASE = "https://graph.facebook.com/v19.0"
+from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version lives in config)
 COEXIST_FIELDS = ("smb_message_echoes", "history", "smb_app_state_sync")
 HISTORY_PER_CHAT = 50
 OWNER_ON_PHONE = "Owner (WhatsApp Business app)"
@@ -73,7 +73,7 @@ async def request_app_sync(phone_number_id: str, token: str) -> Dict[str, str]:
     async with httpx.AsyncClient(timeout=20.0) as client:
         for key, sync_type in (("contacts", "smb_app_state_sync"), ("history", "history")):
             try:
-                resp = await client.post(f"{GRAPH_BASE}/{phone_number_id}/smb_app_data",
+                resp = await client.post(graph_url(f"{phone_number_id}/smb_app_data"),
                                          headers={"Authorization": f"Bearer {token}"},
                                          json={"messaging_product": "whatsapp", "sync_type": sync_type})
                 out[key] = "requested" if resp.is_success else (

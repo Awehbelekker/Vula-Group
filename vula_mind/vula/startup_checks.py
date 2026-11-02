@@ -1,7 +1,8 @@
 """vula/startup_checks.py — boot-time "did the migrations actually get applied" probe.
 
-Migrations in migrations/*.sql are applied BY HAND in the Supabase SQL editor — there is no
-runner and no schema_migrations table. The recurring failure mode (whatsapp_chat_messages,
+Migrations in migrations/*.sql were applied BY HAND in the Supabase SQL editor. Since 31 Oct 2026
+tools/migrate.py applies them and records each in vula_schema_migrations (migration 240), but
+hand-applied databases and the SQL-editor fallback still exist, so this probe stays. The recurring failure mode (whatsapp_chat_messages,
 vula_chat_messages, and others) is: code ships expecting a table/column that was never created
 in prod, and the first sign of it is a silent runtime exception deep in a request.
 
@@ -161,6 +162,8 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("238", "vula_sheet_specs", None),
     ("239", "vula_forms", None),
     ("239", "vula_timesheet_entries", None),
+    ("240", "vula_schema_migrations", None),
+    # 241 only pins search_path on three trigger functions — nothing a select can probe.
 ]
 
 
@@ -194,7 +197,7 @@ def check_schema() -> list[str]:
     if missing:
         logger.error(
             "SCHEMA DRIFT — these migrations appear UNAPPLIED in this database: %s. "
-            "Apply the matching migrations/*.sql in the Supabase SQL editor.",
+            "Run tools/migrate.py apply, or paste the matching migrations/*.sql into the Supabase SQL editor.",
             "; ".join(missing),
         )
     else:

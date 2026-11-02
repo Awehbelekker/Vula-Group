@@ -10,10 +10,29 @@ os.environ.setdefault("QDRANT_BASE", "http://localhost:6333")
 os.environ.setdefault("API_KEY", "")
 os.environ.setdefault("DEBUG", "true")
 
+# Never a real database. 2026-10-31: production's vula_takeoff_jobs ("j1", "test-tenant") and
+# vula_material_rates ("Item 0", "OK Item", "Test Tile"…) held rows written by this suite — someone
+# ran it with production keys in their .env, and the write-through stores (vula/durable.py) sent
+# test data to the live tables. Assigned, not setdefault, so neither the shell nor .env can win
+# (pydantic-settings prefers the process environment over .env). A test that genuinely needs
+# Supabase sets VULA_TESTS_ALLOW_SUPABASE=1 and points at a throwaway branch.
+if os.environ.get("VULA_TESTS_ALLOW_SUPABASE") != "1":
+    for _k in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY",
+               "DATABASE_URL"):
+        os.environ[_k] = ""
+
 # Isolate persistent SQLite stores (tenants.db, ingestion_log.db, reflection.db)
 # in a throwaway directory so tests never pollute the developer's ~/.vula data
 # or each other. Honour an explicitly provided DATA_DIR if the caller set one.
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="vula_test_data_"))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_classifier_cache():
+    """The escalation AI check caches per message text (vula/escalation.py); never across tests."""
+    from vula import escalation
+    escalation._CLASSIFY_CACHE.clear()
+    yield
 
 
 @pytest.fixture(autouse=True)

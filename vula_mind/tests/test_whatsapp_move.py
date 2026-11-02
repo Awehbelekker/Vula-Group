@@ -77,7 +77,7 @@ async def test_a_move_registers_on_their_account_and_keeps_its_place(world):
     d, calls, alerts, _ = world
     out = await _move()
     assert out.moved is True and "nothing changed for your customers" in out.move_note
-    assert ("POST", "https://graph.facebook.com/v19.0/P0001/register") in calls
+    assert ("POST", "https://graph.facebook.com/v25.0/P0001/register") in calls
     row = _by(d, "P0001")
     assert row["waba_id"] == "THEIR-WABA" and row["access_token"] == "enc:their-token"   # theirs now
     assert row["purpose"] == "shop" and row["is_primary"] is True and row["status"] == "connected"

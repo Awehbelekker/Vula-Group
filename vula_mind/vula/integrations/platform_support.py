@@ -49,7 +49,7 @@ def detect(text: str) -> bool:
 OPERATOR_TEMPLATE = "vula_operator_alert"   # one param: the alert line
 _OPERATOR_BODY = "\U0001F527 Vula alert:\n\n{{1}}\n\nSent by Vula's own monitoring."
 _OPERATOR_EXAMPLE = "The local AI computer has been unreachable for 15 minutes."
-GRAPH_BASE = "https://graph.facebook.com/v19.0"
+from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version lives in config)
 
 
 def _platform_creds() -> Optional[dict]:
@@ -70,7 +70,7 @@ def _number(to: str) -> str:
 async def _post(creds: dict, body: dict) -> bool:
     import httpx
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(f"{GRAPH_BASE}/{creds['phone_id']}/messages",
+        resp = await client.post(graph_url(f"{creds['phone_id']}/messages"),
                                  headers={"Authorization": f"Bearer {creds['token']}"}, json=body)
     if not resp.is_success:
         logger.info("operator alert send failed: %s", resp.text[:200])
@@ -113,7 +113,7 @@ async def ensure_operator_template() -> dict:
     if not creds or not creds.get("waba_id"):
         return {"skipped": "Vula's own number is not set"}
     import httpx
-    url = f"{GRAPH_BASE}/{creds['waba_id']}/message_templates"
+    url = graph_url(f"{creds['waba_id']}/message_templates")
     headers = {"Authorization": f"Bearer {creds['token']}"}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:

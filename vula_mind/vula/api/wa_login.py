@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from vula.meta_graph import graph_url
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["wa-login"])
@@ -476,7 +477,7 @@ async def _send_code_template(tenant_id: str, phone: str, code: str) -> bool:
                     "parameters": [{"type": "text", "text": code}]}]}}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+            resp = await client.post(graph_url(f"{creds['phone_id']}/messages"),
                                      headers={"Authorization": f"Bearer {creds['token']}"}, json=payload)
         if resp.is_success:
             return True

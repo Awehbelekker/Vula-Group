@@ -19,7 +19,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-GRAPH = "https://graph.facebook.com/v19.0"
+from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version lives in config)
 FIELDS = "about,address,description,email,profile_picture_url,websites,vertical"
 # Meta's categories, from the business type Vula knows.
 VERTICALS = {"food": "GROCERY", "retail": "RETAIL", "services": "PROF_SERVICES", "trades": "OTHER",
@@ -67,7 +67,7 @@ async def current(tenant_id: str) -> Dict[str, Any]:
         return {"error": "Connect this business's WhatsApp number first (Settings › WhatsApp)."}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(f"{GRAPH}/{creds['phone_id']}/whatsapp_business_profile",
+            r = await client.get(graph_url(f"{creds['phone_id']}/whatsapp_business_profile"),
                                  params={"fields": FIELDS},
                                  headers={"Authorization": f"Bearer {creds['token']}"})
         if not r.is_success:
@@ -112,7 +112,7 @@ async def apply(tenant_id: str, profile: Dict[str, Any]) -> Dict[str, Any]:
             picture_note = f"The picture wasn't changed ({err})."
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(f"{GRAPH}/{creds['phone_id']}/whatsapp_business_profile", json=body,
+            r = await client.post(graph_url(f"{creds['phone_id']}/whatsapp_business_profile"), json=body,
                                   headers={"Authorization": f"Bearer {creds['token']}"})
         if not r.is_success:
             return {"error": f"WhatsApp refused the profile: {_meta_error(r)}"}
