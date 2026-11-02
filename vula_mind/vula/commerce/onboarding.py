@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
+from vula.meta_graph import graph_url
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +272,7 @@ async def send_batch(tenant_id: str, *, template: str, language: str = "en",
                 continue
             try:
                 resp = await client.post(
-                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                    graph_url(f"{creds['phone_id']}/messages"),
                     headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                     json={"messaging_product": "whatsapp", "to": number, "type": "template",
                           "template": {"name": template, "language": {"code": language},

@@ -1,0 +1,64 @@
+{
+  "case": "pdf_text_schedule",
+  "plan_type": "pdf_text",
+  "synthetic": {
+    "kind": "pdf_text",
+    "lines": [
+      "A101  GROUND FLOOR PLAN",
+      "SCALE 1:100",
+      "",
+      "ROOM SCHEDULE",
+      "01 Reception | 24.50 m2",
+      "02 Boardroom | 36.00 m2",
+      "03 Open Plan Office | 180.25 m2",
+      "04 Kitchen | 18.00 m2",
+      "05 Ablutions | 12.75 m2",
+      "TOTAL | 271.50 m2",
+      "GFA 290 m2"
+    ]
+  },
+  "source": {
+    "description": "Synthetic. A CAD-exported PDF's printed room schedule; no model in the default mode.",
+    "licence": "Synthetic, Vula",
+    "via": "evals/takeoff_bench.py::_build"
+  },
+  "expect": {
+    "measurable": true
+  },
+  "rooms": [
+    {
+      "label": "Reception",
+      "area_m2": 24.5,
+      "truth": "analytic"
+    },
+    {
+      "label": "Boardroom",
+      "area_m2": 36.0,
+      "truth": "analytic"
+    },
+    {
+      "label": "Open Plan Office",
+      "area_m2": 180.25,
+      "truth": "analytic"
+    },
+    {
+      "label": "Kitchen",
+      "area_m2": 18.0,
+      "truth": "analytic"
+    },
+    {
+      "label": "Ablutions",
+      "area_m2": 12.75,
+      "truth": "analytic"
+    }
+  ],
+  "review": {
+    "human_reviewed": true,
+    "prepared_by": "analytic: exact by construction"
+  },
+  "tolerances": {
+    "area_pct": 2.0,
+    "length_pct": 2.0,
+    "count_exact": true
+  }
+}

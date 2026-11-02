@@ -34,6 +34,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from config import settings
+from vula.meta_graph import graph_url
 from core.prompt_safety import UNTRUSTED_CONTENT_RULE, fence
 from core.transcribe import transcribe_audio
 from core.verification import strip_caveat
@@ -759,6 +760,14 @@ async def receive_message(
                 _ct, _ = _resolve_number_route(_pnid)
                 _run_bg(_coexist.handle(change["field"], _ct, value), label=f"coexist_{change['field']}")
                 continue
+            # Account-level events (template status/category, number quality, account bans):
+            # logged, and bad ones alert the operator (vula/api/whatsapp_account_events.py). The
+            # entry id is the WhatsApp Business Account id. Never the messages path.
+            from vula.api import whatsapp_account_events as _acct
+            if change.get("field") in _acct.ACCOUNT_FIELDS:
+                _run_bg(_acct.handle(change["field"], entry.get("id", ""), value),
+                        label=f"account_event_{change['field']}")
+                continue
             for msg in messages:
                 phone = msg.get("from", "")
                 msg_id = msg.get("id", "")
@@ -1063,6 +1072,7 @@ async def receive_message(
                             _run_bg(_one_at_a_time(route_tenant, phone, _handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
                                 content_sha=doc.get("sha256") or None, route_mode=route_mode,
+                                caption=doc.get("caption") or "",
                             )), label="document_ingest", turn={
                                 "tenant_id": route_tenant, "phone": phone, "kind": "document",
                                 "text": filename, "wamid": msg_id})
@@ -2280,6 +2290,13 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     from core.sentry_utils import tag_tenant
     tag_tenant(tenant_id)
 
+    # ── Someone who may be at risk of harming themselves: help first, never a sales reply
+    # (vula/safety.py — fixed text with the crisis lines, and a person at the business told).
+    from vula import safety
+    if await safety.handle(phone, text, tenant_id):
+        _note_handler("crisis_support")
+        return
+
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _OPTOUT_RE.match(text):
         await _handle_opt_out(phone, tenant_id)
@@ -3002,7 +3019,7 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
 async def _handle_document_ingest(
     phone: str, media_id: str, filename: str, mime_type: str,
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
-    route_mode: Optional[str] = None,
+    route_mode: Optional[str] = None, caption: str = "",
 ) -> None:
     """Ingest a document/image sent by a tenant into their knowledge base.
 
@@ -3072,7 +3089,9 @@ async def _handle_document_ingest(
         "image/png",
         "image/webp",
     }
-    if mime_type and mime_type not in _INGESTABLE_MIMES:
+    # A DXF drawing arrives as application/dxf, image/vnd.dxf or octet-stream — Takeoff reads it.
+    is_dxf = (filename or "").lower().endswith(".dxf")
+    if mime_type and mime_type not in _INGESTABLE_MIMES and not is_dxf:
         await _send_reply(
             phone,
             f"I can't ingest '{filename or 'that file'}' yet. "
@@ -3135,6 +3154,23 @@ async def _handle_document_ingest(
         # checked and staged; the owner confirms before anything is booked.
         if local_path.suffix.lower() == ".xlsx" and await _returned_form_first(tenant_id, phone, local_path):
             return
+
+        # A building plan from the business's own team (Estimating on): measured, previewed, and
+        # priced only when they tap Price it (vula/takeoff/whatsapp_flow.py). Anything else is
+        # filed as before.
+        if local_path.suffix.lower() in (".pdf", ".dxf"):
+            from vula import team_index
+            from vula.takeoff.whatsapp_flow import plan_first
+            # The business's own team only — on a knowledge-mode line anyone may send a file.
+            on_team = bool(_is_tenant_owner(tenant_id, phone) or team_index.member_for_phone(tenant_id, phone))
+            if await plan_first(tenant_id, phone, local_path, filename, caption, is_staff=on_team):
+                _note_handler("takeoff_plan")
+                return
+            if local_path.suffix.lower() == ".dxf":
+                await _send_reply(phone, "That's a DXF drawing. I read drawings in Takeoff, which "
+                                         "isn't switched on for this business — ask Vula to turn on "
+                                         "Estimating.", tenant_id)
+                return
 
         # No Meta sha256 on the webhook → hash the bytes now and claim before any real work.
         # (Still after the ack in this path, but it stops the expensive scan/ingest/reply
@@ -5984,7 +6020,7 @@ async def _download_media_bytes(media_id: str) -> Optional[bytes]:
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             info = await client.get(
-                f"{settings.whatsapp_api_url}/{media_id}",
+                graph_url(f"{media_id}"),
                 headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
             )
             info.raise_for_status()
@@ -6114,7 +6150,7 @@ async def _download_document(media_id: str, tenant_id: str, filename: str, mime_
         async with httpx.AsyncClient(timeout=60.0) as client:
             # Step 1: get download URL
             info = await client.get(
-                f"{settings.whatsapp_api_url}/{media_id}",
+                graph_url(f"{media_id}"),
                 headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
             )
             info.raise_for_status()
@@ -6507,7 +6543,7 @@ async def _download_media(media_id: str, contractor_id: str, task_id: str) -> st
         async with httpx.AsyncClient(timeout=30.0) as client:
             # Get the download URL
             resp = await client.get(
-                f"{settings.whatsapp_api_url}/{media_id}",
+                graph_url(f"{media_id}"),
                 headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
             )
             resp.raise_for_status()
@@ -7831,7 +7867,7 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json=body,
             )
@@ -8136,7 +8172,7 @@ async def send_template_message(tenant_id: str, to: str, name: str, params: list
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "template",
                       "template": payload})
@@ -8170,7 +8206,7 @@ async def send_template(tenant_id: str, to: str, name: str, params: list,
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "template",
                       "template": payload})
@@ -8210,7 +8246,7 @@ async def _send_notify_template(creds: dict, number: str, tenant_id: str) -> boo
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}",
                          "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number,
@@ -8431,7 +8467,7 @@ async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={
                     "Authorization": f"Bearer {creds['token']}",
                     "Content-Type": "application/json",
@@ -8541,7 +8577,7 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
             for i, part in enumerate(parts):
                 resp = await _post_unsent_retry(client, (
-                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                    graph_url(f"{creds['phone_id']}/messages"),
                     {"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                     {"messaging_product": "whatsapp", "to": number, "type": "text",
                      "text": {"body": part[:_WA_TEXT_LIMIT]}}))
@@ -8632,7 +8668,7 @@ async def _send_invoice_document(
     if number.startswith("0"):
         number = "27" + number[1:]
 
-    base = f"https://graph.facebook.com/v19.0/{creds['phone_id']}"
+    base = graph_url(f"{creds['phone_id']}")
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # 1. Upload the PDF to Meta and obtain a media id
@@ -10072,7 +10108,7 @@ async def _send_wa_buttons(creds: dict, number: str, body: str, buttons: list,
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
                       "interactive": {"type": "button",
@@ -10104,7 +10140,7 @@ async def _send_wa_cta_url(creds: dict, number: str, body: str, label: str, url:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
                       "interactive": {"type": "cta_url",
@@ -10134,7 +10170,7 @@ async def _send_wa_list(creds: dict, number: str, header: str, body: str,
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
                       "interactive": {"type": "list",
@@ -10161,7 +10197,7 @@ async def _send_wa_image(creds: dict, number: str, image_url: str, caption: str 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "image",
                       "image": {"link": image_url, **({"caption": caption[:1024]} if caption else {})}},
@@ -10215,7 +10251,7 @@ async def _send_wa_carousel(creds: dict, number: str, body: str, cards: list) ->
         for kind in kinds:
             try:
                 resp = await client.post(
-                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                    graph_url(f"{creds['phone_id']}/messages"),
                     headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                     json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
                           "interactive": {"type": "carousel", "body": {"text": body[:1024]},
@@ -10441,7 +10477,7 @@ async def _send_wa_product_list(creds: dict, number: str, catalog_id: str, heade
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
                       "interactive": {"type": "product_list",
@@ -10465,7 +10501,7 @@ async def _send_wa_catalog_button(creds: dict, number: str, body: str, thumbnail
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                graph_url(f"{creds['phone_id']}/messages"),
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
                       "interactive": {"type": "catalog_message", "body": {"text": body[:1024]},

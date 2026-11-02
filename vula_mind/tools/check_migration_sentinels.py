@@ -28,6 +28,7 @@ NO_PROBE = {
     "193": "storage policies + a policy helper function — no public-schema table or column",
     "216": "widens the commerce_expenses status CHECK only — no table or column to probe",
     "217": "changes a column default and backfills ui_v2 — 215's sentinel already probes the column",
+    "241": "sets search_path on three trigger functions (function config) — no table or column to probe",
 }
 
 

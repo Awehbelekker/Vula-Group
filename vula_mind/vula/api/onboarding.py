@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import httpx
+from vula.meta_graph import graph_url
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Security, UploadFile, File, Form
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, EmailStr, field_validator
@@ -307,7 +308,7 @@ async def _send_whatsapp(to: str, message: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"{settings.whatsapp_api_url}/{settings.whatsapp_phone_id}/messages",
+                graph_url(f"{settings.whatsapp_phone_id}/messages"),
                 headers={
                     "Authorization": f"Bearer {settings.whatsapp_token}",
                     "Content-Type": "application/json",

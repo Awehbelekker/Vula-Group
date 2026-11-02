@@ -113,8 +113,10 @@ def _build_summary_sheet(wb: Any, boq: dict, project_name: str) -> None:
         (f"Markup ({boq.get('markup_pct', 15):.0f}%)", boq.get("markup_amount", 0)),
         ("Grand Total", boq.get("grand_total", 0)),
         ("", ""),
-        ("VAT (15%)", boq.get("grand_total", 0) * 0.15),
-        ("Total incl. VAT", boq.get("grand_total", 0) * 1.15),
+        # VAT worked out in cents by the server (BOQ.to_dict), not float × 0.15 here.
+        ("VAT (15%)", boq["vat_cents"] / 100 if "vat_cents" in boq else boq.get("grand_total", 0) * 0.15),
+        ("Total incl. VAT", boq["total_incl_vat_cents"] / 100 if "total_incl_vat_cents" in boq
+         else boq.get("grand_total", 0) * 1.15),
     ]
 
     for i, (label, value) in enumerate(rows, start=5):

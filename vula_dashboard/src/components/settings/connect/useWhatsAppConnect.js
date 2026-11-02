@@ -17,6 +17,8 @@ export const FB_APP_ID = import.meta.env.VITE_FB_APP_ID || ''
 // Meta's Embedded Signup configuration. Without it FB.login opens nothing useful and the button
 // used to hang on "Connecting…" — so Connect stays off and the card says why (2026-10-24).
 export const FB_CONFIG_ID = import.meta.env.VITE_FB_CONFIG_ID || ''
+// Meta Graph API version for the FB SDK. Keep it the same as the backend's GRAPH_API_VERSION.
+export const FB_GRAPH_VERSION = import.meta.env.VITE_FB_GRAPH_VERSION || 'v25.0'
 
 // What a number can be for (vula_mind/vula/whatsapp_numbers.py).
 export const PURPOSES = [
@@ -110,7 +112,7 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
         appId: FB_APP_ID,
         autoLogAppEvents: true,
         xfbml: true,
-        version: 'v19.0',
+        version: FB_GRAPH_VERSION,
       })
     }
   }, [])

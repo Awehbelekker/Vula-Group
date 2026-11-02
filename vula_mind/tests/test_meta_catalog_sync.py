@@ -84,7 +84,7 @@ async def test_a_connected_catalogue_gets_every_product_with_its_colour_group(te
         res = await meta_catalog.sync("seedleme")
     assert res == {"status": "success", "synced": 2, "colour_groups": 1, "catalog_id": "cat123", "handles": ["h1"]}
     call = client.post.call_args
-    assert call.args[0] == "https://graph.facebook.com/v19.0/cat123/items_batch"
+    assert call.args[0] == "https://graph.facebook.com/v25.0/cat123/items_batch"
     assert call.kwargs["json"]["item_type"] == "PRODUCT_ITEM"
     assert [r["data"]["color"] for r in call.kwargs["json"]["requests"]] == ["Black", "Grey"]
 

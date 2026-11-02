@@ -3,7 +3,9 @@
 Vula's own alerts go to the operator (Ian, `PLATFORM_SUPPORT_PHONE`) on WhatsApp. They come from
 **Vula's own number**, never from a business's number. This covers setup gaps (`/ready`), the local
 AI computer being unreachable, a stalled server, cloud AI being down, trials ending, a stuck
-WhatsApp move, the knowledge-base checks, and feedback a business's team sends about Vula itself.
+WhatsApp move, the knowledge-base checks, a business's WhatsApp account health from Meta's
+webhook (a rejected, paused or disabled template, a quality drop, a banned or restricted account:
+`vula/api/whatsapp_account_events.py`), and feedback a business's team sends about Vula itself.
 All of them go through one function: `vula/integrations/platform_support.py::alert_operator`.
 
 Until 31 Oct 2026 they went out on Off the Hook's number, so a client's line carried Vula's alerts

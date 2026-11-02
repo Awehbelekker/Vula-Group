@@ -63,6 +63,11 @@ jobs:
       - name: Check client code for secrets
         run: python tools/check_client_secrets.py
 
+      # Takeoff accuracy: every plan case that needs no model must measure within tolerance
+      # (2% area, exact counts). Prints the error per plan type. evals/takeoff_bench.py.
+      - name: Takeoff accuracy benchmark
+        run: python -m evals.takeoff_bench
+
   # ── Docker image — the actual Railway build ───────────────────────────────────
   # Every deploy 2026-09-02 → 2026-09-10 failed silently at build (`COPY
   # requirements.txt` — wrong context) while GitHub CI stayed green, so prod ran
