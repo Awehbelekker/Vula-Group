@@ -68,6 +68,15 @@ export function useEmailConnect({ tenantId, adminEmail }) {
     loadStatus()
   }
 
+  // A mailbox that can't sign in: the form opens filled in (all but the password), and saving it
+  // replaces the saved login rather than adding a second mailbox (2 Nov 2026).
+  const reconnect = (a) => {
+    setError(null)
+    setForm({ ...blank, email: a.email || '', from_name: a.from_name || '', send_mode: a.send_mode || 'draft',
+      imap_host: a.imap_host || '', imap_port: a.imap_port || 993, smtp_host: a.smtp_host || '', smtp_port: a.smtp_port || 465 })
+    setShowForm(true)
+  }
+
   const backfill = async (accountId) => {
     setBusyAccountId(accountId)
     await fetch(`${VULA_API}/v1/email/backfill/${tenantId}?account_id=${accountId}`, { method: 'POST' })
@@ -76,5 +85,5 @@ export function useEmailConnect({ tenantId, adminEmail }) {
   }
 
   return { accounts, loading, showForm, setShowForm, form, setForm, busy, error, setError, busyAccountId,
-    applyPreset, connect, disconnect, setPrimary, backfill }
+    applyPreset, connect, disconnect, setPrimary, backfill, reconnect }
 }

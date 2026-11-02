@@ -13,7 +13,7 @@ import { PRESETS, blank, useEmailConnect } from './settings/connect/useEmailConn
 
 export default function VulaEmailConnect({ tenantId, adminEmail }) {
   const { accounts, loading, showForm, setShowForm, form, setForm, busy, error, setError, busyAccountId,
-    applyPreset, connect, disconnect, setPrimary, backfill } = useEmailConnect({ tenantId, adminEmail })
+    applyPreset, connect, disconnect, setPrimary, backfill, reconnect } = useEmailConnect({ tenantId, adminEmail })
 
   const inp = { width: '100%', padding: '9px 11px', border: '1px solid var(--text)', borderRadius: 6, fontSize: 13, color: 'var(--surface-alt)', background: 'var(--ink)', boxSizing: 'border-box' }
 
@@ -23,9 +23,14 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
         <div style={styles.icon}>✉️</div>
         <div><h3 style={styles.title}>Email (IMAP / SMTP)</h3>
           <p style={styles.subtitle}>Connect as many mailboxes as you need — admin@, sales@, a personal Gmail…</p></div>
-        <span style={{ ...styles.badge, color: accounts.length ? 'var(--ok)' : 'var(--muted)',
-          background: accounts.length ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)' }}>
-          {accounts.length ? `${accounts.length} connected` : 'None connected'}</span>
+        {accounts.some(a => a.failing) ? (
+          <span style={{ ...styles.badge, color: 'var(--warn-text)', background: 'var(--warn-soft)' }}>
+            {`${accounts.filter(a => a.failing).length} of ${accounts.length} not signing in`}</span>
+        ) : (
+          <span style={{ ...styles.badge, color: accounts.length ? 'var(--ok)' : 'var(--muted)',
+            background: accounts.length ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)' }}>
+            {accounts.length ? `${accounts.length} connected` : 'None connected'}</span>
+        )}
       </div>
 
       {loading ? <p style={styles.desc}>Loading…</p> : accounts.length > 0 && (
@@ -41,8 +46,16 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
                   {a.send_mode === 'send' ? 'Sends directly' : 'Draft-only (you send)'}
                   {a.last_sync_at ? ` · last synced ${new Date(a.last_sync_at).toLocaleString()}` : ' · not yet synced'}
                 </div>
+                {a.failing && (
+                  <div role="status" style={{ ...styles.subvalue, color: 'var(--warn-text)', background: 'var(--warn-soft)', padding: '6px 8px', borderRadius: 6, marginTop: 4 }}>
+                    Can't sign in: {a.problem}. Nothing new from this mailbox is coming into Vula. Connect it again with its current password.
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                {a.failing && (
+                  <button onClick={() => reconnect(a)} disabled={busyAccountId === a.id} style={styles.btnSmall}>Connect again</button>
+                )}
                 {!a.is_primary && (
                   <button onClick={() => setPrimary(a.id)} disabled={busyAccountId === a.id} style={styles.btnSmall}>Make primary</button>
                 )}

@@ -39,6 +39,8 @@ _MAX_ATTACH_BYTES = 15 * 1024 * 1024
 # before flagging a mailbox as broken — enough to ride out a single transient blip without
 # nagging, short enough that a real outage (revoked password, host change) surfaces same-day.
 _FAIL_NOTIFY_THRESHOLD = 3
+SAVED_PASSWORD_LOCKED = ("the saved password can't be unlocked (it was saved before Vula's encryption key "
+                         "changed) - connect the mailbox again")
 
 _SCHEDULE_KW = ("schedule", "meeting", "meet ", "available", "availability", "calendar",
                 "appointment", "site visit", "what time", "when can", "set up a call")
@@ -598,6 +600,13 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
     # from each folder's own stored cursor — UIDs are only unique within a folder, so Inbox
     # and Sent can't share one.
     inbox_last = int(from_uid) if from_uid is not None else int(row.get("last_sync_uid") or 0)
+    if creds.get("locked"):
+        # 2 Nov 2026: a blank password went to the mail server for three weeks and came back as
+        # "authentication failed", which read like a wrong password. Say what is actually wrong.
+        err = SAVED_PASSWORD_LOCKED
+        logger.warning("email sync skipped for %s/%s: %s", tenant_id, creds["email"], err)
+        await _record_sync_failure(db, tenant_id, account_id, creds["email"], fail_count, err)
+        return {"synced": 0, "error": err}
     try:
         inbox_result = await asyncio.to_thread(_fetch_new, creds, inbox_last, max_emails)
     except Exception as exc:

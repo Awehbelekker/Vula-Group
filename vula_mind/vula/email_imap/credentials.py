@@ -14,7 +14,6 @@ loop over every connected account.
 from __future__ import annotations
 
 import base64
-import hashlib
 import logging
 from typing import Optional
 
@@ -30,31 +29,34 @@ def _client():
                          settings.supabase_service_role_key or settings.supabase_service_key)
 
 
-def _fernet():
-    from cryptography.fernet import Fernet
-    seed = (settings.supabase_service_role_key or settings.supabase_service_key or "vula-email").encode()
-    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(seed).digest()))
-
-
 def encrypt_secret(password: str) -> str:
+    """Saved under the newest key (vula/secret_keys.py: SECRETS_KEY when set)."""
+    from vula import secret_keys
     try:
-        return "fernet:" + _fernet().encrypt(password.encode()).decode()
+        return secret_keys.encrypt(password)
     except Exception as exc:
         logger.warning("Fernet unavailable, storing obfuscated only: %s", exc)
         return "plain:" + base64.b64encode(password.encode()).decode()
 
 
 def decrypt_secret(stored: str) -> str:
+    """"" for a value no key unlocks — logged loudly once and listed on GET /ready."""
     if not stored:
         return ""
     if stored.startswith("fernet:"):
-        try:
-            return _fernet().decrypt(stored[7:].encode()).decode()
-        except Exception:
-            return ""
+        from vula import secret_keys
+        return secret_keys.decrypt(stored) or ""
     if stored.startswith("plain:"):
         return base64.b64decode(stored[6:]).decode()
     return stored
+
+
+def cannot_unlock(stored: Optional[str]) -> bool:
+    """True when a saved value is encrypted but no key unlocks it (so it would be used as "")."""
+    if not stored or not stored.startswith("fernet:"):
+        return False
+    from vula import secret_keys
+    return secret_keys.decrypt(stored) is None
 
 
 _SELECT_COLS = "id,tenant_id,email,from_name,imap_host,imap_port,smtp_host,smtp_port,secret,send_mode,status,is_primary"
@@ -68,6 +70,8 @@ def _row_to_creds(r: dict) -> dict:
         "smtp_host": r.get("smtp_host"), "smtp_port": r.get("smtp_port") or 465,
         "password": decrypt_secret(r["secret"]), "send_mode": r.get("send_mode") or "draft",
         "is_primary": bool(r.get("is_primary")),
+        # the saved password can't be unlocked (key changed since): don't try a blank login
+        "locked": cannot_unlock(r.get("secret")),
     }
 
 

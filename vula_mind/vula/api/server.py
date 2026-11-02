@@ -1715,6 +1715,15 @@ async def lifespan(app: FastAPI):
         # changes (the scheduler process only, so two workers don't both send it).
         if settings.run_scheduled_jobs:
             try:
+                # Saved logins move onto SECRETS_KEY once it is set (vula/secret_keys.py);
+                # compare-and-set per value, so a second worker doing it too is harmless.
+                from vula import secret_keys
+                if secret_keys.own_key_set():
+                    from vula.commerce import service as _svc
+                    await __a.to_thread(secret_keys.reencrypt_all, _svc._client())
+            except Exception as exc:
+                log.warning("saved-secret re-encrypt skipped: %s", type(exc).__name__)
+            try:
                 from core.mass_mind.health import should_alert
                 from vula import readiness
                 from vula.integrations.platform_support import alert_operator, ensure_operator_template

@@ -41,6 +41,11 @@ def platform_gaps(schema_missing: Optional[list] = None) -> list[dict]:
     if not (settings.platform_wa_phone_id and settings.platform_wa_token and settings.platform_waba_id):
         gaps.append(_gap("Vula's own WhatsApp number is not set: operator alerts are only logged",
                          "Set PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN"))
+    if not (settings.secrets_key or "").strip():
+        gaps.append(_gap("Saved logins and payment keys are locked with a key made from the Supabase key: "
+                         "changing that key makes every one of them unusable",
+                         "Set SECRETS_KEY in Railway to a long random value, then railway up "
+                         "(everything saved is re-saved under it at boot)"))
     for m in schema_missing or []:
         gaps.append(_gap(f"Database is missing {m}", "Apply that migrations/*.sql in the Supabase SQL editor"))
     try:
@@ -124,9 +129,42 @@ def tenant_gaps(client) -> dict[str, list[dict]]:
                      f"{'are' if len(missing) > 1 else 'is'} missing, so invoices "
                      f"can't be valid tax invoices",
                 "Add them under Settings › Invoices, or untick VAT registered if it isn't")
+    # Saved logins that no key unlocks (vula/secret_keys.py), and mailboxes that keep failing to
+    # sign in — both were invisible: the dashboard said "connected" for three weeks (2 Nov 2026).
+    try:
+        from vula import secret_keys
+        for tid, gs in secret_keys.undecryptable(client).items():
+            for g in gs:
+                add(tid, g["what"], g["fix"])
+    except Exception as exc:  # noqa: BLE001
+        logger.info("readiness: saved-secret check skipped (%s)", type(exc).__name__)
+    try:
+        for r in _rows(client, "vula_email_accounts", "tenant_id,email,status,sync_fail_count,last_error"):
+            if r.get("status") == "error":
+                add(r["tenant_id"], f"Mailbox {r.get('email')} can't sign in "
+                                    f"({r.get('sync_fail_count') or 0} failed syncs): {mailbox_problem(r.get('last_error'))}",
+                    "Settings › Email: connect the mailbox again with its current password")
+    except Exception as exc:  # noqa: BLE001
+        logger.info("readiness: mailbox check skipped (%s)", type(exc).__name__)
     for tid in tids:
         out.setdefault(tid, [])
     return out
+
+
+def mailbox_problem(last_error: Optional[str]) -> str:
+    """A mailbox sync error in words an owner understands."""
+    e = (last_error or "").lower()
+    if "can't be unlocked" in e:
+        return "the saved password can't be unlocked (it was saved before Vula's encryption key changed)"
+    if "authenticationfailed" in e or "authentication failed" in e or "login failed" in e or "invalid credentials" in e:
+        return "the mail server refused the password"
+    if "timed out" in e or "timeout" in e:
+        return "the mail server didn't answer"
+    if "getaddrinfo" in e or "name or service not known" in e or "nodename" in e:
+        return "the mail server address can't be found"
+    if "ssl" in e or "certificate" in e:
+        return "a secure connection to the mail server failed"
+    return (last_error or "unknown error")[:120]
 
 
 def report() -> dict:

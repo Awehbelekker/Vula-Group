@@ -54,19 +54,25 @@ async def connect(body: ConnectIn, authorization: str = Header(default="")) -> d
     # First mailbox a tenant connects becomes primary automatically; later ones don't touch
     # the existing primary — use /set-primary explicitly to change it.
     try:
-        existing = db.table("vula_email_accounts").select("id").eq("tenant_id", body.tenant_id).limit(1).execute().data
+        existing = (db.table("vula_email_accounts").select("id,email,is_primary")
+                    .eq("tenant_id", body.tenant_id).execute().data or [])
     except Exception as exc:
         return {"status": "error", "error": f"lookup failed (run migration 093?): {exc}"}
-    is_first = not existing
+    # Connecting a mailbox that is already there (new password) keeps its primary flag; a new
+    # mailbox is primary only when it is the business's first.
+    same = next((r for r in existing if (r.get("email") or "").lower() == body.email.lower()), None)
+    is_first = bool(same.get("is_primary")) if same else not existing
 
     try:
         row = db.table("vula_email_accounts").upsert({
-            "tenant_id": body.tenant_id, "email": body.email, "from_name": body.from_name,
+            "tenant_id": body.tenant_id, "email": (same or {}).get("email") or body.email,
+            "from_name": body.from_name,
             "imap_host": body.imap_host, "imap_port": body.imap_port,
             "smtp_host": body.smtp_host, "smtp_port": body.smtp_port,
             "secret": encrypt_secret(body.password), "send_mode": body.send_mode,
             "notify_phone": body.notify_phone, "is_primary": is_first,
             "status": "connected", "connected_by": body.connected_by,
+            "sync_fail_count": 0, "last_error": None,
             "connected_at": "now()", "updated_at": "now()",
         }, on_conflict="tenant_id,email").execute()
     except Exception as exc:
@@ -81,11 +87,21 @@ async def connect(body: ConnectIn, authorization: str = Header(default="")) -> d
 async def status(tenant_id: str) -> dict:
     try:
         rows = (_client().table("vula_email_accounts")
-                .select("id,email,from_name,send_mode,status,is_primary,connected_at,last_sync_at")
+                .select("id,email,from_name,send_mode,status,is_primary,connected_at,last_sync_at,"
+                        "sync_fail_count,last_error,imap_host,imap_port,smtp_host,smtp_port")
                 .eq("tenant_id", tenant_id).order("is_primary", desc=True).execute().data or [])
     except Exception:
         rows = []
-    return {"tenant_id": tenant_id, "accounts": rows, "count": len(rows)}
+    # 2 Nov 2026: the card said "connected" for mailboxes that had failed to sign in for three
+    # weeks. A failing mailbox now carries the problem in plain words; the raw error stays here.
+    from vula.readiness import mailbox_problem
+    for r in rows:
+        failing = r.get("status") == "error" or int(r.get("sync_fail_count") or 0) >= 3
+        r["failing"] = failing
+        r["problem"] = mailbox_problem(r.get("last_error")) if failing else None
+        r.pop("last_error", None)
+    return {"tenant_id": tenant_id, "accounts": rows, "count": len(rows),
+            "failing": sum(1 for r in rows if r["failing"])}
 
 
 @router.post("/set-primary/{tenant_id}/{account_id}")
