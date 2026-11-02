@@ -34,7 +34,7 @@ def setup(monkeypatch):
                  "platform_support_phone": "27820000000", "tap_reminder_template": "",
                  "vapid_public_key": "", "vapid_private_key": "", "tap_hash_pepper": "",
                  "tap_to_pay_tenants": "", "platform_wa_phone_id": "pnid", "platform_waba_id": "waba",
-                 "platform_wa_token": "tok"}.items():
+                 "platform_wa_token": "tok", "secrets_key": "own-key"}.items():
         monkeypatch.setattr(s, k, v)
     monkeypatch.setattr("vula.api.tenants.is_active", lambda t: t != "suspended")
     monkeypatch.setattr(startup_checks, "unready_payment_tenants", lambda: ["bakery"])

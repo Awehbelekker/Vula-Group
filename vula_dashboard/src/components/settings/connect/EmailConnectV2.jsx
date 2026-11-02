@@ -20,7 +20,11 @@ export default function EmailConnectV2({ tenantId, adminEmail }) {
     <Card className="vst-card">
       <div className="vst-row">
         <span className="vst-label">Status</span>
-        <StatusChip tone={x.accounts.length ? 'ok' : 'muted'}>{x.accounts.length ? `${x.accounts.length} connected` : 'None connected'}</StatusChip>
+        {(() => {
+          const failing = x.accounts.filter(a => a.failing).length
+          if (failing) return <StatusChip tone="warn">{failing === x.accounts.length && failing === 1 ? 'Not signing in' : `${failing} of ${x.accounts.length} not signing in`}</StatusChip>
+          return <StatusChip tone={x.accounts.length ? 'ok' : 'muted'}>{x.accounts.length ? `${x.accounts.length} connected` : 'None connected'}</StatusChip>
+        })()}
       </div>
       <p className="vst-sub">Connect as many mailboxes as you need — admin@, sales@, a personal Gmail…</p>
 
@@ -34,8 +38,13 @@ export default function EmailConnectV2({ tenantId, adminEmail }) {
                   {a.send_mode === 'send' ? 'Sends directly' : 'Draft-only (you send)'}
                   {a.last_sync_at ? ` · last synced ${when(a.last_sync_at)}` : ' · not yet synced'}
                 </span>
+                {a.failing && (
+                  <p className="vcn-warn-box" role="status">Can't sign in: {a.problem}. Nothing new from this mailbox is coming into Vula. Connect it again with its current password.</p>
+                )}
               </div>
               <div className="vst-row">
+                {a.failing && <Button size="sm" Icon={Link2} disabled={x.busyAccountId === a.id}
+                  onClick={() => x.reconnect(a)} aria-label={`Connect ${a.email} again`}>Connect again</Button>}
                 {!a.is_primary && <Button size="sm" variant="secondary" Icon={Star} disabled={x.busyAccountId === a.id}
                   onClick={() => x.setPrimary(a.id)} aria-label={`Make ${a.email} the primary mailbox`}>Make primary</Button>}
                 <Button size="sm" variant="secondary" disabled={x.busyAccountId === a.id}

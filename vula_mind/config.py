@@ -163,6 +163,13 @@ class Settings(BaseSettings):
     platform_wa_phone_id: str = ""
     platform_waba_id: str = ""
     platform_wa_token: str = ""
+    # Vula's own key for saved logins and API keys (mailbox passwords, payment keys, ClickUp,
+    # Google...; vula/secret_keys.py, 2 Nov 2026). Any long random string, set by Ian in Railway.
+    # Unset = the old behaviour (a key made from the Supabase service key, which locks every saved
+    # login when that key is changed). secrets_previous_keys: comma-separated older values of
+    # SECRETS_KEY, kept only to unlock what was saved before a change; boot re-saves under the new one.
+    secrets_key: str = ""
+    secrets_previous_keys: str = ""
     # Weekly customer-view guard (vula/kb_maintenance.weekly_guard, 2026-10-20): re-check once a
     # week that customers see only public documents; WhatsApp platform_support_phone if not.
     kb_customer_view_weekly: bool = True
