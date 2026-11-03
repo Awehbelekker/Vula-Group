@@ -10,7 +10,7 @@ import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Uploa
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
-import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, downloadBoq, downloadBoqPdf, downloadProjectFile, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
+import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, decideDownloadRequest, downloadBoq, downloadBoqPdf, downloadProjectFile, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
   fetchProjectFile, fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject,
   useProjects, withdrawDecision } from "./useProjects";
 import "./projects.css";
@@ -588,6 +588,7 @@ function ProjectMoney({ tenantId, project }) {
           {p.sheet.not_in_books_cents > 0 && <Line label="Of the actual cost, not in Vula's books yet (paid in cash, by the client or not yet booked)" value={cents(p.sheet.not_in_books_cents)} />}
         </Section>)}
       <ClientSlips tenantId={tenantId} slips={t.proposed_slips || []} onChange={load} />
+      <DownloadRequests tenantId={tenantId} requests={t.download_requests || []} onChange={load} />
       <DirectPayments tenantId={tenantId} project={project} p={p} onChange={load} />
       <Section title="Account" hint={`Open book adds your fee (${p.fee_pct}%) to your cost; price only works from your invoices.`}>
         <Line label="Cost through you" value={cents(p.business_cost_cents)} />
@@ -644,6 +645,27 @@ function ClientSlips({ tenantId, slips, onChange }) {
           value={<span className="vpj-go"><span className="vula-money">{money(s.amount_cents)}</span>
             <Button size="sm" onClick={() => decide(s.id, true)}>Yes</Button>
             <Button size="sm" variant="secondary" onClick={() => decide(s.id, false)}>No</Button></span>} />
+      ))}
+    </Section>
+  );
+}
+
+/** The client's link shows the project's documents view only; downloading needs your yes
+ * (vula/commerce/project_share_docs.py). A yes opens downloads on that link for 7 days. */
+function DownloadRequests({ tenantId, requests, onChange }) {
+  if (!requests.length) return null;
+  const open = requests.filter((r) => r.status === "requested");
+  const decide = async (id, approve) => { if (await decideDownloadRequest(tenantId, id, approve)) onChange(); };
+  const state = (r) => r.status === "approved" ? `allowed until ${String(r.approved_until || "").slice(0, 10)}` : "declined";
+  return (
+    <Section title={`Download requests from the client link${open.length ? ` · ${open.length} waiting` : ""}`}
+      hint="The client can view the project's documents on their link. Downloading needs your yes — it then works on that link for 7 days.">
+      {requests.slice(0, 12).map((r) => (
+        <Line key={r.id} label={`${r.what} · asked ${String(r.requested_at || "").slice(0, 10)}`}
+          value={r.status === "requested"
+            ? <span className="vpj-go"><Button size="sm" onClick={() => decide(r.id, true)}>Allow</Button>
+              <Button size="sm" variant="secondary" onClick={() => decide(r.id, false)}>Decline</Button></span>
+            : <span className="vpj-sub">{state(r)}</span>} />
       ))}
     </Section>
   );

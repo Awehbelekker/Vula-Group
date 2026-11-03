@@ -3767,7 +3767,31 @@ async def admin_project_tracker(tenant_id: str, project: str):
         out["clients"], out["proposed_slips"] = [], []
     from vula.commerce import decisions
     out["decisions"] = await asyncio.to_thread(decisions.for_project, tenant_id, project)
+    from vula.commerce import project_share_docs as sd
+    out["download_requests"] = await asyncio.to_thread(sd.list_requests, tenant_id, project)
     return out
+
+
+class DownloadDecisionIn(BaseModel):
+    approve: bool
+    by: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/projects/download-requests/{request_id}/decide")
+async def admin_download_request_decide(tenant_id: str, request_id: str, body: DownloadDecisionIn):
+    """Yes or no to a client link's request to download documents (project_share_docs.py). Read back."""
+    import asyncio
+    from vula import open_questions as oq
+    from vula.commerce import project_share_docs as sd
+    try:
+        row = await asyncio.to_thread(sd.decide, tenant_id, request_id, body.approve, body.by)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    try:
+        oq.close_for(tenant_id, request_id, status="answered")
+    except Exception:
+        pass
+    return row
 
 
 @router.get("/{tenant_id}/admin/projects/file")

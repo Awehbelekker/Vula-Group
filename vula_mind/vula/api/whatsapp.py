@@ -2199,6 +2199,32 @@ async def _maybe_project_client_slip(phone: str, media_id: str, filename: str, m
     return True
 
 
+async def _answer_doc_download(tenant_id: str, phone: str, text: str, q: dict) -> bool:
+    """The owner's yes/no to a client link's download request (open question 'doc_download',
+    vula/commerce/project_share_docs.py)."""
+    import asyncio as _aio
+    from vula import open_questions as oq
+    from vula.commerce import project_share_docs as sd
+    low = (text or "").strip().lower().rstrip(".!")
+    if low in _YES_WORDS or _APPROVE_RE.match(text or ""):
+        approve = True
+    elif low in _NO_WORDS or _REJECT_RE.match(text or ""):
+        approve = False
+    else:
+        return False
+    try:
+        row = await _aio.to_thread(sd.decide, tenant_id, q["ref_id"], approve, phone)
+    except RuntimeError:
+        oq.close_for(tenant_id, q["ref_id"], status="answered")
+        await _send_reply(phone, "That download request was already answered.", tenant_id=tenant_id)
+        return True
+    oq.close_for(tenant_id, q["ref_id"], status="answered")
+    await _send_reply(phone, (f"✅ Done — downloads are open on that {row['project']} link until "
+                              f"{str(row.get('approved_until') or '')[:10]}." if approve else
+                              f"Okay — the {row['project']} link stays view only."), tenant_id=tenant_id)
+    return True
+
+
 async def _answer_client_slip(tenant_id: str, phone: str, text: str, q: dict) -> bool:
     """The owner's yes/no to a client's slip (open question kind 'client_slip')."""
     import asyncio as _aio
@@ -4350,6 +4376,8 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
         return await _answer_promo_scope(tenant_id, phone, text, q)
     if kind == "client_slip":
         return await _answer_client_slip(tenant_id, phone, text, q)
+    if kind == "doc_download":
+        return await _answer_doc_download(tenant_id, phone, text, q)
     if kind == "doc_project_list":
         return await _answer_doc_project_list(tenant_id, phone, text, q)
     if kind == "doc_project":
