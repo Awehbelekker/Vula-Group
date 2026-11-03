@@ -1,0 +1,6 @@
+title: Project file — every document by folder and supplier
+summary: One project's invoices, quotes, statements and drawings sorted by supplier, what looks missing, and a zip with a checked index.
+# Words that pick this task once the bookkeeper has the message (only this task's words in it).
+triggers: [by supplier, per supplier, project file, zip, folders, all the invoices, all invoices, every invoice,
+           all the documents, all documents, every document, missing invoices, invoices missing, missing documents, are missing]
+tools: [project_file, move_to_project, find_document, bank_payments, list_suppliers]

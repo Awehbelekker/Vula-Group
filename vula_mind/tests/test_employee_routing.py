@@ -222,7 +222,7 @@ def test_the_team_loads_from_the_file_tree():
     assert "hand_over" in shared and all(e.job and e.tools and e.keywords for e in team)
     assert {t.id for t in em.BY_ID["bookkeeper"].tasks} == {
         "project-bill", "payment-chase", "slips-and-expenses", "month-end", "bank-and-payments", "fix-a-record",
-        "custom-sheet"}
+        "custom-sheet", "project-file"}
 
 
 def test_every_task_has_a_prompt_cases_and_only_its_employees_tools():

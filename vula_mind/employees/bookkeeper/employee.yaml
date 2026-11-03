@@ -76,6 +76,7 @@ tools:
 - payment_link
 - price_advice
 - project_bill_file
+- project_file
 - project_profit
 - recent_orders
 - record_payment

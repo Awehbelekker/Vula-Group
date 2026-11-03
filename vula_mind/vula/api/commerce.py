@@ -3770,6 +3770,41 @@ async def admin_project_tracker(tenant_id: str, project: str):
     return out
 
 
+@router.get("/{tenant_id}/admin/projects/file")
+async def admin_project_file(tenant_id: str, project: str):
+    """The project's documents by folder and supplier, and what looks missing
+    (vula/commerce/project_file.py). Owner and managers only (server.py section rule)."""
+    import asyncio
+    from vula.api.tenants import display_name
+    from vula.commerce import project_file
+    from vula.storage_links import sign_row
+    out = await asyncio.to_thread(project_file.overview, tenant_id, project, display_name(tenant_id))
+    sign_row(out["documents_list"])
+    return out
+
+
+@router.get("/{tenant_id}/admin/projects/file.zip")
+async def admin_project_file_zip(tenant_id: str, project: str, audience: str = "internal"):
+    """The project file as a zip: folders by type and supplier, Index.xlsx read back first."""
+    import asyncio
+    from vula.api.tenants import display_name
+    from vula.commerce import project_file
+    if audience not in project_file.AUDIENCES:
+        raise HTTPException(status_code=400, detail="audience must be internal or client")
+    try:
+        data, man = await asyncio.to_thread(project_file.build_pack, tenant_id, project, audience,
+                                            display_name(tenant_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=f"There are {exc}.")
+    except RuntimeError as exc:
+        log.error("project file for %s/%s not built: %s", tenant_id, project, exc)
+        raise HTTPException(status_code=409, detail=f"The project file wasn't made: {exc}.")
+    name = project_file.zip_filename(man["project"], audience, man["as_of"])
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"',
+                             "X-Files-Failed": str(len(man["files_failed"]))})
+
+
 @router.get("/{tenant_id}/admin/employees")
 async def admin_employees(tenant_id: str):
     """The business's AI employees and its settings for each (core/skills/employees.py)."""
