@@ -1242,6 +1242,24 @@ PROJECT_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "project": {"type": "string", "description": "Project name as the user said it."}},
             "required": ["project"]}}},
+    # 3 Nov: "share all the invoices for <project> by folder and sorted by supplier".
+    {"type": "function", "function": {
+        "name": "project_file",
+        "description": "One project's documents in folders and by supplier. action 'overview' (default for "
+                       "questions): how many invoices, quotes and other documents per supplier with totals, "
+                       "and what looks missing — bank payments on the project with no document, documents "
+                       "that name the project but aren't filed under it. action 'pack': a zip of every "
+                       "document (invoices / quotes / statements / proofs of payment / drawings, each "
+                       "supplier in its own folder) with an Index spreadsheet checked against the "
+                       "documents, as a private link for the owner. audience 'client' leaves out "
+                       "statements, proofs of payment, contracts and internal reports. Use for 'send me all "
+                       "the Seaview invoices by supplier', 'zip the project's documents', 'what invoices "
+                       "are missing on X'. The reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "Project name as the user said it."},
+            "action": {"type": "string", "enum": ["overview", "pack"]},
+            "audience": {"type": "string", "enum": ["internal", "client"]}},
+            "required": ["project"]}}},
     # 27 Oct (DIGG, Belladonna): Rudi paid Flush, Edward and Elyas himself — the project's spend,
     # never the business's cost. Nothing could record it.
     {"type": "function", "function": {
@@ -1749,7 +1767,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         with_projects = True
     tools += [t for t in PROJECT_TOOLS
               if with_projects or t["function"]["name"] not in ("project_profit", "boq_template", "share_project",
-                                                                   "client_paid_direct", "project_bill_file")]
+                                                                   "client_paid_direct", "project_bill_file",
+                                                                   "project_file")]
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1781,7 +1800,10 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "custom_sheet": "finances", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "custom_sheet": "finances",
+    # every document of a project, statements and proofs of payment included: owner and managers
+    # only — no tab id grants it, so a restricted staff member never gets the tool.
+    "project_file": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -2854,6 +2876,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._share_project(tid, args, ctx)
             if name == "project_bill_file":
                 return await self._project_bill_file(tid, args)
+            if name == "project_file":
+                return await self._project_file(tid, args)
             if name == "custom_sheet":
                 return await self._custom_sheet(tid, args, ctx)
             if name == "fill_in_form":
@@ -3677,6 +3701,49 @@ class CommerceAdminSkill(BaseSkill):
         text += ("\n\nChecked against the books. Have a look before you send it to the client — "
                  "the links are for you and last a week.")
         return {"reply_verbatim": text, "balance_cents": out["figures"]["balance"]}
+
+    async def _project_file(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """A project's documents by folder and supplier (vula/commerce/project_file.py): the quick
+        view, or the zip with its checked index as a private link. Owner and managers only."""
+        import asyncio
+        from vula.api.tenants import display_name
+        from vula.commerce import project_file
+        from vula.commerce.service import canonical_project, project_key, registered_projects
+        raw = (args.get("project") or "").strip()
+        project = canonical_project(tid, raw) or raw
+        known = {project_key(r.get("name")) for r in registered_projects(tid)}
+        if not project or (known and project_key(project) not in known):
+            return {"status": "need_info", "message": f"I can't find a project called '{raw}'. Which project?"}
+        business = display_name(tid)
+        try:
+            ov = await asyncio.to_thread(project_file.overview, tid, project, business)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("project file overview failed for %s/%s: %s", tid, project, exc)
+            return {"error": "I couldn't read the project's documents just now — please try again shortly."}
+        if not ov["documents"]:
+            return {"reply_verbatim": f"No documents are filed under {ov['project']} yet."}
+        text = project_file.summary_text(ov)
+        if (args.get("action") or "overview") != "pack":
+            return {"reply_verbatim": text + "\n\nSay *zip it* and I'll put every document in folders by supplier."}
+        audience = args.get("audience") if args.get("audience") in project_file.AUDIENCES else "internal"
+        try:
+            data, man = await asyncio.to_thread(project_file.build_pack, tid, project, audience, business)
+        except LookupError:
+            return {"reply_verbatim": f"There are no documents for the client in {ov['project']} yet."}
+        except RuntimeError as exc:
+            logger.error("project file pack failed for %s/%s: %s", tid, project, exc)
+            return {"error": "The project file didn't check out, so I haven't sent it. You can see every "
+                             "document on the project page (Projects › the project › Documents)."}
+        link = await asyncio.to_thread(project_file.store_pack, tid, data, man)
+        if not link:
+            return {"reply_verbatim": text + "\n\nThe zip is too big to send here — download it from the project "
+                                             "page (Projects › the project › Documents › Download)."}
+        who = "for the client" if audience == "client" else "with every document"
+        out = (text + f"\n\n🗂️ Project file {who} ({man['files']} files, folders by supplier, Index.xlsx "
+               f"checked against the documents):\n{link}\n\nThe link is for you and lasts a week.")
+        if man["files_failed"]:
+            out += f"\n({len(man['files_failed'])} file(s) couldn't be read — the index marks them.)"
+        return {"reply_verbatim": out}
 
     async def _fill_in_form(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Make one of the fill-in forms and send it (vula/commerce/forms.py)."""

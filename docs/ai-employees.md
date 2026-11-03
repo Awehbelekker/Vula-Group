@@ -82,6 +82,10 @@ vula_mind/employees/
 │       │   ├── prompt.md               How to do it, step by step
 │       │   ├── cases.yaml              Example messages, checked on every change
 │       │   └── data/                   Reference files (e.g. the business's own layout)
+│       ├── project-file/               Project file — every document by folder and supplier
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   └── cases.yaml              Example messages, checked on every change
 │       └── slips-and-expenses/         Slips and expenses
 │           ├── task.yaml               When to use it (trigger words) and its tools
 │           ├── prompt.md               How to do it, step by step
@@ -256,6 +260,7 @@ _Invoices and payments, slips and expenses, the bank, project costs, VAT and tax
 | **Month-end and the reports** (`month-end`) — Profit and loss, cash in and out, VAT and tax, from the business's own books. | 'p&l', 'profit and loss', 'income statement', 'balance sheet', 'month end', 'month-end', 'financial report', 'financial statements', 'vat', 'tax', 'sars', 'cash flow', 'money in and out', 'how did we do' | `cash_summary`, `finance_insights`, `finance_settings`, `financial_report`, `outstanding_invoices`, `sales_summary`, `set_tax_regime`, `set_vat_registration`, `tax_calendar`, `tax_estimate`, `vat_position` |
 | **Chase payments** (`payment-chase`) — Who owes the business, how overdue, and reminders or a payment link — previewed first. | 'who owes', 'owes us', 'owe us', 'overdue', 'chase', 'payment reminder', 'remind them to pay', 'debtors', 'unpaid invoice', 'payment link', 'still owes' | `bank_payments`, `outstanding_invoices`, `payment_link`, `record_payment`, `send_invoice`, `send_payment_reminders` |
 | **Project bill / final account for the client** (`project-bill`) — Budget against actual against paid for one project, what the client paid suppliers directly, and the balance due. | 'final account', 'project bill', 'budget vs actual', 'budget against actual', 'balance due', 'what does the client owe', 'how much does the client owe', 'client statement', 'where the money went', 'over budget', 'under budget', 'close out', 'close the project' | `bank_payments`, `client_paid_direct`, `cost_sheet`, `create_invoice`, `list_suppliers`, `move_to_project`, `outstanding_invoices`, `project_bill_file`, `project_profit`, `send_invoice`, `share_project` |
+| **Project file — every document by folder and supplier** (`project-file`) — One project's invoices, quotes, statements and drawings sorted by supplier, what looks missing, and a zip with a checked index. | 'by supplier', 'per supplier', 'project file', 'zip', 'folders', 'all the invoices', 'all invoices', 'every invoice', 'all the documents', 'all documents', 'every document', 'missing invoices', 'invoices missing', 'missing documents', 'are missing' | `bank_payments`, `find_document`, `list_suppliers`, `move_to_project`, `project_file` |
 | **Slips and expenses** (`slips-and-expenses`) — Book a slip or an expense to the right account and project, and what the business owes people who paid. | 'slip', 'receipt', 'spent', 'expense', 'petty cash', 'reimburse', 'paid out of pocket', 'my own card', 'pay me back', 'pay her back', 'diesel', 'fuel' | `add_expense`, `bank_payments`, `confirm_expense`, `list_suppliers`, `move_to_project`, `reimbursement_balance` |
 
 <details><summary>The bank and payments received: the task prompt</summary>
@@ -409,6 +414,7 @@ THE TASK — booking slips and expenses.
 | `payment_link` | Send a customer a link to pay an amount — 'send Sam a payment link for R1,200', 'request R850 from Thabo for the deposit' |
 | `price_advice` | What to charge for an item or piece of work so the job makes its fee: the business's actual cost for it — for a trade per m2 (ceilings, drywall, painting, tilin… |
 | `project_bill_file` | The project's bill (final account) as a spreadsheet and a PDF, from the books: budget, actual and paid per trade, what the client paid suppliers directly, what … |
+| `project_file` | One project's documents in folders and by supplier: the quick view with what looks missing, or a zip of every document with an Index spreadsheet checked against the documents (owner and managers only). |
 | `project_profit` | How a project (job) is doing money-wise, from the bank: received, cost by trade, the cost-plus fee it should earn, its share of overheads, and profit — or every… |
 | `recent_orders` | List recent orders, optionally filtered by status (e.g |
 | `record_payment` | Record a payment received against an existing invoice, by its number (e.g |

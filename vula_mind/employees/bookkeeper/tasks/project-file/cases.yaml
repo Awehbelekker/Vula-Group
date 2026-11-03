@@ -1,0 +1,5 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Send me all the Seaview invoices by supplier", expect: project-file, tool: project_file}
+- {prompt: "Can you zip every document for Oak Street", expect: project-file, tool: project_file}
+- {prompt: "Which invoices are missing on Main Road", expect: project-file, tool: project_file}
+- {prompt: "Make the project file for Seaview for the client", expect: project-file, tool: project_file}

@@ -1896,6 +1896,9 @@ _SECTION_RULES = [
     # BOQ, its PDF and the QS view (admin/projects/qs-view).
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:boq-template\.xlsx|boq-library|projects/boq-online\.xlsx|"
                       r"projects/(?:tracker|share|shares|costing|direct-payments))(?:/|$)"), _MONEY_TABS),
+    # 2026-11-03: a project's whole file (every invoice, statement and proof of payment, as a
+    # zip) — owner and managers only, like the team settings.
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/file(?:\.zip)?(?:/|$)"), frozenset()),
     (None, re.compile(r"^/v1/users/[^/]+(?:/|$)"), frozenset()),
     (None, re.compile(r"^/v1/team/[^/]+/audit/?$"), frozenset()),
     # ...except a staff member's own "Got it" on a notice (vula/api/staff_notices.py)

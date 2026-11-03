@@ -71,6 +71,18 @@ export const downloadBoq = (tenantId, project) =>
 /** The priced bill as a PDF — the copy for clients and anyone outside the team. */
 export const downloadBoqPdf = (tenantId, project) =>
   saveFile(`/v1/commerce/${tenantId}/admin/projects/boq-online.pdf?project=${encodeURIComponent(project)}`, `${fileStem(project)}_priced_bill.pdf`);
+/** The project file (vula/commerce/project_file.py): documents by folder and supplier, and what looks
+ * missing. Owner and managers only — resolves to { forbidden: true } for anyone else. */
+export async function fetchProjectFile(tenantId, project) {
+  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/file?project=${encodeURIComponent(project)}`).catch(() => null);
+  if (!r) return { error: true };
+  if (r.status === 403) return { forbidden: true };
+  return r.ok ? r.json() : { error: true };
+}
+/** Every document as a zip in folders by supplier, with Index.xlsx; audience "internal" | "client". */
+export const downloadProjectFile = (tenantId, project, audience) =>
+  saveFile(`/v1/commerce/${tenantId}/admin/projects/file.zip?project=${encodeURIComponent(project)}&audience=${audience}`,
+    `${fileStem(project)}_project_file${audience === "client" ? "_client" : ""}.zip`);
 /** The QS's view of the project (no cost, fee or profit) — open to a login limited to Projects. */
 export const fetchQsView = (tenantId, project) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/qs-view?project=${encodeURIComponent(project)}`).then((r) => r.json());

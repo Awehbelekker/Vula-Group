@@ -10,8 +10,8 @@ import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Uploa
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
-import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, downloadBoq, downloadBoqPdf, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
-  fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject,
+import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, downloadBoq, downloadBoqPdf, downloadProjectFile, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
+  fetchProjectFile, fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject,
   useProjects, withdrawDecision } from "./useProjects";
 import "./projects.css";
 
@@ -208,7 +208,77 @@ function ProjectDocuments({ tenantId, project }) {
         <input ref={ref} type="file" multiple hidden tabIndex={-1} aria-hidden="true" onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
         {note && <span className="vpj-sub" role="status">{note}</span>}
       </div>
+      <ProjectFile tenantId={tenantId} project={project} />
       <FiledLibraryV2 tenantId={tenantId} project={project} title={project} />
+    </>
+  );
+}
+
+/** The project file (3 Nov 2026): every document by supplier with totals, what looks missing, and the
+ * whole file as a zip in folders by supplier — all of it, or the client's copy (no statements, proofs
+ * of payment, contracts or internal reports). Owner and managers only; hidden for anyone else. */
+function ProjectFile({ tenantId, project }) {
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    setF(null); setNote("");
+    fetchProjectFile(tenantId, project).then(setF);
+  }, [tenantId, project]);
+  if (!f || f.forbidden) return null;
+  if (f.error) return <Section title="Project file"><Empty>The project's documents couldn't be read just now.</Empty></Section>;
+  const m = f.missing;
+  const get = async (audience) => {
+    setBusy(audience); setNote("Putting the files together — this can take a minute…");
+    const res = await downloadProjectFile(tenantId, project, audience);
+    setBusy("");
+    setNote(res === "ok" ? "Downloaded. Index.xlsx in the zip lists every document with totals per supplier."
+      : res === "forbidden" ? "Only the owner and managers can download the project file."
+        : "The project file couldn't be made just now — please try again.");
+  };
+  const gaps = m ? m.payments_without_document.reduce((a, g) => a + g.amount_cents, 0) : 0;
+  return (
+    <>
+      <Section title={`Project file · ${f.documents} documents`}
+        hint="Every document filed under this project, by supplier. Invoices and quotes are totalled separately.">
+        {f.suppliers.length === 0 && <Empty>No supplier documents filed under this project yet.</Empty>}
+        {f.suppliers.map((s) => (
+          <Line key={s.supplier}
+            label={<span>{s.supplier}<span className="vpj-sub"> · {[
+              s.invoices && `${s.invoices} invoice${s.invoices === 1 ? "" : "s"}`,
+              s.quotes && `${s.quotes} quote${s.quotes === 1 ? "" : "s"} (${money(s.quotes_cents)})`,
+              s.documents - s.invoices - s.quotes > 0 && `${s.documents - s.invoices - s.quotes} other`,
+            ].filter(Boolean).join(", ")}</span></span>}
+            value={s.invoices ? cents(s.invoices_cents) : "—"} />
+        ))}
+        <Line label={<strong>Invoices in total</strong>} value={<strong>{cents(f.invoices_cents)}</strong>} />
+        <div className="vpj-go vpj-pad">
+          <Button disabled={!!busy} onClick={() => get("internal")}>{busy === "internal" ? "Making the zip…" : "Download all documents"}</Button>
+          <Button variant="secondary" disabled={!!busy} onClick={() => get("client")}>{busy === "client" ? "Making the zip…" : "Download the client's copy"}</Button>
+          {note && <span className="vpj-sub" role="status">{note}</span>}
+        </div>
+      </Section>
+      {m && (m.payments_without_document.length > 0 || m.documents_naming_project_not_filed.length > 0 || m.documents_without_file.length > 0) && (
+        <Section title="Missing"
+          hint="Bank payments on this project with no document behind them, and documents that name the project but aren't filed under it. Send the missing invoices to your WhatsApp number with the project as the caption.">
+          {m.payments_without_document.length > 0 && (
+            <Line label={<strong>{`Paid with no document · ${m.payments_without_document.length}`}</strong>} value={<strong>{cents(gaps)}</strong>} />)}
+          {m.payments_without_document.map((g, i) => (
+            <Line key={`p${i}`}
+              label={<span>{g.date} · {g.description}{g.supplier_on_file && <span className="vpj-sub"> · other {g.supplier_on_file} documents are on file</span>}</span>}
+              value={cents(g.amount_cents)} />
+          ))}
+          {m.documents_naming_project_not_filed.map((d) => (
+            <Line key={d.id} label={`Names ${project} but not filed under it: ${d.supplier}${d.number ? ` ${d.number}` : ""} (${d.filename})`}
+              value={d.amount_cents != null ? cents(d.amount_cents) : "—"} />
+          ))}
+          {m.documents_without_file.map((d) => (
+            <Line key={d.id} label={`No file on record: ${d.supplier}${d.number ? ` ${d.number}` : ""}`} value="—" />
+          ))}
+          {m.labour_payments.count > 0 && (
+            <Line label={`Wages and labour paid (${m.labour_payments.count} payments — usually no invoice)`} value={cents(m.labour_payments.total_cents)} />)}
+        </Section>
+      )}
     </>
   );
 }
