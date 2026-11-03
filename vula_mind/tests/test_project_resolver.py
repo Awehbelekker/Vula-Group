@@ -198,3 +198,16 @@ def test_sort_pending_reads_bank_lines_and_supplier_history_once(db, monkeypatch
     assert calls.count("commerce_bank_transactions") <= 2       # the prefetch (+ the month hint)
     assert calls.count("vula_filed_documents") <= 3             # waiting docs + one supplier read
     assert pr._run() == {}                                      # nothing left behind for the next run
+
+
+def test_a_badly_spelt_site_is_asked_about_never_filed(db):
+    """3 Nov 2026: a handwritten labour sheet's site read as a word two letters off the project
+    ("Porterfeeld" style) — too far for close_spelling, close enough to ask "Is this for X?"."""
+    r = pr.resolve(TID, {"site": "Portafiald"}, "Construction workers daily earnings")
+    assert r["project"] == "Porterfield" and r["kind"] == "spelled_like" and r["confidence"] < pr.AUTO_FILE
+    assert "portafiald" in r["reason"]
+
+
+def test_a_loose_spelling_outside_a_site_field_says_nothing(db):
+    assert pr.resolve(TID, {"description": "Portafiald"}, "Invoice for a mixer tap") is None
+    assert pr.resolve(TID, {"site": "Pretoria"}, "Invoice for a mixer tap") is None

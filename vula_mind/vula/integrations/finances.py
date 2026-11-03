@@ -370,8 +370,10 @@ def project_financials(tenant_id: str, project: str) -> dict:
     # Casual labour paid on this project (bank debits categorised as casual_labour, tagged to it).
     labour = 0.0
     try:
-        lab = (db.table("commerce_bank_transactions").select("amount_cents,project,account_code")
+        lab = (db.table("commerce_bank_transactions").select("id,amount_cents,project,account_code")
                .eq("tenant_id", tenant_id).in_("account_code", ["casual_labour", "subcontractors"]).limit(5000).execute().data or [])
+        from vula.commerce.bank_splits import apply as _apply_splits      # migration 244
+        lab = _apply_splits(tenant_id, lab)
         labour = sum(int(r.get("amount_cents") or 0) for r in _match(lab)) / 100.0
     except Exception as exc:
         logger.debug("project labour skipped (run migration 059?): %s", exc)

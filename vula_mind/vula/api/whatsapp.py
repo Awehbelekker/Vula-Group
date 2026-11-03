@@ -4011,6 +4011,20 @@ _FILE_UNDER_RE = re.compile(
     r"(?:under|to|for|on|in|into|against)\s+(?:the\s+)?(?:project\s+|site\s+|job\s+)?"
     r"(?P<name>[^?]+?)\s*[.!]*$",
     re.IGNORECASE)
+# "Above is all for Seaview" / "the above are for Oak Street" / "everything above is for X" / "these
+# are all for X" / "they're all for X", and in Afrikaans "alles hierbo is vir X" / "dit is alles
+# vir X". 2026-11-03: an owner sent six photos then "Above is all for <project>"; nothing above
+# matched it, so the assistant answered it as a remark and every document waited for a project.
+_ALL_ABOVE_RE = re.compile(
+    r"^(?:ok(?:ay)?[,.]?\s+)?(?:please\s+(?:note\s+)?)?"
+    r"(?:all\s+(?:of\s+)?the\s+above|the\s+above|above|everything(?:\s+above)?"
+    r"|all\s+(?:of\s+)?(?:these|those|them)|(?:these|those|they)(?:\s+are|['’]re)?\s+all"
+    r"|it['’]?s\s+all|it\s+is\s+all|alles(?:\s+hierbo)?|al\s+die\s+bogenoemde|bogenoemde"
+    r"|dit\s+is\s+(?:alles|almal)|hierdie\s+is\s+(?:almal|alles))"
+    r"(?:\s+(?:is|are|was|were|goes|go))?(?:\s+(?:all|alles|almal))?"
+    r"\s+(?:for|under|on|to|vir|onder|by)\s+(?:the\s+|die\s+)?(?:project\s+|projek\s+|site\s+|job\s+)?"
+    r"(?P<name>[^?]{2,60}?)\s*[.!]*$",
+    re.IGNORECASE)
 # "It's for a new project we started" / "new project called Hillside".
 _NEW_PROJECT_RE = re.compile(
     r"\bnew\s+(?:project|job|site)\b(?:\s+(?:called|named|is|:)\s*(?P<name>[^.?!]{2,60}))?",
@@ -4073,6 +4087,19 @@ def _recent_upload(tenant_id: str, phone: str) -> dict:
     except Exception:
         out["sent"] = bool(out["docs"])
     return out
+
+
+def _sent_something_recently(tenant_id: str, phone: str) -> bool:
+    """A document is being read for this person, they sent one in the last 30 minutes, or one of
+    theirs is still waiting for a project."""
+    if _sender_busy(tenant_id, phone) or _recent_upload(tenant_id, phone)["sent"]:
+        return True
+    try:
+        from vula import open_questions as oq
+        return any(q.get("kind") in ("doc_project", "doc_project_list")
+                   for q in oq.open_for(tenant_id, phone))
+    except Exception:
+        return False
 
 
 def _clean_project_name(name: str) -> str:
@@ -4146,11 +4173,17 @@ async def _answer_batch_project(tenant_id: str, phone: str, text: str) -> bool:
     # "all invoices for Gardens" with no filing word is a question, not an instruction
     if m and not (not m.group("verb") and m.group("which").lower().startswith("all")):
         name = m.group(m.lastindex)
-    else:
-        f = _FILE_UNDER_RE.match(t)
-        if not f or not _is_team(tenant_id, phone):
+    elif (f := _FILE_UNDER_RE.match(t)):
+        if not _is_team(tenant_id, phone):
             return False
         name = f.group("name")
+    else:
+        # "Above is all for X": only from the team, and only right after they sent something —
+        # otherwise "it's all for the client" is just conversation.
+        a = _ALL_ABOVE_RE.match(t)
+        if not a or not _is_team(tenant_id, phone) or not _sent_something_recently(tenant_id, phone):
+            return False
+        name = a.group("name")
     from vula.commerce import expenses
     project = expenses.match_project(tenant_id, _clean_project_name(name))
     if not project:
@@ -4159,6 +4192,24 @@ async def _answer_batch_project(tenant_id: str, phone: str, text: str) -> bool:
         return False
     await _file_recent_under(tenant_id, phone, project)
     return True
+
+
+def _file_doc_under(tenant_id: str, doc: dict, project: str) -> None:
+    """Put one document on `project` with everything booked from it — the bill, the expense from
+    its photo, its prices (doc_filing.move_to_project, which also learns the filing rule).
+    2026-11-03: "Above is all for <project>" must also move the draft bills booked from the
+    quotes, not only the document rows. Falls back to the document row alone."""
+    try:
+        from vula.integrations.doc_filing import move_to_project
+        res = move_to_project(tenant_id, project, doc_id=doc["id"])
+        if res.get("ok"):
+            return
+        logger.warning("batch file %s under %s: %s", doc.get("id"), project, res.get("error"))
+    except Exception as exc:
+        logger.warning("batch file %s under %s failed: %s", doc.get("id"), project, exc)
+    from vula.commerce import service
+    service._client().table("vula_filed_documents").update({"project": project, "status": "filed"}) \
+        .eq("tenant_id", tenant_id).eq("id", doc["id"]).execute()
 
 
 async def _file_recent_under(tenant_id: str, phone: str, project: str,
@@ -4200,8 +4251,7 @@ async def _file_recent_under(tenant_id: str, phone: str, project: str,
                     + (f" {c['supplier']}" if c.get("supplier") else ""))
     for d in docs:
         if d.get("project") != project or d.get("status") == "pending_project":
-            db.table("vula_filed_documents").update({"project": project, "status": "filed"}) \
-                .eq("tenant_id", tenant_id).eq("id", d["id"]).execute()
+            _file_doc_under(tenant_id, d, project)
         oq.close_for(tenant_id, d["id"], status="answered")
     n_docs = len(docs)
     if done:
@@ -5940,6 +5990,26 @@ def _friendly_document_name(category: str, fields: dict, original_filename: str)
     return f"{base} {ts}{ext}"
 
 
+_LIST_ROWS_IN_REPLY = 20
+
+
+def _labelled_extraction_dict(d: dict) -> str:
+    """A dict field as "label value; label value" — its keys are the document's own labels
+    (e.g. a sheet's totals), so a bare list of figures would lose what each one is."""
+    parts = []
+    for k, v in d.items():
+        if v is None or v == "" or isinstance(v, list):
+            continue
+        if str(k).endswith("_cents") and isinstance(v, (int, float)) and not isinstance(v, bool):
+            v, k = f"R{v / 100:,.2f}", str(k)[: -len("_cents")]
+        elif isinstance(v, dict):
+            v = _flatten_extraction_item(v)
+            if not v:
+                continue
+        parts.append(f"{str(k).replace('_', ' ')} {v}")
+    return "; ".join(parts)
+
+
 def _flatten_extraction_item(item: Any) -> str:
     """Compact one-line rendering of a dict/list-of-scalars value found inside a list field
     (e.g. one entry of a project billboard's "team" array: role/company/contact_details) —
@@ -6007,14 +6077,19 @@ def _format_extraction(analysis: dict) -> str:
             if not v:
                 continue
             label = k.replace("_", " ").title()
+            # Every row up to _LIST_ROWS_IN_REPLY, and the count when there are more (2026-11-03:
+            # a 15-row labour sheet showed 5 rows with nothing saying 10 were left out).
             lines.append(f"• {label}:")
-            for item in v[:5]:
+            for item in v[:_LIST_ROWS_IN_REPLY]:
                 rendered = _flatten_extraction_item(item)
                 if rendered:
-                    lines.append(f"   - {rendered}")
+                    lines.append(f"   - {rendered[:140]}")
+            if len(v) > _LIST_ROWS_IN_REPLY:
+                lines.append(f"   - …and {len(v) - _LIST_ROWS_IN_REPLY} more (all {len(v)} are in the filed document)")
             continue
         if isinstance(v, dict):
-            rendered = _flatten_extraction_item(v)
+            # "Totals: Day rates 26600; Half fortnight 15050" — with the labels, not bare figures.
+            rendered = _labelled_extraction_dict(v)
             if rendered:
                 label = k.replace("_", " ").title()
                 lines.append(f"• {label}: {rendered}")
@@ -6030,7 +6105,10 @@ def _format_extraction(analysis: dict) -> str:
     line_items = fields.get("line_items") or fields.get("items")
     if isinstance(line_items, list) and line_items:
         lines.append(f"• Line items: {len(line_items)}")
-    return "\n".join(lines[:16])
+    # 16 lines of fields as before; a list's rows (at most _LIST_ROWS_IN_REPLY each, kept short)
+    # don't count against them.
+    rows = sum(1 for ln in lines if ln.startswith("   - "))
+    return "\n".join(lines[:16 + rows])
 
 
 def _classify_document(filename: str, path) -> str:

@@ -4,5 +4,7 @@ THE TASK — the bank and money received.
    so the owner knows if a newer statement is needed (they upload it under Bank in the dashboard).
 2. A customer payment against an invoice: record_payment (preview first). Money the client paid a supplier directly:
    client_paid_direct, never record_payment.
-3. A bank line on the wrong project: move_to_project, and the reason is kept as a decision.
+3. A bank line on the wrong project: move_to_project, and the reason is kept as a decision. One payment that paid for
+   more than one job (wages for two sites): split_payment, giving the parts for the OTHER projects — the rest stays on
+   the payment's own project, and the bank line itself is never changed (preview first).
 4. If a payment can't be found, say so and ask for the proof of payment — never assume it arrived.
