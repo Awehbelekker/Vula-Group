@@ -1105,7 +1105,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str,
                 logger.debug("BoQ bridge (resolve) skipped: %s", exc)
 
     # The expense booked from the same photo follows too, when it has no project yet
-    # (2026-11-03: a slip's document was filed under Belladonna and its R425.04 expense stayed
+    # (2026-11-03: a slip's document was filed under its project and the expense from it stayed
     # on no project).
     if doc.get("file_url"):
         try:

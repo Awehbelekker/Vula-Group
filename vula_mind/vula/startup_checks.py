@@ -167,6 +167,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # 242 creates vula_wa_prompt_state on production, where 167 was recorded but never ran.
     ("242", "vula_wa_prompt_state", None),
     ("243", "vula_project_share_requests", None),
+    ("244", "commerce_bank_splits", None),
 ]
 
 

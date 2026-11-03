@@ -4011,9 +4011,9 @@ _FILE_UNDER_RE = re.compile(
     r"(?:under|to|for|on|in|into|against)\s+(?:the\s+)?(?:project\s+|site\s+|job\s+)?"
     r"(?P<name>[^?]+?)\s*[.!]*$",
     re.IGNORECASE)
-# "Above is all for Belladonna" / "the above are for HPC" / "everything above is for X" / "these
+# "Above is all for Seaview" / "the above are for Oak Street" / "everything above is for X" / "these
 # are all for X" / "they're all for X", and in Afrikaans "alles hierbo is vir X" / "dit is alles
-# vir X". 2026-11-03, DIGG: Ian sent six photos then "Above is all for Belladonna"; nothing above
+# vir X". 2026-11-03: an owner sent six photos then "Above is all for <project>"; nothing above
 # matched it, so the assistant answered it as a remark and every document waited for a project.
 _ALL_ABOVE_RE = re.compile(
     r"^(?:ok(?:ay)?[,.]?\s+)?(?:please\s+(?:note\s+)?)?"
@@ -4197,7 +4197,7 @@ async def _answer_batch_project(tenant_id: str, phone: str, text: str) -> bool:
 def _file_doc_under(tenant_id: str, doc: dict, project: str) -> None:
     """Put one document on `project` with everything booked from it — the bill, the expense from
     its photo, its prices (doc_filing.move_to_project, which also learns the filing rule).
-    2026-11-03: "Above is all for Belladonna" must also move the draft bills booked from the
+    2026-11-03: "Above is all for <project>" must also move the draft bills booked from the
     quotes, not only the document rows. Falls back to the document row alone."""
     try:
         from vula.integrations.doc_filing import move_to_project

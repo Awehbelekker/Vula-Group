@@ -119,7 +119,7 @@ _PLACE_FIELD = re.compile(r"site|project|job|address|reference|order|location|pr
 
 def _spelled_like(projects: List[Dict[str, Any]], fields: Dict[str, Any]) -> Optional[tuple]:
     """(project, the word written) when the document's site/project field spells one project's
-    word badly — a handwritten "Belbadana" for Belladonna (2026-11-03, a labour sheet), too far
+    word badly — a handwritten "Seavlaw" for Seaview (2026-11-03, a labour sheet), too far
     off for close_spelling. Only long words, same first two letters, and exactly one project;
     only ever offered as a question."""
     import difflib

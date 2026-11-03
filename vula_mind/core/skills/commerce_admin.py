@@ -369,6 +369,29 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["reference", "project"]},
     }},
     {"type": "function", "function": {
+        "name": "split_payment",
+        "description": (
+            "Split ONE BANK PAYMENT across projects when it paid for more than one job — 'of the "
+            "R19,000 to the ceiling team on 25 Sep, R15,050 was Seaview', 'split the 12 Oct wages: "
+            "R8,000 Oak Street, R4,500 Seaview'. Give the payment's amount (and its date and a word from the "
+            "statement if you have them) and the parts that go to OTHER projects; what isn't split "
+            "off stays on the payment's own project. The bank line itself isn't changed. "
+            "action=undo puts the whole payment back on its own project. First call returns a "
+            "preview; call again with confirm=true only after the owner confirms."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "amount": {"type": "string", "description": "The bank payment's amount, as written (e.g. 'R19,000')"},
+            "date": {"type": "string", "description": "The payment's date, YYYY-MM-DD, if known"},
+            "words": {"type": "string", "description": "A word from the statement line, e.g. 'wages'"},
+            "parts": {"type": "array", "items": {"type": "object", "properties": {
+                "project": {"type": "string"},
+                "amount": {"type": "string", "description": "This part, as written (e.g. 'R15,050')"},
+                "note": {"type": "string"}}, "required": ["project", "amount"]}},
+            "action": {"type": "string", "enum": ["split", "undo"]},
+            "confirm": {"type": "boolean"}},
+            "required": ["amount"]},
+    }},
+    {"type": "function", "function": {
         "name": "reimbursement_balance",
         "description": "What the business owes a specific person for money they paid out of pocket "
                        "(e.g. stock/materials bought on a personal card or cash) that hasn't been "
@@ -1789,7 +1812,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
 # (knowledge, drafting, contacts, meetings, reminders) and stay available to everyone.
 _TOOL_SCOPE: Dict[str, str] = {
     "sales_summary": "finances", "finance_insights": "finances", "cash_summary": "finances",
-    "bank_payments": "finances", "move_to_project": "invoices",
+    "bank_payments": "finances", "move_to_project": "invoices", "split_payment": "finances",
     "reimbursement_balance": "finances", "add_expense": "finances",
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
@@ -2775,6 +2798,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "cash_summary":       return await self._cash_summary(tid, args)
             if name == "bank_payments":      return self._bank_payments(tid, args)
             if name == "move_to_project":    return self._move_to_project(tid, args, ctx)
+            if name == "split_payment":      return self._split_payment(tid, args, ctx)
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
@@ -5375,6 +5399,55 @@ class CommerceAdminSkill(BaseSkill):
         # Spacing varies too: real OTH data carries both "OfftheHook" and "Off the Hook", which
         # a space-preserving key would report as two different suppliers.
         return re.sub(r"\s+", "", s) or "unknown"
+
+    def _split_payment(self, tid: str, args: Dict[str, Any],
+                       ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """One bank payment split across projects (vula/commerce/bank_splits.py, migration 244).
+        The line is found by its exact amount; preview first; the split is read back."""
+        from vula.commerce import bank_splits as bs, expenses
+        amount = bs.to_cents(args.get("amount"))
+        if not amount:
+            return {"error": "Which payment? Give its amount as on the statement."}
+        lines = bs.find_lines(tid, amount, args.get("date"), args.get("words") or "")
+        if not lines:
+            return {"error": f"No payment of {_r(amount)} found on the statements"
+                             + (f" around {args.get('date')}" if args.get("date") else "") + "."}
+        if len(lines) > 1:
+            return {"error": "More than one payment of that amount — which one?",
+                    "choices": [f"{ln['txn_date']} · {ln.get('description')} · {ln.get('project') or 'no project'}"
+                                for ln in lines[:6]]}
+        line = lines[0]
+        if (args.get("action") or "split") == "undo":
+            parts = bs.for_txn(tid, line["id"])
+            if not parts:
+                return {"error": "That payment isn't split."}
+            if not args.get("confirm"):
+                return {"preview": True, "message": f"Put the whole {_r(amount)} payment of {line['txn_date']} "
+                                                    f"back on {line.get('project') or 'no project'}?"}
+            try:
+                bs.unsplit(tid, line["id"])
+            except RuntimeError as exc:
+                return _not_confirmed(str(exc))
+            _readback_gate(tid, "split_payment", True, {"parts": 0}, {"parts": 0})
+            return _checked({"ok": True}, f"✅ The {_r(amount)} payment of {line['txn_date']} is all on "
+                                          f"{line.get('project') or 'no project'} again.")
+        parts = [{"project": p.get("project"), "amount_cents": bs.to_cents(p.get("amount")), "note": p.get("note")}
+                 for p in (args.get("parts") or [])]
+        try:
+            good = bs.check_parts(line, parts, expenses.known_projects(tid))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not args.get("confirm"):
+            return {"preview": True, "message": bs.describe(line, good) + " The bank line itself stays as it is. Confirm?"}
+        try:
+            res = bs.split(tid, line["id"], good, by=(ctx or {}).get("caller_name") or (ctx or {}).get("phone"))
+        except (ValueError, LookupError) as exc:
+            return {"error": str(exc)}
+        except RuntimeError as exc:
+            return _not_confirmed(str(exc))
+        _readback_gate(tid, "split_payment", True, {"parts": len(good)}, {"parts": len(res["parts"])})
+        return _checked({"ok": True}, "✅ " + bs.describe(res["line"], res["parts"])
+                        + " Project costs now count each part on its own project.")
 
     def _move_to_project(self, tid: str, args: Dict[str, Any],
                          ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

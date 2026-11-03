@@ -59,6 +59,9 @@ def _txns(tenant_id: str, since: Optional[str] = None) -> List[Dict[str, Any]]:
     except Exception as exc:
         log.debug("job costing read failed: %s", exc)
         return []
+    # A payment split across projects (migration 244) counts on each project for its part.
+    from vula.commerce.bank_splits import apply as _apply_splits
+    rows = _apply_splits(tenant_id, rows)
     return sorted(rows + _owed_claims(tenant_id, since), key=lambda r: str(r.get("txn_date") or ""))
 
 

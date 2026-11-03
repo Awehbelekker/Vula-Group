@@ -254,7 +254,7 @@ _Invoices and payments, slips and expenses, the bank, project costs, VAT and tax
 
 | Task | When | Tools |
 |---|---|---|
-| **The bank and payments received** (`bank-and-payments`) — Find payments on the bank statements, and record what customers have paid. | 'bank', 'statement', 'statements', 'bank lines', 'eft', 'deposit', 'paid us', 'has paid', 'payment from', 'reconcile' | `bank_payments`, `cash_summary`, `client_paid_direct`, `move_to_project`, `outstanding_invoices`, `record_payment` |
+| **The bank and payments received** (`bank-and-payments`) — Find payments on the bank statements, and record what customers have paid. | 'bank', 'statement', 'statements', 'bank lines', 'eft', 'deposit', 'paid us', 'has paid', 'payment from', 'reconcile', 'split the', 'split payment', 'split it', 'split off' | `bank_payments`, `cash_summary`, `client_paid_direct`, `move_to_project`, `outstanding_invoices`, `record_payment`, `split_payment` |
 | **A spreadsheet in the owner's own layout** (`custom-sheet`) — Any sheet the owner describes — supplier invoices, bank lines, expenses, customer invoices or orders — previewed, then built from the books. | 'spreadsheet', 'excel', 'xlsx', 'csv', 'a sheet of', 'in a sheet', 'as a sheet', 'saved sheet', 'my sheets', 'build it' | `custom_sheet`, `find_document` |
 | **Fix a record** (`fix-a-record`) — Correct something booked wrongly — the project, who paid, a duplicate — and keep the reason. | 'wrong project', 'filed under', 'move it', 'move bill', 'move the', 'belongs to', 'should be on', 'not ours', 'duplicate', 'booked wrong', 'booked twice', 'correct the', 'fix the' | `bank_payments`, `client_paid_direct`, `credit_note`, `move_to_project`, `record_payment` |
 | **Month-end and the reports** (`month-end`) — Profit and loss, cash in and out, VAT and tax, from the business's own books. | 'p&l', 'profit and loss', 'income statement', 'balance sheet', 'month end', 'month-end', 'financial report', 'financial statements', 'vat', 'tax', 'sars', 'cash flow', 'money in and out', 'how did we do' | `cash_summary`, `finance_insights`, `finance_settings`, `financial_report`, `outstanding_invoices`, `sales_summary`, `set_tax_regime`, `set_vat_registration`, `tax_calendar`, `tax_estimate`, `vat_position` |
@@ -272,7 +272,9 @@ THE TASK — the bank and money received.
    so the owner knows if a newer statement is needed (they upload it under Bank in the dashboard).
 2. A customer payment against an invoice: record_payment (preview first). Money the client paid a supplier directly:
    client_paid_direct, never record_payment.
-3. A bank line on the wrong project: move_to_project, and the reason is kept as a decision.
+3. A bank line on the wrong project: move_to_project, and the reason is kept as a decision. One payment that paid for
+   more than one job (wages for two sites): split_payment, giving the parts for the OTHER projects — the rest stays on
+   the payment's own project, and the bank line itself is never changed (preview first).
 4. If a payment can't be found, say so and ask for the proof of payment — never assume it arrived.
 ```
 </details>
@@ -409,6 +411,7 @@ THE TASK — booking slips and expenses.
 | `list_subscriptions` | List active recurring orders. |
 | `list_suppliers` | List known suppliers. |
 | `move_to_project` | Move a supplier bill or a filed document to ANOTHER PROJECT when it was filed under the wrong one — 'move DIG-BILL-00141 to Belladonna', 'the Pudlo invoice IN41… |
+| `split_payment` | Split ONE BANK PAYMENT across projects when it paid for more than one job — 'of the R19,000 to the ceiling team on 25 Sep, R15,050 was Seaview', 'split the 12 Oct wages: R8,000 Oak Street, R4,500 Seaview'.… |
 | `order_payment` | Ask a customer to pay a deposit or the balance on an EXISTING order — 'ask Thandi for a 50% deposit on SEE-00012', 'send the balance for SEE-00012' |
 | `outstanding_invoices` | Who owes the business money — 'who owes me what?', 'unpaid invoices', 'debtors' |
 | `payment_link` | Send a customer a link to pay an amount — 'send Sam a payment link for R1,200', 'request R850 from Thabo for the deposit' |
