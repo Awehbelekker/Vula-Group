@@ -1104,6 +1104,17 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str,
             except Exception as exc:
                 logger.debug("BoQ bridge (resolve) skipped: %s", exc)
 
+    # The expense booked from the same photo follows too, when it has no project yet
+    # (2026-11-03: a slip's document was filed under Belladonna and its R425.04 expense stayed
+    # on no project).
+    if doc.get("file_url"):
+        try:
+            _client().table("commerce_expenses").update({"project": match["project"]}) \
+                .eq("tenant_id", tenant_id).eq("receipt_url", doc["file_url"]) \
+                .is_("project", "null").neq("status", "cancelled").execute()
+        except Exception as exc:
+            logger.debug("expense project (resolve) skipped: %s", exc)
+
     # Learn from this correction so similar docs auto-file next time.
     learned = learn_filing_rule(tenant_id, doc.get("fields") or {}, match["project"])
 

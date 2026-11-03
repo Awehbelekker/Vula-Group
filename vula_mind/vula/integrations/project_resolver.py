@@ -113,6 +113,37 @@ def _named(projects: List[Dict[str, Any]], text: str) -> List[str]:
     return close if len(close) == 1 else []
 
 
+# Fields where a document writes where the work is (a labour sheet's "site", an order reference).
+_PLACE_FIELD = re.compile(r"site|project|job|address|reference|order|location|property", re.I)
+
+
+def _spelled_like(projects: List[Dict[str, Any]], fields: Dict[str, Any]) -> Optional[tuple]:
+    """(project, the word written) when the document's site/project field spells one project's
+    word badly — a handwritten "Belbadana" for Belladonna (2026-11-03, a labour sheet), too far
+    off for close_spelling. Only long words, same first two letters, and exactly one project;
+    only ever offered as a question."""
+    import difflib
+    words = []
+    for k, v in (fields or {}).items():
+        if (isinstance(v, str) and _PLACE_FIELD.search(str(k))
+                and not str(k).lower().startswith(("supplier", "vendor", "from"))):   # where the work is, not the seller
+            words += [w for w in _key(v).split() if len(w) >= 7 and not w.isdigit()]
+    if not words:
+        return None
+    hits = {}
+    for p in projects:
+        for w in p.get("words") or ():
+            if len(w) < 7:
+                continue
+            for tok in words:
+                if tok[:2] == w[:2] and difflib.SequenceMatcher(None, tok, w).ratio() >= 0.7:
+                    hits.setdefault(p["name"], tok)
+    if len(hits) != 1:
+        return None
+    name, tok = next(iter(hits.items()))
+    return name, tok
+
+
 def _by_payment(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         total = int(fields.get("total_cents") or fields.get("amount_cents") or 0)
@@ -227,6 +258,11 @@ def resolve(tenant_id: str, fields: Optional[Dict[str, Any]], text: str = "",
     candidates = named or [by_key[k] for k in (usual or {}).get("candidates", []) if k in by_key]
     if candidates:
         return {"project": None, "ambiguous": True, "candidates": candidates, "confidence": 0.0}
+    like = _spelled_like(projects, fields)
+    if like:
+        # Not proof — "Is this for X?" (never auto-filed); "yes" files it.
+        return {"project": like[0], "confidence": 0.5, "kind": "spelled_like",
+                "reason": f"the document says “{like[1]}”"}
     from vula.commerce.party import resolve_party_name
     from vula.integrations.doc_filing import _is_own, _own_names
     party = resolve_party_name(fields, exclude=("payer",))

@@ -114,3 +114,30 @@ async def test_no_commerce_invoice_id_skips_propagation_without_error():
 
     assert result["filed"] is True
     assert "commerce_invoices" not in updates
+
+
+@pytest.mark.asyncio
+async def test_the_expense_from_the_same_photo_follows_the_project():
+    """3 Nov 2026: a slip's document was filed under a project and the expense booked from its
+    photo stayed on no project."""
+    mock_db, updates = _mock_db(_pending_doc(category="Invoice", commerce_invoice_id=None,
+                                             file_url="https://files/slip.jpg"))
+    exp_table = MagicMock()
+    base_table = mock_db.table.side_effect
+    mock_db.table.side_effect = lambda n: exp_table if n == "commerce_expenses" else base_table(n)
+    with (
+        patch("vula.integrations.doc_filing._client", return_value=mock_db),
+        patch("vula.integrations.doc_filing.match_project",
+              return_value={"project": "Seaview", "clickup_list_id": None}),
+        patch("vula.integrations.doc_filing._existing_filed_doc", return_value=None),
+        patch("vula.integrations.doc_filing.learn_filing_rule", return_value=1),
+        patch("vula.integrations.finances.post_finance_from_doc"),
+    ):
+        result = await resolve_pending_document(TID, PHONE, "Seaview")
+
+    assert result["filed"] is True
+    exp_table.update.assert_called_once_with({"project": "Seaview"})
+    chain = exp_table.update.return_value.eq
+    chain.assert_called_once_with("tenant_id", TID)
+    chain.return_value.eq.assert_called_once_with("receipt_url", "https://files/slip.jpg")
+    chain.return_value.eq.return_value.is_.assert_called_once_with("project", "null")
