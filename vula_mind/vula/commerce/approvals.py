@@ -81,8 +81,6 @@ async def create_approval(
     approvers: [{"phone": "...", "name": "...", "role": "..."}]
     Returns the approval row.
     """
-    from vula.api.whatsapp import _send_reply  # lazy: avoid circular import
-
     sb = _client()
     appr = sb.table("vula_approvals").insert({
         "tenant_id": tenant_id, "entity_type": entity_type, "entity_id": entity_id,
@@ -99,7 +97,14 @@ async def create_approval(
     } for a in approvers if a.get("phone")]
     if steps:
         sb.table("vula_approval_steps").insert(steps).execute()
+    await _notify_steps(tenant_id, appr, steps, requested_by, entity_type, title)
+    return appr
 
+
+async def _notify_steps(tenant_id: str, appr: dict, steps: list[dict], requested_by: str,
+                        entity_type: str, title: str) -> None:
+    """WhatsApp each approver the question and record it so their reply finds it."""
+    from vula.api.whatsapp import _send_reply  # lazy: avoid circular import
     # Notify each approver on WhatsApp, and record the question so their reply finds it. An
     # approval someone else asked for waits behind a question the approver is still on
     # (vula/open_questions.ask_or_queue); the requester's own approval goes straight out.
@@ -123,7 +128,43 @@ async def create_approval(
                                    "expense": "expenses"}.get(entity_type), tag=f"approval-{appr.get('id')}")
     except Exception as exc:
         logger.debug("approval push skipped: %s", exc)
-    return appr
+
+
+# ── Approvals staged by someone other than the agent (an operator, the dashboard) ──────────
+# 3 Nov 2026: corrections to the books were drafted for the owner's bookkeeper to approve on
+# WhatsApp. A row inserted with status 'staged' (plus its steps) is sent by the scheduler here,
+# exactly as create_approval would have sent it; nothing changes until the approver says yes.
+STAGED = "staged"
+
+
+async def send_staged(limit: int = 20) -> int:
+    """Send every staged approval's question to its approvers (claimed one at a time, so two
+    workers never send the same one twice). Returns how many went out."""
+    sb = _client()
+    try:
+        rows = (sb.table("vula_approvals").select("*").eq("status", STAGED)
+                .order("created_at").limit(limit).execute().data or [])
+    except Exception as exc:
+        logger.debug("staged approvals read skipped: %s", exc)
+        return 0
+    sent = 0
+    for appr in rows:
+        claimed = (sb.table("vula_approvals").update({"status": "pending"})
+                   .eq("id", appr["id"]).eq("status", STAGED).execute().data or [])
+        if not claimed:
+            continue                                     # another worker took it
+        steps = (sb.table("vula_approval_steps").select("*").eq("approval_id", appr["id"])
+                 .eq("status", "pending").execute().data or [])
+        if not steps:
+            logger.warning("staged approval %s has no approvers — left pending", appr["id"])
+            continue
+        try:
+            await _notify_steps(appr["tenant_id"], {**appr, "status": "pending"}, steps,
+                                appr.get("requested_by") or "", appr.get("entity_type") or "", appr.get("title") or "")
+            sent += 1
+        except Exception as exc:
+            logger.warning("staged approval %s not sent: %s", appr["id"], exc)
+    return sent
 
 
 async def record_decision(approver_phone: str, decision: str, notes: str = "",
@@ -222,6 +263,12 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "",
         name = (approval.get("meta") or {}).get("candidate_supplier_name") or "that supplier"
         await _send_reply(phone, f"✅ Linked to *{name}*.", tenant_id)
         await _ask_project_next(approval, phone)
+    elif approval["entity_type"] in _BOOKING_ACTIONS:
+        result = await _BOOKING_ACTIONS[approval["entity_type"]](approval, step)
+        await _send_reply(phone, result, tenant_id)
+        if approval.get("requested_by") and not _digits(approval["requested_by"]).endswith(phone[-9:]):
+            await _send_reply(_digits(approval["requested_by"]),
+                              f"{step.get('approver_name') or 'The approver'} approved *{title}*. {result}", tenant_id)
     else:
         await _send_reply(phone, f"✅ Approved: *{title}*", tenant_id)
         await _on_approved(approval)
@@ -322,3 +369,61 @@ async def _deliver_invoice(approval: dict) -> bool:
                 logger.warning("Invoice %s %s failed: %s", invoice_id, ep, exc)
                 ok = False
     return ok
+
+
+# ── Approvals that change the books (3 Nov 2026) ──────────────────────────────────────────
+# The change is described in `meta` when the approval is drafted and made only on APPROVE, then
+# read back; the reply says what was done, or plainly that it wasn't.
+
+def _approver(step: dict) -> str:
+    return step.get("approver_name") or step.get("approver_phone") or "approver"
+
+
+async def _do_bank_split(approval: dict, step: dict) -> str:
+    """meta: {"txn_id", "parts": [{"project", "amount_cents", "note"}]} — vula/commerce/bank_splits."""
+    from vula.commerce import bank_splits
+    meta = approval.get("meta") or {}
+    try:
+        res = bank_splits.split(approval["tenant_id"], meta.get("txn_id") or approval["entity_id"],
+                                meta.get("parts") or [], by=_approver(step))
+    except (ValueError, LookupError, RuntimeError) as exc:
+        return f"⚠️ Approved, but the split wasn't made: {exc}"
+    return "✅ " + bank_splits.describe(res["line"], res["parts"])
+
+
+_CANCELLABLE = {"commerce_expenses": "expense", "commerce_invoices": "bill"}
+
+
+async def _do_cancel_record(approval: dict, step: dict) -> str:
+    """meta: {"table": commerce_expenses | commerce_invoices, "id", "reason"}. Marks it cancelled
+    (never deleted); a paid record is left alone."""
+    meta = approval.get("meta") or {}
+    table, rec_id, reason = meta.get("table"), meta.get("id") or approval["entity_id"], (meta.get("reason") or "").strip()
+    if table not in _CANCELLABLE:
+        return "⚠️ Approved, but that kind of record can't be cancelled this way."
+    tenant_id, sb = approval["tenant_id"], _client()
+    rows = (sb.table(table).select("id,status").eq("tenant_id", tenant_id).eq("id", rec_id)
+            .limit(1).execute().data or [])
+    if not rows:
+        return f"⚠️ Approved, but that {_CANCELLABLE[table]} wasn't found."
+    if rows[0].get("status") in ("paid", "reimbursed"):
+        return f"⚠️ Approved, but that {_CANCELLABLE[table]} is already paid — left as it is."
+    patch = {"status": "cancelled"}
+    if table == "commerce_invoices":
+        patch.update({"cancelled_at": _now(), "cancel_reason": (reason or "Cancelled on approval")[:300]})
+    sb.table(table).update(patch).eq("tenant_id", tenant_id).eq("id", rec_id).execute()
+    back = (sb.table(table).select("status").eq("tenant_id", tenant_id).eq("id", rec_id)
+            .limit(1).execute().data or [{}])[0]
+    if back.get("status") != "cancelled":
+        return f"⚠️ Approved, but the {_CANCELLABLE[table]} didn't read back as cancelled — please check it."
+    try:
+        from vula.commerce import decisions
+        decisions.record(tenant_id, f"{approval.get('title')}: cancelled" + (f" — {reason}" if reason else "") + ".",
+                         project=meta.get("project"), subject="Cancelled on approval",
+                         refs=[{"table": table, "id": str(rec_id)}], made_by=_approver(step))
+    except Exception as exc:  # noqa: BLE001 — the change stands without the note
+        logger.debug("cancel decision note skipped: %s", exc)
+    return f"✅ The {_CANCELLABLE[table]} is cancelled (kept on record, not deleted)."
+
+
+_BOOKING_ACTIONS = {"bank_split": _do_bank_split, "cancel_record": _do_cancel_record}
