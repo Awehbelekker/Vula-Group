@@ -705,6 +705,22 @@ async def _scheduled_campaigns_loop() -> None:
         await _asyncio.sleep(60)
 
 
+async def _staged_approvals_loop() -> None:
+    """Send approvals drafted outside a chat (status 'staged') to their approvers every minute
+    (vula/commerce/approvals.send_staged)."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(40)
+    while True:
+        try:
+            from vula.commerce.approvals import send_staged
+            sent = await send_staged()
+            if sent:
+                log.info("Sent %d staged approval(s)", sent)
+        except Exception as exc:
+            log.warning("Staged approvals loop error: %s", exc)
+        await _asyncio.sleep(60)
+
+
 async def _automations_loop() -> None:
     """Evaluate every enabled automation rule every 5 minutes (P3 automations builder)."""
     import asyncio as _asyncio
@@ -1614,6 +1630,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_invoices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_scheduled_campaigns_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_automations_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_staged_approvals_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_subscriptions_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
