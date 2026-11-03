@@ -240,7 +240,7 @@ function ProjectFile({ tenantId, project }) {
   return (
     <>
       <Section title={`Project file · ${f.documents} documents`}
-        hint="Every document filed under this project, by supplier. Invoices and quotes are totalled separately.">
+        hint="Every document filed under this project, by supplier. Invoices and quotes are totalled separately; your own invoices to the client are listed but not added in.">
         {f.suppliers.length === 0 && <Empty>No supplier documents filed under this project yet.</Empty>}
         {f.suppliers.map((s) => (
           <Line key={s.supplier}
@@ -251,7 +251,7 @@ function ProjectFile({ tenantId, project }) {
             ].filter(Boolean).join(", ")}</span></span>}
             value={s.invoices ? cents(s.invoices_cents) : "—"} />
         ))}
-        <Line label={<strong>Invoices in total</strong>} value={<strong>{cents(f.invoices_cents)}</strong>} />
+        <Line label={<strong>Supplier invoices in total</strong>} value={<strong>{cents(f.invoices_cents)}</strong>} />
         <div className="vpj-go vpj-pad">
           <Button disabled={!!busy} onClick={() => get("internal")}>{busy === "internal" ? "Making the zip…" : "Download all documents"}</Button>
           <Button variant="secondary" disabled={!!busy} onClick={() => get("client")}>{busy === "client" ? "Making the zip…" : "Download the client's copy"}</Button>
