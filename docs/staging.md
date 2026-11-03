@@ -52,6 +52,14 @@ and Node.
    `uvicorn vula.api.server:app --reload --port 7438` from `vula_mind/`. Leave payment and
    email keys out.
 4. Smoke check: `python tools/smoke.py --base-url http://127.0.0.1:7438` (see section 5).
+   Then whole WhatsApp conversations, with nothing sent: `python tools/staging_flows.py seed`,
+   restart the backend with `GRAPH_HOST=http://127.0.0.1:8799 VULA_FB_APP_SECRET=staging-flows-secret
+   WHATSAPP_TOKEN=staging-token WHATSAPP_PHONE_ID=STAGINGPNID`, and run
+   `python tools/staging_flows.py run`. A stand-in Meta on this machine records every reply;
+   the flows cover crisis support, opt-out, duplicate delivery, the takeoff "Price it" flow and
+   a reply when the AI is down. `GRAPH_HOST` is ignored unless it is a loopback address. CI
+   runs the same flows on every push. The AI's answers themselves are checked by the go-live
+   test (Master › a business › Go-live test, `evals/golive.py`), which needs the real models.
 5. WhatsApp and payment callbacks (Meta, PayFast, Yoco) need a public HTTPS address. Run a
    Cloudflare quick tunnel to the backend (`cloudflared tunnel --url http://127.0.0.1:7438`)
    and give its URL to the Meta test number's webhook and the sandbox keys only, never to a

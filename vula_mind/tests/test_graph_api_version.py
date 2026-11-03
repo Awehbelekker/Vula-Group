@@ -63,3 +63,15 @@ def test_a_bare_or_blank_version_still_builds_a_valid_url(monkeypatch):
     assert meta_graph.graph_base() == "https://graph.facebook.com/v25.0"
     monkeypatch.setattr(settings, "graph_api_version", "  ")
     assert meta_graph.graph_base() == "https://graph.facebook.com/v25.0"
+
+
+def test_graph_host_override_is_loopback_only(monkeypatch):
+    # Local staging's stand-in Meta (tools/staging_flows.py). Anything that isn't this machine is
+    # ignored, so a wrong GRAPH_HOST can't send production's tokens to another server.
+    monkeypatch.setattr(settings, "graph_host", "http://127.0.0.1:8799")
+    assert meta_graph.graph_url("123/messages").startswith("http://127.0.0.1:8799/v")
+    for bad in ("https://evil.example.com", "http://10.0.0.5:8799", "http://127.0.0.1.evil.com", "ftp://127.0.0.1"):
+        monkeypatch.setattr(settings, "graph_host", bad)
+        assert meta_graph.graph_url("x").startswith("https://graph.facebook.com/v"), bad
+    monkeypatch.setattr(settings, "graph_host", "")
+    assert meta_graph.graph_url("x").startswith("https://graph.facebook.com/v")

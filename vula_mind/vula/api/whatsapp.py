@@ -8803,6 +8803,15 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
         pass
     text_lower = text.lower().strip()
 
+    # ── Someone who may be at risk: help first, never a sales reply (vula/safety.py). Shop lines
+    # come here, not through _handle_message, so this check has to be here as well: until
+    # 3 Nov 2026 it wasn't, and a customer on a shop line saying "I want to end my life" got the
+    # shop assistant (found by tools/staging_flows.py on local staging).
+    from vula import safety
+    if await safety.handle(phone, text, tenant_id):
+        _note_handler("crisis_support")
+        return
+
     # Escalation answer: if a helper (e.g. Staci) is replying to an open escalation on
     # this tenant's line, their message is the answer — relay + learn, don't treat it as
     # a customer order. Runs on the commerce path too so every tenant is covered.
