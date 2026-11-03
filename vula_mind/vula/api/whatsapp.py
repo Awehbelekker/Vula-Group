@@ -292,6 +292,27 @@ async def _one_at_a_time(tenant_id: Optional[str], phone: str, coro, *, forwarde
             _SENDER_LOCKS.pop(key, None)
 
 
+def _sender_busy(tenant_id: Optional[str], phone: str) -> bool:
+    """A document or photo from this sender is being worked on right now (_one_at_a_time)."""
+    entry = _SENDER_LOCKS.get((tenant_id or "", phone))
+    return bool(entry and entry[1] > 0)
+
+
+def _caption_waits_for_document(tenant_id: Optional[str], phone: str, text: str) -> bool:
+    """A short project-name reply sent while this sender's document is still being read waits for
+    that document, so it answers that document's "which project?" and not an older one.
+    2026-11-03: an invoice, then the project name two seconds later — the text ran first and filed
+    a statement that had been waiting since the morning; the invoice was left unfiled. Real
+    questions ("what's my balance?") don't wait."""
+    if not _sender_busy(tenant_id, phone):
+        return False
+    try:
+        from vula.integrations.doc_filing import looks_like_project_answer
+        return looks_like_project_answer(text)
+    except Exception:
+        return False
+
+
 # Promotions the team forwards into a shop line (vula/commerce/promotions.py, migration 220):
 # saved without a model, then ONE acknowledgement per burst, sent once the forwards stop.
 _PROMO_ACK_DELAY_S = 20.0
@@ -928,7 +949,10 @@ async def receive_message(
                                 pass  # someone took this chat over (Inbox, or the owner's phone)
                             elif route_mode == "knowledge":
                                 # Number is a tenant's assistant line → that tenant's model
-                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message",
+                                _text_coro = _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
+                                if _caption_waits_for_document(route_tenant, phone, text):
+                                    _text_coro = _one_at_a_time(route_tenant, phone, _text_coro)
+                                _run_bg(_text_coro, label="text_message",
                                         track=_text_track(msg_id, route_tenant, phone, text, route_mode))
                             else:
                                 # Unmapped number → fall back to sender-based lookup
@@ -4903,7 +4927,8 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
                 f"{len(merged.get('line_items') or [])} lines now")
         total, vat = cs.vat_inclusive(int(merged.get("total_cents") or 0),
                                       int(merged.get("vat_cents") or 0),
-                                      bool(merged.get("amounts_exclude_vat")))
+                                      bool(merged.get("amounts_exclude_vat")),
+                                      cs.vat_registered(merged.get("tax_id"), merged.get("supplier_vat_no")))
         note += f", total R{total / 100:,.2f}." if total else "."
         if merged.get("_unverified_figures") or not total:
             return note + " I've not booked the total — please check it in your Invoices tab.", row
@@ -5124,6 +5149,11 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                     project=match["project"] if confident else None,
                     is_boq=(category == "Bill of Quantities (BOQ)"),
                 )
+                direct = (committed or {}).get("client_pays_directly")
+                if direct:
+                    note = (note + "\n" if note else "") + (
+                        f"💡 The client pays {direct['supplier']} directly on {direct['project']}, so this "
+                        "isn't booked as your bill. If this one is yours to pay, add it under Invoices › Bills.")
                 # Different bank details from the ones on file: say so to whoever sent it, too.
                 change = ((committed or {}).get("supplier_update") or {}).get("bank_change")
                 if change:
