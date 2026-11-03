@@ -19,11 +19,52 @@ It's a copy of production that talks to nothing real:
 | WhatsApp | Each tenant's live number | One Meta **test number** on the same app |
 | Payments | Live Yoco / PayFast | Yoco test keys, PayFast **sandbox** |
 
+## 0. Local staging (free, on your own machine)
+
+Added 2026-11-03. For day-to-day testing, run the whole stack locally first; the hosted staging
+below is for what local can't do (always on, shared, built exactly like Railway). Needs Docker
+and Node.
+
+1. Database: a local Supabase (Postgres 17, auth, storage, REST API, matching production's
+   Postgres 17.6). From the repo root:
+
+   ```bash
+   cd infrastructure/local-supabase
+   npx supabase@2.54.11 start -x imgproxy,vector,supavisor,postgres-meta
+   # prints the API URL (http://127.0.0.1:54321), the database URL and the local keys
+   ```
+
+   Realtime, Studio, the mail catcher, analytics and edge functions are switched off in its
+   `config.toml`: Vula uses none of them. If image pulls fail with "Forbidden" (some networks
+   block Amazon's registry), prefix the command with `SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io`.
+2. Migrations, from `vula_mind/`:
+
+   ```bash
+   export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres VULA_ENV=staging
+   python tools/migrate.py apply --target staging --yes        # every migration, ~1 minute
+   python tools/schema_fingerprint.py check migrations/production_schema.txt   # matches production
+   ```
+
+   CI runs exactly this on every push ("Fresh database" job).
+3. Backend: in `vula_mind/.env` point `SUPABASE_URL` at `http://127.0.0.1:54321` and
+   `SUPABASE_SERVICE_KEY` at the local service key that `supabase start` printed (local-only,
+   not a real secret). Then `docker compose up -d qdrant redis` from the repo root and
+   `uvicorn vula.api.server:app --reload --port 7438` from `vula_mind/`. Leave payment and
+   email keys out.
+4. Smoke check: `python tools/smoke.py --base-url http://127.0.0.1:7438` (see section 5).
+5. WhatsApp and payment callbacks (Meta, PayFast, Yoco) need a public HTTPS address. Run a
+   Cloudflare quick tunnel to the backend (`cloudflared tunnel --url http://127.0.0.1:7438`)
+   and give its URL to the Meta test number's webhook and the sandbox keys only, never to a
+   live tenant.
+
+Stop with `npx supabase@2.54.11 stop --no-backup` (deletes the local data; `stop` alone keeps it).
+
 ## 1. Database: Supabase branch
 
 1. In the Supabase dashboard for `vula-production`, open **Branches** and create a branch (e.g.
-   `staging`). A branch starts with the schema but no production data, which is what you want:
-   test tenants only.
+   `staging`). It has no production data, which is what you want: test tenants only. It may also
+   start without Vula's tables (production's migrations were applied by hand, so Supabase has
+   none recorded); applying them all on an empty database works, as above.
 2. Apply migrations with the runner (`vula_mind/tools/migrate.py`). It needs the branch's
    Postgres connection string (branch › Project settings › Database › Connection string, the
    direct or session-pooler URI, port 5432) in `DATABASE_URL`. It prints the host with the

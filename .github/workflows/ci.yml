@@ -80,6 +80,40 @@ jobs:
       - name: Build the production image
         run: docker build -f Dockerfile -t vula-mind:ci .
 
+  # ── Fresh database — every migration replays and builds production's schema ───
+  # Until 2026-11-03 nobody had replayed migrations/*.sql onto an empty database: it stopped at
+  # 102, and production's schema had drifted from the files (see migrations/242). This builds a
+  # local Supabase (infrastructure/local-supabase), applies every migration with the real runner,
+  # and checks the tables and columns against migrations/production_schema.txt.
+  fresh-database:
+    name: Fresh database (migrations replay)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vula_mind
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.54.11
+      - name: Start a local Supabase (database, auth, storage, API)
+        working-directory: infrastructure/local-supabase
+        run: supabase start -x imgproxy,vector,supavisor,postgres-meta
+      - name: Apply every migration
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          VULA_ENV: staging
+        run: |
+          pip install "psycopg[binary]"
+          python tools/migrate.py apply --target staging --yes
+      - name: Schema matches production
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: python tools/schema_fingerprint.py check migrations/production_schema.txt
+
   # ── React dashboard — build must pass ─────────────────────────────────────────
   dashboard:
     name: Dashboard (React)
