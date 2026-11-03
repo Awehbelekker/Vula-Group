@@ -7,9 +7,12 @@
 -- ============================================================
 
 -- ── Suppliers ───────────────────────────────────────────────────────────────
+-- 3 Nov 2026: id is TEXT, as in production (which got this table from the older
+-- db/migrations/002_commerce_admin_tables.sql; this CREATE was a no-op there). As UUID, a fresh
+-- database stopped at migration 102, whose supplier_id links are text.
 
 CREATE TABLE IF NOT EXISTS commerce_suppliers (
-    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                  TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     tenant_id           TEXT NOT NULL,
     name                TEXT NOT NULL,
     aliases             TEXT[] NOT NULL DEFAULT '{}',

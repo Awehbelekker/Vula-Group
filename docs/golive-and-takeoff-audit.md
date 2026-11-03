@@ -335,6 +335,29 @@ the business's own rates and used as the budget.
 - ~~Heavy drawing packs~~ **DONE** (`7ebd258`): read through `vula/ingestion/pdf_extract.run`, the same
   child process document ingestion uses. A set that's too heavy is held with a plain reason.
 
+## Staging, step 1: migrations replayed onto a fresh database (3 Nov 2026)
+
+First ever replay of `migrations/*.sql` onto an empty database (local Supabase, Postgres 17,
+same as production 17.6), then compared with production table by table.
+
+- **Stopped at 102.** `commerce_suppliers.id` is text on production (old db/migrations/002) but
+  009 made it uuid. Fixed in 009 (a no-op on production).
+- **001 never matched production.** Production's `vula_tenants` has a text `tenant_id` primary
+  key; 001 made it a uuid with a separate bigint id. Rewritten to production's shape.
+- **Production missing what the files create:** `vula_wa_prompt_state` (167) and 11 indexes.
+  The 31 Oct baseline recorded them as applied. Added by 242.
+- **Files missing what production has:** `commerce_reviews`, `vula_queries`,
+  `vula_subscriptions`, `vula_users`, and seven columns (old `vula_mind/supabase/migrations`
+  folder and hand edits). Added by 242 (no-ops on production).
+- **Security:** six production tables had a `service_role_all` policy granted to every role.
+  The public anon key could read and write them. 242 restricts each policy to service_role
+  (docs/security-model.md, "Policies open to every role").
+
+After the fixes, all 242 migrations apply and every table's columns match production
+(`migrations/production_schema.txt`). CI now replays them on every push ("Fresh database").
+The backend runs against the local database, and `tools/smoke.py` passes 6/6. **242 isn't
+applied to production yet** (needs Supabase's write approval).
+
 ## What Richard must do manually
 
 **This week, before go-live**

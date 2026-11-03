@@ -164,6 +164,8 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("239", "vula_timesheet_entries", None),
     ("240", "vula_schema_migrations", None),
     # 241 only pins search_path on three trigger functions — nothing a select can probe.
+    # 242 creates vula_wa_prompt_state on production, where 167 was recorded but never ran.
+    ("242", "vula_wa_prompt_state", None),
 ]
 
 

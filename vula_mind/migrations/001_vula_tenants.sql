@@ -1,111 +1,88 @@
 -- ============================================================
--- Vula Group — Supabase Migration 001
--- Run in: Supabase Dashboard > SQL Editor > New Query
+-- Vula Group — Supabase Migration 001: tenants and documents
 -- ============================================================
+--
+-- 3 Nov 2026: rewritten to the shape production actually has (checked against the live
+-- schema), so a fresh database (local staging, a Supabase branch, CI) matches it. The first
+-- version of this file was never what production ran: production's tables came from an
+-- earlier hand-made schema, and this file's CREATE TABLE IF NOT EXISTS was a no-op there.
+-- The old version made tenant_id a UUID (real tenant ids are slugs like 'digg-demo', so a
+-- fresh database couldn't hold a real tenant), added a separate bigint id, a different
+-- documents table, and a vula_admin_signups view production doesn't have.
+--
+-- Running this on production changes nothing: every statement is IF NOT EXISTS / replace.
+-- The policies are service-role only. Production's own were open to every role until
+-- migration 242 closed them.
 
 -- ── Tenants ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS vula_tenants (
-    id                      BIGSERIAL PRIMARY KEY,
-    tenant_id               UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+    tenant_id               TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     company_name            TEXT NOT NULL,
     industry                TEXT,
     staff_count             INTEGER,
-    contact_name            TEXT NOT NULL,
-    email                   TEXT NOT NULL UNIQUE,
+    contact_name            TEXT,
+    email                   TEXT UNIQUE,
     whatsapp                TEXT,
-    plan                    TEXT NOT NULL DEFAULT 'starter'
-                                CHECK (plan IN ('starter', 'growth', 'business')),
+    plan                    TEXT NOT NULL DEFAULT 'starter',
     pain_points             JSONB DEFAULT '[]',
-    status                  TEXT NOT NULL DEFAULT 'provisioning'
-                                CHECK (status IN ('provisioning', 'active', 'suspended', 'cancelled')),
+    status                  TEXT NOT NULL DEFAULT 'provisioning',
     trial_ends              TIMESTAMPTZ,
     workspace_url           TEXT,
     workspace_slug          TEXT UNIQUE,
     temp_password_hash      TEXT,
-    payfast_subscription_id TEXT,
     paid                    BOOLEAN NOT NULL DEFAULT FALSE,
     created_at              TIMESTAMPTZ DEFAULT NOW(),
     updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
 
--- If you are upgrading from an earlier schema, add the column in place:
 ALTER TABLE vula_tenants ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
 
--- Row-level security — each tenant only sees their own record
 ALTER TABLE vula_tenants ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_all" ON vula_tenants;
+CREATE POLICY "service_role_all" ON vula_tenants
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 
-CREATE POLICY "Tenants read own record"
-    ON vula_tenants FOR SELECT
-    USING (auth.uid()::text = tenant_id::text);
+CREATE INDEX IF NOT EXISTS idx_tenants_email    ON vula_tenants(email);
+CREATE INDEX IF NOT EXISTS idx_tenants_whatsapp ON vula_tenants(whatsapp);
 
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_vula_tenants_email     ON vula_tenants(email);
-CREATE INDEX IF NOT EXISTS idx_vula_tenants_status    ON vula_tenants(status);
-CREATE INDEX IF NOT EXISTS idx_vula_tenants_created   ON vula_tenants(created_at DESC);
-
--- Auto-update updated_at
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER vula_tenants_updated_at
+DROP TRIGGER IF EXISTS trg_tenants_updated_at ON vula_tenants;
+CREATE TRIGGER trg_tenants_updated_at
     BEFORE UPDATE ON vula_tenants
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 
--- ── Documents ────────────────────────────────────────────────────────────────
+-- ── Documents (ingestion status per uploaded document) ──────────────────────
 
 CREATE TABLE IF NOT EXISTS vula_documents (
-    id                  BIGSERIAL PRIMARY KEY,
-    tenant_id           UUID REFERENCES vula_tenants(tenant_id) ON DELETE CASCADE,
-    filename            TEXT NOT NULL,
-    storage_path        TEXT,
-    content_type        TEXT,
-    size_bytes          INTEGER,
-    ingestion_status    TEXT NOT NULL DEFAULT 'queued'
-                            CHECK (ingestion_status IN ('queued', 'processing', 'done', 'failed')),
-    chunk_count         INTEGER,
-    qdrant_collection   TEXT,      -- vula_{tenant_id}
-    error_message       TEXT,
-    created_at          TIMESTAMPTZ DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ DEFAULT NOW()
+    id              BIGSERIAL PRIMARY KEY,
+    tenant_id       TEXT NOT NULL REFERENCES vula_tenants(tenant_id) ON DELETE CASCADE,
+    doc_id          TEXT NOT NULL,
+    filename        TEXT NOT NULL,
+    file_type       TEXT,
+    size_bytes      INTEGER,
+    status          TEXT NOT NULL DEFAULT 'queued',
+    chunks_stored   INTEGER DEFAULT 0,
+    error           TEXT,
+    uploaded_by     TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (tenant_id, doc_id)
 );
 
 ALTER TABLE vula_documents ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_all" ON vula_documents;
+CREATE POLICY "service_role_all" ON vula_documents
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 
-CREATE POLICY "Tenants read own documents"
-    ON vula_documents FOR SELECT
-    USING (
-        auth.uid()::text = (
-            SELECT tenant_id::text FROM vula_tenants WHERE tenant_id = vula_documents.tenant_id
-        )
-    );
+CREATE INDEX IF NOT EXISTS idx_documents_tenant ON vula_documents(tenant_id);
 
-CREATE INDEX IF NOT EXISTS idx_vula_docs_tenant   ON vula_documents(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_vula_docs_status   ON vula_documents(ingestion_status);
-
-CREATE TRIGGER vula_documents_updated_at
+DROP TRIGGER IF EXISTS trg_documents_updated_at ON vula_documents;
+CREATE TRIGGER trg_documents_updated_at
     BEFORE UPDATE ON vula_documents
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
-
--- ── Admin view (service role only) ───────────────────────────────────────────
-
-CREATE OR REPLACE VIEW vula_admin_signups AS
-SELECT
-    t.company_name,
-    t.contact_name,
-    t.email,
-    t.whatsapp,
-    t.plan,
-    t.industry,
-    t.status,
-    t.trial_ends,
-    t.created_at,
-    COUNT(d.id) AS document_count
-FROM vula_tenants t
-LEFT JOIN vula_documents d ON d.tenant_id = t.tenant_id
-GROUP BY t.id
-ORDER BY t.created_at DESC;

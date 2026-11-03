@@ -39,6 +39,19 @@ in `migrations/*.sql` gets `enable row level security` (`tools/check_migrations_
 A table the dashboard does read from the browser needs a real tenant-scoped policy instead; it
 must not be added to this list.
 
+## Policies open to every role (closed 3 Nov 2026, migration 242)
+
+Six tables on production — `vula_tenants`, `vula_tenant_phones`, `vula_subscriptions`,
+`vula_users`, `vula_documents`, `vula_queries` — came from a hand-made schema that predates the
+migration files. Each had a policy named `service_role_all` that was really
+`for all using (true)` with no role, i.e. granted to **every** role. Anyone with the public anon
+key (it ships in the dashboard bundle) could read and change tenants, the phone → business
+routing, subscription tokens and past questions through the REST API. No frontend reads these
+tables and the API uses the service key, so `242_production_parity.sql` re-creates each policy
+`to service_role` only. Checked first: in the 24 hours before the change, every REST request to
+these tables came from the API's secret key. A test (`tests/test_schema_fingerprint.py`) now
+fails if any migration grants `using (true)` to anything but `service_role`.
+
 ## `vula_storage_can_write`: `authenticated` keeps EXECUTE
 
 The advisor flags `public.vula_storage_can_write(text)` because it is `security definer` and
