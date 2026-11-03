@@ -443,9 +443,12 @@ def pdf(brand: Dict[str, Any], v: Dict[str, Any]) -> bytes:
     return HTML(string=render(brand, v)).write_pdf()
 
 
-def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, str]] = None) -> str:
+def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, str]] = None,
+           extra_html: str = "") -> str:
     """The client's page. Every value escaped; every figure from client_view(). `links`: the
-    downloads offered on it ({label: url}) — PDFs only; nobody outside the team gets the Excel."""
+    downloads offered on it ({label: url}) — PDFs only; nobody outside the team gets the Excel.
+    `extra_html`: a block built (and escaped) by the caller, e.g. the project's documents
+    (vula/api/project_track.py)."""
     from vula.commerce import powered_by
     e = html.escape
     name = e(brand.get("name") or "")
@@ -556,7 +559,10 @@ td.n{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}tr.
 .d{{display:block;color:#8a857c;font-size:12px}}tr.h td{{color:#8a857c;font-size:12px}}
 .dl{{margin:22px 0 0}}.dl a{{display:inline-block;margin:0 10px 8px 0;padding:9px 14px;border-radius:9px;
 background:{accent};color:#fff;text-decoration:none;font-weight:600;font-size:14px}}
+.btn{{display:inline-block;padding:6px 11px;border-radius:8px;border:1px solid {accent};background:#fff;color:{accent};
+font:600 13px system-ui,sans-serif;text-decoration:none;cursor:pointer}}.btn.solid{{background:{accent};color:#fff}}
+form.inline{{display:inline;margin:0}}.note{{background:#f2efe7;border-radius:9px;padding:9px 12px;font-size:14px;margin:10px 0}}
 {powered_by.pill_css(dark_mode=False)}
 </style></head><body><div class="card">{logo_html}<h1>{title}</h1>
 <p class="muted">Project account · {e(VIEW_LABEL[v['view']])} · as of {e(str(v.get('as_of') or ''))}</p>
-{''.join(parts)}{_downloads(links)}<p class="muted" style="margin-top:20px">Questions? Contact {name}.</p></div>{powered_by.pill_html()}</body></html>"""
+{''.join(parts)}{extra_html}{_downloads(links)}<p class="muted" style="margin-top:20px">Questions? Contact {name}.</p></div>{powered_by.pill_html()}</body></html>"""

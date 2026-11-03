@@ -144,7 +144,9 @@ def test_folders_and_quotes_are_kept_apart_from_invoices(world):
     assert ov["folders"]["02 Quotes"] == 1 and ov["folders"]["03 Statements"] == 1
     tile = next(s for s in ov["suppliers"] if s["supplier"].startswith("Tile"))
     assert tile["quotes_cents"] == 450000 and tile["invoices_cents"] == 300000 + 1000
-    assert ov["invoices_cents"] == sum(s["invoices_cents"] for s in ov["suppliers"])
+    own = next(s for s in ov["suppliers"] if s["supplier"].endswith("(our documents)"))
+    assert own["invoices_cents"] == 1000000                      # the business's own invoice to the client
+    assert ov["invoices_cents"] == sum(s["invoices_cents"] for s in ov["suppliers"]) - 1000000
 
 
 def test_what_looks_missing(world):
@@ -191,7 +193,7 @@ def test_the_pack_is_folders_by_supplier_with_an_index_that_adds_up(world):
     from vula.commerce.xlsx_check import evaluate
     ws = load_workbook(io.BytesIO(z.read(f"{root}/Index.xlsx"))).active
     labels = {ws.cell(r, 2).value: r for r in range(1, ws.max_row + 1)}
-    assert round(evaluate(ws, f"F{labels['Total invoices']}") * 100) == _ov()["invoices_cents"]
+    assert round(evaluate(ws, f"F{labels['Total supplier invoices']}") * 100) == _ov()["invoices_cents"]
     assert round(evaluate(ws, f"F{labels['Subtotal — Oak Hardware Centre (Oakies)']}") * 100) == 79050
     files = [ws.cell(r, 7).value for r in range(5, ws.max_row + 1)]
     assert "(no file on record)" in files

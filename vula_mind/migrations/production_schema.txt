@@ -154,6 +154,7 @@ vula_project_codes: code_id:uuid, created_at:timestamptz, id:uuid, project_id:uu
 vula_project_direct_payments: amount_cents:int8, created_at:timestamptz, created_by:text, description:text, id:uuid, paid_on:date, project:text, status:text, supplier:text, tenant_id:text, updated_at:timestamptz
 vula_project_finances: amount:numeric, bank_account:text, category:text, counterparty:text, created_at:timestamptz, description:text, direction:text, doc_id:text, filename:text, id:uuid, kind:text, matched_id:uuid, occurred_at:date, project:text, reconciled:bool, reference:text, source:text, tenant_id:text
 vula_project_messages: content:text, created_at:timestamptz, id:uuid, role:text, tenant_id:text, thread_id:uuid
+vula_project_share_requests: approved_until:timestamptz, decided_at:timestamptz, decided_by:text, id:uuid, project:text, requested_at:timestamptz, scope:text, share_id:uuid, status:text, tenant_id:text
 vula_project_shares: created_at:timestamptz, created_by:text, expires_at:timestamptz, id:uuid, last_viewed_at:timestamptz, project:text, revoked_at:timestamptz, tenant_id:text, token_hash:text, view:text, views:int4
 vula_project_tasks: assignee:text, clickup_task_id:text, created_at:timestamptz, due:date, id:uuid, project:text, source:text, status:text, tenant_id:text, title:text, updated_at:timestamptz
 vula_project_team: created_at:timestamptz, email:text, id:uuid, name:text, phone:text, project_id:uuid, role:text, tenant_id:text

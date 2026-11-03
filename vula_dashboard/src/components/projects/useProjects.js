@@ -110,6 +110,10 @@ export const removeProjectClient = (tenantId, id) =>
 export const decideClientSlip = (tenantId, id, approve) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/client-slips/${id}/decide`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve }) }).then((r) => r.ok).catch(() => false);
+/** Yes / no to a client link's request to download documents (vula/commerce/project_share_docs.py). */
+export const decideDownloadRequest = (tenantId, id, approve) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/download-requests/${id}/decide`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve }) }).then((r) => r.ok).catch(() => false);
 /** Record the owner's ruling in the decision log (vula/commerce/decisions.py); resolves to the row or { error }. */
 export async function addDecision(tenantId, body) {
   const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/decisions`, {

@@ -2563,15 +2563,72 @@ def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
         logger.debug("upsert_project_boq skipped (run migration 056/129?): %s", exc)
 
 
-def vat_inclusive(total_cents: int, vat_cents: int, excl: bool) -> Tuple[int, int]:
+_SA_VAT_NUMBER = re.compile(r"^4\d{9}$")
+
+
+def vat_registered(*tax_ids: Optional[str]) -> Optional[bool]:
+    """Whether the supplier charges VAT, from the tax numbers we have for it (on the document, or
+    on its supplier record): True when one is a South African VAT number (10 digits starting with
+    4), False when there are tax numbers but none is (a company or foreign registration number),
+    None when there is no tax number at all — unknown."""
+    present = [str(t).strip() for t in tax_ids if t and str(t).strip()]
+    if not present:
+        return None
+    return any(_SA_VAT_NUMBER.match(re.sub(r"\D", "", t)) for t in present)
+
+
+def vat_inclusive(total_cents: int, vat_cents: int, excl: bool,
+                  registered: Optional[bool] = None) -> Tuple[int, int]:
     """(total incl VAT, VAT) in cents. A document that prices EXCLUDING VAT and shows no VAT
     figure (STE Scaffolding's quotes, 2026-10-02: "R41,752.47 excluding VAT" was booked as the
     full price with R0 VAT) gets 15% added here, in code — never by the model. Half cents are
-    dropped, as on STE's own invoice: R2,084.50 excl → R312.67 VAT (STE00866, R2,397.17)."""
+    dropped, as on STE's own invoice: R2,084.50 excl → R312.67 VAT (STE00866, R2,397.17).
+    Not when the supplier isn't VAT registered (`registered` False, vat_registered()): 2026-11-03,
+    an electrician's R45,852.00 invoice with no VAT on it was booked as R52,729.80."""
+    if registered is False:
+        return total_cents, vat_cents
     if excl and total_cents > 0 and not vat_cents:
         vat_cents = total_cents * 15 // 100
         return total_cents + vat_cents, vat_cents
     return total_cents, vat_cents
+
+
+_SUPPLIER_WORDS_NOT_A_NAME = frozenset({
+    "electrical", "electric", "plumbing", "plumber", "joinery", "services", "service", "bathrooms",
+    "bathroom", "hardware", "construction", "trading", "supplies", "supply", "tiles", "tiling",
+    "sanitaryware", "building", "builders", "painting", "painter", "centre", "center", "group",
+    "holdings", "africa", "south", "cape", "town", "projects", "solutions", "installations"})
+
+
+def _supplier_words(name: Optional[str]) -> set:
+    return {w for w in _norm_name(name or "").split() if len(w) >= 4 and w not in _SUPPLIER_WORDS_NOT_A_NAME}
+
+
+def client_pays_directly(tenant_id: str, supplier: Optional[str],
+                         project: Optional[str] = None) -> Optional[dict]:
+    """The client's open "still to pay" to this supplier (vula_project_direct_payments), or None.
+    Only rows still to pay count — a supplier the client paid once may well bill the business
+    next time. Matched on the supplier's own name words ("Elighting Electrical Services" ↔
+    "Elyas / Elighting (electrical)"), never on trade words alone; on the document's project when
+    it's known. Fail-open: any error → None (book as before)."""
+    words = _supplier_words(supplier)
+    if not words:
+        return None
+    try:
+        rows = (_client().table("vula_project_direct_payments")
+                .select("project,supplier,amount_cents,status")
+                .eq("tenant_id", tenant_id).eq("status", "to_pay").limit(500).execute().data or [])
+    except Exception as exc:  # noqa: BLE001 — e.g. before the table exists
+        logger.debug("direct payments check skipped: %s", exc)
+        return None
+    want = project_key(project) if project else None
+    for r in rows:
+        if want and project_key(r.get("project")) != want:
+            continue
+        if words & _supplier_words(r.get("supplier")):
+            return {"project": r.get("project"), "supplier": r.get("supplier"),
+                    "to_pay_cents": int(r.get("amount_cents") or 0)}
+    return None
 
 
 async def commit_inbound_document(
@@ -2668,8 +2725,10 @@ async def commit_inbound_document(
         due_date = doc_date + timedelta(days=payment_terms_days)
     days_until_due = (due_date - today).days if due_date else None
     vat_cents = int(extracted.get("vat_cents") or 0)
+    registered = vat_registered(tax_id, extracted.get("supplier_vat_no"),
+                                (supplier_row or {}).get("tax_id"))
     total_cents, vat_cents = vat_inclusive(total_cents, vat_cents,
-                                           bool(extracted.get("amounts_exclude_vat")))
+                                           bool(extracted.get("amounts_exclude_vat")), registered)
 
     preview = {
         "supplier": supplier_name,
@@ -2704,6 +2763,17 @@ async def commit_inbound_document(
     if is_invoice and total_cents <= 0:
         return {"ok": True, "preview": preview, "committed": False,
                 "reason": "no total found on this document — not booked as a draft"}
+
+    # The client pays this supplier directly (a "still to pay" in vula_project_direct_payments):
+    # their invoice is the client's to settle, not the business's bill. 2026-11-03: an
+    # electrician's final invoice, which the client pays, was booked as a R52,729.80 draft bill
+    # to the business. The document is still filed; only the bill is left out.
+    if doc_type in ("invoice", "delivery_note") and not own_document:
+        direct = client_pays_directly(tenant_id, supplier_name, project)
+        if direct:
+            return {"ok": True, "preview": preview, "committed": False, "client_pays_directly": direct,
+                    "reason": f"the client pays {direct['supplier']} directly on {direct['project']} — "
+                              "not booked as your bill"}
 
     record_id = str(uuid4())
     supplier_id = supplier_row.get("id") if supplier_row else None

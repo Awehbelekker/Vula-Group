@@ -34,6 +34,13 @@ PUBLIC = {
     ("GET", "/track/{token}/bill.pdf"): "the shared project's priced bill as a PDF — same token rules; never the Excel",
     ("GET", "/track/{token}"): "a project's account shared with its client — 192-bit random token, only its hash "
                                "stored; expires and can be revoked; the view the business chose (no profit ever)",
+    ("GET", "/track/{token}/doc/{doc_id}"): "a client document, view only, on the shared project link — same token "
+                                            "rules; only that project's client documents",
+    ("GET", "/track/{token}/doc/{doc_id}/{page}.png"): "a watermarked page picture of that view-only document — same rules",
+    ("POST", "/track/{token}/request"): "the client asks to download — same token rules; the business says yes or no",
+    ("GET", "/track/{token}/download/{doc_id}"): "a client document's file — same token rules, and only after the "
+                                                 "business approved a download for that link",
+    ("GET", "/track/{token}/download.zip"): "the client copy as a zip — same token rules, only after approval",
     ("POST", "/v1/tap/app/enrol"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("POST", "/v1/tap/app/login"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("GET", "/v1/tap/app/me"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",

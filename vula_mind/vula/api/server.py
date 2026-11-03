@@ -1895,7 +1895,7 @@ _SECTION_RULES = [
     # cost, fee and profit — Money access only. A QS login limited to Projects keeps the online
     # BOQ, its PDF and the QS view (admin/projects/qs-view).
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:boq-template\.xlsx|boq-library|projects/boq-online\.xlsx|"
-                      r"projects/(?:tracker|share|shares|costing|direct-payments))(?:/|$)"), _MONEY_TABS),
+                      r"projects/(?:tracker|share|shares|costing|direct-payments|download-requests))(?:/|$)"), _MONEY_TABS),
     # 2026-11-03: a project's whole file (every invoice, statement and proof of payment, as a
     # zip) — owner and managers only, like the team settings.
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/file(?:\.zip)?(?:/|$)"), frozenset()),

@@ -317,6 +317,11 @@ def _missing(rows: List[Dict[str, Any]], bank: List[Dict[str, Any]], unfiled: Li
                                         "filename": r["filename"]} for r in rows if not r["file_url"]]}
 
 
+def _ours(supplier: str) -> bool:
+    """The business's own documents (its invoices to the client) — never added to supplier totals."""
+    return supplier.endswith("(our documents)") or supplier == "Our documents"
+
+
 def _summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     by: Dict[str, Dict[str, Any]] = {}
     for r in rows:
@@ -341,7 +346,8 @@ def _summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         folders[r["folder"]] = folders.get(r["folder"], 0) + 1
     return {"suppliers": sorted(by.values(), key=lambda s: -abs(s["invoices_cents"])),
             "folders": folders,
-            "invoices_cents": sum(s["invoices_cents"] for s in by.values()),
+            # supplier invoices only: the business's own invoice to the client is money in
+            "invoices_cents": sum(s["invoices_cents"] for s in by.values() if not _ours(s["supplier"])),
             "documents": len(rows)}
 
 
@@ -469,19 +475,21 @@ def index_workbook(business: str, project: str, audience: str, rows: List[Dict[s
             c.number_format = money
             c.font = font(bold=True)
             want[f"F{r}"] = sum(x["amount_cents"] or 0 for x in rows[i:j])
-            folder_subtotals.setdefault(folder, []).append(f"F{r}")
+            if not (supplier and _ours(supplier)):
+                folder_subtotals.setdefault(folder, []).append(f"F{r}")
         i = j
     r += 1
     for folder in ("01 Invoices", "02 Quotes"):
         if folder not in folder_subtotals:
             continue
         r += 1
-        safe_text(ws.cell(r, 2), "Total invoices" if folder == "01 Invoices" else "Total quotes (not added to invoices)")
+        safe_text(ws.cell(r, 2), "Total supplier invoices" if folder == "01 Invoices"
+                  else "Total supplier quotes (not added to invoices)")
         ws.cell(r, 2).font = font(bold=True, size=10)
         c = ws.cell(r, 6, "=" + "+".join(folder_subtotals[folder]))
         c.number_format = money
         c.font = font(bold=True, size=10)
-        want[f"F{r}"] = sum(x["amount_cents"] or 0 for x in rows if x["folder"] == folder)
+        want[f"F{r}"] = sum(x["amount_cents"] or 0 for x in rows if x["folder"] == folder and not _ours(x["supplier"]))
     ws.freeze_panes = "A5"
     ws.auto_filter.ref = f"A4:H{max(r, 5)}"
     buf = io.BytesIO()
@@ -585,7 +593,7 @@ def summary_text(ov: Dict[str, Any], top: int = 12) -> str:
         lines.append(f"• {s['supplier']}: " + ", ".join(bits))
     if len(ov["suppliers"]) > top:
         lines.append(f"• …and {len(ov['suppliers']) - top} more suppliers")
-    lines.append(f"Invoices in total: {_r(ov['invoices_cents'])}")
+    lines.append(f"Supplier invoices in total: {_r(ov['invoices_cents'])}")
     m = ov.get("missing")
     if m:
         gaps = []
