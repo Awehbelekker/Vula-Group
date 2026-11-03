@@ -113,6 +113,23 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: python tools/schema_fingerprint.py check migrations/production_schema.txt
+      # Whole WhatsApp conversations against that database (tools/staging_flows.py): signed
+      # webhooks in, a stand-in Meta on 127.0.0.1 records every reply. Crisis support, opt-out,
+      # duplicate delivery and the takeoff flow. No AI model here: the flows don't need one.
+      - name: WhatsApp flows on the fresh database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          pip install -r requirements.txt
+          python tools/staging_flows.py seed
+          eval "$(supabase status --workdir ../infrastructure/local-supabase -o env | grep -E '^(API_URL|SERVICE_ROLE_KEY)=' | sed 's/^API_URL=/export SUPABASE_URL=/; s/^SERVICE_ROLE_KEY=/export SUPABASE_SERVICE_KEY=/')"
+          export SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_KEY" VULA_ENV=staging API_KEY=ci-staging \
+                 ENFORCE_TENANT_AUTH=true GRAPH_HOST=http://127.0.0.1:8799 \
+                 VULA_FB_APP_SECRET=staging-flows-secret WHATSAPP_TOKEN=staging-token \
+                 WHATSAPP_PHONE_ID=STAGINGPNID OLLAMA_BASE=http://127.0.0.1:9 QDRANT_BASE=http://127.0.0.1:6333
+          uvicorn vula.api.server:app --port 7438 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf -o /dev/null http://127.0.0.1:7438/status && break; sleep 1; done
+          python tools/staging_flows.py run --base-url http://127.0.0.1:7438 || { tail -80 /tmp/api.log; exit 1; }
 
   # ── React dashboard — build must pass ─────────────────────────────────────────
   dashboard:

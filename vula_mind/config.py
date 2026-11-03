@@ -160,6 +160,11 @@ class Settings(BaseSettings):
     # times and left Meta's support window on 21 May 2026. The legacy WHATSAPP_API_URL env var is
     # no longer read; settings.whatsapp_api_url is now derived from this.
     graph_api_version: str = DEFAULT_GRAPH_API_VERSION
+    # Local staging only (3 Nov 2026, docs/staging.md): point every Graph call at a stand-in Meta
+    # on this machine (tools/staging_flows.py) so whole WhatsApp flows run with nothing sent.
+    # Honoured only for a loopback address (http://127.0.0.1:…, http://localhost:…); anything else
+    # is ignored, so a mistaken value can never send production's Meta tokens elsewhere.
+    graph_host: str = ""
     whatsapp_phone_id: str = ""
     whatsapp_token: str = ""
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
@@ -399,7 +404,20 @@ class Settings(BaseSettings):
     def graph_base(self) -> str:
         """https://graph.facebook.com/<version>: "25.0" gets its "v"; blank → the default."""
         v = (self.graph_api_version or "").strip().strip("/") or DEFAULT_GRAPH_API_VERSION
-        return f"{GRAPH_HOST}/{v if v.startswith('v') else 'v' + v}"
+        return f"{self.graph_host_effective}/{v if v.startswith('v') else 'v' + v}"
+
+    @property
+    def graph_host_effective(self) -> str:
+        """GRAPH_HOST when it is a loopback address (local staging's stand-in Meta), else Meta."""
+        from urllib.parse import urlsplit
+        h = (self.graph_host or "").strip().rstrip("/")
+        try:
+            parts = urlsplit(h)
+        except ValueError:
+            return GRAPH_HOST
+        if parts.scheme in ("http", "https") and parts.hostname in ("127.0.0.1", "localhost", "::1"):
+            return h
+        return GRAPH_HOST
 
     @property
     def whatsapp_api_url(self) -> str:

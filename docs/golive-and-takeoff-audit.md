@@ -358,6 +358,26 @@ After the fixes, all 242 migrations apply and every table's columns match produc
 The backend runs against the local database, and `tools/smoke.py` passes 6/6. **242 isn't
 applied to production yet** (needs Supabase's write approval).
 
+## Staging, step 2: whole WhatsApp flows on local staging (3 Nov 2026)
+
+`tools/staging_flows.py` sends signed Meta webhooks to the real backend on local staging. A
+stand-in Meta (`GRAPH_HOST`, loopback only) records every reply.
+
+- **Found and fixed:** crisis support never ran on shop (commerce) lines. Those messages go
+  to `_handle_commerce_message`, not `_handle_message`, so a customer of a shop saying
+  "I want to end my life" got the shop assistant. Production had this since crisis support
+  went live. Now both entry handlers run `safety.handle` first
+  (`tests/test_crisis_support.py::test_a_shop_line_customer_gets_the_crisis_lines_too`
+  fails before the fix and passes after).
+- **7/7 flows pass:** unsigned webhook refused; crisis (helplines to the person, owner
+  alerted without the message); abuse (GBV line, business not told); duplicate delivery
+  answered once; takeoff on WhatsApp (DXF → measured rooms → Price it → priced BOQ);
+  STOP (reply plus opt-out on record, read back); a reply when the AI is down.
+- CI runs the flows on every push, in the "Fresh database" job.
+- **Not covered here:** what the AI answers. That's the per-tenant go-live test
+  (`evals/golive.py`, Master › a business › Go-live test). As of 3 Nov it had never been run
+  for any of the 11 tenants, and it needs the production models.
+
 ## What Richard must do manually
 
 **This week, before go-live**

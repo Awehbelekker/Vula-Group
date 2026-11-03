@@ -115,3 +115,27 @@ def test_the_ai_check_runs_once_per_message(monkeypatch):
     a = asyncio.run(esc.classify_customer_message("sawubona ngicela umuntu"))
     b = asyncio.run(esc.classify_customer_message("sawubona ngicela umuntu"))
     assert a == b and len(calls) == 1
+
+
+def test_a_shop_line_customer_gets_the_crisis_lines_too():
+    # 3 Nov 2026, found on local staging (tools/staging_flows.py): shop lines go straight to
+    # _handle_commerce_message, which never ran the crisis check — "I want to end my life" from a
+    # customer of a shop got the shop assistant. Both entry handlers must run it first.
+    from vula.api import whatsapp
+    sent = []
+
+    async def send(to, body, tenant_id=None, **kw):
+        sent.append((to, body))
+
+    def no_assistant(name):
+        raise AssertionError(f"the {name} skill must not answer a crisis message")
+
+    with patch("vula.api.whatsapp._send_reply", send), \
+         patch("vula.api.tenants.display_name", return_value="Acme Fish"), \
+         patch("vula.escalation._pick_helper", return_value={"whatsapp": "27820000009"}), \
+         patch("core.skills.loader.get_skill", no_assistant), \
+         patch("vula.api.whatsapp.get_skill", no_assistant, create=True):
+        asyncio.run(whatsapp._handle_commerce_message("27830000001", "I want to end my life",
+                                                      "wamid.x", "off-the-hook"))
+    assert sent and sent[0][0] == "27830000001" and "0800 567 567" in sent[0][1]
+    assert any(to == "27820000009" for to, _ in sent)
