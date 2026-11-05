@@ -179,7 +179,9 @@ def test_the_owner_answers_one_question_at_a_time_and_each_answer_is_read_back(w
     assert "Question 1 of" in _last(world) and "Seaview Tiles" in _last(world)
     _say("Seaview Tiles & Stone")
     assert "Saved ✅ Business name: Seaview Tiles & Stone" in _last(world) and "Question 2 of" in _last(world)
-    assert world.inv[T]["company_name"] == "Seaview Tiles & Stone"
+    assert world.inv[T]["company_name"] == "Seaview Tiles & Stone" and ob.get(T)["step"] == "website"
+    _say("no")                                           # no website
+    assert "Saved ✅ Website: No website" in _last(world)
     _say("We supply and lay tiles for homes")
     _say("Seaview and Main Road")
     _say("Mon–Fri 8–5, closed weekends")
@@ -369,14 +371,15 @@ def test_a_question_the_website_answered_offers_it_and_yes_keeps_it(world, monke
     _make(world)
     _say("Start")
     _say("Seaview Tiles")
-    assert "Question 2 of" in _last(world) and "Your website says: “Tiles and stone for homes”" in _last(world)
+    _say("no")                                                       # the website question
+    assert "Question 3 of" in _last(world) and "Your website says: “Tiles and stone for homes”" in _last(world)
     _say("yes")
     assert world.profile[T]["what_we_do"] == "Tiles and stone for homes"
     assert "Saved ✅ What you do: Tiles and stone for homes" in _last(world)
     assert "Your website says" not in _last(world)                   # area: no draft
     for answer in ("Seaview", "Mon–Fri 8–5", "EFT", "skip"):
         _say(answer)
-    assert "Question 7 of" in _last(world) and "never offered" not in _last(world)   # email isn't a profile answer
+    assert "Question 8 of" in _last(world) and "never offered" not in _last(world)   # email isn't a profile answer
 
 
 def test_a_different_answer_replaces_the_website_draft(world, monkeypatch):
@@ -386,5 +389,75 @@ def test_a_different_answer_replaces_the_website_draft(world, monkeypatch):
     _make(world)
     _say("Start")
     _say("Seaview Tiles")
+    _say("no")
     _say("We supply and lay tiles")
     assert world.profile[T]["what_we_do"] == "We supply and lay tiles"
+
+
+# ── 5 Nov 2026: the owner gives the website on WhatsApp ────────────────────────────────────────
+# The same scan as Master's Website field (website_setup.start): brand now, products, pages and
+# answer drafts in the background. Skipped when Master was given the site; the logo question is
+# skipped when the site gave a logo.
+
+def _site(world, monkeypatch, *, logo=True, fail=None):
+    started = []
+
+    async def start(tid, url):
+        if fail:
+            raise fail
+        started.append((tid, url))
+        patch = {"accent_color": "#1A5E8A", **({"logo_url": "https://store.example/logo.png"} if logo else {})}
+        world.inv.setdefault(tid, {}).update(patch)
+        return {"url": "https://seaviewtiles.example", "brand": {"applied": True, **patch}, "import_started": True}
+    monkeypatch.setattr("vula.commerce.website_setup.start", start)
+    return started
+
+
+def test_a_website_sent_on_whatsapp_starts_the_scan_and_the_logo_question_is_skipped(world, monkeypatch):
+    started = _site(world, monkeypatch)
+    _make(world)
+    _say("Start")
+    _say("Seaview Tiles")
+    _say("It's www.seaviewtiles.example")
+    assert started == [(T, "www.seaviewtiles.example")]
+    msg = _last(world)
+    assert "Saved ✅ Website: seaviewtiles.example" in msg and "colours and logo are set" in msg
+    assert "reading your products and pages" in msg and ob.get(T)["step"] == "what_we_do"
+    ob._update(T, {"step": "bank"})
+    _say("FNB, Seaview Tiles, 62812345678")
+    assert ob.get(T)["step"] == "documents"                           # logo came from the website
+    assert ob.get(T)["answers"]["logo"] == "From the website"
+
+
+def test_no_logo_on_the_site_still_asks_for_one(world, monkeypatch):
+    _site(world, monkeypatch, logo=False)
+    _make(world)
+    _say("Start")
+    _say("Seaview Tiles")
+    _say("seaviewtiles.example")
+    ob._update(T, {"step": "bank"})
+    _say("FNB, Seaview Tiles, 62812345678")
+    assert ob.get(T)["step"] == "logo"
+
+
+def test_a_bad_address_is_asked_again_and_nothing_is_saved(world, monkeypatch):
+    _site(world, monkeypatch, fail=ValueError("'x' doesn't look like a website address"))
+    _make(world)
+    _say("Start")
+    _say("Seaview Tiles")
+    _say("we're on seaview.example")
+    assert "doesn't look like a website address" in _last(world) and ob.get(T)["step"] == "website"
+    _say("not sure what you mean")
+    assert "Send the website address" in _last(world) and ob.get(T)["step"] == "website"
+
+
+def test_a_website_given_in_master_is_not_asked_again(world, monkeypatch):
+    async def create_tenant(body, identity=None):
+        world.db.t["vula_tenant_config"].append({"tenant_id": body.tenant_id, "display_name": body.display_name})
+        return {"tenant": {"tenant_id": body.tenant_id}, "website": {"url": "https://seaviewtiles.example",
+                                                                      "brand": {"applied": False}}}
+    monkeypatch.setattr("vula.api.tenants.create_tenant", create_tenant)
+    _make(world)
+    _say("Start")
+    _say("Seaview Tiles")
+    assert ob.get(T)["step"] == "what_we_do" and ob.get(T)["answers"]["website"] == "seaviewtiles.example"

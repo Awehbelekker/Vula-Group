@@ -46,10 +46,14 @@ Vula's own number also sets up a new business (`vula/onboard_wa.py`, migration 2
    can sign in with WhatsApp) and sends the `vula_business_setup` template from Vula's number
    ("Hi Sam, this is Vula. Seaview Tiles is ready on Vula. Reply START …"). Vula submits that
    template at boot, next to `vula_operator_alert`.
-2. The owner answers 12 questions one at a time: name, what you do, area, hours, payment, pricing,
-   email, VAT, bank details, logo, documents, team. Each answer is saved to the business profile or
-   invoice settings and read back before Vula says it's saved. *skip* leaves a question for later,
-   *stop* pauses, *start* carries on. Documents and slips sent meanwhile are filed as usual.
+2. The owner answers 13 questions one at a time: name, website, what you do, area, hours, payment,
+   pricing, email, VAT, bank details, logo, documents, team. Each answer is saved to the business
+   profile or invoice settings and read back before Vula says it's saved. *skip* leaves a question
+   for later, *stop* pauses, *start* carries on. Documents and slips sent meanwhile are filed as usual.
+   A website address sent here starts the same scan as Master's Website field: brand now; products,
+   pages and answer drafts in the background, which later questions offer as "Your website says…".
+   The website question is skipped when Master was given the site, and the logo question when the
+   site gave a logo.
 3. Until the business connects a number of its own, its owner and team work with Vula through
    Vula's number. Their messages are handled as that business, and every reply for it (proactive
    ones too) comes from Vula's number, never from the server's default number.
