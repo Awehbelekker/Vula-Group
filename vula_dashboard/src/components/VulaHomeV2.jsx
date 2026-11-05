@@ -17,6 +17,7 @@ import { Button, Card, ErrorCard, ListRow, PageHeader, PillTabs, Skeleton, StatC
 import { ActivityDetail, ActivityList, shortWhen, useActivity } from "./VulaActivity";
 import { TodayList, useToday } from "./VulaToday";
 import { InstallCard } from "./install/InstallVula.jsx";
+import MakeItYours from "./MakeItYours.jsx";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -78,6 +79,7 @@ export default function VulaHomeV2({ tenantId, onNavigate }) {
   return (
     <div>
       <PageHeader headline title={greeting(user?.name)} sub={status || undefined} />
+      <MakeItYours tenantId={tenantId} onNavigate={onNavigate} />
       <InstallCard />
       {error && <ErrorCard what="your Home figures" onRetry={load} />}
       {!home && <Skeleton lines={4} height={22} />}

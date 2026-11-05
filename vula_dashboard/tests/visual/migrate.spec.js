@@ -833,6 +833,51 @@ test("master tools: promote, go-live, benchmark, conversation day, retitle and b
   expect((await bake).postDataJSON()).toEqual({ models: ["openrouter/anthropic/claude-haiku-5-5", "openrouter/qwen/qwen3-32b"], skill: "email_admin" });
 });
 
+// 5 Nov 2026: a new business set up from its website — the brand, its products and pages, and
+// the business profile drafted for the owner to confirm on WhatsApp. The Tenant ID becomes a
+// lowercase slug as it's typed (ShopEazy was saved with capitals).
+test("master: a new tenant from its website, with a clean slug and what happens next", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.route(/\/v1\/tenants$/, (route) => route.request().method() === "POST"
+    ? route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ tenant: { tenant_id: "shop-eazy" },
+          website: { url: "https://shopeazy.example", brand: { applied: true, accent_color: "#123456" }, import_started: true } }) })
+    : route.fallback());
+  await page.getByRole("button", { name: "New tenant" }).click();
+  await page.getByLabel("Tenant ID").fill("Shop Eazy");
+  await expect(page.getByLabel("Tenant ID")).toHaveValue("shop-eazy");
+  await page.getByLabel("Display name").fill("ShopEazy");
+  await page.getByLabel("Website (optional)").fill("shopeazy.example");
+  const create = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/v1/tenants");
+  await page.getByRole("button", { name: "Create tenant" }).click();
+  expect((await create).postDataJSON()).toEqual({ tenant_id: "shop-eazy", display_name: "ShopEazy", business_type: "retail", website: "shopeazy.example" });
+  await expect(page.getByRole("status").filter({ hasText: "Brand colours set from the website. Reading https://shopeazy.example in the background" })).toBeVisible();
+});
+
+// Ian, 5 Nov 2026: "in master the new tenant is not in the selection" — the top bar's switcher
+// read its list once at sign-in. It reads it again when a business is created.
+test("master: a new tenant appears in the top bar's switcher straight away", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  let created = false;
+  const cors = { "access-control-allow-origin": "*" };
+  await page.route(/\/v1\/tenants$/, async (route) => {
+    if (route.request().method() === "POST") {
+      created = true;
+      return route.fulfill({ status: 200, contentType: "application/json", headers: cors, body: JSON.stringify({ tenant: { tenant_id: "shop-eazy" } }) });
+    }
+    const tenants = [{ tenant_id: "demo-shop", display_name: "Harbour & Vine Deli" },
+      ...(created ? [{ tenant_id: "shop-eazy", display_name: "ShopEazy" }] : [])];
+    return route.fulfill({ status: 200, contentType: "application/json", headers: cors, body: JSON.stringify({ tenants }) });
+  });
+  const switcher = page.getByTitle("Switch tenant");
+  await expect(switcher.locator("option", { hasText: "ShopEazy" })).toHaveCount(0);
+  await page.getByRole("button", { name: "New tenant" }).click();
+  await page.getByLabel("Tenant ID").fill("shop-eazy");
+  await page.getByLabel("Display name").fill("ShopEazy");
+  await page.getByRole("button", { name: "Create tenant" }).click();
+  await expect(switcher.locator("option", { hasText: "ShopEazy" })).toHaveCount(1);
+});
+
 test("master tenants: search, create, suspend and billing send the same requests", async ({ page }) => {
   await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.getByLabel("Search tenants").fill("salon");

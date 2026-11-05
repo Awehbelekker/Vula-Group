@@ -158,14 +158,19 @@ export default function App() {
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
   const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
 
-  // DB-driven tenant switcher: every configured tenant, not a hardcoded pair.
+  // DB-driven tenant switcher: every configured tenant, not a hardcoded pair. Read again when
+  // Master creates a business ("vula-tenants-changed", master/useMasterTenants.js): it loaded
+  // once at sign-in, so a new business wasn't in the switcher until a reload (5 Nov 2026).
   useEffect(() => {
-    if (role !== "master") return;
-    fetch(`${VULA_API}/v1/tenants`).then(r => r.json()).then(d => {
+    if (role !== "master") return undefined;
+    const load = () => fetch(`${VULA_API}/v1/tenants`).then(r => r.json()).then(d => {
       const list = (d.tenants || []).map(t => ({ id: t.tenant_id, label: t.display_name || t.tenant_id }));
       setMasterTenants(list);
       setMasterTenant(cur => (cur && list.some(t => t.id === cur)) ? cur : (list[0]?.id || ""));
     }).catch(() => {});
+    load();
+    window.addEventListener("vula-tenants-changed", load);
+    return () => window.removeEventListener("vula-tenants-changed", load);
   }, [role]);
 
   useEffect(() => {

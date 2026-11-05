@@ -9355,12 +9355,14 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         from datetime import datetime, timezone
         from vula.commerce import service as _cs
 
-        digits = "".join(c for c in (phone or "") if c.isdigit())
-        digits = "27" + digits[1:] if digits.startswith("0") else digits
+        from vula.team_index import digits_za
         db = _cs._client()
-        rows = (db.table("vula_team_members").select("id,name,role,welcomed_at")
-                .eq("tenant_id", tenant_id).eq("whatsapp", digits).eq("active", True)
-                .limit(1).execute().data or [])
+        # Compared as 27… digits on both sides (5 Nov 2026): Team stores the number as typed
+        # (082…), so matching the stored text against 27… never found someone added that way.
+        target = digits_za(phone or "")
+        rows = [r for r in (db.table("vula_team_members").select("id,name,role,welcomed_at,whatsapp")
+                            .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+                if target and digits_za(r.get("whatsapp") or "") == target][:1]
         if not rows or rows[0].get("welcomed_at"):
             return False
 

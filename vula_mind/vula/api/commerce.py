@@ -1716,6 +1716,20 @@ async def admin_site_import(tenant_id: str, body: dict, request: Request):
     return {"started": True, "url": root}
 
 
+@router.post("/{tenant_id}/admin/setup-from-website")
+async def admin_setup_from_website(tenant_id: str, body: dict, request: Request):
+    """{url}: the brand from the website (saved while the business still wears Vula's default
+    look) and "Import from your website" in the background — products, pages, and the business
+    profile drafted for the owner to confirm (vula/commerce/website_setup.py). Owner/manager."""
+    from vula.commerce import website_setup
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can start this.")
+    try:
+        return await website_setup.start(tenant_id, (body or {}).get("url") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/{tenant_id}/admin/stock/adjust")
 async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
     """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""

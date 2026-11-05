@@ -49,6 +49,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
     active: activeTab, onChange: onTabChange,
   })
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')   // e.g. "Created. Reading their website…"
   const [prefill, setPrefill] = useState(null)   // signup → pre-filled "+ New tenant" form (P1.4)
   // Go-live readiness pass (Phase 3.4): create_tenant only sets core config — WhatsApp
   // connection, KB seeding, and branding remain separate manual steps a master admin has to
@@ -91,10 +92,11 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   return (
     // no 1000px cap (2026-10-18): the shell already bounds the width; tables use the room
     <div className="vula-master" style={{ color: C.text, minWidth: 0 }}>
-      <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} variant={'pill'} label="Master" />
+      <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr(''); setNotice('') }} variant={'pill'} label="Master" />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
+      {notice && <div role="status" style={{ fontSize: 13, color: 'var(--ok-text)', marginBottom: 10 }}>{notice}</div>}
       {tab === 'tenants' && <Tenants onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
-        onCreated={(tenantId) => { setOnboardSelect(tenantId); setTab('onboard') }} />}
+        onCreated={(tenantId, note) => { setOnboardSelect(tenantId); setNotice(note || ''); setTab('onboard') }} />}
       {tab === 'onboard' && <Onboard onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
         selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} onViewDetail={openDetail}
         onAddLogin={(tenantId) => { setLoginPrefill({ tenant_id: tenantId, role: 'owner' }); setTab('users') }} />}

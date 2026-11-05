@@ -28,6 +28,7 @@ class ClientIn(BaseModel):
     owner_whatsapp: str
     owner_email: Optional[str] = None
     send_welcome: bool = True
+    website: Optional[str] = None      # brand + products + pages + profile drafts (website_setup.py)
 
 
 @master_router.post("")
@@ -39,7 +40,7 @@ async def create_client(body: ClientIn, identity: dict = Depends(require_master)
             identity, tenant_id=body.tenant_id.strip().lower(), display_name=body.display_name or body.tenant_id,
             business_type=body.business_type or "other", owner_name=body.owner_name,
             owner_whatsapp=body.owner_whatsapp, owner_email=body.owner_email,
-            send_welcome_now=body.send_welcome)
+            send_welcome_now=body.send_welcome, website=body.website)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if out.get("error") and not out.get("tenant"):
