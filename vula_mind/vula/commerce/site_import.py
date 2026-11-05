@@ -563,6 +563,7 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
         st["step"] = f"reading {len(urls)} pages"
         _save(tenant_id, st)
         sem = asyncio.Semaphore(_CONCURRENCY)
+        read: List[Tuple[str, str, str]] = []      # (url, title, text) for the profile drafts
 
         async def one(u: str) -> None:
             async with sem:
@@ -575,6 +576,7 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
                 if len(text) < _MIN_TEXT:
                     st["skipped_pages"] += 1
                     return
+                read.append((u, title, text))
                 content = f"Source: {u}\n\n# {title or u}\n\n{text}"
                 res = await pipeline.ingest_text(
                     content=content, filename=f"Website — {title or urlparse(u).path}"[:180],
@@ -585,6 +587,15 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
                     st["errors"].append(f"{u}: not stored ({res.status})")
 
         await asyncio.gather(*(one(u) for u in urls))
+        # The business-profile questions, answered from these pages as drafts the owner confirms
+        # on WhatsApp (profile_from_site.py). Best effort: a failure never fails the import.
+        st["step"] = "drafting your business profile from the website"
+        _save(tenant_id, st)
+        try:
+            from vula.commerce.profile_from_site import draft_and_save
+            st["profile_drafts"] = await draft_and_save(tenant_id, read)
+        except Exception as exc:
+            log.info("profile drafts skipped for %s: %s", tenant_id, exc)
         st["step"] = "done"
         from vula.commerce.meta_catalog import sync_if_connected
         await sync_if_connected(tenant_id)

@@ -97,7 +97,7 @@ vula_approval_steps: approval_id:uuid, approver_name:text, approver_phone:text, 
 vula_approvals: completed_at:timestamptz, created_at:timestamptz, deliver_via:text, entity_id:text, entity_type:text, id:uuid, meta:jsonb, requested_by:text, status:text, tenant_id:text, title:text
 vula_background_jobs: kind:text, running:bool, started_at:timestamptz, status:jsonb, tenant_id:text, updated_at:timestamptz
 vula_boq_drafts: lines:jsonb, project:text, tenant_id:text, total_cents:int8, updated_at:timestamptz, updated_by:text
-vula_business_profile: answers:jsonb, public_keys:jsonb, tenant_id:text, updated_at:timestamptz, updated_by:text
+vula_business_profile: answers:jsonb, drafts:jsonb, public_keys:jsonb, tenant_id:text, updated_at:timestamptz, updated_by:text
 vula_business_rules: created_at:timestamptz, created_by:text, id:uuid, rule:text, source:text, status:text, tenant_id:text, topic:text, updated_at:timestamptz
 vula_buying_settings: approver_phones:_text, default_account:text, default_project:text, enabled:bool, monthly_limit_cents:int8, per_purchase_limit_cents:int8, tenant_id:text, updated_at:timestamptz, updated_by:text, who_can_ask:text
 vula_buying_shops: active:bool, created_at:timestamptz, created_by:text, domain:text, how:text, id:uuid, name:text, supplier_id:text, tenant_id:text

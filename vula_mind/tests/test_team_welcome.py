@@ -41,8 +41,8 @@ class _DB:
 def welcome(monkeypatch):
     sent = []
 
-    def run(tenant_id, role="owner", answered=2, total=13, trading_as="SeedleMe"):
-        db = _DB({"id": "m1", "name": "Matt Wilkinson", "role": role, "welcomed_at": None})
+    def run(tenant_id, role="owner", answered=2, total=13, trading_as="SeedleMe", number="0662545068"):
+        db = _DB({"id": "m1", "name": "Matt Wilkinson", "role": role, "welcomed_at": None, "whatsapp": number})
 
         async def invoice_settings(tid):
             return {"trading_as": trading_as}
@@ -78,10 +78,10 @@ async def test_a_new_shop_owner_gets_the_real_dashboard_and_is_offered_the_profi
 
 @pytest.mark.asyncio
 async def test_businesses_with_their_own_dashboard_address_keep_it(welcome):
-    sent = welcome("off-the-hook", trading_as="Off the Hook")
+    sent = welcome("off-the-hook", trading_as="Off the Hook", number="0820000000")
     await whatsapp._maybe_welcome_new_owner("off-the-hook", "0820000000")
     assert "https://admin.offthehook.co.za" in sent[0]
-    sent = welcome("digg-demo", trading_as="DIGG")
+    sent = welcome("digg-demo", trading_as="DIGG", number="0820000000")
     await whatsapp._maybe_welcome_new_owner("digg-demo", "0820000000")
     assert "https://digg.vula-ai.com" in sent[0] and "admin.digg" not in sent[0]
 
@@ -91,7 +91,7 @@ async def test_no_profile_nudge_when_it_is_done_or_for_staff(welcome):
     sent = welcome("seedleme", answered=13)
     await whatsapp._maybe_welcome_new_owner("seedleme", "0662545068")
     assert "set up my profile" not in sent[0]
-    sent = welcome("seedleme", role="staff")
+    sent = welcome("seedleme", role="staff", number="0660000000")
     await whatsapp._maybe_welcome_new_owner("seedleme", "0660000000")
     assert "set up my profile" not in sent[0]
 
@@ -102,6 +102,17 @@ async def test_the_welcome_is_sent_once(welcome):
     first = await whatsapp._maybe_welcome_new_owner("seedleme", "0662545068")
     again = await whatsapp._maybe_welcome_new_owner("seedleme", "0662545068")   # the other worker / a retry
     assert (first, again) == (True, False) and len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_number_saved_as_typed_is_still_recognised(welcome):
+    """5 Nov 2026: Team stores the number as typed (082…) and WhatsApp sends 2782…; the welcome
+    compared the text, so someone added with a local number was never recognised."""
+    sent = welcome("seedleme", number="066 254 5068")
+    assert await whatsapp._maybe_welcome_new_owner("seedleme", "27662545068") is True
+    sent = welcome("seedleme", number="0662545068")
+    assert await whatsapp._maybe_welcome_new_owner("seedleme", "27820000000") is False   # someone else
+    assert sent == []
 
 
 # ── 15 Oct: each business's own <name>.vula-ai.com, once it's live ──────────────────────

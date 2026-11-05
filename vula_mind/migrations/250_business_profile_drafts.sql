@@ -1,0 +1,11 @@
+-- 250: business-profile answers drafted from the business's own website (5 Nov 2026).
+--
+-- drafts: {question_key: {"answer": "...", "quote": "the sentence on the site", "url": "..."}}
+--   written by vula/commerce/profile_from_site.py after "Import from your website" (Master's
+--   New tenant › Website, or Home › Make it yours). A draft is not an answer: customers are never
+--   told it until the owner confirms it — on WhatsApp the setup questions (vula/onboard_wa.py)
+--   and "set up my profile" ask "Your website says … — reply yes to keep it" — then it moves into
+--   answers.
+--
+-- Idempotent. vula_business_profile already has RLS (migration 189).
+alter table vula_business_profile add column if not exists drafts jsonb not null default '{}'::jsonb;

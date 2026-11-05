@@ -47,6 +47,42 @@ test("home: a staff login without Money gets no Back house", async ({ page }) =>
   await expect(page.getByRole("tab", { name: "Back house" })).toHaveCount(0);
 });
 
+// 5 Nov 2026: "Make it yours" is back on Home — for an owner whose business still wears Vula's
+// default look. One website address: the brand now, then the products, pages and profile drafts.
+test("home: make it yours from the website, while the brand is still Vula's", async ({ page }) => {
+  await openScreen(page, { name: "home", role: "owner", nav: null, ready: "Won in" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.getByRole("region", { name: "Make it yours" })).toHaveCount(0);      // the demo shop has its brand
+  const cors = { "access-control-allow-origin": "*" };
+  let polls = 0;
+  await page.route(/\/v1\/commerce\/[^/]+\/(brand|admin\/setup-from-website|admin\/site-import)$/, (route) => {
+    const p = new URL(route.request().url()).pathname;
+    const body = p.endsWith("/brand") ? { name: "ShopEazy", logo_url: null, accent_color: "#2C5545" }
+      : p.endsWith("/setup-from-website") ? { url: "https://shopeazy.example", import_started: true,
+          brand: { applied: true, accent_color: "#1F4E79", logo_url: "https://shopeazy.example/logo.png" } }
+      : { status: ++polls < 2 ? { running: true, step: "reading 12 pages" }
+          : { running: false, step: "done", products_found: 24, kb_documents: 12, profile_drafts: 5 } };
+    return route.fulfill({ status: 200, contentType: "application/json", headers: cors, body: JSON.stringify(body) });
+  });
+  await page.reload();
+  const card = page.getByRole("region", { name: "Make it yours" });
+  await expect(card).toBeVisible();
+  await card.getByLabel("Your website").fill("shopeazy.example");
+  const setup = page.waitForRequest((r) => r.method() === "POST" && /\/admin\/setup-from-website$/.test(new URL(r.url()).pathname));
+  await card.getByRole("button", { name: "Set it up" }).click();
+  expect((await setup).postDataJSON()).toEqual({ url: "shopeazy.example" });
+  await expect(card.getByText("Your colours are set from https://shopeazy.example, and your logo.", { exact: false })).toBeVisible();
+  await expect(card.getByText(/Done: 24 products and 12 pages read, and 5 business-profile answers drafted/)).toBeVisible({ timeout: 15000 });
+});
+
+test("home: no make-it-yours card for a staff login", async ({ page }) => {
+  await openScreen(page, { name: "home", role: "staff", nav: null, ready: "Chats waiting on you" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.route(/\/v1\/commerce\/[^/]+\/brand$/, (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ name: "ShopEazy", logo_url: null, accent_color: "#2C5545" }) }));
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "Front house" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Make it yours" })).toHaveCount(0);
+});
+
 test("activity: filters and the detail panel", async ({ page }) => {
   await openScreen(page, { name: "activity", role: "owner", nav: "All activity", ready: "Chat with Fatima Adams" }, { viewport: VIEWPORTS.mobile, theme: "light" });
   await page.locator(".vui-chip", { hasText: "Back house" }).click();

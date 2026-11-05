@@ -66,13 +66,18 @@ export default function TenantsV2({ onError, onOpenTenant, onViewDetail, prefill
         {x.creating && (
           <form className="vms-form" onSubmit={(e) => { e.preventDefault(); x.create() }}>
             <Field label="Tenant ID" hint="A slug, e.g. my-shop. It can't be changed later.">
-              <Input className="vms-mono" value={x.form.tenant_id} onChange={e => x.setForm(f => ({ ...f, tenant_id: e.target.value }))} />
+              <Input className="vms-mono" value={x.form.tenant_id}
+                onChange={e => x.setForm(f => ({ ...f, tenant_id: e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+/, '') }))} />
             </Field>
             <Field label="Display name"><Input value={x.form.display_name} onChange={e => x.setForm(f => ({ ...f, display_name: e.target.value }))} /></Field>
             <Field label="Business type">
               <Select value={x.form.business_type} onChange={e => x.setForm(f => ({ ...f, business_type: e.target.value }))}>
                 {(x.registry.business_types || []).map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
               </Select>
+            </Field>
+            <Field label="Website (optional)" hint="Vula takes the brand colours and logo, reads in the products and the pages customers ask about, and drafts the business's answers — the owner just confirms them on WhatsApp.">
+              <Input type="text" inputMode="url" autoComplete="off" placeholder="theirshop.co.za" value={x.form.website || ''}
+                onChange={e => x.setForm(f => ({ ...f, website: e.target.value }))} />
             </Field>
             <p className="vms-muted">The owner: Vula sends them a welcome on WhatsApp from Vula's own number and sets the business up with them, one question at a time. Leave the number empty to make an empty business.</p>
             <Field label="Owner's name"><Input value={x.form.owner_name} onChange={e => x.setForm(f => ({ ...f, owner_name: e.target.value }))} autoComplete="off" /></Field>

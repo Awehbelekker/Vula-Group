@@ -354,3 +354,37 @@ def test_the_webhook_hands_vulas_number_to_onboarding_before_any_business_routin
     asyncio.run(go())
     assert seen == [(OWNER, "what's owed to us?", T, T)]
     assert any(s[0] == "text" and s[1] == STRANGER for s in world.sent)
+
+
+# ── 5 Nov 2026: answers drafted from the business's website ─────────────────────────────────────
+# Master's New tenant › Website imports the site and drafts the profile answers
+# (vula/commerce/profile_from_site.py). A question with a draft says what the website says; *yes*
+# keeps it, anything else is the answer. Questions that aren't profile answers never show one.
+
+def test_a_question_the_website_answered_offers_it_and_yes_keeps_it(world, monkeypatch):
+    drafts = {"what_we_do": {"answer": "Tiles and stone for homes", "quote": "…", "url": "https://seaview.example/about"},
+              "email": {"answer": "never offered", "quote": "…", "url": "u"}}
+    monkeypatch.setattr("vula.commerce.business_profile.get_drafts",
+                        lambda tid: {k: v for k, v in drafts.items() if k not in (world.profile.get(tid) or {})})
+    _make(world)
+    _say("Start")
+    _say("Seaview Tiles")
+    assert "Question 2 of" in _last(world) and "Your website says: “Tiles and stone for homes”" in _last(world)
+    _say("yes")
+    assert world.profile[T]["what_we_do"] == "Tiles and stone for homes"
+    assert "Saved ✅ What you do: Tiles and stone for homes" in _last(world)
+    assert "Your website says" not in _last(world)                   # area: no draft
+    for answer in ("Seaview", "Mon–Fri 8–5", "EFT", "skip"):
+        _say(answer)
+    assert "Question 7 of" in _last(world) and "never offered" not in _last(world)   # email isn't a profile answer
+
+
+def test_a_different_answer_replaces_the_website_draft(world, monkeypatch):
+    monkeypatch.setattr("vula.commerce.business_profile.get_drafts",
+                        lambda tid: {} if "what_we_do" in (world.profile.get(tid) or {}) else
+                        {"what_we_do": {"answer": "Old wording", "quote": "…", "url": "u"}})
+    _make(world)
+    _say("Start")
+    _say("Seaview Tiles")
+    _say("We supply and lay tiles")
+    assert world.profile[T]["what_we_do"] == "We supply and lay tiles"

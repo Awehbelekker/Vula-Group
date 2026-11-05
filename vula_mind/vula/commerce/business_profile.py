@@ -103,6 +103,48 @@ def get_answers(tenant_id: str) -> Dict[str, str]:
         return {}
 
 
+def get_drafts(tenant_id: str) -> Dict[str, Dict[str, str]]:
+    """Answers drafted from the business's website (profile_from_site.py), for the questions not
+    answered yet: {key: {"answer", "quote", "url"}}. {} before migration 250. A draft is never an
+    answer — customers aren't told it until the owner confirms it."""
+    try:
+        rows = (_client().table("vula_business_profile").select("drafts")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        drafts = dict((rows[0].get("drafts") if rows else None) or {})
+    except Exception as exc:
+        log.debug("business profile drafts read skipped (migration 250?): %s", exc)
+        return {}
+    answered = {k for k, v in get_answers(tenant_id).items() if (v or "").strip()}
+    return {k: d for k, d in drafts.items()
+            if k not in answered and isinstance(d, dict) and (d.get("answer") or "").strip()}
+
+
+def save_drafts(tenant_id: str, drafts: Dict[str, Dict[str, str]]) -> int:
+    """Store website drafts for questions that exist and aren't answered (replacing earlier
+    drafts for the same questions). Returns how many were stored; 0 before migration 250."""
+    valid = {q["key"] for q in questions(_business_type(tenant_id))}
+    answered = {k for k, v in get_answers(tenant_id).items() if (v or "").strip()}
+    keep = {k: {"answer": str(d.get("answer") or "").strip()[:600],
+                "quote": str(d.get("quote") or "").strip()[:400], "url": str(d.get("url") or "")[:300]}
+            for k, d in (drafts or {}).items()
+            if k in valid and k not in answered and isinstance(d, dict) and (d.get("answer") or "").strip()}
+    if not keep:
+        return 0
+    try:
+        rows = (_client().table("vula_business_profile").select("drafts")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        if rows:
+            merged = {**dict(rows[0].get("drafts") or {}), **keep}
+            _client().table("vula_business_profile").update({"drafts": merged}).eq("tenant_id", tenant_id).execute()
+        else:
+            _client().table("vula_business_profile").insert(
+                {"tenant_id": tenant_id, "answers": {}, "drafts": keep}).execute()
+    except Exception as exc:
+        log.warning("business profile drafts not saved for %s (migration 250?): %s", tenant_id, exc)
+        return 0
+    return len(keep)
+
+
 def structured_hours(tenant_id: str) -> str:
     """The opening hours set in Settings (commerce_order_settings.business_hours) as one line,
     or "" when they aren't set."""
@@ -129,9 +171,11 @@ def status(tenant_id: str) -> Dict[str, Any]:
     qs = questions(_business_type(tenant_id))
     answers = effective_answers(tenant_id)
     missing = [q for q in qs if not (answers.get(q["key"]) or "").strip()]
+    drafts = get_drafts(tenant_id)
     return {"questions": qs, "answers": answers, "missing": [q["key"] for q in missing],
             "answered": len(qs) - len(missing), "total": len(qs),
-            "public_keys": get_public_keys(tenant_id)}
+            "public_keys": get_public_keys(tenant_id),
+            "drafts": {k: d for k, d in drafts.items() if k in {q["key"] for q in missing}}}
 
 
 def next_question(tenant_id: str, skipped: Optional[set] = None) -> Optional[Dict[str, str]]:
@@ -242,9 +286,16 @@ _SKIP_RE = _re.compile(r"^\s*(?:skip|next|pass|later|not sure|n/?a)\s*[.!]?\s*$"
 _STOP_RE = _re.compile(r"^\s*(?:stop|cancel|done|finish|that'?s all|enough)\s*[.!]?\s*$", _re.I)
 
 
+_YES_RE = _re.compile(r"^\s*(?:y|yes|yep|yebo|ja|correct|that'?s (?:right|correct)|keep(?: it)?|"
+                     r"still (?:right|true|correct)|👍|✅)\s*[.!]?\s*$", _re.I)
 def _ask(q: Dict[str, str], st: Dict[str, Any]) -> str:
-    return (f"Question {st['answered'] + 1} of {st['total']}: {q['q']}\n\n"
-            "(Reply with the answer — or *skip*, or *stop* to finish later.)")
+    draft = (st.get("drafts") or {}).get(q["key"])
+    head = f"Question {st['answered'] + 1} of {st['total']}: {q['q']}"
+    if draft:
+        # From the business's own website, quoted — confirmed by the owner before anyone is told it.
+        return (f"{head}\n\nYour website says: “{draft['answer']}”\n\n"
+                "Reply *yes* to keep that, or send the right answer (or *skip*, or *stop* to finish later).")
+    return f"{head}\n\n(Reply with the answer — or *skip*, or *stop* to finish later.)"
 
 
 async def handle_interview(tenant_id: str, phone: str, text: str) -> Optional[str]:
@@ -263,8 +314,13 @@ async def handle_interview(tenant_id: str, phone: str, text: str) -> Optional[st
             return ("Your business profile is complete ✅ — I answer from it. To change an answer, "
                     "edit it in Settings › Business profile.")
         _ACTIVE[key] = (q["key"], now, set())
-        return ("Let's set up your business profile, so I answer customers and your team from what "
-                "YOU tell me, not guesses.\n\n" + _ask(q, status(tenant_id)))
+        st = status(tenant_id)
+        lead = ("Let's set up your business profile, so I answer customers and your team from what "
+                "YOU tell me, not guesses.")
+        if st.get("drafts"):
+            lead += (f" I read your website and drafted {len(st['drafts'])} of the answers — "
+                     "just check them.")
+        return lead + "\n\n" + _ask(q, st)
     asked, _, skipped = active
     if _STOP_RE.search(text or ""):
         _ACTIVE.pop(key, None)
@@ -274,7 +330,9 @@ async def handle_interview(tenant_id: str, phone: str, text: str) -> Optional[st
     if _SKIP_RE.search(text or ""):
         skipped = skipped | {asked}
     else:
-        res = await save_answers(tenant_id, {asked: text}, by=phone)
+        draft = get_drafts(tenant_id).get(asked)
+        answer = draft["answer"] if draft and _YES_RE.search(text or "") else text
+        res = await save_answers(tenant_id, {asked: answer}, by=phone)
         if not res.get("saved"):
             _ACTIVE.pop(key, None)
             return f"I couldn't save that answer — {res.get('error')}"

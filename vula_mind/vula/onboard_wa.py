@@ -98,9 +98,30 @@ def _index(step: Optional[str]) -> int:
     return next((i for i, s in enumerate(STEPS) if s["key"] == step), 0)
 
 
-def _ask(step_key: str) -> str:
+def _draft(tenant_id: Optional[str], step_key: str) -> Optional[Dict[str, str]]:
+    """The answer drafted from the business's website for this question, if any (5 Nov 2026:
+    'Import from your website' drafts the profile answers, vula/commerce/profile_from_site.py)."""
+    step = _BY_KEY.get(step_key) or {}
+    if not tenant_id or step.get("kind") not in ("profile", "hours"):
+        return None
+    try:
+        from vula.commerce.business_profile import get_drafts
+        return get_drafts(tenant_id).get(step_key)
+    except Exception:
+        return None
+
+
+_YES_RE = re.compile(r"^\s*(?:y|yes|yep|yebo|ja|correct|that'?s (?:right|correct)|keep(?: it)?|"
+                     r"still (?:right|true|correct)|👍|✅)\s*[.!]?\s*$", re.I)
+
+
+def _ask(step_key: str, tenant_id: Optional[str] = None) -> str:
     i = _index(step_key)
-    return f"*Question {i + 1} of {len(STEPS)}:* {STEPS[i]['q']}"
+    text = f"*Question {i + 1} of {len(STEPS)}:* {STEPS[i]['q']}"
+    draft = _draft(tenant_id, step_key)
+    if draft:
+        text += f"\n\nYour website says: “{draft['answer']}”\nReply *yes* to keep that, or send the right answer."
+    return text
 
 
 # ── Rows ───────────────────────────────────────────────────────────────────────────────────────
@@ -178,7 +199,8 @@ async def send_welcome(row: Dict[str, Any]) -> str:
 
 async def create_client(identity: Dict[str, Any], *, tenant_id: str, display_name: str,
                         business_type: str, owner_name: str, owner_whatsapp: str,
-                        owner_email: Optional[str] = None, send_welcome_now: bool = True) -> Dict[str, Any]:
+                        owner_email: Optional[str] = None, send_welcome_now: bool = True,
+                        website: Optional[str] = None) -> Dict[str, Any]:
     """Make the business, put its owner on the team, start its WhatsApp setup and send the
     welcome. Raises ValueError for a bad number; HTTPException(409) if the id is taken."""
     phone = digits(owner_whatsapp)
@@ -190,8 +212,11 @@ async def create_client(identity: Dict[str, Any], *, tenant_id: str, display_nam
     if email and not _EMAIL_RE.fullmatch(email):
         raise ValueError("That email address doesn't look right.")
     from vula.api import tenants
+    # website: its brand, products and pages, and the profile answers drafted from it — which
+    # the setup questions below then offer as "Your website says …" (5 Nov 2026).
     out = await tenants.create_tenant(tenants.TenantIn(
-        tenant_id=tenant_id, display_name=display_name, business_type=business_type), identity=identity)
+        tenant_id=tenant_id, display_name=display_name, business_type=business_type, website=website),
+        identity=identity)
     if out.get("error"):
         return out
     db = _db()
@@ -452,7 +477,7 @@ async def _advance(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) ->
     if not nxt:
         return await _finish(row, answers, prefix)
     _update(row["tenant_id"], {"step": nxt, "answers": answers, "status": "in_progress"})
-    return f"{prefix}\n\n{_ask(nxt)}".strip()
+    return f"{prefix}\n\n{_ask(nxt, row['tenant_id'])}".strip()
 
 
 async def _finish(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) -> str:
@@ -495,10 +520,10 @@ async def interview(row: Dict[str, Any], *, text: str = "", media: Optional[Dict
     _update(tid, {"last_message_at": _now().isoformat()})
     if status == "invited":
         _update(tid, {"status": "in_progress", "step": step_key})
-        return f"{_intro(row)}\n\n{_ask(step_key)}"
+        return f"{_intro(row)}\n\n{_ask(step_key, tid)}"
     if status == "paused":
         _update(tid, {"status": "in_progress"})
-        return f"Welcome back 👋 Let's carry on.\n\n{_ask(step_key)}"
+        return f"Welcome back 👋 Let's carry on.\n\n{_ask(step_key, tid)}"
     if text and _STOP_RE.match(text):
         _update(tid, {"status": "paused"})
         return ("Paused ✅ — everything so far is saved. Reply *start* when you want to carry on. "
@@ -532,10 +557,13 @@ async def interview(row: Dict[str, Any], *, text: str = "", media: Optional[Dict
         return (f"Added ✅ {back}. They can message me here too, and sign in to the dashboard with "
                 "WhatsApp. Send the next person, or reply *done*.")
     if not text:
-        return _ask(step_key)
+        return _ask(step_key, tid)
+    draft = _draft(tid, step_key)
+    if draft and _YES_RE.match(text):
+        text = draft["answer"]              # keeps what the website says
     back, why = await _save(row, step, text)
     if not back:
-        return why or f"Send it again?\n\n{_ask(step_key)}"
+        return why or f"Send it again?\n\n{_ask(step_key, tid)}"
     return await _advance(row, _answers_with(row, step["key"], back), f"Saved ✅ {step['label']}: {back}")
 
 

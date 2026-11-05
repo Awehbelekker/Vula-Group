@@ -38,7 +38,7 @@ export function sortTenants(list, by) {
 
 // 5 Nov 2026: a new business is made with its owner's name and WhatsApp number, and set up over
 // WhatsApp from Vula's own number (POST /v1/master/clients, vula/onboard_wa.py).
-const EMPTY_FORM = { tenant_id: '', display_name: '', business_type: 'retail', owner_name: '', owner_whatsapp: '', owner_email: '', send_welcome: true }
+const EMPTY_FORM = { tenant_id: '', display_name: '', business_type: 'retail', owner_name: '', owner_whatsapp: '', owner_email: '', send_welcome: true, website: '' }
 
 export function useMasterTenants({ onError, prefill, onConsumePrefill, onCreated }) {
   const [rows, setRows] = useState([])
@@ -76,7 +76,8 @@ export function useMasterTenants({ onError, prefill, onConsumePrefill, onCreated
     if (withOwner && !form.owner_name.trim()) return onError("Give the owner's name too.")
     setBusy(true)
     try {
-      const body = withOwner ? form : { tenant_id: form.tenant_id, display_name: form.display_name, business_type: form.business_type }
+      const website = form.website.trim() || undefined
+      const body = withOwner ? { ...form, website } : { tenant_id: form.tenant_id, display_name: form.display_name, business_type: form.business_type, website }
       const r = await authFetch(withOwner ? '/v1/master/clients' : '/v1/tenants', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -86,7 +87,11 @@ export function useMasterTenants({ onError, prefill, onConsumePrefill, onCreated
         const newTenantId = form.tenant_id
         if (withOwner) toast(r.welcome === 'sent' ? `Welcome sent to ${form.owner_name} on WhatsApp` : `Made. Welcome ${r.welcome}`, r.welcome === 'sent' ? 'ok' : 'warn')
         setCreating(false); setForm(EMPTY_FORM); load()
-        onCreated && onCreated(newTenantId)
+        window.dispatchEvent(new Event('vula-tenants-changed'))   // the top bar's switcher reads its list again
+        const w = r.website
+        const note = !w ? '' : w.error ? `Created. The website couldn't be read: ${w.error}`
+          : `Created. ${w.brand?.applied ? 'Brand colours set from the website. ' : ''}Reading ${w.url} in the background — products, pages and the business's answers.`
+        onCreated && onCreated(newTenantId, note)
       }
     } catch (e) { onError(e.message) } finally { setBusy(false) }
   }

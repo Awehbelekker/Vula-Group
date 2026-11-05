@@ -197,8 +197,16 @@ def test_watchdog_sees_a_blocked_loop():
 
         t = threading.Thread(target=watch, daemon=True)
         t.start()
-        time.sleep(0.6)          # blocks the loop, like the 26 Oct freeze
-        await asyncio.sleep(0.1)
+        # Blocks the loop, like the 26 Oct freeze — until the watchdog has seen it (at least
+        # 0.6s, at most 3s). A fixed 0.6s missed it on a busy CI runner (5 Nov 2026) when the
+        # watcher thread didn't get a turn while the stall was over the 0.3s limit.
+        blocked = time.monotonic()
+        while time.monotonic() - blocked < 0.6 or (not alerts and time.monotonic() - blocked < 3):
+            time.sleep(0.05)
+        for _ in range(60):      # back to beating: the watchdog sees it recover
+            await asyncio.sleep(0.05)
+            if not dog.stalled:
+                break
         stop.set()
         task.cancel()
         return dog

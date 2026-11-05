@@ -447,6 +447,7 @@ class TenantIn(BaseModel):
     business_type: Optional[str] = "other"
     store_url: Optional[str] = None
     plan: Optional[str] = "starter"
+    website: Optional[str] = None      # the business's own site: brand + import (website_setup.py)
 
 
 @router.post("")
@@ -495,7 +496,16 @@ async def create_tenant(body: TenantIn, identity: dict = Depends(require_master)
         audit(identity, "tenant_created", body.tenant_id, business_type=body.business_type)
     except Exception:
         pass
-    return {"tenant": _public(row)}
+    out = {"tenant": _public(row)}
+    if (body.website or "").strip():
+        # 5 Nov 2026: one address sets the brand and starts the website import (products,
+        # pages, profile drafts). A site that can't be read never fails the new business.
+        try:
+            from vula.commerce import website_setup
+            out["website"] = await website_setup.start(body.tenant_id, body.website)
+        except Exception as exc:
+            out["website"] = {"error": str(exc)[:200]}
+    return out
 
 
 class TenantPatch(BaseModel):
