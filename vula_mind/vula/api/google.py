@@ -38,8 +38,9 @@ def _redirect_uri() -> str:
 
 @router.get("/authorize-url")
 async def authorize_url(tenant_id: str) -> dict:
-    if not settings.google_client_id:
-        return {"error": "Google app not configured (GOOGLE_CLIENT_ID missing)."}
+    from vula import connections
+    if not connections.one_tap("google"):
+        return await connections.not_available("google")
     params = {
         "client_id": settings.google_client_id,
         "redirect_uri": _redirect_uri(),
@@ -90,7 +91,10 @@ async def status(tenant_id: str) -> dict:
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
     except Exception:
         rows = []
-    return rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
+    from vula import connections
+    out = rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
+    out["one_tap"] = connections.one_tap("google")   # its Connect button can work
+    return out
 
 
 @router.get("/{tenant_id}/drive/search")

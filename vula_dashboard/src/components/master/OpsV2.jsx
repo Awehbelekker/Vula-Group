@@ -7,7 +7,7 @@
 import { Bug, CalendarClock, Check, ClipboardCopy, Database, Eye, KeyRound, Mail, Plus, Send, ShieldCheck, Smartphone, Trash2, Waypoints } from 'lucide-react'
 import { Button, Card, DataTable, EmptyState, Field, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatCard, StatusChip } from '../ui/index.jsx'
 import { when } from './TenantDetailV2'
-import { useAppErrors, useLoginTemplate, useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './useMasterOps'
+import { useAppErrors, useLoginTemplate, useMasterConnections, useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './useMasterOps'
 import './master.css'
 
 const loading = <Card><Skeleton lines={4} /></Card>
@@ -36,6 +36,41 @@ function LoginTemplateCard({ onError }) {
         {x.t.no_account.length > 0 && <li className="vms-muted">No WhatsApp account on record for {x.t.no_account.join(', ')}</li>}
       </ul>
     </Card>
+  )
+}
+
+/* ── Every business's app connections (vula/connections.py) ── */
+const CONN_TONE = { working: 'ok', broken: 'danger', unavailable: 'warn', not_connected: 'muted' }
+const CONN_WORD = { working: 'Working', broken: 'Broken', unavailable: 'Not set up on Vula', not_connected: 'Not connected' }
+const ONE_TAP_LABEL = { clickup: 'ClickUp', google: 'Google', microsoft: 'Microsoft', dynamics365: 'Dynamics 365' }
+function ConnectionsCard({ onError, onViewDetail }) {
+  const x = useMasterConnections({ onError })
+  if (!x.c) return null
+  const rows = (x.c.connections || []).filter(r => r.state === 'broken' || r.state === 'working')
+    .map((r, i) => ({ ...r, id: `${r.tenant_id}-${r.provider}-${r.account_key}-${i}` }))
+    .sort((a, b) => (a.state === 'broken' ? 0 : 1) - (b.state === 'broken' ? 0 : 1))
+  const notSetUp = Object.entries(x.c.one_tap || {}).filter(([, ok]) => !ok).map(([p]) => ONE_TAP_LABEL[p] || p)
+  return (
+    <>
+      <div className="vms-head">
+        <h3 className="vms-h"><Waypoints size={16} aria-hidden="true" className="vms-ic" />App connections</h3>
+        <StatusChip tone={x.c.broken ? 'danger' : 'ok'}>{x.c.broken ? `${x.c.broken} broken` : 'All working'}</StatusChip>
+        <Button size="sm" variant="secondary" disabled={x.busy} onClick={x.checkNow}>{x.busy ? 'Checking…' : 'Check now'}</Button>
+      </div>
+      <p className="vms-muted">Checked daily. When one breaks, the business's owner gets one WhatsApp with a link to reconnect, a reminder a week later if it's still broken, and a note when it works again.</p>
+      {notSetUp.length > 0 && <p className="vms-warn" role="status">One-tap connect isn't set up for {notSetUp.join(', ')}: those buttons say "not available yet". See docs/connections-setup.md.</p>}
+      {x.msg && <p className="vms-ok" role="status">{x.msg}</p>}
+      <Card pad={0}>
+        <DataTable caption="App connections" rows={rows} empty="No business has an app connected yet." columns={[
+          { key: 'tenant_id', label: 'Business', render: (r) => <TenantLink id={r.tenant_id} onViewDetail={onViewDetail} /> },
+          { key: 'label', label: 'Connection', render: (r) => <span>{r.label}{r.account_key ? <span className="vms-muted"> · {r.account_key}</span> : null}</span> },
+          { key: 'state', label: 'State', render: (r) => <StatusChip tone={CONN_TONE[r.state] || 'muted'}>{CONN_WORD[r.state] || r.state}</StatusChip> },
+          { key: 'problem', label: 'Why', render: (r) => r.problem || '—' },
+          { key: 'since', label: 'Since', render: (r) => when(r.since) },
+          { key: 'alerted_at', label: 'Owner told', render: (r) => r.state === 'broken' ? (r.alerted_at ? when(r.alerted_at) : 'not yet') : '—' },
+        ]} />
+      </Card>
+    </>
   )
 }
 
@@ -93,6 +128,8 @@ export function HealthV2({ onError, onViewDetail }) {
           sub={vrl.low_coverage ? 'Low coverage — too few events for a pass-rate to mean anything' : (vrl.last_event_at ? `last ${when(vrl.last_event_at)}` : undefined)}
           color={vrl.low_coverage ? 'var(--warn-text)' : undefined} />
       </div>
+
+      <ConnectionsCard onError={onError} onViewDetail={onViewDetail} />
 
       <AppErrorsCard onError={onError} onViewDetail={onViewDetail} />
 

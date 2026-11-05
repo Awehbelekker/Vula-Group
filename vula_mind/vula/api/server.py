@@ -721,6 +721,21 @@ async def _staged_approvals_loop() -> None:
         await _asyncio.sleep(60)
 
 
+async def _connection_check_loop() -> None:
+    """Check every business's app connections daily; owners hear once when one breaks and when it
+    works again (vula/connections.py)."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(1500)  # settle on boot, after the other loops
+    while True:
+        try:
+            from vula.connections import check_all
+            res = await check_all()
+            log.info("Connection check: %s", res)
+        except Exception as exc:
+            log.warning("Connection check loop error: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
 async def _automations_loop() -> None:
     """Evaluate every enabled automation rule every 5 minutes (P3 automations builder)."""
     import asyncio as _asyncio
@@ -1631,6 +1646,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_scheduled_campaigns_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_automations_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_staged_approvals_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_connection_check_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_subscriptions_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
@@ -1870,6 +1886,7 @@ _TENANT_GUARD_RES = [
     re.compile(r"^/v1/subscriptions/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/recurring-bills/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/projects/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/connections/([^/]+)(?:/|$)"),     # a business's app connections (vula/connections.py)
     re.compile(r"^/v1/documents/([^/]+)/(?:filed|projects|media|health)(?:/|$)"),
     re.compile(r"^/v1/qs/rates/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/field/(?:contractors|daily-tasks)/([^/]+)(?:/|$)"),
@@ -2070,6 +2087,9 @@ app.include_router(dash_push_router, prefix="/v1/push")
 from vula.api.app_errors import router as app_errors_router, master_router as app_errors_master_router  # noqa: E402
 app.include_router(app_errors_router, prefix="/v1/app-errors")              # the dashboard's crash reports (public, limited)
 app.include_router(app_errors_master_router, prefix="/v1/master/app-errors")  # master-only list
+from vula.api.connections_api import router as connections_router, master_router as connections_master_router  # noqa: E402
+app.include_router(connections_router, prefix="/v1/connections")       # a business's own connections
+app.include_router(connections_master_router, prefix="/v1/master/connections")   # master-only overview
 app.include_router(draft_router, prefix="/v1")
 app.include_router(agent_router, prefix="/v1")
 

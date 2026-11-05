@@ -43,8 +43,9 @@ def _decode_state(state: str) -> tuple[str, str]:
 
 @router.get("/authorize-url")
 async def authorize_url(tenant_id: str, org_url: str) -> dict:
-    if not settings.microsoft_client_id:
-        return {"error": "Microsoft app not configured (MICROSOFT_CLIENT_ID missing)."}
+    from vula import connections
+    if not connections.one_tap("dynamics365"):
+        return await connections.not_available("dynamics365")
     if not org_url:
         return {"error": "org_url is required, e.g. https://yourorg.crm4.dynamics.com"}
     org_url = org_url.rstrip("/")
@@ -119,4 +120,7 @@ async def status(tenant_id: str) -> dict:
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
     except Exception:
         rows = []
-    return rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
+    from vula import connections
+    out = rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
+    out["one_tap"] = connections.one_tap("dynamics365")   # its Connect button can work
+    return out

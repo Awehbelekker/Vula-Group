@@ -50,4 +50,4 @@ async def test_clickup_status_not_connected_when_no_row():
     mock_db.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
     with patch("vula.api.clickup._client", return_value=mock_db):
         result = await clickup.status("digg-demo")
-    assert result == {"tenant_id": "digg-demo", "status": "not_connected"}
+    assert result == {"tenant_id": "digg-demo", "status": "not_connected", "one_tap": False}

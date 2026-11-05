@@ -103,6 +103,7 @@ vula_call_sheets: created_at:timestamptz, entries:jsonb, id:uuid, rep_whatsapp:t
 vula_chat_messages: created_at:timestamptz, id:uuid, phone:text, role:text, tenant_id:text, text:text
 vula_clickup_accounts: api_token:text, connected_at:timestamptz, connected_by:text, created_at:timestamptz, id:uuid, last_error:text, last_sync_error:text, last_sync_status:text, last_synced_at:timestamptz, list_ids:jsonb, space_id:text, status:text, team_id:text, tenant_id:text, updated_at:timestamptz, webhook_id:text, webhook_secret:text
 vula_code_library: category:text, code_ref:text, created_at:timestamptz, doc_id:text, file_url:text, id:uuid, status:text, tenant_id:text, title:text, uploaded_by:text, version:text
+vula_connection_health: account_key:text, alerted_at:timestamptz, id:uuid, last_checked_at:timestamptz, problem:text, provider:text, since:timestamptz, state:text, tenant_id:text
 vula_dash_push_subs: auth:text, created_at:timestamptz, endpoint:text, failures:int4, id:uuid, last_sent_at:timestamptz, member_id:text, member_phone:text, p256dh:text, role:text, tenant_id:text, user_agent:text, user_email:text
 vula_decisions: amount_cents:int8, created_at:timestamptz, decision:text, id:uuid, made_by:text, made_by_phone:text, made_by_role:text, project:text, refs:jsonb, source:text, status:text, subject:text, superseded_by:uuid, tenant_id:text, updated_at:timestamptz
 vula_document_extractions: category:text, created_at:timestamptz, doc_id:text, fields:jsonb, filename:text, id:uuid, source:text, summary:text, tenant_id:text

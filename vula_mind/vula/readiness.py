@@ -111,6 +111,16 @@ def optional_settings() -> list[dict]:
                       {"YOCO_SECRET_KEY": s.yoco_secret_key, "YOCO_PUBLIC_KEY": s.yoco_public_key,
                        "YOCO_WEBHOOK_SECRET": s.yoco_webhook_secret},
                       "No platform Yoco keys; tenants connect their own Yoco account"))
+    # One-tap Connect buttons need Vula's own app registered with each provider, once
+    # (docs/connections-setup.md). Without it the button says "not available yet" (vula/connections.py).
+    for what, names in (("ClickUp one-tap connect", {"CLICKUP_CLIENT_ID": s.clickup_client_id,
+                                                     "CLICKUP_CLIENT_SECRET": s.clickup_client_secret}),
+                        ("Google one-tap connect", {"GOOGLE_CLIENT_ID": s.google_client_id,
+                                                    "GOOGLE_CLIENT_SECRET": s.google_client_secret}),
+                        ("Microsoft one-tap connect", {"MICROSOFT_CLIENT_ID": s.microsoft_client_id,
+                                                       "MICROSOFT_CLIENT_SECRET": s.microsoft_client_secret})):
+        out.append(_group(what, names, "Not set up: businesses can't connect with one tap "
+                                       "(docs/connections-setup.md)"))
     return out
 
 

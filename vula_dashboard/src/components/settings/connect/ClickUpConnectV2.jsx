@@ -41,9 +41,13 @@ export default function ClickUpConnectV2({ tenantId, tenantName }) {
 
       {connected ? (
         <div className="vst-row">
-          <Button variant="secondary" Icon={RefreshCw} onClick={x.handleConnect} disabled={x.loading}>{x.loading ? 'Opening…' : 'Reconnect'}</Button>
+          {x.oneTap && <Button variant="secondary" Icon={RefreshCw} onClick={x.handleConnect} disabled={x.loading}>{x.loading ? 'Opening…' : 'Reconnect'}</Button>}
           <Button variant="secondary" Icon={Send} onClick={x.refileMissing}>Send missed documents</Button>
         </div>
+      ) : !x.oneTap ? (
+        <p className="vst-body">
+          Connect {tenantName || 'your'} ClickUp so you can create, list and update tasks — and set reminders — straight from WhatsApp. It takes two minutes with a ClickUp token:
+        </p>
       ) : (
         <>
           <p className="vst-body">
@@ -57,7 +61,7 @@ export default function ClickUpConnectV2({ tenantId, tenantName }) {
       )}
 
       {/* shown connected or not: a dead token can still read "Connected" (3 Oct) */}
-      {!x.showToken ? (
+      {!x.showToken && x.oneTap ? (
         <div><Button size="sm" variant="quiet" Icon={KeyRound} onClick={() => x.setShowToken(true)}>
           {connected ? 'Reconnect with a ClickUp token' : "Window didn't come back? Connect with a ClickUp token"}
         </Button></div>

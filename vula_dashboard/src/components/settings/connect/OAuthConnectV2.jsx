@@ -19,6 +19,9 @@ export default function OAuthConnectV2({ provider, tenantId, tenantName }) {
   const x = useOAuthConnect({ tenantId, provider, popupName: P.popupName, label: P.label })
   const connected = x.status === 'connected'
   const a = x.account || {}
+  // Vula's own app for this provider isn't set up: say so instead of opening a window that
+  // goes nowhere (vula/connections.py).
+  const oneTap = a.one_tap !== false
   // Sync health is separate from the sign-in (migration 169): shown once a sync has run.
   const sync = connected && a.last_synced_at && (a.last_sync_status === 'error'
     ? ['Sync', `Failing — ${timeAgo(a.last_synced_at)}${a.last_sync_error ? ` · ${String(a.last_sync_error).slice(0, 120)}` : ''}`, 'danger']
@@ -26,7 +29,11 @@ export default function OAuthConnectV2({ provider, tenantId, tenantName }) {
   return (
     <ConnectCard status={x.status} error={x.error}
       rows={connected ? [['Account', a.email || '—'], ['Email', 'Draft-only (you approve & send)'], sync] : []}>
-      {connected ? (
+      {!oneTap ? (
+        <p className="vcn-warn-box" role="status">
+          {P.label} can't be connected with one tap yet — Vula's {P.label} app is still being set up. Vula's team has been told; you don't need to do anything.
+        </p>
+      ) : connected ? (
         <div className="vst-row">
           <Button variant="secondary" Icon={RefreshCw} onClick={x.handleConnect} disabled={x.loading}>{x.loading ? 'Opening…' : 'Reconnect'}</Button>
         </div>

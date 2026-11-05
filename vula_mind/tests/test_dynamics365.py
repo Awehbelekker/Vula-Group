@@ -179,7 +179,8 @@ async def test_dynamics_lookup_tool_requires_query():
 @pytest.mark.asyncio
 async def test_authorize_url_encodes_tenant_and_org_in_state():
     from vula.api.dynamics365 import authorize_url, _decode_state
-    with patch("vula.api.dynamics365.settings") as mock_settings:
+    with patch("vula.api.dynamics365.settings") as mock_settings, \
+            patch("vula.connections.one_tap", return_value=True):     # Vula's Azure app is set up
         mock_settings.microsoft_client_id = "client123"
         mock_settings.public_base_url = "https://vula-group-production.up.railway.app"
         result = await authorize_url("gerflor", "https://gerflor.crm4.dynamics.com/")
@@ -225,4 +226,4 @@ async def test_status_not_connected_when_no_row():
     mock_db.table.return_value = mock_table
     with patch("vula.api.dynamics365._client", return_value=mock_db):
         result = await status("gerflor")
-    assert result == {"tenant_id": "gerflor", "status": "not_connected"}
+    assert result == {"tenant_id": "gerflor", "status": "not_connected", "one_tap": False}

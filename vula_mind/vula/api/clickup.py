@@ -137,8 +137,9 @@ def _any_stored_webhook_secret() -> list[tuple[str, str]]:
 @router.get("/authorize-url")
 async def authorize_url(tenant_id: str) -> dict:
     """Return the ClickUp consent URL for this tenant (opened in a popup)."""
-    if not settings.clickup_client_id:
-        return {"error": "ClickUp app not configured (CLICKUP_CLIENT_ID missing)."}
+    from vula import connections
+    if not connections.one_tap("clickup"):
+        return await connections.not_available("clickup")
     params = {
         "client_id": settings.clickup_client_id,
         "redirect_uri": f"{settings.public_base_url}/v1/clickup/oauth/callback",
@@ -201,9 +202,12 @@ async def status(tenant_id: str) -> dict:
         rows = res.data or []
     except Exception:
         rows = []
+    from vula import connections
+    one_tap = connections.one_tap("clickup")      # its Connect button can work (else: token, or not yet)
     if not rows:
-        return {"tenant_id": tenant_id, "status": "not_connected"}
+        return {"tenant_id": tenant_id, "status": "not_connected", "one_tap": one_tap}
     row = rows[0]
+    row["one_tap"] = one_tap
     lists = row.get("list_ids") or {}
     row["default_list_id"] = lists.get("default") if isinstance(lists, dict) else None
     return row
