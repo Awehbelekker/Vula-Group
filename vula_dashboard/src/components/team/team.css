@@ -4,7 +4,7 @@
 .vtm-h { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 4px; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
 .vtm-h3 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-4) 0 var(--space-2);
   font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.vtm-h3 .vui-badge, .vtm-h3 span { text-transform: none; letter-spacing: 0; }
+.vtm-h3 span { text-transform: none; letter-spacing: 0; }
 .vtm-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--space-2); }
 .vtm-strong { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .vtm-form { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); align-items: end; margin: var(--space-3) 0; }
