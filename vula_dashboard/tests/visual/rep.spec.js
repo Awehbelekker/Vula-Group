@@ -7,7 +7,6 @@ import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
-const V2 = process.env.UI_V2 === "1";
 const REP = "+27820000009";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
@@ -38,7 +37,6 @@ const SCREENS = [
 ];
 
 test.describe("redesign: sales rep", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [name, screen] of SCREENS) {
     for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -126,9 +124,3 @@ test.describe("redesign: sales rep", () => {
   });
 });
 
-test("current look: a rep's Home and My Work still load on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { name: "rep-home", role: "rep", nav: null, ready: "Bay Hotel kitchens" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await expect(page.getByText("⏰ Reminders (3 open)")).toBeVisible();
-  await expect(page.getByText("Goes to sales@harbourvine.example.test")).toBeVisible();
-});

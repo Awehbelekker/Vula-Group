@@ -7,7 +7,6 @@ import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 import * as F from "./fixtures/demo.js";
 
-test.skip(process.env.UI_V2 !== "1", "the redesign runs with UI_V2=1");
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);

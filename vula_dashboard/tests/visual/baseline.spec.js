@@ -11,12 +11,8 @@ import { SCREENS, VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
 // testDir (= tests/visual, from playwright.config.js) — import.meta isn't available here
 // because Playwright loads these specs as CommonJS (package.json has no "type": "module").
-// UI_V2=1 (the redesign) always captures into .results/v2 — it never overwrites the baseline.
-const outDir = (testInfo) => process.env.UI_V2 === "1"
-  ? path.join(testInfo.project.testDir, ".results", "v2")
-  : process.env.UPDATE_BASELINE === "1"
-    ? path.join(testInfo.project.testDir, "baseline")
-    : path.join(testInfo.project.testDir, ".results", "baseline");
+// Captures into .results/v2 — never over the committed baseline.
+const outDir = (testInfo) => path.join(testInfo.project.testDir, ".results", "v2");
 
 test.describe.configure({ mode: "parallel" });
 test.setTimeout(60000);

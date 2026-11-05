@@ -6,7 +6,6 @@ import { test, expect, devices } from "@playwright/test";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
 const ANDROID = devices["Pixel 7"].userAgent;
 const IPHONE = devices["iPhone 14"].userAgent;
 
@@ -17,7 +16,7 @@ async function open(page, { width = 390, standalone = false } = {}) {
   await installMockApi(page, { role: "owner" });
   await seedSession(page, { role: "owner", theme: "light" });
   await page.goto("/");
-  await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
 }
 
 // What Chrome does once the page is installable: a cancelable event carrying its own pop-up.
@@ -31,18 +30,14 @@ const offerInstall = (page, outcome = "accepted") => page.evaluate((o) => {
 const card = (page) => page.getByRole("region", { name: "Install Vula" });
 
 async function menuInstall(page) {
-  if (V2) {
-    await page.getByRole("button", { name: "More" }).click();
-    return page.getByRole("dialog", { name: "Menu" }).getByRole("button", { name: /Install Vula/ });
-  }
-  return page.getByRole("button", { name: "Install Vula" });          // the old design's top bar
+  await page.getByRole("button", { name: "More" }).click();
+    return page.getByRole("dialog", { name: "Menu" }).getByRole("button", { name: /Install Vula/ });          // the old design's top bar
 }
 
 test.describe("on an Android phone", () => {
   test.use({ userAgent: ANDROID });
 
   test("Install Vula opens the browser's own install pop-up", async ({ page }) => {
-    test.skip(!V2, "the Home card is the redesign's");
     await open(page);
     await offerInstall(page);
     await expect(card(page)).toBeVisible();
@@ -64,7 +59,6 @@ test.describe("on an Android phone", () => {
   });
 
   test("Not now hides the Home card for a month, on this phone", async ({ page }) => {
-    test.skip(!V2, "the Home card is the redesign's");
     await open(page);
     await card(page).getByRole("button", { name: "Not now" }).click();
     await expect(card(page)).toHaveCount(0);
@@ -81,8 +75,7 @@ test.describe("on an iPhone", () => {
 
   test("Install Vula shows Safari's Share → Add to Home Screen steps", async ({ page }) => {
     await open(page);
-    if (V2) await card(page).getByRole("button", { name: "Install Vula" }).click();
-    else await (await menuInstall(page)).click();
+    await card(page).getByRole("button", { name: "Install Vula" }).click();
     const steps = page.getByRole("dialog", { name: "Put Vula on your home screen" }).getByRole("list", { name: "How to install Vula" });
     await expect(steps.getByRole("listitem")).toHaveCount(3);
     await expect(steps).toContainText("Share");
@@ -93,7 +86,7 @@ test.describe("on an iPhone", () => {
     await open(page, { standalone: true });
     await expect(card(page)).toHaveCount(0);
     const item = await menuInstall(page);
-    await expect(page.getByRole("dialog", { name: "Menu" }).or(page.locator(".vshell")).first()).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Menu" })).toBeVisible();
     await expect(item).toHaveCount(0);
   });
 });
@@ -101,11 +94,9 @@ test.describe("on an iPhone", () => {
 test("a computer gets no Home card, and the menu offers the install", async ({ page }) => {
   await open(page, { width: 1280 });
   await expect(card(page)).toHaveCount(0);
-  if (V2) {
+  {
     await page.getByRole("button", { name: /^Account:/ }).click();
     await page.getByRole("menuitem", { name: "Install Vula" }).click();
-  } else {
-    await page.getByRole("button", { name: "Install Vula" }).click();
   }
   await expect(page.getByRole("dialog", { name: "Put Vula on your home screen" })).toContainText("Chrome or Edge");
 });

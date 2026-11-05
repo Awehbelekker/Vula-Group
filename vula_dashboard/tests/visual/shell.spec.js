@@ -9,7 +9,6 @@ import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
-test.skip(process.env.UI_V2 !== "1", "the redesigned shell runs with UI_V2=1");
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "shell", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -98,11 +97,9 @@ test("Master's tenant settings no longer offer the old design", async ({ page })
   expect((await patch).postDataJSON()).not.toHaveProperty("ui_v2");
 });
 
-test("?ui=v1 still pins the old look on one device while it's retired, and ?ui=auto undoes it", async ({ page }) => {
+test("?ui=v1 no longer brings the old look back", async ({ page }) => {
   await openScreen(page, { name: "home", role: "owner", nav: null, ready: "Won in" }, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.goto("/?ui=v1");
-  await page.locator(".vshell").first().waitFor();
-  expect(await page.evaluate(() => document.documentElement.dataset.ui)).toBeUndefined();
-  await page.goto("/?ui=auto");
   await page.locator(".v2-shell").first().waitFor();
+  expect(await page.evaluate(() => document.documentElement.dataset.ui)).toBe("v2");
 });

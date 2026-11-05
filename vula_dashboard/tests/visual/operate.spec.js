@@ -8,7 +8,6 @@ import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 import * as F from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -30,7 +29,6 @@ function capture(page, method, re) {  // method: POST / PUT / PATCH
 }
 
 test.describe("redesign", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
     for (const theme of THEMES) {
@@ -135,7 +133,6 @@ test.describe("redesign", () => {
 const SUPPLIERS = { name: "suppliers", role: "owner", nav: "Operate", tab: "Suppliers", ready: "Atlantic Dairy Co-op" };
 
 test.describe("redesign: suppliers", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
     for (const theme of THEMES) {
@@ -204,7 +201,6 @@ test.describe("redesign: suppliers", () => {
 const COSTING = { name: "costing", role: "owner", nav: "Sell", tab: "Costing", ready: "What each product really costs", modules: ["manufacturing"] };
 
 test.describe("redesign: costing", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
     for (const theme of THEMES) {
@@ -289,7 +285,6 @@ test.describe("redesign: costing", () => {
 const IMPORT = { name: "import", role: "owner", nav: "Sell", tab: "Import", ready: "Paste an old WhatsApp chat" };
 
 test.describe("redesign: import", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
     for (const theme of THEMES) {
@@ -346,12 +341,3 @@ test.describe("redesign: import", () => {
   });
 });
 
-test("current look: Stock still counts a scan on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { ...STOCK, nav: "Sell" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await page.getByRole("button", { name: "Continue" }).first().click();
-  await page.getByPlaceholder("…or type / use a USB scanner").fill(SOURDOUGH);
-  await page.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(page.getByText("Sourdough loaf")).toBeVisible();
-  expect(F.stockCounts.length).toBe(2);
-});

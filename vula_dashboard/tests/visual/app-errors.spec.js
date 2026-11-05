@@ -6,8 +6,6 @@ import { test, expect } from "@playwright/test";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
-
 async function open(page) {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.clock.setFixedTime(new Date(NOW_ISO));
@@ -16,7 +14,7 @@ async function open(page) {
   const reports = [];
   page.on("request", (r) => { if (r.method() === "POST" && /\/v1\/app-errors$/.test(new URL(r.url()).pathname)) reports.push(r.postDataJSON()); });
   await page.goto("/");
-  await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
   return reports;
 }
 

@@ -9,11 +9,11 @@ export const VIEWPORTS = {
 };
 export const THEMES = ["light", "dark"];
 
-// nav = sidebar item label (.vshell-it), tab = SectionTabs sub-tab label (role="tab").
+// nav = menu item label, tab = SectionTabs sub-tab label (role="tab").
 // ready = text that proves the seeded data rendered (not a login / blank / "Loading…").
 export const SCREENS = [
   // the redesign's Home (UX redesign Phase E) replaces the go-live checklist page
-  { name: "home", role: "owner", nav: null, ready: process.env.UI_V2 === "1" ? "Won in" : "Getting you live" },
+  { name: "home", role: "owner", nav: null, ready: "Won in" },
   { name: "inbox", role: "owner", nav: "Inbox", ready: "Waiting on you" },
   { name: "customers", role: "owner", nav: "People", tab: "Customers", ready: "Thandi Mokoena" },
   { name: "orders", role: "owner", nav: "Sell", tab: "Orders", ready: "HV-1052" },
@@ -63,20 +63,9 @@ export async function openScreen(page, screen, { viewport, theme }) {
   await seedSession(page, { role: screen.role, theme });
 
   await page.goto("/");
-  // a UI_V2 run waits for the redesigned shell (the tenant's flag arrives after first paint)
-  await page.locator(process.env.UI_V2 === "1" ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
 
-  if (screen.nav && await page.locator(".v2-shell").count()) {
-    await openV2(page, screen.nav, screen.zone);
-  } else if (screen.nav) {
-    const burger = page.locator("button.vshell-burger");
-    if (await burger.isVisible()) {           // < 860px: the sidebar is a drawer
-      await burger.click();
-      await page.locator(".vshell-side.open").waitFor();
-    }
-    if (screen.zone) await page.locator(".vshell-zone-btn", { hasText: screen.zone }).first().click();
-    await page.locator(".vshell-it", { has: page.locator(".vshell-lb", { hasText: new RegExp(`^${screen.nav}$`) }) }).first().click();
-  }
+  if (screen.nav) await openV2(page, screen.nav, screen.zone);
   if (screen.tab) {
     await page.getByRole("tab", { name: new RegExp(`${screen.tab}$`) }).first().click();
   }

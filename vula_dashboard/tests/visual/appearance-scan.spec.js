@@ -5,7 +5,6 @@ import { VIEWPORTS, openScreen } from "./screens.js";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-test.skip(process.env.UI_V2 !== "1", "the redesign runs with UI_V2=1");
 const SETTINGS = { name: "settings", role: "owner", nav: "Settings", ready: "Brand kit" };
 // a 1×1 PNG
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");

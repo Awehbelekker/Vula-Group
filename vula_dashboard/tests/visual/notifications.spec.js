@@ -5,7 +5,6 @@ import { test, expect, devices } from "@playwright/test";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-test.skip(process.env.UI_V2 !== "1", "the redesign runs with UI_V2=1");
 
 const KEY = { public_key: "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U",
   enabled: true, alerts: ["New paid orders", "A customer waiting for a person", "Approvals waiting for you"], has_whatsapp: true };

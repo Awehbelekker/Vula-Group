@@ -6,7 +6,6 @@ import { test, expect } from "@playwright/test";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
 const MODULES = ["scanner", "expenses", "documents"];
 // a 1×1 PNG
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -17,7 +16,7 @@ async function share(page, files, { role = "owner" } = {}) {
   await installMockApi(page, { role, modules: MODULES });
   await seedSession(page, { role, theme: "light" });
   await page.goto("/");
-  await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
   await page.evaluate(async ([list, png]) => {
     const cache = await caches.open("vula-share");
     await Promise.all(list.map(([name, type], i) => {

@@ -20,8 +20,7 @@ import path from "node:path";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
-const DESIGN = V2 ? "v2" : "v1";
+const DESIGN = "v2";
 const WIDTHS = [360, 390, 430];
 const HEIGHT = { 360: 780, 390: 844, 430: 932 };
 const MODULES = ["projects", "fieldops", "workspace", "estimating", "ai_draft", "followups", "bookings",
@@ -51,7 +50,7 @@ async function boot(page, { role, modules }, width) {
   await installMockApi(page, { role, modules });
   await seedSession(page, { role, theme: "light" });
   await page.goto("/");
-  await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
   await settle(page);
   return errors;
 }
@@ -65,8 +64,7 @@ async function settle(page) {
 
 /** The menu's items (and Master's zones), as the phone shows them. */
 async function menu(page) {
-  if (V2) {
-    await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "More" }).click();
+  await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "More" }).click();
     const sheet = page.getByRole("dialog", { name: "Menu" });
     await sheet.waitFor();
     const zones = await sheet.getByRole("group", { name: "Workspace" }).getByRole("button").allInnerTexts().catch(() => []);
@@ -78,34 +76,16 @@ async function menu(page) {
     await page.keyboard.press("Escape");
     await sheet.waitFor({ state: "hidden" });
     return items;
-  }
-  const burger = page.locator("button.vshell-burger");
-  if (await burger.isVisible()) { await burger.click(); await page.locator(".vshell-side.open").waitFor(); }
-  const zones = (await page.locator(".vshell-zone-btn").allInnerTexts()).map((t) => t.trim());
-  const items = {};
-  for (const z of zones.length ? zones : [null]) {
-    if (z) await page.locator(".vshell-zone-btn", { hasText: z }).first().click();
-    items[z || ""] = (await page.locator(".vshell-it .vshell-lb").allInnerTexts()).map((t) => t.trim()).filter(Boolean);
-  }
-  if (await page.locator(".vshell-side.open").count()) await burger.click();
-  return items;
 }
 
 async function go(page, zone, label) {
   const exact = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
-  if (V2) {
+  {
     await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "More" }).click();
     const sheet = page.getByRole("dialog", { name: "Menu" });
     if (zone) await sheet.getByRole("group", { name: "Workspace" }).getByRole("button", { name: zone }).click();
     await sheet.locator(".vui-row", { has: page.locator(".vui-row-title", { hasText: exact }) }).first().click();
     await sheet.waitFor({ state: "hidden" }).catch(() => page.keyboard.press("Escape"));
-  } else {
-    const burger = page.locator("button.vshell-burger");
-    if (await burger.isVisible() && !(await page.locator(".vshell-side.open").count())) {
-      await burger.click(); await page.locator(".vshell-side.open").waitFor();
-    }
-    if (zone) await page.locator(".vshell-zone-btn", { hasText: zone }).first().click();
-    await page.locator(".vshell-it", { has: page.locator(".vshell-lb", { hasText: exact }) }).first().click();
   }
   await settle(page);
 }
@@ -113,7 +93,7 @@ async function go(page, zone, label) {
 /** Measured in the page: see the header for what each finding means. */
 function measure() {
   const W = window.innerWidth, H = window.innerHeight;
-  const root = document.querySelector(".v2-content") || document.querySelector(".vshell-main") || document.querySelector("main") || document.body;
+  const root = document.querySelector(".v2-content") || document.querySelector("main") || document.body;
   const shown = (el) => {
     const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity) !== 0;
@@ -224,7 +204,7 @@ for (const who of ROLES) {
           try { await go(page, zone || null, label); } catch (e) { report.push({ screen: `${zone} ${label}`, error: String(e).slice(0, 200) }); continue; }
           const name = `${zone ? `${zone} › ` : ""}${label}`;
           try { await check(name); } catch (e) { report.push({ screen: name, error: String(e).slice(0, 200) }); continue; }
-          const tabs = page.locator(V2 ? ".v2-content [role=tablist]" : ".vshell-main [role=tablist]").first().getByRole("tab");
+          const tabs = page.locator(".v2-content [role=tablist]").first().getByRole("tab");
           const names = (await tabs.allInnerTexts()).map((t) => t.trim()).filter(Boolean);
           for (const tab of names.slice(1)) {
             try {
