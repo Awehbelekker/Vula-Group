@@ -518,6 +518,7 @@ def save_number(db, tenant_id: str, phone_number_id: str, record: dict, *, purpo
     full = {**record, **(extra or {})}
     if purpose:
         full.update({"purpose": purpose, "route_mode": nums.PURPOSES[purpose]})
+    _forget_platform(tenant_id)
     try:
         db.table("vula_whatsapp_accounts").upsert(full, on_conflict="phone_number_id").execute()
         if not nums.connected(others):
@@ -575,7 +576,16 @@ def health_summary(meta: dict) -> dict:
             "name": meta.get("verified_name") or "", "status": meta.get("status") or ""}
 
 
+def _forget_platform(tenant_id: str) -> None:
+    """Vula's own number may live on this business (PLATFORM_TENANT_ID): re-read it now."""
+    from config import settings
+    if settings.platform_tenant_id and settings.platform_tenant_id == tenant_id:
+        from vula.integrations import platform_support
+        platform_support.forget_platform_number()
+
+
 def _forget_health(tenant_id: str) -> None:
+    _forget_platform(tenant_id)
     for key in [k for k in _HEALTH_CACHE if k == tenant_id or (isinstance(k, tuple) and k[0] == tenant_id)]:
         _HEALTH_CACHE.pop(key, None)
 

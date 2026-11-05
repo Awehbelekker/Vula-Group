@@ -108,7 +108,7 @@ function SettingUp({ x }) {
     <Card className="vms-setup">
       <span className="vms-name">Setting up on WhatsApp</span>
       {x.setup.vula_number_set === false && (
-        <p className="vms-warn">Vula's own WhatsApp number isn't set, so no welcome can be sent. Set PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN in Railway.</p>)}
+        <p className="vms-warn">Vula's own WhatsApp number isn't set, so no welcome can be sent. Connect it on Vula's own business (Settings › WhatsApp) and set PLATFORM_TENANT_ID in Railway.</p>)}
       <ul className="vms-setup-list">
         {items.map(i => {
           const [tone, label] = SETUP_TONE[i.status] || SETUP_TONE.invited

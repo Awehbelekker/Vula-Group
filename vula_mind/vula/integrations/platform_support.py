@@ -52,14 +52,70 @@ _OPERATOR_EXAMPLE = "The local AI computer has been unreachable for 15 minutes."
 from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version lives in config)
 
 
-def _platform_creds() -> Optional[dict]:
-    """Vula's own number (settings.platform_wa_*), or None. Never a business's number: a client's
-    line only ever carries that client's own conversations (31 Oct 2026, Ian)."""
+_TENANT_CREDS: dict = {}       # {"at": monotonic, "creds": dict|None}
+_TENANT_TTL, _TENANT_MISS_TTL = 300, 60
+
+
+def _tenant_number_creds(tenant_id: str) -> Optional[dict]:
+    """Vula's own number connected like a client's (5 Nov 2026, Ian: "test it like a client will
+    onboard"): the number Settings › WhatsApp › Connect saved on Vula's own business
+    (settings.platform_tenant_id), token encrypted in the database, never copied to Railway or
+    chat. With several numbers on that business, PLATFORM_WA_PHONE_ID picks one; else its main
+    number. Cached 5 minutes (a miss 1 minute), so the per-message check stays cheap."""
+    import time as _t
     from config import settings
+    hit = _TENANT_CREDS.get(tenant_id)
+    if hit and _t.monotonic() - hit["at"] < (_TENANT_TTL if hit["creds"] else _TENANT_MISS_TTL):
+        return hit["creds"]
+    creds = None
+    try:
+        from vula import whatsapp_numbers
+        rows = [r for r in whatsapp_numbers.rows_for(tenant_id) if r.get("status") != "disconnected"]
+        want = settings.platform_wa_phone_id
+        row = (next((r for r in rows if r.get("phone_number_id") == want), None) if want
+               else whatsapp_numbers.main_row(rows))
+        if row and row.get("phone_number_id"):
+            token = ""
+            if row.get("access_token"):
+                from vula.email_imap.credentials import decrypt_secret
+                token = decrypt_secret(row["access_token"]) or ""
+            token = token or settings.whatsapp_token   # a number added on Vula's own WABA
+            if token:
+                creds = {"phone_id": row["phone_number_id"], "token": token,
+                         "waba_id": row.get("waba_id") or settings.platform_waba_id,
+                         "number": re.sub(r"\D", "", row.get("phone_number") or "")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Vula's own number (business %s) could not be read: %s", tenant_id, type(exc).__name__)
+    _TENANT_CREDS[tenant_id] = {"at": _t.monotonic(), "creds": creds}
+    return creds
+
+
+def forget_platform_number() -> None:
+    """After Vula's own number is connected, changed or disconnected."""
+    _TENANT_CREDS.clear()
+
+
+def _platform_creds() -> Optional[dict]:
+    """Vula's own number, or None. Never a business's number: a client's line only ever carries
+    that client's own conversations (31 Oct 2026, Ian). Either connected like a client's on Vula's
+    own business (PLATFORM_TENANT_ID), or entered in Railway (PLATFORM_WA_PHONE_ID + _TOKEN)."""
+    from config import settings
+    if settings.platform_tenant_id:
+        creds = _tenant_number_creds(settings.platform_tenant_id)
+        if creds:
+            return creds
     if settings.platform_wa_phone_id and settings.platform_wa_token:
         return {"phone_id": settings.platform_wa_phone_id, "token": settings.platform_wa_token,
-                "waba_id": settings.platform_waba_id}
+                "waba_id": settings.platform_waba_id,
+                "number": re.sub(r"\D", "", settings.platform_wa_number or "")}
     return None
+
+
+def platform_number() -> str:
+    """Vula's own number as people dial it (digits), or "" — for "message Vula on WhatsApp"."""
+    from config import settings
+    creds = _platform_creds()
+    return re.sub(r"\D", "", settings.platform_wa_number or "") or ((creds or {}).get("number") or "")
 
 
 def _number(to: str) -> str:
@@ -164,8 +220,8 @@ def platform_creds() -> Optional[dict]:
 
 
 def is_platform_number(phone_number_id: str) -> bool:
-    from config import settings
-    return bool(settings.platform_wa_phone_id) and phone_number_id == settings.platform_wa_phone_id
+    creds = _platform_creds() if phone_number_id else None
+    return bool(creds) and phone_number_id == creds["phone_id"]
 
 
 async def ensure_setup_template() -> dict:
