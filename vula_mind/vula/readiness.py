@@ -38,9 +38,16 @@ def platform_gaps(schema_missing: Optional[list] = None) -> list[dict]:
         gaps.append(_gap("Tenant admin routes are not access-checked", "Set ENFORCE_TENANT_AUTH=true"))
     if not settings.platform_support_phone:
         gaps.append(_gap("Operator alerts have nowhere to go", "Set PLATFORM_SUPPORT_PHONE"))
-    if not (settings.platform_wa_phone_id and settings.platform_wa_token and settings.platform_waba_id):
+    from vula.integrations import platform_support as _ps
+    if settings.platform_tenant_id and not _ps.platform_creds():
+        gaps.append(_gap(f"Vula's own WhatsApp number is not connected on business "
+                         f"'{settings.platform_tenant_id}': operator alerts are only logged",
+                         "Connect it there (Settings › WhatsApp › Connect), or fix PLATFORM_TENANT_ID"))
+    elif not (settings.platform_tenant_id or (settings.platform_wa_phone_id and settings.platform_wa_token
+                                              and settings.platform_waba_id)):
         gaps.append(_gap("Vula's own WhatsApp number is not set: operator alerts are only logged",
-                         "Set PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN"))
+                         "Connect it on Vula's own business and set PLATFORM_TENANT_ID, or set "
+                         "PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN"))
     if _is_staging() and settings.public_base_url.rstrip("/") == _PROD_BASE_URL.rstrip("/"):
         gaps.append(_gap("VULA_ENV is staging but PUBLIC_BASE_URL is still production's: pay links, "
                          "receipts and OAuth/webhook callbacks would point at production",

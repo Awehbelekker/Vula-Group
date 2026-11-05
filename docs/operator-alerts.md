@@ -13,6 +13,14 @@ and other clients' names. A business's WhatsApp number now only ever carries tha
 conversations.
 
 ## Setting up Vula's number
+**The way a client does it (recommended, 5 Nov 2026):** make a business for Vula itself in Master
+(e.g. `vula`), open it, and connect the new number in Settings › WhatsApp › Connect, the same way a
+client does. Then set `PLATFORM_TENANT_ID=vula` in Railway and deploy. Vula uses that business's
+connected number as its own number, and its token never leaves the database. If that business has
+several numbers, `PLATFORM_WA_PHONE_ID` picks which one is Vula's; otherwise its main number is used.
+Connecting or disconnecting it there takes effect at once.
+
+**Or by hand:**
 1. Create a Meta Business account for Vula, separate from any client's, and add WhatsApp to it.
 2. Add a number that is not on any WhatsApp app, and register it (you choose the PIN).
 3. Create a system user with a permanent token for that WhatsApp Business Account.

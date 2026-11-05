@@ -187,6 +187,10 @@ class Settings(BaseSettings):
     # Its number as people dial it (digits, e.g. 2770...), for "message Vula on WhatsApp" links: a
     # new business is set up over WhatsApp from this number (vula/onboard_wa.py, 5 Nov 2026).
     platform_wa_number: str = ""
+    # Or connect Vula's number like a client's (Settings › WhatsApp › Connect on Vula's own business,
+    # 5 Nov 2026): set this to that business's id and Vula uses its connected number (main one, or
+    # the one PLATFORM_WA_PHONE_ID names), token from the database. Wins over the three above.
+    platform_tenant_id: str = ""
     # Vula's own key for saved logins and API keys (mailbox passwords, payment keys, ClickUp,
     # Google...; vula/secret_keys.py, 2 Nov 2026). Any long random string, set by Ian in Railway.
     # Unset = the old behaviour (a key made from the Supabase service key, which locks every saved

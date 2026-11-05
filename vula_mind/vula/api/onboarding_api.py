@@ -54,7 +54,6 @@ async def create_client(body: ClientIn, identity: dict = Depends(require_master)
 
 @master_router.get("/onboarding")
 async def onboarding(identity: dict = Depends(require_master)) -> dict:
-    from config import settings
     from vula import onboard_wa
     from vula.integrations import platform_support as ps
     try:
@@ -62,7 +61,7 @@ async def onboarding(identity: dict = Depends(require_master)) -> dict:
     except Exception:
         raise HTTPException(status_code=503, detail="Couldn't read onboarding — has migration 249 been applied?")
     return {"items": items, "vula_number_set": bool(ps.platform_creds()),
-            "vula_number": settings.platform_wa_number or None, "total_steps": len(onboard_wa.STEPS)}
+            "vula_number": ps.platform_number() or None, "total_steps": len(onboard_wa.STEPS)}
 
 
 @master_router.post("/{tenant_id}/nudge")
