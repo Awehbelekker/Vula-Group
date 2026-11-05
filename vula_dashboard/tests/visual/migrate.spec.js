@@ -242,6 +242,29 @@ test("team: access chips toggle with the same PATCH; Stock sits under Operate", 
   await expect(owner.getByText("Full access (owner / manager)")).toBeVisible();
 });
 
+// Ian, 5 Nov 2026 (ShopEazy): an owner already on the team, made with an email only, had no
+// place for their WhatsApp number. Every card has one now; the number is sent as typed and the
+// server keeps its digits (vula/api/team.py::update_member).
+test("team: someone without a WhatsApp number gets one added on their card", async ({ page }) => {
+  await openScreen(page, TEAM, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const emailOnly = { id: "tm-4", name: null, email: "sales@shopeazy.example.test", whatsapp: null, role: "owner",
+    active: true, access: [], notify: [] };
+  await page.route(/\/v1\/team\/[^/]+$/, (route) => (route.request().method() === "GET"
+    ? route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ members: [emailOnly] }) })
+    : route.fallback()));
+  await page.reload();
+  await page.getByRole("button", { name: "Team", exact: true }).locator("visible=true").first().click();
+  const card = page.locator(".vtm-member", { hasText: "sales@shopeazy.example.test" });
+  await expect(card.getByText("No WhatsApp number yet")).toBeVisible();
+  const box = card.getByLabel("WhatsApp number for sales@shopeazy.example.test");
+  await expect(card.getByRole("button", { name: "Add number" })).toHaveCount(0);   // nothing to save yet
+  await box.fill("082 123 4567");
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/team\/[^/]+\/tm-4$/.test(new URL(r.url()).pathname));
+  await card.getByRole("button", { name: "Add number" }).click();
+  expect((await patched).postDataJSON()).toEqual({ whatsapp: "082 123 4567" });
+});
+
 const PRODUCTS = { name: "products", role: "owner", nav: "Sell", tab: "Products", ready: "Everything you sell, by category" };
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -702,6 +725,41 @@ test("master ops: backup, digest, new login and password reset make the same cal
   await del;
   await page.getByRole("button", { name: "Reset the password for counter@harbourvine.example.test" }).click();
   await expect(page.getByRole("status").filter({ hasText: "New temp password for counter@harbourvine.example.test: demo-reset-value" })).toBeVisible();
+});
+
+// Ian, 5 Nov 2026: a new business had "no place to add their number". The owner's own WhatsApp
+// number goes on their login (Users › New login); the business's line is on its Master page.
+// The go-live checklist's "Do this" now goes to each of those instead of the business's home.
+test("a new business: Do this opens the owner's login (with their WhatsApp) and the WhatsApp line", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const steps = [
+    { id: "created", label: "Created from business type", done: true, tab: "settings", detail: "11 modules enabled" },
+    { id: "team", label: "Team & logins", done: false, tab: "team", detail: "0 member(s)" },
+    { id: "whatsapp", label: "WhatsApp connected", done: false, tab: "settings", detail: "not connected" },
+  ];
+  await page.route(/\/v1\/master\/tenants\/[^/]+\/setup$/, (route) => route.fulfill({
+    status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+    body: JSON.stringify({ tenant_id: "demo-shop", steps, done: 1, total: 3, progress_pct: 33 }) }));
+  await page.getByRole("tab", { name: "Onboard" }).click();
+  await page.getByRole("button", { name: "Do this: Team & logins" }).click();
+
+  const sheet = page.getByRole("dialog", { name: "New login" });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByLabel("Tenant")).toHaveValue("demo-shop");
+  await expect(sheet.getByLabel("Role")).toHaveValue("owner");
+  await sheet.getByLabel("Email").fill("owner@shopeazy.example.test");
+  await sheet.getByLabel("Name (optional)").fill("Thandi");
+  await sheet.getByLabel("WhatsApp number (optional)").fill(" 082 123 4567 ");
+  const create = page.waitForRequest((r) => r.method() === "POST" && /\/v1\/master\/tenants\/demo-shop\/users$/.test(new URL(r.url()).pathname));
+  await sheet.getByRole("button", { name: "Create login" }).click();
+  expect((await create).postDataJSON()).toEqual({ email: "owner@shopeazy.example.test", name: "Thandi", role: "owner", whatsapp: "082 123 4567" });
+
+  await page.getByRole("tab", { name: "Onboard" }).click();
+  await page.getByRole("button", { name: "Do this: WhatsApp connected" }).click();
+  await expect(page.getByRole("heading", { name: "demo-shop" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The business’s WhatsApp number" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open their workspace to connect it" })).toBeVisible();
+  await expect(page.getByLabel("Phone number ID")).toBeVisible();
 });
 
 const MASTER_TOOLS = [

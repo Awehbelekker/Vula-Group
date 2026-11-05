@@ -56,6 +56,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   // of that; this just gets a master admin straight there for the tenant they JUST created,
   // instead of leaving them on the Tenants tab with nothing pointing at what's still missing.
   const [onboardSelect, setOnboardSelect] = useState(null)
+  const [loginPrefill, setLoginPrefill] = useState(null)   // Onboard › Team & logins → New login
   // Lightweight per-tenant drill-in (IA overhaul 2026-07-22) — replaces the whole panel body
   // while active. URL-addressable (2026-09-16): #/master/tenant/{id} so a support-ticket link
   // can point straight at a tenant's detail view, and the browser back button steps out of it
@@ -95,10 +96,11 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
       {tab === 'tenants' && <Tenants onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
         onCreated={(tenantId) => { setOnboardSelect(tenantId); setTab('onboard') }} />}
       {tab === 'onboard' && <Onboard onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
-        selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} />}
+        selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} onViewDetail={openDetail}
+        onAddLogin={(tenantId) => { setLoginPrefill({ tenant_id: tenantId, role: 'owner' }); setTab('users') }} />}
       {tab === 'health' && (<HealthV2 onError={setErr} onViewDetail={openDetail} />)}
       {tab === 'usage' && (<UsageV2 onError={setErr} onViewDetail={openDetail} />)}
-      {tab === 'users' && (<UsersV2 onError={setErr} />)}
+      {tab === 'users' && (<UsersV2 onError={setErr} prefill={loginPrefill} onConsumePrefill={() => setLoginPrefill(null)} />)}
       {tab === 'knowledge' && (<KnowledgeV2 onError={setErr} onViewDetail={openDetail} />)}
       {tab === 'audit' && (<AuditV2 onError={setErr} onViewDetail={openDetail} />)}
       {tab === 'models' && (<ModelsV2 onError={setErr} />)}

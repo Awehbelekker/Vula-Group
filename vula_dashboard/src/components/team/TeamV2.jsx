@@ -38,6 +38,26 @@ function useModuleGroups() {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Birthday as day + month only ("MM-DD" on the server, migration 218) — never the year. */
+// A person's own WhatsApp number, added or changed on their card (5 Nov 2026, Ian: someone already
+// on the team — e.g. an owner whose login was made with an email only — had no place for it).
+// It is what WhatsApp sign-in, notifications and Vula's welcome go to.
+function WhatsAppNumber({ m, patch }) {
+  const [value, setValue] = useState(m.whatsapp || "");
+  const [busy, setBusy] = useState(false);
+  const who = m.name || m.email || m.whatsapp;
+  const changed = value.replace(/\D/g, "") !== (m.whatsapp || "").replace(/\D/g, "") && value.replace(/\D/g, "").length >= 9;
+  const save = async (e) => { e.preventDefault(); if (!changed) return; setBusy(true); await patch(m.id, { whatsapp: value.trim() }); setBusy(false); };
+  return (
+    <form className="vtm-bday" onSubmit={save}>
+      <Field label="WhatsApp number" hint={m.whatsapp ? undefined : "Add it so they can sign in with WhatsApp and get Vula's messages."}>
+        <Input type="tel" inputMode="tel" placeholder="e.g. 082 123 4567" value={value} onChange={(e) => setValue(e.target.value)}
+          aria-label={`WhatsApp number for ${who}`} />
+      </Field>
+      {changed && <Button size="sm" type="submit" disabled={busy}>{busy ? "Saving…" : m.whatsapp ? "Save number" : "Add number"}</Button>}
+    </form>
+  );
+}
+
 function Birthday({ m, patch }) {
   const [mm, dd] = (m.birthday || "-").split("-");
   const set = (month, day) => {
@@ -164,10 +184,10 @@ function People({ tenantId }) {
         return (
           <Card key={m.id} className={`vtm-member${m.active ? "" : " vtm-member--off"}`}>
             <div className="vtm-member-head">
-              <span className="vui-disc" aria-hidden="true">{(m.name || m.whatsapp || "?").charAt(0).toUpperCase()}</span>
+              <span className="vui-disc" aria-hidden="true">{(m.name || m.email || m.whatsapp || "?").charAt(0).toUpperCase()}</span>
               <span className="vtm-login-who">
-                <span className="vtm-strong">{m.name || m.whatsapp}</span>
-                <span className="vtm-sub">{m.whatsapp}</span>
+                <span className="vtm-strong">{m.name || m.email || m.whatsapp}</span>
+                <span className="vtm-sub">{m.whatsapp || "No WhatsApp number yet"}</span>
               </span>
               {!m.active && <StatusChip>Disabled</StatusChip>}
               <Select value={m.role} onChange={(e) => t.patch(m.id, { role: e.target.value })} aria-label={`Role for ${m.name || m.whatsapp}`} className="vtm-role">
@@ -178,6 +198,8 @@ function People({ tenantId }) {
                 <Button size="sm" variant="danger" Icon={Trash2} onClick={() => t.del(m.id)}>Remove</Button>
               </span>
             </div>
+
+            <WhatsAppNumber key={m.whatsapp || ""} m={m} patch={t.patch} />
 
             <h3 className="vtm-h3">Can access
               {isFull && <StatusChip tone="ok"><ShieldCheck size={13} aria-hidden="true" />Full access{isOwnerOrManager ? " (owner / manager)" : " — tick a module to restrict"}</StatusChip>}

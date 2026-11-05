@@ -38,7 +38,17 @@ function TenantSelect({ label = 'Tenant', value, onChange, tenants }) {
 }
 
 /* ── Onboard ── */
-export function OnboardV2({ onError, onOpenTenant, onProvision, selectTenantId, onConsumeSelect }) {
+// Where a go-live step's "Do this" goes (5 Nov 2026): the steps Master can do itself open here —
+// "Team & logins" opens Users › New login for this business as its owner (email, name, their
+// WhatsApp number); "WhatsApp connected" opens the business's page in Master, where a number is
+// linked. Every other step opens the business's workspace.
+function doStep(step, tenantId, { onAddLogin, onViewDetail, onOpenTenant }) {
+  if (step.id === 'team' && onAddLogin) return () => onAddLogin(tenantId)
+  if (step.id === 'whatsapp' && onViewDetail) return () => onViewDetail(tenantId)
+  return onOpenTenant ? () => onOpenTenant(tenantId) : null
+}
+
+export function OnboardV2({ onError, onOpenTenant, onProvision, selectTenantId, onConsumeSelect, onAddLogin, onViewDetail }) {
   const x = useMasterOnboard({ onError, selectTenantId, onConsumeSelect })
   return (
     <section className="vms" aria-label="Onboard">
@@ -80,7 +90,10 @@ export function OnboardV2({ onError, onOpenTenant, onProvision, selectTenantId, 
                 <span className="vms-step-n" aria-hidden="true">{s.done ? <Check size={14} /> : i + 1}</span>
                 <span className="vms-grow"><span className="vms-name">{s.label}</span>{s.done && <span className="vms-sr"> (done)</span>}
                   <span className="vms-muted vms-block">{s.detail}</span></span>
-                {!s.done && onOpenTenant && <Button size="sm" variant="secondary" onClick={() => onOpenTenant(x.selected)} aria-label={`Do this: ${s.label}`}>Do this</Button>}
+                {!s.done && (() => {
+                  const go = doStep(s, x.selected, { onAddLogin, onViewDetail, onOpenTenant })
+                  return go && <Button size="sm" variant="secondary" onClick={go} aria-label={`Do this: ${s.label}`}>Do this</Button>
+                })()}
               </li>))}
           </ol>
           <p className="vms-muted">Computed live from the tenant's real state — connect or configure things and this updates itself.</p>

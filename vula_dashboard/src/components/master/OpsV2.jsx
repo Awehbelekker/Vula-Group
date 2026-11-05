@@ -268,8 +268,8 @@ export function UsageV2({ onError, onViewDetail }) {
 }
 
 /* ── Users ── */
-export function UsersV2({ onError }) {
-  const x = useMasterUsers({ onError })
+export function UsersV2({ onError, prefill, onConsumePrefill }) {
+  const x = useMasterUsers({ onError, prefill, onConsumePrefill })
   if (!x.users) return loading
   const rows = x.users.map((r, i) => ({ ...r, id: `${r.tenant_id}:${r.user_id}:${i}` }))
   return (
@@ -312,6 +312,10 @@ export function UsersV2({ onError }) {
             </Field>
             <Field label="Email"><Input type="email" value={x.form.email} onChange={e => x.setForm(f => ({ ...f, email: e.target.value }))} /></Field>
             <Field label="Name (optional)"><Input value={x.form.name} onChange={e => x.setForm(f => ({ ...f, name: e.target.value }))} /></Field>
+            <Field label="WhatsApp number (optional)" hint="Their own phone: for signing in with WhatsApp, and Vula's messages to them. Not the business's WhatsApp line.">
+              <Input type="tel" autoComplete="off" placeholder="e.g. 082 123 4567" value={x.form.whatsapp}
+                onChange={e => x.setForm(f => ({ ...f, whatsapp: e.target.value }))} />
+            </Field>
             <Field label="Role">
               <Select value={x.form.role} onChange={e => x.setForm(f => ({ ...f, role: e.target.value }))}>
                 <option value="owner">Owner</option><option value="manager">Manager</option><option value="staff">Staff</option>
