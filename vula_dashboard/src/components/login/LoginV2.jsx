@@ -212,17 +212,21 @@ function WhatsAppPanel({ onUser }) {
         </form>
       )}
 
+      {w.state === 'expired' && (
+        <Button size="lg" Icon={QrCode} className="vlg-wide" type="button" onClick={() => w.startQr()}>Show a new QR code</Button>
+      )}
+
       {w.state === 'done' && <p className="vlg-ok" role="status">Signing you in…</p>}
 
       <p className="vlg-links">
-        {scanning && <Button variant="quiet" size="sm" type="button" Icon={Smartphone}
+        {(scanning || w.state === 'expired') && <Button variant="quiet" size="sm" type="button" Icon={Smartphone}
           onClick={() => { w.stop(); w.setErr(''); w.setMsg(''); w.setState('code_phone') }}>Send me a code instead</Button>}
         {w.state === 'code_enter' && <Button variant="quiet" size="sm" type="button" Icon={Send}
           disabled={w.busy} onClick={w.resend}>Resend code</Button>}
         {w.state === 'code_enter' && <Button variant="quiet" size="sm" type="button" Icon={RotateCcw}
           onClick={() => { w.setCode(''); w.setState('code_phone') }}>Use a different number</Button>}
         {(w.state === 'code_phone' || w.state === 'code_enter') && w.qr && <Button variant="quiet" size="sm" type="button" Icon={QrCode}
-          onClick={w.startQr}>Scan a QR code instead</Button>}
+          onClick={() => w.startQr()}>Scan a QR code instead</Button>}
       </p>
     </section>
   )

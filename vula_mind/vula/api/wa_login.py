@@ -27,6 +27,7 @@ you get in) and returns nothing about whether a number is on a team.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -162,17 +163,23 @@ def _qr_svg(link: str) -> str:
     return buf.getvalue().decode()
 
 
-def _get(request_id: str) -> Optional[Dict[str, Any]]:
+def _get(request_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
+    """The login row, or None. strict: a database error raises 503 instead of reading as "gone",
+    so the polling login page waits and asks again rather than treating its QR as expired and
+    starting a new one (5 Nov 2026: that turned a slow database into a storm of new QRs)."""
     try:
         rows = _db().table(_TABLE).select("*").eq("id", request_id).limit(1).execute().data or []
-    except Exception:
+    except Exception as exc:
+        if strict:
+            log.warning("wa login lookup failed: %s", exc)
+            raise HTTPException(status_code=503, detail="Couldn't check that login just now — trying again.")
         return None
     return rows[0] if rows else None
 
 
 def _owned(request_id: str, secret: str) -> Dict[str, Any]:
     """The request, only for the browser holding its secret."""
-    row = _get(request_id) if request_id else None
+    row = _get(request_id, strict=True) if request_id else None
     if not row or not secret or not secrets.compare_digest(row["secret_hash"], _h(secret)):
         raise HTTPException(status_code=404, detail="That login has expired — start again.")
     return row
@@ -290,8 +297,13 @@ class StartIn(BaseModel):
 async def start(body: StartIn, request: Request) -> Dict[str, Any]:
     """A QR login for the business this address belongs to: the code to send, the wa.me link,
     a QR of it, and the secret this browser polls with."""
+    # The database calls run off the event loop: done inline they held up every other request
+    # while a login page polled (5 Nov 2026).
+    return await asyncio.to_thread(_start, body, _client_ip(request), request.headers.get("user-agent", ""))
+
+
+def _start(body: StartIn, ip: str, user_agent: str) -> Dict[str, Any]:
     from vula.api.tenants import tenant_for_host
-    ip = _client_ip(request)
     if _recent_count("ip", ip, 10) >= MAX_STARTS_PER_IP:
         raise HTTPException(status_code=429, detail="Too many tries — wait a few minutes.")
     tenant_id = tenant_for_host(body.host or "") if body.host else None
@@ -305,7 +317,7 @@ async def start(body: StartIn, request: Request) -> Dict[str, Any]:
         try:
             row = _db().table(_TABLE).insert({
                 "kind": "qr", "tenant_id": tenant_id, "login_code": code, "secret_hash": _h(secret),
-                "device": device_label(request.headers.get("user-agent", "")), "ip": ip,
+                "device": device_label(user_agent), "ip": ip,
                 "expires_at": (_now() + QR_TTL).isoformat()}).execute().data[0]
             break
         except Exception as exc:                      # the one-in-a-billion code clash → try another
@@ -320,9 +332,9 @@ async def start(body: StartIn, request: Request) -> Dict[str, Any]:
 @router.get("/status")
 async def status(id: str, secret: str) -> Dict[str, Any]:
     """Polled by the login page. On 'approved' it returns the session token, once."""
-    row = _owned(id, secret)
+    row = await asyncio.to_thread(_owned, id, secret)
     if row["status"] in ("pending", "awaiting_approval") and _expired(row):
-        _set(row["id"], {"status": "expired"}, only_status=row["status"])
+        await asyncio.to_thread(_set, row["id"], {"status": "expired"}, only_status=row["status"])
         return {"status": "expired"}
     if row["status"] == "approved":
         return {"status": "approved", **(await _issue(row))}

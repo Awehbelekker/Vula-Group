@@ -42,7 +42,12 @@ async function openLogin(page, { viewport, theme }, calls = [], { tenant = F.TEN
     const url = new URL(req.url());
     const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*" };
     if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
-    calls.push({ path: url.pathname, body: req.postDataJSON?.() ?? null });
+    calls.push({ path: url.pathname, body: req.postDataJSON?.() ?? null, at: Date.now() });
+    if (url.pathname.endsWith("/status") && typeof status === "function") {   // a scripted server
+      const { code = 200, body = {}, delay = 0 } = status(calls);
+      if (delay) await new Promise((r) => setTimeout(r, delay));
+      return route.fulfill({ status: code, contentType: "application/json", headers: cors, body: JSON.stringify(body) }).catch(() => {});
+    }
     const body = url.pathname.endsWith("/by-domain") ? (tenant ? { tenant_id: tenant } : {})
       : url.pathname.endsWith("/start") ? { available: true, id: "wal-1", secret: "s-1", link: "https://wa.me/27820000000?text=Login%20K7F4QX", qr_svg: QR_SVG, code: "K7F4QX" }
       : url.pathname.endsWith("/status") ? { status }
@@ -165,6 +170,55 @@ for (const theme of THEMES) {
     });
   }
 }
+
+// Ian, 5 Nov 2026: a sign-in page sent hundreds of /start calls until the server answered 429.
+// The QR was checked every 2s however long the server took, and any failed check (a 429, a
+// database hiccup's 404) made a new QR — several at once when checks overlapped.
+const starts = (calls) => calls.filter((c) => c.path.endsWith("/wa/start")).length;
+const checks = (calls) => calls.filter((c) => c.path.endsWith("/wa/status"));
+
+test("a busy server is waited out on the same QR: one check at a time, further apart, no new QR", async ({ page }) => {
+  const calls = [];
+  let open = 0, most = 0;
+  await openLogin(page, { viewport: VIEWPORTS.desktop, theme: "light" }, calls, {
+    status: () => { open += 1; most = Math.max(most, open); setTimeout(() => { open -= 1; }, 2500); return { code: 429, body: { detail: "Too many tries" }, delay: 2500 }; },
+  });
+  const before = starts(calls);
+  await page.waitForTimeout(12000);
+  expect(starts(calls)).toBe(before);                                  // no new QR
+  expect(most).toBe(1);                                                // never two checks at once
+  const at = checks(calls).map((c) => c.at);
+  expect(at.length).toBeGreaterThanOrEqual(2);
+  expect(at.length).toBeLessThanOrEqual(3);                            // 2s, then 4s, then 8s gaps (+2.5s answers)
+  await expect(page.getByRole("img", { name: "WhatsApp login QR code" })).toBeVisible();
+});
+
+test("an expired QR is replaced at most three times, then the page offers a new one", async ({ page }) => {
+  const calls = [];
+  await openLogin(page, { viewport: VIEWPORTS.desktop, theme: "light" }, calls, { status: () => ({ body: { status: "expired" } }) });
+  const first = starts(calls);
+  await expect(page.getByRole("button", { name: "Show a new QR code" })).toBeVisible({ timeout: 20000 });
+  expect(starts(calls) - first).toBe(3);
+  await expect(page.getByRole("img", { name: "WhatsApp login QR code" })).toHaveCount(0);
+  await expect(page.getByText("That code expired.")).toBeVisible();
+  await page.waitForTimeout(3000);
+  expect(starts(calls) - first).toBe(3);                               // and nothing more on its own
+  await expect(page.getByRole("button", { name: "Send me a code instead" })).toBeVisible();
+  await page.getByRole("button", { name: "Show a new QR code" }).click();
+  await expect(page.getByRole("img", { name: "WhatsApp login QR code" })).toBeVisible();
+  expect(starts(calls) - first).toBe(4);
+});
+
+test("a QR the server no longer knows (404) is replaced; a database hiccup (503) is not", async ({ page }) => {
+  const calls = [];
+  await openLogin(page, { viewport: VIEWPORTS.desktop, theme: "light" }, calls, {
+    status: (cs) => (checks(cs).length === 1 ? { code: 503, body: {} } : checks(cs).length === 2 ? { code: 404, body: {} } : { body: { status: "pending" } }),
+  });
+  const first = starts(calls);
+  await expect.poll(() => checks(calls).length, { timeout: 15000 }).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => starts(calls) - first, { timeout: 5000 }).toBe(1);
+  await expect(page.getByText("That code expired — here is a fresh one.")).toBeVisible();
+});
 
 test("login: the WhatsApp code path, reset and back make the same calls", async ({ page }) => {
   const calls = [];

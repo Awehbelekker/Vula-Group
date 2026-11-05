@@ -192,6 +192,26 @@ async def test_expired_codes_and_unknown_addresses(env):
 
 
 @pytest.mark.asyncio
+async def test_a_database_hiccup_is_try_again_not_expired(env, monkeypatch):
+    """5 Nov 2026: a lookup failure read as 404 "expired", so the login page made a new QR on every
+    hiccup and a slow database became a storm of /start calls. It is a 503 now, which the page waits
+    out on the same QR; an unknown or wrong-secret QR is still 404."""
+    s = await wl.start(wl.StartIn(host="seedleme.vula-ai.com"), _req())
+
+    def broken():
+        raise RuntimeError("connection reset")
+    monkeypatch.setattr(wl, "_db", broken)
+    with pytest.raises(HTTPException) as e:
+        await wl.status(s["id"], s["secret"])
+    assert e.value.status_code == 503
+    monkeypatch.setattr(wl, "_db", lambda: env.db)
+    assert (await wl.status(s["id"], s["secret"]))["status"] == "pending"
+    with pytest.raises(HTTPException) as e:
+        await wl.status(s["id"], "wrong-secret")
+    assert e.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_six_digit_code(env, monkeypatch):
     codes = []
 
