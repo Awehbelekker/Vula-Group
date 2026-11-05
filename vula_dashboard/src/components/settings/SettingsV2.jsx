@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react'
 import {
   ArrowLeft, Bell, Bike, Brain, ChevronRight, ClipboardList, Clock, Cloud, Contact, CreditCard, Globe, ImageUp, LayoutGrid,
-  ListChecks, Mail, MapPin, MessageCircle, Moon, Palette, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, X,
+  ListChecks, Mail, MapPin, MessageCircle, Moon, Palette, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, Wallet, X,
 } from 'lucide-react'
 import { Button, Card, Field, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
 import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES, THEME_EVENT, getThemeMode, setThemeMode } from '../../theme/tokens'
@@ -23,6 +23,7 @@ import ClickUpConnectV2 from './connect/ClickUpConnectV2'
 import OAuthConnectV2 from './connect/OAuthConnectV2'
 import EmailConnectV2 from './connect/EmailConnectV2'
 import ConnectionsHealth from './connect/ConnectionsHealth'
+import BuyingV2 from './connect/BuyingV2'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
 import './settings.css'
 
@@ -38,6 +39,9 @@ const GROUPS = [
     { id: 'shopify', label: 'Shopify store', Icon: ShoppingBag, hint: 'Already selling on Shopify? Connect it and your products, photos, prices and stock stay in step with Vula automatically.' },
     { id: 'woo', label: 'WooCommerce shop', Icon: ShoppingCart, hint: 'Selling on WooCommerce (WordPress)? Connect it and your products, photos, prices and stock stay in step with Vula automatically.' },
     { id: 'domain', label: 'Your shop’s own address', Icon: Globe, hint: 'Show your name, not Vula’s, when customers open your shop or a receipt from WhatsApp.' },
+  ] },
+  { label: 'Buying', items: [
+    { id: 'buying', label: 'Buying for the business', Icon: Wallet, hint: 'Let Vula find the best price at the shops you choose and buy once an approver says yes — within the limits you set. Vula never stores a card or a shop password.' },
   ] },
   { label: 'WhatsApp', items: [
     { id: 'whatsapp', label: 'WhatsApp number', Icon: MessageCircle, hint: 'Connect your WhatsApp Business number so customers can order and chat to your AI assistant.' },
@@ -112,6 +116,7 @@ function Section({ id, tenantId, tenantName, adminEmail, onOpen }) {
     case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />
     case 'woo': return <StoreConnectV2 key="woo" store="woo" tenantId={tenantId} adminEmail={adminEmail} />
     case 'domain': return <ShopDomainV2 tenantId={tenantId} />
+    case 'buying': return <BuyingV2 tenantId={tenantId} />
     case 'whatsapp': return <WhatsAppConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
     case 'waprofile': return <WAProfileV2 tenantId={tenantId} />
     case 'google': return <OAuthConnectV2 key="google" provider="google" tenantId={tenantId} tenantName={tenantName} />

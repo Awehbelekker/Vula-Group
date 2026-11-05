@@ -118,6 +118,10 @@ vula_mind/employees/
 │   ├── employee.yaml                   Title, summary, front-desk words, the tools of the job
 │   ├── job.md                          The job description (in its prompt)
 │   └── tasks/
+│       ├── buying/                     Buying for the business
+│       │   ├── task.yaml               When to use it (trigger words) and its tools
+│       │   ├── prompt.md               How to do it, step by step
+│       │   └── cases.yaml              Example messages, checked on every change
 │       ├── contacts-and-minutes/       Contacts and minutes
 │       │   ├── task.yaml               When to use it (trigger words) and its tools
 │       │   ├── prompt.md               How to do it, step by step
@@ -572,23 +576,45 @@ THE TASK — a quote for a customer.
 
 ### 🗂️ AI office administrator (`office_admin`)
 
-_Reminders, letters, emails, contacts, staff notices and polls, meeting notes._
+_Reminders, letters, emails, contacts, staff notices and polls, meeting notes, buying office supplies._
 
 **Job description (the exact text in its prompt):**
 
 > You run the office: reminders, letters on the letterhead, finding and summarising emails, saving contacts, meeting notes, staff notices and polls. Keep things short and clear, confirm dates and times back, and never send anything to staff or outsiders without the preview first.
 
-**Front-desk words** (with its tasks' trigger words): 'remind', 'letter', 'letter of', 'email', 'e-mail', 'mail', 'notice', 'poll', 'staff', 'birthday', 'public holiday', 'contact', 'minutes', 'expense sheet', 'the reps', 'automation', 'automate', 'business card', 'proposal', 'expense claim', 'claim sheet', 'vote'
+**Front-desk words** (with its tasks' trigger words): 'remind', 'letter', 'letter of', 'email', 'e-mail', 'mail', 'notice', 'poll', 'staff', 'birthday', 'public holiday', 'contact', 'minutes', 'expense sheet', 'the reps', 'automation', 'automate', 'best price', 'cheapest', 'buy us', 'buy me', 'order online', 'business card', 'proposal', 'expense claim', 'claim sheet', 'vote'
 
 **Tasks:**
 
 | Task | When | Tools |
 |---|---|---|
 | **Contacts and minutes** (`contacts-and-minutes`) — Save a new contact, and write up the minutes of a meeting. | 'contact', 'business card', 'minutes' | `create_contact`, `draft_followup_email`, `log_meeting` |
+| **Buying for the business** (`buying`) — Find the best price at the business's own shops, then buy once an approver says yes. | 'best price', 'cheapest', 'buy us', 'buy me', 'order online' | `find_best_price`, `request_purchase` |
 | **Letters and proposals** (`letters`) — A business letter or proposal on the letterhead, as a PDF or Word document. | 'letter', 'proposal', 'letterhead' | `draft_letter` |
 | **Reminders** (`reminders`) — Remind the owner or the team of something at a set time, and keep the list. | 'remind', 'reminder', 'reminders' | `complete_reminder`, `create_reminder`, `list_reminders` |
 | **Expense sheet and automations** (`sheets-and-automations`) — The monthly expense claim sheet, and standing automations. | 'expense sheet', 'expense claim', 'claim sheet', 'automation', 'automate' | `configure_call_sheet`, `configure_expense_sheet`, `create_automation_rule`, `update_call_sheet`, `view_call_sheet` |
 | **Notices and polls for the staff** (`staff-messages`) — Tell the staff something on WhatsApp, or ask them to vote. | 'staff', 'notice', 'poll', 'vote' | `staff_notice`, `staff_poll` |
+
+<details><summary>Buying for the business: the task prompt</summary>
+
+```
+THE TASK — buying something for the business, only where the owner allowed it.
+
+1. Know exactly what is wanted. If it's vague ("ink", "a chair"), ask the one thing that decides it
+   (which printer model? what size?) before searching. Use what the business has already told you.
+2. find_best_price with the item. Send its reply as it is: the options, each price as printed on the
+   shop's page, and what the business last paid. Never add, round or change a price; never suggest a
+   shop that isn't in the reply.
+3. When the person picks one ("the second one, 2 of them"): request_purchase with the option number,
+   the quantity and the project if they named one — it shows a preview. Only after they say yes,
+   call it again with confirm=true.
+4. Say exactly what happened: sent to the approver, or (for the owner) the link to pay, or the
+   purchase order sent to the supplier. Nothing is bought until an approver says yes, and Vula never
+   pays, stores a card or signs in to a shop.
+5. A limit or "not on your list" answer is final — tell the person, and that the owner changes it in
+   Settings › Buying.
+```
+</details>
 
 <details><summary>Contacts and minutes: the task prompt</summary>
 
@@ -662,7 +688,9 @@ THE TASK — a message to the business's own staff (never customers).
 | `create_contact` | Save a new contact (e.g |
 | `draft_followup_email` | Draft a thank-you / follow-up email from a logged meeting — two steps |
 | `draft_letter` | Draft a professional business letter/proposal, put it on the business's branded letterhead as a PDF (or a Word .docx — see output_format), and send it back as a… |
+| `find_best_price` | Find the best price for something the business wants to BUY — 'find ink cartridges for our Canon PG-545', 'cheapest A4 paper', 'buy us a kettle' |
 | `log_meeting` | Log a client/site meeting from a description (usually a voice note transcript): pulls out attendees, a summary, and any action items, files it against the conta… |
+| `request_purchase` | Buy one of the options find_best_price just returned — 'the second one, 2 of them' |
 | `staff_notice` | Send a notice to the business's OWN STAFF on WhatsApp (not customers) — e.g |
 | `staff_poll` | Ask the business's OWN STAFF to vote on WhatsApp — e.g |
 | `update_call_sheet` | Correct an entry on your call sheet, or add a section that didn't come from a logged meeting |
@@ -904,6 +932,7 @@ THE TASK — the supplier list.
 | `create_product` | Add a new product/service to the catalogue with a price in Rands |
 | `create_purchase_order` | Create a draft purchase order for a supplier with line items |
 | `delete_supplier` | Remove a supplier by name |
+| `find_best_price` | Find the best price for something the business wants to BUY — 'find ink cartridges for our Canon PG-545', 'cheapest A4 paper', 'buy us a kettle' |
 | `find_product_document` | Find a PRODUCT document the business has on file — data sheet, technical sheet, test report/certificate, brochure, product card, price list, installation guide … |
 | `list_bookings` | List upcoming appointments, optionally by status. |
 | `list_purchase_orders` | List purchase orders, optionally filtered by status (draft, sent, received, cancelled). |
@@ -914,6 +943,7 @@ THE TASK — the supplier list.
 | `receive_stock` | Book a delivery into stock: each line is a product and how many arrived (optionally the unit cost in rands, which updates the cost price) |
 | `recent_orders` | List recent orders, optionally filtered by status (e.g |
 | `reorder_suggestions` | Products at or below their reorder threshold, grouped by supplier — what should I order right now. |
+| `request_purchase` | Buy one of the options find_best_price just returned — 'the second one, 2 of them' |
 | `send_purchase_order` | Actually dispatch a draft purchase order to its supplier by email and/or WhatsApp, by its short reference — commits real spend |
 | `set_product_photo` | Make a real photo the website picture of a product |
 | `set_recipe` | Save what goes into one batch of a product (a new version; past batches keep theirs) — 'recipe for round basin: 18 kg concrete mix, 150 g pigment, 0.25 l sealer… |

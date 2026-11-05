@@ -1,0 +1,12 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Buying for the business
+summary: Find the best price at the business's own shops, then buy once an approver says yes.
+triggers:
+- best price
+- cheapest
+- buy us
+- buy me
+- order online
+tools:
+- find_best_price
+- request_purchase

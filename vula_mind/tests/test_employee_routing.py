@@ -21,7 +21,9 @@ TOOL_CHOICE = [c for c in yaml.safe_load((EVALS / "tool_choice.yaml").read_text(
 
 @pytest.fixture()
 def all_modules():
-    with patch("vula.api.tenants.enabled_modules", lambda t: []):
+    # every module on, and buying switched on (it is off until an owner turns it on)
+    with patch("vula.api.tenants.enabled_modules", lambda t: []), \
+            patch("vula.commerce.buying.enabled", lambda t: True):
         yield
 
 

@@ -215,6 +215,12 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "",
         sb.table("vula_approvals").update(
             {"status": "rejected", "completed_at": _now()}
         ).eq("id", approval["id"]).execute()
+        if approval["entity_type"] == "purchase":
+            try:
+                from vula.commerce import buying
+                buying.reject(tenant_id, approval["entity_id"], _approver(step), notes)
+            except Exception as exc:  # noqa: BLE001 — the approval stays rejected either way
+                logger.warning("purchase %s not marked rejected: %s", approval["entity_id"], exc)
         if approval["entity_type"] == "inbound_invoice":
             await _send_reply(phone, "👍 Noted — I'll keep it under the supplier name on the invoice.",
                               tenant_id)
@@ -426,4 +432,11 @@ async def _do_cancel_record(approval: dict, step: dict) -> str:
     return f"✅ The {_CANCELLABLE[table]} is cancelled (kept on record, not deleted)."
 
 
-_BOOKING_ACTIONS = {"bank_split": _do_bank_split, "cancel_record": _do_cancel_record}
+async def _do_purchase(approval: dict, step: dict) -> str:
+    """A purchase someone asked Vula to make (vula/commerce/buying.py): the online shop's link to
+    pay, or a purchase order sent to a supplier on account."""
+    from vula.commerce import buying
+    return await buying.carry_out(approval["tenant_id"], approval["entity_id"], approved_by=_approver(step))
+
+
+_BOOKING_ACTIONS = {"bank_split": _do_bank_split, "cancel_record": _do_cancel_record, "purchase": _do_purchase}
