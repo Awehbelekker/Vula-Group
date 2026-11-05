@@ -17,18 +17,17 @@ import { useManageTenant } from './master/useMasterTenants'
 
 const C = { surface: 'var(--surface)', border: 'var(--border)', green: 'var(--accent)', red: 'var(--danger)', amber: 'var(--warn)', text: 'var(--text)', muted: 'var(--muted)', alt: 'var(--surface-alt)' }
 
-// icon: the current look's emoji; Icon: the redesign's (SectionTabs shows one per [data-ui])
 const SUBTABS = [
-  { id: 'tenants', label: 'Tenants', icon: '🏢', Icon: Building2 },
-  { id: 'onboard', label: 'Onboard', icon: '🚀', Icon: Rocket },
-  { id: 'health', label: 'Health', icon: '💓', Icon: HeartPulse },
-  { id: 'usage', label: 'Usage', icon: '💰', Icon: Coins },
-  { id: 'users', label: 'Users', icon: '👤', Icon: UserRound },
-  { id: 'knowledge', label: 'Knowledge', icon: '🧠', Icon: Brain },
-  { id: 'audit', label: 'Audit', icon: '📜', Icon: ScrollText },
-  { id: 'models', label: 'Models', icon: '🧪', Icon: FlaskConical },
-  { id: 'benchmark', label: 'Benchmark', icon: '🎯', Icon: Target },
-  { id: 'conversations', label: 'Conversations', icon: '💬', Icon: MessagesSquare },
+  { id: 'tenants', label: 'Tenants', Icon: Building2 },
+  { id: 'onboard', label: 'Onboard', Icon: Rocket },
+  { id: 'health', label: 'Health', Icon: HeartPulse },
+  { id: 'usage', label: 'Usage', Icon: Coins },
+  { id: 'users', label: 'Users', Icon: UserRound },
+  { id: 'knowledge', label: 'Knowledge', Icon: Brain },
+  { id: 'audit', label: 'Audit', Icon: ScrollText },
+  { id: 'models', label: 'Models', Icon: FlaskConical },
+  { id: 'benchmark', label: 'Benchmark', Icon: Target },
+  { id: 'conversations', label: 'Conversations', Icon: MessagesSquare },
 ]
 
 // #/master/tenant/{id} — bookmarkable/shareable deep link into the tenant drill-in (2026-09-16).

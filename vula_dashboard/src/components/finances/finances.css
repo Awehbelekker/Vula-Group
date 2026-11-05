@@ -71,7 +71,7 @@
 .vfn-tb th[scope="row"], .vfn-tb thead th:first-child { text-align: left; white-space: normal; font-weight: 500; }
 .vfn-tb thead th { border-top: none; font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .vfn-tb tfoot th, .vfn-tb tfoot td { font-weight: 600; background: var(--surface-2); }
-.vfn-tb tfoot .vui-badge, .vfn-tb tfoot span[style] { margin-left: var(--space-2); }
+.vfn-tb tfoot span[style] { margin-left: var(--space-2); }
 
 /* revenue chart */
 .vrc { margin: 0; display: flex; flex-direction: column; gap: var(--space-3); }
