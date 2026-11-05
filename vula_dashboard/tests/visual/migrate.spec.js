@@ -878,6 +878,31 @@ test("master: a new tenant appears in the top bar's switcher straight away", asy
   await expect(switcher.locator("option", { hasText: "ShopEazy" })).toHaveCount(1);
 });
 
+// Ian, 5 Nov 2026: in New tenant "I could only type a letter, select again and type another".
+// The Sheet put focus back on itself whenever its onClose changed — and an inline onClose changes
+// on every render, so every keystroke. Typed key by key here, as a person does (fill() set the
+// whole value at once and never saw it).
+test("sheets keep the cursor: typing a whole word in New tenant and New login", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByRole("button", { name: "New tenant" }).click();
+  const sheet = page.getByRole("dialog", { name: "New tenant" });
+  await sheet.getByLabel("Tenant ID").click();
+  await page.keyboard.type("shop-eazy", { delay: 20 });
+  await expect(sheet.getByLabel("Tenant ID")).toHaveValue("shop-eazy");
+  await sheet.getByLabel("Display name").click();
+  await page.keyboard.type("ShopEazy Stores", { delay: 20 });
+  await expect(sheet.getByLabel("Display name")).toHaveValue("ShopEazy Stores");
+  await expect(sheet.getByLabel("Display name")).toBeFocused();
+  await sheet.getByRole("button", { name: "Cancel" }).click();
+
+  await page.getByRole("tab", { name: "Users" }).click();
+  await page.getByRole("button", { name: "New login" }).click();
+  const login = page.getByRole("dialog", { name: "New login" });
+  await login.getByLabel("Email").click();
+  await page.keyboard.type("owner@shopeazy.example.test", { delay: 10 });
+  await expect(login.getByLabel("Email")).toHaveValue("owner@shopeazy.example.test");
+});
+
 test("master tenants: search, create, suspend and billing send the same requests", async ({ page }) => {
   await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
   await page.getByLabel("Search tenants").fill("salon");
