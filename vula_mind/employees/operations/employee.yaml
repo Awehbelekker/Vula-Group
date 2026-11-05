@@ -44,6 +44,7 @@ tools:
 - create_product
 - create_purchase_order
 - delete_supplier
+- find_best_price
 - find_product_document
 - list_bookings
 - list_purchase_orders
@@ -54,6 +55,7 @@ tools:
 - receive_stock
 - recent_orders
 - reorder_suggestions
+- request_purchase
 - send_purchase_order
 - set_product_photo
 - set_recipe

@@ -1101,6 +1101,36 @@ REMINDER_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
 ]
+# 5 Nov 2026: Vula buys for the business (vula/commerce/buying.py, migration 246). Offered only when
+# the owner has switched buying on in Settings › Buying; only the shops on its list are searched,
+# every price shown is printed on the shop's page, limits and approvers are checked in code.
+BUYING_TOOLS = [
+    {"type": "function", "function": {
+        "name": "find_best_price",
+        "description": "Find the best price for something the business wants to BUY — 'find ink "
+                       "cartridges for our Canon PG-545', 'cheapest A4 paper', 'buy us a kettle'. "
+                       "Searches only the shops on the business's buying list and returns up to 3 "
+                       "options with the price as printed on each shop's page (and what the business "
+                       "last paid). Nothing is bought. If the item is vague (which printer model?), ask "
+                       "first. Reply with the options as given.",
+        "parameters": {"type": "object", "properties": {
+            "item": {"type": "string", "description": "What to buy, as specific as known, e.g. "
+                     "'Canon PG-545 black ink cartridge'"}},
+            "required": ["item"]}}},
+    {"type": "function", "function": {
+        "name": "request_purchase",
+        "description": "Buy one of the options find_best_price just returned — 'the second one, 2 of "
+                       "them'. Limits are checked; an approver must say yes (the owner's own yes counts). "
+                       "On yes an online shop's link is sent to pay (card, Google Pay or Apple Pay), or a "
+                       "purchase order goes to a supplier on account. First call returns a preview; call "
+                       "again with confirm=true only after the person has said yes to that preview.",
+        "parameters": {"type": "object", "properties": {
+            "option": {"type": "integer", "description": "The option number from find_best_price"},
+            "quantity": {"type": "number"},
+            "project": {"type": "string", "description": "The project to book it to, if one was named"},
+            "confirm": {"type": "boolean"}},
+            "required": ["option"]}}},
+]
 # 31 Oct 2026: a spreadsheet the owner describes in words (vula/commerce/sheet_builder.py). The
 # model writes only the layout (the spec); the rows and every total come from the books.
 SHEET_TOOLS = [
@@ -1532,7 +1562,7 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
                    + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS
-                   + FORM_TOOLS)
+                   + FORM_TOOLS + BUYING_TOOLS)
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1781,6 +1811,12 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         profile = {"known": False}
     if profile.get("known") and not profile.get("sells_products"):
         tools = [t for t in tools if t["function"]["name"] not in _SHOP_ONLY_TOOLS]
+    try:
+        from vula.commerce import buying
+        if buying.enabled(tenant_id):
+            tools += BUYING_TOOLS
+    except Exception:  # noqa: BLE001 — buying stays off when its settings can't be read
+        pass
     # Job costing only for a business that works in projects (DIGG), not a shop (Off the Hook);
     # pricing advice (paid cost + overheads + margin) is useful to both.
     try:
@@ -2799,6 +2835,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "bank_payments":      return self._bank_payments(tid, args)
             if name == "move_to_project":    return self._move_to_project(tid, args, ctx)
             if name == "split_payment":      return self._split_payment(tid, args, ctx)
+            if name == "find_best_price":    return await self._find_best_price(tid, args, ctx)
+            if name == "request_purchase":   return await self._request_purchase(tid, args, ctx)
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
@@ -5448,6 +5486,53 @@ class CommerceAdminSkill(BaseSkill):
         _readback_gate(tid, "split_payment", True, {"parts": len(good)}, {"parts": len(res["parts"])})
         return _checked({"ok": True}, "✅ " + bs.describe(res["line"], res["parts"])
                         + " Project costs now count each part on its own project.")
+
+    async def _find_best_price(self, tid: str, args: Dict[str, Any],
+                               ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The allowed shops searched; up to 3 options, each price as printed on the shop's page."""
+        from vula.commerce import buying
+        ctx = ctx or {}
+        cfg = buying.settings_for(tid)
+        if not cfg.get("enabled"):
+            return {"error": "Buying isn't switched on for this business (Settings › Buying)."}
+        if not buying.may_ask(tid, ctx.get("phone"), ctx.get("caller_role"), cfg):
+            return {"error": "Buying requests aren't open to you — ask the owner, or they can change "
+                             "who may ask in Settings › Buying."}
+        try:
+            res = await buying.find(tid, args.get("item") or "", by_phone=ctx.get("phone"),
+                                    by_name=ctx.get("caller_name"))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"options": len(res["offers"]), "reply": buying.describe_offers(res),
+                "note": "Send the reply as it is; never add or change a price."}
+
+    async def _request_purchase(self, tid: str, args: Dict[str, Any],
+                                ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """One of the options, checked against the shop list and the limits; preview, then to the
+        approvers (or carried out at once when the person asking is one)."""
+        from vula.commerce import buying
+        ctx = ctx or {}
+        cfg = buying.settings_for(tid)
+        if not cfg.get("enabled"):
+            return {"error": "Buying isn't switched on for this business (Settings › Buying)."}
+        if not buying.may_ask(tid, ctx.get("phone"), ctx.get("caller_role"), cfg):
+            return {"error": "Buying requests aren't open to you — ask the owner."}
+        try:
+            p = buying.prepare(tid, ctx.get("phone"), args.get("option") or 0, args.get("quantity") or 1,
+                               args.get("project"))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        title = buying.summary(p)
+        if not args.get("confirm"):
+            who = ("" if buying.is_approver(tid, ctx.get("phone"), cfg)
+                   else " It will go to the approver for a yes before anything is bought.")
+            return {"preview": True, "message": f"{title}.{who} Confirm?"}
+        try:
+            reply = await buying.submit(tid, p, phone=ctx.get("phone"), name=ctx.get("caller_name"))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        _readback_gate(tid, "request_purchase", True, {"total_cents": p["total_cents"]}, {})
+        return _checked({"ok": True}, reply)
 
     def _move_to_project(self, tid: str, args: Dict[str, Any],
                          ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

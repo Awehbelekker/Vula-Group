@@ -3,7 +3,7 @@
 id: office_admin
 title: AI office administrator
 emoji: 🗂️
-summary: Reminders, letters, emails, contacts, staff notices and polls, meeting notes.
+summary: Reminders, letters, emails, contacts, staff notices and polls, meeting notes, buying office supplies.
 keywords:
 - remind
 - letter
@@ -22,6 +22,11 @@ keywords:
 - the reps
 - automation
 - automate
+- best price
+- cheapest
+- buy us
+- buy me
+- order online
 tools:
 - configure_call_sheet
 - configure_expense_sheet
@@ -29,7 +34,9 @@ tools:
 - create_contact
 - draft_followup_email
 - draft_letter
+- find_best_price
 - log_meeting
+- request_purchase
 - staff_notice
 - staff_poll
 - update_call_sheet

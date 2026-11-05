@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Find me the best price on Canon PG-545 ink cartridges", expect: buying, tool: find_best_price}
+- {prompt: "What's the cheapest A4 paper we can get?", expect: buying, tool: find_best_price}

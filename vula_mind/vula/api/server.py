@@ -736,6 +736,22 @@ async def _connection_check_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+async def _purchases_loop() -> None:
+    """Purchases approved through Vula (vula/commerce/buying.py): match each to its receipt and
+    book it to its project; no receipt after 3 days → one reminder to the person who asked."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(1600)  # settle on boot
+    while True:
+        try:
+            from vula.commerce.buying import follow_up
+            res = await follow_up()
+            if res.get("matched") or res.get("reminded"):
+                log.info("Purchases follow-up: %s", res)
+        except Exception as exc:
+            log.warning("Purchases loop error: %s", exc)
+        await _asyncio.sleep(3 * 3600)
+
+
 async def _automations_loop() -> None:
     """Evaluate every enabled automation rule every 5 minutes (P3 automations builder)."""
     import asyncio as _asyncio
@@ -1647,6 +1663,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_automations_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_staged_approvals_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_connection_check_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_purchases_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_subscriptions_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
@@ -1933,6 +1950,8 @@ _SECTION_RULES = [
     # 2026-11-03: a project's whole file (every invoice, statement and proof of payment, as a
     # zip) — owner and managers only, like the team settings.
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/file(?:\.zip)?(?:/|$)"), frozenset()),
+    # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     (None, re.compile(r"^/v1/users/[^/]+(?:/|$)"), frozenset()),
     (None, re.compile(r"^/v1/team/[^/]+/audit/?$"), frozenset()),
     # ...except a staff member's own "Got it" on a notice (vula/api/staff_notices.py)
@@ -2070,6 +2089,8 @@ app.include_router(email_connect_router, prefix="/v1/email")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
+from vula.api.buying_api import router as buying_router  # noqa: E402
+app.include_router(buying_router, prefix="/v1/commerce")          # /{tenant}/admin/buying — tenant-guarded
 app.include_router(shopify_webhook_router, prefix="/v1/shopify")   # Shopify's calls — HMAC-verified
 app.include_router(woo_admin_router, prefix="/v1/commerce")       # /{tenant}/admin/woocommerce — tenant-guarded
 app.include_router(manufacturing_router, prefix="/v1/commerce")   # /{tenant}/admin/mfg — tenant-guarded
