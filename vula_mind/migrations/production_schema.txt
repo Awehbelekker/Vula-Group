@@ -144,6 +144,7 @@ vula_material_rates: change_pct:float8, high:float8, key:text, label:text, low:f
 vula_media_dedup: claimed_by:text, content_sha:text, created_at:timestamptz, kind:text, tenant_id:text
 vula_merchant_audit: action:text, actor_email:text, actor_id:text, created_at:timestamptz, detail:jsonb, id:int8, tenant_id:text
 vula_microsoft_accounts: access_token:text, connected_at:timestamptz, connected_by:text, created_at:timestamptz, email:text, id:uuid, last_sync_error:text, last_sync_status:text, last_synced_at:timestamptz, refresh_token:text, scopes:text, status:text, tenant_id:text, token_expiry:timestamptz, updated_at:timestamptz
+vula_onboarding: answers:jsonb, completed_at:timestamptz, created_by:text, invited_at:timestamptz, last_message_at:timestamptz, owner_email:text, owner_name:text, owner_phone:text, reminded_at:timestamptz, status:text, step:text, tenant_id:text, updated_at:timestamptz, welcome_status:text
 vula_open_questions: answer:text, answered_at:timestamptz, asked_at:timestamptz, expires_at:timestamptz, id:uuid, kind:text, message:text, phone:text, prompt:text, ref_id:text, status:text, tenant_id:text
 vula_page_versions: created_at:timestamptz, id:uuid, page_id:uuid, puck_data:jsonb, seo:jsonb, status:text, title:text
 vula_pages: created_at:timestamptz, id:uuid, puck_data:jsonb, seo:jsonb, slug:text, sort_order:int4, status:text, tenant_id:text, title:text, updated_at:timestamptz

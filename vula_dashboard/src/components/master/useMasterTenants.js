@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react'
 import { authFetch } from '../../lib/authFetch'
-import { confirmDialog } from '../ui/index.jsx'
+import { confirmDialog, toast } from '../ui/index.jsx'
 
 // Health from /v1/master/tenants (master._health): red = WhatsApp down, amber = unanswered
 // questions / no number / quiet 30 days, green = fine, off = suspended.
@@ -36,11 +36,16 @@ export function sortTenants(list, by) {
         : (HEALTH_ORDER[a.health] ?? 2) - (HEALTH_ORDER[b.health] ?? 2) || act(b) - act(a))
 }
 
+// 5 Nov 2026: a new business is made with its owner's name and WhatsApp number, and set up over
+// WhatsApp from Vula's own number (POST /v1/master/clients, vula/onboard_wa.py).
+const EMPTY_FORM = { tenant_id: '', display_name: '', business_type: 'retail', owner_name: '', owner_whatsapp: '', owner_email: '', send_welcome: true }
+
 export function useMasterTenants({ onError, prefill, onConsumePrefill, onCreated }) {
   const [rows, setRows] = useState([])
   const [registry, setRegistry] = useState({ business_types: [], modules: [] })
   const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ tenant_id: '', display_name: '', business_type: 'retail' })
+  const [form, setForm] = useState(EMPTY_FORM)
+  const [setup, setSetup] = useState({ items: [] })   // businesses being set up over WhatsApp (onboard_wa)
   const [busy, setBusy] = useState(false)
   const [managing, setManaging] = useState(null)   // tenant_id being module/plan-edited
   const [q, setQ] = useState('')
@@ -54,31 +59,44 @@ export function useMasterTenants({ onError, prefill, onConsumePrefill, onCreated
       ])
       setRows(t.tenants || []); setRegistry(r)
     } catch (e) { onError(e.message) }
+    try { setSetup(await authFetch('/v1/master/clients/onboarding')) } catch { /* before migration 249 */ }
   }
   useEffect(() => { load() }, [])
 
   useEffect(() => {
     if (!prefill) return
-    setForm({ tenant_id: prefill.tenant_id || '', display_name: prefill.display_name || '', business_type: prefill.business_type || 'retail' })
+    setForm({ ...EMPTY_FORM, tenant_id: prefill.tenant_id || '', display_name: prefill.display_name || '', business_type: prefill.business_type || 'retail' })
     setCreating(true)
     onConsumePrefill && onConsumePrefill()
   }, [prefill])  // eslint-disable-line
 
   const create = async () => {
     if (!form.tenant_id.trim()) return onError('tenant_id required (slug, e.g. my-shop)')
+    const withOwner = form.owner_whatsapp.trim()
+    if (withOwner && !form.owner_name.trim()) return onError("Give the owner's name too.")
     setBusy(true)
     try {
-      const r = await authFetch('/v1/tenants', {
+      const body = withOwner ? form : { tenant_id: form.tenant_id, display_name: form.display_name, business_type: form.business_type }
+      const r = await authFetch(withOwner ? '/v1/master/clients' : '/v1/tenants', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(body),
       })
-      if (r.error) onError(r.error)
+      if (r.error && !r.tenant) onError(r.error)
       else {
         const newTenantId = form.tenant_id
-        setCreating(false); setForm({ tenant_id: '', display_name: '', business_type: 'retail' }); load()
+        if (withOwner) toast(r.welcome === 'sent' ? `Welcome sent to ${form.owner_name} on WhatsApp` : `Made. Welcome ${r.welcome}`, r.welcome === 'sent' ? 'ok' : 'warn')
+        setCreating(false); setForm(EMPTY_FORM); load()
         onCreated && onCreated(newTenantId)
       }
     } catch (e) { onError(e.message) } finally { setBusy(false) }
+  }
+
+  const nudge = async (item) => {
+    try {
+      const r = await authFetch(`/v1/master/clients/${item.tenant_id}/nudge`, { method: 'POST' })
+      toast(r.welcome === 'sent' ? `Reminder sent to ${item.owner_name || 'the owner'}` : `Not sent: ${r.welcome || r.detail || 'try again'}`, r.welcome === 'sent' ? 'ok' : 'warn')
+      load()
+    } catch (e) { onError(e.message) }
   }
 
   const toggleActive = async (t) => {
@@ -128,7 +146,7 @@ export function useMasterTenants({ onError, prefill, onConsumePrefill, onCreated
   }
 
   return { rows, registry, creating, setCreating, form, setForm, busy, managing, setManaging, q, setQ, sort, setSort,
-    load, create, toggleActive, saveManage, markPaid, extendTrial, cancelSub, reactivateSub }
+    setup, nudge, load, create, toggleActive, saveManage, markPaid, extendTrial, cancelSub, reactivateSub }
 }
 
 /** The manage form's state for one tenant (plan, store URL, gateway, spend cap, modules, sharing,
