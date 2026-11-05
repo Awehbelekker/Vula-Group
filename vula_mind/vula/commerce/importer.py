@@ -215,14 +215,14 @@ def commit_invoices(tenant_id: str, invoices: List[Dict[str, Any]]) -> Dict[str,
             "line_items": "[]",
             "subtotal_cents": total, "vat_cents": 0, "total_cents": total,
             "status": status,
-            "date": inv.get("date") or None, "due_date": inv.get("due_date") or None,
+            "issue_date": inv.get("date") or None, "due_date": inv.get("due_date") or None,
             "direction": "outbound", "doc_type": "invoice", "source": "import",
         }
         try:
             db.table("commerce_invoices").insert(row).execute()
         except Exception:
             # Older schema variants — drop optional columns and retry once.
-            for k in ("date", "due_date", "direction", "doc_type", "source"):
+            for k in ("issue_date", "due_date", "direction", "doc_type", "source"):
                 row.pop(k, None)
             try:
                 db.table("commerce_invoices").insert(row).execute()

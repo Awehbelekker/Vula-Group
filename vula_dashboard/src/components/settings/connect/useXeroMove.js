@@ -48,7 +48,7 @@ export function useXeroMove(tenantId) {
       if (!r.ok) return
       const d = await r.json()
       setRun(d.run)
-      if (d.run?.status === 'reading') poll.current = setTimeout(() => openRun(id), 4000)
+      if (['reading', 'importing'].includes(d.run?.status)) poll.current = setTimeout(() => openRun(id), 4000)
     } catch { /* keep the last view */ }
   }
 
@@ -90,5 +90,35 @@ export function useXeroMove(tenantId) {
     }
   }
 
-  return { info, failed, cutover, setCutover, run, busy, error, connect, disconnect, preview, reload: load }
+  async function bringIn() {
+    if (!run) return
+    const ok = await confirmDialog(
+      `Bring everything in from Xero at ${run.cutover_date}? Vula adds the opening balances, every invoice and bill, ` +
+      'your customers and suppliers, checks it all against Xero to the cent, then disconnects from Xero. ' +
+      'It can be undone until a payment is recorded on a moved invoice.')
+    if (!ok) return
+    setBusy(true); setError(null)
+    try {
+      const r = await fetch(`${base}/runs/${run.id}/commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.detail || 'That couldn’t be started')
+      setRun({ ...run, ...d.run, status: 'importing' })
+      poll.current = setTimeout(() => openRun(run.id), 3000)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function undo() {
+    if (!run) return
+    if (!(await confirmDialog('Undo this move? Its invoices and bills are cancelled (kept on record) and the opening balances reversed.'))) return
+    const r = await fetch(`${base}/runs/${run.id}/undo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { setError(d.detail || 'It couldn’t be undone'); return }
+    toast('Move undone'); openRun(run.id)
+  }
+
+  return { info, failed, cutover, setCutover, run, busy, error, connect, disconnect, preview, bringIn, undo, reload: load }
 }

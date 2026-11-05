@@ -41,6 +41,37 @@ def _post(tenant_id: str, *, entry_date: str, description: str, source_type: str
         log.warning("ledger posting failed (%s/%s): %s", source_type, source_id, exc)
 
 
+# 5 Nov 2026 (Move from Xero): an invoice or bill brought in from another accounting app while
+# still owed (source 'migration_open') is already in the books — its sale or cost, and its VAT,
+# are inside the opening balances (debtors / creditors). A payment on it later only clears what
+# is owed: Dr bank / Cr accounts_receivable, or Dr accounts_payable / Cr bank. Never sales again.
+MIGRATED_OPEN = "migration_open"
+
+
+def _migrated(invoice: Dict[str, Any]) -> bool:
+    if "source" in invoice:
+        return invoice.get("source") == MIGRATED_OPEN
+    if not invoice.get("id") or not invoice.get("tenant_id"):
+        return False
+    try:
+        rows = (_client().table("commerce_invoices").select("source").eq("tenant_id", invoice["tenant_id"])
+                .eq("id", invoice["id"]).limit(1).execute().data or [])
+        return bool(rows) and rows[0].get("source") == MIGRATED_OPEN
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _clear_owed(tenant_id: str, invoice: Dict[str, Any], amount: int, *, entry_date: Optional[str],
+                source_type: str, source_id: Optional[str], description: str) -> None:
+    inbound = (invoice.get("direction") or "outbound") == "inbound"
+    lines = ([{"account_code": "accounts_payable", "debit_cents": amount, "credit_cents": 0},
+              {"account_code": "bank_cash", "debit_cents": 0, "credit_cents": amount}] if inbound else
+             [{"account_code": "bank_cash", "debit_cents": amount, "credit_cents": 0},
+              {"account_code": "accounts_receivable", "debit_cents": 0, "credit_cents": amount}])
+    _post(tenant_id, entry_date=entry_date or _today(), description=description,
+          source_type=source_type, source_id=source_id, lines=lines)
+
+
 def post_order_paid(tenant_id: str, order: Dict[str, Any]) -> None:
     """commerce_orders has no vat_cents column — the full total posts as Sales, unsplit."""
     total = int(order.get("total_cents") or 0)
@@ -77,6 +108,11 @@ def post_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
     full = int(invoice.get("total_cents") or 0)
     total = full - int(invoice.get("total_paid_cents") or 0)
     if total <= 0:
+        return
+    if _migrated({"tenant_id": tenant_id, **invoice}):
+        _clear_owed(tenant_id, invoice, total, entry_date=invoice.get("paid_at"), source_type="invoice_paid",
+                    source_id=invoice.get("id"),
+                    description=f"Invoice {invoice.get('invoice_number') or invoice.get('id')} paid (brought in)")
         return
     full_vat = max(0, min(int(invoice.get("vat_cents") or 0), full))
     vat = (total * full_vat // full) if full > 0 else 0
@@ -124,6 +160,11 @@ def post_invoice_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict[
     the first and silently be dropped as "already posted"."""
     amount = int(payment.get("amount_cents") or 0)
     if amount <= 0:
+        return
+    if _migrated({"tenant_id": tenant_id, **invoice}):
+        _clear_owed(tenant_id, invoice, amount, entry_date=payment.get("paid_at"), source_type="invoice_payment",
+                    source_id=payment.get("id"),
+                    description=f"Payment on invoice {invoice.get('invoice_number') or invoice.get('id')} (brought in)")
         return
     inv_total = int(invoice.get("total_cents") or 0)
     inv_vat = int(invoice.get("vat_cents") or 0)
@@ -184,6 +225,13 @@ def post_supplier_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
     amount = int(invoice.get("total_cents") or 0)
     if amount <= 0:
         return
+    if _migrated({"tenant_id": tenant_id, **invoice}):
+        left = amount - int(invoice.get("total_paid_cents") or 0)
+        if left > 0:
+            _clear_owed(tenant_id, {**invoice, "direction": "inbound"}, left, entry_date=invoice.get("paid_at"),
+                        source_type="supplier_invoice_paid", source_id=invoice.get("id"),
+                        description=f"Paid supplier invoice {invoice.get('invoice_number') or invoice.get('id')} (brought in)")
+        return
     vat = max(0, min(int(invoice.get("vat_cents") or 0), amount))
     # commerce_invoices carries no account_code column, so without this every supplier payment
     # would land in "other_expense" and the trial balance would show all supplier spend in one
@@ -212,6 +260,11 @@ def post_supplier_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict
     payment's id so several instalments on one bill each post."""
     amount = int(payment.get("amount_cents") or 0)
     if amount <= 0:
+        return
+    if _migrated({"tenant_id": tenant_id, **invoice}):
+        _clear_owed(tenant_id, {**invoice, "direction": "inbound"}, amount, entry_date=payment.get("paid_at"),
+                    source_type="supplier_payment", source_id=payment.get("id"),
+                    description=f"Part payment of supplier invoice {invoice.get('invoice_number') or invoice.get('id')} (brought in)")
         return
     inv_total = int(invoice.get("total_cents") or 0)
     inv_vat = int(invoice.get("vat_cents") or 0)

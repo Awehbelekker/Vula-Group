@@ -1,4 +1,5 @@
-"""vula/api/xero.py — "Move from Xero" (step 1: connect and preview; nothing written to the books).
+"""vula/api/xero.py — "Move from Xero": connect, preview at a cut-over date, bring it in once (checked
+to the cent against Xero), then Vula disconnects. Undo takes a move back out.
 
 Tenant-guarded, under /v1/commerce/{tenant}/admin/xero (Money access; changes by the owner or a
 manager):
@@ -6,7 +7,9 @@ manager):
     POST /v1/commerce/{tenant}/admin/xero/connect         {by} → {url} to sign in at Xero
     POST /v1/commerce/{tenant}/admin/xero/disconnect      revoke at Xero, forget the tokens
     POST /v1/commerce/{tenant}/admin/xero/preview         {cutover, by} → a run, read in the background
-    GET  /v1/commerce/{tenant}/admin/xero/runs/{run_id}   the run and its preview
+    GET  /v1/commerce/{tenant}/admin/xero/runs/{run_id}   the run, its preview and its result
+    POST /v1/commerce/{tenant}/admin/xero/runs/{run_id}/commit   bring it in (one-off), then disconnect
+    POST /v1/commerce/{tenant}/admin/xero/runs/{run_id}/undo     take a move back out
 Public (Xero sends the owner back here; the state is signed, see vula/xero/credentials.py):
     GET  /v1/xero/oauth/callback
 """
@@ -77,6 +80,35 @@ async def xero_preview(tenant_id: str, body: PreviewIn, request: Request) -> dic
         raise HTTPException(status_code=409, detail="Connect Xero first.")
     try:
         return {"run": runs.start_preview(tenant_id, runs.parse_cutover(body.cutover), body.by or "")}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/xero/runs/{run_id}/commit")
+async def xero_commit(tenant_id: str, run_id: str, body: ByIn, request: Request) -> dict:
+    """Bring it in (one-off): everything at the cut-over, checked to the cent against Xero, then
+    Vula disconnects from Xero (vula/migrate/commit.py). Runs in the background; poll the run."""
+    from vula.migrate import commit
+    from vula.xero import credentials
+    await _owner_or_manager(request, tenant_id)
+    if (credentials.connection(tenant_id) or {}).get("status") != "connected":
+        raise HTTPException(status_code=409, detail="Connect Xero first.")
+    try:
+        return {"run": commit.start_commit(tenant_id, run_id, body.by or "")}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/xero/runs/{run_id}/undo")
+async def xero_undo(tenant_id: str, run_id: str, body: ByIn, request: Request) -> dict:
+    """Take a move back out: its documents cancelled (kept on record) and the opening balances
+    reversed — refused once a payment has been recorded on a moved document."""
+    from vula.migrate import commit
+    await _owner_or_manager(request, tenant_id)
+    try:
+        return {"undone": await asyncio.to_thread(commit.undo, tenant_id, run_id, body.by or "")}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

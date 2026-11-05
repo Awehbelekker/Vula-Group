@@ -50,6 +50,7 @@ DEFAULT_CHART = [
     # was income/expense/equity only, fine for cash-basis P&L/VAT but a journal entry needs a
     # real Bank/Cash asset and VAT liability/asset side.
     ("bank_cash",        "Bank / cash",           "asset",     "none",  False, 5),
+    ("accounts_receivable", "Accounts receivable", "asset",    "none",  False, 165),
     ("accounts_payable", "Accounts payable",      "liability", "none",  False, 170),
     ("vat_output",       "VAT output (owed)",     "liability", "none",  False, 180),
     ("vat_input",        "VAT input (claimable)", "asset",     "none",  False, 190),
