@@ -1952,6 +1952,8 @@ _SECTION_RULES = [
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/file(?:\.zip)?(?:/|$)"), frozenset()),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
+    # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/xero(?:/|$)"), _MONEY_TABS),
     (None, re.compile(r"^/v1/users/[^/]+(?:/|$)"), frozenset()),
     (None, re.compile(r"^/v1/team/[^/]+/audit/?$"), frozenset()),
     # ...except a staff member's own "Got it" on a notice (vula/api/staff_notices.py)
@@ -2091,6 +2093,9 @@ app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/a
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
 from vula.api.buying_api import router as buying_router  # noqa: E402
 app.include_router(buying_router, prefix="/v1/commerce")          # /{tenant}/admin/buying — tenant-guarded
+from vula.api.xero import router as xero_router, public_router as xero_public_router  # noqa: E402
+app.include_router(xero_router, prefix="/v1/commerce")            # /{tenant}/admin/xero — tenant-guarded
+app.include_router(xero_public_router, prefix="/v1/xero")         # /oauth/callback — public, signed state
 app.include_router(shopify_webhook_router, prefix="/v1/shopify")   # Shopify's calls — HMAC-verified
 app.include_router(woo_admin_router, prefix="/v1/commerce")       # /{tenant}/admin/woocommerce — tenant-guarded
 app.include_router(manufacturing_router, prefix="/v1/commerce")   # /{tenant}/admin/mfg — tenant-guarded

@@ -118,7 +118,9 @@ def optional_settings() -> list[dict]:
                         ("Google one-tap connect", {"GOOGLE_CLIENT_ID": s.google_client_id,
                                                     "GOOGLE_CLIENT_SECRET": s.google_client_secret}),
                         ("Microsoft one-tap connect", {"MICROSOFT_CLIENT_ID": s.microsoft_client_id,
-                                                       "MICROSOFT_CLIENT_SECRET": s.microsoft_client_secret})):
+                                                       "MICROSOFT_CLIENT_SECRET": s.microsoft_client_secret}),
+                        ("Move from Xero", {"XERO_CLIENT_ID": s.xero_client_id,
+                                            "XERO_CLIENT_SECRET": s.xero_client_secret})):
         out.append(_group(what, names, "Not set up: businesses can't connect with one tap "
                                        "(docs/connections-setup.md)"))
     return out
