@@ -7,7 +7,6 @@ import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 import * as F from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -28,7 +27,6 @@ const TAP = { name: "taptopay", role: "owner", nav: "Money", tab: "Tap to Pay", 
 const BUDGET = { name: "budget", role: "owner", nav: "Money", tab: "Budget", ready: "Recurring bills", modules: ["budget"] };
 
 test.describe("redesign: money", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [name, screen] of [["taptopay", TAP], ["budget", BUDGET]]) {
     for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -129,11 +127,3 @@ test.describe("redesign: money", () => {
   });
 });
 
-test("current look: Tap to Pay and Budget still load on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { ...TAP, nav: "Money", modules: ["taptopay", "budget"] }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await expect(page.getByText("Lerato (coach)").first()).toBeVisible();
-  await page.getByRole("tab", { name: /Budget$/ }).first().click();
-  await expect(page.getByText("POS software")).toBeVisible();
-  await expect(page.getByText("Sourdough flour, 25kg")).toBeVisible();
-});

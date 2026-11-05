@@ -3,9 +3,7 @@
 // from seeded demo data, so no screenshot ever contains production data.
 import { defineConfig } from "@playwright/test";
 
-// The redesign is the dashboard (2026-11-05): every run is the redesign. Specs still read
-// UI_V2 to skip the old look's tests until those are deleted with it.
-process.env.UI_V2 = "1";
+// One design since 5 Nov 2026 (the redesign); one run.
 
 // A service worker's own requests go through context.route() (pwa.spec.js hands the worker a
 // build's file list); Chromium-only, and off unless asked for. Specs that block service workers

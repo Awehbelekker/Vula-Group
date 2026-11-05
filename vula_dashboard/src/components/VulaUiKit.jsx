@@ -50,9 +50,9 @@ export default function VulaUiKit() {
   useEffect(() => {
     const root = document.documentElement;
     const before = root.dataset.ui;
-    if (v2) root.dataset.ui = "v2"; else delete root.dataset.ui;
+    root.dataset.ui = "v2";
     return () => { if (before) root.dataset.ui = before; else delete root.dataset.ui; };
-  }, [v2]);
+  }, []);
 
   const rows = INVOICES.filter((r) => (!query || `${r.no} ${r.who}`.toLowerCase().includes(query.toLowerCase()))
     && (!chips.length || chips.includes(r.status)));
@@ -62,7 +62,7 @@ export default function VulaUiKit() {
       <PageHeader headline eyebrow="Vula design system" title="UI kit"
         sub="Every shared component, on demo data. Master only."
         actions={<>
-          <Button variant="secondary" size="sm" onClick={() => setV2((x) => !x)}>{v2 ? "Show current look" : "Show redesign"}</Button>
+          <Button variant="secondary" size="sm" onClick={() => setV2((x) => !x)}>{"Show current look"}</Button>
           <Button variant="secondary" size="sm" onClick={() => { const n = mode === "dark" ? "light" : "dark"; setThemeMode(n); setMode(n); }}>
             {mode === "dark" ? "Light" : "Dark"} theme</Button>
         </>} />

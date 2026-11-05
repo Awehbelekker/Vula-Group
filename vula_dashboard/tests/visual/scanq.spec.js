@@ -6,7 +6,6 @@ import { test, expect } from "@playwright/test";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
 async function open(page, width = 390) {
@@ -15,7 +14,7 @@ async function open(page, width = 390) {
   await installMockApi(page, { role: "owner", modules: ["scanner", "expenses", "documents"] });
   await seedSession(page, { role: "owner", theme: "light" });
   await page.goto("/");
-  await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
   const scans = [];
   page.on("request", (r) => { if (/\/admin\/scan$/.test(new URL(r.url()).pathname)) scans.push(r.postDataJSON()); });
   return scans;

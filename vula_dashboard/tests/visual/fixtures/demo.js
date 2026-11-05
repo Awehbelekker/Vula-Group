@@ -367,7 +367,7 @@ export const tenant = {
     modules: tenantModules, uses_projects: false, sells_products: true, is_rep_business: false,
     aliases: [], description: "Neighbourhood deli, bakery and catering in Sea Point." },
   // the redesign opt-in (migration 215): on when the run is UI_V2=1
-  ui_v2: process.env.UI_V2 === "1", ui_labels: null,
+  ui_v2: true, ui_labels: null,
 };
 export const teamMe = { access: [], full: true, role: "owner", whatsapp: "+27820000001" };
 // staff: the counter — chats, orders, bookings and customers only; rep: a sales_rep login with

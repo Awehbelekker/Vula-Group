@@ -3,79 +3,8 @@
  * (vula/commerce/call_sheet.py). Thin wrapper — reuses the same compose/edit logic the
  * WhatsApp configure_call_sheet/view_call_sheet/update_call_sheet tools already use.
  */
-import { DAYS, useRepCallSheet } from "./rep/useRepCallSheet";
 import RepCallSheetV2 from "./rep/RepCallSheetV2";
-import { sidePad } from "../lib/layout";
 
-const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
-
-function VulaRepCallSheetV1({ tenantId, repPhone }) {
-  const { config, entries, instruction, setInstruction, preview, msg, saveConfig, submitInstruction } = useRepCallSheet(tenantId, repPhone);
-
-  if (!repPhone) return <div style={{ padding: 20, color: C.muted, fontSize: 13 }}>Couldn't identify your rep phone number.</div>;
-
-  return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>My Call Sheet</h2>
-      <p style={{ fontSize: 13, color: C.muted, margin: "0 0 16px" }}>
-        Every meeting you log via WhatsApp lands here automatically. Correct or add to it below,
-        then it's emailed on your schedule.
-      </p>
-
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>Schedule</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <input placeholder="Recipient email" defaultValue={config.call_sheet_recipient_email || ""}
-                 onBlur={(e) => saveConfig({ recipient_email: e.target.value })}
-                 style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, minWidth: 220 }} />
-          <select defaultValue={config.call_sheet_day_of_week ?? 4}
-                  onChange={(e) => saveConfig({ day_of_week: Number(e.target.value) })}
-                  style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }}>
-            {DAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
-          </select>
-          <input type="time" defaultValue={`${String(config.call_sheet_hour ?? 17).padStart(2, "0")}:${String(config.call_sheet_minute ?? 0).padStart(2, "0")}`}
-                 onBlur={(e) => { const [h, m] = e.target.value.split(":"); saveConfig({ hour: Number(h), minute: Number(m) }); }}
-                 style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
-        </div>
-        {config.call_sheet_last_sent_at && (
-          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            Last sent {new Date(config.call_sheet_last_sent_at).toLocaleString()}
-          </div>
-        )}
-      </div>
-
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Fix or add something</div>
-        <input value={instruction} onChange={(e) => setInstruction(e.target.value)}
-               placeholder='e.g. "the Dick meeting was about self-levelling, not HBC"'
-               style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
-        {msg && <div style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 8 }}>{msg}</div>}
-        {preview && (
-          <div style={{ background: "var(--warn-soft)", border: "1px solid #E6D9A8", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginTop: 8 }}>
-            {preview.change}
-            <button onClick={() => submitInstruction(true)} style={{ marginLeft: 10, padding: "4px 10px", background: C.green,
-              color: "var(--on-accent)", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>Confirm</button>
-          </div>
-        )}
-        {!preview && (
-          <button onClick={() => submitInstruction(false)} disabled={!instruction.trim()}
-            style={{ marginTop: 8, padding: "7px 14px", background: C.text, color: "var(--bg)", border: "none",
-              borderRadius: 8, fontSize: 12.5, cursor: instruction.trim() ? "pointer" : "not-allowed" }}>Preview change</button>
-        )}
-      </div>
-
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>This week so far ({entries.length})</div>
-      {entries.length === 0 && <div style={{ padding: 16, fontSize: 13, color: C.muted, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>Nothing logged yet.</div>}
-      {entries.map((e) => (
-        <div key={e.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", marginBottom: 6 }}>
-          <div style={{ fontSize: 13, color: C.text }}>{e.text}</div>
-          <div style={{ fontSize: 11, color: C.muted }}>{e.source === "manual" ? "Added manually" : "From a logged meeting"} · {new Date(e.created_at).toLocaleDateString()}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export default function VulaRepCallSheet({ v2 = false, ...props }) {
-  return v2 ? <RepCallSheetV2 {...props} /> : <VulaRepCallSheetV1 {...props} />;
+export default function VulaRepCallSheet({ ...props }) {
+  return <RepCallSheetV2 {...props} />;
 }

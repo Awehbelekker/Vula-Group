@@ -2,57 +2,10 @@
  * VulaFollowups.jsx — emails awaiting a reply. Vula flags inbound questions/requests/
  * scheduling and nudges on WhatsApp daily until they're handled.
  */
-import { daysWaiting, useFollowups } from "./followups/useFollowups";
 import FollowupsV2 from "./followups/FollowupsV2";
-import { sidePad } from "../lib/layout";
-
-const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
-const REASON = { schedule: { label: "📅 Schedule", color: "var(--info)" }, request: { label: "✋ Request", color: "var(--warn)" }, question: { label: "❓ Question", color: "#6B5B95" } };
 
 /** v2: the redesigned screen (same hook, so the same data and actions). */
-export default function VulaFollowups({ tenantId, v2 = false }) {
-  if (v2) return <FollowupsV2 tenantId={tenantId} />;
-  return <FollowupsV1 tenantId={tenantId} />;
+export default function VulaFollowups({ tenantId }) {
+  return <FollowupsV2 tenantId={tenantId} />;
 }
 
-// data + actions in followups/useFollowups.js (shared with followups/FollowupsV2.jsx)
-function FollowupsV1({ tenantId }) {
-  const { rows, setStatus } = useFollowups(tenantId);
-  const days = daysWaiting;
-
-  return (
-    <div style={{ maxWidth: 920, margin: "0 auto", padding: `24px ${sidePad(24)}` }}>
-      <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Follow-ups</h1>
-      <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Emails Vula thinks are waiting on you — you'll get a WhatsApp nudge daily until they're cleared.</p>
-
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-        {rows.length === 0 && <div style={{ padding: 18, fontSize: 13, color: C.muted }}>Nothing waiting — you're all caught up. 🎉</div>}
-        {rows.map((r) => {
-          const d = days(r.received_at);
-          const re = REASON[r.reason] || { label: r.reason || "", color: C.muted };
-          return (
-            <div key={r.id} style={{ padding: "12px 16px", borderTop: `1px solid ${C.alt}`, display: "flex", gap: 12, alignItems: "flex-start" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 3, flexWrap: "wrap" }}>
-                  <span style={{ fontWeight: 600, color: C.text, fontSize: 13.5 }}>{r.sender_name || r.sender}</span>
-                  <span style={{ fontSize: 10.5, color: re.color, fontWeight: 600 }}>{re.label}</span>
-                  {r.urgency === "high" && <span style={{ fontSize: 10.5, color: "var(--danger)", fontWeight: 700, background: "rgba(162,59,45,0.1)", padding: "1px 7px", borderRadius: 8 }}>🔥 Urgent</span>}
-                  {r.tone && <span style={{ fontSize: 10.5, color: C.muted, fontStyle: "italic" }}>{r.tone}</span>}
-                  {d >= 2 && <span style={{ fontSize: 10.5, color: "var(--danger)", fontWeight: 600 }}>{d}d waiting</span>}
-                </div>
-                <div style={{ fontSize: 13, color: C.text }}>{r.subject || "(no subject)"}</div>
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.summary || (r.preview || "").slice(0, 110)}</div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <button onClick={() => setStatus(r.id, "done")} style={{ padding: "5px 10px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 6, fontSize: 11.5, cursor: "pointer" }}>Done</button>
-                <button onClick={() => setStatus(r.id, "snoozed")} style={{ padding: "5px 10px", background: C.surface, color: C.muted, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11.5, cursor: "pointer" }}>Dismiss</button>
-                <button onClick={() => setStatus(r.id, "spam")} title="Not a real follow-up — helps Vula's spam filter improve" style={{ padding: "5px 10px", background: C.surface, color: "var(--danger)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11.5, cursor: "pointer" }}>🚫 Not relevant</button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 20 }}><span className="vula-powered">Powered by Vula · </span>checked every sync</p>
-    </div>
-  );
-}

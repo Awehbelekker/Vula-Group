@@ -39,10 +39,10 @@ const VulaInvoices = lazyScreen(() => import("./components/VulaInvoices"));
 const VulaBudget = lazyScreen(() => import("./components/VulaBudget"));
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 const VulaSmartScanner = lazyScreen(() => import("./components/VulaSmartScanner"));
-import VulaShell from "./components/VulaShell";
+import VulaShellV2 from "./components/VulaShellV2";
 import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible, applyLabels, flattenNav, withV2Pages, withV2Moves } from "./navConfig";
 import { applyBrand, applyThemeMode } from "./theme/tokens";
-import { applyUiMode, uiV2 } from "./lib/flags";
+import { applyUiMode } from "./lib/flags";
 import { showOnAppIcon } from "./lib/appBadge";
 import { setLaunchScreens } from "./lib/iosSplash";
 import { setErrorContext } from "./lib/appErrors";
@@ -182,10 +182,9 @@ export default function App() {
     if (isPublicRoute) document.documentElement.dataset.theme = "light";
     else applyThemeMode();
   }, [isPublicRoute]);
-  // The redesign, for everyone (2026-11-05) — never on the public customer-facing pages, which
-  // keep their own look. ?ui=v1 still pins the old look on this device while it's retired.
-  const v2 = !isPublicRoute && uiV2();
-  useEffect(() => { applyUiMode(v2); }, [v2]);
+  // The dashboard's look ([data-ui="v2"] tokens) — never on the public customer-facing pages,
+  // which keep their own.
+  useEffect(() => { applyUiMode(!isPublicRoute); }, [isPublicRoute]);
   useEffect(() => {
     // Master HQ wears Vula's own brand; only "Open as tenant" takes on that tenant's brand
     // (the whole master panel used to recolour to whichever tenant was picked in the switcher).
@@ -318,7 +317,7 @@ export default function App() {
 
   // Show login if not authenticated
   if (!user) {
-    return <VulaLogin onSuccess={() => {}} v2={v2} />;
+    return <VulaLogin onSuccess={() => {}} />;
   }
 
   // #/ui-kit — every shared component on demo data (2026-10-17, UX redesign). Master only: it
@@ -354,10 +353,10 @@ export default function App() {
     const visibleGroups = applyLabels(filterGroups(MERCHANT_GROUPS,
       merchantVisible({ full, access, modules: tenantModules, profile: tenantProfile })), tenantLabels);
     const isRep = teamRole === "sales_rep" && !full;
-    const groups = withInboxBadge(v2 ? withV2Pages(withV2Moves(visibleGroups), { activity: !isRep }) : visibleGroups, openEscalations);
+    const groups = withInboxBadge(withV2Pages(withV2Moves(visibleGroups), { activity: !isRep }), openEscalations);
     return (
       <div>
-        <VulaShell
+        <VulaShellV2
           brand={{ logoUrl: brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || "Business admin" }}
           groups={groups}
           activeId={merchTab}
@@ -365,12 +364,12 @@ export default function App() {
           title={labelFor(groups, merchTab) || labelFor(MERCHANT_GROUPS, merchTab) || "Home"}
           userEmail={user.email}
           onLogout={logout}
-          v2={v2} onNavigate={navigateIn(groups)} onLaunch={launch} searchContacts={contactSearch(effectiveTenantId, groups)}
+ onNavigate={navigateIn(groups)} onLaunch={launch} searchContacts={contactSearch(effectiveTenantId, groups)}
         >
           <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} navGroups={groups}
             access={access} full={full} teamRole={teamRole} teamPhone={teamPhone} activeTab={merchTab} onTabChange={setMerchTab}
-            navRequest={navRequest} v2={v2} />
-        </VulaShell>
+            navRequest={navRequest} />
+        </VulaShellV2>
         <OpenLinkedPage ready={tenantModules !== null} tick={goTick} open={navigateIn(groups)} />
         {route === "#/share" && tenantModules !== null && (
           <Suspense fallback={null}>
@@ -378,7 +377,7 @@ export default function App() {
               onClose={() => { window.history.replaceState(null, "", window.location.pathname + window.location.search); setRoute(""); }} />
           </Suspense>
         )}
-        <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} v2={v2} />
+        <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab />
       </div>
     );
   }
@@ -390,30 +389,19 @@ export default function App() {
   if (activeTab === "merchant") {
     const mName = brand?.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
     const mAll = filterGroups(MERCHANT_GROUPS, () => true);
-    const mGroups = withInboxBadge(v2 ? withV2Pages(withV2Moves(mAll)) : mAll, openEscalations); // master sees every module
+    const mGroups = withInboxBadge(withV2Pages(withV2Moves(mAll)), openEscalations); // master sees every module
     return (
       <div>
         {/* Prominent, impossible-to-miss impersonation banner — the small brand "sub" label
             below is easy to miss once scrolled past the header; this stays pinned above
             everything for the whole visit. Shows the reason logged with master_impersonate_tenant
             (vula/api/master.py) when one was given. */}
-        {v2 ? (
-          <div className="v2-impersonate" role="status">
+        {<div className="v2-impersonate" role="status">
             <Eye size={16} aria-hidden="true" />
             <span>Master mode: viewing {mName}'s real workspace</span>
             {impersonateReason && <span className="v2-impersonate-why">({impersonateReason})</span>}
-          </div>
-        ) : (
-          <div style={{
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-            padding: "6px 12px", background: COLORS.amber, color: "#1A1200",
-            fontSize: 12, fontWeight: 600, textAlign: "center",
-          }}>
-            <span>👁 Master mode — viewing {mName}'s real workspace</span>
-            {impersonateReason && <span style={{ fontWeight: 400, opacity: 0.85 }}>— {impersonateReason}</span>}
-          </div>
-        )}
-        <VulaShell
+          </div>}
+        <VulaShellV2
           brand={{ logoUrl: brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
           groups={mGroups}
           activeId={merchTab}
@@ -422,28 +410,19 @@ export default function App() {
           userEmail={user.email}
           roleLabel="master"
           onLogout={logout}
-          v2={v2} onNavigate={navigateIn(mGroups)} onLaunch={launch} searchContacts={contactSearch(effectiveTenantId, mGroups)}
+ onNavigate={navigateIn(mGroups)} onLaunch={launch} searchContacts={contactSearch(effectiveTenantId, mGroups)}
           headerExtra={
             // Returns to Master (not "dashboard") — masterSubTab was never touched while
             // visiting the tenant, so this naturally restores whichever Master sub-tab
             // (Tenants/Health/Usage/...) the operator was on before "Open as tenant".
-            v2 ? (
-              <Button variant="secondary" size="sm" Icon={ArrowLeft} onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}>
+            <Button variant="secondary" size="sm" Icon={ArrowLeft} onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}>
                 Master HQ
               </Button>
-            ) : (
-              <button onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}
-                style={{ padding: "6px 12px", border: `1px solid ${COLORS.border}`, borderRadius: 6,
-                         background: COLORS.surface, color: "var(--text)", fontSize: 12,
-                         cursor: "pointer", fontWeight: 600 }}>
-                ← Master HQ
-              </button>
-            )
           }
         >
           <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={mName} navGroups={mGroups}
-            access={[]} full activeTab={merchTab} onTabChange={setMerchTab} navRequest={navRequest} v2={v2} />
-        </VulaShell>
+            access={[]} full activeTab={merchTab} onTabChange={setMerchTab} navRequest={navRequest} />
+        </VulaShellV2>
       </div>
     );
   }
@@ -451,7 +430,7 @@ export default function App() {
   // ── Master (Vula operator) shell — grouped sidebar, tenant switcher in the top bar ──
   return (
     <>
-      <VulaShell
+      <VulaShellV2
         brand={{ logoEmoji: "◆", logo: <VulaLogo kind="mark" size={40} />, name: "Vula", sub: "Master · all tenants" }}
         zones={MASTER_ZONES}
         activeZoneId={masterZone}
@@ -462,7 +441,7 @@ export default function App() {
         userEmail={user.email}
         roleLabel={role === "master" ? "master" : undefined}
         onLogout={logout}
-        v2={v2} onNavigate={setActiveTab} onLaunch={launch}
+ onNavigate={setActiveTab} onLaunch={launch}
         headerExtra={role === "master" ? (
           <select
             value={masterTenant}
@@ -483,7 +462,7 @@ export default function App() {
       >
         <div className="v1-page" style={{ padding: "4px 0 24px" }}>
           <ScreenSuspense>
-          <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} v2={v2}
+          <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
             onOpenTenant={async (tid) => {
               // An optional support reason for the audit trail (vula_admin_audit + the tenant's
               // own vula_merchant_audit); blank is fine. 2026-09-29: an in-app dialog instead of
@@ -506,8 +485,8 @@ export default function App() {
             {...(activeTab === "master" ? { activeTab: masterSubTab, onTabChange: setMasterSubTab } : {})} />
           </ScreenSuspense>
         </div>
-      </VulaShell>
-      <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} v2={v2} />
+      </VulaShellV2>
+      <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab />
     </>
   );
 }

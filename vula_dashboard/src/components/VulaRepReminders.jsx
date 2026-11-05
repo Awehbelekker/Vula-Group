@@ -2,54 +2,8 @@
  * VulaRepReminders.jsx — a sales rep's own reminders (vula_reminders, created_by-scoped).
  * First dashboard surface for vula_reminders at all — previously WhatsApp-only.
  */
-import { useRepReminders } from "./rep/useRepReminders";
 import RepRemindersV2 from "./rep/RepRemindersV2";
-import { sidePad } from "../lib/layout";
 
-const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
-
-function VulaRepRemindersV1({ tenantId, repPhone }) {
-  const { reminders, status, setStatus, complete, isOverdue } = useRepReminders(tenantId, repPhone);
-
-  return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: `20px ${sidePad(20)}` }}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>My Reminders</h2>
-      <p style={{ fontSize: 13, color: C.muted, margin: "0 0 16px" }}>
-        Set via WhatsApp ("remind me to follow up with X Friday") — logged meetings also create
-        one automatically per action item.
-      </p>
-
-      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {["open", "done", "all"].map((s) => (
-          <button key={s} onClick={() => setStatus(s)}
-            style={{ padding: "5px 12px", borderRadius: 14, fontSize: 12, cursor: "pointer",
-              border: `1px solid ${status === s ? C.green : C.border}`,
-              background: status === s ? C.green : C.surface, color: status === s ? "#fff" : C.muted }}>
-            {s === "open" ? "Open" : s === "done" ? "Done" : "All"}
-          </button>
-        ))}
-      </div>
-
-      {reminders.length === 0 && <div style={{ padding: 16, fontSize: 13, color: C.muted, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>Nothing here.</div>}
-      {reminders.map((r) => (
-        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface,
-          border: `1px solid ${isOverdue(r) ? "#E6A23C" : C.border}`, borderRadius: 10, padding: "10px 14px", marginBottom: 8 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, color: C.text }}>{r.text}</div>
-            {r.due_at && <div style={{ fontSize: 11.5, color: isOverdue(r) ? "var(--danger)" : C.muted }}>
-              Due {new Date(r.due_at).toLocaleDateString()}{isOverdue(r) ? " — overdue" : ""}
-            </div>}
-          </div>
-          {r.status === "open" && (
-            <button onClick={() => complete(r.id)} style={{ fontSize: 11.5, color: C.muted, background: "none",
-              border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>✓ Done</button>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export default function VulaRepReminders({ v2 = false, ...props }) {
-  return v2 ? <RepRemindersV2 {...props} /> : <VulaRepRemindersV1 {...props} />;
+export default function VulaRepReminders({ ...props }) {
+  return <RepRemindersV2 {...props} />;
 }

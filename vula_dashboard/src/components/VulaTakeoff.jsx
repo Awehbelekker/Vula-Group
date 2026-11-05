@@ -9,6 +9,6 @@
 import TakeoffV2 from "./estimating/TakeoffV2";
 
 // eslint-disable-next-line no-unused-vars
-export default function VulaTakeoff({ v2 = false, ...props }) {
+export default function VulaTakeoff({ ...props }) {
   return <TakeoffV2 {...props} />;
 }

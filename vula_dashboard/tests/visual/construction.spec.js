@@ -7,7 +7,6 @@ import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
-const V2 = process.env.UI_V2 === "1";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ") + (process.env.AXE_DEBUG ? n.failureSummary : "")).join(" | ")}`);
@@ -33,7 +32,6 @@ const SCREENS = [
 ];
 
 test.describe("redesign: construction (Operate)", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [name, screen] of SCREENS) {
     for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -148,12 +146,3 @@ test.describe("redesign: construction (Operate)", () => {
   });
 });
 
-test("current look: Operate's construction tabs still load on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { ...SCREENS[3][1], ready: "QS Rate Library" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await expect(page.getByText("Drywall partition, 102mm")).toBeVisible();
-  await page.getByRole("tab", { name: /Labour$/ }).first().click();
-  await expect(page.getByText("acct 62001234567")).toBeVisible();
-  await page.getByRole("tab", { name: /Field Ops$/ }).first().click();
-  await expect(page.getByText("Field Operations")).toBeVisible();
-});

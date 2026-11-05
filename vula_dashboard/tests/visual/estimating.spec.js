@@ -7,7 +7,6 @@ import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
-const V2 = process.env.UI_V2 === "1";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ") + (process.env.AXE_DEBUG ? n.failureSummary : "")).join(" | ")}`);
@@ -28,7 +27,6 @@ const SCREENS = [
 ];
 
 test.describe("redesign: estimating", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [name, screen] of SCREENS) {
     for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -88,14 +86,3 @@ test.describe("redesign: estimating", () => {
   });
 });
 
-test("current look: the Estimating tabs still load on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { ...SCREENS[0][1], ready: "Cost Breakdown" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await expect(page.getByText(/^R 5.341.875$/).first()).toBeVisible();
-  await page.getByRole("tab", { name: /QS Pro$/ }).first().click();
-  await expect(page.getByText("VULA QS PRO")).toBeVisible();
-  await page.getByRole("tab", { name: /Takeoff$/ }).first().click();
-  await expect(page.getByText("VULA TAKEOFF")).toBeVisible();
-  await page.getByRole("tab", { name: /AI Draft$/ }).first().click();
-  await expect(page.getByText("Vula Draft")).toBeVisible();
-});

@@ -11,12 +11,12 @@
  *   🐟 Products — toggle stock on/off, edit price, mark weekly special
  */
 
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
-import { SectionTabs, toast, confirmDialog, Skeleton, ErrorCard } from './ui/index.jsx'
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
+import { SectionTabs, confirmDialog } from './ui/index.jsx'
 import { lazyScreen, ScreenSuspense } from '../lib/lazyScreen.jsx'
 import { toQty } from './stock/useStock'
 import { useSectionTabs } from '../hooks/useSectionTabs'
-import { MERCHANT_GROUPS, iconFor, sectionOf } from '../navConfig.jsx'
+import { iconFor, sectionOf } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
@@ -33,9 +33,7 @@ const VulaFinanceInsights = lazyScreen(() => import('./VulaFinanceInsights'))
 const FinancesV2 = lazyScreen(() => import('./finances/FinancesV2'))
 import { useDiscounts, valueLabel } from './discounts/useDiscounts'
 const DiscountsV2 = lazyScreen(() => import('./discounts/DiscountsV2'))
-import { useSuppliers, usePurchaseOrders } from './suppliers/useSuppliers'
 const SuppliersV2 = lazyScreen(() => import('./suppliers/SuppliersV2'))
-import { DEL_PAID, printRunSheet, useDeliveryList } from './delivery/useDelivery'
 import { escapeHtml as esc } from '../lib/html'
 const DeliveryV2 = lazyScreen(() => import('./delivery/DeliveryV2'))
 const VulaBankRec = lazyScreen(() => import('./VulaBankRec'))
@@ -64,14 +62,9 @@ const VulaTeam = lazyScreen(() => import('./VulaTeam'))
 const VulaProjectWorkspace = lazyScreen(() => import('./VulaProjectWorkspace'))
 const VulaFieldOps = lazyScreen(() => import('./VulaFieldOps'))
 const VulaReports = lazyScreen(() => import('./VulaReports'))
-const VulaOrderWorkflow = lazyScreen(() => import('./VulaOrderWorkflow'))
+
 const VulaClientOnboarding = lazyScreen(() => import('./VulaClientOnboarding'))
-const VulaCSMetrics = lazyScreen(() => import('./VulaCSMetrics'))
-const VulaJobCosting = lazyScreen(() => import('./VulaJobCosting'))
-const VulaCrossCheck = lazyScreen(() => import('./VulaCrossCheck'))
-import GlassCard from './GlassCard'
-const VulaRepToday = lazyScreen(() => import('./VulaRepToday'))
-const BrandKitSettings = lazyScreen(() => import('./VulaSettings'), 'BrandKitSettings')
+
 const VulaQS = lazyScreen(() => import('./VulaQS'))
 const VulaQSPro = lazyScreen(() => import('./VulaQSPro'))
 const VulaTakeoff = lazyScreen(() => import('./VulaTakeoff'))
@@ -92,7 +85,6 @@ import { VULA_API } from '../lib/authFetch'
 import { NEXT_STATUSES, ORDER_DELETABLE, ORDER_FILTERS, useOrders } from './orders/useOrders'
 const OrdersV2 = lazyScreen(() => import('./orders/OrdersV2'))
 const ProductsV2 = lazyScreen(() => import('./products/ProductsV2'))
-
 
 const STATUS_LABELS = {
   pending_payment: { label: 'Awaiting payment', color: 'var(--warn)', bg: 'rgba(245,158,11,0.12)' },
@@ -130,7 +122,7 @@ function subtabsFor(navGroups, sectionId) {
 // confirmed the only two real callers, both always pass these. (The old uncontrolled/modal mode,
 // with its own hand-rolled tab strip and gating, was dead code superseded by that shell takeover
 // — deleted 2026-07-21 rather than kept as an unused second nav path to drift out of sync again.)
-export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange, navRequest, v2 = false }) {
+export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange, navRequest }) {
   // Who is connecting WhatsApp/Yoco/email — recorded as connected_by (was always blank).
   const adminEmail = useAuthStore(st => st.user?.email) || ""
   const tab = activeTab
@@ -139,8 +131,12 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
   // managers (full) see everything including Team/Settings. Module-level (business-type) gating
   // now lives once, in navConfig.jsx, driving the sidebar itself — this is just the access-list
   // safety net for a tab a signed-in staff member shouldn't be on.
-  // today / activity (the redesign's own pages) are filtered on the server, like overview
-  const canSee = (id) => full || id === 'overview' || (v2 && (id === 'today' || id === 'activity')) || (access || []).includes(id)
+  // today / activity (the redesign's own pages) are filtered on the server, like overview.
+  // A section is allowed when any of its sub-tabs is (2026-11-05): a sales rep's access lists
+  // rep-contacts, rep-callsheet… never "my-work" itself, so the check bounced a rep who opened My
+  // Work back to Home whenever their access arrived from the server after the tap.
+  const allowed = (id) => (access || []).includes(id) || (subtabsFor(navGroups, id) || []).some((t) => (access || []).includes(t.id))
+  const canSee = (id) => full || id === 'overview' || (id === 'today' || id === 'activity') || allowed(id)
   // If the current tab isn't visible to this member, fall back to a safe default.
   useEffect(() => { if (!canSee(tab)) setTab('overview') }, [access, full])  // eslint-disable-line
   const [products, setProducts] = useState([])
@@ -185,36 +181,35 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
               owner overview — 'overview' itself stays always-visible (merchantVisible's own
               rule), only WHAT renders on it differs for this one role. */}
           {tab === 'overview'  && (teamRole === 'sales_rep' && !full
-            ? <VulaRepHome tenantId={tenantId} v2={v2} repPhone={teamPhone} onNavigate={navigateTo} />
-            : v2 ? <VulaHomeV2 tenantId={tenantId} onNavigate={navigateTo} />
-            : <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />)}
-          {v2 && tab === 'today' && <VulaToday tenantId={tenantId} onNavigate={navigateTo} />}
-          {v2 && tab === 'activity' && <VulaActivity tenantId={tenantId} onNavigate={navigateTo} />}
-          {tab === 'my-work' && <MyWorkSection tenantId={tenantId} v2={v2} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
+            ? <VulaRepHome tenantId={tenantId} repPhone={teamPhone} onNavigate={navigateTo} />
+            : <VulaHomeV2 tenantId={tenantId} onNavigate={navigateTo} />)}
+          {tab === 'today' && <VulaToday tenantId={tenantId} onNavigate={navigateTo} />}
+          {tab === 'activity' && <VulaActivity tenantId={tenantId} onNavigate={navigateTo} />}
+          {tab === 'my-work' && <MyWorkSection tenantId={tenantId} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} v2={v2} />}
-          {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'assistant-hub')}
+          {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}
+          {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'sell' && <SellSection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'sell')}
+          {tab === 'sell' && <SellSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'sell')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
-          {tab === 'money' && <MoneySection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'money')}
+          {tab === 'money' && <MoneySection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'money')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             invoiceSupplierFilter={invoiceSupplierFilter} onClearSupplierFilter={() => setInvoiceSupplierFilter(null)} />}
-          {tab === 'people' && <PeopleSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'people')}
+          {tab === 'people' && <PeopleSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'people')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'marketing-hub' && <MarketingSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'marketing-hub')}
+          {tab === 'marketing-hub' && <MarketingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'marketing-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)}
             onSendAsBroadcast={(text) => { setBroadcastDraft(text); navigateTo('marketing-hub', 'broadcast') }} />}
-          {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: 'var(--muted)' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} v2={v2} /></Suspense>}
-          {tab === 'operate' && <OperateSection tenantId={tenantId} v2={v2} products={products} subtabs={subtabsFor(navGroups, 'operate')}
+          {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: 'var(--muted)' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
+          {tab === 'operate' && <OperateSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'operate')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
-          {tab === 'estimating' && <EstimatingSection tenantId={tenantId} v2={v2} subtabs={subtabsFor(navGroups, 'estimating')}
+          {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
-          {tab === 'team'      && <VulaTeam          tenantId={tenantId} v2={v2} />}
-          {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} v2={v2} />}
+          {tab === 'team'      && <VulaTeam          tenantId={tenantId} />}
+          {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />}
           </ScreenSuspense>
         </div>
     </>
@@ -231,60 +226,60 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
 // `subtabs` is the already access/module-filtered list from navConfig (via subtabsFor above) —
 // these components never re-derive gating themselves.
 
-function AssistantSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav }) {
+function AssistantSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'assistant' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'assistant' && <VulaAssistant tenantId={tenantId} v2={v2} />}
-      {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} v2={v2} />}
-      {active === 'automations' && <VulaAutomations tenantId={tenantId} v2={v2} />}
-      {active === 'flows' && <VulaFlowBuilder tenantId={tenantId} v2={v2} />}
+      {active === 'assistant' && <VulaAssistant tenantId={tenantId} />}
+      {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} />}
+      {active === 'automations' && <VulaAutomations tenantId={tenantId} />}
+      {active === 'flows' && <VulaFlowBuilder tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )
 }
 
-function SellSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
+function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'orders' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'orders' && <OrdersTab tenantId={tenantId} v2={v2} />}
-      {active === 'products' && <ProductsTab tenantId={tenantId} v2={v2} />}
-      {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} v2={v2} />}
-      {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} v2={v2} />}
-      {active === 'delivery' && (v2 ? <DeliveryV2 tenantId={tenantId} /> : <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>)}
-      {active === 'bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
-      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} v2={v2} />}
-      {active === 'costing' && <VulaCosting tenantId={tenantId} v2={v2} />}
-      {active === 'suppliers' && (v2 ? <SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} /> : <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
-      {active === 'import' && <VulaImport tenantId={tenantId} v2={v2} />}
+      {active === 'orders' && <OrdersTab tenantId={tenantId} />}
+      {active === 'products' && <ProductsTab tenantId={tenantId} />}
+      {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
+      {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
+      {active === 'delivery' && (<DeliveryV2 tenantId={tenantId} />)}
+      {active === 'bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
+      {active === 'costing' && <VulaCosting tenantId={tenantId} />}
+      {active === 'suppliers' && (<SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
+      {active === 'import' && <VulaImport tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )
 }
 
-function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsumePendingNav, invoiceSupplierFilter, onClearSupplierFilter }) {
+function MoneySection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, invoiceSupplierFilter, onClearSupplierFilter }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'invoices' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'invoices' && <VulaInvoices tenantId={tenantId} v2={v2} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={onClearSupplierFilter} />}
-      {active === 'expenses' && <VulaExpenses tenantId={tenantId} v2={v2} />}
-      {active === 'bank' && <VulaBankRec tenantId={tenantId} v2={v2} />}
-      {active === 'books' && <VulaAccounting tenantId={tenantId} v2={v2} />}
-      {active === 'payments' && <VulaPayments tenantId={tenantId} v2={v2} />}
-      {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} v2={v2} />}
-      {active === 'budget' && <VulaBudget tenantId={tenantId} v2={v2} />}
-      {active === 'scanner' && <VulaSmartScanner tenantId={tenantId} products={products} v2={v2} />}
-      {active === 'finances' && <FinancesSubsection tenantId={tenantId} v2={v2} />}
+      {active === 'invoices' && <VulaInvoices tenantId={tenantId} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={onClearSupplierFilter} />}
+      {active === 'expenses' && <VulaExpenses tenantId={tenantId} />}
+      {active === 'bank' && <VulaBankRec tenantId={tenantId} />}
+      {active === 'books' && <VulaAccounting tenantId={tenantId} />}
+      {active === 'payments' && <VulaPayments tenantId={tenantId} />}
+      {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} />}
+      {active === 'budget' && <VulaBudget tenantId={tenantId} />}
+      {active === 'scanner' && <VulaSmartScanner tenantId={tenantId} products={products} />}
+      {active === 'finances' && <FinancesSubsection tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )
@@ -294,9 +289,9 @@ function MoneySection({ tenantId, v2, products, subtabs, pendingSubtab, onConsum
 // toggle underneath — previously two competing top-level tabs each mounted VulaFinanceInsights
 // a second time alongside a different sibling (VulaReports vs VulaFinances).
 const FINANCES_INNER_TABS = [{ id: 'insights', label: 'Insights' }, { id: 'ledger', label: 'Ledger' }]
-function FinancesSubsection({ tenantId, v2 = false }) {
+function FinancesSubsection({ tenantId }) {
   const { tabs, active, setActive } = useSectionTabs(FINANCES_INNER_TABS, { defaultTabId: 'insights' })
-  if (v2) return <FinancesV2 tenantId={tenantId} />   // the redesign: same data, finances/FinancesV2.jsx
+  return <FinancesV2 tenantId={tenantId} />   // the redesign: same data, finances/FinancesV2.jsx
   return (
     <div>
       <VulaFinanceInsights tenantId={tenantId} />
@@ -309,16 +304,16 @@ function FinancesSubsection({ tenantId, v2 = false }) {
   )
 }
 
-function PeopleSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav }) {
+function PeopleSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'customers' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'customers' && <VulaCustomers tenantId={tenantId} v2={v2} />}
-      {active === 'contacts' && <VulaContacts tenantId={tenantId} v2={v2} />}
-      {active === 'followups' && <VulaFollowups tenantId={tenantId} v2={v2} />}
+      {active === 'customers' && <VulaCustomers tenantId={tenantId} />}
+      {active === 'contacts' && <VulaContacts tenantId={tenantId} />}
+      {active === 'followups' && <VulaFollowups tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )
@@ -326,434 +321,77 @@ function PeopleSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingN
 
 // Broadcast tab bug fix: this used to render VulaClientOnboarding then VulaBroadcast glued
 // together under one "📢 Broadcast" label — two unrelated features, now two real sub-tabs.
-function MarketingSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav, draftBody, onConsumeDraft, onSendAsBroadcast }) {
+function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav, draftBody, onConsumeDraft, onSendAsBroadcast }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'broadcast' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} v2={v2} />}
-      {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} v2={v2} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
-      {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} v2={v2} />}
-      {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} v2={v2} />}
-      {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} v2={v2} />}
-      {active === 'marketing' && <VulaMarketing tenantId={tenantId} v2={v2} onSendAsBroadcast={onSendAsBroadcast} />}
+      {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} />}
+      {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
+      {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} />}
+      {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} />}
+      {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} />}
+      {active === 'marketing' && <VulaMarketing tenantId={tenantId} onSendAsBroadcast={onSendAsBroadcast} />}
       </ScreenSuspense>
     </div>
   )
 }
 
-function OperateSection({ tenantId, v2, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
+function OperateSection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'projects' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'projects' && <VulaProjects tenantId={tenantId} v2={v2} />}
-      {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} v2={v2} />}
-      {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} v2={v2} />}
-      {active === 'labour' && <VulaLabour tenantId={tenantId} v2={v2} />}
-      {active === 'qsrates' && <VulaQSRates tenantId={tenantId} v2={v2} />}
-      {active === 'documents' && <VulaDocuments tenantId={tenantId} v2={v2} />}
+      {active === 'projects' && <VulaProjects tenantId={tenantId} />}
+      {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
+      {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} />}
+      {active === 'labour' && <VulaLabour tenantId={tenantId} />}
+      {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
+      {active === 'documents' && <VulaDocuments tenantId={tenantId} />}
       {/* the redesign files Stock and Suppliers here (navConfig.withV2Moves) */}
-      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} v2={v2} />}
-      {active === 'suppliers' && (v2 ? <SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} /> : <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
+      {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
+      {active === 'suppliers' && (<SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
       </ScreenSuspense>
     </div>
   )
 }
 
-function MyWorkSection({ tenantId, v2, repPhone, subtabs, pendingSubtab, onConsumePendingNav }) {
+function MyWorkSection({ tenantId, repPhone, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'rep-contacts' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} v2={v2} repPhone={repPhone} />}
-      {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} v2={v2} repPhone={repPhone} />}
-      {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} v2={v2} />}
-      {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} v2={v2} />}
-      {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} v2={v2} repPhone={repPhone} />}
-      {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} v2={v2} />}
-      {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} v2={v2} repPhone={repPhone} />}
-      {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} v2={v2} />}
+      {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
+      {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} />}
+      {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )
 }
 
-function EstimatingSection({ tenantId, v2, subtabs, pendingSubtab, onConsumePendingNav }) {
+function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
   const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'qs' })
   useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense>
-      {active === 'qs' && <VulaQS tenantId={tenantId} v2={v2} />}
-      {active === 'qspro' && <VulaQSPro tenantId={tenantId} v2={v2} />}
-      {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} v2={v2} />}
-      {active === 'draft' && <VulaDraft tenantId={tenantId} v2={v2} />}
+      {active === 'qs' && <VulaQS tenantId={tenantId} />}
+      {active === 'qspro' && <VulaQSPro tenantId={tenantId} />}
+      {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} />}
+      {active === 'draft' && <VulaDraft tenantId={tenantId} />}
       </ScreenSuspense>
-    </div>
-  )
-}
-
-// ── Overview ─────────────────────────────────────────────────────────────────
-
-// Which sidebar section a tab lives in (subtabs are nested inside sections since the IA overhaul).
-function sectionFor(tabId) {
-  for (const g of MERCHANT_GROUPS) {
-    for (const it of g.items) {
-      if (it.id === tabId) return { section: tabId }
-      if (it.subtabs?.some(st => st.id === tabId)) return { section: it.id, subtab: tabId }
-    }
-  }
-  return { section: tabId }
-}
-
-// The go-live checklist master already had (GET /admin/setup, same computation) — shown to the
-// business itself until everything's done, each open step linking to the tab that fixes it.
-function GoLiveChecklist({ tenantId, onNavigate }) {
-  const [setup, setSetup] = useState(null)
-  useEffect(() => {
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/setup`)
-      .then(r => (r.ok ? r.json() : null)).then(setSetup).catch(() => {})
-  }, [tenantId])
-  if (!setup || setup.done >= setup.total) return null
-  const open = setup.steps.filter(st => !st.done)
-  return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
-      <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 14 }}>
-        🚀 Getting you live — {setup.done}/{setup.total} done ({setup.progress_pct}%)
-      </p>
-      <div style={{ height: 6, background: 'var(--surface-alt)', borderRadius: 3, marginBottom: 10 }}>
-        <div style={{ width: `${setup.progress_pct}%`, height: 6, background: 'var(--accent)', borderRadius: 3 }} />
-      </div>
-      {open.map(st => (
-        <button key={st.id} onClick={() => { const n = sectionFor(st.tab || 'settings'); onNavigate && onNavigate(n.section, n.subtab) }}
-                style={{ display: 'flex', justifyContent: 'space-between', width: '100%', border: 'none',
-                         background: 'none', padding: '6px 0', cursor: 'pointer', fontSize: 13, textAlign: 'left' }}>
-          <span>☐ {st.label} <span style={{ color: 'var(--muted)' }}>— {st.detail}</span></span>
-          <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Do this →</span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-// Home cards (2026-09-29, Ian: tenants had no way to "customise what they want to view").
-// Each business picks which cards it sees and in what order — GET/PUT /v1/tenants/{t}/home,
-// default by business type (a project business gets job costing, a shop gets sales).
-const HOME_CARD_LABELS = {
-  today: "Today's appointments & meeting notes",
-  checklist: 'Go-live checklist',
-  attention: 'Needs attention',
-  sales: 'Sales today & totals',
-  trend: 'Revenue / money in — 7 days',
-  shop: 'WhatsApp shop — funnel & searches',
-  jobcosting: 'Job costing (projects)',
-  crosscheck: 'Cross-check & VAT',
-  customers: 'Customer service',
-  assistant: 'Your assistant & knowledge',
-}
-
-function HomeCustomiser({ layout, onSave, onCancel }) {
-  const [cards, setCards] = useState(layout.cards)
-  const hidden = (layout.available || []).filter(c => !cards.includes(c))
-  const move = (i, d) => {
-    const next = [...cards]; const j = i + d
-    if (j < 0 || j >= next.length) return
-    ;[next[i], next[j]] = [next[j], next[i]]; setCards(next)
-  }
-  const btn = { border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 6, padding: '3px 9px', cursor: 'pointer', fontSize: 12 }
-  return (
-    <div style={{ ...ovS.chartCard, marginTop: 0, marginBottom: 16 }}>
-      <p style={ovS.sectionLabel}>Customise Home</p>
-      <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 10px' }}>Choose the cards your business sees, in your order. Everyone on your team sees the same Home.</p>
-      {cards.map((c, i) => (
-        <div key={c} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-soft)', fontSize: 13 }}>
-          <span style={{ flex: 1 }}>{HOME_CARD_LABELS[c] || c}</span>
-          <button style={btn} onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move up">↑</button>
-          <button style={btn} onClick={() => move(i, 1)} disabled={i === cards.length - 1} aria-label="Move down">↓</button>
-          <button style={btn} onClick={() => setCards(cards.filter(x => x !== c))}>Hide</button>
-        </div>))}
-      {hidden.length > 0 && (
-        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Add:</span>
-          {hidden.map(c => <button key={c} style={btn} onClick={() => setCards([...cards, c])}>+ {HOME_CARD_LABELS[c] || c}</button>)}
-        </div>)}
-      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-        <button onClick={() => onSave(cards)} style={{ ...btn, background: 'var(--accent)', color: '#fff', border: 'none', padding: '7px 14px' }}>Save</button>
-        <button onClick={() => onSave([])} style={{ ...btn, padding: '7px 14px' }}>Reset to default</button>
-        <button onClick={onCancel} style={{ ...btn, padding: '7px 14px' }}>Cancel</button>
-      </div>
-    </div>
-  )
-}
-
-// "Make it yours" (2026-09-29): a business whose brand kit is still Vula's default (no logo,
-// Vula green) gets its brand set up from Home on day one — upload a logo or paste a website,
-// Vula suggests the colours, preview, save. Hidden once a brand is set or when dismissed.
-function MakeItYours({ tenantId }) {
-  const [show, setShow] = useState(false)
-  const key = `vula-brand-dismissed-${tenantId}`
-  useEffect(() => {
-    let hidden = false
-    try { hidden = localStorage.getItem(key) === '1' } catch { /* private mode */ }
-    if (hidden) return
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/brand`).then(r => r.ok ? r.json() : null)
-      .then(b => { if (b && !b.logo_url && (!b.accent_color || b.accent_color.toUpperCase() === '#2C5545')) setShow(true) })
-      .catch(() => {})
-  }, [tenantId])  // eslint-disable-line
-  if (!show) return null
-  const dismiss = () => { try { localStorage.setItem(key, '1') } catch { /* private mode */ } setShow(false) }
-  return (
-    <div className="vula-panel" style={{ background: 'var(--surface)', border: '1px solid var(--accent)', borderRadius: 'var(--r-card)', padding: 'var(--s4)', marginBottom: 'var(--s4)' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-        <p style={{ ...ovS.sectionLabel, margin: 0, color: 'var(--accent)' }}>✨ Make it yours</p>
-        <button onClick={dismiss} style={{ marginLeft: 'auto', border: 'none', background: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12.5 }}>Not now</button>
-      </div>
-      <p style={{ fontSize: 13, color: 'var(--muted)', margin: '0 0 12px' }}>Upload your logo or paste your website — Vula picks your colours, and your whole dashboard, invoices, emails and phone app take them on.</p>
-      <BrandKitSettings tenantId={tenantId} />
-    </div>
-  )
-}
-
-function OverviewTab({ tenantId, onNavigate }) {
-  const [stats, setStats] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [layout, setLayout] = useState(null)
-  const [editing, setEditing] = useState(false)
-  const [saveErr, setSaveErr] = useState('')
-
-  useEffect(() => {
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/stats`)
-      .then(r => r.json())
-      .then(setStats)
-      .catch(() => {})
-      .finally(() => setLoading(false))
-    fetch(`${VULA_API}/v1/tenants/${tenantId}/home`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => setLayout(d && Array.isArray(d.cards) ? d : null))
-      .catch(() => setLayout(null))
-  }, [tenantId])
-
-  const saveLayout = async (cards) => {
-    setSaveErr('')
-    try {
-      const r = await fetch(`${VULA_API}/v1/tenants/${tenantId}/home`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cards }) })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) { setSaveErr(d.detail || 'Could not save.'); return }
-      setLayout(d); setEditing(false)
-    } catch { setSaveErr('Could not save.') }
-  }
-
-  if (loading) return (
-    <div aria-busy="true" style={{ display: 'grid', gap: 12 }}>
-      {[0, 1, 2].map(i => <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', padding: 16 }}>
-        <Skeleton height={14} width="30%" /><Skeleton height={42} style={{ marginTop: 12 }} /></div>)}
-    </div>)
-
-  const s = stats || {}
-  const fmt = cents => `R${(Number(cents || 0) / 100).toLocaleString('en-ZA', { maximumFractionDigits: 0 })}`
-  const orderSeries = s.daily_revenue || []
-  const weekOrders = orderSeries.reduce((sum, d) => sum + (d.orders || 0), 0)
-  // A shop that sells face to face (Off the Hook: card machine + EFT, hardly any online orders)
-  // sees its takings from the bank instead of R0 from online orders.
-  const bankLed = (s.total_orders || 0) < 5 && (s.bank_in_30d_cents || 0) > 0
-  const series = bankLed ? (s.daily_bank_in || []) : orderSeries
-  const aov = s.total_orders ? s.total_revenue_cents / s.total_orders : 0
-  // { section, subtab } pairs now that Orders/Invoices/Products live nested inside Sell/Money —
-  // was a flat `tab` id before the IA overhaul (2026-07-22).
-  const alerts = [
-    { show: s.open_escalations > 0,     label: 'Customer waiting on you', value: s.open_escalations,   hint: (s.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), section: 'inbox', color: 'var(--danger)' },
-    { show: s.to_dispatch > 0,          label: 'To dispatch',      value: s.to_dispatch,                hint: 'orders ready to send', section: 'sell',  subtab: 'orders',   color: 'var(--info)' },
-    { show: s.pending_payment > 0,      label: 'Awaiting payment', value: s.pending_payment,            hint: 'unpaid orders',        section: 'sell',  subtab: 'orders',   color: 'var(--warn)' },
-    { show: s.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(s.invoice_overdue_cents), hint: 'chase these',          section: 'money', subtab: 'invoices', color: 'var(--danger)' },
-    { show: s.low_stock_count > 0,      label: 'Low stock',        value: s.low_stock_count,            hint: 'items running out',    section: 'sell',  subtab: 'products', color: 'var(--danger)' },
-  ].filter(a => a.show)
-
-  const cards = {
-    today: () => <VulaRepToday tenantId={tenantId} />,
-    checklist: () => <GoLiveChecklist tenantId={tenantId} onNavigate={onNavigate} />,
-    sales: () => !stats ? <ErrorCard what="sales figures" /> : bankLed ? (
-      <div style={styles.statGrid}>
-        <StatCard label="Money in — 7 days" value={fmt(s.bank_in_7d_cents)} sub="card + EFT, from your bank" accent="var(--accent)" />
-        <StatCard label="Money in — 30 days" value={fmt(s.bank_in_30d_cents)} sub={s.bank_in_last_date ? `bank lines up to ${s.bank_in_last_date}` : 'from your bank'} />
-        <StatCard label="Online orders" value={s.total_orders || 0} sub={`${fmt(s.total_revenue_cents)} through WhatsApp/web`} accent="var(--info)" />
-        <StatCard label="Invoices owed" value={fmt(s.invoice_outstanding_cents)} sub={s.invoice_overdue_cents ? `${fmt(s.invoice_overdue_cents)} overdue` : 'none overdue'} accent={s.invoice_overdue_cents ? 'var(--danger)' : 'var(--muted)'} />
-      </div>) : (
-      <div style={styles.statGrid}>
-        <StatCard label="Today's revenue" value={fmt(s.today_revenue_cents)} sub={`${s.today_orders} orders today`} accent="var(--accent)" />
-        <StatCard label="Total revenue"   value={fmt(s.total_revenue_cents)} sub={`${s.total_orders} orders`} />
-        <StatCard label="Avg order value" value={fmt(aov)}                   sub="per paid order" accent="var(--info)" />
-        <StatCard label="This week"       value={weekOrders}                 sub="orders (7 days)" accent="var(--accent-2)" />
-      </div>),
-    trend: () => <TrendChart series={series} fmt={fmt} title={bankLed ? 'Money in — last 7 days (bank)' : 'Revenue — last 7 days'} />,
-    shop: () => <ShopFunnel tenantId={tenantId} fmt={fmt} />,
-    customers: () => <VulaCSMetrics tenantId={tenantId} />,
-    jobcosting: () => <VulaJobCosting tenantId={tenantId} />,
-    crosscheck: () => <VulaCrossCheck tenantId={tenantId} />,
-    attention: () => alerts.length > 0 ? (
-      <div style={{ marginTop: 18 }}>
-        <p style={ovS.sectionLabel}>Needs attention</p>
-        <div style={ovS.alertRow}>
-          {alerts.map(a => (
-            <button key={a.label} onClick={() => onNavigate && onNavigate(a.section, a.subtab)} className="vula-tile" style={ovS.alertCard}>
-              <span style={{ ...ovS.alertValue, color: a.color }}>{a.value}</span>
-              <span style={ovS.alertLabel}>{a.label}</span>
-              <span style={ovS.alertHint}>{a.hint} →</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    ) : (
-      <p style={{ ...ovS.sectionLabel, marginTop: 18 }}>✓ All caught up — nothing needs attention right now.</p>
-    ),
-    // Glass-box AI + knowledge — what the assistant did and knows (UI overhaul P3)
-    assistant: () => ((s.agent_recent || []).length === 0
-        && !(s.knowledge && (s.knowledge.learned_answers > 0 || s.knowledge.taught > 0))) ? null : (
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14, marginTop: 18 }}>
-        {(s.agent_recent || []).length > 0 && (
-          <div className="vula-panel" style={ovS.chartCard}>
-            <p style={ovS.sectionLabel}>🧠 Your assistant, recently <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ float: 'right', border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>Watch it work →</button></p>
-            {(s.agent_recent || []).map((a, i) => (
-              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--border-soft)', alignItems: 'center' }}>
-                <span style={{ fontFamily: 'monospace', fontSize: 11.5, color: 'var(--accent)' }}>{a.tool}</span>
-                <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 11 }}>{String(a.at || '').slice(11, 16)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {s.knowledge && (s.knowledge.learned_answers > 0 || s.knowledge.taught > 0) && (
-          <div className="vula-panel" style={ovS.chartCard}>
-            <p style={ovS.sectionLabel}>📚 Knowledge pulling through</p>
-            <div style={{ display: 'flex', gap: 18, fontSize: 13 }}>
-              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: 'var(--muted)' }}>learned answers</div></div>
-              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.taught}</b><div style={{ fontSize: 11.5, color: 'var(--muted)' }}>taught by you</div></div>
-            </div>
-            <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '10px 0 0' }}>Everything the assistant knows is visible and editable in <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11.5, padding: 0, fontWeight: 600 }}>Assistant › Activity</button>.</p>
-          </div>
-        )}
-      </div>
-    ),
-  }
-  // No saved layout reachable (older backend, network) → the Home as it always was.
-  const order = (layout?.cards || ['checklist', 'sales', 'trend', 'customers', 'attention', 'assistant'])
-    .filter(c => cards[c])
-
-  return (
-    <div className="vula-home">
-      <div className="vula-home-bg" aria-hidden="true" />
-      {layout && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-          {!editing && <button onClick={() => setEditing(true)} style={{ border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12.5, cursor: 'pointer', fontWeight: 600 }}>⚙ Customise Home</button>}
-        </div>)}
-      <MakeItYours tenantId={tenantId} />
-      {editing && layout && <HomeCustomiser layout={layout} onSave={saveLayout} onCancel={() => setEditing(false)} />}
-      {saveErr && <p style={styles.error}>{saveErr}</p>}
-      {order.map(c => <GlassCard key={c} dark={c === 'customers'}>{cards[c]()}</GlassCard>)}
-    </div>
-  )
-}
-
-// The WhatsApp shop, last 7 days (2026-10-13): how many opened it, filled a basket, sent it to
-// WhatsApp, ordered and paid — and what customers searched for, including what you don't sell.
-function ShopFunnel({ tenantId, fmt }) {
-  const [d, setD] = useState(null)
-  const [failed, setFailed] = useState(false)
-  useEffect(() => {
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/shop-funnel?days=7`)
-      .then(r => r.ok ? r.json() : Promise.reject()).then(setD).catch(() => setFailed(true))
-  }, [tenantId])
-  if (failed) return <ErrorCard what="the shop funnel" />
-  if (!d) return <div style={ovS.chartCard}><p style={ovS.sectionLabel}>🛍️ WhatsApp shop — last 7 days</p><div className="vula-skeleton" style={{ height: 90 }} /></div>
-  const top = Math.max(1, ...d.steps.map(st => st.count))
-  return (
-    <div style={ovS.chartCard}>
-      <p style={ovS.sectionLabel}>🛍️ WhatsApp shop — last 7 days{d.paid_cents ? ` · ${fmt(d.paid_cents)} paid` : ''}</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-        {d.steps.map((st, i) => {
-          const prev = i ? d.steps[i - 1].count : 0
-          return (
-            <div key={st.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(110px, 150px) 1fr auto', gap: 10, alignItems: 'center', fontSize: 12.5 }}>
-              <span style={{ color: 'var(--text)' }}>{st.label}</span>
-              <div style={{ background: 'var(--surface-alt)', borderRadius: 6, height: 14, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.max(st.count ? 3 : 0, Math.round(st.count / top * 100))}%`, height: '100%', background: 'linear-gradient(90deg, var(--accent), var(--accent-2))', borderRadius: 6 }} />
-              </div>
-              <span style={{ fontFamily: 'monospace', minWidth: 64, textAlign: 'right' }}>
-                {st.count}{i && prev ? <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {Math.round(st.count / prev * 100)}%</span> : null}
-              </span>
-            </div>)
-        })}
-      </div>
-      {!d.tracked && <p style={{ ...ovS.chartFoot, textAlign: 'left' }}>Shop visits and searches start counting once the latest update is switched on.</p>}
-      {(d.top_searches.length > 0 || d.not_found.length > 0) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginTop: 14 }}>
-          {d.top_searches.length > 0 && (
-            <div>
-              <p style={ovS.sectionLabel}>🔎 Most searched</p>
-              {d.top_searches.map(t => <div key={t.term} style={{ fontSize: 12.5, padding: '2px 0' }}>{t.term} <span style={{ color: 'var(--muted)' }}>×{t.count}</span></div>)}
-            </div>)}
-          {d.not_found.length > 0 && (
-            <div>
-              <p style={ovS.sectionLabel}>🤷 Asked for, not found</p>
-              {d.not_found.map(t => <div key={t.term} style={{ fontSize: 12.5, padding: '2px 0' }}>{t.term} <span style={{ color: 'var(--muted)' }}>×{t.count}</span></div>)}
-              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0' }}>Ideas for what to stock, or a product name to add.</p>
-            </div>)}
-        </div>)}
-    </div>
-  )
-}
-
-function TrendChart({ series, fmt, title = 'Revenue — last 7 days' }) {
-  if (!series.length) return null
-  const max = Math.max(1, ...series.map(d => d.revenue_cents))
-  const dayName = iso => new Date(iso).toLocaleDateString('en-ZA', { weekday: 'short' })
-  return (
-    <div style={ovS.chartCard}>
-      <p style={ovS.sectionLabel}>{title}</p>
-      <div style={ovS.bars}>
-        {series.map(d => (
-          <div key={d.date} style={ovS.barCol} title={`${d.date}: ${fmt(d.revenue_cents)} · ${d.orders} orders`}>
-            <div style={ovS.barWrap}>
-              <div style={{ ...ovS.bar, height: `${Math.max(2, Math.round((d.revenue_cents / max) * 100))}%` }} />
-            </div>
-            <span style={ovS.barLabel}>{dayName(d.date)}</span>
-          </div>
-        ))}
-      </div>
-      <p style={ovS.chartFoot}>Peak day: {fmt(max)}</p>
-    </div>
-  )
-}
-
-const ovS = {
-  sectionLabel: { fontSize: 12, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px' },
-  chartCard: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 18, marginTop: 16 },
-  bars: { display: 'flex', alignItems: 'flex-end', gap: 10, height: 120 },
-  barCol: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, height: '100%' },
-  barWrap: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' },
-  bar: { width: '100%', background: 'linear-gradient(180deg, var(--accent), var(--accent-2))', borderRadius: '4px 4px 0 0', minHeight: 2 },
-  barLabel: { fontSize: 11, color: 'var(--muted)' },
-  chartFoot: { fontSize: 11, color: 'var(--faint)', margin: '10px 0 0', textAlign: 'right' },
-  alertRow: { display: 'flex', gap: 10, flexWrap: 'wrap' },
-  alertCard: { flex: '1 1 150px', minWidth: 140, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 16px', textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2 },
-  alertValue: { fontSize: 22, fontWeight: 700 },
-  alertLabel: { fontSize: 13, fontWeight: 600, color: 'var(--text)' },
-  alertHint: { fontSize: 11, color: 'var(--muted)' },
-}
-
-function StatCard({ label, value, sub, accent = 'var(--muted)' }) {
-  return (
-    <div className="vula-tile" style={styles.statCard}>
-      <p style={{ ...styles.statValue, color: accent }}>{value}</p>
-      <p style={styles.statLabel}>{label}</p>
-      <p style={styles.statSub}>{sub}</p>
     </div>
   )
 }
@@ -764,8 +402,8 @@ function StatCard({ label, value, sub, accent = 'var(--muted)' }) {
 // DELETE/bulk-delete (pending_payment/cancelled only), so the UI never offers a delete that would
 // just 400. Anything past this needs cancel/refund first, same as before.
 
-function OrdersTab({ tenantId, v2 = false }) {
-  if (v2) return <OrdersV2 tenantId={tenantId} DetailDrawer={OrderDetailDrawer} ManualOrderModal={ManualOrderModal} />
+function OrdersTab({ tenantId }) {
+  return <OrdersV2 tenantId={tenantId} DetailDrawer={OrderDetailDrawer} ManualOrderModal={ManualOrderModal} />
   return <OrdersTabV1 tenantId={tenantId} />
 }
 
@@ -1212,84 +850,9 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
   )
 }
 
-// ── Delivery list ───────────────────────────────────────────────────────────
-
-const SLOT_LABELS = {
-  morning:   '🌅 Morning',
-  afternoon: '☀️ Afternoon',
-  evening:   '🌆 Evening',
-}
-
-function DeliveryTab({ tenantId }) {
-  const { today, date, setDate, data, loading, orders, bySlot, slots } = useDeliveryList(tenantId)
-  const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
-  const printRun = () => printRunSheet({ date, slots, bySlot, slotLabel: slot => SLOT_LABELS[slot] || slot })
-
-  return (
-    <div>
-      <div style={styles.delBar}>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={styles.dateInput} />
-        <button onClick={() => setDate(today)} style={styles.btnGhost}>Today</button>
-        {orders.length > 0 && (
-          <button onClick={printRun} style={{ ...styles.btnAction, marginLeft: 'auto' }}>🖨 Print run sheet</button>
-        )}
-      </div>
-
-      {!loading && data && (
-        <div style={styles.statGrid}>
-          <StatCard label="Deliveries" value={data.total} sub={`${slots.length} slot${slots.length !== 1 ? 's' : ''}`} accent="var(--accent, var(--accent))" />
-          <StatCard label="Paid"   value={data.paid_count}   sub={fmt(data.paid_revenue_cents)}   accent="var(--ok)" />
-          <StatCard label="Unpaid" value={data.unpaid_count} sub={fmt(data.unpaid_revenue_cents)} accent="var(--warn)" />
-          <StatCard label="To collect" value={fmt((data.paid_revenue_cents || 0) + (data.unpaid_revenue_cents || 0))} sub="total value" />
-        </div>
-      )}
-
-      {loading && <p style={styles.loading}>Loading delivery list…</p>}
-      {!loading && orders.length === 0 && <p style={styles.empty}>No deliveries scheduled for {date}.</p>}
-
-      {slots.map(slot => (
-        <div key={slot} style={{ marginBottom: 18 }}>
-          <p style={styles.slotHeader}>
-            {SLOT_LABELS[slot] || slot}<span style={styles.slotCount}> · {bySlot[slot].length}</span>
-          </p>
-          <div style={styles.list}>
-            {bySlot[slot].map(o => {
-              const paid = DEL_PAID.has(o.status)
-              const items = o.commerce_order_items || []
-              return (
-                <div key={o.id} style={styles.orderCard}>
-                  <div style={styles.orderTop}>
-                    <div>
-                      <span style={styles.orderId}>{o.display_id}</span>
-                      <span style={{ ...styles.badge, color: paid ? 'var(--ok)' : 'var(--warn)', background: paid ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)' }}>
-                        {paid ? 'Paid' : 'Unpaid'}
-                      </span>
-                    </div>
-                    <span style={styles.orderAmount}>{fmt(o.total_cents)}</span>
-                  </div>
-                  <div style={styles.orderMeta}>
-                    <span>{o.customer_name}</span><span>·</span><span>{o.customer_phone}</span>
-                  </div>
-                  <p style={styles.delAddress}>📍 {o.delivery_address || 'No address'}</p>
-                  {o.delivery_notes && <p style={styles.detailNotes}>Note: {o.delivery_notes}</p>}
-                  {items.length > 0 && (
-                    <p style={styles.delItems}>
-                      {items.map((i, idx) => `${i.product_name || 'Item'} ×${i.quantity}`).join(' · ')}
-                    </p>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 // ── Products ──────────────────────────────────────────────────────────────────
 
-function ProductsTab({ tenantId, v2 = false }) {
+function ProductsTab({ tenantId }) {
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])   // per-tenant (migration 073); fallback = legacy labels
   const [loading, setLoading] = useState(true)
@@ -1439,204 +1002,12 @@ function ProductsTab({ tenantId, v2 = false }) {
 
   // v2: the redesigned list (products/ProductsV2.jsx) — same state and actions; the full
   // editor (ProductEditPanel) opens in a Sheet there
-  if (v2) {
-    return <ProductsV2 EditPanel={ProductEditPanel} api={{
+  return <ProductsV2 EditPanel={ProductEditPanel} api={{
       tenantId, products, categories, loading, saving, editPrice, setEditPrice, savePrice, patch, deleteProduct,
       catKeys, catLabel, showAdd, setShowAdd, form, setForm, adding, createProduct, showCats, setShowCats,
       newCat, setNewCat, addCategory, exportCsv, fileInputRef, onImportFile, importRows, importing, importResults,
       validateImportRow, commitImport, closeImport: () => { setImportRows(null); setImportResults(null) },
     }} />
-  }
-
-  if (loading) return <p style={styles.loading}>Loading products…</p>
-
-  return (
-    <div>
-      {/* Add product + category manager */}
-      <div style={{ marginBottom: 16 }}>
-        {!showAdd ? (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={() => setShowAdd(true)} style={styles.btnAction}>+ Add product</button>
-            <button onClick={() => setShowCats(s => !s)} style={styles.btnGhost}>🏷 Categories</button>
-            <button onClick={exportCsv} style={styles.btnGhost} disabled={!products.length}>⬇ Export CSV</button>
-            <button onClick={() => fileInputRef.current?.click()} style={styles.btnGhost}>⬆ Import CSV</button>
-            <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={onImportFile} style={{ display: 'none' }} />
-          </div>
-        ) : (
-          <form onSubmit={createProduct} style={styles.addProductForm}>
-            <input placeholder="Product name" value={form.name} required
-                   onChange={e => setForm({ ...form, name: e.target.value })} style={styles.apInput} />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input placeholder="Price (R)" type="number" step="0.01" value={form.price} required
-                     onChange={e => setForm({ ...form, price: e.target.value })} style={styles.apInput} />
-              <select value={form.sold_by} onChange={e => setForm({ ...form, sold_by: e.target.value })} style={styles.apInput}>
-                <option value="pack">per pack / item</option>
-                <option value="kg">per kg</option>
-              </select>
-              <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={styles.apInput}>
-                {catKeys.map(c => <option key={c} value={c}>{catLabel(c)}</option>)}
-              </select>
-            </div>
-            <textarea placeholder="Description (optional)" rows={2} value={form.description}
-                      onChange={e => setForm({ ...form, description: e.target.value })} style={styles.apInput} />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button type="submit" disabled={adding} style={styles.btnAction}>{adding ? 'Adding…' : 'Add product'}</button>
-              <button type="button" onClick={() => setShowAdd(false)} style={styles.btnGhost}>Cancel</button>
-            </div>
-            <p style={{ fontSize: 11, color: 'var(--muted)', margin: 0 }}>
-              You can add a photo after creating, via the 📷 Photos button.
-            </p>
-          </form>
-        )}
-      </div>
-
-      {showCats && (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
-          <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 8px' }}>Your categories</p>
-          {(categories.length ? categories : Object.keys(CATEGORY_LABELS).map(k => ({ key: k, label: CATEGORY_LABELS[k] }))).map(c => (
-            <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, background: 'var(--surface-alt)', borderRadius: 999, padding: '4px 12px', margin: '0 6px 6px 0' }}>
-              {c.label}
-            </span>
-          ))}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input placeholder="New category (e.g. Smoked Fish)" value={newCat} onChange={e => setNewCat(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && addCategory()}
-              style={{ flex: 1, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13}} />
-            <button onClick={addCategory} style={styles.btnAction}>Add</button>
-          </div>
-          {!categories.length && <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0' }}>Adding your first category needs migration 073.</p>}
-        </div>
-      )}
-
-      {importRows && (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
-          <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 8px' }}>
-            Import preview — {importRows.length} row{importRows.length === 1 ? '' : 's'}
-          </p>
-          <div style={{ maxHeight: 260, overflow: 'auto', border: '1px solid var(--border-soft)', borderRadius: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
-              <thead>
-                <tr style={{ background: 'var(--bg)', textAlign: 'left' }}>
-                  <th style={{ padding: '6px 10px' }}>#</th>
-                  <th style={{ padding: '6px 10px' }}>Name</th>
-                  <th style={{ padding: '6px 10px' }}>Price (c)</th>
-                  <th style={{ padding: '6px 10px' }}>Category</th>
-                  <th style={{ padding: '6px 10px' }}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {importRows.map((row, i) => {
-                  const errors = validateImportRow(row)
-                  const isNewCat = row.category && ![...catKeys].includes(row.category)
-                  return (
-                    <tr key={i} style={{ borderTop: '1px solid var(--border-soft)', background: errors.length ? 'rgba(162,59,45,0.06)' : undefined }}>
-                      <td style={{ padding: '6px 10px', color: 'var(--muted)' }}>{i + 1}</td>
-                      <td style={{ padding: '6px 10px' }}>{row.name || <em style={{ color: 'var(--danger)' }}>missing</em>}</td>
-                      <td style={{ padding: '6px 10px' }}>{row.price_cents || <em style={{ color: 'var(--danger)' }}>missing</em>}</td>
-                      <td style={{ padding: '6px 10px' }}>{row.category || 'extras'}{isNewCat && <span style={{ color: 'var(--muted)' }}> (new)</span>}</td>
-                      <td style={{ padding: '6px 10px' }}>
-                        {errors.length ? <span style={{ color: 'var(--danger)' }}>⚠ {errors.join(', ')}</span> : <span style={{ color: 'var(--ok)' }}>OK</span>}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-          {importResults ? (
-            <p style={{ fontSize: 12.5, margin: '10px 0 0' }}>
-              ✅ {importResults.created} created · {importResults.updated} updated
-              {importResults.errors > 0 && <span style={{ color: 'var(--danger)' }}> · {importResults.errors} failed</span>}
-              {importResults.results?.filter(r => r.status === 'error').map((r, i) => (
-                <span key={i} style={{ display: 'block', color: 'var(--danger)', marginTop: 4 }}>Row {r.row + 1} ({r.slug}): {r.error}</span>
-              ))}
-            </p>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button onClick={commitImport} disabled={importing || importRows.every(r => validateImportRow(r).length)} style={styles.btnAction}>
-                {importing ? 'Importing…' : `Import ${importRows.length} product${importRows.length === 1 ? '' : 's'}`}
-              </button>
-              <button onClick={() => { setImportRows(null); setImportResults(null) }} style={styles.btnGhost}>Cancel</button>
-            </div>
-          )}
-          {importResults && (
-            <button onClick={() => { setImportRows(null); setImportResults(null) }} style={{ ...styles.btnGhost, marginTop: 10 }}>Close</button>
-          )}
-        </div>
-      )}
-
-      {Object.entries(grouped).map(([cat, items]) => (
-        <div key={cat} style={{ marginBottom: 24 }}>
-          <h3 style={styles.catHeader}>{catLabel(cat)}</h3>
-          <div style={styles.list}>
-            {items.map(p => (
-              <div key={p.id} style={{ ...styles.productCard, opacity: p.in_stock ? 1 : 0.6 }}>
-                <div style={styles.productTop}>
-                  <div style={{ flex: 1 }}>
-                    <span style={styles.productName}>{p.name}</span>
-                    {p.is_daily_catch && (
-                      <span style={{ ...styles.badge, color: 'var(--warn)', background: 'rgba(245,158,11,0.12)', marginLeft: 6 }}>
-                        ⭐ Catch of the day
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Stock toggle */}
-                  <button
-                    disabled={saving === p.id}
-                    onClick={() => patch(p.id, { in_stock: !p.in_stock })}
-                    style={p.in_stock ? styles.btnStock : styles.btnStockOff}
-                  >
-                    {saving === p.id ? '…' : p.in_stock ? '✓ In stock' : '✗ Out of stock'}
-                  </button>
-                </div>
-
-                <div style={styles.productMeta}>
-                  {/* Inline price edit */}
-                  <div style={styles.priceRow}>
-                    <span style={styles.priceLabel}>R</span>
-                    <input
-                      style={styles.priceInput}
-                      value={editPrice[p.id] !== undefined ? editPrice[p.id] : (p.price_cents / 100).toFixed(2)}
-                      onChange={e => setEditPrice(prev => ({ ...prev, [p.id]: e.target.value }))}
-                      onBlur={() => savePrice(p)}
-                      onKeyDown={e => e.key === 'Enter' && savePrice(p)}
-                    />
-                    <span style={styles.priceUnit}>/{p.sold_by === 'kg' ? 'kg' : 'pack'}</span>
-                  </div>
-
-                  {/* Catch of the day toggle */}
-                  <button
-                    disabled={saving === p.id}
-                    onClick={() => patch(p.id, { is_daily_catch: !p.is_daily_catch })}
-                    style={styles.btnGhost}
-                  >
-                    {p.is_daily_catch ? 'Remove catch' : 'Mark catch of day'}
-                  </button>
-
-                  {/* Expand for the full editor — stock, sale price, weight/pack, supplier,
-                      SEO, photos, delete. Labelled "Edit" (not "Photos") since that undersold
-                      how much lives behind this one button. */}
-                  <button
-                    onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
-                    style={styles.btnGhost}
-                  >
-                    {expandedId === p.id ? '▲ Less' : '✎ Edit'}
-                  </button>
-                </div>
-
-                {/* Expanded: full edit panel (migration 073 depth) */}
-                {expandedId === p.id && (
-                  <ProductEditPanel tenantId={tenantId} product={p} patch={patch} saving={saving}
-                    deleteProduct={deleteProduct} catKeys={catKeys} catLabel={catLabel} />
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
 }
 
 // Small caps section header — groups the edit panel's ~20 fields into named clusters (Basics /
@@ -2200,8 +1571,8 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
 
 // ── Discount codes (migration 091) ────────────────────────────────────────────
 
-function DiscountCodesTab({ tenantId, v2 = false }) {
-  if (v2) return <DiscountsV2 tenantId={tenantId} />
+function DiscountCodesTab({ tenantId }) {
+  return <DiscountsV2 tenantId={tenantId} />
   return <DiscountCodesV1 tenantId={tenantId} />
 }
 
@@ -2306,168 +1677,6 @@ function DiscountCodesV1({ tenantId }) {
                 <button onClick={() => startEdit(c)} style={styles.btnGhost}>Edit</button>
                 <button onClick={() => remove(c)} disabled={saving} style={{ ...styles.btnGhost, color: 'var(--danger)' }}>Delete</button>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Suppliers ───────────────────────────────────────────────────────────────────
-
-function SuppliersTab({ tenantId, onViewInvoices }) {
-  const { suppliers, loading, saving, editing, form, setForm, startEdit, startNew, cancel, save, remove } = useSuppliers(tenantId)
-
-  if (loading) return <p style={styles.loading}>Loading suppliers…</p>
-
-  return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        {!editing ? (
-          <button onClick={startNew} style={styles.btnAction}>+ Add supplier</button>
-        ) : (
-          <form onSubmit={save} style={styles.addProductForm}>
-            <input placeholder="Supplier name" value={form.name} required
-                   onChange={e => setForm({ ...form, name: e.target.value })} style={styles.apInput} />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input placeholder="Payment terms (days)" type="number" value={form.payment_terms_days}
-                     onChange={e => setForm({ ...form, payment_terms_days: e.target.value })} style={styles.apInput} />
-              <input placeholder="Tax / VAT no." value={form.tax_id || ''}
-                     onChange={e => setForm({ ...form, tax_id: e.target.value })} style={styles.apInput} />
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input placeholder="Phone" value={form.contact_phone || ''}
-                     onChange={e => setForm({ ...form, contact_phone: e.target.value })} style={styles.apInput} />
-              <input placeholder="Email" value={form.contact_email || ''}
-                     onChange={e => setForm({ ...form, contact_email: e.target.value })} style={styles.apInput} />
-            </div>
-            <input placeholder="Aliases (comma-separated)" value={form.aliases}
-                   onChange={e => setForm({ ...form, aliases: e.target.value })} style={styles.apInput} />
-            <textarea placeholder="Notes (optional)" rows={2} value={form.notes || ''}
-                      onChange={e => setForm({ ...form, notes: e.target.value })} style={styles.apInput} />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button type="submit" disabled={saving} style={styles.btnAction}>
-                {saving ? 'Saving…' : (editing.id ? 'Save changes' : 'Add supplier')}
-              </button>
-              <button type="button" onClick={cancel} style={styles.btnGhost}>Cancel</button>
-            </div>
-            <p style={{ fontSize: 11, color: 'var(--muted)', margin: 0 }}>
-              Tax number & aliases improve auto-matching when you scan this supplier's bills.
-            </p>
-          </form>
-        )}
-      </div>
-
-      {suppliers.length === 0 ? (
-        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: 'var(--surface)', border: `1px solid ${'var(--border)'}`, borderRadius: 12, padding: 32 }}>
-          <div style={{ fontSize: 32, marginBottom: 10 }}>🚚</div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>Set up your suppliers</div>
-          <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, margin: '0 0 16px' }}>
-            Add suppliers once and Vula auto-fills payment terms, VAT and account details when you
-            scan their bills — and matches incoming invoices automatically.
-          </p>
-          {!editing && <button onClick={startNew} style={{ ...styles.btnAction }}>+ Add your first supplier</button>}
-        </div>
-      ) : (
-        <div style={styles.list}>
-          {suppliers.map(s => (
-            <div key={s.id} style={styles.productCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <div>
-                  <span style={styles.productName}>{s.name}</span>
-                  <span style={{ ...styles.statSub, marginLeft: 8 }}>{s.payment_terms_days ?? 30} day terms</span>
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {onViewInvoices && <button onClick={() => onViewInvoices(s.id)} style={styles.btnGhost}>🧾 Invoices</button>}
-                  <button onClick={() => startEdit(s)} style={styles.btnGhost}>Edit</button>
-                  <button onClick={() => remove(s)} disabled={saving} style={styles.btnDanger}>Delete</button>
-                </div>
-              </div>
-              <div style={{ ...styles.statSub, marginTop: 4 }}>
-                {[
-                  s.tax_id ? `VAT ${s.tax_id}` : null,
-                  s.contact_phone || null,
-                  s.contact_email || null,
-                  (s.aliases && s.aliases.length)
-                    ? `aka ${Array.isArray(s.aliases) ? s.aliases.join(', ') : s.aliases}` : null,
-                ].filter(Boolean).join(' · ') || '—'}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <PurchaseOrders tenantId={tenantId} />
-    </div>
-  )
-}
-
-// ── Purchase orders + auto-reorder (P3.3) ───────────────────────────────────
-
-function PurchaseOrders({ tenantId }) {
-  const { suggestions, pos, loading, busy, channel, setChannel, sendMsg, createFromSuggestion, advance, sendPo, fmt, PO_STATUS } = usePurchaseOrders(tenantId)
-
-  if (loading) return <p style={styles.loading}>Loading purchase orders…</p>
-
-  return (
-    <div style={{ marginTop: 28 }}>
-      <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', margin: '0 0 10px' }}>
-        📋 Purchase orders
-      </p>
-
-      {suggestions.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <p style={{ fontSize: 12.5, color: 'var(--warn)', fontWeight: 600, margin: '0 0 8px' }}>
-            🔔 Low stock — suggested reorders
-          </p>
-          {suggestions.map((g, i) => (
-            <div key={i} style={{ ...styles.productCard, background: 'rgba(180,83,9,0.06)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <span style={styles.productName}>{g.supplier_name}</span>
-                <button onClick={() => createFromSuggestion(g)} disabled={busy === (g.supplier_id || 'unassigned')} style={styles.btnAction}>
-                  {busy === (g.supplier_id || 'unassigned') ? 'Creating…' : '+ Create PO'}
-                </button>
-              </div>
-              <div style={{ ...styles.statSub, marginTop: 4 }}>
-                {g.items.map(it => `${it.name} (${it.stock_quantity} left → order ${it.suggested_qty})`).join(' · ')}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {pos.length === 0 ? (
-        <p style={{ fontSize: 13, color: 'var(--muted)'}}>No purchase orders yet — set a reorder threshold on a product to get suggestions.</p>
-      ) : (
-        <div style={styles.list}>
-          {pos.map(po => (
-            <div key={po.id} style={styles.productCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <div>
-                  <span style={styles.productName}>{po.supplier_name || 'Unassigned'}</span>
-                  <span style={{ ...styles.statSub, marginLeft: 8 }}>{PO_STATUS[po.status] || po.status} · {fmt(po.total_cents)}</span>
-                </div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  {po.status === 'draft' && (
-                    <select value={channel[po.id] || 'email'} onChange={e => setChannel({ ...channel, [po.id]: e.target.value })}
-                            style={{ ...styles.apInput, padding: '4px 6px', fontSize: 12 }}>
-                      <option value="email">Email</option>
-                      <option value="whatsapp">WhatsApp</option>
-                      <option value="both">Both</option>
-                    </select>
-                  )}
-                  {po.status === 'draft' && <button disabled={busy === po.id} onClick={() => sendPo(po)} style={styles.btnAction}>Send</button>}
-                  {po.status === 'draft' && <button disabled={busy === po.id} onClick={() => advance(po, 'sent')} style={styles.btnGhost} title="Mark sent without Vula dispatching it — e.g. you phoned the order in">Mark sent manually</button>}
-                  {po.status === 'sent' && <button disabled={busy === po.id} onClick={() => advance(po, 'received')} style={styles.btnAction}>Mark received</button>}
-                  {(po.status === 'draft' || po.status === 'sent') && <button disabled={busy === po.id} onClick={() => advance(po, 'cancelled')} style={styles.btnDanger}>Cancel</button>}
-                </div>
-              </div>
-              <div style={{ ...styles.statSub, marginTop: 4 }}>
-                {(po.items || []).map(it => `${it.name} ×${it.quantity}`).join(' · ')}
-                {po.sent_channel && ` · sent via ${po.sent_channel}`}
-              </div>
-              {sendMsg[po.id] && <div style={{ fontSize: 11, color: sendMsg[po.id].includes('error') || sendMsg[po.id] === 'network' ? 'var(--danger)' : 'var(--muted)', marginTop: 4 }}>{sendMsg[po.id]}</div>}
             </div>
           ))}
         </div>

@@ -4,9 +4,9 @@
  * button and status badges, an invoice header and the phone app icon. */
 // v2: the redesign's text shades, so the chips and the outline button read at 4.5:1 (the current
 // look keeps its own colours).
-export default function BrandPreview({ name, tagline, logoUrl, iconUrl, v2 = false }) {
+export default function BrandPreview({ name, tagline, logoUrl, iconUrl }) {
   const initial = (name || 'V').trim()[0]
-  const tone = (t) => (v2 ? `var(--${t === 'accent' ? 'brand' : t}-text)` : `var(--${t})`)
+  const tone = (t) => (`var(--${t === 'accent' ? 'brand' : t}-text)`)
   return (
     <div aria-label="Brand preview" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', padding: 'var(--s4)', display: 'flex', flexDirection: 'column', gap: 'var(--s3)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)', borderRadius: 'var(--r-card)', padding: 'var(--s3)', boxShadow: 'var(--shadow-sm)' }}>
@@ -27,7 +27,7 @@ export default function BrandPreview({ name, tagline, logoUrl, iconUrl, v2 = fal
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <span style={{ padding: '7px 14px', borderRadius: 'var(--r-input)', background: 'var(--accent)', color: 'var(--on-accent)', fontSize: 13, fontWeight: 600 }}>Send invoice</span>
-          <span style={{ padding: '7px 14px', borderRadius: 'var(--r-input)', border: '1px solid var(--accent-2)', color: v2 ? 'var(--ink)' : 'var(--accent-2)', fontSize: 13, fontWeight: 600 }}>Preview</span>
+          <span style={{ padding: '7px 14px', borderRadius: 'var(--r-input)', border: '1px solid var(--accent-2)', color: 'var(--ink)', fontSize: 13, fontWeight: 600 }}>Preview</span>
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

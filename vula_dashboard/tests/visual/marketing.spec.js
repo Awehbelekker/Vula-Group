@@ -7,7 +7,6 @@ import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
-const V2 = process.env.UI_V2 === "1";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -28,7 +27,6 @@ function capture(page, method, re) {
 const BROADCAST = { name: "broadcast", role: "owner", nav: "Marketing", tab: "Broadcast", ready: "New broadcast" };
 
 test.describe("redesign: broadcast", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
     for (const theme of THEMES) {
@@ -162,7 +160,6 @@ const SCREENS = [
 ];
 
 test.describe("redesign: marketing tabs", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [name, screen] of SCREENS) {
     for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -263,17 +260,3 @@ test.describe("redesign: marketing tabs", () => {
   });
 });
 
-test("current look: Broadcast's preview and live send still make the same calls on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { name: "broadcast-v1", role: "owner", nav: "Marketing", tab: "Broadcast", ready: "WhatsApp Broadcasts" },
-    { viewport: VIEWPORTS.desktop, theme: "light" });
-  const sends = capture(page, "POST", /\/broadcasts\/send$/);
-  await page.getByRole("button", { name: /Approved template/ }).click();
-  await page.locator("select").filter({ hasText: "Choose an approved template" }).selectOption("weekly_specials");
-  await page.getByRole("button", { name: /Preview audience/ }).click();
-  await page.getByRole("button", { name: /Send live to 184/ }).click();
-  await expect.poll(() => sends.length).toBe(2);
-  expect(sends[0]).toEqual({ template_name: "weekly_specials", audience_filter: "all", dry_run: true });
-  expect(sends[1]).toEqual({ template_name: "weekly_specials", audience_filter: "all", name: "weekly_specials", dry_run: false });
-  await expect(page.getByText("✓ Sent to 184 recipients.")).toBeVisible();
-});

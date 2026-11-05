@@ -6,15 +6,13 @@ import { test, expect } from "@playwright/test";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
-
 async function open(page, { viewport = { width: 1280, height: 860 } } = {}) {
   await page.setViewportSize(viewport);
   await page.clock.setFixedTime(new Date(NOW_ISO));
   await installMockApi(page, { role: "owner" });
   await seedSession(page, { role: "owner", theme: "light" });
   await page.goto("/");
-  await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
 }
 
 async function signOut(page) {
@@ -132,7 +130,7 @@ test.describe("service worker", () => {
   test("keeps the offline page and the app shell for when there's no signal", async ({ page }) => {
     await controlled(page);
     await page.reload();
-    await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+    await page.locator(".v2-shell").first().waitFor();
     await expect.poll(() => page.evaluate(async () => Boolean(await caches.match("/offline.html")))).toBe(true);
     await expect.poll(() => page.evaluate(async () => Boolean(await caches.match("/")))).toBe(true);
   });

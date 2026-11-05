@@ -6,7 +6,6 @@ import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
-const V2 = process.env.UI_V2 === "1";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -31,7 +30,6 @@ const SCREENS = [
 ];
 
 test.describe("redesign: assistant hub", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [name, screen] of SCREENS) {
     for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -113,9 +111,3 @@ test.describe("redesign: assistant hub", () => {
   });
 });
 
-test("current look: the Assistant hub still loads on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { ...SCREENS[3][1], nav: "Assistant" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await page.getByRole("tab", { name: /Automations$/ }).first().click();
-  await expect(page.getByText("On its way", { exact: true })).toBeVisible();
-});

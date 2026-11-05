@@ -266,7 +266,7 @@ function BrandKit({ tenantId }) {
       </div>
 
       <aside className="vst-preview">
-        <BrandPreview name={b.name} tagline={b.tagline} logoUrl={b.logoUrl} iconUrl={b.iconUrl} v2 />
+        <BrandPreview name={b.name} tagline={b.tagline} logoUrl={b.logoUrl} iconUrl={b.iconUrl} />
       </aside>
 
       <div className="vst-save">

@@ -6,8 +6,6 @@ import { test, expect } from "@playwright/test";
 import { installMockApi, seedSession } from "./mockApi.js";
 import { NOW_ISO } from "./fixtures/demo.js";
 
-const V2 = process.env.UI_V2 === "1";
-
 async function boot(page, { role = "owner", url = "/", before } = {}) {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.clock.setFixedTime(new Date(NOW_ISO));
@@ -15,7 +13,7 @@ async function boot(page, { role = "owner", url = "/", before } = {}) {
   await seedSession(page, { role, theme: "light" });
   if (before) await page.addInitScript(before);
   await page.goto(url);
-  await page.locator(V2 ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
+  await page.locator(".v2-shell").first().waitFor();
 }
 
 test("a link to Invoices opens Invoices, and the address is tidied", async ({ page }) => {

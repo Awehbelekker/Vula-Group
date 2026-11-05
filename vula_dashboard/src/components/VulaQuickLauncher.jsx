@@ -22,7 +22,7 @@ const ACTIONS = [
   { key: "invoices", icon: "🧾", label: "New invoice", comp: VulaInvoices },
 ];
 
-export default function VulaQuickLauncher({ tenantId, access = [], full = true, hideFab = false, v2 = false }) {
+export default function VulaQuickLauncher({ tenantId, access = [], full = true, hideFab = false }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(null);   // action key with an open overlay
 
@@ -46,15 +46,13 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true, 
   return (
     <>
       {/* The redesign opens the action in its own Sheet primitive (2026-10-19) */}
-      {v2 && (
-        <Sheet open={!!ActiveComp} title={ACTIONS.find((a) => a.key === active)?.label || ""} onClose={() => setActive(null)}>
+      {<Sheet open={!!ActiveComp} title={ACTIONS.find((a) => a.key === active)?.label || ""} onClose={() => setActive(null)}>
           {/* the scanner and the assistant have redesigned versions that sit in a sheet; the rest render as before */}
-          {ActiveComp && <ScreenSuspense>{active === "scanner" || active === "assistant" ? <ActiveComp tenantId={tenantId} v2 inSheet /> : <ActiveComp tenantId={tenantId} />}</ScreenSuspense>}
-        </Sheet>
-      )}
+          {ActiveComp && <ScreenSuspense>{active === "scanner" || active === "assistant" ? <ActiveComp tenantId={tenantId} inSheet /> : <ActiveComp tenantId={tenantId} />}</ScreenSuspense>}
+        </Sheet>}
 
       {/* Overlay sheet */}
-      {!v2 && ActiveComp && (
+      {false && (
         <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,18,15,0.45)", display: "flex", justifyContent: "center", alignItems: "flex-end" }} onClick={() => setActive(null)}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg)", width: "100%", maxWidth: 560, height: "92vh", borderRadius: "16px 16px 0 0", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 -8px 40px rgba(0,0,0,0.25)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>

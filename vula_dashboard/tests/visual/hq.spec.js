@@ -6,7 +6,6 @@ import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
 
-const V2 = process.env.UI_V2 === "1";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
 const bad = (r) => r.violations.filter((v) => ["serious", "critical"].includes(v.impact))
   .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ") + (process.env.AXE_DEBUG ? n.failureSummary : "")).join(" | ")}`);
@@ -26,7 +25,6 @@ const SCREENS = [
 ];
 
 test.describe("redesign: master HQ business screens", () => {
-  test.skip(!V2, "the redesign runs with UI_V2=1");
 
   for (const [name, screen] of SCREENS) {
     for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
@@ -89,8 +87,3 @@ test.describe("redesign: master HQ business screens", () => {
   });
 });
 
-test("current look: the HQ business screens still load on the shared hooks", async ({ page }) => {
-  test.skip(V2, "the current look runs without UI_V2");
-  await openScreen(page, { ...SCREENS[1][1], ready: "Client Signups" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await expect(page.getByText("Sam Petersen")).toBeVisible();
-});
