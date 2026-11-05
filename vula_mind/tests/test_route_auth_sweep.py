@@ -94,6 +94,7 @@ PUBLIC = {
     ("GET", "/v1/google/oauth/callback"): "OAuth callback (state-bound)",
     ("GET", "/v1/microsoft/authorize-url"): "OAuth start",
     ("GET", "/v1/microsoft/oauth/callback"): "OAuth callback (state-bound)",
+    ("GET", "/v1/xero/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min)",
     ("GET", "/v1/dynamics365/authorize-url"): "OAuth start",
     ("GET", "/v1/dynamics365/oauth/callback"): "OAuth callback (state-bound)",
     ("GET", "/v1/bookings/{tenant_id}/services"): "storefront booking widget",

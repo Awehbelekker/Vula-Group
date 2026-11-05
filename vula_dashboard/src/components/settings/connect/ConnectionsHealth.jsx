@@ -10,7 +10,7 @@ import { AlertTriangle } from 'lucide-react'
 import { Button } from '../../ui/index.jsx'
 import { VULA_API } from '../../../lib/authFetch'
 
-const SECTION = { clickup: 'clickup', google: 'google', microsoft: 'microsoft', email: 'email', whatsapp: 'whatsapp' }
+const SECTION = { clickup: 'clickup', google: 'google', microsoft: 'microsoft', email: 'email', whatsapp: 'whatsapp', xero: 'xero' }
 
 export default function ConnectionsHealth({ tenantId, onOpen }) {
   const [broken, setBroken] = useState([])

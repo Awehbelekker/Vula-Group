@@ -29,12 +29,13 @@ TABLE = "vula_connection_health"
 REMIND_AFTER = timedelta(days=7)
 
 LABELS = {"clickup": "ClickUp", "google": "Google Drive", "microsoft": "Microsoft 365",
-          "dynamics365": "Dynamics 365", "email": "Mailbox", "whatsapp": "WhatsApp number"}
+          "dynamics365": "Dynamics 365", "xero": "Xero", "email": "Mailbox", "whatsapp": "WhatsApp number"}
 # Providers that sign in through Vula's own registered app (one tap), and the settings it needs.
 _ONE_TAP = {"clickup": ("clickup_client_id", "clickup_client_secret"),
             "google": ("google_client_id", "google_client_secret"),
             "microsoft": ("microsoft_client_id", "microsoft_client_secret"),
-            "dynamics365": ("microsoft_client_id", "microsoft_client_secret")}
+            "dynamics365": ("microsoft_client_id", "microsoft_client_secret"),
+            "xero": ("xero_client_id", "xero_client_secret")}
 
 
 def _client():
@@ -89,7 +90,7 @@ def _oauth_state(provider: str, row: Optional[Dict[str, Any]], token_cols: tuple
         if provider in _ONE_TAP and not one_tap(provider):
             return _item(provider, "unavailable", problem=unavailable_message(provider))
         return _item(provider, "not_connected")
-    account = row.get("email") or row.get("org_url") or ""
+    account = row.get("email") or row.get("org_url") or row.get("org_name") or ""
     if any(_locked(row.get(c)) for c in token_cols):
         return _item(provider, "broken", account, "the saved sign-in can't be unlocked (Vula's encryption key changed)",
                      fix=_RECONNECT)
@@ -165,6 +166,8 @@ def state(tenant_id: str) -> List[Dict[str, Any]]:
                                            "email,status,refresh_token,last_synced_at,last_sync_status,last_sync_error"),
                           ("refresh_token",)),
              _oauth_state("dynamics365", one("vula_dynamics365_accounts", "org_url,email,status,refresh_token"),
+                          ("refresh_token",)),
+             _oauth_state("xero", one("vula_xero_accounts", "org_name,status,refresh_token,last_error"),
                           ("refresh_token",))]
     return _mailboxes(tenant_id) + _whatsapp(tenant_id) + items
 
