@@ -12,13 +12,19 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
 
 export function Sheet({ open, title, onClose, children, footer, labelledBy }) {
   const ref = useRef(null);
+  // The latest onClose, read when it's needed. 5 Nov 2026: the effect below used to re-run
+  // whenever onClose changed — and most callers pass an inline arrow, a new one every render —
+  // so every keystroke in a form inside the sheet moved focus to the sheet itself (Ian, New
+  // tenant: "I could only type a letter"). Focus now moves only when the sheet opens.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     if (!open) return undefined;
     const opener = document.activeElement;
     const node = ref.current;
     (node?.querySelector("[autofocus]") || node)?.focus();
     const onKey = (e) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose?.(); return; }
+      if (e.key === "Escape") { e.stopPropagation(); closeRef.current?.(); return; }
       if (e.key !== "Tab" || !node) return;
       const els = [...node.querySelectorAll(FOCUSABLE)];
       if (!els.length) { e.preventDefault(); return; }
@@ -34,7 +40,7 @@ export function Sheet({ open, title, onClose, children, footer, labelledBy }) {
       document.body.style.overflow = overflow;
       opener?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open || typeof document === "undefined") return null;
   return createPortal(
