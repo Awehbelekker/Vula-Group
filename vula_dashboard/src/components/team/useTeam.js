@@ -133,7 +133,8 @@ export function useTeam(tenantId) {
     const d = await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     }).then((x) => x.json()).catch(() => ({}));
-    if (d.login_revoked) setMsg("Disabled — their dashboard login was revoked too.");
+    if (d.error) setMsg(/duplicate|unique/i.test(d.error) ? "Someone on the team already has that WhatsApp number." : d.error);
+    else if (d.login_revoked) setMsg("Disabled — their dashboard login was revoked too.");
     load();
   };
   const del = async (id) => { await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, { method: "DELETE" }); load(); };

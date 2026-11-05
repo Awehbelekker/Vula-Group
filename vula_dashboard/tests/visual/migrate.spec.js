@@ -242,6 +242,29 @@ test("team: access chips toggle with the same PATCH; Stock sits under Operate", 
   await expect(owner.getByText("Full access (owner / manager)")).toBeVisible();
 });
 
+// Ian, 5 Nov 2026 (ShopEazy): an owner already on the team, made with an email only, had no
+// place for their WhatsApp number. Every card has one now; the number is sent as typed and the
+// server keeps its digits (vula/api/team.py::update_member).
+test("team: someone without a WhatsApp number gets one added on their card", async ({ page }) => {
+  await openScreen(page, TEAM, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const emailOnly = { id: "tm-4", name: null, email: "sales@shopeazy.example.test", whatsapp: null, role: "owner",
+    active: true, access: [], notify: [] };
+  await page.route(/\/v1\/team\/[^/]+$/, (route) => (route.request().method() === "GET"
+    ? route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ members: [emailOnly] }) })
+    : route.fallback()));
+  await page.reload();
+  await page.getByRole("button", { name: "Team", exact: true }).locator("visible=true").first().click();
+  const card = page.locator(".vtm-member", { hasText: "sales@shopeazy.example.test" });
+  await expect(card.getByText("No WhatsApp number yet")).toBeVisible();
+  const box = card.getByLabel("WhatsApp number for sales@shopeazy.example.test");
+  await expect(card.getByRole("button", { name: "Add number" })).toHaveCount(0);   // nothing to save yet
+  await box.fill("082 123 4567");
+  const patched = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/team\/[^/]+\/tm-4$/.test(new URL(r.url()).pathname));
+  await card.getByRole("button", { name: "Add number" }).click();
+  expect((await patched).postDataJSON()).toEqual({ whatsapp: "082 123 4567" });
+});
+
 const PRODUCTS = { name: "products", role: "owner", nav: "Sell", tab: "Products", ready: "Everything you sell, by category" };
 
 for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
