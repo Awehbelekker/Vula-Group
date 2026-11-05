@@ -5,7 +5,7 @@
  * Sheet with Details / Open as tenant / Suspend, billing, and the manage form. New tenant is a
  * Sheet too. Stacked rows on a phone (DataTable).
  */
-import { ArrowRight, Ban, CalendarPlus, CircleCheck, Eye, Plus, Power, RotateCcw, XCircle } from 'lucide-react'
+import { ArrowRight, Ban, BellRing, CalendarPlus, CircleCheck, Eye, Plus, Power, RotateCcw, XCircle } from 'lucide-react'
 import { Button, Card, DataTable, Field, Input, PageHeader, Select, Sheet, StatusChip } from '../ui/index.jsx'
 import { ago, matchesTenant, sortTenants, useManageTenant, useMasterTenants } from './useMasterTenants'
 import './master.css'
@@ -51,6 +51,7 @@ export default function TenantsV2({ onError, onOpenTenant, onViewDetail, prefill
           <StatusChip tone={x.rows.some(t => t.dormant) ? 'warn' : 'muted'}>{x.rows.filter(t => t.dormant).length} quiet 30+ days</StatusChip>
         </p>
       </div>
+      <SettingUp x={x} />
       <Card pad={0}>
         <DataTable caption="Tenants" rows={rows} rowKey="tenant_id" columns={columns} empty="No tenant matches that search."
           onRowClick={(t) => x.setManaging(t.tenant_id)}
@@ -73,13 +74,54 @@ export default function TenantsV2({ onError, onOpenTenant, onViewDetail, prefill
                 {(x.registry.business_types || []).map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
               </Select>
             </Field>
+            <p className="vms-muted">The owner: Vula sends them a welcome on WhatsApp from Vula's own number and sets the business up with them, one question at a time. Leave the number empty to make an empty business.</p>
+            <Field label="Owner's name"><Input value={x.form.owner_name} onChange={e => x.setForm(f => ({ ...f, owner_name: e.target.value }))} autoComplete="off" /></Field>
+            <Field label="Owner's WhatsApp number" hint="Their own phone, e.g. 082 123 4567.">
+              <Input type="tel" inputMode="tel" value={x.form.owner_whatsapp} onChange={e => x.setForm(f => ({ ...f, owner_whatsapp: e.target.value }))} autoComplete="off" />
+            </Field>
+            <Field label="Owner's email (optional)"><Input type="email" value={x.form.owner_email} onChange={e => x.setForm(f => ({ ...f, owner_email: e.target.value }))} autoComplete="off" /></Field>
+            <label className="vms-check"><input type="checkbox" checked={x.form.send_welcome} onChange={e => x.setForm(f => ({ ...f, send_welcome: e.target.checked }))} />
+              Send the WhatsApp welcome now</label>
             <div className="vms-row">
-              <Button type="submit" disabled={x.busy}>{x.busy ? 'Creating…' : 'Create tenant'}</Button>
+              <Button type="submit" disabled={x.busy}>{x.busy ? 'Creating…' : x.form.owner_whatsapp.trim() ? 'Create and welcome' : 'Create tenant'}</Button>
               <Button type="button" variant="secondary" onClick={() => x.setCreating(false)}>Cancel</Button>
             </div>
           </form>)}
       </Sheet>
     </section>
+  )
+}
+
+// Businesses being set up over WhatsApp (vula/onboard_wa.py): how far each owner has got, and a
+// Nudge that sends the welcome again from Vula's own number.
+const SETUP_TONE = { invited: ['warn', 'Welcome sent'], in_progress: ['info', 'Answering'], paused: ['muted', 'Paused'], done: ['ok', 'Set up'] }
+
+function SettingUp({ x }) {
+  const items = (x.setup.items || []).filter(i => i.status !== 'done' || !i.own_number)
+  if (!items.length && x.setup.vula_number_set !== false) return null
+  return (
+    <Card className="vms-setup">
+      <span className="vms-name">Setting up on WhatsApp</span>
+      {x.setup.vula_number_set === false && (
+        <p className="vms-warn">Vula's own WhatsApp number isn't set, so no welcome can be sent. Set PLATFORM_WA_PHONE_ID, PLATFORM_WABA_ID and PLATFORM_WA_TOKEN in Railway.</p>)}
+      <ul className="vms-setup-list">
+        {items.map(i => {
+          const [tone, label] = SETUP_TONE[i.status] || SETUP_TONE.invited
+          return (
+            <li key={i.tenant_id} className="vms-setup-item">
+              <span><span className="vms-name">{i.display_name || i.tenant_id}</span>
+                <span className="vms-id">{i.owner_name} · {i.owner_phone}</span></span>
+              <StatusChip tone={tone}>{label}</StatusChip>
+              <span className="vms-muted">
+                {i.status === 'done' ? `${i.answered} of ${i.total} answered · works through Vula's number`
+                  : `Question ${i.step_number} of ${i.total}${i.step_label ? ` (${i.step_label})` : ''} · last message ${ago(i.last_message_at)}`}
+                {i.welcome_status && i.welcome_status !== 'sent' ? ` · welcome ${i.welcome_status}` : ''}
+              </span>
+              {i.status !== 'done' && <Button size="sm" variant="quiet" Icon={BellRing} onClick={() => x.nudge(i)}>Nudge</Button>}
+            </li>)
+        })}
+      </ul>
+    </Card>
   )
 }
 

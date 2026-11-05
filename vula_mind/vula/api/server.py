@@ -752,6 +752,22 @@ async def _purchases_loop() -> None:
         await _asyncio.sleep(3 * 3600)
 
 
+async def _onboarding_loop() -> None:
+    """A business being set up over WhatsApp (vula/onboard_wa.py) whose owner has gone quiet for a
+    day gets one reminder from Vula's own number."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(1700)  # settle on boot
+    while True:
+        try:
+            from vula.onboard_wa import remind_due
+            res = await remind_due()
+            if res.get("reminded"):
+                log.info("Onboarding reminders: %s", res)
+        except Exception as exc:
+            log.warning("Onboarding loop error: %s", exc)
+        await _asyncio.sleep(3600)
+
+
 async def _automations_loop() -> None:
     """Evaluate every enabled automation rule every 5 minutes (P3 automations builder)."""
     import asyncio as _asyncio
@@ -1664,6 +1680,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_staged_approvals_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_connection_check_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_purchases_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_onboarding_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_subscriptions_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
@@ -1795,6 +1812,8 @@ async def lifespan(app: FastAPI):
                 from vula import readiness
                 from vula.integrations.platform_support import alert_operator, ensure_operator_template
                 log.info("operator alert template: %s", await ensure_operator_template())
+                from vula.integrations.platform_support import ensure_setup_template
+                log.info("business setup template: %s", await ensure_setup_template())
                 line = readiness.summary(await __a.to_thread(readiness.report))
                 if line:
                     log.warning("%s", line)
@@ -2116,6 +2135,8 @@ app.include_router(app_errors_master_router, prefix="/v1/master/app-errors")  # 
 from vula.api.connections_api import router as connections_router, master_router as connections_master_router  # noqa: E402
 app.include_router(connections_router, prefix="/v1/connections")       # a business's own connections
 app.include_router(connections_master_router, prefix="/v1/master/connections")   # master-only overview
+from vula.api.onboarding_api import master_router as onboarding_master_router  # noqa: E402
+app.include_router(onboarding_master_router, prefix="/v1/master/clients")   # new business over WhatsApp (master)
 app.include_router(draft_router, prefix="/v1")
 app.include_router(agent_router, prefix="/v1")
 

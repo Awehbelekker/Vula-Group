@@ -108,6 +108,12 @@ def _business_number(tenant_id: Optional[str]) -> Optional[str]:
         log.debug("business number lookup failed for %s: %s", tenant_id, exc)
         return None
     n = _digits(((row or {}).get("phone_number")) or "")
+    if not n and row is None:
+        # set up over WhatsApp, no number of its own yet: its people message Vula's own number
+        from config import settings
+        from vula import onboard_wa
+        if settings.platform_wa_number and onboard_wa.uses_platform(tenant_id):
+            n = _digits(settings.platform_wa_number)
     return n or None
 
 

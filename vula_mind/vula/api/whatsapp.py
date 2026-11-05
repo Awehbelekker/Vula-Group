@@ -820,7 +820,26 @@ async def receive_message(
 
                 # Route by the number the person messaged → (tenant, mode)
                 phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
-                route_tenant, route_mode = _resolve_number_route(phone_number_id)
+                from vula.integrations import platform_support as _ps
+                _ps.REPLY_VIA_PLATFORM.set("")
+                _ps.FROM_PLATFORM.set(False)
+                if _ps.is_platform_number(phone_number_id):
+                    # Vula's own number (vula/onboard_wa.py): a new business's setup questions; its
+                    # people working with Vula until their own number is connected (handled below
+                    # as that business, replies from Vula's number); anyone else is a lead.
+                    if phone in _META_SYSTEM_SENDERS or not phone:
+                        continue
+                    from vula import onboard_wa as _onb
+                    import asyncio as _aio2
+                    _action, _as_tenant = await _aio2.to_thread(_onb.decide, phone, msg)
+                    if _action != "as_tenant" or not _as_tenant:
+                        _ps.FROM_PLATFORM.set(True)
+                        _run_bg(_onb.answer(phone, msg, _action), label="vula_number")
+                        continue
+                    _ps.REPLY_VIA_PLATFORM.set(_as_tenant)
+                    route_tenant, route_mode = _as_tenant, "knowledge"
+                else:
+                    route_tenant, route_mode = _resolve_number_route(phone_number_id)
                 # Replies go from the number this message came in on (a business can have several,
                 # vula/whatsapp_numbers.py) — every task started while handling it inherits this.
                 from vula import whatsapp_numbers as _nums
@@ -6149,22 +6168,27 @@ def _classify_document(filename: str, path) -> str:
 
 
 async def _download_media_bytes(media_id: str) -> Optional[bytes]:
-    """Fetch raw media bytes from the Meta Graph API (2-step: get URL, then download)."""
-    if not settings.whatsapp_token:
+    """Fetch raw media bytes from the Meta Graph API (2-step: get URL, then download). Media sent
+    to Vula's own number is fetched with Vula's own token (vula/onboard_wa.py)."""
+    from vula.integrations import platform_support as _ps
+    token = settings.whatsapp_token
+    if (_ps.REPLY_VIA_PLATFORM.get() or _ps.FROM_PLATFORM.get()) and _ps.platform_creds():
+        token = _ps.platform_creds()["token"]
+    if not token:
         logger.warning("WHATSAPP_TOKEN not set — cannot download media")
         return None
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             info = await client.get(
                 graph_url(f"{media_id}"),
-                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
             info.raise_for_status()
             url = info.json().get("url", "")
             if not url:
                 return None
             dl = await client.get(
-                url, headers={"Authorization": f"Bearer {settings.whatsapp_token}"}
+                url, headers={"Authorization": f"Bearer {token}"}
             )
             dl.raise_for_status()
             return dl.content
@@ -7932,6 +7956,12 @@ async def _get_tenant_wa_creds(tenant_id: str, phone_number_id: Optional[str] = 
     """
     import time as _t
     from vula import whatsapp_numbers as _nums
+    # A message to Vula's own number from this business's people (vula/onboard_wa.py): the reply
+    # goes back from Vula's number, the one they messaged.
+    from vula.integrations import platform_support as _ps
+    if tenant_id and _ps.REPLY_VIA_PLATFORM.get() == tenant_id and _ps.platform_creds():
+        _pc = _ps.platform_creds()
+        return {"token": _pc["token"], "phone_id": _pc["phone_id"]}
     rows = _wa_creds_cache.get(tenant_id)
     if not (isinstance(rows, list) and (_t.time() - _WA_CREDS_AT.get(tenant_id, 0)) < _WA_CREDS_TTL):
         rows = None
@@ -7964,6 +7994,14 @@ async def _get_tenant_wa_creds(tenant_id: str, phone_number_id: Optional[str] = 
         if row.get("phone_number_id") and settings.whatsapp_token:
             return {"token": settings.whatsapp_token, "phone_id": row["phone_number_id"]}
         return None
+
+    # A business set up through Vula's own number with no number of its own yet: Vula's number
+    # speaks for it (5 Nov 2026), never the env default number (another business's line).
+    if rows is not None and tenant_id and _ps.platform_creds():
+        from vula import onboard_wa as _onb
+        if _onb.uses_platform(tenant_id):
+            _pc = _ps.platform_creds()
+            return {"token": _pc["token"], "phone_id": _pc["phone_id"]}
 
     # Fallback: env vars (used during initial setup before Embedded Signup is configured)
     if settings.whatsapp_token and settings.whatsapp_phone_id:

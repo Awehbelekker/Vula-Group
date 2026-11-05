@@ -30,3 +30,24 @@ Nothing is sent. Each alert is written to the server log as `operator alert (not
 ## Repeats
 The readiness summary goes out only when the list changes. The last one sent is remembered in
 `vula_platform_state` (migration 234), so a redeploy doesn't send the same list again.
+
+## New businesses set up over WhatsApp (5 Nov 2026)
+Vula's own number also sets up a new business (`vula/onboard_wa.py`, migration 249):
+1. Master › Tenants › New tenant, with the owner's name and WhatsApp number (`POST
+   /v1/master/clients`). Vula makes the business, adds the owner to its team (role owner, so they
+   can sign in with WhatsApp) and sends the `vula_business_setup` template from Vula's number
+   ("Hi Sam, this is Vula. Seaview Tiles is ready on Vula. Reply START …"). Vula submits that
+   template at boot, next to `vula_operator_alert`.
+2. The owner answers 12 questions one at a time: name, what you do, area, hours, payment, pricing,
+   email, VAT, bank details, logo, documents, team. Each answer is saved to the business profile or
+   invoice settings and read back before Vula says it's saved. *skip* leaves a question for later,
+   *stop* pauses, *start* carries on. Documents and slips sent meanwhile are filed as usual.
+3. Until the business connects a number of its own, its owner and team work with Vula through
+   Vula's number. Their messages are handled as that business, and every reply for it (proactive
+   ones too) comes from Vula's number, never from the server's default number.
+4. Master › Tenants shows "Setting up on WhatsApp": how far each owner has got, with **Nudge** to
+   send the welcome again. If an owner goes quiet for 24 hours, one reminder goes out by itself.
+
+If someone who isn't on any of those businesses messages Vula's number, they get one polite reply a
+day and the operator gets an alert. Set `PLATFORM_WA_NUMBER` (digits) as well: the WhatsApp
+sign-in page needs it to show the number such a business messages.

@@ -106,33 +106,108 @@ async def _send_platform(to: str, text: str) -> bool:
         return False
 
 
-async def ensure_operator_template() -> dict:
-    """Make sure Vula's own WABA has OPERATOR_TEMPLATE; submit it for review if not. Safe to call
-    at every boot. Never raises."""
+async def _ensure_template(name: str, body: str, example: list, buttons: Optional[list] = None) -> dict:
+    """Make sure Vula's own WABA has template `name`; submit it for review if not. Safe to call at
+    every boot. Never raises."""
     creds = _platform_creds()
     if not creds or not creds.get("waba_id"):
         return {"skipped": "Vula's own number is not set"}
     import httpx
     url = graph_url(f"{creds['waba_id']}/message_templates")
     headers = {"Authorization": f"Bearer {creds['token']}"}
+    components: list = [{"type": "BODY", "text": body, "example": {"body_text": [example]}}]
+    if buttons:
+        components.append({"type": "BUTTONS", "buttons": [{"type": "QUICK_REPLY", "text": b} for b in buttons]})
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url, headers=headers,
-                                    params={"fields": "name,status", "name": OPERATOR_TEMPLATE})
+            resp = await client.get(url, headers=headers, params={"fields": "name,status", "name": name})
             live = resp.json().get("data", []) if resp.is_success else []
             if live:
                 return {"already_exists": True, "status": live[0].get("status")}
             resp = await client.post(url, headers=headers, json={
-                "name": OPERATOR_TEMPLATE, "language": "en", "category": "UTILITY",
-                "components": [{"type": "BODY", "text": _OPERATOR_BODY,
-                                "example": {"body_text": [[_OPERATOR_EXAMPLE]]}}]})
+                "name": name, "language": "en", "category": "UTILITY", "components": components})
             data = resp.json()
         if not resp.is_success:
             return {"error": (data.get("error") or {}).get("message") or "template submit failed"}
-        return {"name": OPERATOR_TEMPLATE, "status": data.get("status", "PENDING")}
+        return {"name": name, "status": data.get("status", "PENDING")}
     except Exception as exc:  # noqa: BLE001
-        logger.warning("operator template check failed: %s", exc)
+        logger.warning("template %s check failed: %s", name, exc)
         return {"error": type(exc).__name__}
+
+
+async def ensure_operator_template() -> dict:
+    """Vula's own WABA has OPERATOR_TEMPLATE (submitted for review if not)."""
+    return await _ensure_template(OPERATOR_TEMPLATE, _OPERATOR_BODY, [_OPERATOR_EXAMPLE])
+
+
+# ── Talking to a new business from Vula's own number (vula/onboard_wa.py, 5 Nov 2026) ──────────
+# A business set up from Master has no WhatsApp number of its own yet, so its owner works with
+# Vula through Vula's number. While a message from Vula's number is being handled,
+# REPLY_VIA_PLATFORM holds that business's id: every reply for that business goes out from
+# Vula's number (whatsapp._get_tenant_wa_creds) and the message's media is fetched with Vula's
+# token. Empty = the normal rules.
+import contextvars as _contextvars  # noqa: E402
+
+REPLY_VIA_PLATFORM: "_contextvars.ContextVar[str]" = _contextvars.ContextVar("vula_reply_via_platform",
+                                                                              default="")
+# Set for a message to Vula's number answered by onboard_wa itself (media fetched with Vula's token).
+FROM_PLATFORM: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("vula_from_platform", default=False)
+
+SETUP_TEMPLATE = "vula_business_setup"   # params: owner's first name, business name
+_SETUP_BODY = ("Hi {{1}}, this is Vula. {{2}} is ready on Vula. Reply START and I'll set it up "
+               "with you on WhatsApp, one question at a time.")
+_SETUP_EXAMPLE = ["Sam", "Seaview Tiles"]
+
+
+def platform_creds() -> Optional[dict]:
+    return _platform_creds()
+
+
+def is_platform_number(phone_number_id: str) -> bool:
+    from config import settings
+    return bool(settings.platform_wa_phone_id) and phone_number_id == settings.platform_wa_phone_id
+
+
+async def ensure_setup_template() -> dict:
+    """Vula's own WABA has SETUP_TEMPLATE, the welcome a new business's owner gets."""
+    return await _ensure_template(SETUP_TEMPLATE, _SETUP_BODY, _SETUP_EXAMPLE, buttons=["Start"])
+
+
+async def send_text(to: str, text: str) -> bool:
+    """Free text from Vula's own number (only arrives within 24 hours of their last message)."""
+    creds = _platform_creds()
+    if not creds:
+        return False
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", to, "platform_text"):
+        return True
+    try:
+        return await _post(creds, {"messaging_product": "whatsapp", "to": _number(to), "type": "text",
+                                   "text": {"body": text[:4000]}})
+    except Exception as exc:  # noqa: BLE001
+        logger.info("platform text not sent: %s", exc)
+        return False
+
+
+async def send_template(to: str, name: str, *params: str) -> bool:
+    """An approved template from Vula's own number (arrives any time)."""
+    creds = _platform_creds()
+    if not creds:
+        return False
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", to, name):
+        return True
+    clean = [re.sub(r"\s+", " ", str(p)).strip()[:200] or "-" for p in params]
+    body: dict = {"messaging_product": "whatsapp", "to": _number(to), "type": "template",
+                  "template": {"name": name, "language": {"code": "en"}}}
+    if clean:
+        body["template"]["components"] = [{"type": "body", "parameters": [
+            {"type": "text", "text": p} for p in clean]}]
+    try:
+        return await _post(creds, body)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("platform template %s not sent: %s", name, exc)
+        return False
 
 
 async def forward(tenant_id: str, phone: str, sender_name: str, text: str) -> None:
