@@ -82,7 +82,9 @@ export function DataTable({ columns = [], rows, loading, empty = "Nothing here y
             </tr>))}
         </tbody>
       </table>
-      <div className="vui-stack" role="list" aria-label={caption}>
+      {/* a list only when it has rows: an empty or loading list with a message inside fails
+          aria-required-children (an empty Master › Health "App connections", 2026-11-05) */}
+      <div className="vui-stack" role={!loading && sorted.length ? "list" : undefined} aria-label={caption}>
         {loading && <div style={{ padding: 12 }}><Skeleton lines={3} /></div>}
         {isEmpty && <div style={{ padding: 24, textAlign: "center", color: "var(--muted)" }}>{empty}</div>}
         {!loading && sorted.map((r, i) => (

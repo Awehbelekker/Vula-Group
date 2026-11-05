@@ -131,8 +131,12 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
   // managers (full) see everything including Team/Settings. Module-level (business-type) gating
   // now lives once, in navConfig.jsx, driving the sidebar itself — this is just the access-list
   // safety net for a tab a signed-in staff member shouldn't be on.
-  // today / activity (the redesign's own pages) are filtered on the server, like overview
-  const canSee = (id) => full || id === 'overview' || (id === 'today' || id === 'activity') || (access || []).includes(id)
+  // today / activity (the redesign's own pages) are filtered on the server, like overview.
+  // A section is allowed when any of its sub-tabs is (2026-11-05): a sales rep's access lists
+  // rep-contacts, rep-callsheet… never "my-work" itself, so the check bounced a rep who opened My
+  // Work back to Home whenever their access arrived from the server after the tap.
+  const allowed = (id) => (access || []).includes(id) || (subtabsFor(navGroups, id) || []).some((t) => (access || []).includes(t.id))
+  const canSee = (id) => full || id === 'overview' || (id === 'today' || id === 'activity') || allowed(id)
   // If the current tab isn't visible to this member, fall back to a safe default.
   useEffect(() => { if (!canSee(tab)) setTab('overview') }, [access, full])  // eslint-disable-line
   const [products, setProducts] = useState([])

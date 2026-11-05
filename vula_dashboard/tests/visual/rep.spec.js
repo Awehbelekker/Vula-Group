@@ -6,6 +6,8 @@ import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
+import { installMockApi, seedSession } from "./mockApi.js";
+import { NOW_ISO } from "./fixtures/demo.js";
 
 const REP = "+27820000009";
 const out = (ti, name) => path.join(ti.project.testDir, ".results", "migrate", name);
@@ -124,3 +126,24 @@ test.describe("redesign: sales rep", () => {
   });
 });
 
+
+test("a rep who opens My Work before their access arrives stays on My Work", async ({ page }) => {
+  // the rep's access (rep-contacts, rep-callsheet, …) lists My Work's pages, never "my-work"
+  // itself; it used to bounce the rep back to Home when /team/me answered after the tap
+  await page.setViewportSize(VIEWPORTS.desktop);
+  await page.clock.setFixedTime(new Date(NOW_ISO));
+  await installMockApi(page, { role: "rep" });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let answered = 0;
+  await page.route(/\/v1\/team\/[^/]+\/me/, async (route) => { await gate; await route.fallback(); answered++; });  // after the mock: tried first
+  await seedSession(page, { role: "rep", theme: "light" });
+  await page.goto("/");
+  await page.getByText("Bay Hotel kitchens").first().waitFor();
+  await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "My Work" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "My Work" })).toBeVisible();
+  release();
+  await expect.poll(() => answered).toBeGreaterThan(0);
+  await page.waitForTimeout(500);
+  await expect(page.getByRole("heading", { level: 1, name: "My Work" })).toBeVisible();
+});
