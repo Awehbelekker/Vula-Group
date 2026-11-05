@@ -42,29 +42,38 @@ export function useWhatsAppLogin({ onUser }) {
   const onUserRef = useRef(onUser)
   onUserRef.current = onUser
 
-  const stop = () => { if (timer.current) { clearInterval(timer.current); timer.current = null } }
+  // Each QR session gets a number; stop() moves it on, so an answer that arrives after the person
+  // switched to "Send me a code instead" (a status check already in flight, or the first of
+  // dev's two StrictMode starts) is dropped instead of flipping the page back to the QR (5 Nov 2026).
+  const session = useRef(0)
+  const stop = () => { session.current += 1; if (timer.current) { clearInterval(timer.current); timer.current = null } }
 
   const startQr = useCallback(async () => {
     stop(); setErr(''); setMsg('')
+    const mine = session.current
+    const live = () => mine === session.current
     try {
       const d = await post('/start', { host: window.location.hostname })
+      if (!live()) return
       if (!d.available) { setState('code_phone'); return }
       setQr(d); setState('qr')
       timer.current = setInterval(async () => {
         try {
           const r = await fetch(`${VULA_API}/v1/auth/wa/status?id=${encodeURIComponent(d.id)}&secret=${encodeURIComponent(d.secret)}`)
           const st = await r.json().catch(() => ({}))
+          if (!live()) return
           if (st.status === 'awaiting_approval') { setState('waiting') }
           else if (st.status === 'approved' && st.token_hash) {
-            stop(); setState('done'); onUserRef.current(await signInWith(st.token_hash))
+            stop(); setState('done')
+            try { onUserRef.current(await signInWith(st.token_hash)) } catch (e) { setErr(e.message || 'Login failed — try again.') }
           } else if (st.status === 'denied') {
             stop(); setErr('That login was blocked on WhatsApp.'); setState('qr')
           } else if (st.status === 'expired' || st.status === 'used' || !r.ok) {
             stop(); setMsg('That code expired — here is a fresh one.'); startQr()
           }
-        } catch (e) { stop(); setErr(e.message || 'Login failed — try again.') }
+        } catch (e) { if (live()) { stop(); setErr(e.message || 'Login failed — try again.') } }
       }, 2000)
-    } catch (e) { setErr(e.message); setState('code_phone') }
+    } catch (e) { if (live()) { setErr(e.message); setState('code_phone') } }
   }, [])
 
   useEffect(() => { startQr(); return stop }, [startQr])

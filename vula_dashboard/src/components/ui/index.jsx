@@ -39,13 +39,11 @@ export function Button({ children, variant = "primary", size = "md", style, clas
   const pad = size === "sm" ? "6px 12px" : size === "lg" ? "12px 22px" : "9px 16px";
   const fs = size === "sm" ? 12.5 : size === "lg" ? 15 : 13.5;
   return (
-    <button {...rest} className={`vui-btn${size === "sm" ? " vui-btn--sm" : ""}${className ? ` ${className}` : ""}`} style={{
+    <button {...rest} className={`vui-btn vui-btn--${variant}${size === "sm" ? " vui-btn--sm" : ""}${className ? ` ${className}` : ""}`} style={{
       ...(Icon ? { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 } : {}),
       padding: pad, fontSize: fs, fontWeight: 600, borderRadius: T.rInput, cursor: "pointer",
-      fontFamily: T.body, transition: "filter .15s, opacity .15s", ...BTN[variant], ...style,
-    }}
-      onMouseEnter={(e) => { e.currentTarget.style.filter = "brightness(0.96)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}>
+      fontFamily: T.body, ...BTN[variant], ...style,
+    }}>
       {Icon && <Icon size={18} strokeWidth={1.75} aria-hidden="true" />}
       {children}
     </button>

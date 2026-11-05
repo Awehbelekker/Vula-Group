@@ -11,6 +11,12 @@
   outline: 2px solid var(--focus); outline-offset: 2px;
 }
 .vui-btn:disabled { opacity: 0.5; cursor: not-allowed !important; }
+/* Hover and press show on every brand: a tint in the button's own text colour, painted over its
+   background (an inset shadow, so the inline background stays). The old 4% darken did nothing on
+   a quiet button or a black one, so a tap on DIGG's login looked like nothing happened (5 Nov 2026). */
+.vui-btn { transition: box-shadow var(--t-fast) var(--ease), opacity .15s; }
+.vui-btn:not(:disabled):hover { box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 10%, transparent); }
+.vui-btn:not(:disabled):active { box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 20%, transparent); }
 .vui-icon-btn {
   width: 44px; height: 44px; border-radius: var(--radius-pill); border: 1px solid var(--line);
   background: var(--surface); color: var(--ink); display: inline-grid; place-items: center;

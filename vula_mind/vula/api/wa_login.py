@@ -150,12 +150,15 @@ def _window_open(member: Dict[str, Any]) -> bool:
 
 
 def _qr_svg(link: str) -> str:
+    """The QR as an SVG that scales to whatever box shows it: a viewBox and no fixed width or
+    height (omitsize). With a fixed 222px and no viewBox, the 184px box on the sign-in screen
+    cut off its right and bottom edges, so phones couldn't read it (5 Nov 2026)."""
     import io
 
     import segno
     buf = io.BytesIO()
     segno.make(link, error="m").save(buf, kind="svg", scale=6, border=2, dark="#111", light=None,
-                                     xmldecl=False, svgns=True)
+                                     xmldecl=False, svgns=True, omitsize=True)
     return buf.getvalue().decode()
 
 

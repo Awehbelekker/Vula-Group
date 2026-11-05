@@ -47,6 +47,23 @@ import { showOnAppIcon } from "./lib/appBadge";
 import { setLaunchScreens } from "./lib/iosSplash";
 import { setErrorContext } from "./lib/appErrors";
 
+// Vula's own tab title and icons (index.html). A tenant's sign-in page or workspace swaps them for
+// its brand; master HQ and a business switch put them back — master signing in on a tenant's own
+// address (digg.vula-ai.com) used to keep that tenant's tab icon and title (5 Nov 2026).
+const VULA_TITLE = typeof document !== "undefined" ? document.title : "Vula";
+function setLink(rel, href) {
+  let l = document.querySelector(`link[rel="${rel}"]`);
+  if (!l) { l = document.createElement("link"); l.rel = rel; document.head.appendChild(l); }
+  l.href = href;
+}
+function vulaHead() {
+  if (typeof document === "undefined") return;
+  document.title = VULA_TITLE;
+  setLink("icon", "/icon.svg");
+  setLink("manifest", "/manifest.webmanifest");
+  setLink("apple-touch-icon", "/apple-touch-icon.png");
+}
+
 const COLORS = {
   bg: "var(--bg)",
   surface: "var(--surface)",
@@ -192,6 +209,7 @@ export default function App() {
     setBrand(null); // reset on tenant switch so a stale logo/name never flashes for the wrong tenant
     applyBrand({});
     setLaunchScreens(VULA_API, null);
+    vulaHead();     // Vula's own tab icon, title and app icon until a tenant's brand loads (master HQ keeps them)
     if (!tid) return;
     let alive = true;
     const load = () => fetch(`${VULA_API}/v1/commerce/${tid}/brand`)
@@ -200,11 +218,6 @@ export default function App() {
         if (!alive || !b) return;
         applyBrand(b); setBrand(b);
         // the installed app (home-screen name + icon) and the browser tab wear the brand too
-        const setLink = (rel, href) => {
-          let l = document.querySelector(`link[rel="${rel}"]`);
-          if (!l) { l = document.createElement("link"); l.rel = rel; document.head.appendChild(l); }
-          l.href = href;
-        };
         // ?app: the manifest is served from the API, so it learns the app's own address (start page, Share target)
         setLink("manifest", `${VULA_API}/v1/commerce/${tid}/manifest.webmanifest?app=${encodeURIComponent(window.location.origin)}`);
         setLink("apple-touch-icon", `${VULA_API}/v1/commerce/${tid}/app-icon/180.png`);

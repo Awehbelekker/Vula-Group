@@ -122,6 +122,15 @@ def _req(ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome
     return SimpleNamespace(headers={"user-agent": ua, "x-forwarded-for": ip}, client=None)
 
 
+def test_the_qr_scales_to_its_box_so_no_edge_is_cut_off():
+    """A fixed width/height with no viewBox cropped the code in the sign-in screen's smaller box."""
+    import re
+    svg = wl._qr_svg("https://wa.me/27713128891?text=Login%20P33P2S")
+    head = svg[:svg.index(">")]
+    assert re.search(r'viewBox="0 0 \d+ \d+"', head)
+    assert " width=" not in head and " height=" not in head
+
+
 def test_device_label():
     assert wl.device_label(_req().headers["user-agent"]) == "Chrome on Windows"
     assert wl.device_label("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) AppleWebKit Version/18.0 Mobile Safari/604.1") == "Safari on iPhone"
