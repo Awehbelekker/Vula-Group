@@ -78,13 +78,31 @@ test("Add offers only what the role may use; a sub-tab opens straight from searc
   await expect(page.locator(".v2-title")).toHaveText("Money");
 });
 
-test("Master can put one business back on the old design", async ({ page }) => {
+test("every business gets the redesign, even one whose old switch is off; Master has no switch", async ({ page }) => {
+  await page.route(/\/v1\/tenants\/[^/]+$/, async (route) => {
+    const res = await route.fetch();
+    route.fulfill({ response: res, json: { ...(await res.json()), ui_v2: false } });    // the retired switch
+  });
+  await openScreen(page, { name: "home", role: "owner", nav: null, ready: "Won in" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await expect(page.locator(".v2-shell")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.dataset.ui)).toBe("v2");
+});
+
+test("Master's tenant settings no longer offer the old design", async ({ page }) => {
   await openScreen(page, { name: "master", role: "master", nav: "Master", ready: "need attention" }, { viewport: VIEWPORTS.desktop, theme: "light" });
-  await page.getByRole("row", { name: /Harbour & Vine Deli/ }).click();   // a tenant opens in a sheet
-  const box = page.getByRole("checkbox", { name: /New dashboard design/ });
-  await expect(box).toBeChecked();             // on for every business since migration 217
-  await box.uncheck();
+  await page.getByRole("row", { name: /Harbour & Vine Deli/ }).click();
+  await expect(page.getByRole("button", { name: "Save changes" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /New dashboard design/ })).toHaveCount(0);
   const patch = page.waitForRequest((r) => r.method() === "PATCH" && /\/v1\/master\/tenants\/[^/]+$/.test(r.url()));
   await page.getByRole("button", { name: "Save changes" }).click();
-  expect((await patch).postDataJSON()).toMatchObject({ ui_v2: false });
+  expect((await patch).postDataJSON()).not.toHaveProperty("ui_v2");
+});
+
+test("?ui=v1 still pins the old look on one device while it's retired, and ?ui=auto undoes it", async ({ page }) => {
+  await openScreen(page, { name: "home", role: "owner", nav: null, ready: "Won in" }, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.goto("/?ui=v1");
+  await page.locator(".vshell").first().waitFor();
+  expect(await page.evaluate(() => document.documentElement.dataset.ui)).toBeUndefined();
+  await page.goto("/?ui=auto");
+  await page.locator(".v2-shell").first().waitFor();
 });

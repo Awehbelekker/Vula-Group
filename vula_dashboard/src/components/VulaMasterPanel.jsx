@@ -279,7 +279,7 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
 // instead of duplicating the plan/store-url/gateway/modules editor a second time.
 export function ManageTenantRow({ tenant, registry, onSave }) {
   const { modules, plan, setPlan, storeUrl, setStoreUrl, gateway, setGateway, shareNetwork, setShareNetwork,
-    spendCap, setSpendCap, uiV2, setUiV2, allModules, toggle, patch } = useManageTenant(tenant, registry)
+    spendCap, setSpendCap, allModules, toggle, patch } = useManageTenant(tenant, registry)
 
   return (
     <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -322,10 +322,6 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
       <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
         <input type="checkbox" checked={shareNetwork} onChange={e => setShareNetwork(e.target.checked)} />
         Share this tenant's reviewed answers with other Vula businesses (opt-in — see Knowledge tab)
-      </label>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
-        <input type="checkbox" checked={uiV2} onChange={e => setUiV2(e.target.checked)} />
-        New dashboard design (untick to put this business back on the old one)
       </label>
       <button style={{ ...btn, ...btnOn, alignSelf: 'flex-start' }}
         onClick={() => onSave(patch())}>Save changes</button>
