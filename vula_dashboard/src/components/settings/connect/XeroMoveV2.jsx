@@ -3,10 +3,12 @@
  * (read-only), pick the cut-over date, and see what moving would bring in: the opening balances
  * from Xero's trial balance, invoices still owed to the business and bills it still owes (with
  * whether they agree with Xero's own debtors / creditors), customers and suppliers matched to the
- * ones Vula already has, and history. Nothing is written to the books in this step.
+ * ones Vula already has, and history. Then "Bring it in" (one-off): everything at the cut-over,
+ * checked to the cent against Xero, after which Vula disconnects from Xero. Undo is offered until
+ * a payment is recorded on a moved invoice.
  * Data: connect/useXeroMove.js → vula/api/xero.py.
  */
-import { AlertTriangle, Check, LogOut, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowRightLeft, Check, LogOut, RefreshCw, Undo2 } from 'lucide-react'
 import { Button, Card, ErrorCard, Field, Input, Skeleton, StatusChip } from '../../ui/index.jsx'
 import { useXeroMove } from './useXeroMove'
 import '../settings.css'
@@ -54,6 +56,7 @@ export default function XeroMoveV2({ tenantId }) {
         {x.error && <p className="vcn-error" role="alert">{x.error}</p>}
       </Card>
       {x.run && <Run run={x.run} />}
+      {x.run && <BringIn x={x} connected={connected} />}
     </>
   )
 }
@@ -70,7 +73,8 @@ function Agrees({ ok, mine, theirs, label }) {
 
 function Run({ run }) {
   if (run.status === 'reading') return <Card className="vst-card"><p className="vst-body">Reading Xero… a busy business can take a few minutes. You can leave this page.</p><Skeleton lines={3} /></Card>
-  if (run.status === 'failed') return <Card className="vst-card"><p className="vcn-error" role="alert">{run.error || 'Reading Xero didn’t finish.'}</p></Card>
+  if (run.status === 'importing') return <Card className="vst-card"><p className="vst-body">Bringing your books in and checking them against Xero… this can take a few minutes.</p><Skeleton lines={3} /></Card>
+  if (run.status === 'failed' && !run.preview?.cutover) return <Card className="vst-card"><p className="vcn-error" role="alert">{run.error || 'Reading Xero didn’t finish.'}</p></Card>
   const p = run.preview || {}
   if (!p.cutover) return null
   const c = p.counts || {}
@@ -104,6 +108,45 @@ function Run({ run }) {
             <li key={m.name} className="vcn-item"><span className="vst-sub">Xero “{m.name}” → Vula “{m.vula_name}” ({m.by})</span></li>))}</ul>
         </details>
       )}
+    </Card>
+  )
+}
+
+function BringIn({ x, connected }) {
+  const run = x.run
+  const r = run.result || {}
+  if (run.status === 'done') {
+    return (
+      <Card className="vst-card">
+        <span className="vst-row"><StatusChip tone="ok"><Check size={14} aria-hidden="true" />Moved</StatusChip>
+          <span className="vst-strong">Your books from Xero are in Vula</span></span>
+        <p className="vst-sub">{r.documents} invoices, bills and credit notes ({r.open_documents} still open), opening balances for {r.opening_accounts} accounts,
+          {' '}{r.suppliers_added} suppliers and {r.customers_added} customers added. Customers owe {money(r.receivables_cents)}; you owe suppliers {money(r.payables_cents)} — both agree with Xero to the cent. Vula has disconnected from Xero.</p>
+        <div className="vst-row"><Button size="sm" variant="quiet" Icon={Undo2} onClick={x.undo}>Undo this move</Button></div>
+      </Card>
+    )
+  }
+  if (run.status === 'undone') return <Card className="vst-card"><p className="vst-body">This move was undone. Show the preview again to move once more.</p></Card>
+  if (run.status === 'failed' && r.problems?.length) {
+    return (
+      <Card className="vst-card">
+        <p className="vcn-error" role="alert">{run.error}</p>
+        <div className="vst-row"><Button size="sm" variant="quiet" Icon={Undo2} onClick={x.undo}>Undo this move</Button></div>
+      </Card>
+    )
+  }
+  if (!['previewed', 'failed'].includes(run.status) || !run.preview?.cutover) return null
+  const p = run.preview
+  const ready = p.trial_balance?.balanced && p.receivables?.agrees && p.payables?.agrees
+  return (
+    <Card className="vst-card">
+      {run.status === 'failed' && <p className="vcn-error" role="alert">{run.error}</p>}
+      {ready ? (
+        <p className="vst-body">Everything agrees with Xero. Bringing it in adds it all to Vula once, checks it to the cent, then disconnects from Xero.</p>
+      ) : (
+        <p className="vst-body">Not ready yet: fix what doesn’t agree in Xero (shown above), then show the preview again.</p>
+      )}
+      <div className="vst-row"><Button Icon={ArrowRightLeft} disabled={!ready || !connected || x.busy} onClick={x.bringIn}>Bring it in</Button></div>
     </Card>
   )
 }
