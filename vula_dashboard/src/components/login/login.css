@@ -45,7 +45,10 @@
   .vlg { align-items: flex-start; padding: var(--space-4); }
   .vlg-card { padding: var(--space-5) var(--space-4) !important; }
 }
-.vlg-wa .vui-btn { color: var(--brand-text) !important; }
+/* the text-only links in the WhatsApp box read in the brand's text colour. Only those: on the
+   filled "Send me a code" / "Log in" buttons it made the label the colour of the fill, so on
+   DIGG's black they were blank black bars (5 Nov 2026). */
+.vlg-wa .vui-btn--quiet { color: var(--brand-text) !important; }
 
 /* password box with a show/hide eye */
 .vlg-pw { position: relative; display: block; }

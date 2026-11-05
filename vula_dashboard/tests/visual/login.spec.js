@@ -2,6 +2,7 @@
 // tenant" banner (UX redesign Phase F, 2026-10-20). UI_V2=1. Each screen GATES on axe
 // (serious/critical = fail) and on no sideways scroll at 390px.
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { VIEWPORTS, THEMES, openScreen } from "./screens.js";
@@ -19,16 +20,22 @@ async function check(page, ti, name, vp, viewport, scope) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
 }
 
-const QR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21"><rect width="21" height="21" fill="#fff"/><rect x="1" y="1" width="7" height="7"/><rect x="13" y="1" width="7" height="7"/><rect x="1" y="13" width="7" height="7"/><rect x="10" y="10" width="3" height="3"/></svg>';
+// The QR exactly as the server makes it (wa_login._qr_svg): a fake one with a viewBox hid that the
+// real one, fixed at 222px, was cut off in its 184px box (5 Nov 2026).
+const QR_SVG = readFileSync(path.join(process.cwd(), "tests/visual/fixtures/wa-login-qr.svg"), "utf8");
 
 /** Signed out, on the tenant's own address: the login wears its brand and offers a WhatsApp QR. */
-async function openLogin(page, { viewport, theme }, calls = [], { tenant = F.TENANT_ID } = {}) {
+async function openLogin(page, { viewport, theme }, calls = [], { tenant = F.TENANT_ID, status = "pending", brand = null } = {}) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
   await page.setViewportSize(viewport);
   await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
   await page.clock.setFixedTime(new Date(NOW_ISO));
   await installMockApi(page, { role: "owner" });
+  if (brand) {     // registered after the mock API, so it wins
+    await page.route(/api\.vula\.test\/v1\/commerce\/[^/]+\/brand/, (route) => route.fulfill({
+      status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(brand) }));
+  }
   await page.addInitScript((t) => { try { localStorage.setItem("vula-theme-mode", t); } catch { /* blocked */ } }, theme);
   await page.route(/api\.vula\.test\/v1\/(tenants\/by-domain|auth\/wa\/)/, async (route) => {
     const req = route.request();
@@ -38,7 +45,7 @@ async function openLogin(page, { viewport, theme }, calls = [], { tenant = F.TEN
     calls.push({ path: url.pathname, body: req.postDataJSON?.() ?? null });
     const body = url.pathname.endsWith("/by-domain") ? (tenant ? { tenant_id: tenant } : {})
       : url.pathname.endsWith("/start") ? { available: true, id: "wal-1", secret: "s-1", link: "https://wa.me/27820000000?text=Login%20K7F4QX", qr_svg: QR_SVG, code: "K7F4QX" }
-      : url.pathname.endsWith("/status") ? { status: "pending" }
+      : url.pathname.endsWith("/status") ? { status }
       : url.pathname.endsWith("/code") ? { id: "wac-1", secret: "s-2", message: "We sent a 6-digit code to your WhatsApp." }
       : {};
     return route.fulfill({ status: 200, contentType: "application/json", headers: cors, body: JSON.stringify(body) });
@@ -75,6 +82,88 @@ for (const theme of THEMES) {
     await check(page, ti, "login-vula", `mobile-${theme}`, VIEWPORTS.mobile, "main.vlg");
     expect(errors).toEqual([]);
   });
+}
+
+test("the WhatsApp QR fits its box: no edge cut off, so a phone can read it", async ({ page }) => {
+  await openLogin(page, { viewport: VIEWPORTS.desktop, theme: "light" });
+  const box = await page.getByRole("img", { name: "WhatsApp login QR code" }).boundingBox();
+  const drawn = await page.locator(".vlg-qr svg path").first().boundingBox();     // the modules themselves
+  expect(drawn.x).toBeGreaterThanOrEqual(box.x);
+  expect(drawn.y).toBeGreaterThanOrEqual(box.y);
+  expect(drawn.x + drawn.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+  expect(drawn.y + drawn.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
+});
+
+// Ian, 5 Nov 2026: after scanning, "Send me a code instead" did nothing. The QR's status check
+// (one already in flight, or dev's second StrictMode start) answered "awaiting approval" after
+// the switch and flipped the page back to the QR, so the code form never showed.
+test("Send me a code instead works after the QR was scanned, and stops checking the QR", async ({ page }) => {
+  const calls = [];
+  await openLogin(page, { viewport: VIEWPORTS.desktop, theme: "light" }, calls, { status: "awaiting_approval" });
+  await expect(page.getByText("Now tap Approve in WhatsApp on your phone…")).toBeVisible();
+  await page.getByRole("button", { name: "Send me a code instead" }).click();
+  await expect(page.getByLabel("Your WhatsApp number")).toBeVisible();
+  const checks = calls.filter((c) => c.path.endsWith("/wa/status")).length;
+  await page.waitForTimeout(5000);                      // more than two polls later
+  await expect(page.getByLabel("Your WhatsApp number")).toBeVisible();
+  await expect(page.getByRole("img", { name: "WhatsApp login QR code" })).toHaveCount(0);
+  expect(calls.filter((c) => c.path.endsWith("/wa/status")).length).toBeLessThanOrEqual(checks + 1);   // one may have been in flight
+  // and back to the QR when they'd rather scan
+  await page.getByRole("button", { name: "Scan a QR code instead" }).click();
+  await expect(page.getByRole("img", { name: "WhatsApp login QR code" })).toBeVisible();
+});
+
+const DIGG_BRAND = { name: "DIGG Architecture", accent_color: "#000000", secondary_color: "#ed4b11", ink_color: "#1E1E1E", font_pairing: "modern" };
+
+// Same report: on DIGG's black brand a tap showed nothing — the hover was a 4% darken, which does
+// nothing to black or to a text-only button, and there was no pressed look at all.
+test("buttons show hover and press on a black brand", async ({ page }) => {
+  await openLogin(page, { viewport: VIEWPORTS.desktop, theme: "light" }, [], { brand: DIGG_BRAND });
+  await expect(page.getByText("DIGG Architecture")).toBeVisible();
+  const shadow = (b) => b.evaluate((el) => getComputedStyle(el).boxShadow);
+  for (const name of ["Send me a code instead", "Sign in", "Continue with Google"]) {
+    const b = page.getByRole("button", { name, exact: true });
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(200);
+    const rest = await shadow(b);
+    await b.hover();
+    await page.waitForTimeout(200);
+    const hover = await shadow(b);
+    await page.mouse.down();
+    await page.waitForTimeout(200);
+    const pressed = await shadow(b);
+    await page.mouse.up();
+    expect(rest, name).toBe("none");
+    expect(hover, name).toMatch(/inset/);
+    expect(pressed, name).toMatch(/inset/);
+    expect(pressed, name).not.toBe(hover);
+  }
+});
+
+// Ian, 5 Nov 2026: "the button if you send code / login button". Inside the WhatsApp box a rule
+// meant for the text links painted the filled buttons' labels in the brand colour, the colour of
+// their own fill: on DIGG's black, "Send me a code" and "Log in" were blank black bars.
+for (const theme of THEMES) {
+  for (const [who, brand] of [["DIGG's black brand", DIGG_BRAND], ["Vula's own brand", null]]) {
+    test(`WhatsApp code buttons have readable labels: ${who}, ${theme}`, async ({ page }) => {
+      await openLogin(page, { viewport: VIEWPORTS.desktop, theme }, [], { brand });
+      const ratio = (name) => page.getByRole("button", { name, exact: true }).evaluate((el) => {
+        const rgb = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const lum = ([r, g, b]) => [r, g, b].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+          .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
+        const cs = getComputedStyle(el);
+        const [a, b] = [lum(rgb(cs.color)), lum(rgb(cs.backgroundColor))].sort((x, y) => y - x);
+        return (a + 0.05) / (b + 0.05);
+      });
+      expect(await ratio("Sign in")).toBeGreaterThanOrEqual(3);
+      await page.getByRole("button", { name: "Send me a code instead" }).click();
+      await page.getByLabel("Your WhatsApp number").fill("082 000 0001");
+      expect(await ratio("Send me a code")).toBeGreaterThanOrEqual(3);
+      await page.getByRole("button", { name: "Send me a code", exact: true }).click();
+      await page.getByLabel("6-digit code").fill("123456");
+      expect(await ratio("Log in")).toBeGreaterThanOrEqual(3);
+    });
+  }
 }
 
 test("login: the WhatsApp code path, reset and back make the same calls", async ({ page }) => {
@@ -145,3 +234,21 @@ for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
     });
   }
 }
+
+// Ian, 5 Nov 2026: signed in as master on DIGG's address, Master HQ kept DIGG's tab title and
+// icon. Master HQ wears Vula's; opening a tenant wears theirs; back to HQ is Vula's again.
+test("Master HQ wears Vula's title and icon, a tenant opened as tenant wears theirs", async ({ page }) => {
+  const head = () => page.evaluate(() => ({ title: document.title, icon: document.querySelector('link[rel="icon"]')?.getAttribute("href") }));
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.waitForLoadState("networkidle");
+  expect(await head()).toEqual({ title: "Vula — Unlock Your Business", icon: "/icon.svg" });
+  await page.getByText("Harbour & Vine Deli", { exact: true }).locator("visible=true").first().click();
+  await page.getByRole("button", { name: "Open as tenant" }).click();
+  const dlg = page.getByRole("dialog").filter({ hasText: "Why are you opening it?" });
+  await dlg.getByRole("textbox").fill("support ticket #123");
+  await dlg.getByRole("button", { name: "Open workspace" }).click();
+  await page.locator(".v2-impersonate").waitFor();
+  await expect.poll(async () => (await head()).title).not.toBe("Vula — Unlock Your Business");
+  await page.getByRole("button", { name: "Master HQ" }).locator("visible=true").first().click();
+  await expect.poll(head).toEqual({ title: "Vula — Unlock Your Business", icon: "/icon.svg" });
+});
