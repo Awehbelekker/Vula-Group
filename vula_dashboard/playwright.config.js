@@ -3,15 +3,15 @@
 // from seeded demo data, so no screenshot ever contains production data.
 import { defineConfig } from "@playwright/test";
 
-// UI_V2=1 runs the redesign: a build with VITE_UI_V2 on (its own port, so a server already
-// running the current look is never reused), and the mocked tenant switched onto it.
-const UI_V2 = process.env.UI_V2 === "1";
+// The redesign is the dashboard (2026-11-05): every run is the redesign. Specs still read
+// UI_V2 to skip the old look's tests until those are deleted with it.
+process.env.UI_V2 = "1";
 
 // A service worker's own requests go through context.route() (pwa.spec.js hands the worker a
 // build's file list); Chromium-only, and off unless asked for. Specs that block service workers
 // are unaffected.
 process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS ??= "1";
-const PORT = UI_V2 ? 4180 : 4179;
+const PORT = 4180;
 export default defineConfig({
   testDir: "tests/visual",
   outputDir: "tests/visual/.results",
@@ -35,7 +35,6 @@ export default defineConfig({
       VITE_API_URL: "http://api.vula.test",
       VITE_SUPABASE_URL: "http://supabase.vula.test",
       VITE_SUPABASE_ANON_KEY: "test-anon-key",
-      VITE_UI_V2: UI_V2 ? "true" : "false",
     },
   },
 });

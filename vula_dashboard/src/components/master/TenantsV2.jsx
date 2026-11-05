@@ -160,8 +160,6 @@ export function ManageTenantV2({ tenant, registry, onSave }) {
       </fieldset>
       <label className="vms-check"><input type="checkbox" checked={m.shareNetwork} onChange={e => m.setShareNetwork(e.target.checked)} />
         Share this tenant's reviewed answers with other Vula businesses (opt-in — see Knowledge)</label>
-      <label className="vms-check"><input type="checkbox" checked={m.uiV2} onChange={e => m.setUiV2(e.target.checked)} />
-        New dashboard design (untick to put this business back on the old one)</label>
       <div className="vms-row"><Button type="submit">Save changes</Button></div>
     </form>
   )
