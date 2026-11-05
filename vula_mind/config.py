@@ -394,13 +394,14 @@ class Settings(BaseSettings):
 
     # ── Xero OAuth app (one app for all tenants — moving a business's books into Vula) ──
     # Register at developer.xero.com; redirect URI = <api>/v1/xero/oauth/callback.
-    # Read-only granular scopes (Xero, 2 Mar 2026); override only if Xero renames one.
+    # Read-only granular scopes (Xero, 2 Mar 2026), attachments too (the PDFs behind bills) — a
+    # one-off move, then disconnect. Override only if Xero renames one.
     xero_client_id: str = ""
     xero_client_secret: str = ""
     xero_scopes: str = ("openid profile email offline_access accounting.settings.read "
                         "accounting.contacts.read accounting.invoices.read accounting.payments.read "
                         "accounting.banktransactions.read accounting.manualjournals.read "
-                        "accounting.reports.trialbalance.read")
+                        "accounting.reports.trialbalance.read accounting.attachments.read")
 
     # ── Vula Commerce ────────────────────────────────────────────────────────
     # Supabase service role key alias (commerce service uses this name)

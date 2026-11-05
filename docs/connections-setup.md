@@ -52,7 +52,8 @@ One Azure app serves both.
 
 ## Xero (Move from Xero)
 
-Lets a business bring its books across from Xero (Settings › Move from Xero). Vula only reads Xero.
+Lets a business bring its books across from Xero once (Settings › Move from Xero). Vula only reads
+Xero, and disconnects itself when the move is done and checked.
 
 1. https://developer.xero.com › **My Apps** › **New app**. Name `Vula`; integration type **Web app**;
    company URL `https://vula-ai.com`; redirect URI `API/v1/xero/oauth/callback`
@@ -62,7 +63,7 @@ Lets a business bring its books across from Xero (Settings › Move from Xero). 
 4. Pricing (Xero, 2026): Starter is free for up to 5 connected businesses; Core (about R420/month)
    for up to 50. Disconnecting a business after its move frees its slot.
 5. Vula asks for read-only scopes (`XERO_SCOPES` in config.py): settings, contacts, invoices,
-   payments, bank transactions, manual journals and the trial balance report. If Xero ever refuses
+   payments, bank transactions, manual journals, attachments and the trial balance report. If Xero ever refuses
    one by name, set `XERO_SCOPES` in Railway to the corrected list — no code change.
 
 ## After setting up
