@@ -117,11 +117,18 @@ export function useMasterUsage({ onError }) {
   return { u }
 }
 
-export function useMasterUsers({ onError }) {
+export function useMasterUsers({ onError, prefill, onConsumePrefill }) {
   const [users, setUsers] = useState(null)
   const [tenants, setTenants] = useState([])
   const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ tenant_id: '', email: '', name: '', role: 'staff' })
+  const [form, setForm] = useState({ tenant_id: '', email: '', name: '', whatsapp: '', role: 'staff' })
+  // Onboard's "Team & logins" step opens this form for that business, as its owner (5 Nov 2026)
+  useEffect(() => {
+    if (!prefill) return
+    setForm((f) => ({ ...f, email: '', name: '', whatsapp: '', ...prefill }))
+    setCreating(true)
+    onConsumePrefill && onConsumePrefill()
+  }, [prefill])  // eslint-disable-line
   const [busy, setBusy] = useState(null)
   const [notice, setNotice] = useState('')
 
@@ -143,12 +150,13 @@ export function useMasterUsers({ onError }) {
     try {
       const r = await authFetch(`/v1/master/tenants/${form.tenant_id}/users`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: form.email.trim(), name: form.name.trim() || undefined, role: form.role }),
+        body: JSON.stringify({ email: form.email.trim(), name: form.name.trim() || undefined, role: form.role,
+          whatsapp: form.whatsapp.trim() || undefined }),
       })
       if (r.error) onError(r.error)
       else {
         setNotice(`Created ${r.email} — temp password: ${r.temp_password}`)
-        setForm(f => ({ ...f, email: '', name: '' })); setCreating(false); load()
+        setForm(f => ({ ...f, email: '', name: '', whatsapp: '' })); setCreating(false); load()
       }
     } catch (e) { onError(e.message) } finally { setBusy(null) }
   }

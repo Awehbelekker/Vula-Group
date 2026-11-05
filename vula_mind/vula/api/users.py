@@ -16,6 +16,7 @@ before, any member could create logins or change roles, and the list had no chec
 """
 from __future__ import annotations
 
+import re
 import logging
 import secrets
 from typing import Optional
@@ -129,14 +130,21 @@ async def create_user(tenant: str, body: CreateUserIn,
     # never actually be found again after creation. Now matches by whatsapp OR email (whichever
     # is available) and always stores email, so the restriction this endpoint is asked to set up
     # is actually reachable afterward.
-    if body.whatsapp or body.email:
+    # 5 Nov 2026: the WhatsApp number is stored as digits, the way Team stores it (so the same
+    # person isn't two rows), and a number given for someone already on the team by email is
+    # added to that row — it's what WhatsApp sign-in and Vula's messages to them go by.
+    whatsapp = re.sub(r"\D", "", body.whatsapp or "") or None
+    if whatsapp or body.email:
         try:
             db = _client()
-            q = db.table("vula_team_members").select("id").eq("tenant_id", tenant)
-            q = q.eq("whatsapp", body.whatsapp) if body.whatsapp else q.eq("email", body.email)
-            ex = (q.limit(1).execute().data or [])
-            row = {"tenant_id": tenant, "name": body.name or body.email, "whatsapp": body.whatsapp,
-                   "email": body.email, "role": body.role, "access": body.access or [], "active": True}
+            base = lambda: db.table("vula_team_members").select("id").eq("tenant_id", tenant)  # noqa: E731
+            ex = (base().eq("whatsapp", whatsapp).limit(1).execute().data or []) if whatsapp else []
+            if not ex and body.email:
+                ex = base().eq("email", body.email).limit(1).execute().data or []
+            row = {"tenant_id": tenant, "name": body.name or body.email, "email": body.email,
+                   "role": body.role, "access": body.access or [], "active": True}
+            if whatsapp:
+                row["whatsapp"] = whatsapp
             if ex:
                 db.table("vula_team_members").update(row).eq("id", ex[0]["id"]).execute()
             else:

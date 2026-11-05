@@ -40,7 +40,7 @@ export default function TenantDetailV2({ tenantId, onOpenTenant, onBack }) {
       </div>
       <PillTabs label="Tenant" tabs={TABS} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <p className="vms-error" role="alert">{err}</p>}
-      {tab === 'overview' && <Overview tenantId={tenantId} onError={setErr} />}
+      {tab === 'overview' && <Overview tenantId={tenantId} onError={setErr} onOpenTenant={onOpenTenant} />}
       {tab === 'usage' && <Usage tenantId={tenantId} onError={setErr} />}
       {tab === 'audit' && <Audit tenantId={tenantId} onError={setErr} />}
       {tab === 'escalations' && <Escalations tenantId={tenantId} onError={setErr} />}
@@ -50,7 +50,7 @@ export default function TenantDetailV2({ tenantId, onOpenTenant, onBack }) {
   )
 }
 
-function Overview({ tenantId, onError }) {
+function Overview({ tenantId, onError, onOpenTenant }) {
   const { tenant: t, registry, save } = useTenantOverview({ tenantId, onError })
   if (!t) return loading
   return (
@@ -65,18 +65,23 @@ function Overview({ tenantId, onError }) {
         </div>
         <ManageTenantV2 key={t.tenant_id} tenant={t} registry={registry} onSave={save} />
       </Card>
-      <LinkNumber tenantId={tenantId} />
+      <LinkNumber tenantId={tenantId} onOpenTenant={onOpenTenant} />
       <Catalogue tenantId={tenantId} />
     </>
   )
 }
 
-function LinkNumber({ tenantId }) {
+// The business's WhatsApp line, two ways (5 Nov 2026: a new business showed no obvious place for
+// it): the owner connects their own number in their Settings (Meta's guided window, their own
+// Meta account), or Master links a number added on Vula's WhatsApp account.
+function LinkNumber({ tenantId, onOpenTenant }) {
   const x = useLinkWhatsAppNumber({ tenantId })
   return (
     <Card className="vms-form">
-      <h3 className="vms-h"><Smartphone size={16} aria-hidden="true" className="vms-ic" />Link a WhatsApp number on Vula’s account</h3>
-      <p className="vms-muted">For a number added in WhatsApp Manager on Vula’s WhatsApp Business Account. Paste its phone number ID; add the 6-digit PIN only if Meta still needs the number registered. The PIN isn’t saved.</p>
+      <h3 className="vms-h"><Smartphone size={16} aria-hidden="true" className="vms-ic" />The business’s WhatsApp number</h3>
+      <p className="vms-muted"><b>Their own number (best for a real client):</b> the owner connects it in their Settings › Connections › WhatsApp, with their phone nearby, in about 2 minutes. The number stays on their own Meta account.</p>
+      {onOpenTenant && <div className="vms-row"><Button size="sm" variant="secondary" Icon={ArrowRight} onClick={() => onOpenTenant(tenantId)}>Open their workspace to connect it</Button></div>}
+      <p className="vms-muted"><b>A number on Vula’s WhatsApp account (good for a test business):</b> in WhatsApp Manager on Vula’s account, Add phone number and verify it by SMS, then paste its phone number ID here. Add the 6-digit PIN only if Meta still needs the number registered; it isn’t saved.</p>
       <form className="vms-grid" onSubmit={(e) => { e.preventDefault(); x.link() }}>
         <Field label="Phone number ID"><Input value={x.pnid} onChange={(e) => x.setPnid(e.target.value)} inputMode="numeric" /></Field>
         <Field label="PIN (optional)"><Input value={x.pin} onChange={(e) => x.setPin(e.target.value)} inputMode="numeric" type="password" autoComplete="off" /></Field>
