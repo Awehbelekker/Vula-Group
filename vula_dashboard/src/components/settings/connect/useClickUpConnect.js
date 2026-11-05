@@ -112,6 +112,9 @@ export function useClickUpConnect(tenantId) {
     loadStatus()
   }
 
+  // Vula's own ClickUp app is set up, so the Connect button can finish (vula/connections.py);
+  // without it the card offers the token straight away instead of a window that goes nowhere.
+  const oneTap = account?.one_tap !== false
   return { status, account, lists, loading, error, notice, showToken, setShowToken, token, setToken,
-    handleConnect, connectWithToken, refileMissing, setDefaultList }
+    handleConnect, connectWithToken, refileMissing, setDefaultList, oneTap }
 }

@@ -22,6 +22,7 @@ import WhatsAppConnectV2 from './connect/WhatsAppConnectV2'
 import ClickUpConnectV2 from './connect/ClickUpConnectV2'
 import OAuthConnectV2 from './connect/OAuthConnectV2'
 import EmailConnectV2 from './connect/EmailConnectV2'
+import ConnectionsHealth from './connect/ConnectionsHealth'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
 import './settings.css'
 
@@ -65,6 +66,7 @@ export default function SettingsV2({ tenantId, tenantName, adminEmail }) {
   return (
     <div className="vst" data-open={open ? 'true' : 'false'}>
       <PageHeader sub="Your business, how you get paid, WhatsApp and the apps Vula works with." />
+      <ConnectionsHealth tenantId={tenantId} onOpen={setOpen} />
       <div className="vst-panes">
         <nav className="vst-nav" aria-label="Settings sections">
           {GROUPS.map(g => (

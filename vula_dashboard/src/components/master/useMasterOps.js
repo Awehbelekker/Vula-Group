@@ -46,6 +46,25 @@ export function useAppErrors({ onError }) {
   return { errors, resolve }
 }
 
+/** Every business's app connections as last checked (GET /v1/master/connections), and running
+ * the check now (POST …/check — owners are told on WhatsApp what broke). vula/connections.py. */
+export function useMasterConnections({ onError }) {
+  const [c, setC] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const load = () => authFetch('/v1/master/connections').then(setC).catch(e => onError(e.message))
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  const checkNow = async () => {
+    setBusy(true); setMsg('')
+    try {
+      const r = await authFetch('/v1/master/connections/check', { method: 'POST' })
+      setMsg(`Checked ${r.tenants || 0} businesses: ${r.broken || 0} broken connection${r.broken === 1 ? '' : 's'}, ${r.told || 0} owner message${r.told === 1 ? '' : 's'} sent.`)
+      await load()
+    } catch (e) { onError(e.message) } finally { setBusy(false) }
+  }
+  return { c, busy, msg, checkNow }
+}
+
 /** Vula's WhatsApp login-code template on each WhatsApp account (Meta's review status), and
  * submitting it where it's missing — only that template (GET/POST /v1/master/wa-login-template). */
 export function useLoginTemplate({ onError }) {

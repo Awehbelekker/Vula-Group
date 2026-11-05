@@ -27,8 +27,9 @@ def _redirect_uri() -> str:
 
 @router.get("/authorize-url")
 async def authorize_url(tenant_id: str) -> dict:
-    if not settings.microsoft_client_id:
-        return {"error": "Microsoft app not configured (MICROSOFT_CLIENT_ID missing)."}
+    from vula import connections
+    if not connections.one_tap("microsoft"):
+        return await connections.not_available("microsoft")
     params = {
         "client_id": settings.microsoft_client_id,
         "response_type": "code",
@@ -78,4 +79,7 @@ async def status(tenant_id: str) -> dict:
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
     except Exception:
         rows = []
-    return rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
+    from vula import connections
+    out = rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
+    out["one_tap"] = connections.one_tap("microsoft")   # its Connect button can work
+    return out
