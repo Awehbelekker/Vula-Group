@@ -61,10 +61,16 @@ def _first_name(name: Optional[str]) -> str:
 
 
 # ── The questions ──────────────────────────────────────────────────────────────────────────────
-# kind: profile (business_profile answer), name, hours, email, vat, bank, logo, documents, team.
+# kind: profile (business_profile answer), name, website, hours, email, vat, bank, logo, documents, team.
 STEPS: List[Dict[str, str]] = [
     {"key": "name", "kind": "name", "label": "Business name",
      "q": "What's the business called, the way customers should see it on invoices and messages?"},
+    # 5 Nov 2026 (Ian): the owner can give the website on WhatsApp too, not only Master. It sets the
+    # brand and starts the import (website_setup.py); later questions then offer what it says.
+    # Skipped when Master was given the website.
+    {"key": "website", "kind": "website", "label": "Website",
+     "q": "Do you have a website? Send the address and I'll take your logo, colours, products and the "
+          "pages customers ask about from it, or reply *no*."},
     {"key": "what_we_do", "kind": "profile", "label": "What you do",
      "q": "In a sentence or two: what does the business sell or do, and for whom?"},
     {"key": "area", "kind": "profile", "label": "Where you work",
@@ -197,6 +203,13 @@ async def send_welcome(row: Dict[str, Any]) -> str:
     return status
 
 
+def _website_answer(site: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Master was given the website and it could be read: its question isn't asked again."""
+    if site and site.get("url") and not site.get("error"):
+        return {"website": re.sub(r"^https?://", "", site["url"])}
+    return {}
+
+
 async def create_client(identity: Dict[str, Any], *, tenant_id: str, display_name: str,
                         business_type: str, owner_name: str, owner_whatsapp: str,
                         owner_email: Optional[str] = None, send_welcome_now: bool = True,
@@ -228,7 +241,8 @@ async def create_client(identity: Dict[str, Any], *, tenant_id: str, display_nam
     from vula import team_index
     team_index.invalidate(tenant_id)
     row = {"tenant_id": tenant_id, "owner_phone": phone, "owner_name": owner_name.strip(),
-           "owner_email": email, "status": "invited", "step": STEPS[0]["key"], "answers": {},
+           "owner_email": email, "status": "invited", "step": STEPS[0]["key"],
+           "answers": _website_answer(out.get("website")),
            "created_by": (identity or {}).get("email") or (identity or {}).get("sub"),
            "invited_at": _now().isoformat(), "updated_at": _now().isoformat()}
     db.table(TABLE).upsert(row).execute()
@@ -375,6 +389,27 @@ async def _save(row: Dict[str, Any], step: Dict[str, str], text: str) -> Tuple[O
     tid = row["tenant_id"]
     kind = step["kind"]
     text = (text or "").strip()
+    if kind == "website":
+        if re.match(r"^\s*(?:no|nope|none|we don'?t|not yet|n)\b", text, re.I):
+            return "No website", None
+        m = re.search(r"(?:https?://)?(?:[\w-]+\.)+[a-z]{2,}(?:/\S*)?", text, re.I)
+        if not m:
+            return None, "Send the website address, e.g. *seaviewtiles.co.za*, or reply *no*."
+        from vula.commerce import website_setup
+        try:
+            out = await website_setup.start(tid, m.group(0))
+        except ValueError as exc:
+            return None, f"{exc}. Send the address again, or reply *no*."
+        except Exception:
+            return None, "I couldn't open that website just now — check the address and send it again, or reply *no*."
+        site = re.sub(r"^https?://", "", out.get("url") or m.group(0))
+        brand = out.get("brand") or {}
+        bits = [site]
+        if brand.get("applied"):
+            bits.append("your colours" + (" and logo" if brand.get("logo_url") else "") + " are set")
+        if out.get("import_started"):
+            bits.append("I'm reading your products and pages now (a minute or two)")
+        return " — ".join(bits), None
     if kind == "name":
         name = text[:120]
         _db().table("vula_tenant_config").update({"display_name": name}).eq("tenant_id", tid).execute()
@@ -472,8 +507,26 @@ def _next_key(step_key: str) -> Optional[str]:
     return STEPS[i + 1]["key"] if i + 1 < len(STEPS) else None
 
 
+async def _already_answered(tid: str, key: str, answers: Dict[str, Any]) -> bool:
+    """A question that needn't be asked: the website Master was given, or a logo the website
+    already gave (read back from the invoice settings)."""
+    if key == "website":
+        return bool(answers.get("website"))
+    if key == "logo" and answers.get("website") not in (None, "", "skipped", "No website"):
+        try:
+            from vula.commerce import service
+            return bool((await service.get_invoice_settings(tid) or {}).get("logo_url"))
+        except Exception:
+            return False
+    return False
+
+
 async def _advance(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) -> str:
     nxt = _next_key(row.get("step") or STEPS[0]["key"])
+    while nxt and await _already_answered(row["tenant_id"], nxt, answers):
+        if nxt == "logo" and not answers.get("logo"):
+            answers = {**answers, "logo": "From the website"}
+        nxt = _next_key(nxt)
     if not nxt:
         return await _finish(row, answers, prefix)
     _update(row["tenant_id"], {"step": nxt, "answers": answers, "status": "in_progress"})
