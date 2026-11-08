@@ -6,6 +6,8 @@
 import { supabase } from './supabase'
 
 export const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+/** Fired on window whenever Vula's API answers 401 (sign in required). */
+export const UNAUTHORIZED_EVENT = 'vula-unauthorized'
 
 export async function authFetch(path, opts = {}) {
   const { data } = await supabase.auth.getSession()
@@ -29,8 +31,8 @@ export function installAuthFetch() {
   window.__vulaAuthFetchInstalled = true
   const raw = window.fetch.bind(window)
   window.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : (input?.url || '')
     try {
-      const url = typeof input === 'string' ? input : (input?.url || '')
       if (url.startsWith(VULA_API)) {
         const { data } = await supabase.auth.getSession()
         const token = data?.session?.access_token
@@ -41,6 +43,14 @@ export function installAuthFetch() {
         }
       }
     } catch { /* never let auth decoration break a request */ }
-    return raw(input, init)
+    const resp = await raw(input, init)
+    // Vula said "sign in required": tell the app, which checks whether the sign-in really ran
+    // out (App.jsx, lib/session.js). 8 Nov 2026: a phone whose sign-in had expired kept showing
+    // the dashboard while every request was turned away, and connecting a mailbox looked like
+    // a wrong password.
+    if (resp.status === 401 && url.startsWith(VULA_API)) {
+      try { window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: { url } })) } catch { /* no window */ }
+    }
+    return resp
   }
 }

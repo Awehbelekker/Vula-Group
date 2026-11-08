@@ -26,7 +26,8 @@ import VulaQuickLauncher from "./components/VulaQuickLauncher";
 const VulaReports = lazyScreen(() => import("./components/VulaReports"));
 const VulaPayments = lazyScreen(() => import("./components/VulaPayments"));
 const VulaMasterPanel = lazyScreen(() => import("./components/VulaMasterPanel"));
-import { VULA_API, authFetch } from "./lib/authFetch";
+import { UNAUTHORIZED_EVENT, VULA_API, authFetch } from "./lib/authFetch";
+import { stillSignedIn } from "./lib/session";
 import { Button, promptDialog } from "./components/ui/index.jsx";
 import { ArrowLeft, Eye } from "lucide-react";
 import VulaLogo from "./components/brand/VulaLogo.jsx";
@@ -156,7 +157,22 @@ export default function App() {
   const [navRequest, setNavRequest] = useState(null);   // open a section's sub-tab (redesigned shell)
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
-  const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
+  const { user, role, tenantId, logout, expire, signedOutEmail, access, full, teamRole, teamPhone, setMember } = useAuthStore();
+
+  // Vula turned a request away as "sign in required": if the sign-in really has run out, go back
+  // to the login page and say so, instead of showing screens that can no longer load or save
+  // (8 Nov 2026). One check at a time; offline or unsure never signs anyone out.
+  useEffect(() => {
+    if (!user) return undefined;
+    let checking = false;
+    const onUnauthorized = async () => {
+      if (checking) return;
+      checking = true;
+      try { if ((await stillSignedIn()) === false) await expire(); } finally { checking = false; }
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [user, expire]);
 
   // DB-driven tenant switcher: every configured tenant, not a hardcoded pair. Read again when
   // Master creates a business ("vula-tenants-changed", master/useMasterTenants.js): it loaded
@@ -335,7 +351,8 @@ export default function App() {
 
   // Show login if not authenticated
   if (!user) {
-    return <VulaLogin onSuccess={() => {}} />;
+    return <VulaLogin onSuccess={() => {}} email={signedOutEmail || ""}
+      notice={signedOutEmail ? "You've been signed out on this phone. Sign in again to carry on." : ""} />;
   }
 
   // #/ui-kit — every shared component on demo data (2026-10-17, UX redesign). Master only: it

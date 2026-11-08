@@ -14,6 +14,17 @@ export const PRESETS = {
   'Gmail (app pwd)':   { imap_host: 'imap.gmail.com', imap_port: 993, smtp_host: 'smtp.gmail.com', smtp_port: 465 },
   'Office 365':        { imap_host: 'outlook.office365.com', imap_port: 993, smtp_host: 'smtp.office365.com', smtp_port: 587 },
 }
+/** Why a mailbox didn't connect, in words (8 Nov 2026: every failure used to read as a wrong
+ *  password — including being signed out, when the mail server was never even asked). */
+export function connectError(status, d = {}) {
+  if (status === 401) return "You've been signed out, so the mailbox wasn't tried. Sign in again, then connect it."
+  if (status === 403) return "This login can't change this business's email settings."
+  if (status >= 500 || status === 0) return "Vula couldn't be reached just now. Try again in a minute."
+  if (d.error) return `Couldn't connect: ${d.error}`
+  if (d.detail) return `Couldn't connect: ${typeof d.detail === 'string' ? d.detail : 'check the details and try again.'}`
+  return 'Could not connect — check the host, port and (app) password.'
+}
+
 export const blank = { email: '', password: '', from_name: '', imap_host: '', imap_port: 993, smtp_host: '', smtp_port: 465, send_mode: 'draft' }
 
 export function useEmailConnect({ tenantId, adminEmail }) {
@@ -47,9 +58,9 @@ export function useEmailConnect({ tenantId, adminEmail }) {
         body: JSON.stringify({ tenant_id: tenantId, connected_by: adminEmail, ...form,
           imap_port: Number(form.imap_port), smtp_port: Number(form.smtp_port) }),
       })
-      const d = await r.json()
+      const d = await r.json().catch(() => ({}))
       if (d.status === 'connected') { setForm(blank); setShowForm(false); loadStatus() }
-      else setError(d.error || 'Could not connect — check the host, port and (app) password.')
+      else setError(connectError(r.status, d))
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 

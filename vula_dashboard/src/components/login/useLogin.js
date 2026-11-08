@@ -16,14 +16,14 @@ import { VULA_API } from '../../lib/authFetch'
 // tenant's saved brand — name, logo, colours, font. The static host list is only a first guess.
 const HOST_HINT = resolveTenantFromHost()
 
-export function useLogin({ onSuccess } = {}) {
+export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}) {
   const [mode, setMode] = useState('login')      // 'login' | 'reset_request' | 'set_password' | 'signup' | 'setup_workspace'
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(knownEmail)   // who was signed in, when the sign-in ran out
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
-  const [info, setInfo] = useState('')
+  const [info, setInfo] = useState(notice)       // e.g. "You've been signed out on this phone…"
   const [loading, setLoading] = useState(false)
   const [loginBrand, setLoginBrand] = useState(null)
   const { login } = useAuthStore()
