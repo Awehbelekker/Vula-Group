@@ -1,4 +1,4 @@
--- 251_delivery_enabled.sql — a shop can be collection only (8 Nov 2026).
+-- 252_delivery_enabled.sql — a shop can be collection only (8 Nov 2026).
 --
 -- The WhatsApp setup now asks a shop how customers get their orders (delivery, collection or
 -- both; vula/onboard_wa.py). Collection already had collection_enabled (migration 177); delivery

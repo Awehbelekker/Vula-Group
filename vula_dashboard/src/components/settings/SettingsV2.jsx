@@ -7,11 +7,11 @@
  */
 import { useEffect, useState } from 'react'
 import {
-  ArrowLeft, ArrowRightLeft, Bell, Bike, Brain, ChevronRight, ClipboardList, Clock, Cloud, Contact, CreditCard, Globe, ImageUp, LayoutGrid,
-  ListChecks, Mail, MapPin, MessageCircle, Moon, Palette, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, Wallet, X,
+  ArrowLeft, ArrowRightLeft, Bell, Bike, Brain, CalendarCheck, ChevronRight, ClipboardList, Clock, Cloud, Contact, CreditCard, Globe, ImageUp, Inbox, LayoutGrid,
+  ListChecks, Mail, MapPin, Menu, MessageCircle, Moon, Palette, Plus, Search, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, Wallet, X,
 } from 'lucide-react'
-import { Button, Card, Field, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
-import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES, THEME_EVENT, getThemeMode, setThemeMode } from '../../theme/tokens'
+import { Button, Card, Field, FloatingToolbar, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
+import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES, NAV_STYLES, THEME_EVENT, getThemeMode, setThemeMode } from '../../theme/tokens'
 import BrandPreview from './BrandPreview'
 import { NotificationsPanel } from '../notifications/NotificationsPanel.jsx'
 import YocoConnectV2 from './connect/YocoConnectV2'
@@ -134,11 +134,32 @@ function Section({ id, tenantId, tenantName, adminEmail, onOpen }) {
 
 const Saved = ({ children }) => (children ? <span className="vst-msg" role="status">{String(children).replace(' ✓', '')}</span> : null)
 
+// The phone menu as it will look, in the brand's colour: tap Today or Inbox to see it move.
+// The buttons are a sample; each person's real menu shows the ones their role allows.
+function PhoneMenuPreview({ navStyle }) {
+  const [on, setOn] = useState('today')
+  const noop = () => {}
+  return (
+    <div className="vst-menu-preview">
+      <FloatingToolbar preview navStyle={navStyle} label="Phone menu preview" items={[
+        { id: 'search', label: 'Search', Icon: Search, onClick: noop },
+        { id: 'add', label: 'Add', Icon: Plus, onClick: noop, primary: true },
+        { id: 'today', label: 'Today', Icon: CalendarCheck, onClick: () => setOn('today'), current: on === 'today' },
+        { id: 'inbox', label: 'Inbox', Icon: Inbox, onClick: () => setOn('inbox'), current: on === 'inbox', count: 3 },
+        { id: 'more', label: 'More', Icon: Menu, onClick: noop },
+      ]} />
+      <p className="vst-sub">How the menu at the bottom of the screen looks on a phone. Tap Today or Inbox to try it.</p>
+    </div>
+  )
+}
+
 function Choices({ label, options, value, onChange, shape }) {
+  // an id can't hold a space: "Logo size" as an id gave its group no name for screen readers
+  const id = `vst-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
   return (
     <div className="vst-choice">
-      <span className="vst-label" id={`vst-${label}`}>{label}</span>
-      <div className="vst-chips" role="group" aria-labelledby={`vst-${label}`}>
+      <span className="vst-label" id={id}>{label}</span>
+      <div className="vst-chips" role="group" aria-labelledby={id}>
         {Object.entries(options).map(([k, l]) => (
           <button key={k} type="button" className="vui-chip" aria-pressed={value === k} onClick={() => onChange(k)}
             style={shape ? { borderRadius: k === 'sharp' ? 2 : k === 'soft' ? 6 : 12 } : undefined}>{l}</button>))}
@@ -243,6 +264,8 @@ function BrandKit({ tenantId }) {
           </Field>
           <Choices label="Corners" options={CORNER_STYLES} value={b.corners} onChange={b.setCorners} shape />
           <Choices label="Spacing" options={DENSITIES} value={b.density} onChange={b.setDensity} />
+          <Choices label="Phone menu" options={NAV_STYLES} value={b.navStyle} onChange={b.setNavStyle} />
+          <PhoneMenuPreview navStyle={b.navStyle} />
         </Card>
 
         <Card className="vst-card">

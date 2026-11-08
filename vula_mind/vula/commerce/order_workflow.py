@@ -32,7 +32,7 @@ _DEFAULTS = {
     "business_hours": None, "business_hours_note": None, "after_hours_message": None,
     # Collection / pickup (migration 177) — opt-in; collection_note says where and when.
     "collection_enabled": False, "collection_note": None,
-    # Delivery offered at all (migration 251): False = collection only.
+    # Delivery offered at all (migration 252): False = collection only.
     "delivery_enabled": True,
 }
 _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp",

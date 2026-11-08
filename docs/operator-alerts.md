@@ -57,7 +57,7 @@ Vula's own number also sets up a new business (`vula/onboard_wa.py`, migration 2
    pricing (8 Nov 2026): delivery, collection or both; where and when to collect; delivery areas
    and fee ("Seaview, Main Road — R60, free over R500"); minimum order; and the WhatsApp number
    for new-order alerts. They're saved into the order settings that button checkout reads
-   (migration 251 adds `delivery_enabled` for collection-only shops), and other businesses never
+   (migration 252 adds `delivery_enabled` for collection-only shops), and other businesses never
    see them.
 3. Until the business connects a number of its own, its owner and team work with Vula through
    Vula's number. Their messages are handled as that business, and every reply for it (proactive

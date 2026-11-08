@@ -648,6 +648,18 @@ async def test_upsert_invoice_settings_rejects_bad_template(fake_db):
 
 
 @pytest.mark.asyncio
+async def test_phone_menu_style_saves_and_reaches_the_public_brand(fake_db):
+    """Migration 251: the brand kit's phone-menu look — one of three, 'classic' when unset."""
+    from vula.api.commerce import public_brand
+    assert (await public_brand(TENANT))["nav_style"] == "classic"
+    row = await service.upsert_invoice_settings(TENANT, {"nav_style": "float"})
+    assert row["nav_style"] == "float"
+    assert (await public_brand(TENANT))["nav_style"] == "float"
+    with pytest.raises(ValueError):
+        await service.upsert_invoice_settings(TENANT, {"nav_style": "neon-wave"})
+
+
+@pytest.mark.asyncio
 async def test_invoice_settings_are_tenant_scoped(fake_db):
     await service.upsert_invoice_settings(TENANT, {"vat_number": "AAA", "onboarded": True})
     assert await service.get_invoice_settings(OTHER) is None

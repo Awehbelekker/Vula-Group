@@ -155,7 +155,7 @@ async def _fulfilment(phone: str, tenant_id: str, cart: Dict[str, Any]) -> None:
                        [{"id": "cart_more", "title": "Keep shopping"}])
         return
     if cfg.get("delivery_enabled") is False and cfg.get("collection_enabled"):
-        # collection only (migration 251)
+        # collection only (migration 252)
         _update_cart(tenant_id, cart["id"], {"delivery_address": COLLECTION, "delivery_slot": None})
         await summary(phone, tenant_id)
         return
