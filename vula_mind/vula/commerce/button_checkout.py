@@ -7,7 +7,8 @@ database lookup, and no model chooses anything:
 
   1. the cart, priced from the database, with Continue / Change cart (plus a line for anything
      out of stock or not matched, with Remove it / Ask the team)
-  2. Delivery or Collect (only when the shop offers collection)
+  2. Delivery or Collect (only when the shop offers collection; a collection-only shop goes
+     straight to the summary)
   3. the address: "Same as last time" for a returning customer, else typed (the one free-text
      step, held as an open question so the reply is taken as the address)
   4. Morning or Afternoon
@@ -153,6 +154,11 @@ async def _fulfilment(phone: str, tenant_id: str, cart: Dict[str, Any]) -> None:
                        "Add a little more and check out again.",
                        [{"id": "cart_more", "title": "Keep shopping"}])
         return
+    if cfg.get("delivery_enabled") is False and cfg.get("collection_enabled"):
+        # collection only (migration 251)
+        _update_cart(tenant_id, cart["id"], {"delivery_address": COLLECTION, "delivery_slot": None})
+        await summary(phone, tenant_id)
+        return
     if cfg.get("collection_enabled"):
         note = (cfg.get("collection_note") or "").strip()
         await _buttons(phone, tenant_id, "Delivery or collect?" + (f"\n\nCollection: {note}" if note else ""),
@@ -275,7 +281,10 @@ async def handle(phone: str, tenant_id: str, reply_id: str) -> bool:
         if not await start(phone, tenant_id, intro="Removed ✅"):
             await _text(phone, tenant_id, "Removed ✅ Your cart is now empty — reply *shop* to browse.")
     elif step == "del":
-        await _address(phone, tenant_id, cart)
+        if _settings(tenant_id).get("delivery_enabled") is False:
+            await _fulfilment(phone, tenant_id, cart)       # collection only: no delivery to choose
+        else:
+            await _address(phone, tenant_id, cart)
     elif step == "col":
         if not _settings(tenant_id).get("collection_enabled"):
             await _address(phone, tenant_id, cart)

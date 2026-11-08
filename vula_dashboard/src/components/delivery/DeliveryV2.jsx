@@ -94,6 +94,10 @@ function Workflow({ tenantId }) {
         <label className="vsl-check"><input type="checkbox" checked={!!s.collection_enabled} onChange={(e) => w.save({ collection_enabled: e.target.checked })} />
           Offer collection — no delivery fee, no address needed</label>
         {s.collection_enabled && (
+          <label className="vsl-check"><input type="checkbox" checked={s.delivery_enabled === false}
+            onChange={(e) => w.save({ delivery_enabled: !e.target.checked })} />
+            Collection only — we don't deliver</label>)}
+        {s.collection_enabled && (
           <Field label="Where and when to collect"><Input placeholder="e.g. Shop, 12 Main Rd — weekdays 9–5" defaultValue={s.collection_note || ''}
             onBlur={(e) => e.target.value !== (s.collection_note || '') && w.save({ collection_note: e.target.value })} /></Field>)}
       </div>

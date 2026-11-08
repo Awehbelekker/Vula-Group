@@ -157,7 +157,7 @@ def test_master_makes_the_business_puts_the_owner_on_the_team_and_sends_the_welc
     row = ob.get(T)
     assert row["status"] == "invited" and row["owner_phone"] == OWNER and row["welcome_status"] == "sent"
     assert world.sent == [("template", OWNER, ps.SETUP_TEMPLATE, ("Sam", "Seaview Tiles"))]
-    assert out["onboarding"]["step_number"] == 1 and out["onboarding"]["total"] == len(ob.STEPS)
+    assert out["onboarding"]["step_number"] == 1 and out["onboarding"]["total"] == 13   # no shop questions
 
 
 def test_a_bad_number_is_refused_and_nothing_is_made(world):
@@ -461,3 +461,88 @@ def test_a_website_given_in_master_is_not_asked_again(world, monkeypatch):
     _say("Start")
     _say("Seaview Tiles")
     assert ob.get(T)["step"] == "what_we_do" and ob.get(T)["answers"]["website"] == "seaviewtiles.example"
+
+
+# ── 8 Nov 2026: shop questions (master brief item 9) ───────────────────────────────────────────
+# A business that sells products is asked how orders reach customers, where it delivers and
+# what it costs, its minimum order and who gets order alerts — saved into the order settings
+# button checkout reads, and read back from them. Other businesses never see these.
+
+@pytest.fixture()
+def shop(world, monkeypatch):
+    from vula.commerce import order_workflow as ow
+    world.orders.clear()
+
+    def get_settings(tid):
+        return {**ow._DEFAULTS, **(world.orders.get(tid) or {})}
+    monkeypatch.setattr(ow, "get_order_settings", get_settings)
+    _make(world)
+    next(r for r in world.db.t["vula_tenant_config"] if r["tenant_id"] == T)["modules"] = ["products", "orders"]
+    _say("Start")
+    _say("Seaview Fish")
+    _say("no")                                                         # website
+    for a in ("Fresh fish for homes", "Seaview", "Mon–Sat 8–4", "EFT or card", "price list"):
+        _say(a)
+    assert ob.get(T)["step"] == "fulfilment", ob.get(T)["step"]
+    return world
+
+
+def test_a_shop_answers_how_orders_reach_customers_and_it_lands_in_order_settings(shop):
+    w = shop
+    assert "Question 8 of 18" in _last(w)                             # 13 + 5 shop questions
+    _say("we do both")
+    assert w.orders[T]["collection_enabled"] is True and w.orders[T]["delivery_enabled"] is True
+    assert "Delivery and collection" in _last(w) and ob.get(T)["step"] == "collection_point"
+    _say("12 Harbour Road, Mon–Sat 8–4")
+    assert w.orders[T]["collection_note"] == "12 Harbour Road, Mon–Sat 8–4"
+    _say("we deliver")                                                 # no fee: asked again
+    assert "Send the areas and the fee" in _last(w) and ob.get(T)["step"] == "delivery"
+    _say("Seaview, Main Road and Oak Street — R60, free over R500")
+    assert w.orders[T]["delivery_areas"] == ["Seaview", "Main Road", "Oak Street"]
+    assert w.orders[T]["delivery_fee_cents"] == 6000 and w.orders[T]["free_delivery_over_cents"] == 50000
+    assert "Seaview, Main Road, Oak Street — R60.00, free over R500.00" in _last(w)
+    _say("R150")
+    assert w.orders[T]["min_order_cents"] == 15000
+    _say("me")
+    assert w.orders[T]["fulfillment_whatsapp"] == OWNER and w.orders[T]["dispatch_channel"] == "whatsapp"
+    assert ob.get(T)["step"] == "email"
+
+
+def test_collection_only_skips_the_delivery_question_and_another_number_gets_alerts(shop):
+    w = shop
+    _say("collection only")
+    assert w.orders[T]["delivery_enabled"] is False and w.orders[T]["collection_enabled"] is True
+    _say("12 Harbour Road")
+    assert ob.get(T)["step"] == "min_order"                            # no delivery question
+    assert "Question 10 of 17" in _last(w)
+    _say("no")
+    assert w.orders[T]["min_order_cents"] is None and "No minimum" in _last(w)
+    _say("082 000 0009")
+    assert w.orders[T]["fulfillment_whatsapp"] == "27820000009"
+
+
+def test_delivery_only_skips_the_collection_question(shop):
+    w = shop
+    _say("delivery")
+    assert w.orders[T]["collection_enabled"] is False and ob.get(T)["step"] == "delivery"
+    _say("free")
+    assert w.orders[T]["delivery_fee_cents"] == 0 and "free" in _last(w)
+
+
+def test_a_business_that_doesnt_sell_products_never_sees_the_shop_questions(world):
+    _make(world)
+    _say("Start")
+    assert "Question 1 of 13" in _last(world)
+    ob._update(T, {"step": "pricing"})
+    _say("Quote per job")
+    assert ob.get(T)["step"] == "email" and "Question 8 of 13" in _last(world)
+
+
+def test_the_parsers():
+    assert ob.parse_fulfilment("deliver and pick-up") == "both"
+    assert ob.parse_fulfilment("customers collect") == "collection"
+    assert ob.parse_fulfilment("?") is None
+    assert ob.rand_cents("R1 500") == 150000 and ob.rand_cents("R1,500.50") == 150050
+    assert ob.parse_delivery("we deliver to Seaview, R45.50") == {"areas": ["Seaview"], "fee_cents": 4550,
+                                                                  "free_over_cents": None}
+    assert ob.parse_delivery("anywhere nearby") is None

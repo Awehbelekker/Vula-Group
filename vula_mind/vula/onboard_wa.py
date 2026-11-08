@@ -81,6 +81,22 @@ STEPS: List[Dict[str, str]] = [
      "q": "How do customers pay you (EFT, card, cash, payment link), and what are your payment terms?"},
     {"key": "pricing", "kind": "profile", "label": "Pricing",
      "q": "How do you price: a fixed price list, a quote per job, or per hour/m²? Anything you always add (call-out, delivery)?"},
+    # 8 Nov 2026 (master brief item 9): for a business that sells products, how its orders reach
+    # customers. Saved straight into the order settings button checkout uses; skipped otherwise.
+    {"key": "fulfilment", "kind": "fulfilment", "label": "How orders reach customers", "shop": True,
+     "q": "How do customers get their orders? Reply *delivery*, *collection* or *both*."},
+    {"key": "collection_point", "kind": "collection_point", "label": "Collection", "shop": True,
+     "needs": ("collection", "both"),
+     "q": "Where and when can customers collect? e.g. *12 Harbour Road, Mon–Sat 8–4*"},
+    {"key": "delivery", "kind": "delivery", "label": "Delivery areas and fee", "shop": True,
+     "needs": ("delivery", "both"),
+     "q": "Where do you deliver, and what does it cost? e.g. *Seaview, Main Road, Oak Street — R60, "
+          "free over R500*"},
+    {"key": "min_order", "kind": "min_order", "label": "Minimum order", "shop": True,
+     "q": "Is there a minimum order? Send the amount (e.g. *R150*), or reply *no*."},
+    {"key": "order_alerts", "kind": "order_alerts", "label": "Order alerts", "shop": True,
+     "q": "Which WhatsApp number should get a message for every new order? Reply *me* for this number, "
+          "or send another number."},
     {"key": "email", "kind": "email", "label": "Email",
      "q": "Which email address should go on your invoices and quotes?"},
     {"key": "vat", "kind": "vat", "label": "VAT",
@@ -104,6 +120,87 @@ def _index(step: Optional[str]) -> int:
     return next((i for i, s in enumerate(STEPS) if s["key"] == step), 0)
 
 
+# The fulfilment answer as read back → which of the follow-up questions apply.
+_FULFILMENT_LABEL = {"delivery": "Delivery only", "collection": "Collection only", "both": "Delivery and collection"}
+_FULFILMENT_KEY = {v: k for k, v in _FULFILMENT_LABEL.items()}
+
+
+def parse_fulfilment(text: str) -> Optional[str]:
+    t = (text or "").lower()
+    both = re.search(r"\bboth\b|\band\b.*\b(collect|pick)", t) or (
+        re.search(r"\bdeliver", t) and re.search(r"\b(collect|pick\s*-?\s*up)", t))
+    if both:
+        return "both"
+    if re.search(r"\b(collect\w*|pick\s*-?\s*up|pickup)\b", t):
+        return "collection"
+    if re.search(r"\bdeliver\w*\b", t):
+        return "delivery"
+    return None
+
+
+_AMOUNT = r"R?\s?(\d{1,3}(?:[ ,]\d{3})+|\d+)(?:[.,](\d{1,2}))?"
+
+
+def rand_cents(text: str) -> Optional[int]:
+    """'R1 500', 'R1,500.50', '150' → cents. None when there's no amount."""
+    m = re.search(_AMOUNT, text or "")
+    if not m:
+        return None
+    whole = int(re.sub(r"[ ,]", "", m.group(1)))
+    frac = (m.group(2) or "0").ljust(2, "0")
+    return whole * 100 + int(frac)
+
+
+def parse_delivery(text: str) -> Optional[Dict[str, Any]]:
+    """'Seaview, Main Road and Oak Street — R60, free over R500' → areas, fee, free-over (cents).
+    None without a fee (or the word free)."""
+    t = (text or "").strip()
+    free_over = None
+    m = re.search(r"free\s+(?:delivery\s+)?(?:over|above|from|on orders over|for orders over)\s+(" + _AMOUNT + ")", t, re.I)
+    if m:
+        free_over = rand_cents(m.group(1))
+        t_wo = t[:m.start()] + " " + t[m.end():]
+    else:
+        t_wo = t
+    fee_m = re.search(r"R\s?\d", t_wo) or re.search(r"\b\d+(?:[.,]\d{1,2})?\b", t_wo)
+    if fee_m:
+        fee = rand_cents(t_wo[fee_m.start():])
+        cut = fee_m.start()
+    elif re.search(r"\bfree\b", t_wo, re.I):
+        fee, cut = 0, re.search(r"\bfree\b", t_wo, re.I).start()
+    else:
+        return None
+    head = re.sub(r"^\s*(?:we\s+)?(?:deliver(?:y)?\s*(?:to|in|areas?)?|areas?)\s*:?\s*", "", t_wo[:cut], flags=re.I)
+    head = re.sub(r"[\s—–\-:,;]+$", "", head)
+    areas = [a.strip(" .") for a in re.split(r",|;|/|\band\b|\n", head) if a.strip(" .")]
+    return {"areas": areas[:30], "fee_cents": fee, "free_over_cents": free_over}
+
+
+def _sells(tenant_id: Optional[str]) -> bool:
+    """Does this business sell products (its modules)? Then the shop questions are asked."""
+    if not tenant_id:
+        return False
+    try:
+        from vula.api.tenants import tenant_profile
+        return bool(tenant_profile(tenant_id).get("sells_products"))
+    except Exception:
+        return False
+
+
+def _applies(step: Dict[str, Any], answers: Dict[str, Any], sells: bool) -> bool:
+    if step.get("shop") and not sells:
+        return False
+    needs = step.get("needs")
+    got = _FULFILMENT_KEY.get(str(answers.get("fulfilment") or ""))
+    return not (needs and got and got not in needs)
+
+
+def _steps_for(tenant_id: Optional[str], answers: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The questions this business is asked, in order."""
+    sells = _sells(tenant_id)
+    return [s for s in STEPS if _applies(s, answers or {}, sells)]
+
+
 def _draft(tenant_id: Optional[str], step_key: str) -> Optional[Dict[str, str]]:
     """The answer drafted from the business's website for this question, if any (5 Nov 2026:
     'Import from your website' drafts the profile answers, vula/commerce/profile_from_site.py)."""
@@ -121,9 +218,16 @@ _YES_RE = re.compile(r"^\s*(?:y|yes|yep|yebo|ja|correct|that'?s (?:right|correct
                      r"still (?:right|true|correct)|👍|✅)\s*[.!]?\s*$", re.I)
 
 
-def _ask(step_key: str, tenant_id: Optional[str] = None) -> str:
-    i = _index(step_key)
-    text = f"*Question {i + 1} of {len(STEPS)}:* {STEPS[i]['q']}"
+def _ask(step_key: str, tenant_id: Optional[str] = None, answers: Optional[Dict[str, Any]] = None) -> str:
+    if answers is None and tenant_id:
+        try:
+            answers = (get(tenant_id) or {}).get("answers") or {}
+        except Exception:
+            answers = {}
+    steps = _steps_for(tenant_id, answers)
+    keys = [s["key"] for s in steps]
+    n = keys.index(step_key) + 1 if step_key in keys else _index(step_key) + 1
+    text = f"*Question {n} of {len(steps)}:* {_BY_KEY.get(step_key, STEPS[0])['q']}"
     draft = _draft(tenant_id, step_key)
     if draft:
         text += f"\n\nYour website says: “{draft['answer']}”\nReply *yes* to keep that, or send the right answer."
@@ -269,13 +373,15 @@ async def nudge(tenant_id: str) -> Dict[str, Any]:
 
 def public(row: Dict[str, Any]) -> Dict[str, Any]:
     answers = row.get("answers") or {}
-    i = _index(row.get("step"))
+    steps = _steps_for(row.get("tenant_id"), answers)
+    keys = [s["key"] for s in steps]
+    i = keys.index(row.get("step")) if row.get("step") in keys else _index(row.get("step"))
     return {
         "tenant_id": row.get("tenant_id"), "owner_name": row.get("owner_name"),
         "owner_phone": row.get("owner_phone"), "status": row.get("status"),
         "step": row.get("step"), "step_label": _BY_KEY.get(row.get("step") or "", {}).get("label"),
-        "step_number": len(STEPS) if row.get("status") == "done" else i + 1, "total": len(STEPS),
-        "answered": sum(1 for s in STEPS if answers.get(s["key"]) not in (None, "", "skipped")),
+        "step_number": len(steps) if row.get("status") == "done" else i + 1, "total": len(steps),
+        "answered": sum(1 for s in steps if answers.get(s["key"]) not in (None, "", "skipped")),
         "answers": answers, "welcome_status": row.get("welcome_status"),
         "invited_at": row.get("invited_at"), "last_message_at": row.get("last_message_at"),
         "reminded_at": row.get("reminded_at"), "completed_at": row.get("completed_at"),
@@ -389,6 +495,8 @@ async def _save(row: Dict[str, Any], step: Dict[str, str], text: str) -> Tuple[O
     tid = row["tenant_id"]
     kind = step["kind"]
     text = (text or "").strip()
+    if kind in ("fulfilment", "collection_point", "delivery", "min_order", "order_alerts"):
+        return await _save_shop(row, kind, text)
     if kind == "website":
         if re.match(r"^\s*(?:no|nope|none|we don'?t|not yet|n)\b", text, re.I):
             return "No website", None
@@ -466,6 +574,68 @@ async def _save(row: Dict[str, Any], step: Dict[str, str], text: str) -> Tuple[O
     return None, None
 
 
+async def _save_shop(row: Dict[str, Any], kind: str, text: str) -> Tuple[Optional[str], Optional[str]]:
+    """The shop questions, saved into the order settings and read back from them."""
+    from vula.commerce import order_workflow as ow
+    tid = row["tenant_id"]
+    if kind == "fulfilment":
+        how = parse_fulfilment(text)
+        if not how:
+            return None, "Reply *delivery*, *collection* or *both*."
+        ow.upsert_order_settings(tid, {"collection_enabled": how in ("collection", "both"),
+                                       "delivery_enabled": how in ("delivery", "both")})
+        cfg = ow.get_order_settings(tid)
+        got = ("both" if cfg.get("collection_enabled") and cfg.get("delivery_enabled") is not False
+               else "collection" if cfg.get("collection_enabled") else "delivery")
+        return (_FULFILMENT_LABEL[how], None) if got == how else (None, "I couldn't save that just now — send it again?")
+    if kind == "collection_point":
+        if len(text) < 4:
+            return None, "Send where and when customers can collect, e.g. *12 Harbour Road, Mon–Sat 8–4*."
+        ow.upsert_order_settings(tid, {"collection_note": text[:300]})
+        back = ow.get_order_settings(tid).get("collection_note")
+        return (back, None) if back == text[:300] else (None, "I couldn't save that just now — send it again?")
+    if kind == "delivery":
+        d = parse_delivery(text)
+        if not d:
+            return None, ("Send the areas and the fee, e.g. *Seaview, Main Road — R60, free over R500* "
+                          "(or *free* if delivery costs nothing).")
+        patch = {"delivery_fee_cents": d["fee_cents"], "free_delivery_over_cents": d["free_over_cents"]}
+        if d["areas"]:
+            patch["delivery_areas"] = d["areas"]
+        ow.upsert_order_settings(tid, patch)
+        cfg = ow.get_order_settings(tid)
+        if cfg.get("delivery_fee_cents") != d["fee_cents"]:
+            return None, "I couldn't save that just now — send it again?"
+        line = ("free" if not d["fee_cents"] else f"R{d['fee_cents'] / 100:,.2f}")
+        if cfg.get("free_delivery_over_cents"):
+            line += f", free over R{cfg['free_delivery_over_cents'] / 100:,.2f}"
+        if cfg.get("delivery_areas"):
+            line = ", ".join(cfg["delivery_areas"]) + " — " + line
+        return line, None
+    if kind == "min_order":
+        if re.match(r"^\s*(?:no|none|nope|n|0)\b", text, re.I):
+            ow.upsert_order_settings(tid, {"min_order_cents": None})
+            return ("No minimum", None) if not ow.get_order_settings(tid).get("min_order_cents") else (None, "Send it again?")
+        cents = rand_cents(text)
+        if not cents:
+            return None, "Send the minimum order amount, e.g. *R150*, or reply *no*."
+        ow.upsert_order_settings(tid, {"min_order_cents": cents})
+        back = ow.get_order_settings(tid).get("min_order_cents")
+        return (f"R{back / 100:,.2f}", None) if back == cents else (None, "I couldn't save that just now — send it again?")
+    if kind == "order_alerts":
+        if re.match(r"^\s*(?:me|mine|this(?: number| one)?|my number|here)\s*[.!]?\s*$", text, re.I):
+            phone = row["owner_phone"]
+        else:
+            m = re.search(r"\+?\d[\d ()-]{8,}\d", text)
+            phone = digits(m.group(0)) if m else ""
+            if not (10 <= len(phone) <= 15):
+                return None, "Reply *me*, or send the WhatsApp number with its area code, e.g. *082 123 4567*."
+        ow.upsert_order_settings(tid, {"fulfillment_whatsapp": phone, "dispatch_channel": "whatsapp"})
+        back = digits(ow.get_order_settings(tid).get("fulfillment_whatsapp") or "")
+        return (back, None) if back == phone else (None, "I couldn't save that just now — send it again?")
+    return None, None
+
+
 async def _save_logo(row: Dict[str, Any], media_id: str, mime: str) -> Tuple[Optional[str], Optional[str]]:
     from vula.api import whatsapp as wa
     data = await wa._download_media_bytes(media_id)
@@ -523,14 +693,16 @@ async def _already_answered(tid: str, key: str, answers: Dict[str, Any]) -> bool
 
 async def _advance(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) -> str:
     nxt = _next_key(row.get("step") or STEPS[0]["key"])
-    while nxt and await _already_answered(row["tenant_id"], nxt, answers):
+    sells = _sells(row["tenant_id"])
+    while nxt and (not _applies(_BY_KEY[nxt], answers, sells)
+                   or await _already_answered(row["tenant_id"], nxt, answers)):
         if nxt == "logo" and not answers.get("logo"):
             answers = {**answers, "logo": "From the website"}
         nxt = _next_key(nxt)
     if not nxt:
         return await _finish(row, answers, prefix)
     _update(row["tenant_id"], {"step": nxt, "answers": answers, "status": "in_progress"})
-    return f"{prefix}\n\n{_ask(nxt, row['tenant_id'])}".strip()
+    return f"{prefix}\n\n{_ask(nxt, row['tenant_id'], answers)}".strip()
 
 
 async def _finish(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) -> str:
@@ -538,9 +710,10 @@ async def _finish(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) -> 
     _update(tid, {"status": "done", "answers": answers, "completed_at": _now().isoformat(), "step": None})
     from vula.api import tenants
     biz = _business_name(tid)
-    lines = [f"• {s['label']}: {answers.get(s['key'])}" for s in STEPS
+    steps = _steps_for(tid, answers)
+    lines = [f"• {s['label']}: {answers.get(s['key'])}" for s in steps
              if answers.get(s["key"]) not in (None, "", "skipped")]
-    skipped = [s["label"] for s in STEPS if answers.get(s["key"]) in (None, "", "skipped")]
+    skipped = [s["label"] for s in steps if answers.get(s["key"]) in (None, "", "skipped")]
     text = (f"{prefix}\n\nThat's {biz} set up ✅\n\n" + "\n".join(lines)).strip()
     if skipped:
         text += "\n\nStill to fill in (Settings, any time): " + ", ".join(skipped)
@@ -551,7 +724,7 @@ async def _finish(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) -> 
              f"number: {tenants.dashboard_link(tid, 'settings')} › WhatsApp.")
     try:
         from vula.integrations.platform_support import alert_operator
-        await alert_operator(f"{biz} ({tid}) finished its WhatsApp setup: {len(lines)} of {len(STEPS)} answered.")
+        await alert_operator(f"{biz} ({tid}) finished its WhatsApp setup: {len(lines)} of {len(steps)} answered.")
     except Exception:
         pass
     return text
@@ -560,7 +733,8 @@ async def _finish(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) -> 
 def _intro(row: Dict[str, Any]) -> str:
     biz = _business_name(row["tenant_id"])
     return (f"Welcome to Vula, {_first_name(row.get('owner_name'))}! 👋 Let's set up {biz} together: "
-            f"{len(STEPS)} short questions, one at a time. Answer each in a message. Reply *skip* to "
+            f"{len(_steps_for(row['tenant_id'], row.get('answers') or {}))} short questions, one at a time. "
+            "Answer each in a message. Reply *skip* to "
             "leave one for later, or *stop* to pause and *start* to carry on.")
 
 

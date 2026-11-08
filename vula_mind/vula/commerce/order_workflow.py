@@ -32,6 +32,8 @@ _DEFAULTS = {
     "business_hours": None, "business_hours_note": None, "after_hours_message": None,
     # Collection / pickup (migration 177) — opt-in; collection_note says where and when.
     "collection_enabled": False, "collection_note": None,
+    # Delivery offered at all (migration 251): False = collection only.
+    "delivery_enabled": True,
 }
 _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp",
            "payment_methods", "eft_details",
@@ -40,7 +42,7 @@ _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfill
            "hero_tagline", "hero_subtitle", "announcements", "cutoff_time",
            "express_delivery_extra_cents", "featured_product_ids",
            "business_hours", "business_hours_note", "after_hours_message",
-           "collection_enabled", "collection_note")
+           "collection_enabled", "collection_note", "delivery_enabled")
 
 # Customer-facing labels for the payment methods.
 PAYMENT_LABELS = {"online": "Card / online payment", "cod": "Pay on delivery", "eft": "EFT / bank transfer"}
@@ -122,10 +124,11 @@ def upsert_order_settings(tenant_id: str, patch: dict) -> dict:
     except Exception as exc:
         # The dashboard saves the whole settings object; before migration 177 the collection_*
         # columns don't exist, which must not break saving everything else.
-        if not any(k in row for k in ("collection_enabled", "collection_note")):
+        newer = ("collection_enabled", "collection_note", "delivery_enabled")
+        if not any(k in row for k in newer):
             raise
-        logger.warning("order settings saved without collection fields (run migration 177?): %s", exc)
-        _write({k: v for k, v in row.items() if k not in ("collection_enabled", "collection_note")})
+        logger.warning("order settings saved without collection/delivery fields (run migrations 177, 251?): %s", exc)
+        _write({k: v for k, v in row.items() if k not in newer})
     return get_order_settings(tenant_id)
 
 
