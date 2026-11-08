@@ -4426,6 +4426,9 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
     from vula.integrations.doc_filing import looks_like_project_answer
     kind, ref = q.get("kind"), q.get("ref_id")
     low = (text or "").strip().lower().rstrip(".!")
+    if kind == "checkout_address":
+        from vula.commerce import button_checkout
+        return await button_checkout.take_address(phone, tenant_id, text, q)
     if kind == "approval":
         a, r = _APPROVE_RE.match(text or ""), _REJECT_RE.match(text or "")
         if a or low in _YES_WORDS:
@@ -10002,6 +10005,16 @@ async def _handle_native_order(phone: str, order: dict, tenant_id: str) -> None:
     if note:
         lines.append(f"Note: {note}")
     if added:
+        # 8 Nov 2026: checkout with buttons (vula/commerce/button_checkout.py) — Continue,
+        # delivery or collect, address, slot, then pay — instead of a typed address the model
+        # had to take from there. Without buttons the old question stays.
+        try:
+            from vula.commerce import button_checkout
+            intro = "Got your order ✅" + (f"\nNote: {note}" if note else "")
+            if await button_checkout.start(phone, tenant_id, intro=intro, unmatched=missing):
+                return
+        except Exception as exc:
+            logger.warning("button checkout start failed for %s: %s", tenant_id, exc)
         lines.append("What's the delivery address?")
     await _send_reply(phone, "\n".join(lines), tenant_id)
 
@@ -10186,6 +10199,16 @@ async def _handle_commerce_interactive(
     phone: str, reply_id: str, reply_title: str, msg_id: str, tenant_id: str
 ) -> None:
     """Handle interactive list/button replies from the WhatsApp product catalog."""
+    if reply_id.startswith("chk_"):
+        # Checkout steps (vula/commerce/button_checkout.py): exact ids, no model.
+        from vula.commerce import button_checkout
+        try:
+            if await button_checkout.handle(phone, tenant_id, reply_id):
+                return
+        except Exception as exc:
+            logger.warning("button checkout step %s failed for %s: %s", reply_id[:20], tenant_id, exc)
+            await _handle_commerce_message(phone, "I'd like to check out now", msg_id, tenant_id)
+            return
     # Tap-to-order for shops with ranges in several colours (2026-10-13, SeedleMe): range →
     # colour → how many → cart → checkout, all from exact ids — no LLM picks the product.
     if reply_id.startswith("catp_") or reply_id.startswith("catc_"):
@@ -10221,6 +10244,12 @@ async def _handle_commerce_interactive(
             await _record_rating(phone, tenant_id, rows[0], int(n) if n.isdigit() else 3)
         return
     if reply_id == "cart_checkout":
+        try:
+            from vula.commerce import button_checkout
+            if await button_checkout.start(phone, tenant_id):
+                return
+        except Exception as exc:
+            logger.warning("button checkout start failed for %s: %s", tenant_id, exc)
         if not await _send_checkout_prompt(phone, tenant_id):
             await _handle_commerce_message(phone, "I'd like to check out now", msg_id, tenant_id)
         return
