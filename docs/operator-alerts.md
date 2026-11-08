@@ -53,7 +53,12 @@ Vula's own number also sets up a new business (`vula/onboard_wa.py`, migration 2
    A website address sent here starts the same scan as Master's Website field: brand now; products,
    pages and answer drafts in the background, which later questions offer as "Your website says…".
    The website question is skipped when Master was given the site, and the logo question when the
-   site gave a logo.
+   site gave a logo. A business that sells products is also asked five shop questions after
+   pricing (8 Nov 2026): delivery, collection or both; where and when to collect; delivery areas
+   and fee ("Seaview, Main Road — R60, free over R500"); minimum order; and the WhatsApp number
+   for new-order alerts. They're saved into the order settings that button checkout reads
+   (migration 252 adds `delivery_enabled` for collection-only shops), and other businesses never
+   see them.
 3. Until the business connects a number of its own, its owner and team work with Vula through
    Vula's number. Their messages are handled as that business, and every reply for it (proactive
    ones too) comes from Vula's number, never from the server's default number.

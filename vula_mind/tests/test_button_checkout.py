@@ -223,3 +223,13 @@ def test_the_webhook_hands_checkout_ids_to_this_module():
     assert 'reply_id.startswith("chk_")' in src and "button_checkout.handle" in src
     assert "button_checkout.start" in inspect.getsource(whatsapp._handle_native_order)
     assert 'kind == "checkout_address"' in inspect.getsource(whatsapp._try_open_question)
+
+
+def test_a_collection_only_shop_goes_straight_to_the_summary(make):
+    w = make()
+    w.cfg["delivery_enabled"] = False
+    tap(w, "chk_go")
+    assert w.cart["delivery_address"] == "Collection" and "Seaview Harbour" in w.last()[0]
+    assert w.ids() == ["chk_pay_eft", "chk_pay_cod"]
+    tap(w, "chk_del")                                                  # an old Delivery button
+    assert w.cart["delivery_address"] == "Collection"

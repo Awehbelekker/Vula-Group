@@ -1369,6 +1369,9 @@ class CommerceAssistantSkill(BaseSkill):
                              + (f" Collection details: {cfg['collection_note']}" if cfg.get("collection_note") else ""))
             else:
                 lines.append("Collection is NOT offered — every order is delivered.")
+            if cfg.get("delivery_enabled") is False:
+                lines.append("Delivery is NOT offered — every order is COLLECTED: pass "
+                             "fulfilment='collection' to review_order/place_order and never ask for an address.")
             if cfg.get("delivery_radius_km") and cfg.get("origin_lat") is not None:
                 lines.append(f"We deliver within {cfg['delivery_radius_km']:g} km of "
                              f"{cfg.get('origin_label') or 'the shop'}. If a customer shares their "
@@ -2886,6 +2889,9 @@ class CommerceAssistantSkill(BaseSkill):
         collect = _wants_collection(args)
         if collect and not cfg.get("collection_enabled"):
             return {"error": "This shop doesn't offer collection — ask for a delivery address instead."}
+        if not collect and cfg.get("delivery_enabled") is False:
+            return {"error": "This shop doesn't deliver — orders are collected. Place it with "
+                             "fulfilment='collection'."}
         address = "Collection" if collect else (args.get("delivery_address") or "").strip()
         if not address:
             return {"error": "Need a delivery address before placing the order — ask the customer for it."}
