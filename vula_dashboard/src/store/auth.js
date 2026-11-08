@@ -25,7 +25,15 @@ export const useAuthStore = create(
                            // sales-rep dashboard tabs (contacts/reminders/call sheet/etc.) to
                            // their own data without the frontend having to guess/pass it around.
 
-      login: (user, tenantId, role) => set({ user, tenantId, role }),
+      signedOutEmail: null, // who was signed in when the sign-in ran out (expire below)
+
+      // Signing in after the sign-in ran out: someone else on a shared phone mustn't find the
+      // last person's files or unsent scans (the same clean-up a real sign-out does).
+      login: (user, tenantId, role) => {
+        const before = get().signedOutEmail
+        if (before && (user?.email || '').toLowerCase() !== before.toLowerCase()) clearPersonData()
+        set({ user, tenantId, role, signedOutEmail: null })
+      },
       setMember: ({ access, full, role: teamRole, whatsapp }) =>
         set({ access: access || [], full: !!full, teamRole: teamRole || null, teamPhone: whatsapp || null }),
       // Sign-out must kill the SUPABASE session too — clearing only the store left the session
@@ -40,7 +48,15 @@ export const useAuthStore = create(
         try { if (get().tenantId) await turnOffPush(get().tenantId) } catch { /* best effort */ }
         try { await supabase.auth.signOut() } catch { /* still clear local state */ }
         await clearPersonData()
-        set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null })
+        set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null, signedOutEmail: null })
+      },
+      // The sign-in ran out (lib/session.js): back to the login page with a note saying so.
+      // Unlike logout this keeps what's on the phone (unsent stock scans, scanner photos) for the
+      // same person signing back in, and doesn't ask: there is no session left to keep.
+      expire: async () => {
+        const email = get().user?.email || null
+        try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* already gone */ }
+        set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null, signedOutEmail: email })
       },
     }),
     { name: 'vula-auth' }

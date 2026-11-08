@@ -12,8 +12,8 @@ import { useLogin } from './useLogin'
 import { isPhone, NO_CODE_HINT, useWhatsAppLogin } from './useWhatsAppLogin'
 import './login.css'
 
-export default function LoginV2({ onSuccess }) {
-  const x = useLogin({ onSuccess })
+export default function LoginV2({ onSuccess, notice = '', email = '' }) {
+  const x = useLogin({ onSuccess, notice, email })
   const go = (mode) => { x.setMode(mode); x.setError(''); x.setInfo('') }
   const b = x.loginBrand
 

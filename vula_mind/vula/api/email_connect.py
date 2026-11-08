@@ -48,7 +48,13 @@ async def connect(body: ConnectIn, authorization: str = Header(default="")) -> d
              "imap_host": body.imap_host, "imap_port": body.imap_port}
     test = await service.test_connection(creds)
     if not test.get("ok"):
-        return {"status": "error", "error": test.get("error") or "IMAP login failed"}
+        # 8 Nov 2026: the raw IMAP error ("b'[AUTHENTICATIONFAILED]…'") read like noise, and the
+        # card blamed the password for every failure. Say what went wrong, in the same words the
+        # mailbox card uses when a connected mailbox stops signing in.
+        from vula.readiness import mailbox_problem
+        raw = test.get("error") or "login failed"
+        problem = mailbox_problem(raw)
+        return {"status": "error", "error": problem[:1].upper() + problem[1:] + ".", "detail": raw}
 
     db = _client()
     # First mailbox a tenant connects becomes primary automatically; later ones don't touch
