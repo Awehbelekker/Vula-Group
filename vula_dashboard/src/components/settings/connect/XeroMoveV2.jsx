@@ -121,7 +121,11 @@ function BringIn({ x, connected }) {
         <span className="vst-row"><StatusChip tone="ok"><Check size={14} aria-hidden="true" />Moved</StatusChip>
           <span className="vst-strong">Your books from Xero are in Vula</span></span>
         <p className="vst-sub">{r.documents} invoices, bills and credit notes ({r.open_documents} still open), opening balances for {r.opening_accounts} accounts,
-          {' '}{r.suppliers_added} suppliers and {r.customers_added} customers added. Customers owe {money(r.receivables_cents)}; you owe suppliers {money(r.payables_cents)} — both agree with Xero to the cent. Vula has disconnected from Xero.</p>
+          {' '}{r.suppliers_added} suppliers and {r.customers_added} customers added{r.attachments ? `, ${r.attachments} attached files (in Documents)` : ''}. Customers owe {money(r.receivables_cents)}; you owe suppliers {money(r.payables_cents)} — both agree with Xero to the cent. Vula has disconnected from Xero.</p>
+        {r.attachments_skipped?.length > 0 && (
+          <details><summary className="vst-sub">{r.attachments_skipped.length} attached file{r.attachments_skipped.length === 1 ? '' : 's'} not brought across</summary>
+            <ul className="vcn-list">{r.attachments_skipped.map(t => <li key={t} className="vcn-item"><span className="vst-sub">{t}</span></li>)}</ul>
+          </details>)}
         <div className="vst-row"><Button size="sm" variant="quiet" Icon={Undo2} onClick={x.undo}>Undo this move</Button></div>
       </Card>
     )

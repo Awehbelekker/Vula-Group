@@ -65,8 +65,21 @@ class XeroClient:
                 "Accept": "application/json"}
 
     async def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return (await self._request(path, params)).json() or {}
+
+    async def get_bytes(self, path: str, accept: str, max_bytes: int) -> bytes:
+        """A file (an attachment). Refused when it is bigger than max_bytes."""
+        r = await self._request(path, None, accept=accept or "application/octet-stream")
+        if len(r.content) > max_bytes:
+            raise ValueError(f"bigger than {max_bytes // (1024 * 1024)} MB")
+        return r.content
+
+    async def _request(self, path: str, params: Optional[Dict[str, Any]] = None,
+                       accept: Optional[str] = None) -> httpx.Response:
         for attempt in range(3):
             headers = await self._headers()
+            if accept:
+                headers["Accept"] = accept
             async with httpx.AsyncClient(timeout=60.0, transport=self._transport) as client:
                 r = await client.get(f"{API}/{path}", params=params or {}, headers=headers)
             self.calls += 1
@@ -81,7 +94,7 @@ class XeroClient:
                 raise PermissionError(f"Xero didn't allow reading {path.split('/')[0]} (missing permission)")
             if r.status_code >= 400:
                 raise RuntimeError(f"Xero {path.split('/')[0]}: error {r.status_code}")
-            return r.json() or {}
+            return r
         raise RuntimeError("Xero kept asking Vula to slow down — try again in a few minutes")
 
     async def pages(self, path: str, key: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -124,6 +137,15 @@ class XeroClient:
 
     async def manual_journals(self) -> List[Dict[str, Any]]:
         return await self.pages("ManualJournals", "ManualJournals")
+
+    async def attachments(self, endpoint: str, record_id: str) -> List[Dict[str, Any]]:
+        """The files attached to one invoice/bill ("Invoices") or credit note ("CreditNotes")."""
+        return (await self.get(f"{endpoint}/{record_id}/Attachments")).get("Attachments") or []
+
+    async def attachment(self, endpoint: str, record_id: str, att: Dict[str, Any], max_bytes: int) -> bytes:
+        from urllib.parse import quote
+        return await self.get_bytes(f"{endpoint}/{record_id}/Attachments/{quote(att.get('FileName') or '', safe='')}",
+                                    att.get("MimeType") or "", max_bytes)
 
     async def trial_balance(self, on: date) -> Dict[str, Any]:
         return ((await self.get("Reports/TrialBalance", {"date": on.isoformat()})).get("Reports") or [{}])[0]

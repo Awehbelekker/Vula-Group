@@ -268,3 +268,77 @@ def test_the_bring_in_blockers_name_what_disagrees():
                                       "what customers owe doesn't agree with Xero's debtors"]
     assert plan.norm_name("Tile Co (Pty) Ltd") == "tile co"
     assert date.fromisoformat(CUT.isoformat()) == CUT
+
+
+# ── 8 Nov 2026: the files attached in Xero come across with the move ──────────────────────────
+
+class FakeXeroFiles(FakeXero):
+    """INV-0101 and the Tile Co bill have files; INV-0110 (after the cut-over) has one too, which
+    never comes across. One file is too big."""
+    FILES = {"i1": [{"AttachmentID": "a1", "FileName": "INV-0101 signed.pdf", "MimeType": "application/pdf",
+                     "ContentLength": 1200}],
+             "b1": [{"AttachmentID": "a2", "FileName": "tileco bill.jpg", "MimeType": "image/jpeg", "ContentLength": 900},
+                    {"AttachmentID": "a3", "FileName": "huge scan.pdf", "MimeType": "application/pdf",
+                     "ContentLength": 50 * 1024 * 1024}],
+             "i4": [{"AttachmentID": "a4", "FileName": "later.pdf", "MimeType": "application/pdf", "ContentLength": 10}]}
+
+    def __init__(self):
+        super().__init__([dict(d, HasAttachments=d["InvoiceID"] in self.FILES) for d in INVOICES])
+        self.downloads = []
+
+    async def attachments(self, endpoint, rid):
+        assert endpoint == "Invoices"
+        return self.FILES.get(rid, [])
+
+    async def attachment(self, endpoint, rid, att, max_bytes):
+        self.downloads.append(att["AttachmentID"])
+        return b"%PDF-1.4 made up " + att["AttachmentID"].encode()
+
+
+@pytest.fixture()
+def stored(monkeypatch):
+    up = []
+
+    def upload(bucket, path, data, ct):
+        up.append((bucket, path, ct))
+        return f"https://store.example/{bucket}/{path}"
+    monkeypatch.setattr("vula.api.whatsapp._upload_to_storage", upload)
+    return up
+
+
+def test_attached_files_come_across_linked_to_their_document(world, stored):
+    rid = _previewed(world)
+    x = FakeXeroFiles()
+    res = asyncio.run(commit.run_commit(T, rid, client=x))
+    assert res["ok"] and res["attachments"] == 2
+    assert x.downloads == ["a1", "a2"]                                   # not the big one, not after the cut-over
+    assert res["attachments_skipped"] == ["TC-7781 huge scan.pdf: bigger than 20 MB"]
+    d = _docs(world)
+    files = {f["filename"]: f for f in world.db.t["vula_filed_documents"]}
+    assert files["INV-0101 signed.pdf"]["commerce_invoice_id"] == d["INV-0101"]["id"]
+    assert files["tileco bill.jpg"]["commerce_invoice_id"] == d["TC-7781"]["id"]
+    assert files["tileco bill.jpg"]["category"] == "supplier_invoice" and files["tileco bill.jpg"]["supplier_id"] == "s1"
+    assert all(f["tenant_id"] == T and f["source"] == "xero" for f in files.values())
+    assert all(b == "documents" and p.startswith(f"{T}/xero/") for b, p, _ in stored)   # the private bucket
+    assert "2 attached files" in world.told[0][1]
+
+
+def test_files_brought_in_once_are_not_fetched_again(world, stored):
+    rid = _previewed(world)
+    asyncio.run(commit.run_commit(T, rid, client=FakeXeroFiles(), disconnect=False))
+    x = FakeXeroFiles()
+    res = asyncio.run(commit.run_commit(T, rid, client=x, disconnect=False))
+    assert x.downloads == [] and res["attachments"] == 0 and len(world.db.t["vula_filed_documents"]) == 2
+
+
+def test_a_file_xero_refuses_is_listed_and_the_move_still_finishes(world, stored):
+    class Refusing(FakeXeroFiles):
+        async def attachment(self, endpoint, rid, att, max_bytes):
+            if att["AttachmentID"] == "a1":
+                raise RuntimeError("Xero Invoices: error 500")
+            return await super().attachment(endpoint, rid, att, max_bytes)
+    rid = _previewed(world)
+    res = asyncio.run(commit.run_commit(T, rid, client=Refusing()))
+    assert res["ok"] and runs.get(T, rid)["status"] == "done" and res["attachments"] == 1
+    assert "INV-0101 INV-0101 signed.pdf: RuntimeError" in res["attachments_skipped"]
+    assert world.gone == [T]

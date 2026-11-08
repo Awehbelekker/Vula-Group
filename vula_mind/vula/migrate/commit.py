@@ -312,6 +312,78 @@ def bring_documents(tenant_id: str, run_id: str, rows: List[Dict[str, Any]]) -> 
     return len(rows)
 
 
+# ── 5b. attachments (8 Nov 2026) ─────────────────────────────────────────────────────────────
+# The PDFs and photos attached to each invoice, bill and credit note in Xero come across too, as
+# filed documents linked to the moved document (vula_filed_documents.commerce_invoice_id) in the
+# private "documents" bucket. Read after the to-the-cent check passes and before Vula disconnects.
+# A file that can't be read (too big, refused) is listed, never fails the move. A move that
+# failed its check and is brought in again skips files already brought in (fixed ids). They are part of the move, so a Starter plan's
+# document cap does not apply to them.
+
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENTS = 2000
+
+
+async def bring_attachments(tenant_id: str, run_id: str, client, rows: List[Dict[str, Any]],
+                            src: Dict[str, Any]) -> Dict[str, Any]:
+    from vula.api.whatsapp import _upload_to_storage
+    import hashlib
+    flagged = {d.get("InvoiceID") for d in src.get("invoices") or [] if d.get("HasAttachments")} | \
+              {d.get("CreditNoteID") for d in src.get("credit_notes") or [] if d.get("HasAttachments")}
+    todo = [r for r in rows if r["_sid"] in flagged]
+    out: Dict[str, Any] = {"attachments": 0, "attachments_skipped": []}
+    db = _db()
+    done = 0
+    for r in todo:
+        endpoint = "CreditNotes" if r["_cn"] else "Invoices"
+        try:
+            atts = await client.attachments(endpoint, r["_sid"])
+        except Exception as exc:  # noqa: BLE001
+            out["attachments_skipped"].append(f"{r['invoice_number']}: couldn't list its files ({type(exc).__name__})")
+            continue
+        for att in atts:
+            name = att.get("FileName") or "attachment"
+            if done >= MAX_ATTACHMENTS:
+                out["attachments_skipped"].append(f"{r['invoice_number']} {name}: more than {MAX_ATTACHMENTS} files")
+                continue
+            fid = vid(tenant_id, "attachment", att.get("AttachmentID") or f"{r['_sid']}:{name}")
+            if db.table("vula_filed_documents").select("id").eq("tenant_id", tenant_id).eq("id", fid) \
+                    .limit(1).execute().data:
+                done += 1
+                continue                                   # brought in by an earlier run
+            if int(att.get("ContentLength") or 0) > MAX_ATTACHMENT_BYTES:
+                out["attachments_skipped"].append(f"{r['invoice_number']} {name}: bigger than 20 MB")
+                continue
+            try:
+                data = await client.attachment(endpoint, r["_sid"], att, MAX_ATTACHMENT_BYTES)
+            except Exception as exc:  # noqa: BLE001
+                why = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                out["attachments_skipped"].append(f"{r['invoice_number']} {name}: {why}")
+                continue
+            mime = att.get("MimeType") or "application/octet-stream"
+            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)[:120]
+            url = _upload_to_storage("documents", f"{tenant_id}/xero/{fid}_{safe}", data, mime)
+            if not url:
+                out["attachments_skipped"].append(f"{r['invoice_number']} {name}: couldn't be stored")
+                continue
+            inbound = r["direction"] == "inbound"
+            db.table("vula_filed_documents").insert({
+                "id": fid, "tenant_id": tenant_id, "filename": name, "mime": mime, "file_url": url,
+                "content_hash": hashlib.sha256(data).hexdigest(), "source": "xero", "status": "filed",
+                "category": "credit_note" if r["_cn"] else ("supplier_invoice" if inbound else "invoice"),
+                "summary": f"{'Bill' if inbound else 'Invoice'} {r['invoice_number']} "
+                           f"({r.get('supplier') or r.get('customer_name') or ''}), moved from Xero",
+                "commerce_invoice_id": r["id"], "supplier_id": r.get("supplier_id"), "filed_by": "xero move",
+                "fields": {"moved_from": "xero", "invoice_number": r["invoice_number"],
+                           "document_date": r["issue_date"], "total_cents": r["total_cents"],
+                           "supplier": r.get("supplier"), "customer": r.get("customer_name")}}).execute()
+            _map(tenant_id, run_id, [("attachment", att.get("AttachmentID") or fid, "vula_filed_documents", fid)])
+            out["attachments"] += 1
+            done += 1
+    out["attachments_skipped"] = out["attachments_skipped"][:50]
+    return out
+
+
 # ── 6. archive ───────────────────────────────────────────────────────────────────────────────
 
 _ARCHIVE = {  # kind: (records key, id field, date field, reference field, amount field)
@@ -412,6 +484,8 @@ async def run_commit(tenant_id: str, run_id: str, client=None, *, disconnect: bo
         if books_before(tenant_id, cutover):
             raise ValueError(f"Vula already has books on or before {cutover} — pick a later cut-over date "
                              "(the day after Vula's own records start), or ask Vula's team.")
+        from vula.xero.client import XeroClient
+        client = client or XeroClient(tenant_id)
         src = await runs.read_xero(tenant_id, cutover, client)
         calls = src.pop("calls", 0)
         side = await runs._vula_side(tenant_id)
@@ -439,6 +513,12 @@ async def run_commit(tenant_id: str, run_id: str, client=None, *, disconnect: bo
             runs._set(tenant_id, run_id, {"status": "failed", "result": result,
                                           "error": "Brought in, but it doesn't agree with Xero: " + "; ".join(result["problems"][:5])})
             return result
+        try:
+            result.update(await bring_attachments(tenant_id, run_id, client, rows, src))
+        except Exception as exc:  # noqa: BLE001 — the books are in; the files are a bonus
+            log.warning("xero attachments for %s stopped: %s", tenant_id, exc)
+            result.setdefault("attachments_skipped", []).append(
+                "reading the attached files stopped part-way; the books themselves are all in")
         runs._set(tenant_id, run_id, {"status": "done", "result": result, "error": None})
         if disconnect:
             await _finish(tenant_id, fresh, result)
@@ -472,7 +552,8 @@ async def _finish(tenant_id: str, fresh: Dict[str, Any], result: Dict[str, Any])
         from vula.connections import _owner_phones
         text = (f"✅ Your books from Xero are in Vula (cut-over {fresh['cutover']}).\n"
                 f"{result['documents']} invoices, bills and credit notes ({result['open_documents']} still open), "
-                f"opening balances for {result['opening_accounts']} accounts.\n"
+                f"opening balances for {result['opening_accounts']} accounts"
+                + (f", {result['attachments']} attached files" if result.get("attachments") else "") + ".\n"
                 f"Customers owe R{result['receivables_cents']/100:,.2f} and you owe suppliers "
                 f"R{result['payables_cents']/100:,.2f} — both agree with Xero to the cent.\n"
                 f"Vula has disconnected from Xero. {dashboard_link(tenant_id, 'settings')}")

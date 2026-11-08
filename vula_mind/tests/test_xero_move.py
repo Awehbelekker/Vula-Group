@@ -346,3 +346,23 @@ def test_a_good_callback_saves_the_organisation(db, monkeypatch):
     page = asyncio.run(api.xero_callback(code="c", state=cr.sign_state(T, "Sam")))
     assert "Seaview Builders" in page.body.decode()
     assert db.t["vula_xero_accounts"][0]["connected_by"] == "Sam"
+
+
+def test_an_attachment_is_read_as_a_file_and_a_big_one_is_refused(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.raw_path.decode(), request.headers.get("accept")))
+        if request.url.path.endswith("/Attachments"):
+            return httpx.Response(200, json={"Attachments": [{"FileName": "Bill 7781 #2.pdf", "MimeType": "application/pdf"}]})
+        return httpx.Response(200, content=b"%PDF-1.4 made up")
+
+    async def access(tid):
+        return {"access_token": "t", "xero_tenant_id": "xt"}
+    monkeypatch.setattr(cr, "access", access)
+    x = xc.XeroClient(T, transport=httpx.MockTransport(handler))
+    att = asyncio.run(x.attachments("Invoices", "b1"))[0]
+    assert asyncio.run(x.attachment("Invoices", "b1", att, 1024)) == b"%PDF-1.4 made up"
+    assert seen[1] == ("/api.xro/2.0/Invoices/b1/Attachments/Bill%207781%20%232.pdf", "application/pdf")
+    with pytest.raises(ValueError):
+        asyncio.run(x.attachment("Invoices", "b1", att, 4))

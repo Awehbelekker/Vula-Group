@@ -205,6 +205,24 @@ async def test_followup_patch_is_scoped_to_the_path_tenant():
         assert (await email_connect.set_followup_status(T, "f1", body))["status"] == "done"
 
 
+@pytest.mark.asyncio
+async def test_contact_retag_is_scoped_to_the_path_tenant():
+    from vula.api import email_connect
+    db = MagicMock()
+    chain = db.table.return_value.update.return_value.eq.return_value.eq.return_value
+    chain.execute.return_value = MagicMock(data=[])        # id belongs to another tenant
+    body = email_connect.ContactKindIn(kind="supplier")
+    with patch("vula.api.email_connect._client", return_value=db):
+        with pytest.raises(HTTPException) as e:
+            await email_connect.set_contact_kind(T, "c-of-other-tenant", body)
+    assert e.value.status_code == 404
+    db.table.return_value.update.return_value.eq.return_value.eq.assert_called_with("tenant_id", T)
+
+    chain.execute.return_value = MagicMock(data=[{"id": "c1"}])
+    with patch("vula.api.email_connect._client", return_value=db):
+        assert (await email_connect.set_contact_kind(T, "c1", body))["kind"] == "supplier"
+
+
 # ── S7: exact escalation count ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
