@@ -65,6 +65,11 @@ Xero, and disconnects itself when the move is done and checked.
 5. Vula asks for read-only scopes (`XERO_SCOPES` in config.py): settings, contacts, invoices,
    payments, bank transactions, manual journals, attachments and the trial balance report. If Xero ever refuses
    one by name, set `XERO_SCOPES` in Railway to the corrected list — no code change.
+6. The files attached to each invoice, bill and credit note come across too (8 Nov 2026), once the
+   move has passed its to-the-cent check and before Vula disconnects. They go into Documents, each
+   linked to its moved document, in the private documents bucket. Files over 20 MB, or ones Xero
+   refuses to send, are listed on the "Moved" card and never stop the move. The files belong to the
+   move, so a Starter plan's document cap doesn't count them.
 
 ## After setting up
 
