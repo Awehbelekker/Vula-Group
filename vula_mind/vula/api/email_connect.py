@@ -194,7 +194,7 @@ async def import_contacts(tenant_id: str, body: dict) -> dict:
             row = {"tenant_id": tenant_id, "email": email, "name": (r.get("name") or "").strip() or None,
                    "kind": r.get("kind") or "external", "domain": email.split("@")[-1]}
             if existing:
-                db.table("vula_email_contacts").update(row).eq("id", existing[0]["id"]).execute()
+                db.table("vula_email_contacts").update(row).eq("id", existing[0]["id"]).eq("tenant_id", tenant_id).execute()
             else:
                 db.table("vula_email_contacts").insert(row).execute()
             imported += 1
@@ -210,11 +210,15 @@ class ContactKindIn(BaseModel):
 
 @router.patch("/contacts/{tenant_id}/{contact_id}")
 async def set_contact_kind(tenant_id: str, contact_id: str, body: ContactKindIn) -> dict:
-    """Re-tag a contact (e.g. mark as 'supplier' or 'client')."""
+    """Re-tag a contact (e.g. mark as 'supplier' or 'client'). Scoped to the business in the path
+    (8 Nov 2026), like the follow-up PATCH below."""
     try:
-        _client().table("vula_email_contacts").update({"kind": body.kind}).eq("id", contact_id).execute()
+        res = (_client().table("vula_email_contacts").update({"kind": body.kind})
+               .eq("id", contact_id).eq("tenant_id", tenant_id).execute())
     except Exception as exc:
         return {"error": str(exc)}
+    if not (res.data or []):
+        raise HTTPException(status_code=404, detail="Contact not found.")
     return {"id": contact_id, "kind": body.kind}
 
 
@@ -267,7 +271,7 @@ async def disconnect(tenant_id: str, account_id: str) -> dict:
             nxt = (db.table("vula_email_accounts").select("id").eq("tenant_id", tenant_id)
                    .order("connected_at").limit(1).execute().data or [])
             if nxt:
-                db.table("vula_email_accounts").update({"is_primary": True}).eq("id", nxt[0]["id"]).execute()
+                db.table("vula_email_accounts").update({"is_primary": True}).eq("id", nxt[0]["id"]).eq("tenant_id", tenant_id).execute()
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
     invalidate(tenant_id, account_id)
