@@ -23,7 +23,9 @@ export function useLogin({ onSuccess } = {}) {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
-  const [info, setInfo] = useState('')
+  // The sign-in lapsed on its own (lib/session.js → store expire): say so instead of a bare form.
+  const [info, setInfo] = useState(() => (useAuthStore.getState().expired
+    ? 'Your sign-in has expired. Please sign in again.' : ''))
   const [loading, setLoading] = useState(false)
   const [loginBrand, setLoginBrand] = useState(null)
   const { login } = useAuthStore()

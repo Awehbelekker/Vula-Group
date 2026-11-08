@@ -27,6 +27,8 @@ const VulaReports = lazyScreen(() => import("./components/VulaReports"));
 const VulaPayments = lazyScreen(() => import("./components/VulaPayments"));
 const VulaMasterPanel = lazyScreen(() => import("./components/VulaMasterPanel"));
 import { VULA_API, authFetch } from "./lib/authFetch";
+import { supabase } from "./lib/supabase";
+import { watchSession } from "./lib/session";
 import { Button, promptDialog } from "./components/ui/index.jsx";
 import { ArrowLeft, Eye } from "lucide-react";
 import VulaLogo from "./components/brand/VulaLogo.jsx";
@@ -156,7 +158,12 @@ export default function App() {
   const [navRequest, setNavRequest] = useState(null);   // open a section's sub-tab (redesigned shell)
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
-  const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
+  const { user, role, tenantId, logout, expire, access, full, teamRole, teamPhone, setMember } = useAuthStore();
+
+  // 8 Nov 2026: the sign-in can lapse while the app still shows the person as signed in (the
+  // store is kept in localStorage, the Supabase session is not forever). Every API call then came
+  // back 401 and lists were empty — Master's tenant switcher showed one business. Back to sign-in.
+  useEffect(() => (user ? watchSession(supabase.auth, () => { expire(); }) : undefined), [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // DB-driven tenant switcher: every configured tenant, not a hardcoded pair. Read again when
   // Master creates a business ("vula-tenants-changed", master/useMasterTenants.js): it loaded

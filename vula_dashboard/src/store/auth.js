@@ -24,8 +24,9 @@ export const useAuthStore = create(
       teamPhone: null,     // this member's own vula_team_members.whatsapp — used to scope the
                            // sales-rep dashboard tabs (contacts/reminders/call sheet/etc.) to
                            // their own data without the frontend having to guess/pass it around.
+      expired: false,      // the sign-in lapsed on its own (lib/session.js) — the login page says so
 
-      login: (user, tenantId, role) => set({ user, tenantId, role }),
+      login: (user, tenantId, role) => set({ user, tenantId, role, expired: false }),
       setMember: ({ access, full, role: teamRole, whatsapp }) =>
         set({ access: access || [], full: !!full, teamRole: teamRole || null, teamPhone: whatsapp || null }),
       // Sign-out must kill the SUPABASE session too — clearing only the store left the session
@@ -40,7 +41,15 @@ export const useAuthStore = create(
         try { if (get().tenantId) await turnOffPush(get().tenantId) } catch { /* best effort */ }
         try { await supabase.auth.signOut() } catch { /* still clear local state */ }
         await clearPersonData()
-        set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null })
+        set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null, expired: false })
+      },
+      // 8 Nov 2026: the Supabase session ended on its own (lib/session.js) while the store still
+      // showed the person as signed in, so every API call came back 401 and lists were empty.
+      // Back to the sign-in page with a note. Unlike logout this keeps unsent stock scans and
+      // scanner photos: the same person usually signs straight back in.
+      expire: async () => {
+        try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* already gone */ }
+        set({ user: null, tenantId: null, role: null, access: [], full: true, teamRole: null, teamPhone: null, expired: true })
       },
     }),
     { name: 'vula-auth' }
