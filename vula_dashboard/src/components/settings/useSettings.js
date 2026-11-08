@@ -23,6 +23,7 @@ export function useBrandKit(tenantId) {
   const [fontPairing, setFontPairing] = useState('vula')
   const [corners, setCorners] = useState('rounded')
   const [density, setDensity] = useState('comfortable')
+  const [navStyle, setNavStyle] = useState('classic')   // the phone menu's look (migration 251)
   // Storefront header layout (migration 128) — logoAlign/logoSize already existed (migration
   // 103, invoice branding) and are reused as-is here: same tenant-editable fields now drive both
   // invoice PDFs and the storefront header, one setting instead of two parallel ones.
@@ -55,6 +56,7 @@ export function useBrandKit(tenantId) {
         setFontPairing(st.font_pairing || 'vula')
         setCorners(st.corner_style || 'rounded')
         setDensity(st.density || 'comfortable')
+        setNavStyle(st.nav_style || 'classic')
         setLogoAlign(st.logo_align || 'left')
         setLogoSize(st.logo_size || 'md')
         setHeaderSticky(st.header_sticky !== false)
@@ -69,8 +71,8 @@ export function useBrandKit(tenantId) {
   // Live: every change shows across the whole dashboard straight away (nothing is saved until
   // "Save brand kit"; leaving without saving is undone on the next load of the saved brand).
   const draft = { accent_color: accent, secondary_color: secondary || null, ink_color: ink,
-    font_pairing: fontPairing, corner_style: corners, density, logo_size: logoSize, logo_url: logoUrl, icon_url: iconUrl }
-  useEffect(() => { if (loaded) applyBrand(draft) }, [loaded, accent, secondary, ink, fontPairing, corners, density, logoSize])  // eslint-disable-line
+    font_pairing: fontPairing, corner_style: corners, density, nav_style: navStyle, logo_size: logoSize, logo_url: logoUrl, icon_url: iconUrl }
+  useEffect(() => { if (loaded) applyBrand(draft) }, [loaded, accent, secondary, ink, fontPairing, corners, density, navStyle, logoSize])  // eslint-disable-line
 
   async function upload(e, kind) {
     const file = (e.target.files || [])[0]
@@ -111,7 +113,7 @@ export function useBrandKit(tenantId) {
         body: JSON.stringify({
           trading_as: name, tagline, logo_url: logoUrl, icon_url: iconUrl,
           accent_color: accent, secondary_color: secondary || null, ink_color: ink, font_pairing: fontPairing,
-          corner_style: corners, density,
+          corner_style: corners, density, nav_style: navStyle,
           logo_align: logoAlign, logo_size: logoSize, header_sticky: headerSticky,
           header_nav_position: headerNavPosition, header_cta_text: headerCtaText, header_cta_link: headerCtaLink,
         }),
@@ -125,7 +127,7 @@ export function useBrandKit(tenantId) {
 
   return {
     name, setName, tagline, setTagline, logoUrl, setLogoUrl, iconUrl, setIconUrl, accent, setAccent, secondary, setSecondary,
-    ink, setInk, fontPairing, setFontPairing, corners, setCorners, density, setDensity, logoAlign, setLogoAlign, logoSize, setLogoSize,
+    ink, setInk, fontPairing, setFontPairing, corners, setCorners, density, setDensity, navStyle, setNavStyle, logoAlign, setLogoAlign, logoSize, setLogoSize,
     headerSticky, setHeaderSticky, headerNavPosition, setHeaderNavPosition, headerCtaText, setHeaderCtaText, headerCtaLink, setHeaderCtaLink,
     uploading, saving, msg, loaded, website, setWebsite, suggesting, suggestion, upload, suggest, applySuggestion, save,
   }

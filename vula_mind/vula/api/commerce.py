@@ -5307,6 +5307,7 @@ async def public_brand(tenant_id: str):
         "font_pairing": settings.get("font_pairing"),
         "corner_style": settings.get("corner_style") or "rounded",
         "density": settings.get("density") or "comfortable",
+        "nav_style": settings.get("nav_style") or "classic",   # the phone menu's look (migration 251)
         "logo_align": settings.get("logo_align") or "left",
         "logo_size": settings.get("logo_size") or "md",
         "header_sticky": settings.get("header_sticky", True),

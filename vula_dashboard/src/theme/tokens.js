@@ -65,6 +65,9 @@ export function applyInk(ink) {
 
 export const CORNER_STYLES = { rounded: "Rounded", soft: "Soft", sharp: "Sharp" };
 export const DENSITIES = { comfortable: "Comfortable", compact: "Compact" };
+// The phone menu's look (migration 251; from Ian's Glass Nav Kit, 2026-11-08). The colour is
+// always the brand's; which buttons show depends on the person's role, never on this.
+export const NAV_STYLES = { classic: "Classic", glass: "Liquid glass", float: "Floating button" };
 // One logo size for every surface: this dashboard, the login page, invoices, emails, the
 // WhatsApp menu page and the phone app icon (backend: vula/commerce/brand_sizes.py).
 export const LOGO_SIZES = { sm: "Small", md: "Medium", lg: "Large", xl: "Extra large" };
@@ -169,6 +172,7 @@ export function applyBrand(brand = {}) {
   applyFontPairing(brand.font_pairing);
   root.dataset.corners = CORNER_STYLES[brand.corner_style] ? brand.corner_style : "rounded";
   root.dataset.density = DENSITIES[brand.density] ? brand.density : "comfortable";
+  root.dataset.nav = NAV_STYLES[brand.nav_style] ? brand.nav_style : "classic";
   root.dataset.logoSize = LOGO_SIZES[brand.logo_size] ? brand.logo_size : "md";
   let meta = document.querySelector('meta[name="theme-color"]');
   if (!meta) { meta = document.createElement("meta"); meta.name = "theme-color"; document.head.appendChild(meta); }
