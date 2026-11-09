@@ -608,7 +608,9 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
           customer_name: customer.name, customer_phone: customer.phone,
           customer_email: customer.email, customer_address: customer.address,
           line_items: lineItems, subtotal_cents: subtotal, vat_rate: vatRate, vat_cents: vat,
-          total_cents: total, discount_cents: invDiscCents,
+          // The server works the amounts out again from the lines (VAT basis included) and
+          // ignores these figures; the discount goes as the percentage the owner typed.
+          total_cents: total, discount_cents: invDiscCents, discount_pct: parseFloat(discountPct) || 0,
           deposit_cents: depositCents,
           project: project || null,
           due_date: dueDate || null,

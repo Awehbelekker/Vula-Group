@@ -164,6 +164,11 @@ A green suite doesn't cover the gaps below. Most of them are paths no test exerc
   the fix. The other 2 are a lowercase `application/json` case that already worked and a
   "same tenant and forms still work" regression check. S6 and S7 (forged payments) are in the
   money PR.
+- **9 Nov, money fixes:** S6, S7, M1, M2, H3, H4 and H5 fixed.
+  Tests: `vula_mind/tests/test_money_audit_1109.py` (35). 33 of them fail on the code before the
+  fix. The other 2 are regression checks: a full payment is marked paid once, and a draft still
+  moves to "sent". MEDIUM money items (partial refunds, credit-note caps, overpayment, the
+  `vat_registered` default, journal immutability, rounding) are still open.
 
 ## Suggested order
 

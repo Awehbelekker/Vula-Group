@@ -1341,6 +1341,69 @@ async def update_order_status(order_id: str, status: str, yoco_checkout_id: Opti
             logger.warning("ledger hook failed for order %s: %s", order_id, exc)
 
 
+async def mark_order_paid(tenant_id: str, order_id: str, payment_method: str = "online",
+                          yoco_checkout_id: Optional[str] = None) -> Optional[dict]:
+    """A gateway says this order was paid: pending_payment -> paid, for this business only, in
+    one conditional write, then the ledger. Returns the order when THIS call moved it, None when
+    it was already paid/cancelled, isn't this business's, or doesn't exist.
+
+    9 Nov 2026 audit S6/H4/M8: the Yoco webhook updated the order by id alone (a business's own
+    Yoco secret could mark another business's order paid), and the other gateways (PayFast,
+    Ozow, Paystack, Peach, iKhokha) wrote status straight to the table and never posted to the
+    ledger. Two events at once (payment.succeeded + checkout.completed) both passed a
+    read-then-write status check, so the customer was told twice and dispatch made twice; only
+    one of them can win this write."""
+    if not tenant_id or not order_id:
+        return None
+    update = {"status": "paid", "payment_method": payment_method, "updated_at": _now()}
+    if yoco_checkout_id:
+        update["yoco_checkout_id"] = yoco_checkout_id
+    res = (_client().table("commerce_orders").update(update)
+           .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment").execute())
+    if not res.data:
+        return None
+    order = res.data[0]
+    try:
+        from vula.commerce import ledger
+        ledger.post_order_paid(tenant_id, order)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ledger hook failed for order %s: %s", order_id, exc)
+    _settle_order_invoice(tenant_id, order)
+    return order
+
+
+def _settle_order_invoice(tenant_id: str, order: dict) -> None:
+    """The order was paid -> its own invoice (send_order_invoice's, not a deposit/balance one)
+    is paid too, without a second ledger entry: the sale was just posted for the order. It used
+    to stay outstanding in debtors and statements, and marking it paid by hand then booked the
+    revenue twice (9 Nov 2026 audit M1). The mirror of _settle_linked_order. Never raises."""
+    from vula.commerce import order_deposit
+    try:
+        rows = (_client().table("commerce_invoices").select("id,status,total_cents,notes,direction")
+                .eq("tenant_id", tenant_id).eq("order_id", order["id"]).execute().data or [])
+        now = _now()
+        for inv in rows:
+            if ((inv.get("direction") or "outbound") == "inbound" or order_deposit.kind_of(inv)
+                    or inv.get("status") in ("paid", "cancelled", "void", "credited")):
+                continue
+            (_client().table("commerce_invoices")
+             .update({"status": "paid", "paid_at": now, "updated_at": now,
+                      "total_paid_cents": int(inv.get("total_cents") or 0)})
+             .eq("tenant_id", tenant_id).eq("id", inv["id"]).neq("status", "paid").execute())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("order %s paid but its invoice wasn't settled: %s", order.get("id"), exc)
+
+
+async def cancel_unpaid_order(tenant_id: str, order_id: str) -> Optional[dict]:
+    """pending_payment -> cancelled for this business only, in one conditional write (a late
+    "expired" can never cancel an order another link already paid). The order, or None."""
+    if not tenant_id or not order_id:
+        return None
+    res = (_client().table("commerce_orders").update({"status": "cancelled", "updated_at": _now()})
+           .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment").execute())
+    return res.data[0] if res.data else None
+
+
 async def get_order(order_id: str) -> Optional[dict]:
     result = (
         _client()
@@ -1750,6 +1813,25 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     return result.data[0]
 
 
+def order_invoice_lines(order: dict) -> List[dict]:
+    """An order as invoice lines: its items, its discount code (a negative line) and delivery,
+    so the lines add up to what the customer was charged."""
+    lines = [
+        {"description": it.get("product_name") or "Item", "quantity": it["quantity"],
+         "unit_price_cents": it["unit_price_cents"], "product_id": it.get("product_id")}
+        for it in (order.get("commerce_order_items") or [])
+    ]
+    discount = int(order.get("discount_cents") or 0)
+    if discount > 0:
+        code = order.get("discount_code")
+        lines.append({"description": f"Discount ({code})" if code else "Discount", "quantity": 1,
+                      "unit_price_cents": -discount})
+    delivery = int(order.get("delivery_cents") or 0)
+    if delivery > 0:
+        lines.append({"description": "Delivery", "quantity": 1, "unit_price_cents": delivery})
+    return lines
+
+
 async def send_order_invoice(tenant_id: str, order_id: str, with_pay_link: bool = True) -> Optional[dict]:
     """Auto-generate an invoice for a just-placed order and WhatsApp it to the customer —
     the invoice doubles as the payment request, not a post-payment receipt. Self-contained
@@ -1772,18 +1854,26 @@ async def send_order_invoice(tenant_id: str, order_id: str, with_pay_link: bool 
         logger.info("send_order_invoice: order %s has no customer_phone, skipping", order_id)
         return None
 
-    line_items = [
-        {"description": it.get("product_name") or "Item", "quantity": it["quantity"],
-         "unit_price_cents": it["unit_price_cents"], "product_id": it.get("product_id")}
-        for it in (order.get("commerce_order_items") or [])
-    ]
-    delivery_cents = int(order.get("delivery_cents") or 0)
-    if delivery_cents > 0:
-        line_items.append({"description": "Delivery", "quantity": 1,
-                           "unit_price_cents": delivery_cents})
+    line_items = order_invoice_lines(order)
+    # The invoice says what the order charged, to the cent (9 Nov 2026 audit M1): shelf prices
+    # already include VAT (create_order adds none), and a discount code is its own line. It used
+    # to leave the discount out and add 15% on top for a VAT-exclusive business: R950 charged,
+    # R1,207.50 invoiced. If the figures still don't agree, no invoice goes to the customer.
+    try:
+        settings_row = await get_invoice_settings(tenant_id) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("send_order_invoice: invoice settings unreadable for %s: %s", tenant_id, exc)
+        settings_row = {}
+    vat_rate = 15.0 if settings_row.get("vat_registered", True) else 0.0
+    *_, invoiced, _ = _compute_totals(line_items, vat_rate, prices_include_vat=True)
+    if invoiced != int(order.get("total_cents") or 0):
+        logger.error("send_order_invoice: order %s total %s but its invoice would be %s — not sent",
+                     order_id, order.get("total_cents"), invoiced)
+        return None
 
     try:
         invoice = await create_invoice(tenant_id, {
+            "prices_include_vat": True,
             "doc_type": "invoice",
             "customer_name": order.get("customer_name"),
             "customer_phone": phone,
