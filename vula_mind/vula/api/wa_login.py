@@ -223,10 +223,19 @@ async def _login_for(member: Dict[str, Any], tenant_id: str) -> Dict[str, str]:
     """The member's Supabase user (created without a password if they have none), mapped to the
     business, and a one-time token the browser exchanges for a session. Raises HTTPException."""
     from vula.api import users as users_api
+    synthetic = f"wa-{_digits(member.get('whatsapp') or '')}@{SYNTHETIC_EMAIL_DOMAIN}"
     email = (member.get("email") or "").strip().lower()
     if not email or "@" not in email:
-        email = f"wa-{_digits(member.get('whatsapp') or '')}@{SYNTHETIC_EMAIL_DOMAIN}"
+        email = synthetic
     user_id = await users_api._find_user_id(email)
+    if user_id and email != synthetic and not await _phone_may_open(user_id, member, tenant_id):
+        # The email on the team row is an existing login that this phone has no proven claim to
+        # (9 Nov 2026 audit S3: an owner could put the master's email on a team row with their own
+        # number and be signed in as the master). This phone gets its own login for this business.
+        log.warning("WA login: %s on %s names a login it doesn't own; using the phone's own login",
+                    member.get("id"), tenant_id)
+        email = synthetic
+        user_id = await users_api._find_user_id(email)
     if not user_id:
         r = await users_api._auth_admin("POST", "/users", {
             "email": email, "email_confirm": True,
@@ -246,6 +255,33 @@ async def _login_for(member: Dict[str, Any], tenant_id: str) -> Dict[str, str]:
     if not token_hash:
         raise HTTPException(status_code=502, detail="Couldn't open your login just now — try again.")
     return {"email": email, "token_hash": token_hash, "tenant_id": tenant_id}
+
+
+async def _phone_may_open(user_id: str, member: Dict[str, Any], tenant_id: str) -> bool:
+    """May this team member's phone open the existing login `user_id`? Yes when that login belongs
+    to this business alone (its owner can already set that login's password), or when the login
+    itself carries this WhatsApp number. Never a master's login. Any doubt is No."""
+    from vula.api import users as users_api
+    try:
+        rows = users_api._memberships(user_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("WA login: membership check failed, using the phone's own login: %s", exc)
+        return False
+    if any(r.get("role") == "master" for r in rows):
+        return False
+    if rows and all(r.get("tenant_id") == tenant_id for r in rows):
+        return True
+    phone = _digits(member.get("whatsapp") or "")
+    if not phone:
+        return False
+    try:
+        r = await users_api._auth_admin("GET", f"/users/{user_id}")
+        u = r.json() if r.status_code == 200 else {}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("WA login: couldn't read login %s: %s", user_id, exc)
+        return False
+    meta = u.get("user_metadata") or {}
+    return phone in {_digits(str(u.get("phone") or "")), _digits(str(meta.get("whatsapp") or ""))}
 
 
 def _ensure_mapping(user_id: str, tenant_id: str, team_role: str) -> None:

@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from vula.api import server
 
-AUTH_DEPS = {"require_auth", "require_master", "_require_auth", "require_tenant_actor",
+AUTH_DEPS = {"require_auth", "require_platform", "require_master", "_require_auth", "require_tenant_actor",
              "_require_admin", "require_authenticated_user"}
 
 # (method, path template) -> why it is public. Keep reasons specific.
@@ -88,15 +88,11 @@ PUBLIC = {
     ("POST", "/v1/yoco/connect"): "check_body_tenant in handler",
     ("POST", "/v1/email/connect"): "check_body_tenant in handler",
     ("POST", "/v1/clickup/webhook"): "ClickUp webhook",
-    ("GET", "/v1/clickup/authorize-url"): "OAuth start",
-    ("GET", "/v1/clickup/oauth/callback"): "OAuth callback (state-bound)",
-    ("GET", "/v1/google/authorize-url"): "OAuth start",
-    ("GET", "/v1/google/oauth/callback"): "OAuth callback (state-bound)",
-    ("GET", "/v1/microsoft/authorize-url"): "OAuth start",
-    ("GET", "/v1/microsoft/oauth/callback"): "OAuth callback (state-bound)",
+    ("GET", "/v1/clickup/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
+    ("GET", "/v1/google/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
+    ("GET", "/v1/microsoft/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
     ("GET", "/v1/xero/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min)",
-    ("GET", "/v1/dynamics365/authorize-url"): "OAuth start",
-    ("GET", "/v1/dynamics365/oauth/callback"): "OAuth callback (state-bound)",
+    ("GET", "/v1/dynamics365/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
     ("GET", "/v1/bookings/{tenant_id}/services"): "storefront booking widget",
     ("GET", "/v1/bookings/{tenant_id}/availability"): "storefront booking widget",
     ("POST", "/v1/bookings/{tenant_id}"): "storefront booking widget",

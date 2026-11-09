@@ -22,7 +22,7 @@ import secrets
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from config import settings
@@ -69,7 +69,30 @@ async def _find_user_id(email: str) -> Optional[str]:
 # user still got created, but with no vula_tenant_users row, so on login they landed in "set up
 # your own workspace" instead of the tenant they were meant to join. The real restriction for a
 # non-owner role lives in vula_team_members.access (see create_user below), not in this value.
-_TENANT_USER_ROLES = {"owner", "staff", "master"}
+_TENANT_USER_ROLES = {"owner", "staff"}
+# "master" is allowed by the DB CHECK but is never something a business may hand out: a master row
+# makes is_tenant_member / require_master accept that login on every business and every
+# /v1/master route (9 Nov 2026 audit S1: an owner could PATCH their own row to "master").
+
+
+def _memberships(user_id: str) -> list:
+    """Every vula_tenant_users row for this login: [{"tenant_id", "role"}, ...]."""
+    return (_client().table("vula_tenant_users").select("tenant_id,role")
+            .eq("user_id", user_id).execute().data or [])
+
+
+def _owned_only_by(user_id: str, tenant: str) -> bool:
+    """True when this login belongs to this business and to nothing else (no other business,
+    no master row): only then may this business's admin set its password or change its role.
+    A login shared with another business, or a master's, is that person's own: the owner can
+    give it access here, never a new password (9 Nov 2026 audit S2: "create a login" with the
+    master's email returned a fresh password for the master). Any doubt is False."""
+    try:
+        rows = _memberships(user_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("membership lookup failed for %s, refusing: %s", user_id, exc)
+        return False
+    return bool(rows) and all(r.get("tenant_id") == tenant and r.get("role") != "master" for r in rows)
 
 
 def _map_tenant_user(user_id: str, tenant: str, role: str) -> None:
@@ -114,8 +137,21 @@ async def create_user(tenant: str, body: CreateUserIn,
         user_id = await _find_user_id(body.email)
         if not user_id:
             return {"error": f"Could not create user: {r.text[:200]}"}
-        await _auth_admin("PUT", f"/users/{user_id}", {"password": temp, "email_confirm": True})
         created = False
+        try:
+            rows = _memberships(user_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("membership lookup failed for %s: %s", user_id, exc)
+            return {"error": "Couldn't check that login just now. Try again."}
+        if any(x.get("role") == "master" for x in rows):
+            return {"error": "That email is a Vula admin login. Use a different email."}
+        if rows and all(x.get("tenant_id") == tenant for x in rows):
+            # Already only this business's login: a new temp password is the owner's to give.
+            await _auth_admin("PUT", f"/users/{user_id}", {"password": temp, "email_confirm": True})
+        else:
+            # Someone else's login (another business, or a sign-up with no business yet). Give it
+            # access here; their password stays theirs.
+            temp = None
 
     try:
         _map_tenant_user(user_id, tenant, body.role)
@@ -155,12 +191,20 @@ async def create_user(tenant: str, body: CreateUserIn,
             log.debug("team_members upsert skipped: %s", exc)
 
     merchant_audit.audit(tenant, identity, "login_created", email=body.email, role=body.role)
-    return {"email": body.email, "temp_password": temp, "user_id": user_id, "created": created}
+    out = {"email": body.email, "temp_password": temp, "user_id": user_id, "created": created}
+    if temp is None:
+        out["note"] = "This person already has a Vula login. They sign in with their own password."
+    return out
 
 
 @router.post("/{tenant}/users/{user_id}/reset")
 async def reset_password(tenant: str, user_id: str,
                          identity: dict = Depends(require_tenant_admin)) -> dict:
+    # Master's own page (master.master_reset_user_password) passes require_master's identity,
+    # the only one with a role; a business's admin gets none.
+    if (identity or {}).get("role") != "master" and not _owned_only_by(user_id, tenant):
+        raise HTTPException(status_code=403, detail="You can only reset the password of a login that "
+                                                    "belongs to this business alone.")
     temp = secrets.token_urlsafe(9)
     r = await _auth_admin("PUT", f"/users/{user_id}", {"password": temp})
     if r.status_code != 200:
@@ -176,13 +220,25 @@ class RolePatch(BaseModel):
 @router.patch("/{tenant}/users/{user_id}")
 async def update_role(tenant: str, user_id: str, body: RolePatch,
                       identity: dict = Depends(require_tenant_admin)) -> dict:
+    if body.role == "master":
+        raise HTTPException(status_code=403, detail="Master access can't be given from a business.")
+    login_role = body.role if body.role in _TENANT_USER_ROLES else "staff"
     try:
-        _client().table("vula_tenant_users").update({"role": body.role}) \
+        rows = _memberships(user_id)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+    if not any(x.get("tenant_id") == tenant for x in rows):
+        raise HTTPException(status_code=404, detail="No such login on this business.")
+    if any(x.get("role") == "master" for x in rows):
+        # Demoting the master's row here would take away master everywhere.
+        raise HTTPException(status_code=403, detail="A Vula admin login's role can't be changed here.")
+    try:
+        _client().table("vula_tenant_users").update({"role": login_role}) \
             .eq("user_id", user_id).eq("tenant_id", tenant).execute()
     except Exception as exc:
         return {"error": str(exc)}
-    merchant_audit.audit(tenant, identity, "login_role_changed", user_id=user_id, role=body.role)
-    return {"user_id": user_id, "role": body.role}
+    merchant_audit.audit(tenant, identity, "login_role_changed", user_id=user_id, role=login_role)
+    return {"user_id": user_id, "role": login_role}
 
 
 @router.delete("/{tenant}/users/{user_id}")

@@ -12,15 +12,15 @@ through the OAuth round-trip in `state` alongside tenant_id.
 """
 from __future__ import annotations
 
-import base64
-import json
 import logging
 from urllib.parse import urlencode
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 
 from config import settings
+from vula import oauth_state
+from vula.api.master_auth import require_auth
 from vula.dynamics365 import client
 from vula.dynamics365.credentials import store_connection, _client
 
@@ -33,15 +33,18 @@ def _redirect_uri() -> str:
 
 
 def _encode_state(tenant_id: str, org_url: str) -> str:
-    return base64.urlsafe_b64encode(json.dumps({"t": tenant_id, "org": org_url}).encode()).decode()
+    # Signed (9 Nov 2026 audit H2): this was plain base64, so anyone could name another business.
+    return oauth_state.sign("dynamics365", tenant_id, {"org": org_url})
 
 
 def _decode_state(state: str) -> tuple[str, str]:
-    d = json.loads(base64.urlsafe_b64decode(state.encode()).decode())
-    return d["t"], d["org"]
+    signed = oauth_state.verify("dynamics365", state)
+    if not signed or not signed["extra"].get("org"):
+        raise ValueError("unsigned, altered or expired state")
+    return signed["tenant_id"], signed["extra"]["org"]
 
 
-@router.get("/authorize-url")
+@router.get("/authorize-url", dependencies=[Depends(require_auth)])  # a member of tenant_id (audit H2)
 async def authorize_url(tenant_id: str, org_url: str) -> dict:
     from vula import connections
     if not connections.one_tap("dynamics365"):

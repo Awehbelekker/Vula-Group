@@ -424,17 +424,17 @@ async def fetch_link_title(tenant: str, body: FetchTitleIn) -> dict:
     """Best-effort page-title lookup for a link card, so the user doesn't have to type one."""
     import html as _html
     import re as _re
-    import httpx
     url = (body.url or "").strip()
     if not url:
         return {"error": "url is required"}
     if not _re.match(r"^https?://", url, _re.I):
         url = f"https://{url}"
-    ua = "VulaCommerce/1.0 (link preview; contact: awehbelekker@gmail.com)"
+    from vula.commerce.reference_url import safe_fetch_bytes
     try:
-        async with httpx.AsyncClient(timeout=6.0, headers={"User-Agent": ua}, follow_redirects=True) as client:
-            resp = await client.get(url)
-        m = _re.search(r"<title[^>]*>(.*?)</title>", resp.text, _re.I | _re.S)
+        # The safe fetch (9 Nov 2026 audit H1): this URL is typed by a business, so never an
+        # internal address, on any redirect hop. Only the start of the page is needed.
+        text = (await safe_fetch_bytes(url, max_bytes=512 * 1024, timeout=6.0)).decode("utf-8", errors="replace")
+        m = _re.search(r"<title[^>]*>(.*?)</title>", text, _re.I | _re.S)
         title = _html.unescape(_re.sub(r"\s+", " ", m.group(1)).strip()) if m else ""
         return {"title": title[:200], "url": url}
     except Exception as exc:

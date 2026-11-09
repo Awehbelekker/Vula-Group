@@ -116,7 +116,7 @@ from vula.api.agent import router as agent_router
 from vula.api.links import router as links_router
 from vula.api.project_track import router as project_track_router
 from vula.api.master import router as master_router
-from vula.api.master_auth import require_auth
+from vula.api.master_auth import require_auth, require_platform
 from vula.api.menu_page import router as menu_page_router
 from vula.api.email_public import router as email_public_router
 
@@ -2165,35 +2165,35 @@ def validate_tenant(tenant_id: str) -> str:
 
 # ─── OTH manual briefing triggers (for testing / on-demand) ──────────────────
 
-@app.post("/v1/oth/briefing/morning", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/morning", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_morning_briefing():
     """Manually fire the morning delivery list — for testing or on-demand sends."""
     await _send_oth_delivery_briefing()
     return {"sent": True, "briefing": "morning"}
 
 
-@app.post("/v1/oth/briefing/evening", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/evening", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_evening_summary():
     """Manually fire the 18:00 sales summary — for testing or on-demand sends."""
     await _send_oth_sales_summary()
     return {"sent": True, "briefing": "evening"}
 
 
-@app.post("/v1/oth/briefing/low-stock", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/low-stock", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_low_stock_alert():
     """Manually fire the low stock alert to Stacy."""
     await _send_low_stock_alert()
     return {"sent": True, "briefing": "low_stock"}
 
 
-@app.post("/v1/oth/briefing/friday-catch", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/friday-catch", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_friday_catch_reminder():
     """Manually fire the Friday catch reminder to Stacy."""
     await _send_friday_catch_reminder()
     return {"sent": True, "briefing": "friday_catch"}
 
 
-@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_chase_unpaid():
     """Manually fire the unpaid order follow-up chase."""
     await _chase_unpaid_orders()
@@ -2547,7 +2547,7 @@ async def health_check():
     }
 
 
-@app.get("/ready", dependencies=[Depends(require_auth)])
+@app.get("/ready", dependencies=[Depends(require_platform)])
 async def readiness_report():
     """What each switched-on feature still needs, platform and per tenant (vula/readiness.py).
     503 while a platform setting is missing; a tenant's unfinished setup alone stays 200."""
@@ -2558,7 +2558,7 @@ async def readiness_report():
     return JSONResponse(rep, status_code=200 if rep["ready"] else 503)
 
 
-@app.get("/metrics", dependencies=[Depends(require_auth)])
+@app.get("/metrics", dependencies=[Depends(require_platform)])
 async def metrics():
     """Request performance metrics — total, errors, rolling average latency."""
     lats = _request_stats["latencies_ms"]

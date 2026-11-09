@@ -128,15 +128,18 @@ def _presign(urls: Iterable[Optional[str]], ttl: int) -> None:
                 _cache[(bucket, it["path"], ttl)] = (now + ttl / 2, url)
 
 
+FETCH_MAX_BYTES = 50 * 1024 * 1024   # a document or photo, never more
+
+
 def fetch_sync(url: str, timeout: float = 60.0) -> bytes:
     """The file's bytes, for the server's own use. Private links go through the Storage API."""
     p = parse(url)
     if p:
         return _client().storage.from_(p[0]).download(p[1])
-    import httpx
-    resp = httpx.get(url, timeout=timeout, follow_redirects=True)
-    resp.raise_for_status()
-    return resp.content
+    # Any other URL is checked like a business-typed one (9 Nov 2026 audit H1): these come from
+    # stored rows a business can write, so never an internal address, on any redirect hop.
+    from vula.commerce.reference_url import safe_fetch_bytes_sync
+    return safe_fetch_bytes_sync(url, max_bytes=FETCH_MAX_BYTES, timeout=timeout)
 
 
 async def fetch(url: str, timeout: float = 60.0) -> bytes:
@@ -144,8 +147,5 @@ async def fetch(url: str, timeout: float = 60.0) -> bytes:
     if p:
         import asyncio
         return await asyncio.to_thread(lambda: _client().storage.from_(p[0]).download(p[1]))
-    import httpx
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.content
+    from vula.commerce.reference_url import safe_fetch_bytes
+    return await safe_fetch_bytes(url, max_bytes=FETCH_MAX_BYTES, timeout=timeout)

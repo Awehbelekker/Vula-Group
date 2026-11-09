@@ -105,7 +105,8 @@ def test_ready_needs_the_api_key():
     import inspect
     import vula.api.server as server
     src = inspect.getsource(server)
-    assert '@app.get("/ready", dependencies=[Depends(require_auth)])' in src
+    # API key or master only: a member of any business could read it before (9 Nov 2026 audit S5)
+    assert '@app.get("/ready", dependencies=[Depends(require_platform)])' in src
 
 
 def test_same_gaps_alert_once_across_redeploys(tmp_path, monkeypatch):
