@@ -5,7 +5,7 @@
  * self-serve "set up your workspace" step for a signed-in user with no tenant yet.
  */
 import { useState, useEffect } from 'react'
-import { supabase } from '../../lib/supabase'
+import { supabase, supabaseConfigured } from '../../lib/supabase'
 import { useAuthStore } from '../../store/auth'
 import { resolveTenantFromHost } from '../../theme/tenantThemes'
 import { applyBrand } from '../../theme/tokens'
@@ -107,6 +107,10 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
   async function handleSignIn(e) {
     e.preventDefault()
     setError('')
+    if (!supabaseConfigured) {
+      setError("Sign-in isn't set up on this copy of the app. Tell the person who runs it.")
+      return
+    }
     setLoading(true)
     try {
       const { data, error: authErr } = await supabase.auth.signInWithPassword({ email, password })

@@ -257,15 +257,26 @@ export default function App() {
     const tid = ownTenant;
     if (!tid) return;
     const API = VULA_API;
-    fetch(`${API}/v1/team/${tid}/me?email=${encodeURIComponent(user.email || "")}`)
-      .then((r) => r.json())
-      .then((d) => setMember({ access: d.access, full: d.full, role: d.role, whatsapp: d.whatsapp }))
-      .catch(() => setMember({ access: [], full: true }));
+    // A failed lookup must never open the whole menu (9 Nov 2026 audit): it used to set
+    // full: true, so a restricted sales rep saw Team, Settings and Money after any network blip.
+    // An owner login is full anyway; anyone else sees only the core tabs until the lookup
+    // works (one retry after a few seconds).
+    let alive = true;
+    const lookUp = (retry) => fetch(`${API}/v1/team/${tid}/me?email=${encodeURIComponent(user.email || "")}`)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then((d) => { if (alive) setMember({ access: d.access, full: d.full, role: d.role, whatsapp: d.whatsapp }); })
+      .catch(() => {
+        if (!alive) return;
+        setMember({ access: [], full: role === "owner" });
+        if (retry) setTimeout(() => alive && lookUp(false), 4000);
+      });
+    lookUp(true);
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
       .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); })
       .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); });
+    return () => { alive = false; };
   }, [user, role, tenantId, setMember]);
 
   // Real Inbox badge (P0.4): count of open escalations waiting on a human — polled per
@@ -496,7 +507,7 @@ export default function App() {
         ) : null}
       >
         <div className="v1-page" style={{ padding: "4px 0 24px" }}>
-          <ScreenSuspense>
+          <ScreenSuspense resetKey={activeTab}>
           <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
             onOpenTenant={async (tid) => {
               // An optional support reason for the audit trail (vula_admin_audit + the tenant's

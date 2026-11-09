@@ -174,6 +174,12 @@ A green suite doesn't cover the gaps below. Most of them are paths no test exerc
   fix; the other checks that a failed placement can be tried again. Still open: 8 businesses have
   no number row and send from the server's default line by design. Whether that line should
   speak for a business at all is a product decision.
+- **9 Nov, dashboard + POPIA:** retention rules added (owner's periods: dedupe and WhatsApp
+  logins 30 days, error reports 90, unconverted leads and conversation turns 365). The website lead
+  form has a privacy notice. The dashboard no longer goes blank without its Supabase settings, no
+  longer opens the full menu when the member lookup fails, keeps the menu working when one screen
+  crashes (no "tell Ian"), and says when Vula's server can't be reached. The client-secret check
+  now covers the site, the dashboard's public/pay/r folders and the mobile app's app.json.
 
 ## Suggested order
 
