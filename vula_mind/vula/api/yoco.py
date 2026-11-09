@@ -62,14 +62,6 @@ def _tenant_team(tenant_id: str) -> list[tuple[str, str, str]]:
         log.debug("team DB lookup skipped: %s", exc)
     return _TENANT_TEAM.get(tenant_id, [])
 
-# Last-resort fallback if the vula_whatsapp_accounts DB lookup fails below — keep in sync
-# with the tenant's CURRENT number (this table went stale for weeks pointing at a retired
-# number and silently 400'd every send; the DB lookup is the source of truth, this is backup only).
-_TENANT_PHONE_IDS: dict[str, str] = {
-    "off-the-hook": "1216487374874418",  # +27 79 178 3933
-    "digg-demo": "1180015145200511",     # +27 66 566 9387
-}
-
 
 async def _notify_order_paid(
     tenant_id: str,
@@ -86,17 +78,15 @@ async def _notify_order_paid(
         await _cs.apply_order_stock(order_id, restore=False)
     except Exception as exc:
         log.debug("order-paid stock decrement skipped: %s", exc)
-    # Resolve the tenant's LIVE WhatsApp creds (phone_id + token), not a hardcoded
-    # (retired) number. Falls back to env/global.
+    # The business's own line (whatsapp._send_creds): never the server's line for a business
+    # whose numbers are disconnected (9 Nov 2026 audit H9). A failed lookup uses the last known
+    # numbers — the hardcoded phone ids that used to back this up went stale for weeks.
     creds = None
     try:
-        from vula.api.whatsapp import _get_tenant_wa_creds
-        creds = await _get_tenant_wa_creds(tenant_id)
+        from vula.api.whatsapp import _send_creds
+        creds = await _send_creds(tenant_id)
     except Exception:
         creds = None
-    if not creds and settings.whatsapp_token and (settings.whatsapp_phone_id or _TENANT_PHONE_IDS.get(tenant_id)):
-        creds = {"token": settings.whatsapp_token,
-                 "phone_id": _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_id}
     if not creds:
         log.info("Order notify: no WhatsApp creds for %s", tenant_id)
         return

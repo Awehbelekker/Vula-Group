@@ -72,13 +72,25 @@ async def test_no_credentials_is_a_noop_not_a_crash():
 
 
 @pytest.mark.asyncio
-async def test_falls_back_to_global_env_credentials():
+async def test_a_business_with_no_line_is_not_sent_from_the_servers_line():
+    """None from _get_tenant_wa_creds means "send nothing" (a business whose numbers are all
+    disconnected); it used to fall back to the server's line (9 Nov 2026 audit H9)."""
     sink = []
     with patch.object(wa, "_get_tenant_wa_creds", AsyncMock(return_value=None)), \
          patch.object(wa.settings, "whatsapp_token", "env-tok"), \
          patch.object(wa.settings, "whatsapp_phone_id", "ENV-PHONE"), \
          patch.object(wa.httpx, "AsyncClient", lambda **k: _Client(sink)):
         await wa._mark_read_and_typing("wamid.ABC", "off-the-hook")
+    assert sink == []
+
+
+@pytest.mark.asyncio
+async def test_no_business_uses_the_servers_line():
+    sink = []
+    with patch.object(wa.settings, "whatsapp_token", "env-tok"), \
+         patch.object(wa.settings, "whatsapp_phone_id", "ENV-PHONE"), \
+         patch.object(wa.httpx, "AsyncClient", lambda **k: _Client(sink)):
+        await wa._mark_read_and_typing("wamid.ABC", "")
     assert sink[0]["url"].endswith("/ENV-PHONE/messages")
 
 

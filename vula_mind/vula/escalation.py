@@ -660,6 +660,9 @@ def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Opt
     return row
 
 
+APOLOGY_MAX_AGE_DAYS = 7   # an apology for a question older than this helps no one
+
+
 def find_abandoned_escalations(tenant_id: str, hours: float = 48.0) -> list[dict]:
     """Open escalations past the give-up window that the CUSTOMER was never told about.
 
@@ -675,16 +678,57 @@ def find_abandoned_escalations(tenant_id: str, hours: float = 48.0) -> list[dict
     """
     from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    oldest = (datetime.now(timezone.utc) - timedelta(days=APOLOGY_MAX_AGE_DAYS)).isoformat()
     try:
         return (_client().table("vula_escalations").select("*")
                 .eq("tenant_id", tenant_id).in_("status", ["open", "expired"])
-                .lt("created_at", cutoff)
+                .lt("created_at", cutoff).gt("created_at", oldest)
                 .is_("answered_at", "null")
                 .is_("customer_notified_at", "null")
                 .limit(50).execute().data or [])
     except Exception as exc:
         log.debug("abandoned escalation lookup skipped (run migration 149?): %s", exc)
         return []
+
+
+async def apologise_abandoned(tenant_id: str, send) -> None:
+    """Tell each customer whose question the team never answered that we couldn't get them an
+    answer (find_abandoned_escalations). Silence is the worst reply to a real buying question.
+    One attempt each: delivered -> mark_customer_notified; not delivered -> give_up_apology.
+    `send(phone, text, tenant_id=...)` is whatsapp._send_reply."""
+    for row in find_abandoned_escalations(tenant_id):
+        q = (row.get("question") or "").strip()
+        apology = (
+            "Hi 👋 You asked me earlier:\n\n"
+            f"\"{q}\"\n\n"
+            "I'm sorry — I checked with the team and haven't been able to get "
+            "you a firm answer. I didn't want to leave you waiting with no "
+            "reply. Please send me a message and I'll get someone onto it "
+            "right away."
+        )
+        if await send(row["customer_phone"], apology, tenant_id=tenant_id):
+            mark_customer_notified(row["id"])
+            log.info("apologised to customer for unanswered escalation %s", row["id"])
+        else:
+            give_up_apology(row["id"])
+            log.info("apology for escalation %s couldn't be delivered — closed", row["id"])
+        try:
+            from core.mass_mind import health as _mm_health
+            _mm_health.record_event(tenant_id, "stale_escalation_abandoned", {"escalation_id": row["id"]})
+        except Exception as exc:  # noqa: BLE001
+            log.debug("health event skipped: %s", exc)
+
+
+def give_up_apology(escalation_id: str) -> None:
+    """The apology couldn't be delivered (almost always Meta's 24-hour window: the question is
+    48 hours old). Closed, with customer_notified_at left empty so the record says the customer
+    was NOT told. It used to be retried every hour, forever, each failure adding a template
+    nudge to the customer and a "didn't go through" notice to the team (9 Nov 2026 audit H7)."""
+    try:
+        _client().table("vula_escalations").update(
+            {"status": "closed"}).eq("id", escalation_id).is_("customer_notified_at", "null").execute()
+    except Exception as exc:
+        log.warning("couldn't close escalation %s after a failed apology: %s", escalation_id, exc)
 
 
 def mark_customer_notified(escalation_id: str) -> None:

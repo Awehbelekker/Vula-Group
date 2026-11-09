@@ -231,12 +231,28 @@ async def _place(phone: str, tenant_id: str, method: str) -> None:
     if not collect and not (cart.get("delivery_address") or "").strip():
         await ask_address(phone, tenant_id, cart)
         return
+    # One placement per cart (9 Nov 2026 audit): a double tap, or EFT then Card, arrives as two
+    # webhook calls that both saw a full cart, so two orders, two invoices and stock reserved
+    # twice. The once-only claim (vula_wa_msg_dedup, shared by every worker) lets one through;
+    # a placement that doesn't go through (minimum order, stock) gives the cart back.
+    import asyncio
+    from vula.api import whatsapp as wa
+    key = f"place-order:{cart.get('id')}"
+    if not await asyncio.to_thread(wa._claim_outbound, tenant_id, key):
+        await _text(phone, tenant_id, "Your order is already being placed — I'll confirm it here in a moment.")
+        return
     skill = get_skill("commerce_assistant")
-    res = await skill._exec_place_order(tenant_id, phone, phone, {
-        "payment_method": method, "fulfilment": "collection" if collect else "delivery",
-        "delivery_address": "" if collect else cart.get("delivery_address"),
-        "delivery_slot": cart.get("delivery_slot") or "morning",
-        "customer_name": cart.get("customer_name") or ""}, ctx={"current_message": "confirm"})
+    try:
+        res = await skill._exec_place_order(tenant_id, phone, phone, {
+            "payment_method": method, "fulfilment": "collection" if collect else "delivery",
+            "delivery_address": "" if collect else cart.get("delivery_address"),
+            "delivery_slot": cart.get("delivery_slot") or "morning",
+            "customer_name": cart.get("customer_name") or ""}, ctx={"current_message": "confirm"})
+    except Exception:
+        await asyncio.to_thread(wa._release_outbound, tenant_id, key)
+        raise
+    if not res.get("confirmation"):
+        await asyncio.to_thread(wa._release_outbound, tenant_id, key)
     if res.get("confirmation"):
         await _text(phone, tenant_id, res["confirmation"])
         await _remember(tenant_id, phone, f"[tapped {_PAY_TITLES.get(method, method)}]", res["confirmation"])
