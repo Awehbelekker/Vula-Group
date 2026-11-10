@@ -216,6 +216,42 @@ def _warnings(final: Optional[Dict[str, Any]], basis: Optional[Dict[str, Any]], 
     return out
 
 
+def _bill_lines(tenant_id: str, key: str, budget_cents: int) -> List[Dict[str, Any]]:
+    """The project bill item by item (10 Nov 2026, Ian: "why is it not showing the full project as per
+    Judy's bill?"): the items of the filed bill the budget came from — the one whose total is the
+    budget, a spreadsheet read before a PDF, the latest — with what each cost and what's paid, as the
+    business keeps it. [] when no filed bill has items. Read whatever the file's category, so a bill
+    kept off the client's documents (an internal sheet) still shows here, as figures."""
+    rows = _rows(lambda: _client().table("vula_filed_documents").select("project,fields,created_at,status")
+                 .eq("tenant_id", tenant_id))
+    mine = [r for r in rows if _key(r.get("project")) == key and r.get("status") != "duplicate"
+            and (r.get("fields") or {}).get("line_items")]
+    if not mine:
+        return []
+
+    def rank(r):
+        f = r.get("fields") or {}
+        try:
+            total = int(f.get("total_cents") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        return (bool(budget_cents) and total == budget_cents, f.get("line_items_source") == "sheet",
+                str(r.get("created_at") or ""))
+
+    best = max(mine, key=rank)
+    if budget_cents and rank(best)[0] is False:
+        return []                       # no filed bill adds up to the budget: never show a different bill's items
+    out = []
+    for li in (best.get("fields") or {}).get("line_items") or []:
+        if not isinstance(li, dict) or not (li.get("description") or "").strip():
+            continue
+        cents = lambda k: (int(li[k]) if li.get(k) not in (None, "") and str(li.get(k)).lstrip("-").isdigit() else None)
+        out.append({"section": (li.get("section") or "").strip() or "Other", "description": li["description"].strip(),
+                    "budget_cents": cents("total_cents"), "actual_cents": cents("actual_cents"),
+                    "paid_cents": cents("paid_cents")})
+    return out
+
+
 def _claims(tenant_id: str, project: str) -> Dict[str, Any]:
     """The project's progress claims (vula_project_claims): how many, and the latest's figures."""
     try:
@@ -395,6 +431,7 @@ def position(tenant_id: str, project: str, ctx: Optional[Dict[str, Any]] = None)
         "to_invoice_cents": max(contract - invoiced, 0) if contract else None,
         # a project's own page only — an overview doesn't read every project's register and programme
         "claims": {"count": 0, "latest": None} if ctx.get("light") else _claims(tenant_id, name),
+        "bill_lines": [] if ctx.get("light") else _bill_lines(tenant_id, key, budget),
         "programme": None if ctx.get("light") else _programme(tenant_id, name),
         "documents": [] if ctx.get("light") else _documents(tenant_id, key),
         # the owner's own figures — never in a client view
@@ -469,7 +506,7 @@ _OPEN_BOOK_FIELDS = _PRICE_FIELDS + ("trades", "business_cost_cents", "paid_dire
                                      "direct_payments", "to_pay_directly_cents",
                                      "budget_left_cents", "fee_pct", "fee_cents", "open_book_total_cents",
                                      "received_cents", "open_book_balance_cents", "sheet", "final_account",
-                                     "fee_basis")
+                                     "fee_basis", "bill_lines")
 
 
 def client_view(pos: Dict[str, Any], view: str) -> Dict[str, Any]:
@@ -786,13 +823,24 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                                      "<td class='n'>Anticipated final</td></tr>", ''.join(body)))
     elif secs and v["view"] == "open_book" and v.get("sheet"):
         cell = lambda label, c: f"<td class='n' data-label='{label}'>{_r(c)}</td>"
-        body = [f"<tr><td>{e(s['section'])}</td>{cell('Budget', s['budget_cents'])}{cell('Actual', s.get('actual_cents'))}"
-                f"{cell('Paid', s.get('paid_cents'))}</tr>" for s in secs]
+        # the bill item by item under each section, as the business keeps it (open book only)
+        items: Dict[str, List[Dict[str, Any]]] = {}
+        for li in v.get("bill_lines") or []:
+            items.setdefault(li["section"].strip().lower(), []).append(li)
+        item_row = lambda li: (f"<tr class='li'><td>{e(li['description'])}</td>{cell('Budget', li.get('budget_cents'))}"
+                               f"{cell('Actual', li.get('actual_cents'))}{cell('Paid', li.get('paid_cents'))}</tr>")
+        body = []
+        for s in secs:
+            body.append(f"<tr class='sec'><td>{e(s['section'])}</td>{cell('Budget', s['budget_cents'])}"
+                        f"{cell('Actual', s.get('actual_cents'))}{cell('Paid', s.get('paid_cents'))}</tr>")
+            body += [item_row(li) for li in items.pop(s["section"].strip().lower(), [])]
+        body += [item_row(li) for rest in items.values() for li in rest]      # items under no section: never dropped
         sh = v["sheet"]
         body.append(f"<tr class='total'><td>Total</td>{cell('Budget', sum(s['budget_cents'] for s in secs))}"
                     f"{cell('Actual', sh['actual_cents'])}{cell('Paid', sh['paid_cents'])}</tr>")
-        parts.append(wide("By section", "<tr class='h'><td></td><td class='n'>Budget</td><td class='n'>Actual</td>"
-                                        "<td class='n'>Paid</td></tr>", ''.join(body)))
+        parts.append(wide("The project bill" if v.get("bill_lines") else "By section",
+                          "<tr class='h'><td></td><td class='n'>Budget</td><td class='n'>Actual</td>"
+                          "<td class='n'>Paid</td></tr>", ''.join(body)))
     elif secs:
         parts.append(table("Budget by section", [row(s["section"], s["budget_cents"]) for s in secs]))
     if v["view"] == "qs":
@@ -848,6 +896,9 @@ table{{width:100%;border-collapse:collapse;font-size:15px;line-height:1.4}}td{{p
 td:first-child{{overflow-wrap:anywhere;padding-right:12px}}
 td.n{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}table.cols td.n{{padding-left:14px}}
 tr.total td{{font-weight:700;border-top:2px solid {accent}}}
+table.cols tr.sec td{{font-weight:600;padding-top:12px}}
+table.cols tr.li td{{font-size:13.5px;color:#4a4740;padding-top:5px;padding-bottom:5px}}
+table.cols tr.li td:first-child{{padding-left:16px}}
 .d{{display:block;color:#8a857c;font-size:12px}}tr.h td{{color:#8a857c;font-size:12px}}
 .dl{{margin:22px 0 0}}.dl a{{display:inline-block;margin:0 10px 8px 0;padding:9px 14px;border-radius:9px;
 background:{accent};color:#fff;text-decoration:none;font-weight:600;font-size:14px}}
@@ -876,7 +927,9 @@ padding:12px 0;border-bottom:1px solid #eee}}
 table.cols tr.total{{border-top:2px solid {accent};border-bottom:0}}table.cols tr.total td{{border-top:0}}
 table.cols td{{border:0;padding:0}}table.cols td:first-child{{grid-column:1/-1;font-weight:600;padding:0 0 4px}}
 table.cols td.n{{text-align:left;padding-left:0;white-space:normal;font-size:14px}}
-table.cols td.n::before{{content:attr(data-label);display:block;font-size:11px;font-weight:400;color:#8a857c}}}}
+table.cols td.n::before{{content:attr(data-label);display:block;font-size:11px;font-weight:400;color:#8a857c}}
+table.cols tr.li{{padding:8px 0 8px 12px;border-bottom:1px dashed #eee}}table.cols tr.li td:first-child{{padding-left:0;font-weight:500}}
+table.cols tr.sec{{padding-top:16px}}}}
 @media print{{.grid{{display:block}}.card{{box-shadow:none;max-width:none}}.scroll{{overflow:visible}}table.cols{{min-width:0}}}}
 {powered_by.pill_css(dark_mode=False)}
 </style></head><body><div class="card">{logo_html}<h1>{title}</h1>
