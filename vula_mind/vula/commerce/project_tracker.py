@@ -183,10 +183,13 @@ def _warnings(final: Optional[Dict[str, Any]], basis: Optional[Dict[str, Any]], 
     """What the owner should check before the client relies on the link (10 Nov 2026: Belladonna's
     link told the client the business owed him R57,917.27 while its invoice asked him for R32,839.40)."""
     out: List[str] = []
+    if basis and basis["pricing"] == "per_bill" and not final:
+        out.append("Priced as per the bill: the client's open-book link shows the contract and your invoices. "
+                   "Store the final account when the job is done so the link shows the balance as agreed.")
     if not final and not basis:
         out.append("No fee is agreed for this project, so the client's open-book link shows no balance. "
                    "Set the fee (a percentage or a fixed amount) or store the final account.")
-    elif not final and fee_source == "standard":
+    elif not final and fee_source == "standard" and basis["pricing"] != "per_bill":
         what = f"{fee_pct:g}%" if fee_pct is not None else f"{_r_text(basis['fee_cents'])} fixed"
         out.append(f"This project uses your standard fee ({what}). If a different fee was agreed with this "
                    "client, set it for the project.")
@@ -319,10 +322,10 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
     fee_pct = basis["fee_pct"] if basis and basis["pricing"] == "cost_plus" else None
     if basis and basis["pricing"] == "cost_plus":
         fee: Optional[int] = int(round(business_cost * fee_pct / 100))
-    elif basis:
+    elif basis and basis["pricing"] == "fixed_fee":
         fee = int(basis["fee_cents"])
     else:
-        fee = None
+        fee = None          # per the bill (the fee is in the bill's rates) or not agreed
     final = final_account(tenant_id, key)
     if final:
         # the agreed final account is the account: what the client paid comes from the bank, live
@@ -518,6 +521,8 @@ def summary_text(pos: Dict[str, Any], view: str) -> str:
         if fa:
             lines += [f"Final account ({fa['as_of']}): {_r(fa['total_cents'])}",
                       f"*Balance due: {_r(fa['balance_cents'])}*"]
+        elif v.get("fee_basis") == "per_bill":
+            lines += [f"Priced as per the bill · invoiced {_r(v['invoiced_cents'])}, owed {_r(v['invoices_owed_cents'])}"]
         elif v.get("fee_cents") is None:
             lines.append("Fee: not agreed yet — the client sees no balance until you set it")
         else:
@@ -606,7 +611,13 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                          abs(fa["balance_cents"]), True)]
             parts.append(table("Account", acct))
         else:
-            if v.get("fee_cents") is None:
+            if v.get("fee_basis") == "per_bill":
+                # priced as per the bill: the fee is in the bill's rates — the account is the invoices
+                acct = [row("Contract (as per the bill)", v.get("contract_cents")),
+                        row("Invoiced to date", v.get("invoiced_cents")), row("Paid", v.get("invoices_paid_cents")),
+                        row("Owed now", v.get("invoices_owed_cents"), True)]
+                parts.append(table("Account", acct))
+            elif v.get("fee_cents") is None:
                 # no fee agreed for this project: costs and payments only — never a balance on a guess
                 acct = [row("Cost through us", v.get("business_cost_cents")),
                         "<tr><td>Fee</td><td class='n'>Not agreed yet</td></tr>",

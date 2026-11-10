@@ -158,7 +158,7 @@ def terms(tenant_id: str) -> Dict[str, float]:
     return out
 
 
-PRICING = ("cost_plus", "fixed_fee")
+PRICING = ("cost_plus", "fixed_fee", "per_bill")
 
 
 def agreed_terms(tenant_id: str) -> Dict[str, Dict[str, Any]]:
@@ -174,6 +174,8 @@ def agreed_terms(tenant_id: str) -> Dict[str, Dict[str, Any]]:
                 out[r["project"]] = {"pricing": pricing, "fee_pct": None, "fee_cents": int(r["fee_cents"])}
             elif pricing == "cost_plus" and r.get("fee_pct") is not None:
                 out[r["project"]] = {"pricing": pricing, "fee_pct": float(r["fee_pct"]), "fee_cents": None}
+            elif pricing == "per_bill":          # the fee is inside the bill's rates (migration 256)
+                out[r["project"]] = {"pricing": pricing, "fee_pct": None, "fee_cents": None}
     except Exception as exc:
         log.debug("agreed terms read skipped: %s", exc)
     return out
@@ -185,8 +187,10 @@ def set_terms(tenant_id: str, project: str, pricing: str, *, fee_pct: Optional[f
     fixed amount in cents. Read back."""
     from datetime import datetime, timezone
     if pricing not in PRICING:
-        raise ValueError("The fee is either a percentage on cost or a fixed amount.")
-    if pricing == "cost_plus":
+        raise ValueError("The price is agreed as a percentage on cost, a fixed fee, or as per the bill.")
+    if pricing == "per_bill":
+        row = {"fee_pct": None, "fee_cents": None}
+    elif pricing == "cost_plus":
         if fee_pct is None or not 0 <= float(fee_pct) <= 100:
             raise ValueError("The fee percentage must be between 0 and 100.")
         row = {"fee_pct": float(fee_pct), "fee_cents": None}

@@ -404,3 +404,12 @@ def test_the_owners_warnings_never_reach_the_client():
     p = _position(agreed={})
     for view in pt.VIEWS:
         assert "warnings" not in pt.client_view(p, view) and "fee_source" not in pt.client_view(p, view)
+
+
+def test_a_project_priced_as_per_the_bill_shows_the_contract_and_invoices():
+    p = _position(agreed={"Sample Flat": {"pricing": "per_bill", "fee_pct": None, "fee_cents": None}})
+    assert (p["fee_basis"], p["fee_cents"], p["open_book_balance_cents"]) == ("per_bill", None, None)
+    assert any("as per the bill" in w for w in p["warnings"]) and not any("No fee" in w for w in p["warnings"])
+    page = pt.render({"name": "Example"}, pt.client_view(p, "open_book"))
+    assert "Contract (as per the bill)" in page and "R53 000.00" in page and "Owed now" in page
+    assert "Fee (" not in page and "Not agreed yet" not in page

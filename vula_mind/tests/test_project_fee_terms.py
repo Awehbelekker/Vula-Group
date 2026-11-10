@@ -39,7 +39,7 @@ def test_nothing_set_means_nothing_agreed():
 
 
 @pytest.mark.parametrize("pricing,kw,msg", [
-    ("hourly", {}, "percentage on cost or a fixed amount"),
+    ("hourly", {}, "a fixed fee, or as per the bill"),
     ("cost_plus", {"fee_pct": 120}, "between 0 and 100"),
     ("cost_plus", {}, "between 0 and 100"),
     ("fixed_fee", {"fee_cents": -1}, "R0 or more"),
@@ -57,3 +57,11 @@ def test_setting_a_fixed_fee_is_read_back():
         out = jc.set_terms("t1", "Belladonna", "fixed_fee", fee_cents=4800000, by="owner")
     assert out == {"project": "Belladonna", "pricing": "fixed_fee", "fee_pct": None, "fee_cents": 4800000}
     assert db["row"]["fee_pct"] is None and db["row"]["agreed_by"] == "owner"
+
+
+def test_as_per_the_bill_carries_no_fee_figure():
+    db, c = _db([{"project": "Belladonna", "pricing": "per_bill", "fee_pct": None, "fee_cents": None}])
+    with patch.object(jc, "_client", return_value=c):
+        assert jc.agreed_terms("t1") == {"Belladonna": {"pricing": "per_bill", "fee_pct": None, "fee_cents": None}}
+        out = jc.set_terms("t1", "Belladonna", "per_bill", fee_pct=10, by="owner")
+    assert out["pricing"] == "per_bill" and db["row"]["fee_pct"] is None and db["row"]["fee_cents"] is None

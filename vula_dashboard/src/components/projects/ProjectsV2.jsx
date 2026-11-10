@@ -569,7 +569,8 @@ function ProjectMoney({ tenantId, project }) {
     if (!r.error) load();
   };
   const fa = p.final_account;
-  const feeLabel = p.fee_basis === "cost_plus" ? `Fee (${p.fee_pct}%)` : p.fee_basis === "fixed_fee" ? "Fee (agreed amount)" : "Fee";
+  const feeLabel = p.fee_basis === "cost_plus" ? `Fee (${p.fee_pct}%)` : p.fee_basis === "fixed_fee" ? "Fee (agreed amount)"
+    : p.fee_basis === "per_bill" ? "Fee (in the bill's rates)" : "Fee";
   return (
     <>
       {(p.warnings || []).length > 0 && (
@@ -605,7 +606,7 @@ function ProjectMoney({ tenantId, project }) {
           <Line label={<strong>{fa.balance_cents >= 0 ? "Balance due to you" : "You owe the client"}</strong>} value={<strong>{cents(Math.abs(fa.balance_cents))}</strong>} />
         </>) : (<>
           <Line label="Cost through you" value={cents(p.business_cost_cents)} />
-          <Line label={feeLabel} value={p.fee_cents == null ? "not agreed" : cents(p.fee_cents)} />
+          <Line label={feeLabel} value={p.fee_basis === "per_bill" ? "in the bill" : p.fee_cents == null ? "not agreed" : cents(p.fee_cents)} />
           <Line label="Received from the client" value={cents(p.received_cents)} />
           <Line label={<strong>Open-book balance due</strong>} value={<strong>{p.open_book_balance_cents == null ? "— set the fee" : cents(p.open_book_balance_cents)}</strong>} />
         </>)}
@@ -655,8 +656,14 @@ function ProjectFee({ tenantId, project, p, onChange }) {
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const now = p.fee_basis == null ? "Not agreed yet — the client's open-book link shows no balance."
-    : `${p.fee_basis === "cost_plus" ? `${p.fee_pct}% on cost` : `${money(p.fee_cents)} fixed`}${p.fee_source === "standard" ? " (your standard fee)" : " (agreed for this project)"}`;
+    : `${p.fee_basis === "cost_plus" ? `${p.fee_pct}% on cost` : p.fee_basis === "per_bill" ? "as per the bill" : `${money(p.fee_cents)} fixed`}${p.fee_source === "standard" ? " (your standard fee)" : " (agreed for this project)"}`;
   const save = async () => {
+    if (pricing === "per_bill") {
+      setBusy(true);
+      const r = await setProjectFee(tenantId, project, { pricing });
+      setBusy(false); setMsg(r.error || "Saved."); if (!r.error) onChange();
+      return;
+    }
     const n = Number(String(value).replace(/[^\d.]/g, ""));
     if (!value || Number.isNaN(n)) { setMsg("Enter the percentage or the amount."); return; }
     setBusy(true);
@@ -672,11 +679,13 @@ function ProjectFee({ tenantId, project, p, onChange }) {
           <Select value={pricing} onChange={(e) => setPricing(e.target.value)}>
             <option value="cost_plus">A percentage on cost</option>
             <option value="fixed_fee">An agreed fixed amount</option>
+            <option value="per_bill">As per the bill (the fee is in the bill's rates)</option>
           </Select>
         </Field>
-        <Field label={pricing === "cost_plus" ? "Percentage" : "Amount (R)"}>
-          <Input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder={pricing === "cost_plus" ? "10" : "48000"} />
-        </Field>
+        {pricing !== "per_bill" && (
+          <Field label={pricing === "cost_plus" ? "Percentage" : "Amount (R)"}>
+            <Input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder={pricing === "cost_plus" ? "10" : "48000"} />
+          </Field>)}
         <div className="vpj-go"><Button disabled={busy} onClick={save}>{busy ? "Saving…" : "Save the fee"}</Button></div>
         {msg && <p className="vpj-sub" role="status">{msg}</p>}
       </div>
