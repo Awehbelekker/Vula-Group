@@ -773,7 +773,11 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
         order = None            # get_order uses .single() → raises when the order doesn't exist
     if not order or order.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="Order not found")
-    await service.update_order_status(order_id, new_status)
+    refund_cents = int(body["amount_cents"]) if new_status == "refunded" and body.get("amount_cents") else None
+    try:
+        await service.update_order_status(order_id, new_status, refund_cents=refund_cents)
+    except service.OrderStatusRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     # Keep stock in sync: restore on cancel/refund, deduct once when it enters fulfilment.
     if new_status in ("cancelled", "refunded"):
         await service.apply_order_stock(order_id, restore=True)
@@ -795,7 +799,8 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
             now = service._now()
             if result.get("ok"):
                 refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
-                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
+                # refunded_amount_cents is the running total, kept by update_order_status.
+                patch = {"refund_status": "pending",
                          "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
             else:
                 refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
@@ -5590,51 +5595,54 @@ async def cron_recurring_invoices():
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/credit-note")
 async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict = None):
-    """Create a credit note against an invoice (full, or partial via body.line_items).
-    Invoices have no 'refunded' status (unlike orders) — a credit note IS the refund record —
-    so body.auto_refund here does what body.auto_refund does on the order status endpoint:
-    opt-in, real money-back-to-customer via Yoco, keyed off the invoice's own checkout id."""
+    """A credit note against an invoice: the whole of what's left to credit, or body.line_items.
+
+    Goes through service.credit_invoice like the WhatsApp tool (9 Nov 2026 audit, money): it
+    used to make the credit note on its own with no cap, priced on the business's current VAT
+    setting rather than the invoice's, without reducing what the invoice still owed, and
+    body.auto_refund sent Yoco the whole credit-note total even when the invoice was unpaid.
+
+    The part of a credit that is money already received must be refunded: body.auto_refund does
+    it through Yoco (that part only); otherwise the answer is 409 refund_needed with the amount,
+    and the owner confirms they refunded it themselves (body.refund_made)."""
     body = body or {}
-    try:
-        cn = await service.create_credit_note(tenant_id, invoice_id, body.get("line_items"))
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    src = await service.get_invoice(tenant_id, invoice_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    lines = body.get("line_items") or None
+    args = dict(reason=body.get("reason") or "", line_items=lines)
     refund_result = None
-    if body.get("auto_refund"):
-        src = await service.get_invoice(tenant_id, invoice_id)
-        checkout_id = (src or {}).get("yoco_checkout_id")
-        amount = int(cn.get("total_cents") or 0)
-        if not checkout_id:
-            refund_result = {"gateway": "yoco", "status": "failed",
-                              "detail": "This invoice has no online (Yoco) payment on record."}
-        elif amount <= 0:
-            refund_result = {"gateway": "yoco", "status": "failed", "detail": "Nothing to refund."}
-        else:
-            from vula.api.yoco import refund_yoco_payment
-            # One key per credit note: two partial credit notes of the same amount on one
-            # invoice are two refunds. The default checkout+amount key would make Yoco replay
-            # the first and move no money, while we recorded the second as pending.
-            result = await refund_yoco_payment(tenant_id, checkout_id, amount,
-                                               idempotency_key=f"refund-cn-{cn.get('id') or invoice_id}")
-            now = service._now()
-            if result.get("ok"):
-                refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
-                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
-                         "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
-                try:   # money went back → reverse that part of the sale (idempotent per CN)
-                    from vula.commerce import ledger
-                    ledger.post_invoice_refund(tenant_id, src, cn, amount)
-                except Exception as exc:
-                    log.warning("refund ledger posting failed for %s: %s", cn.get("id"), exc)
-            else:
-                refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
-                patch = {"refund_status": "failed"}
-            try:
-                service._client().table("commerce_invoices").update(patch) \
-                    .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
-            except Exception as exc:
-                log.warning("refund tracking update failed for invoice %s: %s", invoice_id, exc)
-    return {"credit_note": cn, "refund": refund_result}
+    try:
+        res = await service.credit_invoice(tenant_id, invoice_id, refund_made=bool(body.get("refund_made")), **args)
+    except service.RefundNeeded as exc:
+        checkout_id = src.get("yoco_checkout_id")
+        if not (body.get("auto_refund") and checkout_id):
+            raise HTTPException(status_code=409, detail={
+                "code": "refund_needed", "refund_cents": exc.refund_cents, "message": str(exc)})
+        from vula.api.yoco import refund_yoco_payment
+        # One key per invoice + amount already refunded: a second part credit is a second refund.
+        done = int(src.get("refunded_amount_cents") or 0)
+        result = await refund_yoco_payment(tenant_id, checkout_id, exc.refund_cents,
+                                           idempotency_key=f"refund-inv-{invoice_id}-{done}-{exc.refund_cents}")
+        if not result.get("ok"):
+            raise HTTPException(status_code=502, detail={
+                "code": "refund_failed", "refund_cents": exc.refund_cents,
+                "message": f"Yoco didn't refund it ({result.get('detail') or 'no reason given'}). "
+                           "Nothing was credited. Refund the customer yourself, then try again."})
+        try:
+            service._client().table("commerce_invoices").update({
+                "refund_status": "pending", "refunded_amount_cents": done + exc.refund_cents,
+                "refunded_at": service._now(), "yoco_refund_id": result.get("refund_id")}) \
+                .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+        except Exception as e:  # noqa: BLE001
+            log.warning("refund tracking update failed for invoice %s: %s", invoice_id, e)
+        # The money went back: the credit note and its ledger refund are recorded once, here.
+        res = await service.credit_invoice(tenant_id, invoice_id, refund_made=True, **args)
+        refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": exc.refund_cents}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"credit_note": res["credit_note"], "invoice": res["invoice"], "refund": refund_result,
+            "credited_cents": res["credited_cents"], "refund_cents": res["refund_cents"]}
 
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")

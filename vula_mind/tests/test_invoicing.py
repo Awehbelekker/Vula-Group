@@ -153,6 +153,12 @@ def fake_db():
         yield fake
 
 
+def _vat_vendor(fake_db):
+    """A VAT-registered business says so in its settings: with none saved, a business is not
+    registered (migration 253; it used to default to registered and add 15%)."""
+    fake_db.store["commerce_invoice_settings"] = [{"tenant_id": TENANT, "vat_registered": True}]
+
+
 def _items():
     return [
         {"description": "Fresh snoek", "quantity": 2, "unit_price_cents": 18500},
@@ -164,6 +170,7 @@ def _items():
 
 @pytest.mark.asyncio
 async def test_create_invoice_computes_totals_server_side(fake_db):
+    _vat_vendor(fake_db)
     out = await service.create_invoice(
         TENANT, {"customer_name": "Thabo", "line_items": _items(), "vat_rate": 15.0}
     )
@@ -403,6 +410,7 @@ async def test_convert_rejects_zero_or_negative_amount(fake_db):
 
 @pytest.mark.asyncio
 async def test_convert_partial_vat_scales_proportionally(fake_db):
+    _vat_vendor(fake_db)
     quote = await service.create_invoice(
         TENANT, {"doc_type": "quote", "customer_name": "Judy",
                  "line_items": [{"description": "Design fee", "quantity": 1, "unit_price_cents": 100000}],
@@ -753,11 +761,14 @@ async def test_record_payment_reaching_total_flips_to_paid(fake_db):
 
 
 @pytest.mark.asyncio
-async def test_record_payment_overpayment_still_flips_to_paid(fake_db):
+async def test_record_payment_never_records_more_than_is_owed(fake_db):
+    """An overpayment used to book the extra as sales and VAT (9 Nov 2026 audit, money)."""
     inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
-    result = await service.record_invoice_payment(TENANT, inv["id"], inv["total_cents"] + 5000)
-    assert result["status"] == "paid"
-    assert result["balance_due_cents"] == 0  # never negative
+    with pytest.raises(ValueError, match="more than the"):
+        await service.record_invoice_payment(TENANT, inv["id"], inv["total_cents"] + 5000)
+    assert not fake_db.store.get("commerce_invoice_payments")
+    result = await service.record_invoice_payment(TENANT, inv["id"], inv["total_cents"])
+    assert result["status"] == "paid" and result["balance_due_cents"] == 0
 
 
 @pytest.mark.asyncio

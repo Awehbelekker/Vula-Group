@@ -86,17 +86,33 @@ def post_order_paid(tenant_id: str, order: Dict[str, Any]) -> None:
           ])
 
 
-def post_order_refund(tenant_id: str, order: Dict[str, Any]) -> None:
+def post_order_refund(tenant_id: str, order: Dict[str, Any], amount_cents: Optional[int] = None,
+                      source_id: Optional[str] = None) -> None:
+    """The money that actually went back: amount_cents (a part refund), else the whole order.
+    A second part refund needs its own source_id (the ledger keeps one entry per source)."""
     total = int(order.get("total_cents") or 0)
-    if total <= 0:
+    amount = total if amount_cents is None else min(int(amount_cents), total)
+    if amount <= 0:
         return
+    label = "refunded" if amount == total else f"part refund R{amount / 100:,.2f}"
     _post(tenant_id, entry_date=order.get("updated_at") or _today(),
-          description=f"Order {order.get('display_id') or order.get('id')} refunded",
-          source_type="order_refund", source_id=order.get("id"),
+          description=f"Order {order.get('display_id') or order.get('id')} {label}",
+          source_type="order_refund", source_id=source_id or order.get("id"),
           lines=[
-              {"account_code": "sales", "debit_cents": total, "credit_cents": 0},
-              {"account_code": "bank_cash", "debit_cents": 0, "credit_cents": total},
+              {"account_code": "sales", "debit_cents": amount, "credit_cents": 0},
+              {"account_code": "bank_cash", "debit_cents": 0, "credit_cents": amount},
           ])
+
+
+def was_posted(tenant_id: str, source_type: str, source_id: str) -> Optional[bool]:
+    """Is there a journal entry for this source? None when the ledger can't be read."""
+    try:
+        rows = (_client().table("journal_entries").select("id").eq("tenant_id", tenant_id)
+                .eq("source_type", source_type).eq("source_id", str(source_id)).limit(1).execute().data or [])
+        return bool(rows)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ledger lookup failed (%s/%s): %s", source_type, source_id, exc)
+        return None
 
 
 def post_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
