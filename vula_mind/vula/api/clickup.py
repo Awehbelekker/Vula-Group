@@ -26,6 +26,7 @@ from vula.api.master_auth import require_auth
 from pydantic import BaseModel
 
 from config import settings
+from vula import oauth_state
 from vula.clickup import service
 from vula.clickup.credentials import _client, invalidate, get_tenant_clickup_creds
 
@@ -134,7 +135,7 @@ def _any_stored_webhook_secret() -> list[tuple[str, str]]:
 
 # ── One-click OAuth ───────────────────────────────────────────────────────────
 
-@router.get("/authorize-url")
+@router.get("/authorize-url", dependencies=[Depends(require_auth)])  # a member of tenant_id (audit H2)
 async def authorize_url(tenant_id: str) -> dict:
     """Return the ClickUp consent URL for this tenant (opened in a popup)."""
     from vula import connections
@@ -143,7 +144,7 @@ async def authorize_url(tenant_id: str) -> dict:
     params = {
         "client_id": settings.clickup_client_id,
         "redirect_uri": f"{settings.public_base_url}/v1/clickup/oauth/callback",
-        "state": tenant_id,
+        "state": oauth_state.sign("clickup", tenant_id),
     }
     return {"url": f"{_AUTHORIZE}?{urlencode(params)}"}
 
@@ -172,9 +173,14 @@ def _popup_close_html(message: str, ok: bool = True) -> HTMLResponse:
 @router.get("/oauth/callback")
 async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
     """ClickUp redirects here. Exchange code → token, auto-discover, store, close popup."""
-    tenant_id = state
-    if not code or not tenant_id:
+    # Signed state only (9 Nov 2026 audit H2): a raw business id here let anyone link their own
+    # account into another business.
+    if not code or not state:
         return _popup_close_html("Connection cancelled.", ok=False)
+    signed = oauth_state.verify("clickup", state)
+    if not signed:
+        return _popup_close_html("That connection link has expired. Start again from Vula.", ok=False)
+    tenant_id = signed["tenant_id"]
     try:
         token = await service.exchange_code(code)
         if not token:

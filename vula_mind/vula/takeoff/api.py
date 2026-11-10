@@ -26,12 +26,12 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import settings
-from vula.api.master_auth import authorized_tenant
+from vula.api.master_auth import authorized_tenant, require_platform
 from vula import durable
 from vula.takeoff.plan_reader import PlanReader, Room
 from vula.takeoff.boq_generator import BOQGenerator
@@ -249,7 +249,7 @@ async def get_rates(changed_only: bool = False, threshold_pct: float = 5.0):
     return {"count": len(rates), "rates": rates, "failed_sources": failed_sources}
 
 
-@router.post("/rates/update")
+@router.post("/rates/update", dependencies=[Depends(require_platform)])  # every business's market rates
 async def trigger_rates_update(background_tasks: BackgroundTasks):
     """Trigger an immediate construction rates scrape.
 

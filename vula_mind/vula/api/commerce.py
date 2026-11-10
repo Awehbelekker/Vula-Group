@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from vula.api.master_auth import require_auth
+from vula.api.master_auth import require_auth, require_platform
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
@@ -5513,7 +5513,7 @@ async def admin_delete_recurring(tenant_id: str, rec_id: str):
     return {"deleted": rec_id}
 
 
-@router.post("/cron/recurring-invoices", dependencies=[Depends(require_auth)])
+@router.post("/cron/recurring-invoices", dependencies=[Depends(require_platform)])
 async def cron_recurring_invoices():
     """Generate invoices for all due recurring templates (called by the scheduler)."""
     return {"generated": await service.process_due_recurring()}
@@ -6570,7 +6570,7 @@ async def process_due_campaigns() -> int:
     return n
 
 
-@router.post("/cron/campaigns", dependencies=[Depends(require_auth)])
+@router.post("/cron/campaigns", dependencies=[Depends(require_platform)])
 async def cron_process_campaigns():
     """Backstop trigger for the scheduler (also runs in-process every 60s)."""
     return {"processed": await process_due_campaigns()}

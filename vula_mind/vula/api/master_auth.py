@@ -14,6 +14,7 @@ merchant endpoints is a separate follow-up initiative.
 from __future__ import annotations
 
 import logging
+import json
 import secrets
 import time
 from typing import Optional
@@ -112,7 +113,10 @@ async def require_auth(api_key: str | None = Security(_api_key_header),
     legacy endpoint (/query, /ingest, /scrape/*), not a new auth model, and needs no frontend
     change."""
     if not settings.api_key:
-        return  # no key configured — open (dev mode only)
+        if _open_without_key():
+            return  # no key configured — open (dev mode only)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="The server has no API key set, so this is switched off.")
     if api_key and secrets.compare_digest(api_key, settings.api_key):
         return
     auth_header = request.headers.get("authorization", "") if request is not None else ""
@@ -140,6 +144,31 @@ async def require_auth(api_key: str | None = Security(_api_key_header),
     )
 
 
+def _open_without_key() -> bool:
+    """With no API_KEY set, require_auth used to let every request through, in production too
+    (9 Nov 2026 audit H12): one missing variable opened /query, /ingest, /scrape and chat
+    history. Now that only happens on a dev box (DEBUG on, or VULA_ENV other than production)."""
+    return bool(settings.debug) or (settings.vula_env or "production").strip().lower() != "production"
+
+
+async def require_platform(api_key: str | None = Security(_api_key_header),
+                           request: Request = None) -> None:
+    """For routes that act on the whole platform or on every business: /ready, /metrics, the
+    crons, the Off the Hook briefings, the market-rate scrape. Only the server API key or a
+    verified master login. require_auth also admits a member of whichever business the request
+    names, which is right for a business's own data but let anyone who signed up run every
+    business's crons or message Off the Hook's customers (9 Nov 2026 audit S5)."""
+    if not settings.api_key and _open_without_key():
+        return
+    if settings.api_key and api_key and secrets.compare_digest(api_key, settings.api_key):
+        return
+    auth_header = request.headers.get("authorization", "") if request is not None else ""
+    if not auth_header:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid or missing API key. Set X-API-Key header or sign in.")
+    await require_master(auth_header)
+
+
 def authorized_tenant(request: Request | None) -> str:
     """The tenant require_auth let this request through as a MEMBER of, or "" when it passed on
     the API key or a master login (which see every tenant). Id-only routes must scope the
@@ -156,16 +185,26 @@ async def _request_tenant(request: Request | None) -> str:
         return ""
     found = {str(v) for v in (request.path_params.get("tenant_id"),
                               request.query_params.get("tenant_id")) if v}
-    ctype = request.headers.get("content-type", "")
+    ctype = request.headers.get("content-type", "").lower()
     try:
-        if "application/json" in ctype:
-            body = await request.json()   # cached by Starlette — the endpoint still reads it
-            if isinstance(body, dict) and body.get("tenant_id"):
-                found.add(str(body["tenant_id"]))
-        elif "form" in ctype:
+        if "form" in ctype:
             t = (await request.form()).get("tenant_id")
             if t:
                 found.add(str(t))
+        else:
+            # Whatever the content type says. FastAPI parses a JSON body for a missing type, any
+            # case ("Application/JSON") and any "+json" type, so checking only a lowercase
+            # "application/json" let a member of A send tenant_id=B in the body and act on B
+            # (9 Nov 2026 audit S4). A body that isn't JSON can't name a tenant to the endpoint
+            # either, so it adds nothing here.
+            raw = await request.body()    # cached by Starlette — the endpoint still reads it
+            if raw.strip():
+                try:
+                    body = json.loads(raw)
+                except ValueError:
+                    body = None
+                if isinstance(body, dict) and body.get("tenant_id"):
+                    found.add(str(body["tenant_id"]))
     except Exception:
         return ""
     return found.pop() if len(found) == 1 else ""

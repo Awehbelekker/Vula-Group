@@ -10,10 +10,12 @@ from __future__ import annotations
 import logging
 from urllib.parse import urlencode
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 
 from config import settings
+from vula import oauth_state
+from vula.api.master_auth import require_auth
 from vula.microsoft import service
 from vula.microsoft.credentials import store_connection, _client
 
@@ -25,7 +27,7 @@ def _redirect_uri() -> str:
     return f"{settings.public_base_url}/v1/microsoft/oauth/callback"
 
 
-@router.get("/authorize-url")
+@router.get("/authorize-url", dependencies=[Depends(require_auth)])  # a member of tenant_id (audit H2)
 async def authorize_url(tenant_id: str) -> dict:
     from vula import connections
     if not connections.one_tap("microsoft"):
@@ -36,7 +38,7 @@ async def authorize_url(tenant_id: str) -> dict:
         "redirect_uri": _redirect_uri(),
         "response_mode": "query",
         "scope": " ".join(service.SCOPES),
-        "state": tenant_id,
+        "state": oauth_state.sign("microsoft", tenant_id),
     }
     return {"url": f"{service._auth_url()}?{urlencode(params)}"}
 
@@ -53,9 +55,14 @@ def _popup(message: str, ok: bool = True) -> HTMLResponse:
 
 @router.get("/oauth/callback")
 async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
-    tenant_id = state
-    if not code or not tenant_id:
+    # Signed state only (9 Nov 2026 audit H2): a raw business id here let anyone link their own
+    # account into another business.
+    if not code or not state:
         return _popup("Connection cancelled.", ok=False)
+    signed = oauth_state.verify("microsoft", state)
+    if not signed:
+        return _popup("That connection link has expired. Start again from Vula.", ok=False)
+    tenant_id = signed["tenant_id"]
     try:
         tok = await service.exchange_code(code, _redirect_uri())
         if not tok.get("access_token"):

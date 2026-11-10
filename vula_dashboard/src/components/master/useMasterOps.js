@@ -155,7 +155,8 @@ export function useMasterUsers({ onError, prefill, onConsumePrefill }) {
       })
       if (r.error) onError(r.error)
       else {
-        setNotice(`Created ${r.email} — temp password: ${r.temp_password}`)
+        setNotice(r.temp_password ? `Created ${r.email} — temp password: ${r.temp_password}`
+          : `Added ${r.email}. ${r.note || ''}`)
         setForm(f => ({ ...f, email: '', name: '', whatsapp: '' })); setCreating(false); load()
       }
     } catch (e) { onError(e.message) } finally { setBusy(null) }

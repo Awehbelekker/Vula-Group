@@ -103,13 +103,15 @@ export function useTeam(tenantId) {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     }).then((x) => x.json());
     if (d.temp_password) { setTempPw(`${d.email} — temporary password: ${d.temp_password}`); setLoginForm({ email: "", role: "staff", whatsapp: "" }); load(); }
-    else setMsg(d.error || "Could not create login");
+    // Someone who already has a Vula login (another business) is added, but keeps their password.
+    else if (d.user_id && d.note) { setMsg(`${d.email} added. ${d.note}`); setLoginForm({ email: "", role: "staff", whatsapp: "" }); load(); }
+    else setMsg(d.error || d.detail || "Could not create login");
   };
   const resetPw = async (uid, email) => {
     setMsg(""); setTempPw("");
     const d = await fetch(`${VULA_API}/v1/users/${tenantId}/users/${uid}/reset`, { method: "POST" }).then((x) => x.json());
     if (d.temp_password) setTempPw(`${email || ""} — temporary password: ${d.temp_password}`);
-    else setMsg(d.error || "Reset failed");
+    else setMsg(d.error || d.detail || "Reset failed");
   };
   const removeLogin = async (uid) => {
     await fetch(`${VULA_API}/v1/users/${tenantId}/users/${uid}`, { method: "DELETE" }); load();

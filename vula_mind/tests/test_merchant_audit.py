@@ -192,6 +192,7 @@ async def test_reset_password_writes_audit_row():
     mock_resp = MagicMock(status_code=200)
     with (
         patch("vula.api.users._auth_admin", new=AsyncMock(return_value=mock_resp)),
+        patch("vula.api.users._memberships", return_value=[{"tenant_id": "off-the-hook", "role": "staff"}]),
         patch("vula.api.users.merchant_audit.audit") as mock_audit,
     ):
         result = await reset_password("off-the-hook", "u9",
@@ -209,11 +210,14 @@ async def test_update_role_writes_audit_row():
     mock_db.table.return_value = mock_table
     with (
         patch("vula.api.users._client", return_value=mock_db),
+        patch("vula.api.users._memberships", return_value=[{"tenant_id": "off-the-hook", "role": "staff"}]),
         patch("vula.api.users.merchant_audit.audit") as mock_audit,
     ):
         result = await update_role("off-the-hook", "u9", RolePatch(role="manager"),
                                    identity={"user_id": "u1", "email": "owner@shop.com"})
-    assert result["role"] == "manager"
+    # vula_tenant_users.role is owner|staff|master (DB CHECK): a "manager" label is a staff login,
+    # as in _map_tenant_user. Writing "manager" raw failed the CHECK in production.
+    assert result["role"] == "staff"
     mock_audit.assert_called_once()
 
 

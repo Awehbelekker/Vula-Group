@@ -92,6 +92,9 @@ class NewsDigest:
 
 # ─── Core Fetcher ─────────────────────────────────────────────────────────────
 
+PAGE_MAX_BYTES = 5 * 1024 * 1024  # a page, not a download
+
+
 class WebFetcher:
     """
     Fetches web pages and converts to clean Markdown.
@@ -104,18 +107,23 @@ class WebFetcher:
         "Accept-Language": "en-ZA,en;q=0.9,af;q=0.8",
     }
 
-    async def fetch_markdown(self, url: str) -> tuple[str, str]:
+    async def fetch_markdown(self, url: str, trusted: bool = False) -> tuple[str, str]:
         """
         Fetch URL and return (title, clean_markdown).
-        Tries Crawl4AI first, falls back to httpx + basic parsing.
-        """
-        # Try Crawl4AI
-        try:
-            return await self._crawl4ai_fetch(url)
-        except Exception as e:
-            logger.debug(f"Crawl4AI unavailable: {e}, using httpx fallback")
 
-        # Fallback: httpx + html2text
+        Every URL here may come from a business (/scrape/*: company, prices, digest, tenders,
+        custom), so by default it goes through reference_url.safe_fetch_bytes: http(s) only, the
+        resolved address checked on every redirect hop (no private, loopback, link-local or
+        cloud-metadata address), a size cap and a timeout. Before 9 Nov 2026 (audit H1) it
+        followed redirects anywhere and used a headless browser, so a signed-in business could
+        read Vula's internal services. Crawl4AI (a browser: its redirects and sub-requests can't
+        be checked) is only for URLs an operator chose: trusted=True.
+        """
+        if trusted:
+            try:
+                return await self._crawl4ai_fetch(url)
+            except Exception as e:
+                logger.debug(f"Crawl4AI unavailable: {e}, using the safe fetch")
         return await self._httpx_fetch(url)
 
     async def _crawl4ai_fetch(self, url: str) -> tuple[str, str]:
@@ -132,15 +140,9 @@ class WebFetcher:
             raise RuntimeError("crawl4ai not installed")
 
     async def _httpx_fetch(self, url: str) -> tuple[str, str]:
-        """Direct fetch with basic HTML-to-text conversion."""
-        async with httpx.AsyncClient(
-            headers=self.HEADERS,
-            timeout=DEFAULT_TIMEOUT,
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            html = resp.text
+        """Safe fetch (see fetch_markdown) with basic HTML-to-text conversion."""
+        from vula.commerce.reference_url import safe_fetch_bytes
+        html = (await safe_fetch_bytes(url, max_bytes=PAGE_MAX_BYTES)).decode("utf-8", errors="replace")
 
         title = self._extract_title(html)
         markdown = self._html_to_text(html)

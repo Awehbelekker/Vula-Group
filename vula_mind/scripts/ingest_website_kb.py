@@ -34,7 +34,7 @@ async def ingest_website(tenant_id: str, urls: list[str]) -> list[dict]:
         if i > 0:
             await asyncio.sleep(_DELAY_SECONDS)
         try:
-            title, markdown = await fetcher.fetch_markdown(url)
+            title, markdown = await fetcher.fetch_markdown(url, trusted=True)  # operator-chosen URLs
         except Exception as exc:
             results.append({"url": url, "status": "fetch_failed", "error": str(exc)})
             continue

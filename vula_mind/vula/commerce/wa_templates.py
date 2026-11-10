@@ -56,6 +56,19 @@ def _placeholder_count(body_text: str) -> int:
     return max(nums) if nums else 0
 
 
+def _image_mime(content: bytes) -> str:
+    """The image type from its first bytes (the safe fetch returns the bytes only)."""
+    if content[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if content[:4] == b"%PDF":
+        return "application/pdf"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    if content[:4] in (b"\x00\x00\x00\x18", b"\x00\x00\x00\x1c", b"\x00\x00\x00\x20") and content[4:8] == b"ftyp":
+        return "video/mp4"
+    return "image/jpeg"
+
+
 async def _upload_media_handle(url: str, token: str) -> tuple[Optional[str], Optional[str]]:
     """Meta's resumable Upload API: download the sample media, upload it to Meta, return the
     'handle' a template's HEADER example needs. Sending a real template message later takes a
@@ -66,11 +79,11 @@ async def _upload_media_handle(url: str, token: str) -> tuple[Optional[str], Opt
     if not app_id:
         return None, "VULA_FB_APP_ID is not configured on the server."
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            img = await client.get(url)
-            img.raise_for_status()
-            content = img.content
-            mime = img.headers.get("content-type", "image/jpeg").split(";")[0]
+        # The sample image URL is the business's, so the safe fetch (9 Nov 2026 audit H1).
+        from vula.commerce.reference_url import safe_fetch_bytes
+        content = await safe_fetch_bytes(url, max_bytes=16 * 1024 * 1024, timeout=30.0)
+        mime = _image_mime(content)
+        async with httpx.AsyncClient(timeout=30.0) as client:
 
             session = await client.post(
                 graph_url(f"{app_id}/uploads"),

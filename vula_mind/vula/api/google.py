@@ -19,10 +19,12 @@ from __future__ import annotations
 import logging
 from urllib.parse import urlencode
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 
 from config import settings
+from vula import oauth_state
+from vula.api.master_auth import require_auth
 from vula.google import service
 from vula.google.credentials import store_connection, _client
 
@@ -36,7 +38,7 @@ def _redirect_uri() -> str:
     return f"{settings.public_base_url}/v1/google/oauth/callback"
 
 
-@router.get("/authorize-url")
+@router.get("/authorize-url", dependencies=[Depends(require_auth)])  # a member of tenant_id (audit H2)
 async def authorize_url(tenant_id: str) -> dict:
     from vula import connections
     if not connections.one_tap("google"):
@@ -49,7 +51,7 @@ async def authorize_url(tenant_id: str) -> dict:
         "access_type": "offline",      # get a refresh token
         "prompt": "consent",            # ensure refresh token is returned
         "include_granted_scopes": "true",
-        "state": tenant_id,
+        "state": oauth_state.sign("google", tenant_id),
     }
     return {"url": f"{_AUTH}?{urlencode(params)}"}
 
@@ -66,9 +68,14 @@ def _popup(message: str, ok: bool = True) -> HTMLResponse:
 
 @router.get("/oauth/callback")
 async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
-    tenant_id = state
-    if not code or not tenant_id:
+    # Signed state only (9 Nov 2026 audit H2): a raw business id here let anyone link their own
+    # account into another business.
+    if not code or not state:
         return _popup("Connection cancelled.", ok=False)
+    signed = oauth_state.verify("google", state)
+    if not signed:
+        return _popup("That connection link has expired. Start again from Vula.", ok=False)
+    tenant_id = signed["tenant_id"]
     try:
         tok = await service.exchange_code(code, _redirect_uri())
         if not tok.get("access_token"):

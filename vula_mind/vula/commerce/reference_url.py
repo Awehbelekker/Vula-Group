@@ -95,7 +95,8 @@ async def safe_fetch_html(url: str) -> str:
     return (await safe_fetch_bytes(url)).decode("utf-8", errors="replace")
 
 
-async def safe_fetch_bytes(url: str, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
+async def safe_fetch_bytes(url: str, max_bytes: int = MAX_RESPONSE_BYTES,
+                           timeout: float = _TIMEOUT) -> bytes:
     """safe_fetch_html's fetch, returning raw bytes (a logo or favicon image) — same scheme,
     DNS-resolved IP, redirect and size checks. `max_bytes` lets a caller that reads a known
     larger document (a shop's JSON catalogue feed) raise the cap; it never lowers safety."""
@@ -105,7 +106,7 @@ async def safe_fetch_bytes(url: str, max_bytes: int = MAX_RESPONSE_BYTES) -> byt
         hostname = _validate_scheme_and_hostname(current)
         await _resolve_and_validate(hostname)
 
-        async with httpx.AsyncClient(headers=_HEADERS, timeout=_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(headers=_HEADERS, timeout=timeout, follow_redirects=False) as client:
             async with client.stream("GET", current) as resp:
                 if resp.status_code in (301, 302, 303, 307, 308):
                     location = resp.headers.get("location")
@@ -121,6 +122,48 @@ async def safe_fetch_bytes(url: str, max_bytes: int = MAX_RESPONSE_BYTES) -> byt
                 chunks: List[bytes] = []
                 total = 0
                 async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise UnsafeUrlError("Response too large")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+
+
+def _resolve_and_validate_sync(hostname: str) -> None:
+    """_resolve_and_validate for code that isn't async (a worker thread)."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except Exception as exc:
+        raise UnsafeUrlError(f"Could not resolve {hostname}: {exc}")
+    if not infos:
+        raise UnsafeUrlError(f"{hostname} did not resolve to any address")
+    for info in infos:
+        if not _is_safe_ip(info[4][0]):
+            raise UnsafeUrlError(f"{hostname} resolves to a non-public address ({info[4][0]})")
+
+
+def safe_fetch_bytes_sync(url: str, max_bytes: int = MAX_RESPONSE_BYTES, timeout: float = _TIMEOUT) -> bytes:
+    """safe_fetch_bytes for code that isn't async: the same scheme, address, redirect and size
+    checks."""
+    hops = 0
+    current = url
+    while True:
+        _resolve_and_validate_sync(_validate_scheme_and_hostname(current))
+        with httpx.Client(headers=_HEADERS, timeout=timeout, follow_redirects=False) as client:
+            with client.stream("GET", current) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise UnsafeUrlError("Redirect with no Location header")
+                    hops += 1
+                    if hops > MAX_REDIRECTS:
+                        raise UnsafeUrlError("Too many redirects")
+                    current = str(httpx.URL(current).join(location))
+                    continue
+                resp.raise_for_status()
+                chunks: List[bytes] = []
+                total = 0
+                for chunk in resp.iter_bytes():
                     total += len(chunk)
                     if total > max_bytes:
                         raise UnsafeUrlError("Response too large")
