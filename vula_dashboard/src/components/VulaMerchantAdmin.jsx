@@ -232,7 +232,7 @@ function AssistantSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'assistant' && <VulaAssistant tenantId={tenantId} />}
       {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} />}
       {active === 'automations' && <VulaAutomations tenantId={tenantId} />}
@@ -248,7 +248,7 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'orders' && <OrdersTab tenantId={tenantId} />}
       {active === 'products' && <ProductsTab tenantId={tenantId} />}
       {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
@@ -270,7 +270,7 @@ function MoneySection({ tenantId, products, subtabs, pendingSubtab, onConsumePen
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'invoices' && <VulaInvoices tenantId={tenantId} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={onClearSupplierFilter} />}
       {active === 'expenses' && <VulaExpenses tenantId={tenantId} />}
       {active === 'bank' && <VulaBankRec tenantId={tenantId} />}
@@ -296,7 +296,7 @@ function FinancesSubsection({ tenantId }) {
     <div>
       <VulaFinanceInsights tenantId={tenantId} />
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'insights' && <VulaReports tenantId={tenantId} />}
       {active === 'ledger' && <VulaFinances tenantId={tenantId} />}
       </ScreenSuspense>
@@ -310,7 +310,7 @@ function PeopleSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'customers' && <VulaCustomers tenantId={tenantId} />}
       {active === 'contacts' && <VulaContacts tenantId={tenantId} />}
       {active === 'followups' && <VulaFollowups tenantId={tenantId} />}
@@ -327,7 +327,7 @@ function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} />}
       {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
       {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} />}
@@ -345,7 +345,7 @@ function OperateSection({ tenantId, products, subtabs, pendingSubtab, onConsumeP
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'projects' && <VulaProjects tenantId={tenantId} />}
       {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
       {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} />}
@@ -366,7 +366,7 @@ function MyWorkSection({ tenantId, repPhone, subtabs, pendingSubtab, onConsumePe
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} />}
@@ -386,7 +386,7 @@ function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingN
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      <ScreenSuspense resetKey={tab}>
+      <ScreenSuspense resetKey={active}>
       {active === 'qs' && <VulaQS tenantId={tenantId} />}
       {active === 'qspro' && <VulaQSPro tenantId={tenantId} />}
       {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} />}
