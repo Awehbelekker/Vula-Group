@@ -171,14 +171,42 @@ def bill_project_mismatches(tenant_id: str, docs: List[Dict[str, Any]]) -> List[
     linked = {str(d["commerce_invoice_id"]): d for d in docs if d.get("commerce_invoice_id") and d.get("project")}
     if not linked:
         return []
-    bills = _rows(lambda: _client().table("commerce_invoices").select("id,invoice_number,supplier,project,status")
-                  .eq("tenant_id", tenant_id).neq("status", "cancelled"))
+    bills = _bills(tenant_id)
     out = []
     for b in bills:
         d = linked.get(str(b["id"]))
         if d and b.get("project") and project_key(b["project"]) != project_key(d["project"]):
             out.append({"id": b["id"], "bill": b.get("invoice_number"), "supplier": b.get("supplier"),
                         "detail": f"Bill under {b['project']}, its document under {d['project']}."})
+    return out
+
+
+def _bills(tenant_id: str) -> List[Dict[str, Any]]:
+    return _rows(lambda: _client().table("commerce_invoices").select("id,invoice_number,supplier,project,status,total_cents")
+                 .eq("tenant_id", tenant_id).neq("status", "cancelled"))
+
+
+def bill_amount_mismatches(tenant_id: str, docs: List[Dict[str, Any]],
+                           bills: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """A bill booked at a different amount from its own document (Sea Point Hire 113631: the invoice says
+    R2,000.00, the bill R2,300.00)."""
+    linked = {str(d["commerce_invoice_id"]): d for d in docs if d.get("commerce_invoice_id")}
+    if not linked:
+        return []
+    out = []
+    for b in (bills if bills is not None else _bills(tenant_id)):
+        d = linked.get(str(b["id"]))
+        doc_c = (d.get("fields") or {}).get("total_cents") if d else None
+        try:
+            doc_c, bill_c = abs(int(doc_c)), abs(int(b.get("total_cents") or 0))
+        except (TypeError, ValueError):
+            continue
+        if doc_c and bill_c and abs(doc_c - bill_c) > 100:
+            why = (" 15% VAT was added because the document was read as priced excluding VAT — right only if "
+                   "it says so and the supplier is VAT registered." if abs(bill_c - (doc_c + doc_c * 15 // 100)) <= 1 else "")
+            out.append({"id": b["id"], "project": b.get("project"), "bill": b.get("invoice_number"),
+                        "supplier": b.get("supplier"),
+                        "detail": f"Booked at {_r(bill_c)}, the document says {_r(doc_c)}.{why}"})
     return out
 
 
@@ -264,6 +292,7 @@ _TITLES = {
     "internal": "Internal cost sheets a client link would show",
     "no_supplier": "Invoices and quotes with no supplier (last 6 months)",
     "bill_project": "Bills on a different project from their document",
+    "bill_amount": "Bills booked at a different amount from their document",
     "unpaid_paid": "Supplier bills still unpaid with a matching bank payment",
     "duplicates": "Suppliers on file more than once",
     "unallocated": "Job payments in the bank with no project",
@@ -283,6 +312,7 @@ def sweep(tenant_id: str) -> Dict[str, Any]:
     found = document_issues(docs)
     add("internal", found["internal"])
     add("bill_project", bill_project_mismatches(tenant_id, docs))
+    add("bill_amount", bill_amount_mismatches(tenant_id, docs))
     add("date", found["date"])
     add("unpaid_paid", unpaid_bills_with_payment(tenant_id))
     add("no_supplier", found["no_supplier"])

@@ -2609,6 +2609,13 @@ def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
 _SA_VAT_NUMBER = re.compile(r"^4\d{9}$")
 
 
+def _cents_or_none(v: Any) -> Optional[int]:
+    try:
+        return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def vat_registered(*tax_ids: Optional[str]) -> Optional[bool]:
     """Whether the supplier charges VAT, from the tax numbers we have for it (on the document, or
     on its supplier record): True when one is a South African VAT number (10 digits starting with
@@ -2621,14 +2628,20 @@ def vat_registered(*tax_ids: Optional[str]) -> Optional[bool]:
 
 
 def vat_inclusive(total_cents: int, vat_cents: int, excl: bool,
-                  registered: Optional[bool] = None) -> Tuple[int, int]:
+                  registered: Optional[bool] = None, subtotal_cents: Optional[int] = None) -> Tuple[int, int]:
     """(total incl VAT, VAT) in cents. A document that prices EXCLUDING VAT and shows no VAT
     figure (STE Scaffolding's quotes, 2026-10-02: "R41,752.47 excluding VAT" was booked as the
     full price with R0 VAT) gets 15% added here, in code — never by the model. Half cents are
     dropped, as on STE's own invoice: R2,084.50 excl → R312.67 VAT (STE00866, R2,397.17).
     Not when the supplier isn't VAT registered (`registered` False, vat_registered()): 2026-11-03,
-    an electrician's R45,852.00 invoice with no VAT on it was booked as R52,729.80."""
+    an electrician's R45,852.00 invoice with no VAT on it was booked as R52,729.80.
+    Not when the document shows a subtotal AND a different total (10 Nov 2026: Sea Point Hire 113631,
+    subtotal R1,880 and "total amount due R2,000.00", was booked as R2,300.00; a Solucent invoice
+    totalling R31,777.20 as R36,543.78): the total already carries whatever was added to the
+    subtotal — it's the amount due, and VAT is never added to it again."""
     if registered is False:
+        return total_cents, vat_cents
+    if subtotal_cents and total_cents and abs(int(subtotal_cents) - int(total_cents)) > 1:
         return total_cents, vat_cents
     if excl and total_cents > 0 and not vat_cents:
         vat_cents = total_cents * 15 // 100
@@ -2771,7 +2784,8 @@ async def commit_inbound_document(
     registered = vat_registered(tax_id, extracted.get("supplier_vat_no"),
                                 (supplier_row or {}).get("tax_id"))
     total_cents, vat_cents = vat_inclusive(total_cents, vat_cents,
-                                           bool(extracted.get("amounts_exclude_vat")), registered)
+                                           bool(extracted.get("amounts_exclude_vat")), registered,
+                                           _cents_or_none(extracted.get("subtotal_cents")))
 
     preview = {
         "supplier": supplier_name,

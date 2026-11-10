@@ -119,3 +119,15 @@ async def _async_value(v):
 
 def _async(v):
     return _async_value(v)
+
+
+def test_the_health_list_finds_a_bill_booked_at_the_wrong_amount():
+    docs = [{"id": "d1", "commerce_invoice_id": "b1", "fields": {"total_cents": 200000}},
+            {"id": "d2", "commerce_invoice_id": "b2", "fields": {"total_cents": 840650}},
+            {"id": "d3", "commerce_invoice_id": "b3", "fields": {}}]
+    bills = [{"id": "b1", "invoice_number": "DIG-BILL-00098", "supplier": "Sea Point Hire", "total_cents": 230000},
+             {"id": "b2", "invoice_number": "DIG-BILL-00039", "supplier": "FLUSH", "total_cents": 840650},
+             {"id": "b3", "invoice_number": "X", "supplier": "Y", "total_cents": 1}]
+    out = dc.bill_amount_mismatches("t1", docs, bills)
+    assert [o["bill"] for o in out] == ["DIG-BILL-00098"]
+    assert out[0]["detail"].startswith("Booked at R2,300.00, the document says R2,000.00. 15% VAT was added")

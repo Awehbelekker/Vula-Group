@@ -5028,7 +5028,8 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
         total, vat = cs.vat_inclusive(int(merged.get("total_cents") or 0),
                                       int(merged.get("vat_cents") or 0),
                                       bool(merged.get("amounts_exclude_vat")),
-                                      cs.vat_registered(merged.get("tax_id"), merged.get("supplier_vat_no")))
+                                      cs.vat_registered(merged.get("tax_id"), merged.get("supplier_vat_no")),
+                                      cs._cents_or_none(merged.get("subtotal_cents")))
         note += f", total R{total / 100:,.2f}." if total else "."
         if merged.get("_unverified_figures") or not total:
             return note + " I've not booked the total — please check it in your Invoices tab.", row
