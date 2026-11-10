@@ -202,7 +202,8 @@ export const config = {
             backgroundImage: image ? `url(${image})` : undefined, backgroundSize: "cover", backgroundPosition: "center" }}>
             <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(180deg, rgba(0,0,0,${Math.min(overlay, 100) * 0.27 / 100}) 0%, rgba(0,0,0,${Math.min(overlay, 100) / 100}) 100%)` }} />
             <div style={{ position: "relative", zIndex: 1, maxWidth: 760, padding: "80px 16px" }}>
-              <h1 style={{ fontSize: 44, fontWeight: 800, marginBottom: 16, fontFamily: FONT_DISPLAY }}>{title}</h1>
+              {/* color: inherit — the dashboard's global h1 rule (index.css) made this dark-on-dark */}
+              <h1 style={{ fontSize: 44, fontWeight: 800, marginBottom: 16, fontFamily: FONT_DISPLAY, color: "inherit" }}>{title}</h1>
               {subtitle ? <p style={{ fontSize: 18, opacity: 0.9, marginBottom: 24 }}>{subtitle}</p> : null}
               {(ctaText || ctaText2) && (
                 <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>

@@ -2107,6 +2107,8 @@ from vula.api.business_profile import router as business_profile_router  # noqa:
 app.include_router(business_profile_router, prefix="/v1/commerce")
 from vula.api.listings import router as listings_router  # noqa: E402
 app.include_router(listings_router, prefix="/v1/commerce")          # real-estate listings; /{tenant}/admin/* tenant-guarded
+from vula.api.pipeline import router as pipeline_router  # noqa: E402
+app.include_router(pipeline_router, prefix="/v1/commerce")          # deals pipeline; /{tenant}/admin/* tenant-guarded, `pipeline` module
 app.include_router(command_centre_router, prefix="/v1/commerce")  # /{tenant}/admin/activity|home|today — tenant-guarded
 app.include_router(bookings_router, prefix="/v1/bookings")
 app.include_router(subscriptions_router, prefix="/v1/subscriptions")

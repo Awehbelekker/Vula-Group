@@ -1548,11 +1548,15 @@ MANUFACTURING_TOOLS = [
 
 _MFG_TOOL_NAMES = {t["function"]["name"] for t in MANUFACTURING_TOOLS}
 
-# Real-estate listing tools (core/skills/listing_tools.py). Deliberately NOT a _GATED_GROUPS
-# entry: that list offers every group to a tenant with no module config, and its keyword
-# matcher would narrow other tenants' tools on everyday words ("sold out"). These are added in
-# _tools_for only when the `listings` module is explicitly on.
-from core.skills import listing_tools as _lt  # noqa: E402
+# Add-ons (2026-11-10): a self-contained tool module per optional feature — listings (real
+# estate), pipeline (deals, any business type). Each exposes MODULE, ADMIN_TOOL_SPECS,
+# ADMIN_TOOL_NAMES, ADMIN_PREVIEW_FIRST and run_admin_tool; adding one is one line here.
+# Deliberately NOT _GATED_GROUPS entries: that list offers every group to a tenant with no
+# module config, and its keyword matcher would narrow other tenants' tools on everyday words
+# ("sold out"). An add-on's tools are offered only when its module is explicitly on.
+from core.skills import listing_tools as _lt, pipeline_tools as _pt  # noqa: E402
+_ADDONS = (_lt, _pt)
+_ADDON_FOR_TOOL = {n: a for a in _ADDONS for n in a.ADMIN_TOOL_NAMES}
 
 _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
@@ -1568,7 +1572,7 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
                    + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS
-                   + FORM_TOOLS + BUYING_TOOLS + _lt.ADMIN_TOOL_SPECS)
+                   + FORM_TOOLS + BUYING_TOOLS + [t for a in _ADDONS for t in a.ADMIN_TOOL_SPECS])
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1846,8 +1850,9 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
             continue
         if matched is None or mod in matched:
             tools += _product_tools_for(tenant_id) if mod == "products" else group
-    if "listings" in mods:
-        tools += _lt.ADMIN_TOOL_SPECS
+    for addon in _ADDONS:
+        if addon.MODULE in mods:
+            tools += addon.ADMIN_TOOL_SPECS
     return tools
 
 
@@ -1880,7 +1885,8 @@ _TOOL_SCOPE: Dict[str, str] = {
     "send_payment_reminders": "invoices",
     "staff_notice": "team", "staff_poll": "team",
     # real-estate listing tools: staff granted the Listings tab
-    **{n: "listings" for n in _lt.ADMIN_TOOL_NAMES},
+    # add-on tools: staff granted that add-on's dashboard tab (tab id = module id)
+    **{n: a.MODULE for a in _ADDONS for n in a.ADMIN_TOOL_NAMES},
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -1933,7 +1939,7 @@ _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "reco
                             # message the team; a discount code changes prices.
                             "order_payment", "create_manual_order", "create_discount_code",
                             "update_order_status", "staff_notice", "staff_poll", "cancel_booking"}
-                           | _lt.ADMIN_PREVIEW_FIRST)
+                           | frozenset().union(*(a.ADMIN_PREVIEW_FIRST for a in _ADDONS)))
 
 
 def _claim_preview(tenant_id: str, phone: Optional[str], tool: str) -> Optional[Dict[str, Any]]:
@@ -2862,10 +2868,16 @@ class CommerceAdminSkill(BaseSkill):
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
         _log_tool_call(tid, "admin", name, args)
-        if name in _lt.ADMIN_TOOL_NAMES:
-            if not _lt.tenant_has_listings(tid):
+        addon = _ADDON_FOR_TOOL.get(name)
+        if addon is not None:
+            try:
+                from vula.api.tenants import enabled_modules
+                on = addon.MODULE in (enabled_modules(tid) or [])
+            except Exception:
+                on = False
+            if not on:
                 return {"error": f"{name} isn't available for this business."}
-            return await _lt.run_admin_tool(name, args, ctx)
+            return await addon.run_admin_tool(name, args, ctx)
         try:
             if name == "sales_summary":      return await self._sales_summary(tid, args.get("period", "today"))
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))

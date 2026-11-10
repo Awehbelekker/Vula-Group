@@ -3,6 +3,8 @@
    pill controls, photo-led cards with a tag on the image, big confident numbers. The tenant's
    accent colour (--brand) carries it, so each agency still looks like itself. */
 .vls { --vls-r: 20px; --vls-shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 18px 40px -28px rgba(20, 30, 60, .35); }
+/* the shared tab strip carries its own bottom margin: none inside a bar, so tabs and the button line up */
+.vls-bar > .vula-tabs { margin-bottom: 0 !important; }
 .vls-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
 .vls-muted { font-size: var(--fs-caption); color: var(--muted); }
 .vls-strong { font-weight: 600; color: var(--ink); }
@@ -41,8 +43,11 @@
 .vls-enq-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .vls-quote { font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
 .vls-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: 4px; }
-.vls-wa { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
-  color: var(--ink); text-decoration: none; font-size: var(--fs-caption); font-weight: 600; }
+.vls-wa { display: inline-flex; align-items: center; gap: 5px; height: 32px; box-sizing: border-box; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--ink); text-decoration: none; font: 600 var(--fs-caption)/1 var(--font-sans);
+  cursor: pointer; appearance: none; }
+.vls-wa:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vls-status { width: auto !important; height: 32px !important; padding-top: 0 !important; padding-bottom: 0 !important; border-radius: 999px !important; font-size: var(--fs-caption) !important; }
 .vls-wa:hover { border-color: var(--brand); }
 
 /* agents */

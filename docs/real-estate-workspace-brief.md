@@ -52,3 +52,31 @@ rail runs down the right of every page.
 4. Deals board (new `vula_property_deals` table: property, contact, stage, offer cents, close date).
 5. Overview page assembling the above.
 6. Property workspace page (stepper, offers, documents, media).
+
+## Status (2026-11-10) — what's built on this branch
+
+Everything is behind module switches; a business without them sees no change.
+
+| Piece | Module | Where |
+|---|---|---|
+| Listings, agents, enquiries (DB + API) | `listings` | migration 254, `vula/listings/`, `vula/api/listings.py` |
+| Website blocks: property search grid + listing dialog, agents, enquiry form; "Homepage — Real estate" template | `listings` (editor only) | `vula_dashboard/src/puck/config.jsx`, `pages/usePages.js` |
+| Customer WhatsApp: search, details + photo, viewing / call-back requests | `listings` | `core/skills/listing_tools.py` |
+| Agent WhatsApp: add / edit listings (preview → confirm → read-back), photos by caption, enquiries | `listings` | `core/skills/listing_tools.py`, `vula/api/whatsapp.py::_maybe_listing_photo` |
+| Deals pipeline for **any** business type (stages per business type) | `pipeline` | migration 255, `vula/pipeline/`, `vula/api/pipeline.py`, `core/skills/pipeline_tools.py` |
+| Dashboard: Sell › Listings (grid, edit, enquiries inbox, agents), People › Pipeline (board, drag & drop) | `listings`, `pipeline` | `components/listings/`, `components/pipeline/` |
+
+New optional features plug in the same way: one tools module registered in
+`commerce_admin._ADDONS`, one module key, one dashboard tab whose id is the module key.
+
+### Go-live checklist
+1. Apply migrations 254 and 255 in the Supabase SQL editor (staging first).
+2. Merge the branch; deploy the backend (`railway up`) and the dashboard (Vercel).
+3. Switch on `listings` + `pipeline` for one agency (Master › Tenants) — or onboard it as
+   "Real estate", which includes both.
+4. For leads that arrive from the website/portals (no WhatsApp message from the person first),
+   an approved WhatsApp template is still needed before Vula can message them first.
+
+### Next, when needed
+- Listings import from the agency's existing CRM/portal feed (avoid double capture).
+- A map view of listings (Leaflet is already in the dashboard).

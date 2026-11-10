@@ -4,7 +4,7 @@
  * components exactly as before — every pre-overhaul tab id is present, nothing dropped.
  */
 import {
-  Building2,
+  Building2, KanbanSquare,
   Activity, Banknote, Bike, CalendarCheck, Bot, BookOpen, Boxes, BrainCircuit, BrickWall, Briefcase, Calculator,
   CalendarDays, ClipboardList, Clock, Contact, CreditCard, Download, Factory, FileSignature,
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
@@ -26,7 +26,7 @@ export const NAV_ICONS = {
   subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, listings: Building2, suppliers: Truck, import: Download,
   money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
-  people: Users, customers: Users, contacts: Contact, followups: MailCheck,
+  people: Users, pipeline: KanbanSquare, customers: Users, contacts: Contact, followups: MailCheck,
   "marketing-hub": Sparkles, onboarding: PartyPopper, broadcast: Megaphone, "email-campaigns": Mail,
   "wa-templates": MessagesSquare, scheduling: Clock, marketing: Sparkles,
   pages: Globe,
@@ -106,6 +106,8 @@ export const MERCHANT_GROUPS = [
       { id: "customers", icon: "👥", label: "Customers" },
       { id: "contacts", icon: "📇", label: "Contacts" },
       { id: "followups", icon: "📬", label: "Follow-ups" },
+      // any business with the `pipeline` module (tab id = module id, no MERCHANT_MODMAP entry)
+      { id: "pipeline", icon: "📈", label: "Pipeline" },
     ]},
   ]},
   { label: "Marketing", items: [

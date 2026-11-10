@@ -5,7 +5,7 @@
  * Look follows docs/real-estate-workspace-brief.md — scoped to .vls so no other screen changes.
  */
 import { useMemo, useState } from "react";
-import { Building2, Inbox, MessageCircle, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { Building2, Inbox, KanbanSquare, MessageCircle, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { formatMoney } from "../../lib/money";
 import VulaImageUpload from "../VulaImageUpload";
 import { Button, EmptyState, Field, Input, PageHeader, PillTabs, Select, Sheet, Skeleton, StatusChip, Textarea, confirmDialog, toast } from "../ui/index.jsx";
@@ -258,10 +258,17 @@ function EnquiriesView({ x }) {
                   <span className="vls-actions">
                     {wa && <a className="vls-wa" href={wa} target="_blank" rel="noreferrer"><MessageCircle size={14} aria-hidden /> WhatsApp</a>}
                     {e.email && <a className="vls-wa" href={`mailto:${e.email}`}>Email</a>}
+                    {x.modules.includes("pipeline") && (
+                      <button type="button" className="vls-wa" onClick={async () => {
+                        const r = await x.toPipeline(e.id);
+                        if (r.error) toast(r.error, "danger");
+                        else toast(r.existing ? "Already in the pipeline" : "Added to the pipeline");
+                      }}><KanbanSquare size={14} aria-hidden /> Add to pipeline</button>
+                    )}
                     <Select aria-label={`Status for ${e.name}`} value={e.status} onChange={async (ev) => {
                       const r = await x.setEnquiryStatus(e.id, ev.target.value);
                       if (r.error) toast(r.error, "danger");
-                    }} style={{ width: "auto" }}>
+                    }} className="vls-status">
                       {Object.entries(ENQUIRY_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                     </Select>
                   </span>

@@ -64,6 +64,8 @@ MODULES: dict[str, str] = {
     "manufacturing": "Manufacturing & costing (recipes, batches, cost per unit, margin)",
     # 2026-11-10: properties for sale / to rent, agents, website enquiries — vula/listings/.
     "listings":   "Property listings (real estate)",
+    # 2026-11-10: deals board for any business type (stages per business type) — vula/pipeline/.
+    "pipeline":   "Deals pipeline",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
@@ -94,7 +96,7 @@ BUSINESS_TYPES: dict[str, dict] = {
     # 2026-11-10: estate agencies and letting agents — listings, agents, enquiries, viewings
     # (bookings), a website to show the listings on, and follow-ups on every lead.
     "real_estate": {"label": "Real estate / Estate agency / Rentals",
-                    "modules": ["listings", "bookings", "crm", "followups", "pages", "inbox",
+                    "modules": ["listings", "pipeline", "bookings", "crm", "followups", "pages", "inbox",
                                 "broadcasts", "marketing", "documents", "team", "reports", "invoices"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team"]},

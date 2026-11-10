@@ -28,6 +28,7 @@ from vula.listings import service as ls
 
 log = logging.getLogger(__name__)
 
+MODULE = "listings"            # commerce_admin._ADDONS: tools offered only with this module
 MAX_RESULTS = 6
 
 

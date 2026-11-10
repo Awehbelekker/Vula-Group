@@ -36,6 +36,10 @@ export function useListings(tenantId) {
   const [enquiries, setEnquiries] = useState(null);
   const [agents, setAgents] = useState(null);
   const [msg, setMsg] = useState("");
+  const [modules, setModules] = useState([]);     // "Add to pipeline" only with the pipeline module
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/tenants/${tenantId}`).then((r) => r.json()).then((t) => setModules(t.modules || [])).catch(() => {});
+  }, [tenantId]);
 
   const load = useCallback(async () => {
     const [l, e, a] = await Promise.all([
@@ -75,6 +79,13 @@ export function useListings(tenantId) {
     return r;
   };
 
-  return { view, setView, listings, enquiries, agents, msg, setMsg, load, saveListing, deleteListing,
+  const toPipeline = async (enquiryId) => {
+    const { dealFromEnquiry } = await import("../pipeline/usePipeline");
+    const r = await dealFromEnquiry(tenantId, enquiryId);
+    if (!r.error) await load();          // the enquiry moves to Contacted
+    return r;
+  };
+
+  return { view, setView, listings, enquiries, agents, msg, setMsg, load, modules, toPipeline, saveListing, deleteListing,
            saveAgent, deleteAgent, setEnquiryStatus };
 }

@@ -29,6 +29,7 @@ const VulaCosting = lazyScreen(() => import('./VulaCosting'))
 const VulaInvoices = lazyScreen(() => import('./VulaInvoices'))
 const VulaBookings = lazyScreen(() => import('./VulaBookings'))
 const VulaListings = lazyScreen(() => import('./VulaListings'))
+const VulaPipeline = lazyScreen(() => import('./VulaPipeline'))
 const VulaMarketing = lazyScreen(() => import('./VulaMarketing'))
 const VulaFinanceInsights = lazyScreen(() => import('./VulaFinanceInsights'))
 const FinancesV2 = lazyScreen(() => import('./finances/FinancesV2'))
@@ -316,6 +317,7 @@ function PeopleSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }
       {active === 'customers' && <VulaCustomers tenantId={tenantId} />}
       {active === 'contacts' && <VulaContacts tenantId={tenantId} />}
       {active === 'followups' && <VulaFollowups tenantId={tenantId} />}
+      {active === 'pipeline' && <VulaPipeline tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )
