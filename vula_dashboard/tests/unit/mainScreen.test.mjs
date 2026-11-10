@@ -6,8 +6,12 @@ import { mainScreen } from "../../src/lib/mainScreen.js";
 
 const page = (id, section = "money") => ({ id, label: id[0].toUpperCase() + id.slice(1), section });
 
-test("a shop gets Orders", () => {
-  assert.equal(mainScreen([page("overview", "overview"), page("orders", "sell"), page("invoices")]).id, "orders");
+test("a shop that invoices gets Invoices: every business can invoice on the move", () => {
+  assert.equal(mainScreen([page("overview", "overview"), page("orders", "sell"), page("invoices")]).id, "invoices");
+});
+
+test("a shop without invoicing gets Orders", () => {
+  assert.equal(mainScreen([page("overview", "overview"), page("orders", "sell")]).id, "orders");
 });
 
 test("a business that doesn't sell (DIGG) gets Invoices", () => {

@@ -1,14 +1,15 @@
 /**
  * mainScreen.js — the screen a business works in most, on the phone bar (10 Nov 2026).
  *
- * The phone bar had Search, Add, Today, Inbox and More, so a business's everyday screen was three
- * taps away (More › Money › Invoices). DIGG's owner couldn't find Invoices on her phone at all,
- * and invoicing is most of what DIGG does in Vula. A shop works in Orders; a business that
- * doesn't sell products works in Invoices. Only a screen this login can already see is offered.
+ * The phone bar had Search, Add, Today, Inbox and More, so Invoices was three taps away
+ * (More › Money › Invoices). DIGG's owner couldn't find it on her phone at all. Every business
+ * that invoices must be able to do it on the move (Ian, 10 Nov), so Invoices comes first, shops
+ * included; a shop without invoicing gets Orders. Only a screen this login can already see is
+ * offered.
  *
  * pages: the login's flattened, already-filtered nav ([{ id, label, ... }]).
  */
-export const MAIN_SCREENS = ["orders", "invoices"];
+export const MAIN_SCREENS = ["invoices", "orders"];
 
 export function mainScreen(pages) {
   for (const id of MAIN_SCREENS) {

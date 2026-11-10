@@ -19,7 +19,7 @@ import * as F from "./fixtures/demo.js";
 
 const WIDTHS = { 360: 780, 390: 844, 430: 932 };
 const LOOKS = ["classic", "glass", "float"];
-const MAIN = /^(Orders|Invoices)/;       // the phone bar's main-screen button
+const MAIN = /^Invoices/;                // the phone bar's main-screen button (the demo shop invoices)
 const BRANDS = { vula: "#2C5545", digg: "#1E1E1E" };
 const outDir = (ti) => path.join(ti.project.testDir, ".results-phonemenu");
 
@@ -98,8 +98,8 @@ for (const look of LOOKS) {
             expect(a.y, "Add rises above the bar").toBeLessThan(b.y);
             expect(await bar.locator(".vui-toolbar-line path").getAttribute("d")).toMatch(/^M[\d.]+,[\d.]+ L/);
           }
-          // the business's everyday screen has its own button (lib/mainScreen.js: the demo shop's
-          // Orders) in Inbox's place; Inbox stays one tap away in the header, with its count
+          // Invoices has its own button (lib/mainScreen.js), shops included, in Inbox's place;
+          // Inbox stays one tap away in the header, with its count
           await expect(bar.getByRole("button", { name: /^Inbox/ })).toHaveCount(0);
           await expect(page.locator(".v2-top").getByRole("button", { name: /^Inbox/ })).toBeVisible();
           // the current page stands out: full-strength text, marked in the brand (glass pill, float dot)
