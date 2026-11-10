@@ -19,6 +19,7 @@ import * as F from "./fixtures/demo.js";
 
 const WIDTHS = { 360: 780, 390: 844, 430: 932 };
 const LOOKS = ["classic", "glass", "float"];
+const MAIN = /^Invoices/;                // the phone bar's main-screen button (the demo shop invoices)
 const BRANDS = { vula: "#2C5545", digg: "#1E1E1E" };
 const outDir = (ti) => path.join(ti.project.testDir, ".results-phonemenu");
 
@@ -97,9 +98,13 @@ for (const look of LOOKS) {
             expect(a.y, "Add rises above the bar").toBeLessThan(b.y);
             expect(await bar.locator(".vui-toolbar-line path").getAttribute("d")).toMatch(/^M[\d.]+,[\d.]+ L/);
           }
+          // Invoices has its own button (lib/mainScreen.js), shops included, in Inbox's place;
+          // Inbox stays one tap away in the header, with its count
+          await expect(bar.getByRole("button", { name: /^Inbox/ })).toHaveCount(0);
+          await expect(page.locator(".v2-top").getByRole("button", { name: /^Inbox/ })).toBeVisible();
           // the current page stands out: full-strength text, marked in the brand (glass pill, float dot)
-          await bar.getByRole("button", { name: /^Inbox/ }).click();
-          await expect(bar.getByRole("button", { name: /^Inbox/ })).toHaveAttribute("aria-current", "page");
+          await bar.getByRole("button", { name: MAIN }).click();
+          await expect(bar.getByRole("button", { name: MAIN })).toHaveAttribute("aria-current", "page");
           if (look !== "classic") {
             const bgSel = look === "glass" ? ".v2-shell" : ".vui-toolbar-bg";
             expect(await contrastIn(page, [".vui-tool[aria-current='page']", "color"], [bgSel, "backgroundColor"]),
@@ -108,13 +113,13 @@ for (const look of LOOKS) {
           if (look === "float") {
             expect(await contrastIn(page, [".vui-tool[aria-current='page']", "color"], [".vui-toolbar-bg", "backgroundColor"]))
               .toBeGreaterThanOrEqual(4.5);
-            expect(await bar.getByRole("button", { name: /^Inbox/ }).evaluate((b) => getComputedStyle(b, "::after").backgroundColor))
+            expect(await bar.getByRole("button", { name: MAIN }).evaluate((b) => getComputedStyle(b, "::after").backgroundColor))
               .not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
           }
           if (look === "glass") {
             const pill = await bar.locator(".vui-toolbar-ind").boundingBox();
-            const inbox = await bar.getByRole("button", { name: /^Inbox/ }).boundingBox();
-            expect(Math.abs((pill.x + pill.width / 2) - (inbox.x + inbox.width / 2)), "pill under Inbox").toBeLessThan(2);
+            const main = await bar.getByRole("button", { name: MAIN }).boundingBox();
+            expect(Math.abs((pill.x + pill.width / 2) - (main.x + main.width / 2)), "pill under the main screen").toBeLessThan(2);
           }
 
           // the page's last row clears the bar, the raised button included: scrolled to the end,

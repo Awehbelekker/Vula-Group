@@ -676,7 +676,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
       {items.map((it, i) => (
         <div key={i} style={s.itemRow}>
           <input list="section-list" placeholder="Section (optional)" title="Group this line under a BoQ trade section, e.g. Demolition, Structure, Finishes" value={it.section} onChange={e => updateItem(i, 'section', e.target.value)} style={{ ...s.fInput, width: 90 }} />
-          <input list="prod-list" placeholder="Description / pick product or service" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: 2 }} />
+          <input list="prod-list" placeholder="Description / pick product or service" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: '2 1 180px', minWidth: 0 }} />
           <input type="number" step="0.001" placeholder="Qty" value={it.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} style={{ ...s.fInput, width: 54 }} />
           <input list="unit-list" placeholder="unit" value={it.unit} onChange={e => updateItem(i, 'unit', e.target.value)} style={{ ...s.fInput, width: 58 }} />
           <input type="number" step="0.01" placeholder="R" value={it.unit_price} onChange={e => updateItem(i, 'unit_price', e.target.value)} style={{ ...s.fInput, width: 76 }} />
@@ -1418,9 +1418,11 @@ const s = {
   matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, color: 'var(--accent)' },
   formSection:{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   fInput:     { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', flex: 1 },
-  fRow:       { display: 'flex', gap: 8 },
+  // Rows wrap on a phone instead of running off the screen (10 Nov 2026: at 360px the email box,
+  // a line item's price and the Due/VAT/Discount/Deposit row were cut off — invoicing on the move).
+  fRow:       { display: 'flex', gap: 8, flexWrap: 'wrap' },
   sectionLabel:{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '8px 0 6px' },
-  itemRow:    { display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' },
+  itemRow:    { display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' },
   rmBtn:      { background: 'transparent', border: 'none', color: 'var(--danger)', fontSize: 20, cursor: 'pointer', lineHeight: 1 },
   addItemBtn: { padding: '6px 12px', background: 'transparent', border: '1px dashed var(--border)', borderRadius: 6, fontSize: 12, cursor: 'pointer', color: 'var(--muted)', marginBottom: 12 },
   dueLabel:   { fontSize: 12, color: 'var(--muted)', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 },
