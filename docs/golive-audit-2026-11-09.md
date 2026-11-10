@@ -165,16 +165,22 @@ A green suite doesn't cover the gaps below. Most of them are paths no test exerc
   the fix. The other 2 are a lowercase `application/json` case that already worked and a
   "same tenant and forms still work" regression check. S6 and S7 (forged payments) are in the
   money PR.
-- **9 Nov, money fixes:** S6, S7, M1, M2, H3, H4 and H5 fixed. **Merged as #286 on 10 Nov.**
+- **9 Nov, money fixes:** S6, S7, M1, M2, H3, H4 and H5 fixed. **Merged as #286 on 10 Nov, live from 08:42.**
   Tests: `vula_mind/tests/test_money_audit_1109.py` (35). 33 of them fail on the code before the
   fix. The other 2 are regression checks: a full payment is marked paid once, and a draft still
   moves to "sent". MEDIUM money items (partial refunds, credit-note caps, overpayment, the
   `vat_registered` default, journal immutability, rounding) are still open.
-- **9 Nov, WhatsApp fixes:** H7–H10 and the checkout double tap fixed.
+- **9 Nov, WhatsApp fixes:** H7–H10 and the checkout double tap fixed. **Merged as #287 on 10 Nov.**
   Tests: `vula_mind/tests/test_whatsapp_audit_1109.py` (10). 9 of them fail on the code before the
   fix; the other checks that a failed placement can be tried again. Still open: 8 businesses have
   no number row and send from the server's default line by design. Whether that line should
   speak for a business at all is a product decision.
+- **9 Nov, dashboard + POPIA:** retention rules added (owner's periods: dedupe and WhatsApp
+  logins 30 days, error reports 90, unconverted leads and conversation turns 365). The website lead
+  form has a privacy notice. The dashboard no longer goes blank without its Supabase settings, no
+  longer opens the full menu when the member lookup fails, keeps the menu working when one screen
+  crashes (no "tell Ian"), and says when Vula's server can't be reached. The client-secret check
+  now covers the site, the dashboard's public/pay/r folders and the mobile app's app.json.
 
 ## Suggested order
 

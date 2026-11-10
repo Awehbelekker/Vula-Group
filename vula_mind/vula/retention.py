@@ -35,8 +35,49 @@ def _takeoff(days: int) -> Dict[str, int]:
     return purge_expired(days=days)
 
 
+def _older_than(table: str, column: str, days: int, **eq_not) -> int:
+    """Delete rows of `table` whose `column` is older than `days`; `eq_not` keeps rows whose
+    column equals the value (e.g. status="won"). Returns how many went."""
+    from datetime import datetime, timedelta, timezone
+    from vula.commerce.service import _client
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    q = _client().table(table).delete().lt(column, cutoff)
+    for col, keep in eq_not.items():
+        q = q.neq(col, keep)
+    return len(q.execute().data or [])
+
+
+def _dedup(days: int) -> Dict[str, int]:
+    return {"rows": _older_than("vula_wa_msg_dedup", "seen_at", days)}
+
+
+def _wa_logins(days: int) -> Dict[str, int]:
+    return {"rows": _older_than("vula_wa_login_requests", "created_at", days)}
+
+
+def _app_errors(days: int) -> Dict[str, int]:
+    return {"rows": _older_than("vula_app_errors", "last_seen", days)}
+
+
+def _leads(days: int) -> Dict[str, int]:
+    # A won lead became a business; the rest (new, contacted, lost) go after the period.
+    return {"rows": _older_than("vula_website_leads", "created_at", days, status="won")}
+
+
+def _turns(days: int) -> Dict[str, int]:
+    out = {"turns": _older_than("vula_turns", "started_at", days)}
+    out["kb_turns"] = _older_than("vula_kb_turns", "created_at", days)
+    return out
+
+
 RULES: List[Rule] = [
     Rule("takeoff_plans", "takeoff_retention_days", _takeoff),
+    # 9 Nov 2026 (owner's decision, golive audit): the candidates docs/security-model.md listed.
+    Rule("whatsapp_dedupe", "wa_dedup_retention_days", _dedup),
+    Rule("whatsapp_logins", "wa_login_retention_days", _wa_logins),
+    Rule("app_errors", "app_error_retention_days", _app_errors),
+    Rule("website_leads", "lead_retention_days", _leads),
+    Rule("conversation_turns", "turn_retention_days", _turns),
 ]
 
 

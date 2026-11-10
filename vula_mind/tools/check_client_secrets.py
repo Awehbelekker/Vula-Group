@@ -15,7 +15,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-CLIENT_DIRS = ["vula_dashboard/src", "vula_mobile/src", "vula_mobile/app", "vula_site/src"]
+# 9 Nov 2026 (go-live audit): vula_site/src doesn't exist; the site is vula_site/index.html. The
+# dashboard's public/, pay/ and r/ folders and the mobile app's app.json ship too.
+CLIENT_DIRS = ["vula_dashboard/src", "vula_dashboard/public", "vula_dashboard/pay", "vula_dashboard/r",
+               "vula_mobile/src", "vula_mobile/app", "vula_site"]
+CLIENT_FILES = ["vula_dashboard/index.html", "vula_mobile/app.json"]
 EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json", ".html"}
 
 PATTERNS = [
@@ -36,21 +40,23 @@ PATTERNS = [
 
 def scan(root: Path = ROOT) -> list:
     found = []
+    paths = []
     for d in CLIENT_DIRS:
         base = root / d
-        if not base.exists():
+        if base.exists():
+            paths += [p for p in base.rglob("*") if "node_modules" not in p.parts]
+    paths += [root / f for f in CLIENT_FILES]
+    for path in paths:
+        if path.suffix not in EXTS or not path.is_file():
             continue
-        for path in base.rglob("*"):
-            if path.suffix not in EXTS or "node_modules" in path.parts or not path.is_file():
-                continue
-            try:
-                text = path.read_text(errors="ignore")
-            except OSError:
-                continue
-            for n, line in enumerate(text.splitlines(), 1):
-                for label, rx in PATTERNS:
-                    if rx.search(line):
-                        found.append((str(path.relative_to(root)), n, label))
+        try:
+            text = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            for label, rx in PATTERNS:
+                if rx.search(line):
+                    found.append((str(path.relative_to(root)), n, label))
     return found
 
 

@@ -48,7 +48,7 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true, 
       {/* The redesign opens the action in its own Sheet primitive (2026-10-19) */}
       {<Sheet open={!!ActiveComp} title={ACTIONS.find((a) => a.key === active)?.label || ""} onClose={() => setActive(null)}>
           {/* the scanner and the assistant have redesigned versions that sit in a sheet; the rest render as before */}
-          {ActiveComp && <ScreenSuspense>{active === "scanner" || active === "assistant" ? <ActiveComp tenantId={tenantId} inSheet /> : <ActiveComp tenantId={tenantId} />}</ScreenSuspense>}
+          {ActiveComp && <ScreenSuspense resetKey={active}>{active === "scanner" || active === "assistant" ? <ActiveComp tenantId={tenantId} inSheet /> : <ActiveComp tenantId={tenantId} />}</ScreenSuspense>}
         </Sheet>}
 
       {/* Overlay sheet */}
@@ -59,7 +59,7 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true, 
               <span style={{ fontWeight: 700, color: C.text, fontSize: 14 }}>{ACTIONS.find((a) => a.key === active)?.label}</span>
               <button onClick={() => setActive(null)} style={{ border: "none", background: "none", fontSize: 22, color: "var(--muted)", cursor: "pointer", lineHeight: 1 }}>×</button>
             </div>
-            <div style={{ flex: 1, overflowY: "auto" }}><ScreenSuspense><ActiveComp tenantId={tenantId} /></ScreenSuspense></div>
+            <div style={{ flex: 1, overflowY: "auto" }}><ScreenSuspense resetKey={active}><ActiveComp tenantId={tenantId} /></ScreenSuspense></div>
           </div>
         </div>
       )}
