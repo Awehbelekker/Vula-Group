@@ -63,6 +63,26 @@ test("a 401 while the sign-in is still good signs nobody out", async ({ page }) 
   expect(errors).toEqual([]);
 });
 
+test("a refresh token Supabase refuses (400) goes back to the login page: DIGG's phone, 10 Nov 2026", async ({ page }) => {
+  // The phone's access token had expired; renewing it got 400 "Invalid Refresh Token", and every
+  // Vula request after that was a 401. That 400 used to read as "couldn't tell", so the app stayed
+  // put and Invoices loaded for ever.
+  const errors = await boot(page);
+  await page.addInitScript((email) => {
+    const past = Math.floor(Date.now() / 1000) - 3600;
+    localStorage.setItem("sb-supabase-auth-token", JSON.stringify({ access_token: "a.b.c", refresh_token: "gone",
+      token_type: "bearer", expires_in: 3600, expires_at: past, user: { id: "u-owner", email, aud: "authenticated" } }));
+  }, OWNER);
+  await page.route(/supabase\.vula\.test\/auth\/v1\/token/, (r) => r.fulfill(json(
+    { code: "refresh_token_not_found", error_code: "refresh_token_not_found", msg: "Invalid Refresh Token: Refresh Token Not Found" }, 400)));
+  await page.route(/\/v1\/(commerce|team|documents)\/[^/]+\/(admin\/)?[^?]*/, (r) => r.fulfill(json({ detail: "Sign in required." }, 401)));
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("status").filter({ hasText: "You've been signed out on this phone" })).toBeVisible();
+  await expect(page.getByLabel("Email", { exact: true })).toHaveValue(OWNER);
+  expect(errors).toEqual([]);
+});
+
 async function openEmailSettings(page) {
   await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "More" }).click();
   const sheet = page.getByRole("dialog", { name: "Menu" });
