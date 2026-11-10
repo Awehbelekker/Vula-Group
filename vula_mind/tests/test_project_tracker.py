@@ -413,3 +413,27 @@ def test_a_project_priced_as_per_the_bill_shows_the_contract_and_invoices():
     page = pt.render({"name": "Example"}, pt.client_view(p, "open_book"))
     assert "Contract (as per the bill)" in page and "R53 000.00" in page and "Owed now" in page
     assert "Fee (" not in page and "Not agreed yet" not in page
+
+
+# ── what the client still owes, at the top ─────────────────────────────────────────────────
+
+def test_the_client_sees_what_they_still_owe_at_the_top():
+    v = _ob(final_account=_FA, to_pay_directly_cents=6770200)
+    page = pt.render({"name": "DIGG"}, v)
+    top = page[:page.index("<div class=\"grid\">")]
+    assert "Still owed to us" in top and "R32 839.40" in top and "per the final account of 2026-11-02" in top
+    assert "Still to pay your suppliers directly" in top and "R67 702.00" in top
+    assert "Total still to pay on the project" in top and "R100 541.40" in top
+    assert "Open book · final account of 2026-11-02" in page and "cost-plus" not in page
+
+
+def test_no_owed_summary_without_an_agreed_fee_or_final_account():
+    page = pt.render({"name": "DIGG"}, _ob(final_account=None, fee_basis=None, fee_cents=None,
+                                           open_book_balance_cents=None))
+    assert "Still owed to us" not in page
+
+
+def test_the_heading_says_how_the_account_works():
+    assert pt._basis_label({"view": "open_book", "fee_basis": "per_bill"}) == "Open book · priced as per the bill"
+    assert pt._basis_label({"view": "open_book", "fee_basis": "cost_plus", "fee_pct": 10.0}) == "Open book · cost plus 10%"
+    assert pt._basis_label({"view": "price"}) == "Price only"

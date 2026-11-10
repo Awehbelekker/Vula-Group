@@ -563,6 +563,44 @@ def pdf(brand: Dict[str, Any], v: Dict[str, Any]) -> bytes:
     return HTML(string=render(brand, v)).write_pdf()
 
 
+def _basis_label(v: Dict[str, Any]) -> str:
+    """How the account works, for the page's heading — never "cost-plus" for a project that isn't."""
+    if v.get("view") != "open_book":
+        return VIEW_LABEL.get(v.get("view"), "")
+    fa = v.get("final_account")
+    if fa:
+        return f"Open book · final account of {fa['as_of']}"
+    return {"per_bill": "Open book · priced as per the bill", "fixed_fee": "Open book · agreed fixed fee",
+            "cost_plus": f"Open book · cost plus {v.get('fee_pct') or 0:g}%"}.get(v.get("fee_basis"), "Open book")
+
+
+def _owed_summary(v: Dict[str, Any], e) -> str:
+    """What the client still has to pay, at the top of an open-book page (10 Nov 2026, Ian: "we need to
+    show what Rudi still owes DIGG — we need to be fully open"): to the business, to suppliers
+    directly, and the two together. Only figures the page already carries; nothing estimated."""
+    if v.get("view") != "open_book":
+        return ""
+    fa = v.get("final_account")
+    if fa:
+        to_us, how = fa["balance_cents"], f"per the final account of {fa['as_of']}"
+    elif v.get("open_book_balance_cents") is not None:
+        to_us, how = v["open_book_balance_cents"], "cost plus the agreed fee, less what you've paid"
+    elif v.get("fee_basis") == "per_bill":
+        to_us, how = v.get("invoices_owed_cents") or 0, "on our invoices"
+    else:
+        return ""
+    direct = int(v.get("to_pay_directly_cents") or 0)
+    rows = [("Still owed to us" if to_us >= 0 else "We owe you", abs(to_us), how)]
+    if direct:
+        rows.append(("Still to pay your suppliers directly", direct, "listed below"))
+    if direct and to_us >= 0:
+        rows.append(("Total still to pay on the project", to_us + direct, ""))
+    body = "".join(f"<div class='owe{' tot' if i == len(rows) - 1 and len(rows) > 2 else ''}'>"
+                   f"<span>{e(label)}<small>{e(sub)}</small></span><b>{_r(c)}</b></div>"
+                   for i, (label, c, sub) in enumerate(rows))
+    return f"<div class='owed'>{body}</div>"
+
+
 def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, str]] = None,
            extra_html: str = "") -> str:
     """The client's page. Every value escaped; every figure from client_view(). `links`: the
@@ -598,7 +636,7 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
     if v["view"] == "open_book":
         cost = [row(t["trade"], t["cents"]) for t in v.get("trades") or []]
         cost.append(row("Cost through us", v.get("business_cost_cents"), True))
-        parts.append(table("Spent through us, by trade", cost))
+        parts.append(table("Paid through our bank so far, by trade", cost))
         fa = v.get("final_account")
         if fa:
             # the agreed final account, not the cost + fee estimate
@@ -636,7 +674,7 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                             abs(v.get("open_book_balance_cents") or 0), True)]
                 parts.append(table("Account", acct))
         if v.get("paid_directly_cents") or v.get("to_pay_directly_cents"):
-            spent = [row("Through us", v.get("business_cost_cents")),
+            spent = [row("Through our bank so far", v.get("business_cost_cents")),
                      row("Paid by you directly to suppliers", v.get("paid_directly_cents")),
                      row("Total spent on the project", v.get("spent_cents"), True)]
             if v.get("budget_left_cents") is not None:
@@ -702,6 +740,8 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
            for i in v.get("invoices") or []]
     parts.append(table("Invoices", inv))
     title = e(v.get("project") or "")
+    summary = _owed_summary(v, e)
+    basis = _basis_label(v)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>{title} · {name}</title><style>
@@ -711,37 +751,44 @@ body{{margin:0;padding:0 12px;background:#f5f3ee;font-family:system-ui,-apple-sy
 .card{{width:100%;max-width:1040px;margin:24px auto;background:#fff;border-radius:14px;padding:24px 28px;
 box-shadow:0 2px 10px rgba(0,0,0,.06);overflow:hidden}}
 .logo{{max-height:56px;max-width:200px}}h1{{font-size:22px;margin:14px 0 2px;color:{accent};overflow-wrap:anywhere}}
-.muted{{color:#6e6a63;margin:0 0 8px;font-size:14px}}h3{{font-size:15px;margin:22px 0 6px;color:{accent}}}
+.muted{{color:#6e6a63;margin:0 0 8px;font-size:14px;line-height:1.45}}h3{{font-size:15px;margin:28px 0 8px;color:{accent}}}
+.owed{{margin:18px 0 6px;border:1.5px solid {accent};border-radius:12px;overflow:hidden}}
+.owe{{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:12px 14px;border-top:1px solid #eee}}
+.owe:first-child{{border-top:0}}.owe span{{min-width:0;overflow-wrap:anywhere}}
+.owe small{{display:block;color:#8a857c;font-size:12px;margin-top:2px}}
+.owe b{{white-space:nowrap;font-variant-numeric:tabular-nums;font-size:17px}}
+.owe:first-child b{{color:{accent};font-size:20px}}.owe.tot{{background:#f5f3ee}}
 /* the account blocks side by side on a wide screen, one column on a phone */
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));column-gap:40px;align-items:start}}
 .blk{{min-width:0}}.blk.wide{{grid-column:1/-1}}
 .scroll{{overflow-x:auto;-webkit-overflow-scrolling:touch}}table.cols{{min-width:480px}}
-table{{width:100%;border-collapse:collapse;font-size:15px}}td{{padding:7px 0;border-bottom:1px solid #eee;vertical-align:top}}
+table{{width:100%;border-collapse:collapse;font-size:15px;line-height:1.4}}td{{padding:9px 0;border-bottom:1px solid #eee;vertical-align:top}}
 td:first-child{{overflow-wrap:anywhere;padding-right:12px}}
 td.n{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}table.cols td.n{{padding-left:14px}}
 tr.total td{{font-weight:700;border-top:2px solid {accent}}}
 .d{{display:block;color:#8a857c;font-size:12px}}tr.h td{{color:#8a857c;font-size:12px}}
 .dl{{margin:22px 0 0}}.dl a{{display:inline-block;margin:0 10px 8px 0;padding:9px 14px;border-radius:9px;
 background:{accent};color:#fff;text-decoration:none;font-weight:600;font-size:14px}}
-.btn{{display:inline-block;padding:6px 11px;border-radius:8px;border:1px solid {accent};background:#fff;color:{accent};
+.btn{{display:inline-flex;align-items:center;min-height:38px;padding:7px 14px;border-radius:9px;border:1px solid {accent};background:#fff;color:{accent};
 font:600 13px system-ui,sans-serif;text-decoration:none;cursor:pointer;white-space:nowrap}}.btn.solid{{background:{accent};color:#fff}}
 form.inline{{display:inline;margin:0}}.note{{background:#f2efe7;border-radius:9px;padding:9px 12px;font-size:14px;margin:10px 0}}
 /* the documents: name and amount on one line, the details under it, the buttons on their own line on a phone */
-.docs{{border-top:1px solid #eee}}h4.grp{{font-size:13px;margin:18px 0 4px;color:#2a2a2a;text-transform:uppercase;letter-spacing:.04em}}
+.docs{{border-top:1px solid #eee}}h4.grp{{font-size:13px;margin:26px 0 6px;color:#2a2a2a;text-transform:uppercase;letter-spacing:.04em}}
 h4.grp .cnt{{color:#8a857c;font-weight:400}}
-.doc{{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:3px;padding:10px 0;border-bottom:1px solid #eee}}
+.doc{{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:4px;padding:14px 0;border-bottom:1px solid #eee}}
 .doc .who{{overflow-wrap:anywhere}}.doc .amt{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}
 .doc .sub{{grid-column:1/-1;color:#8a857c;font-size:12px;overflow-wrap:anywhere}}
-.doc .acts{{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}}
+.doc .acts{{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}}
 .doc .acts .d{{display:inline}}
 @media (min-width:760px){{
 .doc{{grid-template-columns:minmax(0,1fr) 140px auto;align-items:center}}
 .doc .who{{grid-column:1;grid-row:1}}.doc .sub{{grid-column:1;grid-row:2}}
 .doc .amt{{grid-column:2;grid-row:1 / span 2}}.doc .acts{{grid-column:3;grid-row:1 / span 2;justify-content:flex-end;margin:0}}
 .swipe{{display:none}}}}
-@media (max-width:480px){{.card{{padding:18px 14px;margin:12px auto}}table{{font-size:14px}}h1{{font-size:20px}}}}
+@media (max-width:480px){{.card{{padding:20px 16px;margin:12px auto}}table{{font-size:14px}}h1{{font-size:20px}}
+.btn{{flex:1 1 auto;justify-content:center}}}}
 @media print{{.swipe{{display:none}}.grid{{display:block}}.card{{box-shadow:none;max-width:none}}.scroll{{overflow:visible}}table.cols{{min-width:0}}}}
 {powered_by.pill_css(dark_mode=False)}
 </style></head><body><div class="card">{logo_html}<h1>{title}</h1>
-<p class="muted">Project account · {e(VIEW_LABEL[v['view']])} · as of {e(str(v.get('as_of') or ''))}</p>
+<p class="muted">Project account · {e(basis)} · as of {e(str(v.get('as_of') or ''))}</p>{summary}
 <div class="grid">{''.join(parts)}</div>{extra_html}{_downloads(links)}<p class="muted" style="margin-top:20px">Questions? Contact {name}.</p></div>{powered_by.pill_html()}</body></html>"""
