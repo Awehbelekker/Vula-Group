@@ -115,10 +115,10 @@ def _documents_html(token: str, share: dict, brand: dict, asked: str = "") -> st
             acts.append(f"<form class='inline' method='post' action='{base}/request'>"
                         f"<input type='hidden' name='scope' value='{did}'>"
                         "<button class='btn' type='submit'>Request download</button></form>")
-        rows.append(f"<tr><td>{who}<span class='d'>{e(sub)}</span></td>"
-                    f"<td class='n'>{e(amount)}<span class='d'>{' '.join(acts)}</span></td></tr>")
+        rows.append(f"<div class='doc'><div class='who'>{who}</div><div class='amt'>{e(amount)}</div>"
+                    f"<div class='sub'>{e(sub)}</div><div class='acts'>{' '.join(acts)}</div></div>")
     return (f"<h3>Documents ({len(docs)})</h3>{note}<p class='muted'>View any document here. To keep a copy, "
-            f"request a download — the team says yes or no.</p>{top}<table>{''.join(rows)}</table>")
+            f"request a download — the team says yes or no.</p>{top}<div class='docs'>{''.join(rows)}</div>")
 
 
 def _fetch():
@@ -161,11 +161,12 @@ async def project_doc_view(token: str, doc_id: str):
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>{e(sd.label(d))}</title><style>
 body{{margin:0;background:#e9e6df;font-family:system-ui,-apple-system,sans-serif;color:#2a2a2a}}
+*{{box-sizing:border-box}}
 .bar{{position:sticky;top:0;background:#fff;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
-box-shadow:0 1px 6px rgba(0,0,0,.08)}}.bar b{{flex:1;min-width:0}}
+box-shadow:0 1px 6px rgba(0,0,0,.08);z-index:1}}.bar b{{flex:1 1 200px;min-width:0;overflow-wrap:anywhere;font-size:15px}}
 .btn{{padding:7px 12px;border-radius:8px;border:1px solid {accent};background:#fff;color:{accent};font:600 13px system-ui;
 text-decoration:none;cursor:pointer}}
-img{{display:block;max-width:min(900px,100%);margin:14px auto;box-shadow:0 2px 10px rgba(0,0,0,.12);background:#fff;
+img{{display:block;width:min(900px,calc(100% - 16px));height:auto;margin:14px auto;box-shadow:0 2px 10px rgba(0,0,0,.12);background:#fff;
 user-select:none;-webkit-user-drag:none;pointer-events:none}}</style></head>
 <body oncontextmenu="return false"><div class="bar"><a class="btn" href="{base}">← Back</a><b>{e(sd.label(d))}</b>{action}</div>
 {pages}</body></html>"""

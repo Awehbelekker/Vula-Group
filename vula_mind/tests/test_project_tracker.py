@@ -252,3 +252,16 @@ def test_a_price_or_qs_link_never_shows_what_the_sections_really_cost():
     assert ob["sheet"]["actual_cents"] == 55_000_00
     page = pt.render({"name": "Example Builders"}, ob)
     assert "By section" in page and "R36 000.00" in page and "R49 000.00" in page
+
+
+def test_the_page_fits_a_phone_and_uses_a_wide_screen():
+    """10 Nov 2026: the client's page was a 560px strip on a desktop, and on a phone its multi-column
+    tables and document rows ran off the right edge. Now: a wider card with the account blocks side by
+    side, wide tables scrolling inside their own box, and document buttons on their own line."""
+    v = {"view": "open_book", "project": "Belladonna", "as_of": "2026-11-10", "budget_cents": 100000,
+         "contract_cents": 100000, "trades": [], "business_cost_cents": 0, "sheet": {"actual_cents": 1, "paid_cents": 1},
+         "sections": [{"section": "Kitchen", "budget_cents": 1, "actual_cents": 1, "paid_cents": 1}]}
+    page = pt.render({"name": "Example"}, v, extra_html="<div class='docs'></div>")
+    assert "max-width:1040px" in page and "max-width:560px" not in page
+    assert "<div class=\"grid\">" in page and "class='blk wide'" in page and "class='scroll'" in page
+    assert "Swipe the table sideways" in page and "@media print" in page

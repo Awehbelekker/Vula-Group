@@ -461,7 +461,12 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
         return f"<tr{cls}><td>{e(label)}</td><td class='n'>{_r(cents)}</td></tr>"
 
     def table(title, rows):
-        return f"<h3>{e(title)}</h3><table>{''.join(rows)}</table>" if rows else ""
+        return f"<section class='blk'><h3>{e(title)}</h3><table>{''.join(rows)}</table></section>" if rows else ""
+
+    def wide(title, head, body):
+        # a table with several money columns: full width, and on a phone it scrolls inside its own box
+        return (f"<section class='blk wide'><h3>{e(title)}</h3><p class='muted swipe'>Swipe the table sideways to see every column.</p>"
+                f"<div class='scroll'><table class='cols'>{head}{body}</table></div></section>")
 
     parts = []
     head = [row("Agreed budget", v.get("budget_cents"))] if v.get("budget_cents") else []
@@ -508,8 +513,8 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
         tot = lambda k: sum(s.get(k) or 0 for s in secs)
         body.append(f"<tr class='total'><td>Total</td>{cell(tot('budget_cents'))}{cell(tot('certified_cents'))}"
                     f"{cell(tot('anticipated_cents'))}</tr>")
-        parts.append("<h3>By bill</h3><table><tr class='h'><td></td><td class='n'>Contract</td><td class='n'>Certified</td>"
-                     f"<td class='n'>Anticipated final</td></tr>{''.join(body)}</table>")
+        parts.append(wide("By bill", "<tr class='h'><td></td><td class='n'>Contract</td><td class='n'>Certified</td>"
+                                     "<td class='n'>Anticipated final</td></tr>", ''.join(body)))
     elif secs and v["view"] == "open_book" and v.get("sheet"):
         cell = lambda c: f"<td class='n'>{_r(c)}</td>"
         body = [f"<tr><td>{e(s['section'])}</td>{cell(s['budget_cents'])}{cell(s.get('actual_cents'))}"
@@ -517,8 +522,8 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
         sh = v["sheet"]
         body.append(f"<tr class='total'><td>Total</td>{cell(sum(s['budget_cents'] for s in secs))}"
                     f"{cell(sh['actual_cents'])}{cell(sh['paid_cents'])}</tr>")
-        parts.append("<h3>By section</h3><table><tr class='h'><td></td><td class='n'>Budget</td><td class='n'>Actual</td>"
-                     f"<td class='n'>Paid</td></tr>{''.join(body)}</table>")
+        parts.append(wide("By section", "<tr class='h'><td></td><td class='n'>Budget</td><td class='n'>Actual</td>"
+                                        "<td class='n'>Paid</td></tr>", ''.join(body)))
     elif secs:
         parts.append(table("Budget by section", [row(s["section"], s["budget_cents"]) for s in secs]))
     if v["view"] == "qs":
@@ -534,9 +539,9 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                                               row("Extra charged by suppliers", v["variations_extra_cost_cents"])]))
         pg = v.get("programme")
         if pg:
-            parts.append(f"<h3>Programme</h3><p class='muted'>{e(pg['start'])} to {e(pg['finish'])}: "
+            parts.append(f"<section class='blk'><h3>Programme</h3><p class='muted'>{e(pg['start'])} to {e(pg['finish'])}: "
                          f"{pg['time_pct']}% of the time gone · {pg['done']} of {pg['tasks']} tasks done "
-                         f"({pg['done_pct']}%)</p>")
+                         f"({pg['done_pct']}%)</p></section>")
         docs = v.get("documents") or []
         if docs:
             parts.append(table(f"Document register ({len(docs)})", [
@@ -550,19 +555,42 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>{title} · {name}</title><style>
-body{{margin:0;padding:0 12px;background:#f5f3ee;font-family:system-ui,-apple-system,sans-serif;color:#2a2a2a}}
-.card{{max-width:560px;margin:28px auto;background:#fff;border-radius:14px;padding:24px 22px;box-shadow:0 2px 10px rgba(0,0,0,.06)}}
-.logo{{max-height:56px;max-width:200px}}h1{{font-size:22px;margin:14px 0 2px;color:{accent}}}
+*{{box-sizing:border-box}}
+body{{margin:0;padding:0 12px;background:#f5f3ee;font-family:system-ui,-apple-system,sans-serif;color:#2a2a2a;
+-webkit-text-size-adjust:100%}}
+.card{{width:100%;max-width:1040px;margin:24px auto;background:#fff;border-radius:14px;padding:24px 28px;
+box-shadow:0 2px 10px rgba(0,0,0,.06);overflow:hidden}}
+.logo{{max-height:56px;max-width:200px}}h1{{font-size:22px;margin:14px 0 2px;color:{accent};overflow-wrap:anywhere}}
 .muted{{color:#6e6a63;margin:0 0 8px;font-size:14px}}h3{{font-size:15px;margin:22px 0 6px;color:{accent}}}
+/* the account blocks side by side on a wide screen, one column on a phone */
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));column-gap:40px;align-items:start}}
+.blk{{min-width:0}}.blk.wide{{grid-column:1/-1}}
+.scroll{{overflow-x:auto;-webkit-overflow-scrolling:touch}}table.cols{{min-width:480px}}
 table{{width:100%;border-collapse:collapse;font-size:15px}}td{{padding:7px 0;border-bottom:1px solid #eee;vertical-align:top}}
-td.n{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}tr.total td{{font-weight:700;border-top:2px solid {accent}}}
+td:first-child{{overflow-wrap:anywhere;padding-right:12px}}
+td.n{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}table.cols td.n{{padding-left:14px}}
+tr.total td{{font-weight:700;border-top:2px solid {accent}}}
 .d{{display:block;color:#8a857c;font-size:12px}}tr.h td{{color:#8a857c;font-size:12px}}
 .dl{{margin:22px 0 0}}.dl a{{display:inline-block;margin:0 10px 8px 0;padding:9px 14px;border-radius:9px;
 background:{accent};color:#fff;text-decoration:none;font-weight:600;font-size:14px}}
 .btn{{display:inline-block;padding:6px 11px;border-radius:8px;border:1px solid {accent};background:#fff;color:{accent};
-font:600 13px system-ui,sans-serif;text-decoration:none;cursor:pointer}}.btn.solid{{background:{accent};color:#fff}}
+font:600 13px system-ui,sans-serif;text-decoration:none;cursor:pointer;white-space:nowrap}}.btn.solid{{background:{accent};color:#fff}}
 form.inline{{display:inline;margin:0}}.note{{background:#f2efe7;border-radius:9px;padding:9px 12px;font-size:14px;margin:10px 0}}
+/* the documents: name and amount on one line, the details under it, the buttons on their own line on a phone */
+.docs{{border-top:1px solid #eee}}
+.doc{{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:3px;padding:10px 0;border-bottom:1px solid #eee}}
+.doc .who{{overflow-wrap:anywhere}}.doc .amt{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}
+.doc .sub{{grid-column:1/-1;color:#8a857c;font-size:12px;overflow-wrap:anywhere}}
+.doc .acts{{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}}
+.doc .acts .d{{display:inline}}
+@media (min-width:760px){{
+.doc{{grid-template-columns:minmax(0,1fr) 140px auto;align-items:center}}
+.doc .who{{grid-column:1;grid-row:1}}.doc .sub{{grid-column:1;grid-row:2}}
+.doc .amt{{grid-column:2;grid-row:1 / span 2}}.doc .acts{{grid-column:3;grid-row:1 / span 2;justify-content:flex-end;margin:0}}
+.swipe{{display:none}}}}
+@media (max-width:480px){{.card{{padding:18px 14px;margin:12px auto}}table{{font-size:14px}}h1{{font-size:20px}}}}
+@media print{{.swipe{{display:none}}.grid{{display:block}}.card{{box-shadow:none;max-width:none}}.scroll{{overflow:visible}}table.cols{{min-width:0}}}}
 {powered_by.pill_css(dark_mode=False)}
 </style></head><body><div class="card">{logo_html}<h1>{title}</h1>
 <p class="muted">Project account · {e(VIEW_LABEL[v['view']])} · as of {e(str(v.get('as_of') or ''))}</p>
-{''.join(parts)}{extra_html}{_downloads(links)}<p class="muted" style="margin-top:20px">Questions? Contact {name}.</p></div>{powered_by.pill_html()}</body></html>"""
+<div class="grid">{''.join(parts)}</div>{extra_html}{_downloads(links)}<p class="muted" style="margin-top:20px">Questions? Contact {name}.</p></div>{powered_by.pill_html()}</body></html>"""

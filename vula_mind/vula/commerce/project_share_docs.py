@@ -59,7 +59,10 @@ def find(tenant_id: str, project: str, doc_id: str, business: str = "") -> Optio
 
 
 def label(row: Dict[str, Any]) -> str:
-    bits = [row.get("supplier") if row.get("by_supplier") else row.get("category"),
+    # the business's own document is labelled with its name, not "<name> (our documents)" (the
+    # project file's internal grouping) — this is what the client sees
+    who = (row.get("supplier") or "").removesuffix(" (our documents)") if row.get("by_supplier") else row.get("category")
+    bits = [who,
             row.get("number") or "", row.get("date") or ""]
     return " · ".join(b for b in bits if b) or (row.get("filename") or "Document")
 
