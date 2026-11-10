@@ -68,3 +68,11 @@
 .vls-thumb button { position: absolute; border: 0; cursor: pointer; border-radius: 999px; background: rgba(255,255,255,.92); color: #121722; font-size: 11px; font-weight: 600; }
 .vls-thumb button:first-of-type { top: 6px; right: 6px; width: 22px; height: 22px; }
 .vls-thumb .vls-cover { bottom: 6px; left: 6px; right: auto; top: auto; width: auto; height: auto; padding: 2px 8px; }
+
+/* maps (listings/ListingMap.jsx) */
+.vls-mapwrap { display: flex; flex-direction: column; gap: var(--space-2); }
+.vls-map { width: 100%; height: min(62vh, 560px); border-radius: var(--vls-r); overflow: hidden; border: 1px solid var(--line); box-shadow: var(--vls-shadow); background: var(--surface-alt); z-index: 0; }
+.vls-map--small { height: 220px; border-radius: 14px; box-shadow: none; margin-bottom: var(--space-2); }
+.vls-map-note { margin: 0; }
+.vls-pick { display: flex; flex-direction: column; }
+.vls-bar > .vls-row > .vula-tabs { margin-bottom: 0 !important; }

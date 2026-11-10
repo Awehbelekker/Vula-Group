@@ -178,7 +178,9 @@ def public_view(prop: Dict[str, Any], agent: Optional[Dict[str, Any]] = None) ->
     """What a website visitor may see of a listing."""
     out = {k: v for k, v in prop.items() if k not in _PRIVATE_FIELDS}
     if prop.get("show_address"):
+        # The exact spot is as private as the street address: the map pin goes with it.
         out["address"] = prop.get("address")
+        out["latitude"], out["longitude"] = prop.get("latitude"), prop.get("longitude")
     if prop.get("price_on_request"):
         out["price_cents"] = None
     if agent:
@@ -379,7 +381,34 @@ async def create_enquiry(tenant_id: str, body: Dict[str, Any], ip: str = "") -> 
     res = _client().table(ENQUIRIES).insert(row).execute()
     saved = (res.data or [row])[0]
     await _tell_people(tenant_id, saved, prop)
+    await _acknowledge(tenant_id, saved, prop)
     return saved
+
+
+async def _acknowledge(tenant_id: str, enquiry: Dict[str, Any], prop: Optional[Dict[str, Any]]) -> bool:
+    """Thank a website enquirer on WhatsApp with the approved enquiry template, so the agent can
+    talk to them there. Only for enquiries from the website form (someone who messaged on
+    WhatsApp is already in a conversation), only with a WhatsApp number they gave for this, and
+    only once settings.whatsapp_enquiry_template names an approved template. Best-effort: the
+    enquiry is stored and the agent alerted either way."""
+    from config import settings
+    name = (settings.whatsapp_enquiry_template or "").strip()
+    if not name or enquiry.get("source", "website") != "website" or not enquiry.get("whatsapp"):
+        return False
+    try:
+        from vula.api.tenants import get_config
+        business = (get_config(tenant_id) or {}).get("display_name") or "us"
+    except Exception:
+        business = "us"
+    first = (enquiry.get("name") or "").split()[0] if (enquiry.get("name") or "").strip() else "there"
+    about = prop["title"] if prop else "your enquiry"
+    try:
+        from vula.api.whatsapp import send_template
+        return await send_template(tenant_id, enquiry["whatsapp"], name, [first, business, about],
+                                   lang=settings.whatsapp_enquiry_template_lang or "en")
+    except Exception as exc:
+        log.warning("enquiry acknowledgement not sent (%s): %s", tenant_id, exc)
+        return False
 
 
 def enquiry_alert_text(enquiry: Dict[str, Any], prop: Optional[Dict[str, Any]]) -> str:

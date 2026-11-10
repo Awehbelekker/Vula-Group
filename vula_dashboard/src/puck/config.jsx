@@ -1207,6 +1207,13 @@ function PropertyDialog({ p, onClose }) {
                 {p.features.map((f) => <li key={f}>{f}</li>)}
               </ul>
             ) : null}
+            {p.latitude != null && p.longitude != null ? (
+              // Only present when the agency shows the address (public_view keeps the pin with it).
+              // A plain OpenStreetMap embed: no map library, so it renders the same on every storefront.
+              <iframe title={`Map of ${p.title}`} loading="lazy"
+                src={`https://www.openstreetmap.org/export/embed.html?bbox=${p.longitude - 0.006}%2C${p.latitude - 0.004}%2C${p.longitude + 0.006}%2C${p.latitude + 0.004}&layer=mapnik&marker=${p.latitude}%2C${p.longitude}`}
+                style={{ width: "100%", height: 220, border: 0, borderRadius: 12, marginTop: 16, background: TINT_LIGHT }} />
+            ) : null}
           </div>
           <div>
             {p.agent ? (

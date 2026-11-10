@@ -74,9 +74,11 @@ New optional features plug in the same way: one tools module registered in
 2. Merge the branch; deploy the backend (`railway up`) and the dashboard (Vercel).
 3. Switch on `listings` + `pipeline` for one agency (Master › Tenants) — or onboard it as
    "Real estate", which includes both.
-4. For leads that arrive from the website/portals (no WhatsApp message from the person first),
-   an approved WhatsApp template is still needed before Vula can message them first.
+4. Website leads: submit the `enquiry_received` template (docs/whatsapp-enquiry-template.md);
+   once Meta approves it, set `WHATSAPP_ENQUIRY_TEMPLATE` on Railway and `railway up`. Until
+   then the agent is alerted but the enquirer isn't messaged.
 
 ### Next, when needed
 - Listings import from the agency's existing CRM/portal feed (avoid double capture).
-- A map view of listings (Leaflet is already in the dashboard).
+- ~~A map view of listings~~ — done: Listings › Map, a pin picker in the listing form, and an
+  OpenStreetMap embed in the website's listing popup (only when the address is shown).

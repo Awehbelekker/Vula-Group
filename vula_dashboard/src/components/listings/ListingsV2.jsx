@@ -10,6 +10,7 @@ import { formatMoney } from "../../lib/money";
 import VulaImageUpload from "../VulaImageUpload";
 import { Button, EmptyState, Field, Input, PageHeader, PillTabs, Select, Sheet, Skeleton, StatusChip, Textarea, confirmDialog, toast } from "../ui/index.jsx";
 import { ENQUIRY_STATUS, PROPERTY_TYPES, STATUS, useListings } from "./useListings";
+import { ListingsMap, PinPicker } from "./ListingMap";
 import "./listings.css";
 
 const price = (p) => (p.price_on_request || p.price_cents == null ? "Price on request"
@@ -69,6 +70,7 @@ function Kpis({ x }) {
 function ListingsView({ x, tenantId }) {
   const [filter, setFilter] = useState("all");
   const [editing, setEditing] = useState(null);     // null | {} (new) | listing
+  const [layout, setLayout] = useState("grid");     // grid | map
   const rows = useMemo(() => (x.listings || []).filter((p) => filter === "all" || p.status === filter
     || (filter === "closed" && (p.status === "sold" || p.status === "let"))), [x.listings, filter]);
   const agentName = (id) => (x.agents || []).find((a) => a.id === id)?.name;
@@ -79,7 +81,10 @@ function ListingsView({ x, tenantId }) {
           { id: "all", label: "All" }, { id: "active", label: "On the market" }, { id: "under_offer", label: "Under offer" },
           { id: "closed", label: "Sold / let" }, { id: "draft", label: "Drafts" },
         ]} />
-        <Button Icon={Plus} onClick={() => setEditing({})}>New listing</Button>
+        <span className="vls-row">
+          <PillTabs label="Show as" active={layout} onChange={setLayout} tabs={[{ id: "grid", label: "Grid" }, { id: "map", label: "Map" }]} />
+          <Button Icon={Plus} onClick={() => setEditing({})}>New listing</Button>
+        </span>
       </div>
       {x.listings === null ? (
         <div className="vls-grid">{[0, 1, 2].map((i) => <Skeleton key={i} height={280} style={{ borderRadius: 20 }} />)}</div>
@@ -88,6 +93,8 @@ function ListingsView({ x, tenantId }) {
           action={<Button Icon={Plus} onClick={() => setEditing({})}>Add your first listing</Button>}>
           Add one here, or WhatsApp Vula: "new listing, 3 bed house in Bellville, R1.95m".
         </EmptyState>
+      ) : layout === "map" ? (
+        <ListingsMap listings={rows} onOpen={setEditing} />
       ) : (
         <div className="vls-grid" role="list">
           {rows.map((p) => {
@@ -134,6 +141,7 @@ function ListingSheet({ x, tenantId, listing, onClose }) {
     description: listing.description || "", features: (listing.features || []).join(", "),
     images: listing.images || [], agent_id: listing.agent_id || "", featured: !!listing.featured,
     available_from: listing.available_from || "",
+    pin: listing.latitude != null && listing.longitude != null ? { lat: listing.latitude, lng: listing.longitude } : null,
   }));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -141,7 +149,8 @@ function ListingSheet({ x, tenantId, listing, onClose }) {
 
   const save = async () => {
     setSaving(true); setErr("");
-    const body = { ...f, features: f.features, images: f.images, agent_id: f.agent_id || null };
+    const { pin, ...rest } = f;
+    const body = { ...rest, agent_id: f.agent_id || null, latitude: pin?.lat ?? null, longitude: pin?.lng ?? null };
     if (!isNew) body.id = listing.id;
     const r = await x.saveListing(body);
     setSaving(false);
@@ -184,6 +193,10 @@ function ListingSheet({ x, tenantId, listing, onClose }) {
         </div>
         <Field label="Street address" hint="Kept private unless you tick the box below."><Input value={f.address} onChange={set("address")} /></Field>
         <label className="vls-check"><input type="checkbox" checked={f.show_address} onChange={set("show_address")} /> Show the address on the website</label>
+        <Field label="Location on the map" hint="Used on your map. On the website it only shows when the address is shown.">
+          <PinPicker tenantId={tenantId} value={f.pin} onChange={(pin) => setF((s) => ({ ...s, pin }))}
+            addressText={[f.address, f.suburb, f.city].filter(Boolean).join(", ")} />
+        </Field>
         <div className="vls-3">
           <Field label="Bedrooms"><Input type="number" step="0.5" min="0" value={f.bedrooms} onChange={set("bedrooms")} /></Field>
           <Field label="Bathrooms"><Input type="number" step="0.5" min="0" value={f.bathrooms} onChange={set("bathrooms")} /></Field>

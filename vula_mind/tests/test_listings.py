@@ -156,7 +156,8 @@ async def test_public_view_hides_drafts_addresses_and_other_tenants(env):
                                           "latitude": -33.8, "agent_id": agent["id"], "price": 1_500_000})
     await ls.upsert_property("estate-a", {"title": "Draft", "status": "draft"})
     await ls.upsert_property("estate-a", {"title": "Shown", "status": "active", "address": "1 Main Rd",
-                                          "show_address": True, "price_on_request": True, "price": 9})
+                                          "show_address": True, "price_on_request": True, "price": 9,
+                                          "latitude": -33.9, "longitude": 18.4})
     await ls.upsert_property("estate-a", {"title": "Gone", "status": "sold"})
     await ls.upsert_property("estate-b", {"title": "Not ours", "status": "active"})
 
@@ -166,6 +167,7 @@ async def test_public_view_hides_drafts_addresses_and_other_tenants(env):
     assert "address" not in by_title["Live"] and "latitude" not in by_title["Live"]
     assert by_title["Live"]["agent"]["name"] == "Lindi"
     assert by_title["Shown"]["address"] == "1 Main Rd" and by_title["Shown"]["price_cents"] is None
+    assert by_title["Shown"]["latitude"] == -33.9                      # pin only with the address
     assert {r["title"] for r in await ls.public_properties("estate-a", include_sold=True)} == {"Live", "Shown", "Gone"}
     assert await ls.public_property("estate-a", "draft") is None
 
@@ -370,3 +372,28 @@ async def test_photo_captions_on_other_businesses_fall_through(monkeypatch):
     monkeypatch.setattr(wa, "_is_team", lambda tid, p: True)
     # "photo Hake Fillets" on a shop must still reach the product-photo handler
     assert await wa._maybe_listing_photo("off-the-hook", "27820000001", "m1", "photo Hake Fillets", None) is False
+
+
+@pytest.mark.asyncio
+async def test_website_enquiry_is_acknowledged_only_with_an_approved_template(env, monkeypatch):
+    from config import settings
+    from vula.api import tenants
+    sent = []
+
+    async def fake_template(tid, to, name, params, lang=None):
+        sent.append((to, name, params))
+        return True
+    monkeypatch.setattr("vula.api.whatsapp.send_template", fake_template)
+    monkeypatch.setattr(tenants, "get_config", lambda tid, **k: {"display_name": "Oak & Stone"})
+    await ls.upsert_property("estate-a", {"title": "Family home", "status": "active"})
+    body = {"name": "Thandi Nkosi", "whatsapp": "27835551234", "property_slug": "family-home"}
+
+    monkeypatch.setattr(settings, "whatsapp_enquiry_template", "")
+    await ls.create_enquiry("estate-a", dict(body))
+    assert sent == []                                            # off until a template is approved
+    monkeypatch.setattr(settings, "whatsapp_enquiry_template", "enquiry_received")
+    await ls.create_enquiry("estate-a", dict(body))
+    assert sent == [("27835551234", "enquiry_received", ["Thandi", "Oak & Stone", "Family home"])]
+    await ls.create_enquiry("estate-a", {**body, "source": "whatsapp"})      # already chatting
+    await ls.create_enquiry("estate-a", {"name": "Ben", "email": "b@x.co"})  # no WhatsApp number
+    assert len(sent) == 1
