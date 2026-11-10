@@ -190,7 +190,8 @@ async def test_order_refund_auto_refund_success_updates_tracking_and_notifies():
     patch_body = mock_table.update.call_args.args[0]
     assert patch_body["refund_status"] == "pending"
     assert patch_body["yoco_refund_id"] == "rf_1"
-    assert patch_body["refunded_amount_cents"] == 15000
+    # The running refunded total is update_order_status's (it posts what was refunded).
+    assert "refunded_amount_cents" not in patch_body
     mock_notify.assert_awaited_once()
     assert "automatically via Yoco" in mock_notify.call_args.args[2]
 
@@ -239,57 +240,59 @@ async def test_order_refund_auto_refund_skipped_when_no_checkout_id():
 
 # ── admin_create_credit_note: opt-in auto_refund ─────────────────────────────
 
+def _credited(refund_cents=0):
+    return {"credit_note": {"id": "cn1", "invoice_number": "OTH-CN-00001", "total_cents": 8000},
+            "invoice": {"id": "inv1"}, "credited_cents": 8000, "refund_cents": refund_cents}
+
+
 @pytest.mark.asyncio
-async def test_credit_note_auto_refund_success():
+async def test_credit_note_auto_refund_refunds_only_the_paid_part_then_credits():
+    """The endpoint goes through service.credit_invoice (9 Nov 2026 audit): the part of the
+    credit that is money already received is refunded through Yoco first, then credited."""
     from vula.api import commerce as commerce_api
-    cn = {"id": "cn1", "invoice_number": "OTH-CN-00001", "total_cents": 8000}
-    src_invoice = {"id": "inv1", "yoco_checkout_id": "co_999"}
-    mock_table = MagicMock()
-    mock_client = MagicMock()
-    mock_client.table.return_value = mock_table
+    src_invoice = {"id": "inv1", "yoco_checkout_id": "co_999", "refunded_amount_cents": 0}
+    credit = AsyncMock(side_effect=[commerce_api.service.RefundNeeded("R50 was paid", 5000), _credited(5000)])
     with (
-        patch.object(commerce_api.service, "create_credit_note", new=AsyncMock(return_value=cn)),
+        patch.object(commerce_api.service, "credit_invoice", credit),
         patch.object(commerce_api.service, "get_invoice", new=AsyncMock(return_value=src_invoice)),
-        patch.object(commerce_api.service, "_client", return_value=mock_client),
+        patch.object(commerce_api.service, "_client", return_value=MagicMock()),
         patch.object(commerce_api.service, "_now", return_value="2026-08-09T00:00:00Z"),
         patch("vula.api.yoco.refund_yoco_payment", new=AsyncMock(return_value={"ok": True, "refund_id": "rf_2"})) as mock_refund,
     ):
-        result = await commerce_api.admin_create_credit_note(
-            "off-the-hook", "inv1", {"auto_refund": True})
-
-    assert result["credit_note"] == cn
-    assert result["refund"] == {"gateway": "yoco", "status": "pending", "amount_cents": 8000}
-    # Keyed per credit note: a second, equal partial credit note is a second refund.
-    mock_refund.assert_awaited_once_with("off-the-hook", "co_999", 8000, idempotency_key="refund-cn-cn1")
+        result = await commerce_api.admin_create_credit_note("off-the-hook", "inv1", {"auto_refund": True})
+    mock_refund.assert_awaited_once_with("off-the-hook", "co_999", 5000, idempotency_key="refund-inv-inv1-0-5000")
+    assert credit.await_args_list[1].kwargs["refund_made"] is True
+    assert result["refund"] == {"gateway": "yoco", "status": "pending", "amount_cents": 5000}
+    assert result["refund_cents"] == 5000
 
 
 @pytest.mark.asyncio
-async def test_credit_note_auto_refund_no_online_payment():
+async def test_credit_note_on_a_paid_invoice_without_yoco_asks_the_owner_to_confirm_the_refund():
+    from fastapi import HTTPException
     from vula.api import commerce as commerce_api
-    cn = {"id": "cn1", "invoice_number": "OTH-CN-00001", "total_cents": 8000}
-    src_invoice = {"id": "inv1", "yoco_checkout_id": None}
+    credit = AsyncMock(side_effect=commerce_api.service.RefundNeeded("R80 was paid", 8000))
     with (
-        patch.object(commerce_api.service, "create_credit_note", new=AsyncMock(return_value=cn)),
-        patch.object(commerce_api.service, "get_invoice", new=AsyncMock(return_value=src_invoice)),
+        patch.object(commerce_api.service, "credit_invoice", credit),
+        patch.object(commerce_api.service, "get_invoice", new=AsyncMock(return_value={"id": "inv1"})),
         patch("vula.api.yoco.refund_yoco_payment", new=AsyncMock()) as mock_refund,
     ):
-        result = await commerce_api.admin_create_credit_note(
-            "off-the-hook", "inv1", {"auto_refund": True})
-
-    assert result["refund"]["status"] == "failed"
-    assert "no online" in result["refund"]["detail"].lower()
+        with pytest.raises(HTTPException) as exc:
+            await commerce_api.admin_create_credit_note("off-the-hook", "inv1", {"auto_refund": True})
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "refund_needed" and exc.value.detail["refund_cents"] == 8000
     mock_refund.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_credit_note_without_auto_refund_flag_unchanged():
+async def test_credit_note_on_an_unpaid_invoice_needs_no_refund():
     from vula.api import commerce as commerce_api
-    cn = {"id": "cn1", "invoice_number": "OTH-CN-00001", "total_cents": 8000}
+    credit = AsyncMock(return_value=_credited(0))
     with (
-        patch.object(commerce_api.service, "create_credit_note", new=AsyncMock(return_value=cn)),
+        patch.object(commerce_api.service, "credit_invoice", credit),
+        patch.object(commerce_api.service, "get_invoice", new=AsyncMock(return_value={"id": "inv1"})),
         patch("vula.api.yoco.refund_yoco_payment", new=AsyncMock()) as mock_refund,
     ):
-        result = await commerce_api.admin_create_credit_note("off-the-hook", "inv1", {})
-
-    assert result == {"credit_note": cn, "refund": None}
+        result = await commerce_api.admin_create_credit_note("off-the-hook", "inv1", {"auto_refund": True})
+    assert result["refund"] is None and result["refund_cents"] == 0
+    assert credit.await_args.kwargs["refund_made"] is False
     mock_refund.assert_not_called()

@@ -17,6 +17,21 @@ import { VULA_API } from '../lib/authFetch'
 import { todaySA } from '../lib/dates'
 import InvoiceListV2 from './invoices/InvoiceListV2'
 
+/** POST a credit note. A credit that includes money the customer already paid must be refunded
+ * first: Vula does it through Yoco when asked (autoRefund), otherwise it answers 409
+ * refund_needed and the owner confirms they've refunded it themselves (9 Nov 2026 audit). */
+async function postCreditNote(tenantId, invoiceId, body, confirmDialog, fmt) {
+  const url = `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${invoiceId}/credit-note`
+  const send = (extra) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, ...extra }) }).then(r => r.json()).catch(() => ({}))
+  const d = await send({})
+  if (d.detail?.code !== 'refund_needed') return d
+  const ok = await confirmDialog(
+    `${fmt(d.detail.refund_cents)} of this credit was already paid by the customer. Have you refunded it to them? The credit note is only recorded once you have.`,
+    { title: 'Refund first', confirmLabel: "Yes, I've refunded it", cancelLabel: 'Not yet' })
+  return ok ? send({ refund_made: true }) : { cancelled: true }
+}
+
 export default function VulaInvoices({ tenantId, products = [], initialSupplierId = null, onClearSupplierFilter }) {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
@@ -373,15 +388,15 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     } else if (!(await confirmDialog(`Create a credit note for ${inv.invoice_number} (${fmt(inv.total_cents)})?`))) {
       return
     }
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/credit-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_refund: autoRefund }) })
-      .then(r => r.json()).catch(() => ({}))
+    const d = await postCreditNote(tenantId, inv.id, { auto_refund: autoRefund }, confirmDialog, fmt)
+    if (d.cancelled) return
     if (d.credit_note) {
       let msg = `Credit note ${d.credit_note.invoice_number} created.`
       if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
       else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
       toast(msg); load()
     }
-    else toast(d.detail || 'Could not create credit note.', 'danger')
+    else toast(d.detail?.message || (typeof d.detail === 'string' ? d.detail : '') || 'Could not create credit note.', 'danger')
   }
 
   async function payLink(inv) {
@@ -779,18 +794,17 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
   async function save() {
     if (creditItems.length === 0) return
     setSaving(true)
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${invoice.id}/credit-note`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ line_items: creditItems, auto_refund: !!invoice.yoco_checkout_id && autoRefund }),
-    }).then(r => r.json()).catch(() => ({}))
+    const d = await postCreditNote(tenantId, invoice.id,
+      { line_items: creditItems, auto_refund: !!invoice.yoco_checkout_id && autoRefund }, confirmDialog, fmt)
     setSaving(false)
+    if (d.cancelled) return
     if (d.credit_note) {
       let msg = `Credit note ${d.credit_note.invoice_number} created.`
       if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
       else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
       toast(msg); onDone()
     }
-    else toast(d.detail || 'Could not create credit note.', 'danger')
+    else toast(d.detail?.message || (typeof d.detail === 'string' ? d.detail : '') || 'Could not create credit note.', 'danger')
   }
 
   return (

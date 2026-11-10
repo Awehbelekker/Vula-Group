@@ -40,6 +40,9 @@ class _DB:
     def eq(self, *_a):
         return self
 
+    def select(self, *_a):          # plan_credit reads earlier credits: none here
+        return self
+
     def execute(self):
         return type("R", (), {"data": [{}]})()
 

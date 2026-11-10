@@ -180,6 +180,20 @@ A green suite doesn't cover the gaps below. Most of them are paths no test exerc
   longer opens the full menu when the member lookup fails, keeps the menu working when one screen
   crashes (no "tell Ian"), and says when Vula's server can't be reached. The client-secret check
   now covers the site, the dashboard's public/pay/r folders and the mobile app's app.json.
+- **10 Nov, remaining money items:** fixed.
+  - Part refunds post the amount refunded.
+  - A never-paid order posts no refund, and a paid order is refunded, not cancelled.
+  - Credit notes are capped at what's left to credit, keep the invoice's own VAT basis and never
+    refund more than was received. The dashboard's credit note goes through the same path, so a
+    Yoco auto-refund sends only the paid part.
+  - Payments can't exceed what's owed.
+  - No settings means not VAT-registered, in the code and (migration 253) the DB default.
+  - Rounding is half-up.
+  - The ledger is append-only (migration 253).
+  - Tests: `vula_mind/tests/test_money2_audit_1109.py` (17; 14 fail before the fix, 3 are
+    rounding cases where both rules agree).
+  - **ShopEazy** is marked VAT-registered with no VAT number: probably the old DB default. Check
+    before it invoices.
 
 ## Suggested order
 

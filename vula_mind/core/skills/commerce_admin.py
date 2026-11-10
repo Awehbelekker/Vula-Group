@@ -3071,10 +3071,13 @@ class CommerceAdminSkill(BaseSkill):
         method = payment_method if status == "paid" else None
         # Passed only when there is one, so the ordinary status change keeps its long-standing
         # two-argument call shape.
-        if method:
-            await service.update_order_status(match["id"], status, payment_method=method)
-        else:
-            await service.update_order_status(match["id"], status)
+        try:
+            if method:
+                await service.update_order_status(match["id"], status, payment_method=method)
+            else:
+                await service.update_order_status(match["id"], status)
+        except service.OrderStatusRefused as exc:
+            return {"error": str(exc)}       # e.g. a paid order: refund it instead of cancelling
         result = {"updated": match["display_id"], "new_status": status}
         if method:
             result["payment_method"] = method

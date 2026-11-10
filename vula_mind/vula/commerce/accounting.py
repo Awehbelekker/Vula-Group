@@ -389,7 +389,7 @@ def is_vat_registered(tenant_id: str) -> bool:
     try:
         rows = (_client().table("commerce_invoice_settings").select("vat_registered")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
-        return bool(rows[0].get("vat_registered", True)) if rows else True
+        return bool(rows[0].get("vat_registered", False)) if rows else False   # migration 253
     except Exception:
         return True
 

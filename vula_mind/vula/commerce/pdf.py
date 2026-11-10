@@ -449,7 +449,7 @@ def merge_branding(tenant_id: str, settings: Optional[dict]) -> dict:
         branding["address"] = settings["registered_address"]
     if settings.get("accent_color"):
         branding["accent"] = settings["accent_color"]
-    branding["vat_registered"] = settings.get("vat_registered", True)
+    branding["vat_registered"] = settings.get("vat_registered", False)
     payment_info = _payment_info_from_settings(settings)
     if payment_info:
         branding["payment_info"] = payment_info
@@ -661,7 +661,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "total_cents": int(invoice.get("total_cents") or 0),
         "deposit_cents": int(invoice.get("deposit_cents") or 0),
         "notes": invoice.get("notes") or "",
-        "vat_registered": branding.get("vat_registered", True),
+        "vat_registered": branding.get("vat_registered", False),
         "cert_style": choice in _CERT_STYLE_TEMPLATES,
         # Branding depth (migration 103) — all default to today's fixed behavior when unset.
         "footer_text": branding.get("footer_text") or "",
