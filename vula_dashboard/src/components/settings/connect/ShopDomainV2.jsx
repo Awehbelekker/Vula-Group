@@ -16,8 +16,22 @@ const STATE = {
   live: ['ok', 'Live'],
 }
 
-export default function ShopDomainV2({ tenantId }) {
-  const x = useShopDomain(tenantId)
+const TEXT = {
+  shop: {
+    intro: 'Optional — your shop already works on WhatsApp. With your own address, customers see your name (not Vula’s) at the top when your shop or a receipt opens.',
+    label: 'Your shop’s address', hint: 'Starts with shop. so your main website stays as it is — e.g. shop.yourbusiness.co.za',
+    placeholder: 'shop.yourbusiness.co.za', open: '/',
+  },
+  links: {
+    intro: 'Optional — client project links work already. With your own address they look like yours: projects.yourbusiness.co.za/track/… instead of Vula’s server. Links you’ve already sent keep working.',
+    label: 'Your client links’ address', hint: 'Starts with projects. (or clients., portal.) so your main website stays as it is — e.g. projects.yourbusiness.co.za',
+    placeholder: 'projects.yourbusiness.co.za', open: '/link-ping',
+  },
+}
+
+export default function ShopDomainV2({ tenantId, kind = 'shop' }) {
+  const x = useShopDomain(tenantId, kind)
+  const t = TEXT[kind] || TEXT.shop
   const info = x.info
   if (!info) return <Card><Skeleton lines={3} /></Card>
 
@@ -25,11 +39,9 @@ export default function ShopDomainV2({ tenantId }) {
     return (
       <Card>
         <form className="vst-card" onSubmit={x.connect}>
-          <p className="vst-body">
-            Optional — your shop already works on WhatsApp. With your own address, customers see your name (not Vula’s) at the top when your shop or a receipt opens.
-          </p>
-          <Field label="Your shop’s address" hint="Starts with shop. so your main website stays as it is — e.g. shop.yourbusiness.co.za">
-            <Input required value={x.domain} placeholder="shop.yourbusiness.co.za" onChange={e => x.setDomain(e.target.value)} />
+          <p className="vst-body">{t.intro}</p>
+          <Field label={t.label} hint={t.hint}>
+            <Input required value={x.domain} placeholder={t.placeholder} onChange={e => x.setDomain(e.target.value)} />
           </Field>
           {x.error && <p className="vcn-error" role="alert">{x.error}</p>}
           <div className="vst-row"><Button type="submit" Icon={Globe} disabled={x.busy}>{x.busy ? 'Adding…' : 'Use this address'}</Button></div>
@@ -46,7 +58,7 @@ export default function ShopDomainV2({ tenantId }) {
       <div className="vst-row">
         <span className="vst-strong">{info.domain}</span>
         <StatusChip tone={tone}>{live && <Check size={14} aria-hidden="true" />}{label}</StatusChip>
-        {live && <a className="vcn-link" href={`https://${info.domain}/`} target="_blank" rel="noreferrer">Open<ExternalLink size={14} aria-hidden="true" /></a>}
+        {live && kind === 'shop' && <a className="vcn-link" href={`https://${info.domain}${t.open}`} target="_blank" rel="noreferrer">Open<ExternalLink size={14} aria-hidden="true" /></a>}
       </div>
       {!live && records.length > 0 && (
         <>

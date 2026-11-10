@@ -667,6 +667,10 @@ async def file_document(
         clickup_list_id = att.get("clickup_list_id") or clickup_list_id
         clickup_task_id = att.get("clickup_task_id")
 
+    # What the business adds is checked before anything relies on it (vula/commerce/data_checks.py):
+    # a date years off, an internal cost sheet a client link would show, an invoice with no supplier.
+    from vula.commerce import data_checks
+    fields, checks = data_checks.at_filing(category, filename, fields)
     row = {
         "tenant_id": tenant_id, "project": project, "clickup_list_id": clickup_list_id,
         "clickup_task_id": clickup_task_id, "category": category, "summary": summary,
@@ -675,6 +679,8 @@ async def file_document(
         "status": status, "filed_by": filed_by, "content_hash": content_hash,
         "customer_phone": customer_phone,
     }
+    if checks:
+        row["needs_review"] = True
     try:
         # ignore_duplicates=True (Postgres ON CONFLICT DO NOTHING) against the unique
         # (tenant_id, source, content_hash) index (migrations 081 + 101 + 143 — content_hash is
@@ -723,6 +729,8 @@ async def file_document(
             logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc2)
     _record_prices(tenant_id, row)
     _maybe_read_programme(tenant_id, row)
+    if checks:
+        row["checks"] = checks          # for the caller to tell the sender; not a column
     return row
 
 

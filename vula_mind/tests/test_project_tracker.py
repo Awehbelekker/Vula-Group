@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from vula.commerce import project_tracker as pt
 
 TID = "test-tenant"
@@ -65,9 +67,13 @@ def _db():
              "invoice_number": "BILL-9", "total_cents": 1_000_00, "status": "sent"}])
 
 
-def _position(db=None):
+AGREED = {"Sample Flat": {"pricing": "cost_plus", "fee_pct": 10.0, "fee_cents": None}}
+
+
+def _position(db=None, agreed=None):
     db = db or _db()
     with (patch.object(pt, "_client", return_value=db),
+          patch("vula.commerce.job_costing.agreed_terms", return_value=AGREED if agreed is None else agreed),
           patch("vula.commerce.job_costing.costing", return_value={"projects": [COSTED]}),
           patch("vula.commerce.job_costing.direct_costs", return_value={"sample flat": {"cents": 8_000_00}})):
         return pt.position(TID, "sample flat")
@@ -107,6 +113,7 @@ def test_the_open_book_view_shows_cost_fee_and_balance_but_never_profit():
 def test_a_share_link_stores_only_a_hash_and_ends_when_revoked_or_expired():
     db = _db()
     with (patch.object(pt, "_client", return_value=db),
+          patch("vula.commerce.job_costing.agreed_terms", return_value=AGREED),
           patch("vula.commerce.service.canonical_project", return_value="Sample Flat"),
           patch("config.settings.public_base_url", "https://api.example.test")):
         share = pt.create_share(TID, "sample flat", "open_book", by="27820000000")
@@ -157,7 +164,7 @@ def test_an_unknown_project_is_asked_about_not_shared():
 def test_the_public_page_refuses_an_unknown_link():
     from vula.api.project_track import project_page
     with patch.object(pt, "share_for_token", return_value=None):
-        res = asyncio.run(project_page("not-a-real-token"))
+        res = asyncio.run(project_page("not-a-real-token", None))
     assert res.status_code == 404 and b"isn't valid" in res.body
 
 
@@ -252,3 +259,218 @@ def test_a_price_or_qs_link_never_shows_what_the_sections_really_cost():
     assert ob["sheet"]["actual_cents"] == 55_000_00
     page = pt.render({"name": "Example Builders"}, ob)
     assert "By section" in page and "R36 000.00" in page and "R49 000.00" in page
+
+
+def test_the_page_fits_a_phone_and_uses_a_wide_screen():
+    """10 Nov 2026: the client's page was a 560px strip on a desktop, and on a phone its multi-column
+    tables and document rows ran off the right edge. Now: a wider card with the account blocks side by
+    side, wide tables scrolling inside their own box, and document buttons on their own line."""
+    v = {"view": "open_book", "project": "Belladonna", "as_of": "2026-11-10", "budget_cents": 100000,
+         "contract_cents": 100000, "trades": [], "business_cost_cents": 0, "sheet": {"actual_cents": 1, "paid_cents": 1},
+         "sections": [{"section": "Kitchen", "budget_cents": 1, "actual_cents": 1, "paid_cents": 1}]}
+    page = pt.render({"name": "Example"}, v, extra_html="<div class='docs'></div>")
+    assert "max-width:1040px" in page and "max-width:560px" not in page
+    assert "<div class=\"grid\">" in page and "class='blk wide'" in page and "class='scroll'" in page
+    assert "data-label='Budget'" in page and "content:attr(data-label)" in page and "@media print" in page
+
+
+# ── the agreed final account (migration 254) ───────────────────────────────────────────────
+
+_FA = {"as_of": "2026-11-02", "charged_cents": 23924738, "total_cents": 24424738,
+       "adjustments": [{"label": "Correction — Jack Hammer account", "cents": 500000}],
+       "received_cents": 21140798, "balance_cents": 3283940}
+
+
+def _ob(**kw):
+    return {"view": "open_book", "project": "Belladonna", "as_of": "2026-11-10", "trades": [],
+            "business_cost_cents": 13953701, "fee_basis": "cost_plus", "fee_pct": 10.0, "fee_cents": 1395370,
+            "open_book_total_cents": 15349071, "received_cents": 21140798,
+            "open_book_balance_cents": -5791727, **kw}
+
+
+def test_the_final_account_is_the_account_on_the_client_page():
+    page = pt.render({"name": "DIGG"}, _ob(final_account=_FA))
+    assert "Costs and fee (final account, 2026-11-02)" in page and "R239 247.38" in page
+    assert "Correction — Jack Hammer account" in page and "R244 247.38" in page
+    assert "Balance due to us" in page and "R32 839.40" in page
+    assert "Fee (10%)" not in page and "57 917.27" not in page          # never the cost + fee estimate
+
+
+def test_without_a_final_account_the_estimate_stays():
+    page = pt.render({"name": "DIGG"}, _ob(final_account=None))
+    assert "Fee (10%)" in page and "Balance due to us" not in page
+
+
+def test_an_overpaid_final_account_says_so():
+    fa = {**_FA, "received_cents": 25000000, "balance_cents": 24424738 - 25000000}
+    page = pt.render({"name": "DIGG"}, _ob(final_account=fa))
+    assert "Balance due to you" in page and "R5 752.62" in page
+
+
+def test_only_the_open_book_view_carries_the_final_account():
+    pos = {**_ob(final_account=_FA), "overhead_share_cents": 1, "profit_cents": 2}
+    assert pt.client_view(pos, "open_book")["final_account"] == _FA
+    for view in ("price", "qs"):
+        assert "final_account" not in pt.client_view(pos, view)
+
+
+def test_a_later_payment_lowers_the_balance(monkeypatch):
+    rows = [{"project": "Belladonna", "as_of": "2026-11-02", "charged_cents": 23924738,
+             "adjustments": [{"label": "Correction", "cents": 500000}]}]
+    monkeypatch.setattr(pt, "_rows", lambda make: rows)
+    fa = pt.final_account("digg-demo", pt._key("belladonna"))
+    assert fa["total_cents"] == 24424738
+    assert pt.final_account("digg-demo", pt._key("HPC Bokaap")) is None
+
+
+def test_saving_a_final_account_is_read_back(monkeypatch):
+    saved = []
+
+    class _T:
+        def upsert(self, row, **kw): saved.append(row); return self
+        def execute(self): return self
+
+    monkeypatch.setattr(pt, "_client", lambda: type("C", (), {"table": lambda self, n: _T()})())
+    monkeypatch.setattr("vula.commerce.service.canonical_project", lambda t, p: "Belladonna")
+    monkeypatch.setattr(pt, "final_account", lambda t, k: {"as_of": "2026-11-02", "charged_cents": 100,
+                                                           "adjustments": [], "total_cents": 100} if saved else None)
+    out = pt.set_final_account("digg-demo", "belladonna", "2026-11-02", 100)
+    assert out["project"] == "Belladonna" and saved[0]["tenant_id"] == "digg-demo"
+    monkeypatch.setattr(pt, "final_account", lambda t, k: None)
+    with pytest.raises(RuntimeError):
+        pt.set_final_account("digg-demo", "belladonna", "2026-11-02", 100)
+
+
+# ── the fee as agreed, per project (migration 255) ─────────────────────────────────────────
+
+def test_no_agreed_fee_means_no_balance_for_the_client():
+    p = _position(agreed={})
+    assert p["fee_basis"] is None and p["fee_cents"] is None and p["open_book_balance_cents"] is None
+    assert any("No fee is agreed" in w for w in p["warnings"])
+    page = pt.render({"name": "Example"}, pt.client_view(p, "open_book"))
+    assert "Not agreed yet" in page and "once the fee for this project is agreed" in page
+    assert "Balance due" not in page and "Fee (10%)" not in page
+
+
+def test_an_agreed_fixed_fee_is_used_as_agreed():
+    p = _position(agreed={"sample flat": {"pricing": "fixed_fee", "fee_pct": None, "fee_cents": 48_000_00}})
+    assert (p["fee_basis"], p["fee_source"], p["fee_cents"]) == ("fixed_fee", "project", 48_000_00)
+    assert p["open_book_balance_cents"] == 40_000_00 + 48_000_00 - 30_000_00
+    page = pt.render({"name": "Example"}, pt.client_view(p, "open_book"))
+    assert "Fee (agreed amount)" in page and "R48 000.00" in page and "Balance due to us" in page
+
+
+def test_the_businesss_standard_fee_applies_with_a_warning():
+    p = _position(agreed={"*": {"pricing": "cost_plus", "fee_pct": 12.5, "fee_cents": None}})
+    assert (p["fee_source"], p["fee_pct"], p["fee_cents"]) == ("standard", 12.5, 5_000_00)
+    assert any("standard fee (12.5%)" in w for w in p["warnings"])
+
+
+def test_a_project_fee_beats_the_standard_one():
+    p = _position(agreed={"*": {"pricing": "cost_plus", "fee_pct": 12.5, "fee_cents": None},
+                          "Sample Flat": {"pricing": "cost_plus", "fee_pct": 8.0, "fee_cents": None}})
+    assert (p["fee_source"], p["fee_cents"]) == ("project", 3_200_00)
+
+
+def test_the_owner_is_warned_when_the_link_and_the_invoices_disagree():
+    # cost R40,000 + 10% − R30,000 received = R14,000 due; unpaid invoices R10,000 (INV-2)
+    p = _position()
+    assert any("R14,000.00 due" in w and "R10,000.00 unpaid" in w for w in p["warnings"])
+    assert all("standard fee" not in w for w in p["warnings"])          # this project's own fee
+
+
+def test_the_owner_is_warned_when_the_link_says_the_business_owes_the_client():
+    w = pt._warnings(None, {"pricing": "cost_plus", "fee_pct": 10.0, "fee_cents": None}, "project", 10.0,
+                     -5_791_727, [], 0, 21_140_798)
+    assert any("owing the client R57,917.27" in x for x in w)
+
+
+def test_a_final_account_matching_the_invoice_raises_no_warning():
+    fa = {"total_cents": 24424738, "balance_cents": 3283940}
+    assert pt._warnings(fa, None, None, None, None, [], 3283940, 21140798) == []
+
+
+def test_an_open_book_link_needs_an_agreed_fee():
+    db = _db()
+    with (patch.object(pt, "_client", return_value=db),
+          patch("vula.commerce.job_costing.agreed_terms", return_value={}),
+          patch("vula.commerce.service.canonical_project", return_value="Sample Flat")):
+        with pytest.raises(ValueError, match="Agree this project's fee first"):
+            pt.create_share(TID, "sample flat", "open_book")
+        assert pt.create_share(TID, "sample flat", "price")["view"] == "price"     # price only is fine
+
+
+def test_the_owners_warnings_never_reach_the_client():
+    p = _position(agreed={})
+    for view in pt.VIEWS:
+        assert "warnings" not in pt.client_view(p, view) and "fee_source" not in pt.client_view(p, view)
+
+
+def test_a_project_priced_as_per_the_bill_shows_the_contract_and_invoices():
+    p = _position(agreed={"Sample Flat": {"pricing": "per_bill", "fee_pct": None, "fee_cents": None}})
+    assert (p["fee_basis"], p["fee_cents"], p["open_book_balance_cents"]) == ("per_bill", None, None)
+    assert any("as per the bill" in w for w in p["warnings"]) and not any("No fee" in w for w in p["warnings"])
+    page = pt.render({"name": "Example"}, pt.client_view(p, "open_book"))
+    assert "Contract (as per the bill)" in page and "R53 000.00" in page and "Owed now" in page
+    assert "Fee (" not in page and "Not agreed yet" not in page
+
+
+# ── what the client still owes, at the top ─────────────────────────────────────────────────
+
+def test_the_client_sees_where_the_money_stands_today_at_the_top():
+    v = _ob(final_account=_FA, to_pay_directly_cents=6770200, paid_directly_cents=28381608)
+    page = pt.render({"name": "DIGG"}, v)
+    top = page[:page.index("<div class=\"grid\">")]
+    assert "Where the money stands today" in top
+    assert "Paid to us so far" in top and "R211 407.98" in top
+    assert "Paid by you directly to suppliers" in top and "R283 816.08" in top
+    assert "Balance due to us" in top and "R32 839.40" in top and "per the final account of 2026-11-02" in top
+    # today's position only: no other suppliers' balances, nothing projected
+    assert "R67 702.00" not in top and "Total still to pay" not in top
+    assert "Open book · final account of 2026-11-02" in page and "cost-plus" not in page
+
+
+def test_no_owed_summary_without_an_agreed_fee_or_final_account():
+    page = pt.render({"name": "DIGG"}, _ob(final_account=None, fee_basis=None, fee_cents=None,
+                                           open_book_balance_cents=None))
+    assert "Where the money stands today" not in page
+
+
+def test_the_heading_says_how_the_account_works():
+    assert pt._basis_label({"view": "open_book", "fee_basis": "per_bill"}) == "Open book · priced as per the bill"
+    assert pt._basis_label({"view": "open_book", "fee_basis": "cost_plus", "fee_pct": 10.0}) == "Open book · cost plus 10%"
+    assert pt._basis_label({"view": "price"}) == "Price only"
+
+
+# ── every project at a glance ───────────────────────────────────────────────────────────────
+
+def test_what_is_owed_rests_on_the_same_rule_as_the_client_page():
+    assert pt.owed_to_business({"final_account": {"balance_cents": 3283940, "as_of": "2026-11-02"}}) == \
+        {"cents": 3283940, "basis": "final account 2026-11-02"}
+    assert pt.owed_to_business({"open_book_balance_cents": 1400000, "fee_basis": "cost_plus"}) == \
+        {"cents": 1400000, "basis": "cost + agreed fee"}
+    assert pt.owed_to_business({"open_book_balance_cents": None, "invoices": [{"owed_cents": 5}], "invoices_owed_cents": 5}) == \
+        {"cents": 5, "basis": "unpaid invoices"}
+    assert pt.owed_to_business({"open_book_balance_cents": None, "invoices": [], "fee_basis": None}) == \
+        {"cents": None, "basis": "fee not agreed"}
+
+
+def test_the_overview_reads_the_business_once_and_lists_every_project():
+    calls = {"costing": 0}
+
+    def costing(tid):
+        calls["costing"] += 1
+        return {"projects": [COSTED, {**COSTED, "project": "Other Job", "cost_cents": 0, "received_cents": 5_000_00}]}
+
+    with (patch.object(pt, "_client", return_value=_db()),
+          patch("vula.commerce.job_costing.costing", side_effect=costing),
+          patch("vula.commerce.job_costing.direct_costs", return_value={}),
+          patch("vula.commerce.job_costing.agreed_terms", return_value=AGREED),
+          patch("vula.commerce.service.registered_projects", return_value=[{"name": "Sample Flat", "status": "active"}])):
+        o = pt.overview(TID)
+    assert calls["costing"] == 1                       # once for the whole business, not once a project
+    assert [r["project"] for r in o["projects"]] == ["Sample Flat", "Other Job"]
+    flat = o["projects"][0]
+    assert (flat["status"], flat["owed_cents"], flat["owed_basis"]) == ("active", 14_000_00, "cost + agreed fee")
+    assert o["owed_cents"] == 14_000_00 and o["received_cents"] == 35_000_00
+    assert o["projects"][1]["owed_cents"] is None       # Other Job: no fee agreed — nothing guessed

@@ -158,6 +158,56 @@ def terms(tenant_id: str) -> Dict[str, float]:
     return out
 
 
+PRICING = ("cost_plus", "fixed_fee", "per_bill")
+
+
+def agreed_terms(tenant_id: str) -> Dict[str, Dict[str, Any]]:
+    """project → the fee actually agreed: {"pricing", "fee_pct", "fee_cents"}; '*' = the business's
+    standard fee, if it set one. Unlike terms(), nothing is assumed: a project with no row (and no '*'
+    row) has no agreed fee, and the client is never shown a balance worked out on a guess (10 Nov 2026)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        for r in (_client().table("vula_project_terms").select("project,pricing,fee_pct,fee_cents")
+                  .eq("tenant_id", tenant_id).limit(500).execute().data or []):
+            pricing = r.get("pricing") or "cost_plus"
+            if pricing == "fixed_fee" and r.get("fee_cents") is not None:
+                out[r["project"]] = {"pricing": pricing, "fee_pct": None, "fee_cents": int(r["fee_cents"])}
+            elif pricing == "cost_plus" and r.get("fee_pct") is not None:
+                out[r["project"]] = {"pricing": pricing, "fee_pct": float(r["fee_pct"]), "fee_cents": None}
+            elif pricing == "per_bill":          # the fee is inside the bill's rates (migration 256)
+                out[r["project"]] = {"pricing": pricing, "fee_pct": None, "fee_cents": None}
+    except Exception as exc:
+        log.debug("agreed terms read skipped: %s", exc)
+    return out
+
+
+def set_terms(tenant_id: str, project: str, pricing: str, *, fee_pct: Optional[float] = None,
+              fee_cents: Optional[int] = None, by: Optional[str] = None) -> Dict[str, Any]:
+    """Agree a project's fee (project '*' = the business's standard): a percentage on cost, or a
+    fixed amount in cents. Read back."""
+    from datetime import datetime, timezone
+    if pricing not in PRICING:
+        raise ValueError("The price is agreed as a percentage on cost, a fixed fee, or as per the bill.")
+    if pricing == "per_bill":
+        row = {"fee_pct": None, "fee_cents": None}
+    elif pricing == "cost_plus":
+        if fee_pct is None or not 0 <= float(fee_pct) <= 100:
+            raise ValueError("The fee percentage must be between 0 and 100.")
+        row = {"fee_pct": float(fee_pct), "fee_cents": None}
+    else:
+        if fee_cents is None or int(fee_cents) < 0:
+            raise ValueError("The fixed fee must be R0 or more.")
+        row = {"fee_pct": None, "fee_cents": int(fee_cents)}
+    project = project or "*"
+    _client().table("vula_project_terms").upsert(
+        {"tenant_id": tenant_id, "project": project, "pricing": pricing, **row, "agreed_by": by,
+         "updated_at": datetime.now(timezone.utc).isoformat()}, on_conflict="tenant_id,project").execute()
+    back = agreed_terms(tenant_id).get(project)
+    if not back or back["pricing"] != pricing:
+        raise RuntimeError("the fee was not saved")
+    return {"project": project, **back}
+
+
 def set_fee(tenant_id: str, project: str, fee_pct: float) -> None:
     from datetime import datetime, timezone
     _client().table("vula_project_terms").upsert(

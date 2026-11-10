@@ -32,6 +32,14 @@ export async function createShare(tenantId, project, view) {
   const d = await r.json().catch(() => ({}));
   return r.ok ? d : { error: d.detail || "The link couldn't be made." };
 }
+/** Agree a project's fee: { pricing: "cost_plus", fee_pct } or { pricing: "fixed_fee", fee_cents }. */
+export async function setProjectFee(tenantId, project, terms) {
+  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/terms`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, ...terms }) }).catch(() => null);
+  if (!r) return { error: "Couldn't reach Vula — try again." };
+  const d = await r.json().catch(() => ({}));
+  return r.ok ? d : { error: r.status === 403 ? "Only the owner or a manager can set fees." : (d.detail || "The fee couldn't be saved.") };
+}
 /** The online BOQ (vula/commerce/boq_online.py): the bill, the rate library, and its actions. */
 const boqUrl = (tenantId, path = "") => `${VULA_API}/v1/commerce/${tenantId}/admin/projects/boq-online${path}`;
 export const fetchBoqOnline = (tenantId, project) =>

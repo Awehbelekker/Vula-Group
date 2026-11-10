@@ -20,6 +20,16 @@ import httpx
 
 RAILWAY_API = "https://backboard.railway.com/graphql/v2"
 PREFIXES = ("shop.", "order.", "buy.", "store.")
+# 10 Nov 2026 (Ian: "can the URL look like it's from DIGG?"): the same set-up for a second address,
+# where the business's client links open — projects.digg.co.za/track/… instead of Vula's server.
+LINK_PREFIXES = ("projects.", "clients.", "client.", "portal.")
+KINDS = {"shop": PREFIXES, "links": LINK_PREFIXES}
+
+
+def _prefixes(kind: str):
+    if kind not in KINDS:
+        raise DomainError("Unknown kind of address.")
+    return KINDS[kind]
 _DOMAIN_RE = re.compile(r"^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
@@ -27,11 +37,14 @@ class DomainError(Exception):
     pass
 
 
-def normalise(raw: str) -> str:
+def normalise(raw: str, kind: str = "shop") -> str:
     d = re.sub(r"^https?://", "", (raw or "").strip().lower()).split("/")[0].split(":")[0].rstrip(".")
     if not _DOMAIN_RE.match(d):
         raise DomainError("That doesn't look like a web address — e.g. shop.yourbusiness.co.za")
-    if not d.startswith(PREFIXES):
+    if kind == "links" and not d.startswith(LINK_PREFIXES):
+        raise DomainError("Use an address that starts with projects. (or clients., portal.) — "
+                          "e.g. projects.yourbusiness.co.za, so your main website stays as it is.")
+    if kind == "shop" and not d.startswith(PREFIXES):
         raise DomainError("Use an address that starts with shop. (or order., buy., store.) — "
                           "e.g. shop.yourbusiness.co.za, so your main website stays as it is.")
     if d.endswith((".railway.app", ".vercel.app", ".vula-ai.com")):
@@ -39,8 +52,8 @@ def normalise(raw: str) -> str:
     return d
 
 
-def suggestion(tenant_id: str) -> str:
-    """shop.<their store's domain>, when we know it."""
+def suggestion(tenant_id: str, kind: str = "shop") -> str:
+    """shop.<their store's domain> (projects.<…> for client links), when we know it."""
     try:
         from vula.api.tenants import get_config
         store = (get_config(tenant_id) or {}).get("store_url") or ""
@@ -48,7 +61,7 @@ def suggestion(tenant_id: str) -> str:
         store = ""
     host = re.sub(r"^https?://", "", store.lower()).split("/")[0]
     host = host[4:] if host.startswith("www.") else host
-    return f"shop.{host}" if host and "." in host and not host.endswith((".myshopify.com", ".railway.app")) else ""
+    return f"{'projects' if kind == 'links' else 'shop'}.{host}" if host and "." in host and not host.endswith((".myshopify.com", ".railway.app")) else ""
 
 
 def _ids() -> Dict[str, str]:
@@ -119,12 +132,12 @@ def records(domain: str, rd: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
     return out
 
 
-def _save(tenant_id: str, domain: Optional[str]) -> None:
-    """Put the address on the tenant (or take it off) — one shop address at a time."""
+def _save(tenant_id: str, domain: Optional[str], kind: str = "shop") -> None:
+    """Put the address on the tenant (or take it off) — one address of each kind at a time."""
     from vula.api import tenants
     from vula.commerce import service
     cfg = tenants.get_config(tenant_id, fresh=True) or {}
-    doms = [d for d in (cfg.get("domains") or []) if not str(d).lower().startswith(PREFIXES)]
+    doms = [d for d in (cfg.get("domains") or []) if not str(d).lower().startswith(_prefixes(kind))]
     if domain:
         doms.append(domain)
     service._client().table("vula_tenant_config").update({"domains": doms}).eq("tenant_id", tenant_id).execute()
@@ -134,14 +147,16 @@ def _save(tenant_id: str, domain: Optional[str]) -> None:
         pass
 
 
-async def status(tenant_id: str) -> Dict[str, Any]:
+async def status(tenant_id: str, kind: str = "shop") -> Dict[str, Any]:
     from vula.commerce import web_basket
-    domain = web_basket.configured_shop_host(tenant_id)
-    out: Dict[str, Any] = {"domain": domain, "suggestion": suggestion(tenant_id),
+    domain = (web_basket.configured_link_host(tenant_id) if _prefixes(kind) is LINK_PREFIXES
+              else web_basket.configured_shop_host(tenant_id))
+    out: Dict[str, Any] = {"domain": domain, "suggestion": suggestion(tenant_id, kind), "kind": kind,
                            "automated": can_automate(), "state": "none", "records": []}
     if not domain:
         return out
-    live = await web_basket.check_shop_host(domain, tenant_id)
+    live = await (web_basket.check_link_host(domain, tenant_id) if kind == "links"
+                  else web_basket.check_shop_host(domain, tenant_id))
     out["state"] = "live" if live else "waiting_dns"
     if not live and can_automate():
         try:
@@ -156,8 +171,8 @@ async def status(tenant_id: str) -> Dict[str, Any]:
     return out
 
 
-async def connect(tenant_id: str, raw: str) -> Dict[str, Any]:
-    domain = normalise(raw)
+async def connect(tenant_id: str, raw: str, kind: str = "shop") -> Dict[str, Any]:
+    domain = normalise(raw, kind)
     from vula.api.tenants import tenant_for_host
     owner = tenant_for_host(domain)
     if owner and owner != tenant_id:
@@ -167,20 +182,21 @@ async def connect(tenant_id: str, raw: str) -> Dict[str, Any]:
         if not any(c.get("domain") == domain for c in doms.get("customDomains") or []):
             port = next((s.get("targetPort") for s in doms.get("serviceDomains") or [] if s.get("targetPort")), None)
             await _gql(_CREATE, {"input": {**_ids(), "domain": domain, **({"targetPort": port} if port else {})}})
-    _save(tenant_id, domain)
-    return await status(tenant_id)
+    _save(tenant_id, domain, kind)
+    return await status(tenant_id, kind)
 
 
-async def disconnect(tenant_id: str) -> Dict[str, Any]:
+async def disconnect(tenant_id: str, kind: str = "shop") -> Dict[str, Any]:
     from vula.commerce import web_basket
-    domain = web_basket.configured_shop_host(tenant_id)
+    domain = (web_basket.configured_link_host(tenant_id) if _prefixes(kind) is LINK_PREFIXES
+              else web_basket.configured_shop_host(tenant_id))
     if domain and can_automate():
         rd = await _railway_domain(domain)
         if rd:
             await _gql("mutation d($id: String!) { customDomainDelete(id: $id) }", {"id": rd["id"]})
-    _save(tenant_id, None)
+    _save(tenant_id, None, kind)
     web_basket._READY.pop(domain, None)
-    return await status(tenant_id)
+    return await status(tenant_id, kind)
 
 
 def instructions(domain: str, recs: List[Dict[str, str]]) -> str:

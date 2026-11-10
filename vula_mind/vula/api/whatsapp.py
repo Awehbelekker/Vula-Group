@@ -5033,7 +5033,8 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
         total, vat = cs.vat_inclusive(int(merged.get("total_cents") or 0),
                                       int(merged.get("vat_cents") or 0),
                                       bool(merged.get("amounts_exclude_vat")),
-                                      cs.vat_registered(merged.get("tax_id"), merged.get("supplier_vat_no")))
+                                      cs.vat_registered(merged.get("tax_id"), merged.get("supplier_vat_no")),
+                                      cs._cents_or_none(merged.get("subtotal_cents")))
         note += f", total R{total / 100:,.2f}." if total else "."
         if merged.get("_unverified_figures") or not total:
             return note + " I've not booked the total — please check it in your Invoices tab.", row
@@ -5316,6 +5317,11 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                         tenant_id, name=payee_name, tax_id=pf.get("tax_id"))
                     if match and match.get("auto_apply"):
                         supplier_note = f"🏢 *{payee_name}* is already on your supplier list."
+                    elif match:
+                        # A near match is not a new supplier (10 Nov 2026: "Isoboard" was added next
+                        # to "Isoboard SA (Pty) Ltd" this way). Say which one it looks like instead.
+                        supplier_note = (f"🏢 *{payee_name}* looks like *{match['supplier'].get('name')}* "
+                                         "on your supplier list, so I haven't added it again.")
                     else:
                         details = []
                         if pf.get("payee_bank"):
@@ -5324,7 +5330,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                             details.append(f"Branch code: {pf['payee_branch_code']}")
                         if pf.get("tax_id"):
                             details.append(f"Tax/VAT no: {pf['tax_id']}")
-                        await commerce_service.upsert_supplier(tenant_id, {
+                        saved = await commerce_service.upsert_supplier(tenant_id, {
                             "name": payee_name,
                             "account_number": pf.get("payee_account_number"),
                             "tax_id": pf.get("tax_id"),
@@ -5332,12 +5338,20 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                                      f"added automatically from a {category.lower()} "
                                      f"forwarded {_dt2.now().strftime('%Y-%m-%d')}.",
                         })
-                        supplier_note = f"🏢 Added *{payee_name}* to your supplier list."
+                        if (saved or {}).get("matched_existing"):
+                            supplier_note = (f"🏢 *{payee_name}* is *{saved.get('name')}* on your supplier "
+                                             "list — I've noted the name, not added it again.")
+                        else:
+                            supplier_note = f"🏢 Added *{payee_name}* to your supplier list."
                     note = (note + "\n\n" if note else "") + supplier_note
             except Exception as exc:
                 logger.warning("Supplier auto-add from %s failed for %s: %s",
                               category, result.filename, exc)
 
+        # what the filing checks found (vula/commerce/data_checks.py) — told to whoever sent it
+        if row and row.get("checks"):
+            from vula.commerce.data_checks import notice
+            note = (note + "\n\n" if note else "") + notice(row["checks"])
         return note, row
     except Exception as exc:
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
