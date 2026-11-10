@@ -448,6 +448,31 @@ _PRODUCT_PHOTO_RE = re.compile(
     re.IGNORECASE)
 
 
+async def _maybe_listing_photo(tenant_id: str, phone: str, media_id: str, caption: str,
+                               mime: Optional[str]) -> bool:
+    """A team member's captioned photo for a property listing. False (fall through to the other
+    photo handlers) unless the tenant has listings, the sender is team, and the caption is a
+    photo caption naming a listing."""
+    from core.skills import listing_tools as lt
+    m = lt.LISTING_PHOTO_RE.match(caption or "")
+    if not m or not lt.tenant_has_listings(tenant_id) or not _is_team(tenant_id, phone):
+        return False
+    ref = m.group("name").strip().rstrip(".!")
+    rows = await lt.ls.list_properties(tenant_id, limit=500)
+    if not lt.match_listings(rows, ref):
+        await _send_reply(phone, f"I couldn't find a listing called *{ref}*. Send the photo again "
+                                 "captioned with the listing's name or area, e.g. *photos Bellville house*.",
+                          tenant_id)
+        return True
+    url, _ = await _keep_post_picture(tenant_id, media_id, mime)
+    if not url:
+        await _send_reply(phone, "I couldn't fetch that photo — please send it again.", tenant_id)
+        return True
+    res = await lt.add_listing_photo(tenant_id, ref, url)
+    await _send_reply(phone, res.get("reply") or "⚠️ That photo didn't save — please send it again.", tenant_id)
+    return True
+
+
 async def _maybe_product_photo(tenant_id: str, phone: str, media_id: str, caption: str,
                                mime: Optional[str]) -> bool:
     m = _PRODUCT_PHOTO_RE.match(caption or "")
@@ -2918,6 +2943,11 @@ async def _handle_image_or_video(
     if (msg_type == "image" and route_tenant and _recently_asked_about_signature(phone)
             and (_is_tenant_owner(route_tenant, phone) or await _sender_is_sales_rep(phone, route_tenant))):
         await _handle_signature_capture(phone, media_id, route_tenant)
+        return
+    # "photos Bellville house" from the team of a real-estate business → added to that listing
+    # (core/skills/listing_tools.py). Only for tenants with the `listings` module.
+    if (msg_type == "image" and route_tenant and caption.strip()
+            and await _maybe_listing_photo(route_tenant, phone, media_id, caption, mime_type)):
         return
     # "photo Hake Fillets" from the team on a shop line → offered as that product's website picture.
     if (msg_type == "image" and route_mode == "commerce" and route_tenant and caption.strip()

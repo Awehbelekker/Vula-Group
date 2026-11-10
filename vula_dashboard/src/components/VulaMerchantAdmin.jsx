@@ -28,6 +28,7 @@ import VulaActivity from './VulaActivity'
 const VulaCosting = lazyScreen(() => import('./VulaCosting'))
 const VulaInvoices = lazyScreen(() => import('./VulaInvoices'))
 const VulaBookings = lazyScreen(() => import('./VulaBookings'))
+const VulaListings = lazyScreen(() => import('./VulaListings'))
 const VulaMarketing = lazyScreen(() => import('./VulaMarketing'))
 const VulaFinanceInsights = lazyScreen(() => import('./VulaFinanceInsights'))
 const FinancesV2 = lazyScreen(() => import('./finances/FinancesV2'))
@@ -255,6 +256,7 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
       {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
       {active === 'delivery' && (<DeliveryV2 tenantId={tenantId} />)}
       {active === 'bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'listings' && <VulaListings tenantId={tenantId} />}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
       {active === 'costing' && <VulaCosting tenantId={tenantId} />}
       {active === 'suppliers' && (<SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} />)}

@@ -74,6 +74,8 @@ create table if not exists vula_property_enquiries (
   email        text,
   message      text,
   wants_viewing boolean not null default false,
+  preferred_times text,                    -- "Saturday morning", as the person said it
+  source       text not null default 'website',   -- website | whatsapp | email | portal
   status       text not null default 'new' check (status in ('new', 'contacted', 'viewing', 'closed')),
   ip           text,
   created_at   timestamptz not null default now()

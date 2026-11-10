@@ -1548,6 +1548,12 @@ MANUFACTURING_TOOLS = [
 
 _MFG_TOOL_NAMES = {t["function"]["name"] for t in MANUFACTURING_TOOLS}
 
+# Real-estate listing tools (core/skills/listing_tools.py). Deliberately NOT a _GATED_GROUPS
+# entry: that list offers every group to a tenant with no module config, and its keyword
+# matcher would narrow other tenants' tools on everyday words ("sold out"). These are added in
+# _tools_for only when the `listings` module is explicitly on.
+from core.skills import listing_tools as _lt  # noqa: E402
+
 _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
@@ -1562,7 +1568,7 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
                    + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS
-                   + FORM_TOOLS + BUYING_TOOLS)
+                   + FORM_TOOLS + BUYING_TOOLS + _lt.ADMIN_TOOL_SPECS)
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1707,6 +1713,7 @@ def _match_groups(message: str) -> Optional[set]:
 # "invoices" and "broadcasts" enabled gets "bookkeeper" (the earlier entry), since that's the
 # more central day-to-day framing for most small businesses on this platform.
 _ROLE_LABELS: List[tuple] = [
+    ("listings", "AI property assistant"),      # only real-estate businesses have this module
     ("invoices", "AI bookkeeper"),
     ("purchase_orders", "AI procurement assistant"),
     ("broadcasts", "AI marketing assistant"),
@@ -1839,6 +1846,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
             continue
         if matched is None or mod in matched:
             tools += _product_tools_for(tenant_id) if mod == "products" else group
+    if "listings" in mods:
+        tools += _lt.ADMIN_TOOL_SPECS
     return tools
 
 
@@ -1870,6 +1879,8 @@ _TOOL_SCOPE: Dict[str, str] = {
     "financial_report": "finances", "finance_settings": "finances",
     "send_payment_reminders": "invoices",
     "staff_notice": "team", "staff_poll": "team",
+    # real-estate listing tools: staff granted the Listings tab
+    **{n: "listings" for n in _lt.ADMIN_TOOL_NAMES},
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -1921,7 +1932,8 @@ _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "reco
                             # cancel/refund change what the customer was promised; the staff tools
                             # message the team; a discount code changes prices.
                             "order_payment", "create_manual_order", "create_discount_code",
-                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking"})
+                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking"}
+                           | _lt.ADMIN_PREVIEW_FIRST)
 
 
 def _claim_preview(tenant_id: str, phone: Optional[str], tool: str) -> Optional[Dict[str, Any]]:
@@ -2850,6 +2862,10 @@ class CommerceAdminSkill(BaseSkill):
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
         _log_tool_call(tid, "admin", name, args)
+        if name in _lt.ADMIN_TOOL_NAMES:
+            if not _lt.tenant_has_listings(tid):
+                return {"error": f"{name} isn't available for this business."}
+            return await _lt.run_admin_tool(name, args, ctx)
         try:
             if name == "sales_summary":      return await self._sales_summary(tid, args.get("period", "today"))
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))

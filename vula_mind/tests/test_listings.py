@@ -245,3 +245,128 @@ def test_real_estate_business_type():
     assert tenants.valid_modules(preset["modules"]) == preset["modules"]
     assert {q["key"] for q in business_profile.questions("real_estate")} >= {"areas", "viewings"}
     assert starter_kb.STARTER_SLOTS["real_estate"]
+
+
+# ── WhatsApp tools (core/skills/listing_tools.py) ─────────────────────────────
+from core.skills import listing_tools as lt
+
+
+def test_match_listings_by_ref_title_or_words():
+    rows = [{"id": "1", "slug": "family-home", "title": "4 Bed Family Home", "suburb": "Durbanville"},
+            {"id": "2", "slug": "sea-point-flat", "title": "2 Bed Apartment", "suburb": "Sea Point"},
+            {"id": "3", "slug": "bellville-flat", "title": "2 Bed Apartment", "suburb": "Bellville"}]
+    assert [r["id"] for r in lt.match_listings(rows, "family-home")] == ["1"]
+    assert [r["id"] for r in lt.match_listings(rows, "the Durbanville house")] == ["1"]
+    assert [r["id"] for r in lt.match_listings(rows, "the apartment in sea point")] == ["2"]
+    assert {r["id"] for r in lt.match_listings(rows, "2 bed apartment")} == {"2", "3"}   # ambiguous
+    assert lt.match_listings(rows, "castle") == []
+
+
+@pytest.mark.asyncio
+async def test_customer_search_details_and_viewing(env):
+    agent = await ls.upsert_agent("estate-a", {"name": "Lindi", "whatsapp": "0821112222"})
+    await ls.upsert_property("estate-a", {"title": "Family home", "status": "active", "suburb": "Durbanville",
+                                          "price_cents": 245_000_000, "bedrooms": 4, "agent_id": agent["id"],
+                                          "address": "12 Oak St", "images": ["https://img/1.jpg"]})
+    await ls.upsert_property("estate-a", {"title": "Secret draft", "status": "draft", "suburb": "Durbanville"})
+    ctx = {"tenant_id": "estate-a", "customer_phone": "27835551234"}
+
+    res = await lt.run_customer_tool("search_listings", {"suburb": "durbanville", "max_price": "R3m"}, ctx)
+    assert [r["title"] for r in res["results"]] == ["Family home"]
+    assert res["results"][0]["price"] == "R2 450 000"
+    assert (await lt.run_customer_tool("search_listings", {"max_price": "lots"}, ctx))["error"]
+
+    det = await lt.run_customer_tool("listing_details", {"listing": "the durbanville home"}, ctx)
+    assert det["agent"] == "Lindi" and "address" not in det          # address hidden by default
+    assert ctx["media_url"] == "https://img/1.jpg"
+    assert "error" in await lt.run_customer_tool("listing_details", {"listing": "secret draft"}, ctx)
+
+    out = await lt.run_customer_tool("request_viewing", {"listing": "family-home", "customer_name": "Thandi",
+                                                          "preferred_times": "Saturday morning"}, ctx)
+    assert out["sent"] and "Lindi" in out["message"]
+    enq = env.db.rows["vula_property_enquiries"][-1]
+    assert enq["source"] == "whatsapp" and enq["wants_viewing"] and enq["preferred_times"] == "Saturday morning"
+    assert any("Saturday morning" in t for _, t in env.sent)
+
+
+@pytest.mark.asyncio
+async def test_agent_create_and_update_need_a_preview_then_read_back(env):
+    await ls.upsert_agent("estate-a", {"name": "Lindi Mokoena"})
+    ctx = {"tenant_id": "estate-a", "phone": "27820000001"}
+    args = {"title": "3 bed house in Bellville", "listing_type": "sale", "price": "R1.95m",
+            "suburb": "Bellville", "bedrooms": 3, "agent": "lindi"}
+    prev = await lt.run_admin_tool("create_listing", args, ctx)
+    assert prev["preview"] is True and prev["price"] == "R1 950 000" and prev["on_website"] == "yes"
+    assert not env.db.rows.get("vula_properties")                    # nothing saved yet
+    done = await lt.run_admin_tool("create_listing", {**args, "confirm": True}, ctx)
+    assert done["verified"] and "R1 950 000" in done["reply_verbatim"]
+    row = env.db.rows["vula_properties"][0]
+    assert row["price_cents"] == 195_000_000 and row["status"] == "active" and row["agent_id"]
+
+    prev = await lt.run_admin_tool("update_listing", {"listing": "bellville", "price": "1.85m",
+                                                      "status": "under_offer"}, ctx)
+    assert prev["preview"] is True
+    assert prev["price"] == "R1 950 000 → R1 850 000" and prev["status"] == "active → under offer"
+    assert row["price_cents"] == 195_000_000                         # still unchanged
+    done = await lt.run_admin_tool("update_listing", {"listing": "bellville", "price": "1.85m",
+                                                      "status": "under_offer", "confirm": True}, ctx)
+    assert done["verified"] and row["price_cents"] == 185_000_000 and row["status"] == "under_offer"
+
+    bad = await lt.run_admin_tool("create_listing", {"title": "X", "listing_type": "sale", "agent": "nobody"}, ctx)
+    assert "No agent called" in bad["error"]
+
+
+def test_listing_tools_only_for_listings_businesses(monkeypatch):
+    from core.skills import commerce_admin as ca
+    from vula.api import tenants
+    names = lambda tid: {t["function"]["name"] for t in ca._tools_for(tid)}
+    profile = {"known": True, "sells_products": False}
+    monkeypatch.setattr(tenants, "tenant_profile", lambda tid: profile)
+    monkeypatch.setattr(tenants, "uses_projects", lambda tid: False)
+    for mods in ([], ["invoices", "crm"], ["products", "orders"]):      # [] = no module config
+        monkeypatch.setattr(tenants, "enabled_modules", lambda tid, m=mods: m)
+        assert not lt.ADMIN_TOOL_NAMES & names("shop"), mods
+    monkeypatch.setattr(tenants, "enabled_modules", lambda tid: ["listings", "crm"])
+    assert lt.ADMIN_TOOL_NAMES <= names("estate")
+    assert lt.ADMIN_PREVIEW_FIRST <= ca._PREVIEW_FIRST
+    # "sold out" must not change a shop's matched tool groups
+    assert ca._match_groups("we sold out of hake") is None
+
+
+@pytest.mark.asyncio
+async def test_other_businesses_cant_reach_listing_tools(monkeypatch):
+    from core.skills.commerce_admin import CommerceAdminSkill
+    from core.skills.commerce_assistant import CommerceAssistantSkill
+    monkeypatch.setattr(lt, "tenant_has_listings", lambda tid: False)
+    r = await CommerceAdminSkill()._dispatch_tool("create_listing", {"title": "x"}, {"tenant_id": "shop"})
+    assert "isn't available" in r["error"]
+    r = await CommerceAssistantSkill()._dispatch_tool(
+        "search_listings", {}, {"tenant_id": "shop", "session_id": "s", "customer_phone": None})
+    assert "unknown tool" in r["error"]
+
+
+@pytest.mark.asyncio
+async def test_listing_photos_added_read_back_and_removed_after_preview(env):
+    await ls.upsert_property("estate-a", {"title": "Family home", "status": "active", "suburb": "Durbanville"})
+    assert lt.LISTING_PHOTO_RE.match("photos Durbanville home").group("name") == "Durbanville home"
+    assert lt.LISTING_PHOTO_RE.match("Lovely kitchen!") is None
+    r1 = await lt.add_listing_photo("estate-a", "durbanville home", "https://img/1.jpg")
+    r2 = await lt.add_listing_photo("estate-a", "family-home", "https://img/2.jpg")
+    assert r1["ok"] and "(the cover)" in r1["reply"] and "on the website" in r1["reply"]
+    assert r2["ok"] and "photo 2" in r2["reply"]
+    assert (await lt.add_listing_photo("estate-a", "castle", "https://img/3.jpg")) == {"no_match": True}
+    ctx = {"tenant_id": "estate-a"}
+    prev = await lt.run_admin_tool("remove_listing_photo", {"listing": "family home", "photo_number": 1}, ctx)
+    assert prev["preview"] and env.db.rows["vula_properties"][0]["images"] == ["https://img/1.jpg", "https://img/2.jpg"]
+    done = await lt.run_admin_tool("remove_listing_photo", {"listing": "family home", "photo_number": 1,
+                                                            "confirm": True}, ctx)
+    assert done["verified"] and env.db.rows["vula_properties"][0]["images"] == ["https://img/2.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_photo_captions_on_other_businesses_fall_through(monkeypatch):
+    from vula.api import whatsapp as wa
+    monkeypatch.setattr(lt, "tenant_has_listings", lambda tid: False)
+    monkeypatch.setattr(wa, "_is_team", lambda tid, p: True)
+    # "photo Hake Fillets" on a shop must still reach the product-photo handler
+    assert await wa._maybe_listing_photo("off-the-hook", "27820000001", "m1", "photo Hake Fillets", None) is False

@@ -4,6 +4,7 @@
  * components exactly as before — every pre-overhaul tab id is present, nothing dropped.
  */
 import {
+  Building2,
   Activity, Banknote, Bike, CalendarCheck, Bot, BookOpen, Boxes, BrainCircuit, BrickWall, Briefcase, Calculator,
   CalendarDays, ClipboardList, Clock, Contact, CreditCard, Download, Factory, FileSignature,
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
@@ -22,7 +23,7 @@ export const NAV_ICONS = {
   overview: House, inbox: Inbox, today: CalendarCheck, activity: Activity,
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
   sell: Store, orders: Package, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag,
-  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, suppliers: Truck, import: Download,
+  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, listings: Building2, suppliers: Truck, import: Download,
   money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
   people: Users, customers: Users, contacts: Contact, followups: MailCheck,
@@ -81,6 +82,8 @@ export const MERCHANT_GROUPS = [
       { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
       { id: "delivery", icon: "🛵", label: "Delivery" },
       { id: "bookings", icon: "📅", label: "Bookings" },
+      // real-estate businesses only: tab id = module id `listings`, so no MERCHANT_MODMAP entry
+      { id: "listings", icon: "🏠", label: "Listings" },
       { id: "suppliers", icon: "🚚", label: "Suppliers" },
       { id: "import", icon: "📥", label: "Import" },
     ]},

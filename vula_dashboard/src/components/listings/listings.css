@@ -1,0 +1,65 @@
+/* listings.css — real-estate Listings (listings/ListingsV2.jsx). Tokens only, scoped to .vls.
+   Look from docs/real-estate-workspace-brief.md: big soft-cornered cards, long soft shadows,
+   pill controls, photo-led cards with a tag on the image, big confident numbers. The tenant's
+   accent colour (--brand) carries it, so each agency still looks like itself. */
+.vls { --vls-r: 20px; --vls-shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 18px 40px -28px rgba(20, 30, 60, .35); }
+.vls-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
+.vls-muted { font-size: var(--fs-caption); color: var(--muted); }
+.vls-strong { font-weight: 600; color: var(--ink); }
+.vls-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vls-err { margin: 0; padding: var(--space-2) var(--space-3); border-radius: 12px; background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger-text); font-size: var(--fs-caption); }
+
+/* KPI chips */
+.vls-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: var(--space-2); margin-bottom: var(--space-4); }
+.vls-kpi { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3) var(--space-4); border-radius: var(--vls-r); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--vls-shadow); }
+.vls-kpi-v { font: 700 26px/1.1 var(--font-sans); color: var(--ink); letter-spacing: -.01em; }
+.vls-kpi-l { font-size: var(--fs-caption); color: var(--muted); }
+
+/* listing cards */
+.vls-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
+.vls-card { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; overflow: hidden;
+  border-radius: var(--vls-r); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--vls-shadow);
+  transition: transform .2s ease, box-shadow .2s ease; }
+.vls-card:hover { transform: translateY(-3px); box-shadow: 0 24px 50px -26px rgba(20, 30, 60, .45); }
+.vls-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vls-photo { position: relative; display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 10;
+  background: var(--surface-alt) center / cover no-repeat; color: var(--muted); }
+.vls-tag { position: absolute; top: 10px; left: 10px; padding: 3px 10px; border-radius: 999px; background: rgba(255,255,255,.92);
+  color: #121722; font: 700 11px/1.4 var(--font-sans); letter-spacing: .04em; }
+.vls-body { display: flex; flex-direction: column; gap: 4px; padding: var(--space-3) var(--space-4) var(--space-4); }
+.vls-title { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.vls-price { font: 700 19px/1.2 var(--font-sans); color: var(--ink); }
+.vls-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.vls-facts span { padding: 2px 9px; border-radius: 999px; background: var(--surface-alt); font-size: 12px; color: var(--ink); }
+
+/* enquiries */
+.vls-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.vls-enq { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--vls-r);
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--vls-shadow); }
+.vls-avatar { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--brand-text, var(--accent)); font: 700 13px/1 var(--font-sans); }
+.vls-enq-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.vls-quote { font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vls-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: 4px; }
+.vls-wa { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
+  color: var(--ink); text-decoration: none; font-size: var(--fs-caption); font-weight: 600; }
+.vls-wa:hover { border-color: var(--brand); }
+
+/* agents */
+.vls-agents { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.vls-agent { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; padding: var(--space-4);
+  border-radius: var(--vls-r); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--vls-shadow); }
+.vls-agent-photo { display: inline-flex; align-items: center; justify-content: center; width: 72px; height: 72px; margin-bottom: 6px;
+  border-radius: 999px; background: var(--accent-soft) center / cover no-repeat; color: var(--brand-text, var(--accent)); font-weight: 700; }
+
+/* edit sheets */
+.vls-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.vls-2 { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); }
+.vls-3 { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr)); }
+.vls-check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-body); color: var(--ink); }
+.vls-sheet-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; }
+.vls-thumbs { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); margin-bottom: 8px; }
+.vls-thumb { position: relative; aspect-ratio: 4 / 3; border-radius: 12px; background: var(--surface-alt) center / cover no-repeat; overflow: hidden; }
+.vls-thumb button { position: absolute; border: 0; cursor: pointer; border-radius: 999px; background: rgba(255,255,255,.92); color: #121722; font-size: 11px; font-weight: 600; }
+.vls-thumb button:first-of-type { top: 6px; right: 6px; width: 22px; height: 22px; }
+.vls-thumb .vls-cover { bottom: 6px; left: 6px; right: auto; top: auto; width: auto; height: auto; padding: 2px 8px; }

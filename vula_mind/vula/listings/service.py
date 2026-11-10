@@ -372,6 +372,8 @@ async def create_enquiry(tenant_id: str, body: Dict[str, Any], ip: str = "") -> 
         "email": body.get("email") or None,
         "message": body.get("message") or None,
         "wants_viewing": bool(body.get("wants_viewing")),
+        "preferred_times": body.get("preferred_times") or None,
+        "source": body.get("source") or "website",
         "ip": ip or None,
     }
     res = _client().table(ENQUIRIES).insert(row).execute()
@@ -384,8 +386,12 @@ def enquiry_alert_text(enquiry: Dict[str, Any], prop: Optional[Dict[str, Any]]) 
     what = "wants to view" if enquiry.get("wants_viewing") else "asked about"
     lines = [f"🏠 New property enquiry — {enquiry['name']} {what} "
              + (f"{prop['title']} ({format_price(prop)})" if prop else "your listings")]
+    if enquiry.get("preferred_times"):
+        lines.append(f"Preferred times: {enquiry['preferred_times']}")
     if enquiry.get("message"):
         lines.append(f"“{enquiry['message']}”")
+    if enquiry.get("source") and enquiry["source"] != "website":
+        lines.append(f"Came in via {enquiry['source']}.")
     if enquiry.get("whatsapp"):
         lines.append(f"Reply on WhatsApp: https://wa.me/{enquiry['whatsapp']}")
     if enquiry.get("email"):
