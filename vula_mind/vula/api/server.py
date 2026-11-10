@@ -1961,6 +1961,9 @@ _SECTION_RULES = [
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/data-health/?$"), _MONEY_TABS),
     # 2026-11-10: an invoice for several jobs, split across them — the books: Money access (vula/commerce/site_split.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/documents/[^/]+/site-split/?$"), _MONEY_TABS),
+    # 2026-11-10: showing a document on a client link although it names another project — what the
+    # client sees: owner and managers only (vula/commerce/project_share_docs.other_projects)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/documents/[^/]+/client-link/?$"), frozenset()),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)

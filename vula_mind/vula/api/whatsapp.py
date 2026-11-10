@@ -2899,6 +2899,20 @@ def _project_named_in_caption(tenant_id: str, filename: str) -> Optional[str]:
         return None
 
 
+def _project_named_in_text(tenant_id: str, text: str) -> Optional[str]:
+    """The one project a caption's own words name ("Belladonna", "skip slips for HPC"), or None —
+    the strict named match only, never a loose shared word."""
+    if not (text or "").strip() or not tenant_id:
+        return None
+    try:
+        from vula.integrations.project_resolver import resolve
+        r = resolve(tenant_id, {}, text)
+        return r["project"] if r and r.get("kind") == "named" else None
+    except Exception as exc:
+        logger.debug("caption project check skipped: %s", exc)
+        return None
+
+
 def _caption_hint(filename: str) -> str:
     """The caption a photo was named after, or "" for a generated name."""
     stem = (filename or "").rsplit(".", 1)[0].strip()
@@ -3618,10 +3632,21 @@ async def _handle_document_ingest_one(
             file_note, filed_row = await _join_to_first_page(
                 tenant_id, phone, result, local_path, mime_type, doc_category, fields, first_page)
         else:
+            # The project the sender named: in this document's caption (a PDF's caption, or a photo's,
+            # carried in its filename), else in the caption of an earlier document of the same batch
+            # (10 Nov 2026, DIGG: "Belladonna" on the first of 20 skip slips — the rest were asked
+            # about one by one). vula/api/doc_batch.py keeps the batch's project.
+            from vula.api import doc_batch
+            named_project = (_project_named_in_text(tenant_id, caption)
+                             or _project_named_in_caption(tenant_id, filename))
+            if named_project:
+                doc_batch.note_project(phone, named_project)
+            else:
+                named_project = doc_batch.project(phone)
             file_note, filed_row = await _file_uploaded_document(
                 tenant_id, phone, result, local_path, mime_type,
                 doc_category, summary, fields, already_committed=already_committed,
-                project=_project_named_in_caption(tenant_id, filename),
+                project=named_project, doc_text=doc_text,
             )
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
@@ -5107,7 +5132,7 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
 
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
                                   category, summary, fields, already_committed=False,
-                                  source="whatsapp", project=None):
+                                  source="whatsapp", project=None, doc_text: str = ""):
     """Match the document to a project and file it (durable copy + record + ClickUp).
     Also books it via the shared commit path (same as email/Smart Scanner) when it's a
     financial category the vision-scan shortcut hasn't already committed.
@@ -5158,7 +5183,9 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             from vula.api.tenants import uses_projects as _up
             if _up(tenant_id):
                 from vula.integrations.project_resolver import resolve as _resolve
-                _named = _resolve(tenant_id, {}, hint)
+                # the document's own words too — a skip invoice prints its site ("07 Belladonna Drive")
+                # but the reading doesn't always copy it into a field (10 Nov 2026, DIGG)
+                _named = _resolve(tenant_id, {}, hint + " " + (doc_text or "")[:8000])
                 if (_named and _named.get("kind") == "named" and not (match or {}).get("chosen")
                         and (match or {}).get("project") != _named["project"]):
                     match = {"project": _named["project"], "clickup_list_id": None,

@@ -59,6 +59,31 @@ function SiteSplit({ tenantId, item, onDone }) {
   );
 }
 
+function ShowAnyway({ tenantId, item, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const show = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/documents/${item.id}/client-link`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ show: true }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof body.detail === "string" ? body.detail : "That didn't save.");
+      toast(`Shown on ${item.project}'s client link`);
+      onDone();
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button size="sm" variant="secondary" disabled={busy} style={{ marginTop: "var(--space-1)" }} onClick={show}>
+      {busy ? "Saving…" : "Show it on the client link anyway"}
+    </Button>
+  );
+}
+
 export default function DataHealth({ tenantId }) {
   const [d, setD] = useState(null);
   const [open, setOpen] = useState(null);
@@ -86,6 +111,7 @@ export default function DataHealth({ tenantId }) {
                   <li key={it.id || i} style={{ overflowWrap: "anywhere", marginBottom: 4 }}>
                     {[it.project, it.filename || it.bill || it.supplier, it.detail].filter(Boolean).join(" — ")}
                     {it.action === "site_split" && <SiteSplit tenantId={tenantId} item={it} onDone={load} />}
+                    {it.action === "show_anyway" && <div><ShowAnyway tenantId={tenantId} item={it} onDone={load} /></div>}
                   </li>))}
                 {s.count > s.items.length && <li>…and {s.count - s.items.length} more</li>}
               </ul>)}

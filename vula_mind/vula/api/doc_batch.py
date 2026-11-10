@@ -30,13 +30,14 @@ _current: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("doc_ba
 
 
 class _Burst:
-    __slots__ = ("active", "seen", "items", "flush")
+    __slots__ = ("active", "seen", "items", "flush", "project")
 
     def __init__(self) -> None:
         self.active = 0                      # documents of this burst still being worked on
         self.seen = 0                        # documents seen in this burst
         self.items: List[Tuple[str, str]] = []   # (tenant_id, reply) held for the summary
         self.flush: Optional[asyncio.Task] = None
+        self.project: Optional[str] = None   # the project a caption in this burst named
 
 
 _bursts: Dict[str, _Burst] = {}
@@ -69,6 +70,38 @@ def capture(to: str, message: str, tenant_id: str) -> bool:
         return False
     b.items.append((tenant_id, message.strip()))
     return True
+
+
+CAPTION_MINUTES = 10.0
+_recent_project: Dict[str, Tuple[str, float]] = {}
+
+
+def note_project(phone: str, project: str) -> None:
+    """A caption named `project`: this sender's documents without a caption of their own, in this
+    burst or within CAPTION_MINUTES of it, are filed there too (10 Nov 2026, DIGG: "Belladonna" on
+    the first of 20 skip slips, sent a few minutes apart — the rest were asked about one by one)."""
+    if not project:
+        return
+    k = _key(phone)
+    b = _bursts.get(k)
+    if b:
+        b.project = project
+    import time
+    _recent_project[k] = (project, time.monotonic())
+
+
+def project(phone: str) -> Optional[str]:
+    """The project a recent caption from this sender named, or None."""
+    k = _key(phone)
+    b = _bursts.get(k)
+    if b and b.project:
+        return b.project
+    import time
+    got = _recent_project.get(k)
+    if got and time.monotonic() - got[1] <= CAPTION_MINUTES * 60:
+        return got[0]
+    _recent_project.pop(k, None)
+    return None
 
 
 def pause() -> contextvars.Token:
