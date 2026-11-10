@@ -519,10 +519,17 @@ def client_view(pos: Dict[str, Any], view: str) -> Dict[str, Any]:
     else:
         # 10 Nov 2026 (Ian): "drop the actual column" — the sheet's Actual is the business's expected final
         # cost (paid + still to pay), a projection. The client sees the forecast (the bill) and what's paid.
-        out["sections"] = [{k: v for k, v in s.items() if k != "actual_cents"} for s in out.get("sections") or []]
-        out["bill_lines"] = [{k: v for k, v in li.items() if k != "actual_cents"} for li in out.get("bill_lines") or []]
+        def left(r):            # what's still to pay on a line: the sheet's actual less paid — never the actual itself
+            out_r = {k: v for k, v in r.items() if k != "actual_cents"}
+            if r.get("actual_cents") is not None:
+                out_r["to_pay_cents"] = max(0, r["actual_cents"] - (r.get("paid_cents") or 0))
+            return out_r
+        out["sections"] = [left(s) for s in out.get("sections") or []]
+        out["bill_lines"] = [left(li) for li in out.get("bill_lines") or []]
         if out.get("sheet"):
-            out["sheet"] = {"paid_cents": out["sheet"].get("paid_cents")}
+            # 10 Nov 2026 (Ian): "Judy's spreadsheet is where we are at" — what's still to pay on the bill
+            # is the cost to finish, if someone else took the job over.
+            out["sheet"] = {"paid_cents": out["sheet"].get("paid_cents"), "to_pay_cents": out["sheet"].get("to_pay_cents")}
     return out
 
 
@@ -737,8 +744,13 @@ def _owed_summary(v: Dict[str, Any], e) -> str:
         return f"<div class='owe{cls}'><span>{e(label)}{note}</span><b>{amount}</b></div>"
 
     body = "".join(line(i, *r) for i, r in enumerate(rows))
+    to_finish = int((v.get("sheet") or {}).get("to_pay_cents") or 0)
     still = int(v.get("to_pay_directly_cents") or 0)
-    if fa and still:
+    if fa and to_finish > 0:
+        # the project bill's own figure (it already holds your balances with suppliers) — never both, never added
+        body += (f"<div class='owe aside'><span>Still to pay to finish the work<small>Per the project bill below, "
+                 f"item by item; this is not owed to us</small></span><b>{_r(to_finish)}</b></div>")
+    elif fa and still:
         body += (f"<div class='owe aside'><span>Still owed by you directly to suppliers<small>Your own balances with "
                  f"them, not owed to us; listed under Paid by you directly</small></span><b>{_r(still)}</b></div>")
     title = "If the work stopped today" if fa else "Where the money stands today"
@@ -855,18 +867,18 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
         for li in v.get("bill_lines") or []:
             items.setdefault(li["section"].strip().lower(), []).append(li)
         item_row = lambda li: (f"<tr class='li'><td>{e(li['description'])}</td>{cell('Forecast', li.get('budget_cents'))}"
-                               f"{cell('Paid so far', li.get('paid_cents'))}</tr>")
+                               f"{cell('Paid so far', li.get('paid_cents'))}{cell('Still to pay', li.get('to_pay_cents'))}</tr>")
         body = []
         for s in secs:
             body.append(f"<tr class='sec'><td>{e(s['section'])}</td>{cell('Forecast', s['budget_cents'])}"
-                        f"{cell('Paid so far', s.get('paid_cents'))}</tr>")
+                        f"{cell('Paid so far', s.get('paid_cents'))}{cell('Still to pay', s.get('to_pay_cents'))}</tr>")
             body += [item_row(li) for li in items.pop(s["section"].strip().lower(), [])]
         body += [item_row(li) for rest in items.values() for li in rest]      # items under no section: never dropped
         sh = v["sheet"]
         body.append(f"<tr class='total'><td>Total</td>{cell('Forecast', sum(s['budget_cents'] for s in secs))}"
-                    f"{cell('Paid so far', sh.get('paid_cents'))}</tr>")
+                    f"{cell('Paid so far', sh.get('paid_cents'))}{cell('Still to pay', sh.get('to_pay_cents'))}</tr>")
         parts.append(wide("The project bill" if v.get("bill_lines") else "By section",
-                          "<tr class='h'><td></td><td class='n'>Forecast</td><td class='n'>Paid so far</td></tr>",
+                          "<tr class='h'><td></td><td class='n'>Forecast</td><td class='n'>Paid so far</td><td class='n'>Still to pay</td></tr>",
                           ''.join(body)))
     elif secs:
         parts.append(table("Budget by section", [row(s["section"], s["budget_cents"]) for s in secs]))

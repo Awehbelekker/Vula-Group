@@ -256,7 +256,7 @@ def test_a_price_or_qs_link_never_shows_what_the_sections_really_cost():
         assert "sheet" not in v and all("actual_cents" not in s and "paid_cents" not in s for s in v["sections"])
         assert "R36 000.00" not in pt.render({"name": "Example Builders"}, v)
     ob = pt.client_view(p, "open_book")
-    assert ob["sheet"] == {"paid_cents": 49_000_00}
+    assert ob["sheet"] == {"paid_cents": 49_000_00, "to_pay_cents": 6_000_00}
     page = pt.render({"name": "Example Builders"}, ob)
     assert "By section" in page and "Forecast" in page and "Paid so far" in page and "R49 000.00" in page
 
@@ -266,10 +266,11 @@ def test_the_client_never_sees_the_expected_final_cost():
     p = _position(_billed_db())
     ob = pt.client_view(p, "open_book")
     assert all("actual_cents" not in s for s in ob["sections"] + ob["bill_lines"])
-    assert "actual_cents" not in ob["sheet"] and "to_pay_cents" not in ob["sheet"]
+    assert "actual_cents" not in ob["sheet"]
     page = pt.render({"name": "Example Builders"}, ob)
     assert "Actual" not in page and "R36 000.00" not in page and "R55 000.00" not in page and "R21 000.00" not in page
     assert "R50 000.00" in page and "R18 000.00" in page            # the forecast, total and per item
+    assert ob["bill_lines"][0]["to_pay_cents"] == 3_000_00 and "Still to pay" in page   # 21,000 less 18,000 paid
     assert p["sheet"]["actual_cents"] == 55_000_00                   # the business still has it
 
 
@@ -532,3 +533,14 @@ def test_price_and_qs_links_never_show_the_bill_items():
     for view in ("price", "qs"):
         v = pt.client_view(p, view)
         assert "bill_lines" not in v and "Tiling" not in pt.render({"name": "Example Builders"}, v)
+
+
+def test_with_the_bill_the_client_sees_what_is_left_to_finish_not_owed_to_us():
+    # 10 Nov 2026 (Ian): "Judy's spreadsheet is where we are at" — if the work stopped, the bill's still-to-pay
+    v = _ob(final_account=_FA, to_pay_directly_cents=6770200, paid_directly_cents=28381608,
+            sheet={"paid_cents": 38404153, "to_pay_cents": 18512000})
+    top = pt.render({"name": "DIGG"}, v)
+    top = top[:top.index("<div class=\"grid\">")]
+    assert "Still to pay to finish the work" in top and "R185 120.00" in top and "not owed to us" in top
+    assert "R67 702.00" not in top            # already inside the bill's figure: never shown twice
+    assert top.index("R32 839.40") < top.index("R185 120.00")
