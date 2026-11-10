@@ -19,6 +19,7 @@ import { TodayList, useToday } from "./VulaToday";
 import { InstallCard } from "./install/InstallVula.jsx";
 import MakeItYours from "./MakeItYours.jsx";
 import DataHealth from "./DataHealth.jsx";
+import ProjectsOverview from "./projects/ProjectsOverview";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -123,6 +124,10 @@ export default function VulaHomeV2({ tenantId, onNavigate }) {
           {b.documents_to_review && <Tile label="Documents to check" value={String(b.documents_to_review.value)} sub="Vula wasn't sure" onClick={go(b.documents_to_review.link)} />}
           {b.bank_unmatched && <Tile label="Bank lines to match" value={String(b.bank_unmatched.value)} sub="not linked yet" onClick={go(b.bank_unmatched.link)} />}
           {b.stock_alerts && <Tile label="Low stock" value={String(b.stock_alerts.value)} sub="under 5 left" onClick={go(b.stock_alerts.link)} />}
+        </div>)}
+      {home && view === "back" && (
+        <div style={{ marginTop: "var(--space-5)" }}>
+          <ProjectsOverview tenantId={tenantId} compact onOpen={() => onNavigate?.("projects")} />
         </div>)}
       {home && view === "back" && <DataHealth tenantId={tenantId} />}
 

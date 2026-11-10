@@ -14,6 +14,7 @@ import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createSh
   fetchProjectFile, fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, setProjectFee, uploadToProject,
   useProjects, withdrawDecision } from "./useProjects";
 import "./projects.css";
+import ProjectsOverview from "./ProjectsOverview";
 
 const STATUS = { active: { label: "Active", tone: "ok" }, on_hold: { label: "On hold", tone: "highlight" }, complete: { label: "Complete", tone: "muted" } };
 const statusChip = (s) => { const st = STATUS[s] || { label: (s || "").replace("_", " "), tone: "muted" }; return <StatusChip tone={st.tone}>{st.label}</StatusChip>; };
@@ -62,7 +63,14 @@ export default function ProjectsV2({ tenantId }) {
 
         <section className="vpj-page" aria-label={open ? x.sel.name : "Code library"}>
           {x.msg && <p className="vpj-msg" role="status">{x.msg}</p>}
-          {!open ? <CodeLibrary x={x} /> : (
+          {!open ? (<>
+            <ProjectsOverview tenantId={tenantId} onOpen={(name) => {
+              const all = x.groups.flatMap(([, list]) => list.flatMap((p) => [p, ...(p.phases || [])]));
+              const hit = all.find((p) => (p.name || "").toLowerCase() === name.toLowerCase());
+              if (hit) x.openProject(hit.id);
+            }} />
+            <CodeLibrary x={x} />
+          </>) : (
             <>
               <Button size="sm" variant="quiet" Icon={ArrowLeft} className="vpj-back" onClick={x.closeProject}>All projects</Button>
               <ProjectHeader key={x.sel.id} x={x} />

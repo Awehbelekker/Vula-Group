@@ -440,3 +440,37 @@ def test_the_heading_says_how_the_account_works():
     assert pt._basis_label({"view": "open_book", "fee_basis": "per_bill"}) == "Open book · priced as per the bill"
     assert pt._basis_label({"view": "open_book", "fee_basis": "cost_plus", "fee_pct": 10.0}) == "Open book · cost plus 10%"
     assert pt._basis_label({"view": "price"}) == "Price only"
+
+
+# ── every project at a glance ───────────────────────────────────────────────────────────────
+
+def test_what_is_owed_rests_on_the_same_rule_as_the_client_page():
+    assert pt.owed_to_business({"final_account": {"balance_cents": 3283940, "as_of": "2026-11-02"}}) == \
+        {"cents": 3283940, "basis": "final account 2026-11-02"}
+    assert pt.owed_to_business({"open_book_balance_cents": 1400000, "fee_basis": "cost_plus"}) == \
+        {"cents": 1400000, "basis": "cost + agreed fee"}
+    assert pt.owed_to_business({"open_book_balance_cents": None, "invoices": [{"owed_cents": 5}], "invoices_owed_cents": 5}) == \
+        {"cents": 5, "basis": "unpaid invoices"}
+    assert pt.owed_to_business({"open_book_balance_cents": None, "invoices": [], "fee_basis": None}) == \
+        {"cents": None, "basis": "fee not agreed"}
+
+
+def test_the_overview_reads_the_business_once_and_lists_every_project():
+    calls = {"costing": 0}
+
+    def costing(tid):
+        calls["costing"] += 1
+        return {"projects": [COSTED, {**COSTED, "project": "Other Job", "cost_cents": 0, "received_cents": 5_000_00}]}
+
+    with (patch.object(pt, "_client", return_value=_db()),
+          patch("vula.commerce.job_costing.costing", side_effect=costing),
+          patch("vula.commerce.job_costing.direct_costs", return_value={}),
+          patch("vula.commerce.job_costing.agreed_terms", return_value=AGREED),
+          patch("vula.commerce.service.registered_projects", return_value=[{"name": "Sample Flat", "status": "active"}])):
+        o = pt.overview(TID)
+    assert calls["costing"] == 1                       # once for the whole business, not once a project
+    assert [r["project"] for r in o["projects"]] == ["Sample Flat", "Other Job"]
+    flat = o["projects"][0]
+    assert (flat["status"], flat["owed_cents"], flat["owed_basis"]) == ("active", 14_000_00, "cost + agreed fee")
+    assert o["owed_cents"] == 14_000_00 and o["received_cents"] == 35_000_00
+    assert o["projects"][1]["owed_cents"] is None       # Other Job: no fee agreed — nothing guessed

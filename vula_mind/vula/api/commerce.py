@@ -3764,6 +3764,15 @@ class ProjectShareIn(BaseModel):
     by: Optional[str] = None
 
 
+@router.get("/{tenant_id}/admin/projects/overview")
+async def admin_projects_overview(tenant_id: str):
+    """Every project at a glance: status, budget, spent, received, still owed to the business, how the
+    fee is agreed, and warnings (vula/commerce/project_tracker.overview). Money access."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    return await asyncio.to_thread(pt.overview, tenant_id)
+
+
 @router.get("/{tenant_id}/admin/projects/tracker")
 async def admin_project_tracker(tenant_id: str, project: str):
     """One project's money picture (vula/commerce/project_tracker.py), with what each client view

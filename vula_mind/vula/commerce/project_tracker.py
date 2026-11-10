@@ -77,16 +77,26 @@ def _rows(make) -> List[Dict[str, Any]]:
         return []
 
 
-def _boq(tenant_id: str, key: str) -> Optional[Dict[str, Any]]:
-    rows = _rows(lambda: _client().table("vula_project_boq")
+def _shared(ctx: Optional[Dict[str, Any]], name: str, make) -> List[Dict[str, Any]]:
+    """_rows(make), read once per overview (ctx) instead of once per project."""
+    if ctx is None:
+        return _rows(make)
+    k = f"_rows:{name}"
+    if k not in ctx:
+        ctx[k] = _rows(make)
+    return ctx[k]
+
+
+def _boq(tenant_id: str, key: str, ctx: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    rows = _shared(ctx, "boq", lambda: _client().table("vula_project_boq")
                  .select("project,title,total_cents,sections,baseline_locked,baseline_set_at")
                  .eq("tenant_id", tenant_id))
     return next((r for r in rows if _key(r.get("project")) == key), None)
 
 
-def _client_paid(tenant_id: str, key: str) -> Dict[str, Any]:
+def _client_paid(tenant_id: str, key: str, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Slips the client paid the supplier for directly ("the client paid" — whatsapp.py)."""
-    rows = _rows(lambda: _client().table("commerce_expenses")
+    rows = _shared(ctx, "client_paid", lambda: _client().table("commerce_expenses")
                  .select("date,supplier,description,amount_cents,project")
                  .eq("tenant_id", tenant_id).eq("paid_with", "client"))
     mine = [r for r in rows if _key(r.get("project")) == key]
@@ -96,9 +106,9 @@ def _client_paid(tenant_id: str, key: str) -> Dict[str, Any]:
 _DIRECT = "vula_project_direct_payments"
 
 
-def direct_payments(tenant_id: str, key: str) -> List[Dict[str, Any]]:
+def direct_payments(tenant_id: str, key: str, ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The client's own payments to suppliers and trades on the project (paid and still to pay)."""
-    rows = _rows(lambda: _client().table(_DIRECT)
+    rows = _shared(ctx, "direct", lambda: _client().table(_DIRECT)
                  .select("id,project,supplier,description,amount_cents,paid_on,status,created_at")
                  .eq("tenant_id", tenant_id).order("paid_on"))
     return [{"id": r["id"], "supplier": r.get("supplier"), "description": r.get("description"),
@@ -146,8 +156,8 @@ def remove_direct_payment(tenant_id: str, payment_id: str) -> bool:
     return bool(rows and rows[0].get("status") == "removed")
 
 
-def _invoices(tenant_id: str, key: str) -> List[Dict[str, Any]]:
-    rows = _rows(lambda: _client().table("commerce_invoices")
+def _invoices(tenant_id: str, key: str, ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    rows = _shared(ctx, "invoices", lambda: _client().table("commerce_invoices")
                  .select("invoice_number,issue_date,due_date,total_cents,total_paid_cents,status,"
                          "doc_type,direction,project")
                  .eq("tenant_id", tenant_id).eq("doc_type", "invoice"))
@@ -164,9 +174,9 @@ def _invoices(tenant_id: str, key: str) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda i: str(i.get("date") or ""))
 
 
-def _draft_invoices_cents(tenant_id: str, key: str) -> int:
+def _draft_invoices_cents(tenant_id: str, key: str, ctx: Optional[Dict[str, Any]] = None) -> int:
     """The project's invoices to the client still in draft (not yet sent), in cents."""
-    rows = _rows(lambda: _client().table("commerce_invoices")
+    rows = _shared(ctx, "drafts", lambda: _client().table("commerce_invoices")
                  .select("total_cents,status,doc_type,direction,project")
                  .eq("tenant_id", tenant_id).eq("doc_type", "invoice").eq("status", "draft"))
     return sum(int(r.get("total_cents") or 0) for r in rows
@@ -256,9 +266,9 @@ def _documents(tenant_id: str, key: str, limit: int = 60) -> List[Dict[str, Any]
 _FINAL = "vula_project_final_accounts"
 
 
-def final_account(tenant_id: str, key: str) -> Optional[Dict[str, Any]]:
+def final_account(tenant_id: str, key: str, ctx: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The project's agreed final account (migration 254), or None. Charged + adjustments, in cents."""
-    rows = _rows(lambda: _client().table(_FINAL)
+    rows = _shared(ctx, "final", lambda: _client().table(_FINAL)
                  .select("project,as_of,charged_cents,adjustments,note").eq("tenant_id", tenant_id))
     r = next((x for x in rows if _key(x.get("project")) == key), None)
     if not r:
@@ -297,25 +307,29 @@ def _fee_pct(tenant_id: str, project: str, costed: Optional[Dict[str, Any]]) -> 
     return next((v for p, v in t.items() if p != "*" and _key(p) == _key(project)), t["*"])
 
 
-def position(tenant_id: str, project: str) -> Dict[str, Any]:
-    """The project's whole money picture (the owner's view). Every figure in cents."""
+def position(tenant_id: str, project: str, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The project's whole money picture (the owner's view). Every figure in cents. `ctx`: the
+    business-wide reads (costing, direct costs, agreed fees) when several projects are worked out
+    together (overview), so each is read once."""
     from vula.commerce import job_costing
     key = _key(project)
-    costing = job_costing.costing(tenant_id)
+    ctx = ctx if ctx is not None else {}
+    costing = ctx.get("costing") or job_costing.costing(tenant_id)
     costed = next((p for p in costing.get("projects") or [] if _key(p["project"]) == key), None)
-    boq = _boq(tenant_id, key) or {}
+    shared = ctx if ctx.get("costing") else None
+    boq = _boq(tenant_id, key, shared) or {}
     name = (costed or {}).get("project") or boq.get("project") or project
     business_cost = int((costed or {}).get("cost_cents") or 0)
     received = int((costed or {}).get("received_cents") or 0)
     variations = (costed or {}).get("variations") or {}
-    direct = int((job_costing.direct_costs(tenant_id).get(key) or {}).get("cents") or 0)
-    by_client = _client_paid(tenant_id, key)
-    recorded = direct_payments(tenant_id, key)
+    direct = int(((ctx["direct"] if "direct" in ctx else job_costing.direct_costs(tenant_id)).get(key) or {}).get("cents") or 0)
+    by_client = _client_paid(tenant_id, key, shared)
+    recorded = direct_payments(tenant_id, key, shared)
     recorded_paid = sum(r["amount_cents"] for r in recorded if r["status"] == "paid")
     to_pay_directly = sum(r["amount_cents"] for r in recorded if r["status"] == "to_pay")
-    invoices = _invoices(tenant_id, key)
+    invoices = _invoices(tenant_id, key, shared)
     # the fee as agreed for this project, else the business's standard fee — never an assumed one
-    agreed = job_costing.agreed_terms(tenant_id)
+    agreed = ctx["agreed"] if "agreed" in ctx else job_costing.agreed_terms(tenant_id)
     own = next((v for p, v in agreed.items() if p != "*" and _key(p) == key), None)
     basis = own or agreed.get("*")
     fee_source = "project" if own else ("standard" if basis else None)
@@ -326,7 +340,7 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
         fee = int(basis["fee_cents"])
     else:
         fee = None          # per the bill (the fee is in the bill's rates) or not agreed
-    final = final_account(tenant_id, key)
+    final = final_account(tenant_id, key, shared)
     if final:
         # the agreed final account is the account: what the client paid comes from the bank, live
         final = {**final, "received_cents": received, "balance_cents": final["total_cents"] - received}
@@ -375,19 +389,74 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
         "final_account": final,
         # the owner's own checks — never in a client view
         "warnings": _warnings(final, basis, fee_source, fee_pct, business_cost + fee - received if fee is not None else None,
-                              invoices, _draft_invoices_cents(tenant_id, key), received),
+                              invoices, _draft_invoices_cents(tenant_id, key, shared), received),
         "invoices": invoices, "invoiced_cents": invoiced, "invoices_paid_cents": paid,
         "invoices_owed_cents": invoiced - paid,
         "to_invoice_cents": max(contract - invoiced, 0) if contract else None,
-        "claims": _claims(tenant_id, name),
-        "programme": _programme(tenant_id, name),
-        "documents": _documents(tenant_id, key),
+        # a project's own page only — an overview doesn't read every project's register and programme
+        "claims": {"count": 0, "latest": None} if ctx.get("light") else _claims(tenant_id, name),
+        "programme": None if ctx.get("light") else _programme(tenant_id, name),
+        "documents": [] if ctx.get("light") else _documents(tenant_id, key),
         # the owner's own figures — never in a client view
         "overhead_share_cents": (costed or {}).get("overhead_share_cents"),
         "profit_cents": (costed or {}).get("profit_cents"),
         "unallocated_trade_cents": (costed or {}).get("unallocated_trade_cents") or 0,
         "as_of": datetime.now(timezone.utc).date().isoformat(),
     }
+
+
+def owed_to_business(pos: Dict[str, Any]) -> Dict[str, Any]:
+    """What the client still owes the business on a project, and on what it rests — the same rule as
+    the top of the client's open-book page: the final account, else cost plus the agreed fee, else
+    the unpaid invoices. {"cents", "basis"}; cents None when nothing can be said."""
+    fa = pos.get("final_account")
+    if fa:
+        return {"cents": fa["balance_cents"], "basis": f"final account {fa['as_of']}"}
+    if pos.get("open_book_balance_cents") is not None:
+        return {"cents": pos["open_book_balance_cents"], "basis": "cost + agreed fee"}
+    if pos.get("invoices"):
+        return {"cents": pos.get("invoices_owed_cents") or 0, "basis": "unpaid invoices"}
+    return {"cents": None, "basis": "fee not agreed" if not pos.get("fee_basis") else "nothing invoiced yet"}
+
+
+def overview(tenant_id: str) -> Dict[str, Any]:
+    """Every project at a glance (10 Nov 2026, Ian: "when Judy logs in it's not showing where DIGG is
+    at, the status, or what's still owed"): status, budget, spent, received, what's still owed to the
+    business, how its fee is agreed, and the owner's warnings — one row a project, the business's
+    totals on top. Built from position(), so it always agrees with each project's own page."""
+    from vula.commerce import job_costing
+    from vula.commerce.service import registered_projects
+    costing = job_costing.costing(tenant_id)
+    ctx = {"costing": costing, "direct": job_costing.direct_costs(tenant_id),
+           "agreed": job_costing.agreed_terms(tenant_id), "light": True}
+    names: Dict[str, Dict[str, Any]] = {}
+    for r in registered_projects(tenant_id):
+        if r.get("name"):
+            names.setdefault(_key(r["name"]), {"project": r["name"], "status": r.get("status") or "active"})
+    for c in costing.get("projects") or []:
+        if c.get("project"):
+            names.setdefault(_key(c["project"]), {"project": c["project"], "status": None})
+    rows = []
+    for meta in names.values():
+        try:
+            pos = position(tenant_id, meta["project"], ctx)
+        except Exception as exc:  # noqa: BLE001 — one project's read never hides the others
+            log.warning("overview: %s skipped: %s", meta["project"], exc)
+            continue
+        owed = owed_to_business(pos)
+        rows.append({"project": pos["project"], "status": meta["status"],
+                     "budget_cents": pos.get("budget_cents") or 0, "spent_cents": pos.get("spent_cents") or 0,
+                     "received_cents": pos.get("received_cents") or 0,
+                     "owed_cents": owed["cents"], "owed_basis": owed["basis"],
+                     "fee_basis": pos.get("fee_basis"), "has_final_account": bool(pos.get("final_account")),
+                     "warnings": pos.get("warnings") or []})
+    rows.sort(key=lambda r: (r["status"] in ("complete", "completed", "closed", "archived"),
+                             -(r["owed_cents"] or 0), r["project"].lower()))
+    return {"projects": rows, "count": len(rows),
+            "owed_cents": sum(r["owed_cents"] for r in rows if (r["owed_cents"] or 0) > 0),
+            "received_cents": sum(r["received_cents"] for r in rows),
+            "warnings": sum(len(r["warnings"]) for r in rows),
+            "as_of": datetime.now(timezone.utc).date().isoformat()}
 
 
 # Figures each client view may carry. Anything not listed never leaves the business.
