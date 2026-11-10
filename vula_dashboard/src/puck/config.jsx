@@ -22,6 +22,30 @@ const ACCENT = "var(--brand-accent, #0E7C7B)";
 const ACCENT_FG = "var(--brand-accent-fg, #ffffff)";
 const INK = "var(--brand-ink, #1a1a1a)";
 const FONT_DISPLAY = "var(--brand-font-display, inherit)";
+// Neutral palette (2026-11-10) — every grey/white this file uses, named once at its exact value.
+// Literal for the same reason as the SHADOW_* constants below: this file also renders on the
+// storefronts (off_the_hook/kelp copies), which don't load theme/tokens.js. Brand colours come
+// from the CSS variables above (ACCENT/INK); these are only the neutrals around them.
+const WHITE = "#fff";
+const BLACK = "#000";
+const NEAR_BLACK = "#1a1a1a";
+const BODY_DARK = "#333";
+const BODY = "#444";
+const BODY_SOFT = "#555";
+const SUBTLE = "#666";
+const MUTED_DARK = "#777";
+const MUTED = "#888";
+const MUTED_LIGHT = "#999";
+const LINE_STRONG = "#ddd";
+const LINE = "#e5e5e5";
+const SKELETON = "#f0f0f0";
+const PAPER_GREY = "#f1f1f1";
+const TINT_WARM = "#f3f1ea";
+const TINT_LIGHT = "#f4f2ed";
+const PAPER_DIM = "#f8f8f8";
+const PAPER = "#fafafa";
+const TINT = "#ece9e2";
+const DANGER = "#c0392b";
 const wrap = { maxWidth: 1100, margin: "0 auto", padding: "0 16px" };
 
 // Self-contained depth constants (not var()-references to theme/tokens.js, which only exists in
@@ -63,11 +87,11 @@ export const VULA_PUCK_STYLES = `
 .vula-img-zoom img { transition: transform 0.35s ease; display: block; width: 100%; height: 100%; object-fit: cover; }
 .vula-img-zoom:hover img { transform: scale(1.06); }
 
-.vula-skeleton { background: linear-gradient(90deg, #f0f0f0 0%, #f8f8f8 50%, #f0f0f0 100%); background-size: 800px 100%; animation: vula-anim-shimmer 1.4s linear infinite; }
+.vula-skeleton { background: linear-gradient(90deg, ${SKELETON} 0%, ${PAPER_DIM} 50%, ${SKELETON} 100%); background-size: 800px 100%; animation: vula-anim-shimmer 1.4s linear infinite; }
 
 .vula-lightbox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out; animation: vula-anim-fadeIn 0.2s ease both; }
 .vula-lightbox-img { max-width: 100%; max-height: 100%; border-radius: 8px; animation: vula-anim-scaleIn 0.25s cubic-bezier(0.16,1,0.3,1) both; }
-.vula-lightbox-close { position: absolute; top: 20px; right: 24px; color: #fff; font-size: 32px; line-height: 1; cursor: pointer; background: none; border: none; }
+.vula-lightbox-close { position: absolute; top: 20px; right: 24px; color: ${WHITE}; font-size: 32px; line-height: 1; cursor: pointer; background: none; border: none; }
 
 .vula-anim-off .vula-reveal, .vula-anim-off .vula-stagger-item { opacity: 1 !important; animation: none !important; }
 
@@ -160,7 +184,7 @@ const imageField = (label) => ({
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
         placeholder="…or paste an image URL"
-        style={{ padding: "6px 8px", border: "1px solid #ddd", borderRadius: 6, fontSize: 12 }}
+        style={{ padding: "6px 8px", border: `1px solid ${LINE_STRONG}`, borderRadius: 6, fontSize: 12 }}
       />
     </div>
   ),
@@ -198,7 +222,7 @@ export const config = {
         const overlay = overlayOpacity ?? 55;
         return (
           <section {...reveal} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
-            textAlign: "center", color: "#fff", minHeight: 420, backgroundColor: ACCENT,
+            textAlign: "center", color: WHITE, minHeight: 420, backgroundColor: ACCENT,
             backgroundImage: image ? `url(${image})` : undefined, backgroundSize: "cover", backgroundPosition: "center" }}>
             <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(180deg, rgba(0,0,0,${Math.min(overlay, 100) * 0.27 / 100}) 0%, rgba(0,0,0,${Math.min(overlay, 100) / 100}) 100%)` }} />
             <div style={{ position: "relative", zIndex: 1, maxWidth: 760, padding: "80px 16px" }}>
@@ -213,7 +237,7 @@ export const config = {
                   ) : null}
                   {ctaText2 ? (
                     <a href={ctaHref2 || "#"} className="vula-btn-lift" style={{ display: "inline-block", borderRadius: 999, padding: "12px 28px",
-                      fontWeight: 600, border: "1px solid rgba(255,255,255,0.7)", color: "#fff", textDecoration: "none" }}>{ctaText2}</a>
+                      fontWeight: 600, border: "1px solid rgba(255,255,255,0.7)", color: WHITE, textDecoration: "none" }}>{ctaText2}</a>
                   ) : null}
                 </div>
               )}
@@ -254,7 +278,7 @@ export const config = {
         const reveal = useBlockReveal(animation, "fadeUp");
         return (
           <div {...reveal} style={{ ...wrap, padding: "12px 16px" }}>
-            <p style={{ lineHeight: 1.7, whiteSpace: "pre-line", maxWidth: 760, color: "#555",
+            <p style={{ lineHeight: 1.7, whiteSpace: "pre-line", maxWidth: 760, color: BODY_SOFT,
               margin: align === "center" ? "0 auto" : 0, textAlign: align === "center" ? "center" : "left" }}>{text}</p>
           </div>
         );
@@ -273,7 +297,7 @@ export const config = {
         return (
           <div {...reveal} style={{ ...wrap, padding: "24px 16px" }}>
             {src ? <img src={src} alt={alt} style={{ width: "100%", objectFit: "cover", borderRadius: rounded ? 16 : 0, boxShadow: SHADOW_SM }} />
-                 : <div style={{ height: 192, background: "#f1f1f1", borderRadius: rounded ? 16 : 0 }} />}
+                 : <div style={{ height: 192, background: PAPER_GREY, borderRadius: rounded ? 16 : 0 }} />}
           </div>
         );
       },
@@ -321,9 +345,9 @@ export const config = {
             {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 32, color: INK }}>{title}</h2> : null}
             <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 24 }}>
               {(items || []).map((it, i) => (
-                <div key={i} className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), borderRadius: 16, border: "1px solid #e5e5e5", padding: 24, textAlign: "center", boxShadow: SHADOW_SM, background: "#fff" }}>
+                <div key={i} className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), borderRadius: 16, border: `1px solid ${LINE}`, padding: 24, textAlign: "center", boxShadow: SHADOW_SM, background: WHITE }}>
                   <h3 style={{ fontWeight: 600, fontSize: 18, marginBottom: 8, color: INK }}>{it.heading}</h3>
-                  <p style={{ color: "#666", fontSize: 14 }}>{it.body}</p>
+                  <p style={{ color: SUBTLE, fontSize: 14 }}>{it.body}</p>
                 </div>
               ))}
             </div>
@@ -392,7 +416,7 @@ export const config = {
               <div key={i} ref={col.ref} className="vula-reveal">
                 {col.img ? <img src={col.img} alt="" style={{ width: "100%", borderRadius: 12, marginBottom: 16, objectFit: "cover", maxHeight: 240, boxShadow: SHADOW_SM }} /> : null}
                 {col.h ? <h3 style={{ fontSize: 22, fontWeight: 800, color: INK, marginBottom: 8 }}>{col.h}</h3> : null}
-                {col.b ? <p style={{ color: "#666", lineHeight: 1.7, whiteSpace: "pre-line" }}>{col.b}</p> : null}
+                {col.b ? <p style={{ color: SUBTLE, lineHeight: 1.7, whiteSpace: "pre-line" }}>{col.b}</p> : null}
               </div>
             ))}
           </section>
@@ -431,7 +455,7 @@ export const config = {
                 </div>
               ))}
             </div>
-            {shown.length === 0 && <p style={{ textAlign: "center", color: "#888" }}>Add images in the editor →</p>}
+            {shown.length === 0 && <p style={{ textAlign: "center", color: MUTED }}>Add images in the editor →</p>}
             {openIndex !== null && shown[openIndex] ? (
               <div className="vula-lightbox-overlay" onClick={() => setOpenIndex(null)}>
                 <button className="vula-lightbox-close" onClick={(e) => { e.stopPropagation(); setOpenIndex(null); }} aria-label="Close">×</button>
@@ -463,10 +487,10 @@ export const config = {
             {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 28, color: INK }}>{title}</h2> : null}
             <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 20 }}>
               {(items || []).map((it, i) => (
-                <div key={i} className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), borderRadius: 16, border: "1px solid #e5e5e5", padding: 24, background: "#fafafa", boxShadow: SHADOW_SM }}>
-                  <p style={{ fontStyle: "italic", color: "#444", lineHeight: 1.6, marginBottom: 12 }}>&ldquo;{it.quote}&rdquo;</p>
+                <div key={i} className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), borderRadius: 16, border: `1px solid ${LINE}`, padding: 24, background: PAPER, boxShadow: SHADOW_SM }}>
+                  <p style={{ fontStyle: "italic", color: BODY, lineHeight: 1.6, marginBottom: 12 }}>&ldquo;{it.quote}&rdquo;</p>
                   <div style={{ fontWeight: 700, color: INK, fontSize: 14 }}>{it.author}</div>
-                  {it.role ? <div style={{ color: "#888", fontSize: 12.5 }}>{it.role}</div> : null}
+                  {it.role ? <div style={{ color: MUTED, fontSize: 12.5 }}>{it.role}</div> : null}
                 </div>
               ))}
             </div>
@@ -485,17 +509,17 @@ export const config = {
         const reveal = useBlockReveal(animation, "fadeUp");
         return (
           <section {...reveal} style={{ ...wrap, padding: "40px 16px" }}>
-            <div style={{ position: "relative", paddingTop: "56.25%", borderRadius: 14, overflow: "hidden", background: "#000", boxShadow: SHADOW_MD }}>
+            <div style={{ position: "relative", paddingTop: "56.25%", borderRadius: 14, overflow: "hidden", background: BLACK, boxShadow: SHADOW_MD }}>
               {embedSrc ? (
                 <iframe src={embedSrc} title={caption || "Video"} allowFullScreen
                   style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }} />
               ) : url ? (
                 <video src={url} controls style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
               ) : (
-                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>Add a video URL →</div>
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: MUTED }}>Add a video URL →</div>
               )}
             </div>
-            {caption ? <p style={{ textAlign: "center", color: "#888", fontSize: 13, marginTop: 10 }}>{caption}</p> : null}
+            {caption ? <p style={{ textAlign: "center", color: MUTED, fontSize: 13, marginTop: 10 }}>{caption}</p> : null}
           </section>
         );
       },
@@ -516,7 +540,7 @@ export const config = {
         return (
           <div {...reveal} style={{ ...wrap, padding: "24px 16px", textAlign: "center" }}>
             <a href={href} target="_blank" rel="noreferrer" className="vula-btn-lift" style={{ display: "inline-block", borderRadius: 999, padding: "14px 32px",
-              fontWeight: 700, background: "#25D366", color: "#fff", textDecoration: "none", fontSize: 16, boxShadow: SHADOW_MD }}>{buttonText}</a>
+              fontWeight: 700, background: "#25D366", color: WHITE, textDecoration: "none", fontSize: 16, boxShadow: SHADOW_MD }}>{buttonText}</a>{/* brand-colour: WhatsApp green */}
           </div>
         );
       },
@@ -534,12 +558,12 @@ export const config = {
         const reveal = useBlockReveal(animation, "fadeUp");
         return (
           <section {...reveal} style={{ ...wrap, padding: "40px 16px" }}>
-            <div className="vula-card-lift" style={{ borderRadius: 16, border: "1px solid #e5e5e5", padding: 28, maxWidth: 420, margin: "0 auto", boxShadow: SHADOW_SM, background: "#fff" }}>
+            <div className="vula-card-lift" style={{ borderRadius: 16, border: `1px solid ${LINE}`, padding: 28, maxWidth: 420, margin: "0 auto", boxShadow: SHADOW_SM, background: WHITE }}>
               {title ? <h3 style={{ fontSize: 22, fontWeight: 800, color: INK, marginBottom: 14 }}>{title}</h3> : null}
-              {phone ? <p style={{ margin: "6px 0", color: "#444" }}>📞 <a href={`tel:${phone}`} style={{ color: "#444" }}>{phone}</a></p> : null}
-              {email ? <p style={{ margin: "6px 0", color: "#444" }}>✉️ <a href={`mailto:${email}`} style={{ color: "#444" }}>{email}</a></p> : null}
-              {address ? <p style={{ margin: "6px 0", color: "#444", whiteSpace: "pre-line" }}>📍 {address}</p> : null}
-              {hours ? <p style={{ margin: "6px 0", color: "#444", whiteSpace: "pre-line" }}>🕐 {hours}</p> : null}
+              {phone ? <p style={{ margin: "6px 0", color: BODY }}>📞 <a href={`tel:${phone}`} style={{ color: BODY }}>{phone}</a></p> : null}
+              {email ? <p style={{ margin: "6px 0", color: BODY }}>✉️ <a href={`mailto:${email}`} style={{ color: BODY }}>{email}</a></p> : null}
+              {address ? <p style={{ margin: "6px 0", color: BODY, whiteSpace: "pre-line" }}>📍 {address}</p> : null}
+              {hours ? <p style={{ margin: "6px 0", color: BODY, whiteSpace: "pre-line" }}>🕐 {hours}</p> : null}
             </div>
           </section>
         );
@@ -565,7 +589,7 @@ export const config = {
       defaultProps: { style: "solid" },
       render: ({ style }) => (
         <div style={{ ...wrap, padding: "8px 16px" }}>
-          <hr style={{ border: "none", borderTop: `1px ${style || "solid"} #e5e5e5` }} />
+          <hr style={{ border: "none", borderTop: `1px ${style || "solid"} ${LINE}` }} />
         </div>
       ),
     },
@@ -597,7 +621,7 @@ export const config = {
           background === "solid" ? { backgroundColor: backgroundColor || ACCENT } :
           background === "gradient" ? { backgroundImage: `linear-gradient(135deg, ${backgroundColor || ACCENT} 0%, ${INK} 100%)` } :
           background === "image" && backgroundImage ? { backgroundImage: `url(${backgroundImage})`, backgroundSize: "cover", backgroundPosition: "center" } :
-          tinted ? { background: "color-mix(in srgb, var(--brand-accent, #0E7C7B) 6%, white)" } : {};
+          tinted ? { background: `color-mix(in srgb, ${ACCENT} 6%, white)` } : {};
         const reveal = useBlockReveal(animation, "fadeIn");
         return (
           <section {...reveal} style={{ position: "relative", padding: `${padPx}px 16px`, ...bgStyle }}>
@@ -667,7 +691,7 @@ export const config = {
       render: (props) => (
         <section style={{ ...wrap, padding: "48px 16px" }}>
           {props.title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 8, color: INK, fontFamily: FONT_DISPLAY }}>{props.title}</h2> : null}
-          {props.subtitle ? <p style={{ textAlign: "center", color: "#666", marginBottom: 24 }}>{props.subtitle}</p> : null}
+          {props.subtitle ? <p style={{ textAlign: "center", color: SUBTLE, marginBottom: 24 }}>{props.subtitle}</p> : null}
           <div style={{ maxWidth: 480, margin: "0 auto" }}><EnquiryForm buttonText={props.buttonText} /></div>
         </section>
       ),
@@ -698,12 +722,12 @@ export const config = {
               {(items || []).map((it, i) => {
                 const open = openIndex === i;
                 return (
-                  <div key={i} className="vula-stagger-item" style={{ ...staggerDelay(i), border: "1px solid #e5e5e5", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+                  <div key={i} className="vula-stagger-item" style={{ ...staggerDelay(i), border: `1px solid ${LINE}`, borderRadius: 12, overflow: "hidden", background: WHITE }}>
                     <button onClick={() => setOpenIndex(open ? null : i)} style={{ width: "100%", textAlign: "left", padding: "14px 18px", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, fontSize: 15, color: INK }}>
                       {it.question}
                       <span style={{ marginLeft: 12, color: ACCENT, transform: open ? "rotate(45deg)" : "none", transition: "transform 0.2s ease" }}>+</span>
                     </button>
-                    {open ? <div style={{ padding: "0 18px 16px", color: "#666", lineHeight: 1.6 }}>{it.answer}</div> : null}
+                    {open ? <div style={{ padding: "0 18px 16px", color: SUBTLE, lineHeight: 1.6 }}>{it.answer}</div> : null}
                   </div>
                 );
               })}
@@ -740,10 +764,10 @@ export const config = {
             {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 32, color: INK }}>{title}</h2> : null}
             <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 24 }}>
               {(tiers || []).map((t, i) => (
-                <div key={i} className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), border: "1px solid #e5e5e5", borderRadius: 16, padding: 28, textAlign: "center", boxShadow: SHADOW_SM, background: "#fff", display: "flex", flexDirection: "column" }}>
+                <div key={i} className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), border: `1px solid ${LINE}`, borderRadius: 16, padding: 28, textAlign: "center", boxShadow: SHADOW_SM, background: WHITE, display: "flex", flexDirection: "column" }}>
                   <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 6, color: INK }}>{t.name}</h3>
                   <div style={{ fontWeight: 800, fontSize: 28, color: ACCENT, marginBottom: 16 }}>{t.price}</div>
-                  <ul style={{ listStyle: "none", padding: 0, margin: "0 0 20px", flex: 1, color: "#666", fontSize: 14, lineHeight: 2 }}>
+                  <ul style={{ listStyle: "none", padding: 0, margin: "0 0 20px", flex: 1, color: SUBTLE, fontSize: 14, lineHeight: 2 }}>
                     {(t.features || []).map((f, j) => <li key={j}>{f.value}</li>)}
                   </ul>
                   {t.ctaText ? (
@@ -784,7 +808,7 @@ function ProductSkeletonGrid({ count }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 20 }}>
       {Array.from({ length: count || 8 }).map((_, i) => (
-        <div key={i} style={{ borderRadius: 14, overflow: "hidden", border: "1px solid #e5e5e5" }}>
+        <div key={i} style={{ borderRadius: 14, overflow: "hidden", border: `1px solid ${LINE}` }}>
           <div className="vula-skeleton" style={{ height: 150 }} />
           <div style={{ padding: "10px 12px" }}>
             <div className="vula-skeleton" style={{ height: 14, width: "70%", borderRadius: 4, marginBottom: 8 }} />
@@ -815,7 +839,7 @@ function LiveProducts({ title, category, count, linkBase, mode }) {
       {products === null ? (
         <ProductSkeletonGrid count={count} />
       ) : rows.length === 0 ? (
-        <p style={{ textAlign: "center", color: "#888" }}>No products to show yet.</p>
+        <p style={{ textAlign: "center", color: MUTED }}>No products to show yet.</p>
       ) : (
         <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 20 }}>
           {rows.map((p, i) => {
@@ -823,8 +847,8 @@ function LiveProducts({ title, category, count, linkBase, mode }) {
             const img = (p.images && p.images[0]) || p.image_url;
             return (
               <a key={p.id || p.slug} href={`${linkBase || "/shop"}/${p.slug}`}
-                 className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), textDecoration: "none", color: INK, borderRadius: 14, border: "1px solid #e5e5e5", background: "#fff", display: "block", boxShadow: SHADOW_SM }}>
-                <div className="vula-zoom-target" style={{ height: 150, background: "#f3f1ea", backgroundImage: img ? `url(${img})` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
+                 className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), textDecoration: "none", color: INK, borderRadius: 14, border: `1px solid ${LINE}`, background: WHITE, display: "block", boxShadow: SHADOW_SM }}>
+                <div className="vula-zoom-target" style={{ height: 150, background: TINT_WARM, backgroundImage: img ? `url(${img})` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
                 <div style={{ padding: "10px 12px" }}>
                   <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 4 }}>{p.name}</div>
                   <div style={{ fontSize: 14 }}>
@@ -834,8 +858,8 @@ function LiveProducts({ title, category, count, linkBase, mode }) {
                       </span>
                     ) : (<>
                       <span style={{ fontWeight: 700, color: ACCENT }}>{R(pr.now)}</span>
-                      {pr.was ? <span style={{ marginLeft: 6, color: "#999", textDecoration: "line-through", fontSize: 12.5 }}>{R(pr.was)}</span> : null}
-                      <span style={{ color: "#888", fontSize: 12 }}>{p.sold_by === "kg" ? " /kg" : ""}</span>
+                      {pr.was ? <span style={{ marginLeft: 6, color: MUTED_LIGHT, textDecoration: "line-through", fontSize: 12.5 }}>{R(pr.was)}</span> : null}
+                      <span style={{ color: MUTED, fontSize: 12 }}>{p.sold_by === "kg" ? " /kg" : ""}</span>
                     </>)}
                   </div>
                 </div>
@@ -876,9 +900,9 @@ function LiveCategories({ title, linkBase }) {
         <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 16 }}>
           {(cats || []).map((c, i) => (
             <a key={c.key} href={`${linkBase || "/shop"}?category=${c.key}`}
-               className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), textDecoration: "none", textAlign: "center", padding: "26px 12px", borderRadius: 14, border: "1px solid #e5e5e5", color: INK, background: "#fff", boxShadow: SHADOW_SM }}>
+               className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), textDecoration: "none", textAlign: "center", padding: "26px 12px", borderRadius: 14, border: `1px solid ${LINE}`, color: INK, background: WHITE, boxShadow: SHADOW_SM }}>
               <div style={{ fontWeight: 700, fontSize: 15 }}>{label(c.key)}</div>
-              <div style={{ color: "#888", fontSize: 12, marginTop: 4 }}>{c.n} item{c.n === 1 ? "" : "s"}</div>
+              <div style={{ color: MUTED, fontSize: 12, marginTop: 4 }}>{c.n} item{c.n === 1 ? "" : "s"}</div>
             </a>
           ))}
         </div>
@@ -946,14 +970,14 @@ function LiveBooking({ title, subtitle }) {
     }
   };
 
-  const inputStyle = { padding: "10px 12px", border: "1px solid #ddd", borderRadius: 8, fontSize: 14, width: "100%", boxSizing: "border-box" };
+  const inputStyle = { padding: "10px 12px", border: `1px solid ${LINE_STRONG}`, borderRadius: 8, fontSize: 14, width: "100%", boxSizing: "border-box" };
   const reveal = useReveal("fadeUp");
 
   if (status === "done") {
     return (
       <section {...reveal} className="vula-reveal" style={{ ...wrap, padding: "48px 16px", textAlign: "center" }}>
         <h2 style={{ fontSize: 26, fontWeight: 800, color: INK, marginBottom: 8 }}>Booked ✓</h2>
-        <p style={{ color: "#666" }}>You're confirmed for {slot?.label || slot?.start_local}. We'll be in touch if anything changes.</p>
+        <p style={{ color: SUBTLE }}>You're confirmed for {slot?.label || slot?.start_local}. We'll be in touch if anything changes.</p>
       </section>
     );
   }
@@ -961,7 +985,7 @@ function LiveBooking({ title, subtitle }) {
   return (
     <section {...reveal} className="vula-reveal" style={{ ...wrap, padding: "48px 16px" }}>
       {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 8, color: INK }}>{title}</h2> : null}
-      {subtitle ? <p style={{ textAlign: "center", color: "#666", marginBottom: 28 }}>{subtitle}</p> : null}
+      {subtitle ? <p style={{ textAlign: "center", color: SUBTLE, marginBottom: 28 }}>{subtitle}</p> : null}
       <div style={{ maxWidth: 480, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
         {services === null ? (
           <div className="vula-skeleton" style={{ height: 44, borderRadius: 8 }} />
@@ -975,13 +999,13 @@ function LiveBooking({ title, subtitle }) {
         {slots === null ? (
           <div className="vula-skeleton" style={{ height: 80, borderRadius: 8 }} />
         ) : slots.length === 0 ? (
-          <p style={{ color: "#888", fontSize: 14, textAlign: "center" }}>No times available that day — try another date.</p>
+          <p style={{ color: MUTED, fontSize: 14, textAlign: "center" }}>No times available that day — try another date.</p>
         ) : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {slots.map((s) => (
               <button key={s.start_utc} onClick={() => setSlot(s)}
-                style={{ padding: "8px 14px", borderRadius: 999, border: `1px solid ${slot?.start_utc === s.start_utc ? ACCENT : "#ddd"}`,
-                  background: slot?.start_utc === s.start_utc ? ACCENT : "#fff", color: slot?.start_utc === s.start_utc ? ACCENT_FG : INK,
+                style={{ padding: "8px 14px", borderRadius: 999, border: `1px solid ${slot?.start_utc === s.start_utc ? ACCENT : LINE_STRONG}`,
+                  background: slot?.start_utc === s.start_utc ? ACCENT : WHITE, color: slot?.start_utc === s.start_utc ? ACCENT_FG : INK,
                   cursor: "pointer", fontSize: 13.5 }}>
                 {s.label || s.start_local}
               </button>
@@ -992,7 +1016,7 @@ function LiveBooking({ title, subtitle }) {
           <>
             <input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
             <input placeholder="Your phone (WhatsApp)" value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
-            {errMsg ? <p style={{ color: "#c0392b", fontSize: 13 }}>{errMsg}</p> : null}
+            {errMsg ? <p style={{ color: DANGER, fontSize: 13 }}>{errMsg}</p> : null}
             <button onClick={confirm} disabled={status === "booking" || !name.trim() || !phone.trim()}
               className="vula-btn-lift" style={{ padding: "12px 20px", borderRadius: 999, border: "none", background: ACCENT, color: ACCENT_FG, fontWeight: 600, cursor: "pointer" }}>
               {status === "booking" ? "Booking…" : "Confirm booking"}
@@ -1064,7 +1088,7 @@ function LiveProperties({ title, listingType, showFilters, featuredOnly, include
     return () => clearTimeout(t);
   }, [type, beds, maxPrice, suburb, featuredOnly, includeSold, count]);
 
-  const inputStyle = { padding: "10px 12px", border: "1px solid #ddd", borderRadius: 8, fontSize: 14, background: "#fff", minWidth: 0 };
+  const inputStyle = { padding: "10px 12px", border: `1px solid ${LINE_STRONG}`, borderRadius: 8, fontSize: 14, background: WHITE, minWidth: 0 };
   const priceOptions = type === "rent"
     ? [["", "Any rent"], ["8000", "Up to R8 000"], ["15000", "Up to R15 000"], ["25000", "Up to R25 000"], ["40000", "Up to R40 000"]]
     : [["", "Any price"], ["1000000", "Up to R1m"], ["2000000", "Up to R2m"], ["3500000", "Up to R3.5m"], ["5000000", "Up to R5m"], ["10000000", "Up to R10m"]];
@@ -1094,7 +1118,7 @@ function LiveProperties({ title, listingType, showFilters, featuredOnly, include
       {rows === null ? (
         <ProductSkeletonGrid count={Math.min(count || 6, 6)} />
       ) : rows.length === 0 ? (
-        <p style={{ textAlign: "center", color: "#888" }}>No properties match right now — try widening the search.</p>
+        <p style={{ textAlign: "center", color: MUTED }}>No properties match right now — try widening the search.</p>
       ) : (
         <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 20 }}>
           {rows.map((p, i) => {
@@ -1103,16 +1127,16 @@ function LiveProperties({ title, listingType, showFilters, featuredOnly, include
             return (
               <button key={p.id || p.slug} type="button" onClick={() => setOpen(p)}
                 className="vula-stagger-item vula-card-lift"
-                style={{ ...staggerDelay(i), textAlign: "left", padding: 0, cursor: "pointer", color: INK, borderRadius: 14, border: "1px solid #e5e5e5", background: "#fff", display: "block", boxShadow: SHADOW_SM, font: "inherit" }}>
+                style={{ ...staggerDelay(i), textAlign: "left", padding: 0, cursor: "pointer", color: INK, borderRadius: 14, border: `1px solid ${LINE}`, background: WHITE, display: "block", boxShadow: SHADOW_SM, font: "inherit" }}>
                 <div style={{ position: "relative", height: 190, overflow: "hidden" }}>
-                  <div className="vula-zoom-target" style={{ height: "100%", background: "#ece9e2", backgroundImage: img ? `url("${img}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
-                  <span style={{ position: "absolute", top: 12, left: 12, background: STATUS_BADGES[p.status] ? "#1a1a1a" : ACCENT, color: STATUS_BADGES[p.status] ? "#fff" : ACCENT_FG, fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999 }}>{badge}</span>
+                  <div className="vula-zoom-target" style={{ height: "100%", background: TINT, backgroundImage: img ? `url("${img}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
+                  <span style={{ position: "absolute", top: 12, left: 12, background: STATUS_BADGES[p.status] ? NEAR_BLACK : ACCENT, color: STATUS_BADGES[p.status] ? WHITE : ACCENT_FG, fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999 }}>{badge}</span>
                 </div>
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ fontWeight: 800, fontSize: 19, color: ACCENT, marginBottom: 4 }}>{propertyPrice(p)}</div>
                   <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{p.title}</div>
-                  <div style={{ color: "#777", fontSize: 13.5, marginBottom: 10 }}>{[p.suburb, p.city].filter(Boolean).join(", ")}</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 13, color: "#555" }}>
+                  <div style={{ color: MUTED_DARK, fontSize: 13.5, marginBottom: 10 }}>{[p.suburb, p.city].filter(Boolean).join(", ")}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 13, color: BODY_SOFT }}>
                     {propertyFacts(p).map((f) => <span key={f}>{f}</span>)}
                   </div>
                 </div>
@@ -1150,8 +1174,8 @@ function PropertyDialog({ p, onClose }) {
     <div role="dialog" aria-modal="true" aria-label={p.title} onClick={onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "24px 12px" }}>
       <div onClick={(e) => e.stopPropagation()}
-        style={{ background: "#fff", color: INK, borderRadius: 16, width: "100%", maxWidth: 880, overflow: "hidden", boxShadow: SHADOW_LG }}>
-        <div style={{ position: "relative", background: "#ece9e2", aspectRatio: "16 / 9", backgroundImage: images[idx] ? `url("${images[idx]}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }}>
+        style={{ background: WHITE, color: INK, borderRadius: 16, width: "100%", maxWidth: 880, overflow: "hidden", boxShadow: SHADOW_LG }}>
+        <div style={{ position: "relative", background: TINT, aspectRatio: "16 / 9", backgroundImage: images[idx] ? `url("${images[idx]}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }}>
           <button type="button" onClick={onClose} aria-label="Close"
             style={{ position: "absolute", top: 12, right: 12, width: 36, height: 36, borderRadius: 999, border: "none", background: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 18 }}>✕</button>
           {images.length > 1 ? (<>
@@ -1159,27 +1183,27 @@ function PropertyDialog({ p, onClose }) {
               style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", width: 40, height: 40, borderRadius: 999, border: "none", background: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 18 }}>‹</button>
             <button type="button" aria-label="Next photo" onClick={() => setIdx((idx + 1) % images.length)}
               style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", width: 40, height: 40, borderRadius: 999, border: "none", background: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 18 }}>›</button>
-            <span style={{ position: "absolute", bottom: 12, right: 12, background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 12, padding: "3px 9px", borderRadius: 999 }}>{idx + 1} / {images.length}</span>
+            <span style={{ position: "absolute", bottom: 12, right: 12, background: "rgba(0,0,0,0.6)", color: WHITE, fontSize: 12, padding: "3px 9px", borderRadius: 999 }}>{idx + 1} / {images.length}</span>
           </>) : null}
         </div>
         <div style={{ padding: "20px 22px 26px", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 28 }}>
           <div>
             <div style={{ fontWeight: 800, fontSize: 26, color: ACCENT }}>{propertyPrice(p)}</div>
             <h3 style={{ fontSize: 20, fontWeight: 700, margin: "4px 0", fontFamily: FONT_DISPLAY }}>{p.title}</h3>
-            <div style={{ color: "#777", fontSize: 14, marginBottom: 14 }}>{p.address || [p.suburb, p.city, p.province].filter(Boolean).join(", ")}</div>
+            <div style={{ color: MUTED_DARK, fontSize: 14, marginBottom: 14 }}>{p.address || [p.suburb, p.city, p.province].filter(Boolean).join(", ")}</div>
             {facts.length ? (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-                {facts.map((f) => <span key={f} style={{ background: "#f4f2ed", borderRadius: 999, padding: "5px 12px", fontSize: 13 }}>{f}</span>)}
+                {facts.map((f) => <span key={f} style={{ background: TINT_LIGHT, borderRadius: 999, padding: "5px 12px", fontSize: 13 }}>{f}</span>)}
               </div>
             ) : null}
-            {p.description ? <p style={{ whiteSpace: "pre-line", lineHeight: 1.6, fontSize: 14.5, color: "#333" }}>{p.description}</p> : null}
+            {p.description ? <p style={{ whiteSpace: "pre-line", lineHeight: 1.6, fontSize: 14.5, color: BODY_DARK }}>{p.description}</p> : null}
             {extras.length ? (
               <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", fontSize: 14, marginTop: 16 }}>
-                {extras.map(([k, v]) => <Fragment key={k}><dt style={{ color: "#777" }}>{k}</dt><dd style={{ margin: 0 }}>{v}</dd></Fragment>)}
+                {extras.map(([k, v]) => <Fragment key={k}><dt style={{ color: MUTED_DARK }}>{k}</dt><dd style={{ margin: 0 }}>{v}</dd></Fragment>)}
               </dl>
             ) : null}
             {(p.features || []).length ? (
-              <ul style={{ marginTop: 16, paddingLeft: 18, columns: 2, fontSize: 14, color: "#333" }}>
+              <ul style={{ marginTop: 16, paddingLeft: 18, columns: 2, fontSize: 14, color: BODY_DARK }}>
                 {p.features.map((f) => <li key={f}>{f}</li>)}
               </ul>
             ) : null}
@@ -1187,10 +1211,10 @@ function PropertyDialog({ p, onClose }) {
           <div>
             {p.agent ? (
               <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
-                <div style={{ width: 52, height: 52, borderRadius: 999, background: "#ece9e2", backgroundImage: p.agent.photo_url ? `url("${p.agent.photo_url}")` : undefined, backgroundSize: "cover", flexShrink: 0 }} />
+                <div style={{ width: 52, height: 52, borderRadius: 999, background: TINT, backgroundImage: p.agent.photo_url ? `url("${p.agent.photo_url}")` : undefined, backgroundSize: "cover", flexShrink: 0 }} />
                 <div>
                   <div style={{ fontWeight: 700 }}>{p.agent.name}</div>
-                  {p.agent.title ? <div style={{ color: "#777", fontSize: 13 }}>{p.agent.title}</div> : null}
+                  {p.agent.title ? <div style={{ color: MUTED_DARK, fontSize: 13 }}>{p.agent.title}</div> : null}
                   {p.agent.whatsapp ? (
                     <a href={waLink(p.agent.whatsapp, `Hi ${p.agent.name}, I'm interested in "${p.title}".`)} target="_blank" rel="noreferrer"
                       style={{ color: ACCENT, fontSize: 13.5, fontWeight: 600 }}>WhatsApp {p.agent.name.split(" ")[0]}</a>
@@ -1199,7 +1223,7 @@ function PropertyDialog({ p, onClose }) {
               </div>
             ) : null}
             {STATUS_BADGES[p.status] && p.status !== "under_offer" ? (
-              <p style={{ color: "#777", fontSize: 14 }}>This property is {STATUS_BADGES[p.status].toLowerCase()}. Ask us about similar homes.</p>
+              <p style={{ color: MUTED_DARK, fontSize: 14 }}>This property is {STATUS_BADGES[p.status].toLowerCase()}. Ask us about similar homes.</p>
             ) : null}
             <EnquiryForm propertySlug={p.slug} viewing={!STATUS_BADGES[p.status] || p.status === "under_offer"} buttonText="Send enquiry" />
           </div>
@@ -1218,7 +1242,7 @@ function EnquiryForm({ propertySlug, viewing, buttonText }) {
   const [hp, setHp] = useState("");
   const [status, setStatus] = useState(""); // "" | "sending" | "done" | "error"
   const [errMsg, setErrMsg] = useState("");
-  const inputStyle = { padding: "10px 12px", border: "1px solid #ddd", borderRadius: 8, fontSize: 14, width: "100%", boxSizing: "border-box", font: "inherit" };
+  const inputStyle = { padding: "10px 12px", border: `1px solid ${LINE_STRONG}`, borderRadius: 8, fontSize: 14, width: "100%", boxSizing: "border-box", font: "inherit" };
 
   const send = async (e) => {
     e.preventDefault();
@@ -1245,9 +1269,9 @@ function EnquiryForm({ propertySlug, viewing, buttonText }) {
 
   if (status === "done") {
     return (
-      <div style={{ background: "#f4f2ed", borderRadius: 12, padding: 18, textAlign: "center" }}>
+      <div style={{ background: TINT_LIGHT, borderRadius: 12, padding: 18, textAlign: "center" }}>
         <div style={{ fontWeight: 700, marginBottom: 4 }}>Thanks — we've got your details ✓</div>
-        <div style={{ color: "#666", fontSize: 14 }}>An agent will be in touch shortly.</div>
+        <div style={{ color: SUBTLE, fontSize: 14 }}>An agent will be in touch shortly.</div>
       </div>
     );
   }
@@ -1265,7 +1289,7 @@ function EnquiryForm({ propertySlug, viewing, buttonText }) {
           <input type="checkbox" checked={wantsViewing} onChange={(e) => setWantsViewing(e.target.checked)} /> I'd like to arrange a viewing
         </label>
       ) : null}
-      {errMsg ? <p style={{ color: "#c0392b", fontSize: 13, margin: 0 }}>{errMsg}</p> : null}
+      {errMsg ? <p style={{ color: DANGER, fontSize: 13, margin: 0 }}>{errMsg}</p> : null}
       <button type="submit" disabled={status === "sending"} className="vula-btn-lift"
         style={{ padding: "12px 20px", borderRadius: 999, border: "none", background: ACCENT, color: ACCENT_FG, fontWeight: 600, cursor: "pointer", font: "inherit" }}>
         {status === "sending" ? "Sending…" : (buttonText || "Send")}
@@ -1287,14 +1311,14 @@ function LiveAgents({ title, subtitle }) {
   return (
     <section style={{ ...wrap, padding: "40px 16px" }}>
       {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 8, color: INK, fontFamily: FONT_DISPLAY }}>{title}</h2> : null}
-      {subtitle ? <p style={{ textAlign: "center", color: "#666", marginBottom: 24 }}>{subtitle}</p> : null}
+      {subtitle ? <p style={{ textAlign: "center", color: SUBTLE, marginBottom: 24 }}>{subtitle}</p> : null}
       <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 20, marginTop: 16 }}>
         {(agents || []).map((a, i) => (
-          <div key={a.id} className="vula-stagger-item" style={{ ...staggerDelay(i), textAlign: "center", border: "1px solid #e5e5e5", borderRadius: 14, padding: 20, background: "#fff", boxShadow: SHADOW_SM }}>
-            <div style={{ width: 96, height: 96, borderRadius: 999, margin: "0 auto 12px", background: "#ece9e2", backgroundImage: a.photo_url ? `url("${a.photo_url}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
+          <div key={a.id} className="vula-stagger-item" style={{ ...staggerDelay(i), textAlign: "center", border: `1px solid ${LINE}`, borderRadius: 14, padding: 20, background: WHITE, boxShadow: SHADOW_SM }}>
+            <div style={{ width: 96, height: 96, borderRadius: 999, margin: "0 auto 12px", background: TINT, backgroundImage: a.photo_url ? `url("${a.photo_url}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
             <div style={{ fontWeight: 700, fontSize: 16 }}>{a.name}</div>
-            {a.title ? <div style={{ color: "#777", fontSize: 13.5, marginBottom: 8 }}>{a.title}</div> : null}
-            {a.bio ? <p style={{ fontSize: 13.5, color: "#555", lineHeight: 1.5 }}>{a.bio}</p> : null}
+            {a.title ? <div style={{ color: MUTED_DARK, fontSize: 13.5, marginBottom: 8 }}>{a.title}</div> : null}
+            {a.bio ? <p style={{ fontSize: 13.5, color: BODY_SOFT, lineHeight: 1.5 }}>{a.bio}</p> : null}
             {a.whatsapp ? (
               <a href={waLink(a.whatsapp, `Hi ${a.name}`)} target="_blank" rel="noreferrer" className="vula-btn-lift"
                 style={{ display: "inline-block", marginTop: 8, padding: "8px 16px", borderRadius: 999, background: ACCENT, color: ACCENT_FG, fontSize: 13.5, fontWeight: 600, textDecoration: "none" }}>💬 WhatsApp</a>
