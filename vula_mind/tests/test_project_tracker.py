@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from vula.commerce import project_tracker as pt
 
 TID = "test-tenant"
@@ -265,3 +267,70 @@ def test_the_page_fits_a_phone_and_uses_a_wide_screen():
     assert "max-width:1040px" in page and "max-width:560px" not in page
     assert "<div class=\"grid\">" in page and "class='blk wide'" in page and "class='scroll'" in page
     assert "Swipe the table sideways" in page and "@media print" in page
+
+
+# ── the agreed final account (migration 254) ───────────────────────────────────────────────
+
+_FA = {"as_of": "2026-11-02", "charged_cents": 23924738, "total_cents": 24424738,
+       "adjustments": [{"label": "Correction — Jack Hammer account", "cents": 500000}],
+       "received_cents": 21140798, "balance_cents": 3283940}
+
+
+def _ob(**kw):
+    return {"view": "open_book", "project": "Belladonna", "as_of": "2026-11-10", "trades": [],
+            "business_cost_cents": 13953701, "fee_pct": 10.0, "fee_cents": 1395370,
+            "open_book_total_cents": 15349071, "received_cents": 21140798,
+            "open_book_balance_cents": -5791727, **kw}
+
+
+def test_the_final_account_is_the_account_on_the_client_page():
+    page = pt.render({"name": "DIGG"}, _ob(final_account=_FA))
+    assert "Costs and fee (final account, 2026-11-02)" in page and "R239 247.38" in page
+    assert "Correction — Jack Hammer account" in page and "R244 247.38" in page
+    assert "Balance due to us" in page and "R32 839.40" in page
+    assert "Fee (10%)" not in page and "57 917.27" not in page          # never the cost + fee estimate
+
+
+def test_without_a_final_account_the_estimate_stays():
+    page = pt.render({"name": "DIGG"}, _ob(final_account=None))
+    assert "Fee (10%)" in page and "Balance due to us" not in page
+
+
+def test_an_overpaid_final_account_says_so():
+    fa = {**_FA, "received_cents": 25000000, "balance_cents": 24424738 - 25000000}
+    page = pt.render({"name": "DIGG"}, _ob(final_account=fa))
+    assert "Balance due to you" in page and "R5 752.62" in page
+
+
+def test_only_the_open_book_view_carries_the_final_account():
+    pos = {**_ob(final_account=_FA), "overhead_share_cents": 1, "profit_cents": 2}
+    assert pt.client_view(pos, "open_book")["final_account"] == _FA
+    for view in ("price", "qs"):
+        assert "final_account" not in pt.client_view(pos, view)
+
+
+def test_a_later_payment_lowers_the_balance(monkeypatch):
+    rows = [{"project": "Belladonna", "as_of": "2026-11-02", "charged_cents": 23924738,
+             "adjustments": [{"label": "Correction", "cents": 500000}]}]
+    monkeypatch.setattr(pt, "_rows", lambda make: rows)
+    fa = pt.final_account("digg-demo", pt._key("belladonna"))
+    assert fa["total_cents"] == 24424738
+    assert pt.final_account("digg-demo", pt._key("HPC Bokaap")) is None
+
+
+def test_saving_a_final_account_is_read_back(monkeypatch):
+    saved = []
+
+    class _T:
+        def upsert(self, row, **kw): saved.append(row); return self
+        def execute(self): return self
+
+    monkeypatch.setattr(pt, "_client", lambda: type("C", (), {"table": lambda self, n: _T()})())
+    monkeypatch.setattr("vula.commerce.service.canonical_project", lambda t, p: "Belladonna")
+    monkeypatch.setattr(pt, "final_account", lambda t, k: {"as_of": "2026-11-02", "charged_cents": 100,
+                                                           "adjustments": [], "total_cents": 100} if saved else None)
+    out = pt.set_final_account("digg-demo", "belladonna", "2026-11-02", 100)
+    assert out["project"] == "Belladonna" and saved[0]["tenant_id"] == "digg-demo"
+    monkeypatch.setattr(pt, "final_account", lambda t, k: None)
+    with pytest.raises(RuntimeError):
+        pt.set_final_account("digg-demo", "belladonna", "2026-11-02", 100)

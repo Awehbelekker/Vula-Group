@@ -211,6 +211,42 @@ def _documents(tenant_id: str, key: str, limit: int = 60) -> List[Dict[str, Any]
             for r in mine[:limit]]
 
 
+_FINAL = "vula_project_final_accounts"
+
+
+def final_account(tenant_id: str, key: str) -> Optional[Dict[str, Any]]:
+    """The project's agreed final account (migration 254), or None. Charged + adjustments, in cents."""
+    rows = _rows(lambda: _client().table(_FINAL)
+                 .select("project,as_of,charged_cents,adjustments,note").eq("tenant_id", tenant_id))
+    r = next((x for x in rows if _key(x.get("project")) == key), None)
+    if not r:
+        return None
+    adj = [{"label": str(a.get("label") or "Adjustment"), "cents": int(a.get("cents") or 0)}
+           for a in (r.get("adjustments") or []) if isinstance(a, dict)]
+    charged = int(r.get("charged_cents") or 0)
+    return {"as_of": str(r.get("as_of") or "")[:10], "charged_cents": charged, "adjustments": adj,
+            "total_cents": charged + sum(a["cents"] for a in adj)}
+
+
+def set_final_account(tenant_id: str, project: str, as_of: str, charged_cents: int,
+                      adjustments: Optional[List[Dict[str, Any]]] = None, note: Optional[str] = None,
+                      by: Optional[str] = None) -> Dict[str, Any]:
+    """Store (or replace) the project's final account, read back."""
+    from vula.commerce.service import canonical_project
+    if int(charged_cents) < 0:
+        raise ValueError("The final account can't be less than R0.")
+    name = canonical_project(tenant_id, project) or project
+    adj = [{"label": str(a["label"])[:200], "cents": int(a["cents"])} for a in adjustments or []]
+    _client().table(_FINAL).upsert({
+        "tenant_id": tenant_id, "project": name, "as_of": str(as_of)[:10], "charged_cents": int(charged_cents),
+        "adjustments": adj, "note": note, "created_by": by,
+        "updated_at": datetime.now(timezone.utc).isoformat()}, on_conflict="tenant_id,project").execute()
+    back = final_account(tenant_id, _key(name))
+    if not back or back["charged_cents"] != int(charged_cents) or back["adjustments"] != adj:
+        raise RuntimeError("the final account was not saved")
+    return {**back, "project": name}
+
+
 def _fee_pct(tenant_id: str, project: str, costed: Optional[Dict[str, Any]]) -> float:
     if costed and costed.get("fee_pct") is not None:
         return float(costed["fee_pct"])
@@ -238,6 +274,10 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
     invoices = _invoices(tenant_id, key)
     fee_pct = _fee_pct(tenant_id, name, costed)
     fee = int(round(business_cost * fee_pct / 100))
+    final = final_account(tenant_id, key)
+    if final:
+        # the agreed final account is the account: what the client paid comes from the bank, live
+        final = {**final, "received_cents": received, "balance_cents": final["total_cents"] - received}
     budget = int(boq.get("total_cents") or 0)
     claimed = int(variations.get("claimed_cents") or 0)
     contract = budget + claimed
@@ -279,6 +319,7 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
         "open_book_total_cents": business_cost + fee,
         "received_cents": received,
         "open_book_balance_cents": business_cost + fee - received,
+        "final_account": final,
         "invoices": invoices, "invoiced_cents": invoiced, "invoices_paid_cents": paid,
         "invoices_owed_cents": invoiced - paid,
         "to_invoice_cents": max(contract - invoiced, 0) if contract else None,
@@ -302,7 +343,7 @@ _QS_FIELDS = _PRICE_FIELDS + ("variations_extra_cost_cents", "baseline_locked", 
 _OPEN_BOOK_FIELDS = _PRICE_FIELDS + ("trades", "business_cost_cents", "paid_directly_cents", "spent_cents",
                                      "direct_payments", "to_pay_directly_cents",
                                      "budget_left_cents", "fee_pct", "fee_cents", "open_book_total_cents",
-                                     "received_cents", "open_book_balance_cents", "sheet")
+                                     "received_cents", "open_book_balance_cents", "sheet", "final_account")
 
 
 def client_view(pos: Dict[str, Any], view: str) -> Dict[str, Any]:
@@ -479,12 +520,24 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
         cost = [row(t["trade"], t["cents"]) for t in v.get("trades") or []]
         cost.append(row("Cost through us", v.get("business_cost_cents"), True))
         parts.append(table("Spent through us, by trade", cost))
-        acct = [row("Cost through us", v.get("business_cost_cents")),
-                row(f"Fee ({v.get('fee_pct') or 0:g}%)", v.get("fee_cents")),
-                row("Total for our part", v.get("open_book_total_cents"), True),
-                row("Paid to us so far", -(v.get("received_cents") or 0)),
-                row("Balance due", v.get("open_book_balance_cents"), True)]
-        parts.append(table("Account", acct))
+        fa = v.get("final_account")
+        if fa:
+            # the agreed final account, not the cost + fee estimate
+            acct = [row(f"Costs and fee (final account, {fa['as_of']})", fa["charged_cents"])]
+            acct += [row(a["label"], a["cents"]) for a in fa.get("adjustments") or []]
+            if fa.get("adjustments"):
+                acct.append(row("Total for our part", fa["total_cents"], True))
+            acct += [row("Paid to us so far", -(fa.get("received_cents") or 0)),
+                     row("Balance due to us" if fa["balance_cents"] >= 0 else "Balance due to you",
+                         abs(fa["balance_cents"]), True)]
+            parts.append(table("Account", acct))
+        else:
+            acct = [row("Cost through us", v.get("business_cost_cents")),
+                    row(f"Fee ({v.get('fee_pct') or 0:g}%)", v.get("fee_cents")),
+                    row("Total for our part", v.get("open_book_total_cents"), True),
+                    row("Paid to us so far", -(v.get("received_cents") or 0)),
+                    row("Balance due", v.get("open_book_balance_cents"), True)]
+            parts.append(table("Account", acct))
         if v.get("paid_directly_cents") or v.get("to_pay_directly_cents"):
             spent = [row("Through us", v.get("business_cost_cents")),
                      row("Paid by you directly to suppliers", v.get("paid_directly_cents")),
