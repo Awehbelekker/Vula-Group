@@ -7905,6 +7905,39 @@ async def admin_data_health(tenant_id: str):
     return await asyncio.to_thread(data_checks.sweep, tenant_id)
 
 
+@router.get("/{tenant_id}/admin/documents/{doc_id}/site-split")
+async def admin_site_split(tenant_id: str, doc_id: str):
+    """An invoice that covers several jobs: its proposed split and the bank payments that could be its
+    own (vula/commerce/site_split.py)."""
+    import asyncio
+    from vula.commerce import site_split
+    doc = await asyncio.to_thread(site_split._doc, tenant_id, doc_id)
+    s = ((doc or {}).get("fields") or {}).get("_site_split")
+    if not s:
+        raise HTTPException(status_code=404, detail="There's no split on that document.")
+    pays = await asyncio.to_thread(site_split.payments, tenant_id, doc)
+    return {"split": s, "payments": [{k: r.get(k) for k in ("id", "txn_date", "description", "amount_cents", "project")}
+                                     for r in pays]}
+
+
+@router.post("/{tenant_id}/admin/documents/{doc_id}/site-split")
+async def admin_apply_site_split(tenant_id: str, doc_id: str, body: dict, request: Request):
+    """Split the invoice's bank payment across its jobs, as proposed. body: {txn_id?} — needed only when
+    more than one payment could be the invoice's (409 lists them). Read back."""
+    import asyncio
+    from vula.commerce import site_split
+    by = _actor(request)
+    try:
+        return await asyncio.to_thread(site_split.apply, tenant_id, doc_id, (body or {}).get("txn_id"), by)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        doc = await asyncio.to_thread(site_split._doc, tenant_id, doc_id)
+        pays = await asyncio.to_thread(site_split.payments, tenant_id, doc or {})
+        raise HTTPException(status_code=409, detail={"message": str(exc), "payments": [
+            {k: r.get(k) for k in ("id", "txn_date", "description", "amount_cents", "project")} for r in pays]})
+
+
 @router.get("/{tenant_id}/admin/suppliers/duplicates")
 async def admin_supplier_duplicates(tenant_id: str):
     """Suppliers on file that look like one business — same VAT number, bank account, email, or the
