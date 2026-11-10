@@ -18,16 +18,21 @@
 import { lazy, Suspense } from "react";
 import { Skeleton } from "../components/ui/index.jsx";
 import { loadScreen } from "./reloadOnce.js";
+import ErrorBoundary from "../components/ErrorBoundary.jsx";
 
 export function lazyScreen(load, name = "default") {
   return lazy(() => loadScreen(load).then((m) => (name === "default" ? m : { default: m[name] })));
 }
 
 /** The placeholder while a screen loads: the page's own skeleton lines, nothing that jumps. */
-export function ScreenSuspense({ children }) {
+export function ScreenSuspense({ children, resetKey }) {
+  // Each screen gets its own error boundary, so one screen's crash leaves the menu and the
+  // other screens working (resetKey: the screen being shown, so moving on clears the error).
   return (
-    <Suspense fallback={<div className="vula-screen-loading" role="status" aria-label="Loading" style={{ padding: "var(--space-4, 16px)" }}><Skeleton lines={4} height={14} /></div>}>
-      {children}
-    </Suspense>
+    <ErrorBoundary screen resetKey={resetKey}>
+      <Suspense fallback={<div className="vula-screen-loading" role="status" aria-label="Loading" style={{ padding: "var(--space-4, 16px)" }}><Skeleton lines={4} height={14} /></div>}>
+        {children}
+      </Suspense>
+    </ErrorBoundary>
   );
 }

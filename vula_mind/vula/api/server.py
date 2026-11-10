@@ -116,7 +116,7 @@ from vula.api.agent import router as agent_router
 from vula.api.links import router as links_router
 from vula.api.project_track import router as project_track_router
 from vula.api.master import router as master_router
-from vula.api.master_auth import require_auth
+from vula.api.master_auth import require_auth, require_platform
 from vula.api.menu_page import router as menu_page_router
 from vula.api.email_public import router as email_public_router
 
@@ -1216,25 +1216,9 @@ async def _stale_escalation_scheduler_loop() -> None:
                         if await _send_reply(row["helper_phone"], msg, tenant_id=tenant_id):
                             esc.mark_stale_notified(row["id"])
 
-                    # Close the loop with the CUSTOMER on anything the helper never answered.
-                    # Silence is the worst reply to a real buying question — see
-                    # find_abandoned_escalations for the incident this comes from.
-                    for row in esc.find_abandoned_escalations(tenant_id):
-                        q = (row.get("question") or "").strip()
-                        apology = (
-                            "Hi 👋 You asked me earlier:\n\n"
-                            f"\"{q}\"\n\n"
-                            "I'm sorry — I checked with the team and haven't been able to get "
-                            "you a firm answer. I didn't want to leave you waiting with no "
-                            "reply. Please send me a message and I'll get someone onto it "
-                            "right away."
-                        )
-                        if await _send_reply(row["customer_phone"], apology, tenant_id=tenant_id):
-                            esc.mark_customer_notified(row["id"])
-                            log.info("apologised to customer for unanswered escalation %s", row["id"])
-                            from core.mass_mind import health as _mm_health
-                            _mm_health.record_event(tenant_id, "stale_escalation_abandoned",
-                                                     {"escalation_id": row["id"]})
+                    # Close the loop with the CUSTOMER on anything the helper never answered:
+                    # one apology attempt each (escalation.apologise_abandoned).
+                    await esc.apologise_abandoned(tenant_id, _send_reply)
                 except Exception as exc:
                     log.warning("stale escalation nudge failed for %s: %s", tenant_id, exc)
         except Exception as exc:
@@ -2171,35 +2155,35 @@ def validate_tenant(tenant_id: str) -> str:
 
 # ─── OTH manual briefing triggers (for testing / on-demand) ──────────────────
 
-@app.post("/v1/oth/briefing/morning", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/morning", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_morning_briefing():
     """Manually fire the morning delivery list — for testing or on-demand sends."""
     await _send_oth_delivery_briefing()
     return {"sent": True, "briefing": "morning"}
 
 
-@app.post("/v1/oth/briefing/evening", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/evening", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_evening_summary():
     """Manually fire the 18:00 sales summary — for testing or on-demand sends."""
     await _send_oth_sales_summary()
     return {"sent": True, "briefing": "evening"}
 
 
-@app.post("/v1/oth/briefing/low-stock", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/low-stock", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_low_stock_alert():
     """Manually fire the low stock alert to Stacy."""
     await _send_low_stock_alert()
     return {"sent": True, "briefing": "low_stock"}
 
 
-@app.post("/v1/oth/briefing/friday-catch", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/friday-catch", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_friday_catch_reminder():
     """Manually fire the Friday catch reminder to Stacy."""
     await _send_friday_catch_reminder()
     return {"sent": True, "briefing": "friday_catch"}
 
 
-@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"], dependencies=[Depends(require_auth)])
+@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"], dependencies=[Depends(require_platform)])
 async def trigger_chase_unpaid():
     """Manually fire the unpaid order follow-up chase."""
     await _chase_unpaid_orders()
@@ -2553,7 +2537,7 @@ async def health_check():
     }
 
 
-@app.get("/ready", dependencies=[Depends(require_auth)])
+@app.get("/ready", dependencies=[Depends(require_platform)])
 async def readiness_report():
     """What each switched-on feature still needs, platform and per tenant (vula/readiness.py).
     503 while a platform setting is missing; a tenant's unfinished setup alone stays 200."""
@@ -2564,7 +2548,7 @@ async def readiness_report():
     return JSONResponse(rep, status_code=200 if rep["ready"] else 503)
 
 
-@app.get("/metrics", dependencies=[Depends(require_auth)])
+@app.get("/metrics", dependencies=[Depends(require_platform)])
 async def metrics():
     """Request performance metrics — total, errors, rolling average latency."""
     lats = _request_stats["latencies_ms"]

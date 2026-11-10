@@ -4,10 +4,12 @@
  * token server-side (vula/api/master_auth.py) instead of trusting the client's role label.
  */
 import { supabase } from './supabase'
+import { reportApiOutcome } from './apiHealth'
 
 export const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 /** Fired on window whenever Vula's API answers 401 (sign in required). */
 export const UNAUTHORIZED_EVENT = 'vula-unauthorized'
+export { API_HEALTH_EVENT } from './apiHealth'
 
 export async function authFetch(path, opts = {}) {
   const { data } = await supabase.auth.getSession()
@@ -43,7 +45,17 @@ export function installAuthFetch() {
         }
       }
     } catch { /* never let auth decoration break a request */ }
-    const resp = await raw(input, init)
+    let resp
+    try {
+      resp = await raw(input, init)
+    } catch (err) {
+      // A request that never got an answer, with the phone online: the server is unreachable.
+      if (url.startsWith(VULA_API)) {
+        reportApiOutcome({ networkError: true, online: typeof navigator === 'undefined' || navigator.onLine !== false })
+      }
+      throw err
+    }
+    if (url.startsWith(VULA_API)) reportApiOutcome({ status: resp.status })
     // Vula said "sign in required": tell the app, which checks whether the sign-in really ran
     // out (App.jsx, lib/session.js). 8 Nov 2026: a phone whose sign-in had expired kept showing
     // the dashboard while every request was turned away, and connecting a mailbox looked like

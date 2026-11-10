@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     # POPIA (2026-10-31): uploaded plans and their takeoff jobs are deleted this many days after
     # upload (vula/takeoff/api.purge_expired, run daily). 0 keeps them forever — not recommended.
     takeoff_retention_days: int = 90
+    # POPIA s14 retention, in days (0 keeps it). Agreed 9 Nov 2026: technical data briefly,
+    # conversations and unconverted leads for a year. vula/retention.py; docs/security-model.md.
+    wa_dedup_retention_days: int = 30          # vula_wa_msg_dedup (inbound dedupe, once-only send keys)
+    wa_login_retention_days: int = 30          # vula_wa_login_requests
+    app_error_retention_days: int = 90         # vula_app_errors (by last_seen)
+    lead_retention_days: int = 365             # vula_website_leads not won
+    turn_retention_days: int = 365             # vula_turns, vula_kb_turns
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 

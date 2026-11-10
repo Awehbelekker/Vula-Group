@@ -167,6 +167,9 @@ form.start { background: var(--paper); border: 2px solid var(--line); border-rad
 form.start label { font-weight: 600; font-size: 14px; display: grid; gap: 6px }
 form.start input, form.start select { font: 500 16px var(--body); padding: 13px 14px; border-radius: 12px; border: 2px solid var(--line); background: var(--mint); color: var(--ink) }
 .ok { background: var(--bubble-out); border-radius: 12px; padding: 12px 14px; font-weight: 600 }
+/* POPIA notice under the lead form (9 Nov 2026 audit): what the details are for, how long, how to stop. */
+.fine { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink); opacity: .75 }
+.fine a, footer a { color: inherit; text-decoration: underline }
 footer { padding-block: 34px; font-size: 14px; color: var(--ink-soft); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px }
 
 
@@ -522,7 +525,7 @@ footer { padding-block: 34px; font-size: 14px; color: var(--ink-soft); display: 
         <h2>Let's get your business on WhatsApp.</h2>
         <p>Leave your details and we'll WhatsApp you to set up a quick demo on your own products.</p>
       </div>
-      <form class="start" id="startForm" novalidate>
+      <form class="start" id="startForm" novalidate aria-describedby="f-privacy">
         <input type="text" name="website" id="f-hp" tabindex="-1" autocomplete="off" aria-hidden="true" class="hp">
         <label for="f-name">Your name<input id="f-name" name="name" required autocomplete="name" placeholder="Thandi Mokoena"></label>
         <label for="f-biz">Business name<input id="f-biz" name="business" required placeholder="e.g. Bay Bakery"></label>
@@ -531,6 +534,7 @@ footer { padding-block: 34px; font-size: 14px; color: var(--ink-soft); display: 
           <select id="f-kind" name="kind"><option>Shop / food</option><option>I make things</option><option>Construction / design</option><option>Brand rep</option><option>Services</option><option>Something else</option></select>
         </label>
         <button class="btn btn-wa" type="submit">💬 WhatsApp me</button>
+        <p class="fine" id="f-privacy">We use your name and number only to contact you about Vula. If you don't become a customer we delete them after 12 months, and you can reply STOP at any time. <a href="https://vuladashboard.vercel.app/#/privacy" target="_blank" rel="noopener">Privacy policy</a></p>
         <div class="ok" id="ok" hidden role="status">Thanks! We'll WhatsApp you shortly to set up your demo.</div>
         <div class="err" id="err" hidden role="alert"></div>
       </form>
@@ -538,7 +542,7 @@ footer { padding-block: 34px; font-size: 14px; color: var(--ink-soft); display: 
   </section>
 </main>
 
-<div class="wrap"><footer><span>© Vula Group · Cape Town</span><span>vula-ai.com</span></footer></div>
+<div class="wrap"><footer><span>© Vula Group · Cape Town</span><span><a href="https://vuladashboard.vercel.app/#/privacy" target="_blank" rel="noopener">Privacy</a> · vula-ai.com</span></footer></div>
 
 <script>
 // a decorative QR-like grid for the login card

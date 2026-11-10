@@ -17,6 +17,21 @@ import { VULA_API } from '../lib/authFetch'
 import { todaySA } from '../lib/dates'
 import InvoiceListV2 from './invoices/InvoiceListV2'
 
+/** POST a credit note. A credit that includes money the customer already paid must be refunded
+ * first: Vula does it through Yoco when asked (autoRefund), otherwise it answers 409
+ * refund_needed and the owner confirms they've refunded it themselves (9 Nov 2026 audit). */
+async function postCreditNote(tenantId, invoiceId, body, confirmDialog, fmt) {
+  const url = `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${invoiceId}/credit-note`
+  const send = (extra) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, ...extra }) }).then(r => r.json()).catch(() => ({}))
+  const d = await send({})
+  if (d.detail?.code !== 'refund_needed') return d
+  const ok = await confirmDialog(
+    `${fmt(d.detail.refund_cents)} of this credit was already paid by the customer. Have you refunded it to them? The credit note is only recorded once you have.`,
+    { title: 'Refund first', confirmLabel: "Yes, I've refunded it", cancelLabel: 'Not yet' })
+  return ok ? send({ refund_made: true }) : { cancelled: true }
+}
+
 export default function VulaInvoices({ tenantId, products = [], initialSupplierId = null, onClearSupplierFilter }) {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
@@ -373,15 +388,15 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     } else if (!(await confirmDialog(`Create a credit note for ${inv.invoice_number} (${fmt(inv.total_cents)})?`))) {
       return
     }
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/credit-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_refund: autoRefund }) })
-      .then(r => r.json()).catch(() => ({}))
+    const d = await postCreditNote(tenantId, inv.id, { auto_refund: autoRefund }, confirmDialog, fmt)
+    if (d.cancelled) return
     if (d.credit_note) {
       let msg = `Credit note ${d.credit_note.invoice_number} created.`
       if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
       else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
       toast(msg); load()
     }
-    else toast(d.detail || 'Could not create credit note.', 'danger')
+    else toast(d.detail?.message || (typeof d.detail === 'string' ? d.detail : '') || 'Could not create credit note.', 'danger')
   }
 
   async function payLink(inv) {
@@ -608,7 +623,9 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
           customer_name: customer.name, customer_phone: customer.phone,
           customer_email: customer.email, customer_address: customer.address,
           line_items: lineItems, subtotal_cents: subtotal, vat_rate: vatRate, vat_cents: vat,
-          total_cents: total, discount_cents: invDiscCents,
+          // The server works the amounts out again from the lines (VAT basis included) and
+          // ignores these figures; the discount goes as the percentage the owner typed.
+          total_cents: total, discount_cents: invDiscCents, discount_pct: parseFloat(discountPct) || 0,
           deposit_cents: depositCents,
           project: project || null,
           due_date: dueDate || null,
@@ -674,7 +691,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
       {items.map((it, i) => (
         <div key={i} style={s.itemRow}>
           <input list="section-list" placeholder="Section (optional)" title="Group this line under a BoQ trade section, e.g. Demolition, Structure, Finishes" value={it.section} onChange={e => updateItem(i, 'section', e.target.value)} style={{ ...s.fInput, width: 90 }} />
-          <input list="prod-list" placeholder="Description / pick product or service" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: 2 }} />
+          <input list="prod-list" placeholder="Description / pick product or service" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: '2 1 180px', minWidth: 0 }} />
           <input type="number" step="0.001" placeholder="Qty" value={it.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} style={{ ...s.fInput, width: 54 }} />
           <input list="unit-list" placeholder="unit" value={it.unit} onChange={e => updateItem(i, 'unit', e.target.value)} style={{ ...s.fInput, width: 58 }} />
           <input type="number" step="0.01" placeholder="R" value={it.unit_price} onChange={e => updateItem(i, 'unit_price', e.target.value)} style={{ ...s.fInput, width: 76 }} />
@@ -777,18 +794,17 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
   async function save() {
     if (creditItems.length === 0) return
     setSaving(true)
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${invoice.id}/credit-note`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ line_items: creditItems, auto_refund: !!invoice.yoco_checkout_id && autoRefund }),
-    }).then(r => r.json()).catch(() => ({}))
+    const d = await postCreditNote(tenantId, invoice.id,
+      { line_items: creditItems, auto_refund: !!invoice.yoco_checkout_id && autoRefund }, confirmDialog, fmt)
     setSaving(false)
+    if (d.cancelled) return
     if (d.credit_note) {
       let msg = `Credit note ${d.credit_note.invoice_number} created.`
       if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
       else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
       toast(msg); onDone()
     }
-    else toast(d.detail || 'Could not create credit note.', 'danger')
+    else toast(d.detail?.message || (typeof d.detail === 'string' ? d.detail : '') || 'Could not create credit note.', 'danger')
   }
 
   return (
@@ -1416,9 +1432,11 @@ const s = {
   matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, color: 'var(--accent)' },
   formSection:{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   fInput:     { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', flex: 1 },
-  fRow:       { display: 'flex', gap: 8 },
+  // Rows wrap on a phone instead of running off the screen (10 Nov 2026: at 360px the email box,
+  // a line item's price and the Due/VAT/Discount/Deposit row were cut off — invoicing on the move).
+  fRow:       { display: 'flex', gap: 8, flexWrap: 'wrap' },
   sectionLabel:{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '8px 0 6px' },
-  itemRow:    { display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' },
+  itemRow:    { display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' },
   rmBtn:      { background: 'transparent', border: 'none', color: 'var(--danger)', fontSize: 20, cursor: 'pointer', lineHeight: 1 },
   addItemBtn: { padding: '6px 12px', background: 'transparent', border: '1px dashed var(--border)', borderRadius: 6, fontSize: 12, cursor: 'pointer', color: 'var(--muted)', marginBottom: 12 },
   dueLabel:   { fontSize: 12, color: 'var(--muted)', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 },

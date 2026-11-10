@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from vula.api.master_auth import require_auth
+from vula.api.master_auth import require_auth, require_platform
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
@@ -773,7 +773,11 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
         order = None            # get_order uses .single() → raises when the order doesn't exist
     if not order or order.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="Order not found")
-    await service.update_order_status(order_id, new_status)
+    refund_cents = int(body["amount_cents"]) if new_status == "refunded" and body.get("amount_cents") else None
+    try:
+        await service.update_order_status(order_id, new_status, refund_cents=refund_cents)
+    except service.OrderStatusRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     # Keep stock in sync: restore on cancel/refund, deduct once when it enters fulfilment.
     if new_status in ("cancelled", "refunded"):
         await service.apply_order_stock(order_id, restore=True)
@@ -795,7 +799,8 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
             now = service._now()
             if result.get("ok"):
                 refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
-                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
+                # refunded_amount_cents is the running total, kept by update_order_status.
+                patch = {"refund_status": "pending",
                          "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
             else:
                 refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
@@ -4757,15 +4762,35 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
             raise HTTPException(status_code=409, detail=(
                 f"{cur.get('invoice_number')} has been sent, so its amounts can't be changed — "
                 "issue a credit note for the difference instead."))
+    # The amounts come from the server, never the browser (9 Nov 2026 audit H5): the dashboard
+    # recomputed VAT-exclusive, so a R1,200 VAT-inclusive payment-link draft was re-saved as R1,380
+    # and its pay page then asked for R1,380.
+    for k in ("subtotal_cents", "vat_cents", "total_cents", "discount_cents"):
+        update.pop(k, None)
+    if not update and not body.get("project"):
+        raise HTTPException(status_code=400, detail="Amounts are worked out from the lines: send line_items.")
 
     # A status change is routed through update_invoice_status so a transition to "paid"
     # always stamps paid_at server-side AND posts to the general ledger — a raw field write
     # here silently skipped both (2026-08-15 fix: the dashboard's "Mark paid" button used this
     # endpoint directly, so every invoice marked paid this way was invisible to the trial
     # balance report). Never trust a client-supplied paid_at either — always server time.
+    cur_doc = None
+    if "line_items" in update or "vat_rate" in update or "status" in update:
+        cur_doc = await service.get_invoice(tenant_id, invoice_id) or {}
+        if not cur_doc:
+            raise HTTPException(status_code=404, detail="No such document.")
+    if "line_items" in update or "vat_rate" in update:
+        update.update(await _server_totals(tenant_id, cur_doc, body))
+
     new_status = update.pop("status", None)
     update.pop("paid_at", None)
     if new_status:
+        refused = _status_refusal(cur_doc, new_status)
+        if refused:
+            raise HTTPException(status_code=409, detail=refused)
+        if new_status == "paid" and cur_doc.get("status") == "paid" and not update:
+            return cur_doc     # already paid: nothing to do, and never a second ledger entry
         result = await service.update_invoice_status(tenant_id, invoice_id, new_status)
         if new_status == "sent" and update.get("sent_channel"):
             update["sent_at"] = service._now()  # server time, never trust a client value
@@ -4795,6 +4820,55 @@ async def admin_move_invoice_project(tenant_id: str, invoice_id: str, body: dict
 
 
 _ISSUED = ("sent", "overdue", "part_paid", "paid")
+
+
+def _status_refusal(cur: dict, new_status: str) -> str:
+    """Why an issued invoice or credit note can't go to new_status, or "" when it can.
+
+    Status had no rules (9 Nov 2026 audit H5): PATCH "draft" on a sent or paid invoice, then edit
+    its amounts or delete it, got round the sent-invoice lock, broke the numbered series a tax
+    invoice must keep, and left its ledger entry with nothing behind it. Quotes and other
+    documents keep their own statuses."""
+    if (cur or {}).get("doc_type") not in ("invoice", "credit_note"):
+        return ""
+    status, number = cur.get("status"), cur.get("invoice_number") or "This invoice"
+    if status == "paid" and new_status != "paid":
+        return (f"{number} is paid. To reverse it, issue a credit note (and refund if the money "
+                "came in) so the books stay complete.")
+    if status in _ISSUED and new_status in ("draft", "cancelled", "void"):
+        return (f"{number} has been sent, so it can't go back to {new_status}. Cancel it with a "
+                "credit note so the numbering and the books stay complete.")
+    return ""
+
+
+async def _server_totals(tenant_id: str, cur: dict, body: dict) -> dict:
+    """Subtotal, discount, VAT and total for an edited document, worked out here from its lines
+    (service._compute_totals, the same sums create_invoice uses) on the document's own VAT
+    basis: an inclusive document stores an ex-VAT subtotal below the sum of its lines; with no
+    lines to tell, the business's setting."""
+    lines = body.get("line_items") if "line_items" in body else (cur.get("line_items") or [])
+    vat_rate = float(body["vat_rate"] if body.get("vat_rate") is not None else (cur.get("vat_rate") or 0))
+    old_lines = sum(int(i.get("total_cents") or 0) for i in (cur.get("line_items") or []))
+    if old_lines and float(cur.get("vat_rate") or 0) > 0:
+        inclusive = old_lines > int(cur.get("subtotal_cents") or 0) + 1
+    else:
+        s = await service.get_invoice_settings(tenant_id) or {}
+        inclusive = bool(s.get("prices_include_vat"))
+    entered = sum(int(round(float(i.get("quantity") or 0) * int(i.get("unit_price_cents") or 0)
+                            * (1 - float(i.get("discount_pct") or 0) / 100.0))) for i in lines)
+    if body.get("discount_pct") is not None:
+        pct = float(body.get("discount_pct") or 0)
+    elif body.get("discount_cents") is not None and entered:
+        pct = 100.0 * int(body.get("discount_cents") or 0) / entered
+    else:
+        pct = 100.0 * int(cur.get("discount_cents") or 0) / old_lines if old_lines and not inclusive else 0.0
+    pct = max(0.0, min(100.0, pct))
+    try:
+        subtotal, discount, vat, total, items = service._compute_totals(lines, vat_rate, inclusive, pct)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"A line is missing its description, quantity or price ({exc}).")
+    return {"line_items": items, "vat_rate": vat_rate, "subtotal_cents": subtotal,
+            "discount_cents": discount, "vat_cents": vat, "total_cents": total}
 _LOCKED_ONCE_SENT = {"line_items", "subtotal_cents", "vat_rate", "vat_cents", "total_cents",
                      "discount_cents", "deposit_cents", "customer_name", "customer_address"}
 
@@ -5530,7 +5604,7 @@ async def admin_delete_recurring(tenant_id: str, rec_id: str):
     return {"deleted": rec_id}
 
 
-@router.post("/cron/recurring-invoices", dependencies=[Depends(require_auth)])
+@router.post("/cron/recurring-invoices", dependencies=[Depends(require_platform)])
 async def cron_recurring_invoices():
     """Generate invoices for all due recurring templates (called by the scheduler)."""
     return {"generated": await service.process_due_recurring()}
@@ -5538,51 +5612,54 @@ async def cron_recurring_invoices():
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/credit-note")
 async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict = None):
-    """Create a credit note against an invoice (full, or partial via body.line_items).
-    Invoices have no 'refunded' status (unlike orders) — a credit note IS the refund record —
-    so body.auto_refund here does what body.auto_refund does on the order status endpoint:
-    opt-in, real money-back-to-customer via Yoco, keyed off the invoice's own checkout id."""
+    """A credit note against an invoice: the whole of what's left to credit, or body.line_items.
+
+    Goes through service.credit_invoice like the WhatsApp tool (9 Nov 2026 audit, money): it
+    used to make the credit note on its own with no cap, priced on the business's current VAT
+    setting rather than the invoice's, without reducing what the invoice still owed, and
+    body.auto_refund sent Yoco the whole credit-note total even when the invoice was unpaid.
+
+    The part of a credit that is money already received must be refunded: body.auto_refund does
+    it through Yoco (that part only); otherwise the answer is 409 refund_needed with the amount,
+    and the owner confirms they refunded it themselves (body.refund_made)."""
     body = body or {}
-    try:
-        cn = await service.create_credit_note(tenant_id, invoice_id, body.get("line_items"))
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    src = await service.get_invoice(tenant_id, invoice_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    lines = body.get("line_items") or None
+    args = dict(reason=body.get("reason") or "", line_items=lines)
     refund_result = None
-    if body.get("auto_refund"):
-        src = await service.get_invoice(tenant_id, invoice_id)
-        checkout_id = (src or {}).get("yoco_checkout_id")
-        amount = int(cn.get("total_cents") or 0)
-        if not checkout_id:
-            refund_result = {"gateway": "yoco", "status": "failed",
-                              "detail": "This invoice has no online (Yoco) payment on record."}
-        elif amount <= 0:
-            refund_result = {"gateway": "yoco", "status": "failed", "detail": "Nothing to refund."}
-        else:
-            from vula.api.yoco import refund_yoco_payment
-            # One key per credit note: two partial credit notes of the same amount on one
-            # invoice are two refunds. The default checkout+amount key would make Yoco replay
-            # the first and move no money, while we recorded the second as pending.
-            result = await refund_yoco_payment(tenant_id, checkout_id, amount,
-                                               idempotency_key=f"refund-cn-{cn.get('id') or invoice_id}")
-            now = service._now()
-            if result.get("ok"):
-                refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
-                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
-                         "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
-                try:   # money went back → reverse that part of the sale (idempotent per CN)
-                    from vula.commerce import ledger
-                    ledger.post_invoice_refund(tenant_id, src, cn, amount)
-                except Exception as exc:
-                    log.warning("refund ledger posting failed for %s: %s", cn.get("id"), exc)
-            else:
-                refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
-                patch = {"refund_status": "failed"}
-            try:
-                service._client().table("commerce_invoices").update(patch) \
-                    .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
-            except Exception as exc:
-                log.warning("refund tracking update failed for invoice %s: %s", invoice_id, exc)
-    return {"credit_note": cn, "refund": refund_result}
+    try:
+        res = await service.credit_invoice(tenant_id, invoice_id, refund_made=bool(body.get("refund_made")), **args)
+    except service.RefundNeeded as exc:
+        checkout_id = src.get("yoco_checkout_id")
+        if not (body.get("auto_refund") and checkout_id):
+            raise HTTPException(status_code=409, detail={
+                "code": "refund_needed", "refund_cents": exc.refund_cents, "message": str(exc)})
+        from vula.api.yoco import refund_yoco_payment
+        # One key per invoice + amount already refunded: a second part credit is a second refund.
+        done = int(src.get("refunded_amount_cents") or 0)
+        result = await refund_yoco_payment(tenant_id, checkout_id, exc.refund_cents,
+                                           idempotency_key=f"refund-inv-{invoice_id}-{done}-{exc.refund_cents}")
+        if not result.get("ok"):
+            raise HTTPException(status_code=502, detail={
+                "code": "refund_failed", "refund_cents": exc.refund_cents,
+                "message": f"Yoco didn't refund it ({result.get('detail') or 'no reason given'}). "
+                           "Nothing was credited. Refund the customer yourself, then try again."})
+        try:
+            service._client().table("commerce_invoices").update({
+                "refund_status": "pending", "refunded_amount_cents": done + exc.refund_cents,
+                "refunded_at": service._now(), "yoco_refund_id": result.get("refund_id")}) \
+                .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+        except Exception as e:  # noqa: BLE001
+            log.warning("refund tracking update failed for invoice %s: %s", invoice_id, e)
+        # The money went back: the credit note and its ledger refund are recorded once, here.
+        res = await service.credit_invoice(tenant_id, invoice_id, refund_made=True, **args)
+        refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": exc.refund_cents}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"credit_note": res["credit_note"], "invoice": res["invoice"], "refund": refund_result,
+            "credited_cents": res["credited_cents"], "refund_cents": res["refund_cents"]}
 
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")
@@ -6587,7 +6664,7 @@ async def process_due_campaigns() -> int:
     return n
 
 
-@router.post("/cron/campaigns", dependencies=[Depends(require_auth)])
+@router.post("/cron/campaigns", dependencies=[Depends(require_platform)])
 async def cron_process_campaigns():
     """Backstop trigger for the scheduler (also runs in-process every 60s)."""
     return {"processed": await process_due_campaigns()}

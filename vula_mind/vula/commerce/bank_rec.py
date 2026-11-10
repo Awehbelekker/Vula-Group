@@ -509,7 +509,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     accounts = accounting.ensure_chart(tenant_id)
     acc_map = {a["code"]: a for a in accounts}
     try:
-        vat_reg = bool((await service.get_invoice_settings(tenant_id) or {}).get("vat_registered", True))
+        vat_reg = bool((await service.get_invoice_settings(tenant_id) or {}).get("vat_registered", False))
     except Exception:
         vat_reg = True
 

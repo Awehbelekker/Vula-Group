@@ -1309,14 +1309,55 @@ async def find_by_barcode(tenant_id: str, barcode: str) -> Optional[dict]:
     return {"product": variant.pop("commerce_products", None), "variant": variant}
 
 
+class OrderStatusRefused(ValueError):
+    """A status change that would leave the books wrong; the message says what to do instead."""
+
+
+def _order_was_paid(order: dict) -> bool:
+    """Was this order's sale booked? The ledger says (an order_paid entry); if it can't be read,
+    any status past pending_payment counts as paid (cash-on-delivery orders reach "confirmed"
+    unpaid, so the ledger is asked first)."""
+    from vula.commerce import ledger
+    posted = ledger.was_posted(order.get("tenant_id") or "", "order_paid", order.get("id"))
+    if posted is not None:
+        return posted
+    return (order.get("status") or "pending_payment") not in ("pending_payment", "cancelled")
+
+
 async def update_order_status(order_id: str, status: str, yoco_checkout_id: Optional[str] = None,
-                              payment_method: Optional[str] = None) -> None:
+                              payment_method: Optional[str] = None,
+                              refund_cents: Optional[int] = None) -> None:
     """payment_method records HOW a walk-in paid (cash, card, eft, snapscan). Invoices have
     carried this since migration 130 via record_invoice_payment; orders — where a shop's cash
     sales actually land — did not, so 'paid' said nothing about whether the money was in the
     till or the bank. Optional and best-effort: the column arrived in migration 044, so a
     failure retries without it rather than losing the status change itself."""
+    # 9 Nov 2026 audit (money, medium): a refund posted a reversal of the WHOLE order whatever
+    # was refunded (R200 back on a R1,000 order reversed R1,000), an unpaid order marked
+    # "refunded" posted a refund for a sale never booked, and a paid order could be cancelled
+    # with the money still held and nothing in the books.
+    refund = None                       # (amount, ledger source id) to post after the update
+    if status in ("cancelled", "refunded"):
+        cur = (_client().table("commerce_orders")
+               .select("id,tenant_id,display_id,status,total_cents,refunded_amount_cents")
+               .eq("id", order_id).limit(1).execute().data or [{}])[0]
+        if cur and status == "cancelled" and cur.get("status") not in ("cancelled", "refunded") \
+                and _order_was_paid(cur):
+            raise OrderStatusRefused(
+                f"Order {cur.get('display_id') or order_id} is paid, so it can't just be cancelled: "
+                "refund it instead (status refunded), so the money and the books match.")
+        if cur and status == "refunded" and _order_was_paid(cur):
+            total = int(cur.get("total_cents") or 0)
+            already = int(cur.get("refunded_amount_cents") or 0)
+            left = max(0, total - already)
+            amount = left if refund_cents is None else max(0, min(int(refund_cents), left))
+            if amount:
+                source = order_id if (already == 0 and amount == total) else f"{order_id}:refund:{already}"
+                refund = (amount, source)
+                update_extra = {"refunded_amount_cents": already + amount}
     update = {"status": status, "updated_at": _now()}
+    if refund:
+        update.update(update_extra)
     if yoco_checkout_id:
         update["yoco_checkout_id"] = yoco_checkout_id
     if payment_method:
@@ -1335,10 +1376,73 @@ async def update_order_status(order_id: str, status: str, yoco_checkout_id: Opti
             order = result.data[0]
             if status == "paid":
                 ledger.post_order_paid(order["tenant_id"], order)
-            else:
-                ledger.post_order_refund(order["tenant_id"], order)
+            elif refund:
+                ledger.post_order_refund(order["tenant_id"], order, amount_cents=refund[0], source_id=refund[1])
         except Exception as exc:
             logger.warning("ledger hook failed for order %s: %s", order_id, exc)
+
+
+async def mark_order_paid(tenant_id: str, order_id: str, payment_method: str = "online",
+                          yoco_checkout_id: Optional[str] = None) -> Optional[dict]:
+    """A gateway says this order was paid: pending_payment -> paid, for this business only, in
+    one conditional write, then the ledger. Returns the order when THIS call moved it, None when
+    it was already paid/cancelled, isn't this business's, or doesn't exist.
+
+    9 Nov 2026 audit S6/H4/M8: the Yoco webhook updated the order by id alone (a business's own
+    Yoco secret could mark another business's order paid), and the other gateways (PayFast,
+    Ozow, Paystack, Peach, iKhokha) wrote status straight to the table and never posted to the
+    ledger. Two events at once (payment.succeeded + checkout.completed) both passed a
+    read-then-write status check, so the customer was told twice and dispatch made twice; only
+    one of them can win this write."""
+    if not tenant_id or not order_id:
+        return None
+    update = {"status": "paid", "payment_method": payment_method, "updated_at": _now()}
+    if yoco_checkout_id:
+        update["yoco_checkout_id"] = yoco_checkout_id
+    res = (_client().table("commerce_orders").update(update)
+           .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment").execute())
+    if not res.data:
+        return None
+    order = res.data[0]
+    try:
+        from vula.commerce import ledger
+        ledger.post_order_paid(tenant_id, order)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ledger hook failed for order %s: %s", order_id, exc)
+    _settle_order_invoice(tenant_id, order)
+    return order
+
+
+def _settle_order_invoice(tenant_id: str, order: dict) -> None:
+    """The order was paid -> its own invoice (send_order_invoice's, not a deposit/balance one)
+    is paid too, without a second ledger entry: the sale was just posted for the order. It used
+    to stay outstanding in debtors and statements, and marking it paid by hand then booked the
+    revenue twice (9 Nov 2026 audit M1). The mirror of _settle_linked_order. Never raises."""
+    from vula.commerce import order_deposit
+    try:
+        rows = (_client().table("commerce_invoices").select("id,status,total_cents,notes,direction")
+                .eq("tenant_id", tenant_id).eq("order_id", order["id"]).execute().data or [])
+        now = _now()
+        for inv in rows:
+            if ((inv.get("direction") or "outbound") == "inbound" or order_deposit.kind_of(inv)
+                    or inv.get("status") in ("paid", "cancelled", "void", "credited")):
+                continue
+            (_client().table("commerce_invoices")
+             .update({"status": "paid", "paid_at": now, "updated_at": now,
+                      "total_paid_cents": int(inv.get("total_cents") or 0)})
+             .eq("tenant_id", tenant_id).eq("id", inv["id"]).neq("status", "paid").execute())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("order %s paid but its invoice wasn't settled: %s", order.get("id"), exc)
+
+
+async def cancel_unpaid_order(tenant_id: str, order_id: str) -> Optional[dict]:
+    """pending_payment -> cancelled for this business only, in one conditional write (a late
+    "expired" can never cancel an order another link already paid). The order, or None."""
+    if not tenant_id or not order_id:
+        return None
+    res = (_client().table("commerce_orders").update({"status": "cancelled", "updated_at": _now()})
+           .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment").execute())
+    return res.data[0] if res.data else None
 
 
 async def get_order(order_id: str) -> Optional[dict]:
@@ -1608,6 +1712,14 @@ def format_history(messages: List[dict]) -> str:
 _DOC_TYPE_CODE = {"invoice": "INV", "quote": "QTE", "proforma": "PRO", "credit_note": "CRN"}
 
 
+def _half_up(x) -> int:
+    """Cents, rounded half up (0.5c -> 1c), the way the dashboard and the Xero import round.
+    Python's round() rounds halves to even, so VAT on 30c was 4c here and 5c in the dashboard
+    (9 Nov 2026 audit, money). Through Decimal of the float's shortest repr, so 2.675 stays 2.675."""
+    from decimal import Decimal, ROUND_HALF_UP
+    return int(Decimal(repr(float(x))).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def _compute_totals(line_items: List[dict], vat_rate: float,
                     prices_include_vat: bool = False,
                     invoice_discount_pct: float = 0.0) -> tuple[int, int, int, int, List[dict]]:
@@ -1625,7 +1737,7 @@ def _compute_totals(line_items: List[dict], vat_rate: float,
         qty = float(item["quantity"])          # decimals allowed for per-kg items
         unit = int(item["unit_price_cents"])
         line_disc = float(item.get("discount_pct") or 0)
-        line_total = int(round(qty * unit * (1 - line_disc / 100.0)))
+        line_total = _half_up(qty * unit * (1 - line_disc / 100.0))
         entered += line_total
         normalised.append(
             {
@@ -1642,15 +1754,15 @@ def _compute_totals(line_items: List[dict], vat_rate: float,
                 "section": (item.get("section") or "").strip() or None,
             }
         )
-    discount_cents = int(round(entered * (invoice_discount_pct / 100.0))) if invoice_discount_pct else 0
+    discount_cents = _half_up(entered * (invoice_discount_pct / 100.0)) if invoice_discount_pct else 0
     after_discount = entered - discount_cents
     if prices_include_vat and vat_rate > 0:
         # entered prices already contain VAT. Work in ex-VAT terms so the columns foot:
         # subtotal(ex, pre-discount) − discount(ex) = taxable(ex); taxable + vat = total(incl).
-        subtotal = round(entered / (1 + vat_rate / 100.0))
-        net_after = round(after_discount / (1 + vat_rate / 100.0))
+        subtotal = _half_up(entered / (1 + vat_rate / 100.0))
+        net_after = _half_up(after_discount / (1 + vat_rate / 100.0))
         return subtotal, subtotal - net_after, after_discount - net_after, after_discount, normalised
-    vat_cents = round(after_discount * (vat_rate / 100.0))
+    vat_cents = _half_up(after_discount * (vat_rate / 100.0))
     return entered, discount_cents, vat_cents, after_discount + vat_cents, normalised
 
 
@@ -1699,7 +1811,7 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     doc_type = data.get("doc_type", "invoice")
     # Respect the tenant's VAT profile: non-registered → 0%; inclusive pricing → back out VAT.
     s = await get_invoice_settings(tenant_id) or {}
-    vat_registered = s.get("vat_registered", True)
+    vat_registered = bool(s.get("vat_registered", False))   # no settings: not registered (migration 253)
     # A per-document override: a payment link for "R1,200" means the customer pays R1,200.
     prices_include_vat = bool(data["prices_include_vat"] if "prices_include_vat" in data
                               else s.get("prices_include_vat"))
@@ -1750,6 +1862,25 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     return result.data[0]
 
 
+def order_invoice_lines(order: dict) -> List[dict]:
+    """An order as invoice lines: its items, its discount code (a negative line) and delivery,
+    so the lines add up to what the customer was charged."""
+    lines = [
+        {"description": it.get("product_name") or "Item", "quantity": it["quantity"],
+         "unit_price_cents": it["unit_price_cents"], "product_id": it.get("product_id")}
+        for it in (order.get("commerce_order_items") or [])
+    ]
+    discount = int(order.get("discount_cents") or 0)
+    if discount > 0:
+        code = order.get("discount_code")
+        lines.append({"description": f"Discount ({code})" if code else "Discount", "quantity": 1,
+                      "unit_price_cents": -discount})
+    delivery = int(order.get("delivery_cents") or 0)
+    if delivery > 0:
+        lines.append({"description": "Delivery", "quantity": 1, "unit_price_cents": delivery})
+    return lines
+
+
 async def send_order_invoice(tenant_id: str, order_id: str, with_pay_link: bool = True) -> Optional[dict]:
     """Auto-generate an invoice for a just-placed order and WhatsApp it to the customer —
     the invoice doubles as the payment request, not a post-payment receipt. Self-contained
@@ -1772,18 +1903,26 @@ async def send_order_invoice(tenant_id: str, order_id: str, with_pay_link: bool 
         logger.info("send_order_invoice: order %s has no customer_phone, skipping", order_id)
         return None
 
-    line_items = [
-        {"description": it.get("product_name") or "Item", "quantity": it["quantity"],
-         "unit_price_cents": it["unit_price_cents"], "product_id": it.get("product_id")}
-        for it in (order.get("commerce_order_items") or [])
-    ]
-    delivery_cents = int(order.get("delivery_cents") or 0)
-    if delivery_cents > 0:
-        line_items.append({"description": "Delivery", "quantity": 1,
-                           "unit_price_cents": delivery_cents})
+    line_items = order_invoice_lines(order)
+    # The invoice says what the order charged, to the cent (9 Nov 2026 audit M1): shelf prices
+    # already include VAT (create_order adds none), and a discount code is its own line. It used
+    # to leave the discount out and add 15% on top for a VAT-exclusive business: R950 charged,
+    # R1,207.50 invoiced. If the figures still don't agree, no invoice goes to the customer.
+    try:
+        settings_row = await get_invoice_settings(tenant_id) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("send_order_invoice: invoice settings unreadable for %s: %s", tenant_id, exc)
+        settings_row = {}
+    vat_rate = 15.0 if settings_row.get("vat_registered", False) else 0.0
+    *_, invoiced, _ = _compute_totals(line_items, vat_rate, prices_include_vat=True)
+    if invoiced != int(order.get("total_cents") or 0):
+        logger.error("send_order_invoice: order %s total %s but its invoice would be %s — not sent",
+                     order_id, order.get("total_cents"), invoiced)
+        return None
 
     try:
         invoice = await create_invoice(tenant_id, {
+            "prices_include_vat": True,
             "doc_type": "invoice",
             "customer_name": order.get("customer_name"),
             "customer_phone": phone,
@@ -2113,6 +2252,17 @@ async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: 
         raise ValueError(f"invoice is already {invoice['status']}")
     if amount_cents <= 0:
         raise ValueError("amount must be greater than zero")
+    # Never more than is owed (9 Nov 2026 audit, money): R1,500 recorded against a R1,000
+    # invoice booked R1,500 to bank, sales and VAT. An overpayment is a different conversation
+    # (refund it, or hold it as credit), never extra income on this invoice.
+    before = sum(int(p.get("amount_cents") or 0) for p in (
+        _client().table("commerce_invoice_payments").select("amount_cents")
+        .eq("tenant_id", tenant_id).eq("invoice_id", invoice_id).execute().data or []))
+    still_owed = int(invoice.get("total_cents") or 0) - before
+    if amount_cents > still_owed + 1:
+        raise ValueError(f"R{amount_cents / 100:,.2f} is more than the R{max(0, still_owed) / 100:,.2f} still owed on "
+                         f"{invoice.get('invoice_number') or 'this invoice'}. Record R{max(0, still_owed) / 100:,.2f}, "
+                         "and refund or hold the rest separately.")
 
     payment = {
         "tenant_id": tenant_id, "invoice_id": invoice_id, "amount_cents": amount_cents,
@@ -3363,41 +3513,67 @@ async def _propose_recurring_send(tenant_id: str, inv: dict, rec: dict) -> None:
 
 # ── Credit notes ──────────────────────────────────────────────────────────────
 
-async def create_credit_note(tenant_id: str, invoice_id: str, line_items: Optional[List[dict]] = None) -> dict:
-    """Create a credit note against an invoice (reuses the invoice engine).
-    Defaults to crediting the full invoice; pass line_items for a partial credit."""
-    src = await get_invoice(tenant_id, invoice_id)
-    if not src:
-        raise ValueError("Invoice not found")
-    items = line_items or src.get("line_items") or []
-    if isinstance(items, str):
-        import json as _json
-        try: items = _json.loads(items)
-        except Exception: items = []
-    cn = await create_invoice(tenant_id, {
-        "doc_type": "credit_note",
-        "customer_name": src.get("customer_name"), "customer_email": src.get("customer_email"),
-        "customer_phone": src.get("customer_phone"), "customer_address": src.get("customer_address"),
-        "line_items": items, "vat_rate": float(src.get("vat_rate") or 15),
-        "status": "sent", "issue_date": _now()[:10],
-        "notes": f"Credit note against invoice {src.get('invoice_number')}",
-    })
-    try:
-        _client().table("commerce_invoices").update({"credited_invoice_id": invoice_id}) \
-            .eq("id", cn["id"]).eq("tenant_id", tenant_id).execute()
-        cn["credited_invoice_id"] = invoice_id
-    except Exception:
-        pass
-    return cn
-
-
 class RefundNeeded(ValueError):
     """Part of the credit is money the customer already paid — it must be refunded, and the
-    owner must say it has been, before the books record it."""
+    owner must say it has been, before the books record it. refund_cents: that part."""
+
+    def __init__(self, message: str, refund_cents: int = 0):
+        super().__init__(message)
+        self.refund_cents = refund_cents
+
+
+def _vat_inclusive(doc: dict) -> bool:
+    """Was this document priced VAT-inclusive? Inclusive documents store an ex-VAT subtotal below
+    the sum of their lines; exclusive ones store the sum itself."""
+    lines = doc.get("line_items") or []
+    if isinstance(lines, str):
+        try:
+            import json as _json
+            lines = _json.loads(lines)
+        except Exception:
+            lines = []
+    gross = sum(int(i.get("total_cents") or 0) for i in lines)
+    return bool(gross and float(doc.get("vat_rate") or 0) > 0 and gross > int(doc.get("subtotal_cents") or 0) + 1)
+
+
+def plan_credit(tenant_id: str, src: dict, amount_cents: Optional[int] = None) -> Dict[str, int]:
+    """How a credit of `amount_cents` (default: everything not yet credited) splits:
+    {"credit", "against_owed", "refund", "left_to_credit", "cash_paid"}. Raises ValueError.
+
+    9 Nov 2026 audit (money, medium): earlier credit notes count against the invoice total, and
+    only money actually received can be refunded. total_paid_cents holds credit-note settlements
+    too, so two R800 credits on an unpaid R1,000 invoice used to ask the owner to confirm a
+    "R600 already paid" refund, and the dashboard's credit notes had no cap at all."""
+    total = int(src.get("total_cents") or 0)
+    paid = int(src.get("total_paid_cents") or 0)
+    db = _client()
+    credited = sum(int(r.get("total_cents") or 0) for r in (
+        db.table("commerce_invoices").select("total_cents").eq("tenant_id", tenant_id)
+        .eq("credited_invoice_id", src["id"]).execute().data or []))
+    by_credit = sum(int(r.get("amount_cents") or 0) for r in (
+        db.table("commerce_invoice_payments").select("amount_cents").eq("tenant_id", tenant_id)
+        .eq("invoice_id", src["id"]).eq("payment_method", "credit_note").execute().data or []))
+    cash_paid = max(0, paid - by_credit)
+    left = max(0, total - credited)
+    credit = left if amount_cents is None else int(amount_cents)
+    if left <= 0:
+        raise ValueError(f"Invoice {src.get('invoice_number')} has already been credited in full.")
+    if credit <= 0 or credit > left:
+        raise ValueError(f"A credit must be between R0.01 and R{left / 100:,.2f} (what's left to credit "
+                         f"on {src.get('invoice_number')}).")
+    owed = max(0, total - paid)
+    against_owed = min(credit, owed)
+    refund = credit - against_owed
+    if refund > cash_paid:
+        raise ValueError(f"Only R{cash_paid / 100:,.2f} was paid on {src.get('invoice_number')}, so no more "
+                         "than that can be refunded.")
+    return {"credit": credit, "against_owed": against_owed, "refund": refund,
+            "left_to_credit": left, "cash_paid": cash_paid}
 
 
 async def credit_invoice(tenant_id: str, invoice_id: str, amount_cents: Optional[int] = None,
-                         reason: str = "", refund_made: bool = False) -> dict:
+                         reason: str = "", refund_made: bool = False,
+                         line_items: Optional[List[dict]] = None) -> dict:
     """Correct a sent invoice with a credit note — the invoice itself is never edited.
 
     The credit first reduces what is still owed (a commerce_invoice_payments row with method
@@ -3414,22 +3590,27 @@ async def credit_invoice(tenant_id: str, invoice_id: str, amount_cents: Optional
                          "a draft can simply be edited or deleted; nothing to credit.")
     total = int(src.get("total_cents") or 0)
     paid = int(src.get("total_paid_cents") or 0)
-    owed = max(0, total - paid)
-    credit = int(amount_cents or total)
-    if credit <= 0 or credit > total:
-        raise ValueError(f"A credit must be between R0.01 and the invoice total R{total / 100:,.2f}.")
-    against_owed = min(credit, owed)
-    refund = credit - against_owed
+    vat_rate = float(src.get("vat_rate") or 0)
+    inclusive = _vat_inclusive(src)
+    if line_items:
+        # Lines credited are priced on the invoice's own VAT basis (the dashboard's credit notes
+        # used the business's current setting: a VAT-inclusive invoice was credited at 1.15x).
+        *_, amount_cents, cn_lines = _compute_totals(line_items, vat_rate, inclusive)
+        cn_inclusive = inclusive
+    else:
+        cn_lines, cn_inclusive = None, True
+    plan = plan_credit(tenant_id, src, amount_cents)
+    credit, against_owed, refund = plan["credit"], plan["against_owed"], plan["refund"]
     if refund and not refund_made:
         raise RefundNeeded(f"R{refund / 100:,.2f} of this was already paid — refund the customer "
-                           "first, then confirm the refund was made.")
+                           "first, then confirm the refund was made.", refund)
     cn = await create_invoice(tenant_id, {
         "doc_type": "credit_note",
         "customer_name": src.get("customer_name"), "customer_email": src.get("customer_email"),
         "customer_phone": src.get("customer_phone"), "customer_address": src.get("customer_address"),
-        "line_items": [{"description": (reason or f"Credit against invoice {src.get('invoice_number')}")[:200],
-                        "quantity": 1, "unit_price_cents": credit}],
-        "prices_include_vat": True, "vat_rate": float(src.get("vat_rate") or 15),
+        "line_items": cn_lines or [{"description": (reason or f"Credit against invoice {src.get('invoice_number')}")[:200],
+                                    "quantity": 1, "unit_price_cents": credit}],
+        "prices_include_vat": cn_inclusive, "vat_rate": vat_rate,
         "status": "sent", "issue_date": _now()[:10],
         "notes": f"Credit note against invoice {src.get('invoice_number')}",
     })

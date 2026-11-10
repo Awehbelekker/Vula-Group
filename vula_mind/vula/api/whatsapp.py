@@ -837,7 +837,12 @@ async def receive_message(
                         _run_bg(_onb.answer(phone, msg, _action), label="vula_number")
                         continue
                     _ps.REPLY_VIA_PLATFORM.set(_as_tenant)
-                    route_tenant, route_mode = _as_tenant, "knowledge"
+                    # Only the business's own people get here (onboard_wa.decide). For a shop, the
+                    # shop-line route sends them to the admin agent, as on its own number; as a
+                    # knowledge line "what orders came in today?" reached the CUSTOMER shopping
+                    # assistant with the owner as the customer (9 Nov 2026 audit H10).
+                    route_tenant = _as_tenant
+                    route_mode = await _aio2.to_thread(_platform_route_mode, _as_tenant)
                 else:
                     route_tenant, route_mode = _resolve_number_route(phone_number_id)
                 # Replies go from the number this message came in on (a business can have several,
@@ -7992,7 +7997,14 @@ async def _get_tenant_wa_creds(tenant_id: str, phone_number_id: Optional[str] = 
             _wa_creds_cache[tenant_id] = rows
             _WA_CREDS_AT[tenant_id] = _t.time()
         except Exception as exc:
-            logger.debug("Supabase WA creds lookup failed for %s: %s", tenant_id, exc)
+            # A failed read is not "no numbers": the last rows we had, however old, else nothing
+            # (9 Nov 2026 audit H9: a database blip sent any business's messages from the
+            # server's line).
+            rows = _wa_creds_cache.get(tenant_id) if isinstance(_wa_creds_cache.get(tenant_id), list) else None
+            logger.warning("WhatsApp line lookup failed for %s (%s): %s", tenant_id,
+                           "using the last known numbers" if rows is not None else "not sending", exc)
+            if rows is None:
+                return None
 
     if rows:
         row = _nums.pick(rows, phone_number_id, to)
@@ -8027,6 +8039,31 @@ async def _get_tenant_wa_creds(tenant_id: str, phone_number_id: Optional[str] = 
     return None
 
 
+def _platform_route_mode(tenant_id: str) -> str:
+    """How a business's own people are handled when they message Vula's number on its behalf:
+    a shop as a shop line (its owner and staff reach the admin agent), anything else as a
+    knowledge line."""
+    from vula import onboard_wa
+    return "commerce" if onboard_wa._sells(tenant_id) else "knowledge"
+
+
+async def _send_creds(tenant_id: str, phone_number_id: Optional[str] = None,
+                      to: Optional[str] = None) -> dict | None:
+    """The line a message for this business goes out on, or None: send nothing.
+
+    With a business: exactly what _get_tenant_wa_creds says. It already uses the server's line
+    for a business that has no number yet (setup), and deliberately says None for one whose
+    numbers are all disconnected. Every send path used to fall back to the server's line on that
+    None too (9 Nov 2026 audit H9), so a disconnected business's reminders and customer messages
+    still went out, from another business's number. Without a business (a reply to a number no
+    business owns): the server's line."""
+    if tenant_id:
+        return await _get_tenant_wa_creds(tenant_id, phone_number_id, to)
+    if settings.whatsapp_token and settings.whatsapp_phone_id:
+        return {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+    return None
+
+
 async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str) -> bool:
     """Send an APPROVED WhatsApp template message. Proactive/scheduled notifications must use a
     template — free text to someone who hasn't messaged recently fails with 'Re-engagement message'
@@ -8037,13 +8074,10 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, str(template)):   # capability benchmark
         return True
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            logger.info("WhatsApp not configured — skipping template send to %s", to)
-            return False
+        logger.info("No WhatsApp line for %s — template not sent to %s", tenant_id or "(none)", to)
+        return False
 
     number = to.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
@@ -8344,10 +8378,7 @@ async def send_template_message(tenant_id: str, to: str, name: str, params: list
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, f"[template {name}] " + " | ".join(str(p) for p in params)):
         return "dry-run"
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
-    if not creds:
-        creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-                 if settings.whatsapp_token and settings.whatsapp_phone_id else None)
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
         logger.error("template %s not sent to %s — no WhatsApp credentials for %s", name, to, tenant_id)
         return None
@@ -8383,10 +8414,7 @@ async def send_template(tenant_id: str, to: str, name: str, params: list,
                         lang: Optional[str] = None) -> bool:
     """Send an approved Meta template with body parameters (works outside the 24-hour window).
     False when it couldn't be sent — logged as an error, never silently."""
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
-    if not creds:
-        creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-                 if settings.whatsapp_token and settings.whatsapp_phone_id else None)
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
         logger.error("template %s not sent to %s — no WhatsApp credentials for %s", name, to, tenant_id)
         return False
@@ -8423,6 +8451,15 @@ async def _send_notify_template(creds: dict, number: str, tenant_id: str) -> boo
     """
     name = (settings.whatsapp_notify_template or "").strip()
     if not name:
+        return False
+    # Once per number per day, across workers (9 Nov 2026 audit H8): the owner digest and the
+    # advisor retry every 15 minutes on a failed send, and each failure used to send this
+    # template again, about 8-12 nudges a morning. Not released on failure, so a refused
+    # template isn't retried all day either.
+    import asyncio as _aio
+    from datetime import date as _date
+    if not await _aio.to_thread(_claim_outbound, tenant_id, f"notify-template:{number}:{_date.today().isoformat()}"):
+        logger.info("notification template already sent to %s today — not again", number)
         return False
     try:
         from vula.api.tenants import get_config
@@ -8648,13 +8685,9 @@ async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
         return
     # The number the message came in on — a message is marked read by the number it was sent to.
     from vula import whatsapp_numbers as _nums
-    creds = (await _get_tenant_wa_creds(tenant_id, (_nums.INBOUND.get() or {}).get("pnid"))
-             if tenant_id else None)
+    creds = await _send_creds(tenant_id, (_nums.INBOUND.get() or {}).get("pnid"))
     if not creds:
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            return
+        return
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
@@ -8740,14 +8773,10 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
     message = _sanitize_outbound(message)
     from vula import turns as _turns
     _turns.reply(message, to=to)
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
-        # Try global env var fallback
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            logger.info("WhatsApp not configured — skipping reply to %s", to)
-            return False
+        logger.info("No WhatsApp line for %s — reply not sent to %s", tenant_id or "(none)", to)
+        return False
 
     number = to.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
@@ -8847,13 +8876,10 @@ async def _send_invoice_document(
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, f"[document {filename}] {caption}"):   # capability benchmark
         return True
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            logger.info("WhatsApp not configured — skipping document to %s", to)
-            return False
+        logger.info("No WhatsApp line for %s — document not sent to %s", tenant_id or "(none)", to)
+        return False
 
     number = to.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
@@ -10438,10 +10464,7 @@ async def _send_wa_image(creds: dict, number: str, image_url: str, caption: str 
 
 
 async def _resolve_wa(tenant_id: str, to: Optional[str] = None) -> Optional[dict]:
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
-    if not creds and settings.whatsapp_token and settings.whatsapp_phone_id:
-        creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-    return creds
+    return await _send_creds(tenant_id, to=to)
 
 
 def _wa_number(phone: str) -> str:
@@ -10898,9 +10921,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     the tenant's own name/catalog — not hardcoded to any one tenant."""
     # Use the tenant's LIVE WhatsApp creds (phone_id + token) — same source as _send_reply —
     # not a hardcoded (retired) number. Falls back to env. Failures fall back to a text menu.
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
-    if not creds and settings.whatsapp_token and settings.whatsapp_phone_id:
-        creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+    creds = await _send_creds(tenant_id)
     if not creds:
         logger.info("Commerce welcome: no WhatsApp creds for %s", tenant_id)
         return

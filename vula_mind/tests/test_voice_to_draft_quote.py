@@ -89,7 +89,7 @@ async def test_confirm_before_any_preview_becomes_a_preview(monkeypatch):
         return ({"sent": True} if args.get("confirm") else
                 {"preview": True, "invoice_number": "ACM-QUO-00004", "message": "Confirm to send"})
 
-    monkeypatch.setattr(ca, "_preview_was_shown", lambda tid, phone, tool: False)
+    monkeypatch.setattr(ca, "_claim_preview", lambda tid, phone, tool: None)
     with (patch.object(ca, "resolve_generation_route", new=_fake_route),
           patch.object(ca, "escalate_to_cloud", return_value=("openrouter/test", "k", None)),
           patch.object(CommerceAdminSkill, "_dispatch_tool", new=dispatch),
@@ -115,7 +115,7 @@ async def test_typed_yes_after_a_real_preview_still_sends(monkeypatch):
         calls["n"] += 1
         return await first() if calls["n"] == 1 else _resp(content="Sent ✅")
 
-    monkeypatch.setattr(ca, "_preview_was_shown", lambda tid, phone, tool: True)
+    monkeypatch.setattr(ca, "_claim_preview", lambda tid, phone, tool: {"invoice_number": "ACM-QUO-00004"})
     with (patch.object(ca, "resolve_generation_route", new=_fake_route),
           patch.object(ca, "escalate_to_cloud", return_value=("openrouter/test", "k", None)),
           patch.object(CommerceAdminSkill, "_dispatch_tool", new=dispatch),
@@ -126,14 +126,22 @@ async def test_typed_yes_after_a_real_preview_still_sends(monkeypatch):
 
 
 def test_a_shown_preview_is_used_up_once(monkeypatch):
-    rows = [{"id": "p1"}]
+    pending = [{"id": "p1", "tool_args": {"invoice_number": "ACM-QUO-00004", "_caller": {"role": "owner"}}}]
     q = MagicMock()
-    for m in ("update", "eq", "gt"):
+    for m in ("select", "update", "eq", "gt", "order", "limit"):
         getattr(q, m).return_value = q
-    q.execute.side_effect = lambda: MagicMock(data=[rows.pop()] if rows else [])
+    state = {"op": "select"}
+    q.select.side_effect = lambda *a: (state.update(op="select"), q)[1]
+    q.update.side_effect = lambda *a: (state.update(op="update"), q)[1]
+
+    def execute():
+        if state["op"] == "select":
+            return MagicMock(data=list(pending))
+        return MagicMock(data=[pending.pop()] if pending else [])
+    q.execute.side_effect = execute
     db = MagicMock()
     db.table.return_value = q
     monkeypatch.setattr("vula.commerce.service._client", lambda: db)
-    assert ca._preview_was_shown(TID, "27820000001", "send_invoice") is True
-    assert ca._preview_was_shown(TID, "27820000001", "send_invoice") is False
-    assert ca._preview_was_shown(TID, None, "send_invoice") is False
+    assert ca._claim_preview(TID, "27820000001", "send_invoice") == {"invoice_number": "ACM-QUO-00004"}
+    assert ca._claim_preview(TID, "27820000001", "send_invoice") is None
+    assert ca._claim_preview(TID, None, "send_invoice") is None
