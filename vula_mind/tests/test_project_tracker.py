@@ -429,16 +429,20 @@ def test_a_project_priced_as_per_the_bill_shows_the_contract_and_invoices():
 
 # ── what the client still owes, at the top ─────────────────────────────────────────────────
 
-def test_the_client_sees_where_the_money_stands_today_at_the_top():
+def test_the_client_sees_where_we_stand_if_the_work_stopped_today():
+    # 10 Nov 2026 (Ian): "what DIGG spent and what Rudi spent … what's truly owed to DIGG if we stop"
     v = _ob(final_account=_FA, to_pay_directly_cents=6770200, paid_directly_cents=28381608)
     page = pt.render({"name": "DIGG"}, v)
     top = page[:page.index("<div class=\"grid\">")]
-    assert "Where the money stands today" in top
-    assert "Paid to us so far" in top and "R211 407.98" in top
+    assert "If the work stopped today" in top
+    assert "Paid to us" in top and "R211 407.98" in top
     assert "Paid by you directly to suppliers" in top and "R283 816.08" in top
-    assert "Balance due to us" in top and "R32 839.40" in top and "per the final account of 2026-11-02" in top
-    # today's position only: no other suppliers' balances, nothing projected
-    assert "R67 702.00" not in top and "Total still to pay" not in top
+    assert "Your total into the project" in top and "R495 224.06" in top
+    assert "Our costs and charges for the work done" in top and "R244 247.38" in top
+    assert "per the final account of 2026-11-02" in top and "−R211 407.98" in top
+    assert top.index("Balance due to us") < top.index("R32 839.40") < top.index("Still owed by you directly")
+    assert "R67 702.00" in top and "not owed to us" in top
+    assert "Total still to pay" not in top and "R569" not in top        # nothing projected
     assert "Open book · final account of 2026-11-02" in page and "cost-plus" not in page
 
 

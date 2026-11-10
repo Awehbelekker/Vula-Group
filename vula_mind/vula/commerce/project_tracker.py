@@ -715,14 +715,34 @@ def _owed_summary(v: Dict[str, Any], e) -> str:
         received = v.get("invoices_paid_cents") or 0
     else:
         return ""
-    rows = [("Paid to us so far", received, ""),
-            ("Paid by you directly to suppliers", int(v.get("paid_directly_cents") or 0), ""),
-            ("Balance due to us" if to_us >= 0 else "Balance due to you", abs(to_us), how)]
+    direct = int(v.get("paid_directly_cents") or 0)
+    if fa:
+        # 10 Nov 2026 (Ian): "where we sit … what DIGG spent and what Rudi spent … what's truly owed to DIGG
+        # if we stop where we are and he got an outside contractor to finish the job." Everything here is
+        # already settled or agreed — nothing projected (the cost to finish is not shown).
+        rows = [("Paid to us", received, ""),
+                ("Paid by you directly to suppliers", direct, ""),
+                ("Your total into the project", received + direct, "sub"),
+                ("Our costs and charges for the work done", fa.get("total_cents") or 0, how),
+                ("Less what you've paid us", -received, "")]
+    else:
+        rows = [("Paid to us so far", received, ""), ("Paid by you directly to suppliers", direct, "")]
+    rows.append(("Balance due to us" if to_us >= 0 else "Balance due to you", abs(to_us), "" if fa else how))
     rows = [r for r in rows if r[1] or r is rows[-1]]
-    body = "".join(f"<div class='owe{' tot' if i == len(rows) - 1 else ''}'>"
-                   f"<span>{e(label)}{f'<small>{e(sub)}</small>' if sub else ''}</span><b>{_r(c)}</b></div>"
-                   for i, (label, c, sub) in enumerate(rows))
-    return f"<div class='owed'><div class='oweh'>Where the money stands today</div>{body}</div>"
+
+    def line(i, label, c, sub):
+        cls = " tot" if i == len(rows) - 1 else (" sub" if sub == "sub" else "")
+        note = f"<small>{e(sub)}</small>" if sub and sub != "sub" else ""
+        amount = f"−{_r(-c)}" if c < 0 else _r(c)
+        return f"<div class='owe{cls}'><span>{e(label)}{note}</span><b>{amount}</b></div>"
+
+    body = "".join(line(i, *r) for i, r in enumerate(rows))
+    still = int(v.get("to_pay_directly_cents") or 0)
+    if fa and still:
+        body += (f"<div class='owe aside'><span>Still owed by you directly to suppliers<small>Your own balances with "
+                 f"them, not owed to us; listed under Paid by you directly</small></span><b>{_r(still)}</b></div>")
+    title = "If the work stopped today" if fa else "Where the money stands today"
+    return f"<div class='owed'><div class='oweh'>{title}</div>{body}</div>"
 
 
 def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, str]] = None,
@@ -895,6 +915,7 @@ box-shadow:0 2px 10px rgba(0,0,0,.06);overflow:hidden}}
 .owe b{{white-space:nowrap;font-variant-numeric:tabular-nums;font-size:17px}}
 .oweh{{padding:10px 14px;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#6e6a63;background:#f5f3ee}}
 .owe.tot{{background:#f5f3ee}}.owe.tot b{{color:{accent};font-size:20px}}
+.owe.sub span,.owe.sub b{{font-weight:600}}.owe.aside{{border-top:1.5px solid {accent};font-size:14px}}.owe.aside b{{font-size:15px;color:#6e6a63}}
 /* the account blocks side by side on a wide screen, one column on a phone */
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));column-gap:40px;align-items:start}}
 .blk{{min-width:0}}.blk.wide{{grid-column:1/-1}}
