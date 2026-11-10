@@ -1973,6 +1973,8 @@ _SECTION_RULES = [
     # owner and managers only; seeing the likely duplicates is Money access (vula/commerce/supplier_identity.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/merge/?$"), frozenset()),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/duplicates/?$"), _MONEY_TABS),
+    # 2026-11-10: the business's data health list — the books, bills and client links: Money access
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/data-health/?$"), _MONEY_TABS),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)

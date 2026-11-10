@@ -5342,6 +5342,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 logger.warning("Supplier auto-add from %s failed for %s: %s",
                               category, result.filename, exc)
 
+        # what the filing checks found (vula/commerce/data_checks.py) — told to whoever sent it
+        if row and row.get("checks"):
+            from vula.commerce.data_checks import notice
+            note = (note + "\n\n" if note else "") + notice(row["checks"])
         return note, row
     except Exception as exc:
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)

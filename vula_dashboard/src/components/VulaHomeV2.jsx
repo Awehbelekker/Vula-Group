@@ -18,6 +18,7 @@ import { ActivityDetail, ActivityList, shortWhen, useActivity } from "./VulaActi
 import { TodayList, useToday } from "./VulaToday";
 import { InstallCard } from "./install/InstallVula.jsx";
 import MakeItYours from "./MakeItYours.jsx";
+import DataHealth from "./DataHealth.jsx";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -123,6 +124,7 @@ export default function VulaHomeV2({ tenantId, onNavigate }) {
           {b.bank_unmatched && <Tile label="Bank lines to match" value={String(b.bank_unmatched.value)} sub="not linked yet" onClick={go(b.bank_unmatched.link)} />}
           {b.stock_alerts && <Tile label="Low stock" value={String(b.stock_alerts.value)} sub="under 5 left" onClick={go(b.stock_alerts.link)} />}
         </div>)}
+      {home && view === "back" && <DataHealth tenantId={tenantId} />}
 
       {home && view === "all" && feed.items && feed.items.length > 0 && (
         <>

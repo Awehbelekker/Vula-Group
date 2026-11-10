@@ -269,7 +269,9 @@ def organise(docs: List[Dict[str, Any]], suppliers: _Suppliers) -> Dict[str, Any
                 continue
             seen.add(k)
         date, read = _date(d), _read_date(d)
-        rows.append({"id": d["id"], "folder": folder, "by_supplier": by_supplier, "client": client_ok,
+        rows.append({"id": d["id"], "folder": folder, "by_supplier": by_supplier,
+                     # an internal cost sheet never reaches a client, whatever its category (data_checks)
+                     "client": client_ok and not f.get("_internal"),
                      "supplier": supplier, "date": date, "number": number, "amount_cents": amount,
                      "date_note": f"date read as {read} — check" if read and not date else "",
                      "credit": _is_credit(d), "category": d.get("category") or "", "filename": d.get("filename") or "",

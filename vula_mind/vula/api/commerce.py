@@ -7809,6 +7809,16 @@ async def admin_upsert_supplier(tenant_id: str, body: dict):
     return await service.upsert_supplier(tenant_id, body)
 
 
+@router.get("/{tenant_id}/admin/data-health")
+async def admin_data_health(tenant_id: str):
+    """What Vula found to check in the business's data (vula/commerce/data_checks.py): client links that
+    could mislead, internal sheets a client would see, bills on the wrong project, dates that can't be
+    right, bills unpaid beside a matching payment, duplicate suppliers, job payments with no project."""
+    import asyncio
+    from vula.commerce import data_checks
+    return await asyncio.to_thread(data_checks.sweep, tenant_id)
+
+
 @router.get("/{tenant_id}/admin/suppliers/duplicates")
 async def admin_supplier_duplicates(tenant_id: str):
     """Suppliers on file that look like one business — same VAT number, bank account, email, or the
