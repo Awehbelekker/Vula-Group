@@ -1949,10 +1949,16 @@ _SECTION_RULES = [
     # cost, fee and profit — Money access only. A QS login limited to Projects keeps the online
     # BOQ, its PDF and the QS view (admin/projects/qs-view).
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:boq-template\.xlsx|boq-library|projects/boq-online\.xlsx|"
-                      r"projects/(?:tracker|share|shares|costing|direct-payments|download-requests))(?:/|$)"), _MONEY_TABS),
+                      r"projects/(?:tracker|overview|share|shares|costing|direct-payments|download-requests))(?:/|$)"), _MONEY_TABS),
     # 2026-11-03: a project's whole file (every invoice, statement and proof of payment, as a
     # zip) — owner and managers only, like the team settings.
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/file(?:\.zip)?(?:/|$)"), frozenset()),
+    # 2026-11-10: merging duplicate suppliers moves bills between records and deletes the duplicates —
+    # owner and managers only; seeing the likely duplicates is Money access (vula/commerce/supplier_identity.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/merge/?$"), frozenset()),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/duplicates/?$"), _MONEY_TABS),
+    # 2026-11-10: the business's data health list — the books, bills and client links: Money access
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/data-health/?$"), _MONEY_TABS),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)

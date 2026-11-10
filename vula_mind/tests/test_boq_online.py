@@ -248,8 +248,8 @@ def test_the_shared_page_offers_pdfs_only():
     with (patch.object(pt, "share_for_token", return_value=share), patch.object(pt, "position", return_value=POS),
           patch.object(pt, "note_view"), patch("vula.api.commerce.public_brand", AsyncMock(return_value={"name": "Example"})),
           patch.object(bo, "load", return_value={"lines": [{"description": "x"}]})):
-        page = asyncio.run(project_track.project_page("tok")).body.decode()
-        pdf = asyncio.run(project_track.project_page_pdf("tok"))
+        page = asyncio.run(project_track.project_page("tok", None)).body.decode()
+        pdf = asyncio.run(project_track.project_page_pdf("tok", None))
     assert "href='/track/tok/pdf'" in page and "href='/track/tok/bill.pdf'" in page
     assert ".xlsx'" not in page                    # no link to an Excel — a file NAME in the register is fine
     assert pdf.media_type == "application/pdf" and pdf.body[:4] == b"%PDF"

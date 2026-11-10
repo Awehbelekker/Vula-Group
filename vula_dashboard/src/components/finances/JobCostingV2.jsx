@@ -24,7 +24,7 @@ export default function JobCostingV2({ tenantId }) {
     <section className="vfn-stack" aria-labelledby="vjc-h">
       <div className="vfn-head"><h3 id="vjc-h" className="vfn-h3"><HardHat size={18} aria-hidden="true" />Job costing — is each project making its fee?</h3></div>
       <p className="vfn-sub">
-        From the bank: money received vs cost on each project, the cost-plus fee it should earn (default {d.fee_default_pct}%), and its share of running costs. Received counts what's in the bank so far.
+        From the bank: money received vs cost on each project, the cost-plus fee it should earn (default {d.fee_default_pct}%{d.fee_default_agreed === false ? " — assumed, not set: agree each project's fee in Projects › Money" : ""}), and its share of running costs. Received counts what's in the bank so far.
       </p>
       <div className="vfn-stats vfn-stats--sm">
         <StatCard variant="tile" label="Fees earned" value={money(d.fees_earned_cents)} sub={`target ${money(d.fees_target_cents)}`}

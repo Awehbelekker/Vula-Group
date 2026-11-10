@@ -19,6 +19,7 @@ export function useSuppliers(tenantId) {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState(null) // null | {} (new) | supplier
   const [form, setForm] = useState(BLANK_SUPPLIER)
+  const [notice, setNotice] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -52,10 +53,14 @@ export function useSuppliers(tenantId) {
       aliases: String(form.aliases).split(',').map(a => a.trim()).filter(Boolean),
     }
     if (editing && editing.id) payload.id = editing.id
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`, {
+    const saved = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    })
+    }).then(r => r.json()).catch(() => ({}))
+    // a new supplier that is a business already on file is not added twice (supplier_identity.py)
+    setNotice(saved && saved.matched_existing
+      ? `${payload.name} is already on your list as ${saved.name}, so it was added as another name for it.`
+      : '')
     cancel()
     setSaving(false)
     await load()
@@ -70,7 +75,41 @@ export function useSuppliers(tenantId) {
     return true
   }
 
-  return { suppliers, loading, saving, editing, form, setForm, startEdit, startNew, cancel, save, remove }
+  return { suppliers, loading, saving, editing, form, setForm, startEdit, startNew, cancel, save, remove, notice, reload: load }
+}
+
+/** Supplier records that look like one business (vula/commerce/supplier_identity.py) and merging
+ * them: bills, expenses and documents move to the kept record, the other names become its aliases. */
+export function useSupplierDuplicates(tenantId, onMerged) {
+  const [groups, setGroups] = useState([])
+  const [busy, setBusy] = useState(null)
+  const [message, setMessage] = useState('')
+
+  const load = useCallback(async () => {
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers/duplicates`)
+      .then(r => (r.ok ? r.json() : {})).catch(() => ({}))
+    setGroups(d.groups || [])
+  }, [tenantId])
+  useEffect(() => { load() }, [load])
+
+  async function merge(group) {
+    const names = group.duplicates.map(d => d.name).join(', ')
+    if (!(await confirmDialog(`Merge ${names} into ${group.keep.name}? Their bills and documents move to ${group.keep.name}.`,
+      { confirmLabel: 'Merge' }))) return
+    setBusy(group.keep.id)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers/merge`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep_id: group.keep.id, duplicate_ids: group.duplicates.map(d => d.id) }),
+    })
+    const d = await r.json().catch(() => ({}))
+    setMessage(r.status === 403 ? 'Only the owner and managers can merge suppliers.'
+      : d.message || d.detail || (r.ok ? 'Merged.' : "That didn't work — please try again."))
+    setBusy(null)
+    await load()
+    if (r.ok && onMerged) onMerged()
+  }
+
+  return { groups, busy, message, merge }
 }
 
 export function usePurchaseOrders(tenantId) {

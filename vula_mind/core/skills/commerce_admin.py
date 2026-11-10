@@ -4282,6 +4282,10 @@ class CommerceAdminSkill(BaseSkill):
                     "contact_phone": data.get("contact_phone"), "payment_terms": data.get("payment_terms"),
                     "message": "Confirm to save this supplier (call again with confirm=true)."}
         s = await service.upsert_supplier(tid, data)
+        if s.get("matched_existing"):
+            return {"saved": s.get("name"), "already_on_file": True,
+                    "message": f"{name} is already on the supplier list as {s.get('name')} — "
+                               f"added '{name}' as another name for it, not a second supplier."}
         return {"saved": s.get("name")}
 
     async def _delete_supplier(self, tid: str, name: str, confirm: bool = False) -> Dict[str, Any]:

@@ -2441,8 +2441,51 @@ async def list_suppliers(tenant_id: str) -> List[dict]:
     return result.data or []
 
 
+async def _existing_supplier(tenant_id: str, data: dict) -> Optional[dict]:
+    """The supplier on file that a would-be new record duplicates (vula/commerce/supplier_identity.py),
+    with the new name added as its alias and its blanks filled — or None to create it. A record of
+    the exact same name is left to the upsert below, which updates it as before. Fail-open."""
+    try:
+        from vula.commerce import supplier_identity as si
+        suppliers = await list_suppliers(tenant_id)
+        name = data.get("name") or ""
+        if any((s.get("name") or "") == name for s in suppliers):
+            return None
+        own_names, own_numbers = await own_business_names(tenant_id)
+        others, own_accounts = si.split_own(suppliers, own_names, own_numbers)
+        hit = si.find_existing(others, data, own_accounts)
+        if not hit:
+            return None
+        sup, why = hit
+        up = si.merged_fields(sup, [{k: v for k, v in data.items() if k != "category"}])
+        if up:
+            (_client().table("commerce_suppliers").update(up)
+             .eq("tenant_id", tenant_id).eq("id", sup["id"]).execute())
+        logger.info("supplier %r matched existing %r (%s) — not created", name, sup.get("name"), why)
+        return {**sup, **up, "matched_existing": why}
+    except Exception as exc:  # noqa: BLE001 — never block a filing over the duplicate check
+        logger.warning("supplier duplicate check skipped for %s: %s", tenant_id, exc)
+        return None
+
+
 async def upsert_supplier(tenant_id: str, data: dict) -> dict:
-    """Insert or update a supplier (conflict on tenant_id,name)."""
+    """Insert or update a supplier (conflict on tenant_id,name).
+
+    A new supplier that is a business already on file — same VAT number, bank account or email,
+    or the same name give or take "SA (Pty) Ltd" — is not created: the existing record is returned
+    with the new name as an alias (supplier_identity.find_existing; 10 Nov 2026, a client's list held
+    "Pudlo" next to "Pudlo S.A (Pty) Ltd" and "elighting01@gmail.com" next to "Elighting Electrical
+    Services"). An email address is never a supplier's name."""
+    from vula.commerce import supplier_identity as si
+    data = dict(data)
+    name = (data.get("name") or "").strip()
+    if si.is_email(name):
+        data["contact_email"] = data.get("contact_email") or name
+        data["name"] = si.name_from_email(name)
+    if not data.get("id"):
+        existing = await _existing_supplier(tenant_id, data)
+        if existing:
+            return existing
     row = {
         "id": data.get("id") or str(uuid.uuid4()),
         "tenant_id": tenant_id,
@@ -2716,6 +2759,13 @@ def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
 _SA_VAT_NUMBER = re.compile(r"^4\d{9}$")
 
 
+def _cents_or_none(v: Any) -> Optional[int]:
+    try:
+        return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def vat_registered(*tax_ids: Optional[str]) -> Optional[bool]:
     """Whether the supplier charges VAT, from the tax numbers we have for it (on the document, or
     on its supplier record): True when one is a South African VAT number (10 digits starting with
@@ -2728,14 +2778,20 @@ def vat_registered(*tax_ids: Optional[str]) -> Optional[bool]:
 
 
 def vat_inclusive(total_cents: int, vat_cents: int, excl: bool,
-                  registered: Optional[bool] = None) -> Tuple[int, int]:
+                  registered: Optional[bool] = None, subtotal_cents: Optional[int] = None) -> Tuple[int, int]:
     """(total incl VAT, VAT) in cents. A document that prices EXCLUDING VAT and shows no VAT
     figure (STE Scaffolding's quotes, 2026-10-02: "R41,752.47 excluding VAT" was booked as the
     full price with R0 VAT) gets 15% added here, in code — never by the model. Half cents are
     dropped, as on STE's own invoice: R2,084.50 excl → R312.67 VAT (STE00866, R2,397.17).
     Not when the supplier isn't VAT registered (`registered` False, vat_registered()): 2026-11-03,
-    an electrician's R45,852.00 invoice with no VAT on it was booked as R52,729.80."""
+    an electrician's R45,852.00 invoice with no VAT on it was booked as R52,729.80.
+    Not when the document shows a subtotal AND a different total (10 Nov 2026: Sea Point Hire 113631,
+    subtotal R1,880 and "total amount due R2,000.00", was booked as R2,300.00; a Solucent invoice
+    totalling R31,777.20 as R36,543.78): the total already carries whatever was added to the
+    subtotal — it's the amount due, and VAT is never added to it again."""
     if registered is False:
+        return total_cents, vat_cents
+    if subtotal_cents and total_cents and abs(int(subtotal_cents) - int(total_cents)) > 1:
         return total_cents, vat_cents
     if excl and total_cents > 0 and not vat_cents:
         vat_cents = total_cents * 15 // 100
@@ -2878,7 +2934,8 @@ async def commit_inbound_document(
     registered = vat_registered(tax_id, extracted.get("supplier_vat_no"),
                                 (supplier_row or {}).get("tax_id"))
     total_cents, vat_cents = vat_inclusive(total_cents, vat_cents,
-                                           bool(extracted.get("amounts_exclude_vat")), registered)
+                                           bool(extracted.get("amounts_exclude_vat")), registered,
+                                           _cents_or_none(extracted.get("subtotal_cents")))
 
     preview = {
         "supplier": supplier_name,

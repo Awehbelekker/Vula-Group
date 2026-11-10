@@ -215,6 +215,72 @@ def sized(url: Optional[str], width: int = 800) -> Optional[str]:
     return urlunsplit(parts._replace(query=urlencode(query)))
 
 
+_LINK_PREFIXES = ("projects.", "clients.", "client.", "portal.")
+
+
+def configured_host(tenant_id: str, prefixes) -> str:
+    """The first of the tenant's `domains` that starts with one of `prefixes` ('' when none)."""
+    try:
+        from vula.api.tenants import get_config
+        doms = (get_config(tenant_id) or {}).get("domains") or []
+    except Exception:
+        return ""
+    return next((str(d).strip().lower() for d in doms if str(d or "").strip().lower().startswith(tuple(prefixes))), "")
+
+
+def configured_link_host(tenant_id: str) -> str:
+    """Where the business's client links open, as configured, e.g. projects.digg.co.za ('' when none)."""
+    return configured_host(tenant_id, _LINK_PREFIXES)
+
+
+async def check_link_host(host: str, tenant_id: str) -> bool:
+    """Is the client-links address live and pointing at us, for this business? (GET /link-ping)"""
+    import time
+    import httpx
+    ok = False
+    try:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=False) as client:
+            r = await client.get(f"https://{host}/link-ping")
+            ok = r.status_code == 200 and (r.json() or {}).get("links") == tenant_id
+    except Exception:
+        ok = False
+    _READY[host] = (time.monotonic(), ok)
+    return ok
+
+
+def link_base(tenant_id: str) -> str:
+    """Where a new client link points: the business's own address once it answers as this business,
+    else Vula's. Synchronous (share links are made off the event loop); the answer is remembered."""
+    import time
+    from config import settings
+    vula = (settings.public_base_url or "").rstrip("/")
+    host = configured_link_host(tenant_id)
+    if not host:
+        return vula
+    hit = _READY.get(host)
+    if not (hit and time.monotonic() - hit[0] < (READY_TTL_S if hit[1] else NOT_READY_TTL_S)):
+        ok = False
+        try:
+            import httpx
+            r = httpx.get(f"https://{host}/link-ping", timeout=5.0, follow_redirects=False)
+            ok = r.status_code == 200 and (r.json() or {}).get("links") == tenant_id
+        except Exception:
+            ok = False
+        hit = _READY[host] = (time.monotonic(), ok)
+    return f"https://{host}" if hit[1] else vula
+
+
+def tenant_for_link_host(host: str) -> Optional[str]:
+    h = (host or "").strip().lower().split(":")[0]
+    if not h.startswith(_LINK_PREFIXES):
+        return None
+    try:
+        from vula.api.tenants import tenant_for_host
+        return tenant_for_host(h)
+    except Exception:
+        return None
+
+
 def configured_shop_host(tenant_id: str) -> str:
     """The shop's own web address as configured, e.g. shop.seedleme.com — the first of the
     tenant's `domains` that starts with shop./order./buy./store. ('' when it has none)."""

@@ -136,8 +136,21 @@ class _Suppliers:
         if self.is_us(name):
             return f"{self.business} (our documents)" if self.business else "Our documents"
         label = _tidy(name)
-        alias = next((a for a in (row or {}).get("aliases") or [] if a and _norm(a) not in _norm(label)), None)
+        alias = next((a for a in (row or {}).get("aliases") or [] if self._shown_alias(a, label)), None)
         return f"{label} ({alias})" if alias else label
+
+    @staticmethod
+    def _shown_alias(alias: str, label: str) -> bool:
+        """An alias worth showing next to the name: a different trading name ("Jack Hammer" for
+        "Gardens Handiman Centre") — not an email address, a short misspelling ("Dyi"), or another
+        spelling of the same name ("Pudlo", "ICES ELIGHTING ELECTRICAL") merged into this supplier."""
+        from vula.commerce.supplier_identity import is_email, _TRADE
+        if not alias or is_email(alias) or len(re.sub(r"[^a-z0-9]", "", alias.lower())) <= 4:
+            return False
+        if _norm(alias) in _norm(label):
+            return False
+        mine = {w for w in _norm(label).split() if len(w) >= 4 and w not in _TRADE}
+        return not ({w for w in _norm(alias).split() if len(w) >= 4 and w not in _TRADE} & mine)
 
     def names_for(self, label: str) -> List[str]:
         """The spellings a bank line might use for a supplier (name + aliases, normalised)."""
@@ -256,7 +269,10 @@ def organise(docs: List[Dict[str, Any]], suppliers: _Suppliers) -> Dict[str, Any
                 continue
             seen.add(k)
         date, read = _date(d), _read_date(d)
-        rows.append({"id": d["id"], "folder": folder, "by_supplier": by_supplier, "client": client_ok,
+        rows.append({"id": d["id"], "folder": folder, "by_supplier": by_supplier,
+                     # an internal cost sheet never reaches a client, whatever its category (data_checks),
+                     # nor a document the owner took off the link (a quote a later one replaced)
+                     "client": client_ok and not f.get("_internal") and not f.get("_hidden_from_client"),
                      "supplier": supplier, "date": date, "number": number, "amount_cents": amount,
                      "date_note": f"date read as {read} — check" if read and not date else "",
                      "credit": _is_credit(d), "category": d.get("category") or "", "filename": d.get("filename") or "",

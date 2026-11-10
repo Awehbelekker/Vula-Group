@@ -40,6 +40,7 @@ const GROUPS = [
     { id: 'shopify', label: 'Shopify store', Icon: ShoppingBag, hint: 'Already selling on Shopify? Connect it and your products, photos, prices and stock stay in step with Vula automatically.' },
     { id: 'woo', label: 'WooCommerce shop', Icon: ShoppingCart, hint: 'Selling on WooCommerce (WordPress)? Connect it and your products, photos, prices and stock stay in step with Vula automatically.' },
     { id: 'domain', label: 'Your shop’s own address', Icon: Globe, hint: 'Show your name, not Vula’s, when customers open your shop or a receipt from WhatsApp.' },
+    { id: 'link-domain', label: 'Your client links’ address', Icon: Globe, hint: 'Client project links on your own address — projects.yourbusiness.co.za — not Vula’s.' },
   ] },
   { label: 'Your books', items: [
     { id: 'xero', label: 'Move from Xero', Icon: ArrowRightLeft, hint: 'Bring your books across from Xero: every account balance, what customers owe you and what you owe suppliers, at the date you choose. Vula shows you everything first and only reads Xero.' },
@@ -120,6 +121,7 @@ function Section({ id, tenantId, tenantName, adminEmail, onOpen }) {
     case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />
     case 'woo': return <StoreConnectV2 key="woo" store="woo" tenantId={tenantId} adminEmail={adminEmail} />
     case 'domain': return <ShopDomainV2 tenantId={tenantId} />
+    case 'link-domain': return <ShopDomainV2 tenantId={tenantId} kind="links" />
     case 'buying': return <BuyingV2 tenantId={tenantId} />
     case 'xero': return <XeroMoveV2 tenantId={tenantId} />
     case 'whatsapp': return <WhatsAppConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />

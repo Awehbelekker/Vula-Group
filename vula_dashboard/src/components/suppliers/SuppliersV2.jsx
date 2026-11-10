@@ -5,10 +5,10 @@
  * low-stock reorder suggestions, and each order's send / mark sent / received / cancel.
  * Amounts are the server's integer cents through formatMoney.
  */
-import { Ban, Bell, CheckCircle2, ClipboardList, Pencil, Plus, Receipt, Send, Trash2, Truck } from 'lucide-react'
+import { Ban, Bell, CheckCircle2, ClipboardList, Combine, Pencil, Plus, Receipt, Send, Trash2, Truck } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
 import { Button, Card, DataTable, EmptyState, Field, IconButton, Input, Select, Sheet, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
-import { usePurchaseOrders, useSuppliers } from './useSuppliers'
+import { usePurchaseOrders, useSupplierDuplicates, useSuppliers } from './useSuppliers'
 import './suppliers.css'
 
 const PO_TONE = { draft: 'muted', sent: 'accent', received: 'ok', cancelled: 'muted' }
@@ -20,6 +20,7 @@ const contactLine = (s) => [
   (s.aliases && s.aliases.length) ? `aka ${Array.isArray(s.aliases) ? s.aliases.join(', ') : s.aliases}` : null,
 ].filter(Boolean).join(' · ') || '—'
 const terms = (s) => `${s.payment_terms_days ?? 30} day terms`
+const WHY = { tax_id: 'same VAT number', bank_account: 'same bank account', email: 'same email', name: 'same name' }
 
 export default function SuppliersV2({ tenantId, onViewInvoices }) {
   const x = useSuppliers(tenantId)
@@ -36,6 +37,8 @@ export default function SuppliersV2({ tenantId, onViewInvoices }) {
             <h2 className="vsp-h2">Suppliers</h2>
             {x.suppliers.length > 0 && <Button Icon={Plus} onClick={x.startNew}>Add supplier</Button>}
           </div>
+          {x.notice && <p className="vsp-muted" role="status">{x.notice}</p>}
+          <DuplicatesV2 tenantId={tenantId} onMerged={x.reload} />
           {x.suppliers.length === 0
             ? <EmptyState Icon={Truck} title="Set up your suppliers"
                 action={<Button Icon={Plus} onClick={x.startNew}>Add your first supplier</Button>}>
@@ -89,6 +92,29 @@ export default function SuppliersV2({ tenantId, onViewInvoices }) {
       <PurchaseOrdersV2 tenantId={tenantId} />
     </section>
   )
+}
+
+/** Records that look like one business — merge them so its bills and totals are in one place. */
+function DuplicatesV2({ tenantId, onMerged }) {
+  const d = useSupplierDuplicates(tenantId, onMerged)
+  if (!d.groups.length && !d.message) return null
+  return (
+    <Card className="vsp-card vsp-suggest">
+      <h3 className="vsp-h"><Combine size={16} aria-hidden="true" />Same business, more than one record</h3>
+      {d.groups.length > 0 && <p className="vsp-muted">Merging moves their bills, expenses and documents to one supplier and keeps the other names, so future bills under those names land there too.</p>}
+      <ul className="vsp-list">
+        {d.groups.map(g => (
+          <li key={g.keep.id} className="vsp-item">
+            <div className="vsp-row">
+              <span className="vsp-grow"><b>{g.keep.name}</b> ← {g.duplicates.map(x => x.name).join(', ')}</span>
+              <Button size="sm" Icon={Combine} disabled={d.busy === g.keep.id} onClick={() => d.merge(g)}>
+                {d.busy === g.keep.id ? 'Merging…' : 'Merge'}</Button>
+            </div>
+            <p className="vsp-muted">{g.why.map(w => WHY[w] || w).join(', ')}</p>
+          </li>))}
+      </ul>
+      {d.message && <p className="vsp-muted" role="status">{d.message}</p>}
+    </Card>)
 }
 
 function PurchaseOrdersV2({ tenantId }) {

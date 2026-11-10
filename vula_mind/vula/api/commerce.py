@@ -3769,6 +3769,15 @@ class ProjectShareIn(BaseModel):
     by: Optional[str] = None
 
 
+@router.get("/{tenant_id}/admin/projects/overview")
+async def admin_projects_overview(tenant_id: str):
+    """Every project at a glance: status, budget, spent, received, still owed to the business, how the
+    fee is agreed, and warnings (vula/commerce/project_tracker.overview). Money access."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    return await asyncio.to_thread(pt.overview, tenant_id)
+
+
 @router.get("/{tenant_id}/admin/projects/tracker")
 async def admin_project_tracker(tenant_id: str, project: str):
     """One project's money picture (vula/commerce/project_tracker.py), with what each client view
@@ -4048,6 +4057,8 @@ async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
     # Off the event loop: costing pages through every bank line (PR B, 2026-09-29).
     res = await asyncio.to_thread(job_costing.costing, tenant_id, since=since)
     res["fee_default_pct"] = (await asyncio.to_thread(job_costing.terms, tenant_id))["*"]
+    # whether the business actually set that standard fee, or it's the assumed 10% (migration 255)
+    res["fee_default_agreed"] = "*" in await asyncio.to_thread(job_costing.agreed_terms, tenant_id)
     return res
 
 
@@ -4112,19 +4123,25 @@ async def admin_project_today(tenant_id: str, day: Optional[str] = None):
 
 class ProjectTermsIn(BaseModel):
     project: str = "*"
-    fee_pct: float
+    pricing: str = "cost_plus"          # cost_plus (fee_pct on cost) | fixed_fee (an agreed fee_cents)
+    fee_pct: Optional[float] = None
+    fee_cents: Optional[int] = None
 
 
 @router.post("/{tenant_id}/admin/projects/terms")
 async def admin_project_terms(tenant_id: str, body: ProjectTermsIn, request: Request):
-    """Set a project's cost-plus fee % (project "*" = the business default)."""
+    """Agree a project's fee (project "*" = the business's standard fee): a percentage on cost, or a
+    fixed amount in cents (migration 255). Read back."""
+    import asyncio
     from vula.commerce import job_costing
     if not await _may_apply_stock(request, tenant_id):
         raise HTTPException(status_code=403, detail="Only the owner or a manager can set fees.")
-    if not 0 <= body.fee_pct <= 100:
-        raise HTTPException(status_code=400, detail="fee_pct must be 0–100")
-    job_costing.set_fee(tenant_id, body.project or "*", body.fee_pct)
-    return {"ok": True, "project": body.project or "*", "fee_pct": body.fee_pct}
+    try:
+        out = await asyncio.to_thread(job_costing.set_terms, tenant_id, body.project or "*", body.pricing,
+                                      fee_pct=body.fee_pct, fee_cents=body.fee_cents)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **out}
 
 
 @router.get("/{tenant_id}/admin/projects/price-advice")
@@ -7876,6 +7893,47 @@ async def admin_upsert_supplier(tenant_id: str, body: dict):
     if not body.get("name"):
         raise HTTPException(status_code=400, detail="Supplier name is required.")
     return await service.upsert_supplier(tenant_id, body)
+
+
+@router.get("/{tenant_id}/admin/data-health")
+async def admin_data_health(tenant_id: str):
+    """What Vula found to check in the business's data (vula/commerce/data_checks.py): client links that
+    could mislead, internal sheets a client would see, bills on the wrong project, dates that can't be
+    right, bills unpaid beside a matching payment, duplicate suppliers, job payments with no project."""
+    import asyncio
+    from vula.commerce import data_checks
+    return await asyncio.to_thread(data_checks.sweep, tenant_id)
+
+
+@router.get("/{tenant_id}/admin/suppliers/duplicates")
+async def admin_supplier_duplicates(tenant_id: str):
+    """Suppliers on file that look like one business — same VAT number, bank account, email, or the
+    same name give or take "SA (Pty) Ltd" (vula/commerce/supplier_identity.py). Nothing changes until
+    a group is merged."""
+    from vula.commerce import supplier_identity as si
+    own_names, own_numbers = await service.own_business_names(tenant_id)
+    suppliers, own_accounts = si.split_own(await service.list_suppliers(tenant_id), own_names, own_numbers)
+    groups = si.find_duplicates(suppliers, own_accounts)
+    slim = lambda s: {k: s.get(k) for k in ("id", "name", "aliases", "category", "tax_id", "contact_email")}  # noqa: E731
+    return {"groups": [{"keep": slim(g["keep"]), "duplicates": [slim(d) for d in g["duplicates"]],
+                        "why": g["why"]} for g in groups], "count": len(groups)}
+
+
+class SupplierMergeIn(BaseModel):
+    keep_id: str
+    duplicate_ids: List[str]
+
+
+@router.post("/{tenant_id}/admin/suppliers/merge")
+async def admin_supplier_merge(tenant_id: str, body: SupplierMergeIn):
+    """Fold duplicate suppliers into one: their bills, expenses, documents, orders and products move
+    to the kept supplier, their names become its aliases, then they are deleted. Read back."""
+    import asyncio
+    from vula.commerce import supplier_identity as si
+    res = await asyncio.to_thread(si.merge, tenant_id, body.keep_id, body.duplicate_ids)
+    if not res.get("ok") and not res.get("merged"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "Nothing was merged.")
+    return {**res, "message": si.merge_summary(res)}
 
 
 @router.delete("/{tenant_id}/admin/suppliers/{supplier_id}")
