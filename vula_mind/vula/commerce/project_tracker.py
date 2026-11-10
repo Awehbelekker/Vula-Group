@@ -516,6 +516,13 @@ def client_view(pos: Dict[str, Any], view: str) -> Dict[str, Any]:
     out = {"view": view if view in VIEWS else "price", **{k: pos.get(k) for k in fields}}
     if view != "open_book":
         out["sections"] = [{k: v for k, v in s.items() if k not in _SECTION_COST} for s in out.get("sections") or []]
+    else:
+        # 10 Nov 2026 (Ian): "drop the actual column" — the sheet's Actual is the business's expected final
+        # cost (paid + still to pay), a projection. The client sees the forecast (the bill) and what's paid.
+        out["sections"] = [{k: v for k, v in s.items() if k != "actual_cents"} for s in out.get("sections") or []]
+        out["bill_lines"] = [{k: v for k, v in li.items() if k != "actual_cents"} for li in out.get("bill_lines") or []]
+        if out.get("sheet"):
+            out["sheet"] = {"paid_cents": out["sheet"].get("paid_cents")}
     return out
 
 
@@ -827,20 +834,20 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
         items: Dict[str, List[Dict[str, Any]]] = {}
         for li in v.get("bill_lines") or []:
             items.setdefault(li["section"].strip().lower(), []).append(li)
-        item_row = lambda li: (f"<tr class='li'><td>{e(li['description'])}</td>{cell('Budget', li.get('budget_cents'))}"
-                               f"{cell('Actual', li.get('actual_cents'))}{cell('Paid', li.get('paid_cents'))}</tr>")
+        item_row = lambda li: (f"<tr class='li'><td>{e(li['description'])}</td>{cell('Forecast', li.get('budget_cents'))}"
+                               f"{cell('Paid so far', li.get('paid_cents'))}</tr>")
         body = []
         for s in secs:
-            body.append(f"<tr class='sec'><td>{e(s['section'])}</td>{cell('Budget', s['budget_cents'])}"
-                        f"{cell('Actual', s.get('actual_cents'))}{cell('Paid', s.get('paid_cents'))}</tr>")
+            body.append(f"<tr class='sec'><td>{e(s['section'])}</td>{cell('Forecast', s['budget_cents'])}"
+                        f"{cell('Paid so far', s.get('paid_cents'))}</tr>")
             body += [item_row(li) for li in items.pop(s["section"].strip().lower(), [])]
         body += [item_row(li) for rest in items.values() for li in rest]      # items under no section: never dropped
         sh = v["sheet"]
-        body.append(f"<tr class='total'><td>Total</td>{cell('Budget', sum(s['budget_cents'] for s in secs))}"
-                    f"{cell('Actual', sh['actual_cents'])}{cell('Paid', sh['paid_cents'])}</tr>")
+        body.append(f"<tr class='total'><td>Total</td>{cell('Forecast', sum(s['budget_cents'] for s in secs))}"
+                    f"{cell('Paid so far', sh.get('paid_cents'))}</tr>")
         parts.append(wide("The project bill" if v.get("bill_lines") else "By section",
-                          "<tr class='h'><td></td><td class='n'>Budget</td><td class='n'>Actual</td>"
-                          "<td class='n'>Paid</td></tr>", ''.join(body)))
+                          "<tr class='h'><td></td><td class='n'>Forecast</td><td class='n'>Paid so far</td></tr>",
+                          ''.join(body)))
     elif secs:
         parts.append(table("Budget by section", [row(s["section"], s["budget_cents"]) for s in secs]))
     if v["view"] == "qs":

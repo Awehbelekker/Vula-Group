@@ -256,9 +256,21 @@ def test_a_price_or_qs_link_never_shows_what_the_sections_really_cost():
         assert "sheet" not in v and all("actual_cents" not in s and "paid_cents" not in s for s in v["sections"])
         assert "R36 000.00" not in pt.render({"name": "Example Builders"}, v)
     ob = pt.client_view(p, "open_book")
-    assert ob["sheet"]["actual_cents"] == 55_000_00
+    assert ob["sheet"] == {"paid_cents": 49_000_00}
     page = pt.render({"name": "Example Builders"}, ob)
-    assert "By section" in page and "R36 000.00" in page and "R49 000.00" in page
+    assert "By section" in page and "Forecast" in page and "Paid so far" in page and "R49 000.00" in page
+
+
+def test_the_client_never_sees_the_expected_final_cost():
+    # 10 Nov 2026 (Ian): "drop the actual column … but we need to show what we forecasted as well"
+    p = _position(_billed_db())
+    ob = pt.client_view(p, "open_book")
+    assert all("actual_cents" not in s for s in ob["sections"] + ob["bill_lines"])
+    assert "actual_cents" not in ob["sheet"] and "to_pay_cents" not in ob["sheet"]
+    page = pt.render({"name": "Example Builders"}, ob)
+    assert "Actual" not in page and "R36 000.00" not in page and "R55 000.00" not in page and "R21 000.00" not in page
+    assert "R50 000.00" in page and "R18 000.00" in page            # the forecast, total and per item
+    assert p["sheet"]["actual_cents"] == 55_000_00                   # the business still has it
 
 
 def test_the_page_fits_a_phone_and_uses_a_wide_screen():
@@ -271,7 +283,7 @@ def test_the_page_fits_a_phone_and_uses_a_wide_screen():
     page = pt.render({"name": "Example"}, v, extra_html="<div class='docs'></div>")
     assert "max-width:1040px" in page and "max-width:560px" not in page
     assert "<div class=\"grid\">" in page and "class='blk wide'" in page and "class='scroll'" in page
-    assert "data-label='Budget'" in page and "content:attr(data-label)" in page and "@media print" in page
+    assert "data-label='Forecast'" in page and "content:attr(data-label)" in page and "@media print" in page
 
 
 # ── the agreed final account (migration 254) ───────────────────────────────────────────────
