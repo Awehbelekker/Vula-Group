@@ -669,8 +669,12 @@ async def file_document(
 
     # What the business adds is checked before anything relies on it (vula/commerce/data_checks.py):
     # a date years off, an internal cost sheet a client link would show, an invoice with no supplier.
-    from vula.commerce import data_checks
+    from vula.commerce import data_checks, site_split
     fields, checks = data_checks.at_filing(category, filename, fields)
+    # one invoice for several jobs (a skip company's invoice lists each site): propose the split, keep
+    # it off client links, and ask the owner to confirm (vula/commerce/site_split.py)
+    fields, more = site_split.at_filing(tenant_id, category, fields, project)
+    checks = list(checks) + more
     row = {
         "tenant_id": tenant_id, "project": project, "clickup_list_id": clickup_list_id,
         "clickup_task_id": clickup_task_id, "category": category, "summary": summary,

@@ -296,6 +296,7 @@ _TITLES = {
     "unpaid_paid": "Supplier bills still unpaid with a matching bank payment",
     "duplicates": "Suppliers on file more than once",
     "unallocated": "Job payments in the bank with no project",
+    "multi_site": "Invoices for several jobs — confirm the split",
 }
 
 
@@ -310,6 +311,11 @@ def sweep(tenant_id: str) -> Dict[str, Any]:
     add("link", link_warnings(tenant_id))
     docs = _documents(tenant_id)
     found = document_issues(docs)
+    try:
+        from vula.commerce import site_split
+        add("multi_site", site_split.pending(tenant_id, docs))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("site split list skipped: %s", exc)
     add("internal", found["internal"])
     add("bill_project", bill_project_mismatches(tenant_id, docs))
     add("bill_amount", bill_amount_mismatches(tenant_id, docs))
