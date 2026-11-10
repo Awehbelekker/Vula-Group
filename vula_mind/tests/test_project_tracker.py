@@ -256,9 +256,22 @@ def test_a_price_or_qs_link_never_shows_what_the_sections_really_cost():
         assert "sheet" not in v and all("actual_cents" not in s and "paid_cents" not in s for s in v["sections"])
         assert "R36 000.00" not in pt.render({"name": "Example Builders"}, v)
     ob = pt.client_view(p, "open_book")
-    assert ob["sheet"]["actual_cents"] == 55_000_00
+    assert ob["sheet"] == {"paid_cents": 49_000_00, "to_pay_cents": 6_000_00}
     page = pt.render({"name": "Example Builders"}, ob)
-    assert "By section" in page and "R36 000.00" in page and "R49 000.00" in page
+    assert "By section" in page and "Forecast" in page and "Paid so far" in page and "R49 000.00" in page
+
+
+def test_the_client_never_sees_the_expected_final_cost():
+    # 10 Nov 2026 (Ian): "drop the actual column … but we need to show what we forecasted as well"
+    p = _position(_billed_db())
+    ob = pt.client_view(p, "open_book")
+    assert all("actual_cents" not in s for s in ob["sections"] + ob["bill_lines"])
+    assert "actual_cents" not in ob["sheet"]
+    page = pt.render({"name": "Example Builders"}, ob)
+    assert "Actual" not in page and "R36 000.00" not in page and "R55 000.00" not in page and "R21 000.00" not in page
+    assert "R50 000.00" in page and "R18 000.00" in page            # the forecast, total and per item
+    assert ob["bill_lines"][0]["to_pay_cents"] == 3_000_00 and "Still to pay" in page   # 21,000 less 18,000 paid
+    assert p["sheet"]["actual_cents"] == 55_000_00                   # the business still has it
 
 
 def test_the_page_fits_a_phone_and_uses_a_wide_screen():
@@ -271,7 +284,7 @@ def test_the_page_fits_a_phone_and_uses_a_wide_screen():
     page = pt.render({"name": "Example"}, v, extra_html="<div class='docs'></div>")
     assert "max-width:1040px" in page and "max-width:560px" not in page
     assert "<div class=\"grid\">" in page and "class='blk wide'" in page and "class='scroll'" in page
-    assert "data-label='Budget'" in page and "content:attr(data-label)" in page and "@media print" in page
+    assert "data-label='Forecast'" in page and "content:attr(data-label)" in page and "@media print" in page
 
 
 # ── the agreed final account (migration 254) ───────────────────────────────────────────────
@@ -417,16 +430,20 @@ def test_a_project_priced_as_per_the_bill_shows_the_contract_and_invoices():
 
 # ── what the client still owes, at the top ─────────────────────────────────────────────────
 
-def test_the_client_sees_where_the_money_stands_today_at_the_top():
+def test_the_client_sees_where_we_stand_if_the_work_stopped_today():
+    # 10 Nov 2026 (Ian): "what DIGG spent and what Rudi spent … what's truly owed to DIGG if we stop"
     v = _ob(final_account=_FA, to_pay_directly_cents=6770200, paid_directly_cents=28381608)
     page = pt.render({"name": "DIGG"}, v)
     top = page[:page.index("<div class=\"grid\">")]
-    assert "Where the money stands today" in top
-    assert "Paid to us so far" in top and "R211 407.98" in top
+    assert "If the work stopped today" in top
+    assert "Paid to us" in top and "R211 407.98" in top
     assert "Paid by you directly to suppliers" in top and "R283 816.08" in top
-    assert "Balance due to us" in top and "R32 839.40" in top and "per the final account of 2026-11-02" in top
-    # today's position only: no other suppliers' balances, nothing projected
-    assert "R67 702.00" not in top and "Total still to pay" not in top
+    assert "Your total into the project" in top and "R495 224.06" in top
+    assert "Our costs and charges for the work done" in top and "R244 247.38" in top
+    assert "per the final account of 2026-11-02" in top and "−R211 407.98" in top
+    assert top.index("Balance due to us") < top.index("R32 839.40") < top.index("Still owed by you directly")
+    assert "R67 702.00" in top and "not owed to us" in top
+    assert "Total still to pay" not in top and "R569" not in top        # nothing projected
     assert "Open book · final account of 2026-11-02" in page and "cost-plus" not in page
 
 
@@ -474,3 +491,56 @@ def test_the_overview_reads_the_business_once_and_lists_every_project():
     assert (flat["status"], flat["owed_cents"], flat["owed_basis"]) == ("active", 14_000_00, "cost + agreed fee")
     assert o["owed_cents"] == 14_000_00 and o["received_cents"] == 35_000_00
     assert o["projects"][1]["owed_cents"] is None       # Other Job: no fee agreed — nothing guessed
+
+
+def _billed_db(total=50_000_00):
+    db = _reconciled_db()
+    items = [{"section": "Bathroom", "description": "Tiling", "total_cents": 18_000_00, "actual_cents": 21_000_00,
+              "paid_cents": 18_000_00},
+             {"section": "Bathroom", "description": "Plumbing", "total_cents": 12_000_00},
+             {"section": "Kitchen", "description": "Units", "total_cents": 20_000_00},
+             {"section": "Garden", "description": "Paving", "total_cents": 1_000_00},
+             {"section": "Kitchen", "description": "  "}]
+    db.tables["vula_filed_documents"] = [
+        {"tenant_id": TID, "project": "Sample Flat", "created_at": "2026-10-26", "status": "filed",
+         "fields": {"total_cents": total, "line_items_source": "sheet", "line_items": items}},
+        {"tenant_id": TID, "project": "Sample Flat", "created_at": "2026-10-27", "status": "duplicate",
+         "fields": {"total_cents": 50_000_00, "line_items": [{"description": "Copy", "total_cents": 1}]}},
+        {"tenant_id": "other-tenant", "project": "Sample Flat", "created_at": "2026-10-28",
+         "fields": {"total_cents": 50_000_00, "line_items": [{"description": "Theirs", "total_cents": 1}]}}]
+    return db
+
+
+def test_the_open_book_page_shows_the_project_bill_item_by_item():
+    # 10 Nov 2026 (Ian): "why is it not showing the full project as per Judy's bill?"
+    p = _position(_billed_db())
+    assert [li["description"] for li in p["bill_lines"]] == ["Tiling", "Plumbing", "Units", "Paving"]
+    assert p["bill_lines"][0] == {"section": "Bathroom", "description": "Tiling", "budget_cents": 18_000_00,
+                                  "actual_cents": 21_000_00, "paid_cents": 18_000_00}
+    page = pt.render({"name": "Example Builders"}, pt.client_view(p, "open_book"))
+    assert "The project bill" in page
+    assert page.index("Bathroom") < page.index("Tiling") < page.index("Plumbing") < page.index("Kitchen") \
+        < page.index("Units") < page.index("Paving")             # items under their section; the unmatched last
+    assert "Copy" not in page and "Theirs" not in page
+
+
+def test_a_bill_that_is_not_the_budget_never_lends_its_items():
+    assert _position(_billed_db(total=12_345_00))["bill_lines"] == []
+
+
+def test_price_and_qs_links_never_show_the_bill_items():
+    p = _position(_billed_db())
+    for view in ("price", "qs"):
+        v = pt.client_view(p, view)
+        assert "bill_lines" not in v and "Tiling" not in pt.render({"name": "Example Builders"}, v)
+
+
+def test_with_the_bill_the_client_sees_what_is_left_to_finish_not_owed_to_us():
+    # 10 Nov 2026 (Ian): "Judy's spreadsheet is where we are at" — if the work stopped, the bill's still-to-pay
+    v = _ob(final_account=_FA, to_pay_directly_cents=6770200, paid_directly_cents=28381608,
+            sheet={"paid_cents": 38404153, "to_pay_cents": 18512000})
+    top = pt.render({"name": "DIGG"}, v)
+    top = top[:top.index("<div class=\"grid\">")]
+    assert "Still to pay to finish the work" in top and "R185 120.00" in top and "not owed to us" in top
+    assert "R67 702.00" not in top            # already inside the bill's figure: never shown twice
+    assert top.index("R32 839.40") < top.index("R185 120.00")
