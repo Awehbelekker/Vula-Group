@@ -7801,6 +7801,37 @@ async def admin_upsert_supplier(tenant_id: str, body: dict):
     return await service.upsert_supplier(tenant_id, body)
 
 
+@router.get("/{tenant_id}/admin/suppliers/duplicates")
+async def admin_supplier_duplicates(tenant_id: str):
+    """Suppliers on file that look like one business — same VAT number, bank account, email, or the
+    same name give or take "SA (Pty) Ltd" (vula/commerce/supplier_identity.py). Nothing changes until
+    a group is merged."""
+    from vula.commerce import supplier_identity as si
+    own_names, own_numbers = await service.own_business_names(tenant_id)
+    suppliers, own_accounts = si.split_own(await service.list_suppliers(tenant_id), own_names, own_numbers)
+    groups = si.find_duplicates(suppliers, own_accounts)
+    slim = lambda s: {k: s.get(k) for k in ("id", "name", "aliases", "category", "tax_id", "contact_email")}  # noqa: E731
+    return {"groups": [{"keep": slim(g["keep"]), "duplicates": [slim(d) for d in g["duplicates"]],
+                        "why": g["why"]} for g in groups], "count": len(groups)}
+
+
+class SupplierMergeIn(BaseModel):
+    keep_id: str
+    duplicate_ids: List[str]
+
+
+@router.post("/{tenant_id}/admin/suppliers/merge")
+async def admin_supplier_merge(tenant_id: str, body: SupplierMergeIn):
+    """Fold duplicate suppliers into one: their bills, expenses, documents, orders and products move
+    to the kept supplier, their names become its aliases, then they are deleted. Read back."""
+    import asyncio
+    from vula.commerce import supplier_identity as si
+    res = await asyncio.to_thread(si.merge, tenant_id, body.keep_id, body.duplicate_ids)
+    if not res.get("ok") and not res.get("merged"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "Nothing was merged.")
+    return {**res, "message": si.merge_summary(res)}
+
+
 @router.delete("/{tenant_id}/admin/suppliers/{supplier_id}")
 async def admin_delete_supplier(tenant_id: str, supplier_id: str):
     """Delete a supplier."""

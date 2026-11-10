@@ -2291,8 +2291,51 @@ async def list_suppliers(tenant_id: str) -> List[dict]:
     return result.data or []
 
 
+async def _existing_supplier(tenant_id: str, data: dict) -> Optional[dict]:
+    """The supplier on file that a would-be new record duplicates (vula/commerce/supplier_identity.py),
+    with the new name added as its alias and its blanks filled — or None to create it. A record of
+    the exact same name is left to the upsert below, which updates it as before. Fail-open."""
+    try:
+        from vula.commerce import supplier_identity as si
+        suppliers = await list_suppliers(tenant_id)
+        name = data.get("name") or ""
+        if any((s.get("name") or "") == name for s in suppliers):
+            return None
+        own_names, own_numbers = await own_business_names(tenant_id)
+        others, own_accounts = si.split_own(suppliers, own_names, own_numbers)
+        hit = si.find_existing(others, data, own_accounts)
+        if not hit:
+            return None
+        sup, why = hit
+        up = si.merged_fields(sup, [{k: v for k, v in data.items() if k != "category"}])
+        if up:
+            (_client().table("commerce_suppliers").update(up)
+             .eq("tenant_id", tenant_id).eq("id", sup["id"]).execute())
+        logger.info("supplier %r matched existing %r (%s) — not created", name, sup.get("name"), why)
+        return {**sup, **up, "matched_existing": why}
+    except Exception as exc:  # noqa: BLE001 — never block a filing over the duplicate check
+        logger.warning("supplier duplicate check skipped for %s: %s", tenant_id, exc)
+        return None
+
+
 async def upsert_supplier(tenant_id: str, data: dict) -> dict:
-    """Insert or update a supplier (conflict on tenant_id,name)."""
+    """Insert or update a supplier (conflict on tenant_id,name).
+
+    A new supplier that is a business already on file — same VAT number, bank account or email,
+    or the same name give or take "SA (Pty) Ltd" — is not created: the existing record is returned
+    with the new name as an alias (supplier_identity.find_existing; 10 Nov 2026, a client's list held
+    "Pudlo" next to "Pudlo S.A (Pty) Ltd" and "elighting01@gmail.com" next to "Elighting Electrical
+    Services"). An email address is never a supplier's name."""
+    from vula.commerce import supplier_identity as si
+    data = dict(data)
+    name = (data.get("name") or "").strip()
+    if si.is_email(name):
+        data["contact_email"] = data.get("contact_email") or name
+        data["name"] = si.name_from_email(name)
+    if not data.get("id"):
+        existing = await _existing_supplier(tenant_id, data)
+        if existing:
+            return existing
     row = {
         "id": data.get("id") or str(uuid.uuid4()),
         "tenant_id": tenant_id,

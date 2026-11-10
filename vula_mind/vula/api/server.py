@@ -1969,6 +1969,10 @@ _SECTION_RULES = [
     # 2026-11-03: a project's whole file (every invoice, statement and proof of payment, as a
     # zip) — owner and managers only, like the team settings.
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/file(?:\.zip)?(?:/|$)"), frozenset()),
+    # 2026-11-10: merging duplicate suppliers moves bills between records and deletes the duplicates —
+    # owner and managers only; seeing the likely duplicates is Money access (vula/commerce/supplier_identity.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/merge/?$"), frozenset()),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/duplicates/?$"), _MONEY_TABS),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)
