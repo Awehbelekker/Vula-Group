@@ -5240,7 +5240,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
                 note = (f"📂 Which project is this for?{hint_txt} "
                         f"Reply with the project name and I'll file it (or 'skip').")
-            if row.get("id"):
+            if row.get("id") and row.get("status") != "duplicate":
                 from vula import open_questions
                 open_questions.ask(tenant_id, phone, "doc_project", row["id"],
                                    f"Which project: {result.filename}")
@@ -5250,6 +5250,8 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # Starter tenant at the cap sees the real reason instead of a false "Filed under X".
         if row.get("plan_limit_reached"):
             note = f"📂 {row.get('error')}"
+        elif row.get("status") == "duplicate":
+            note = ""                        # the duplicate notice (row["checks"]) says what happened
 
         unverified = (fields or {}).get("_unverified_figures")
         if not already_committed and category in _FINANCIAL_DOC_CATEGORIES:
@@ -5546,6 +5548,15 @@ def _content_fingerprint(category: str, fields: dict) -> str:
         return ""  # not enough distinct identifying signal
     raw = (category or "").lower() + "|" + "|".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+_VAT_WORDS = re.compile(r"\bv\.?\s?a\.?\s?t\b|\bbtw\b|\bexcl(?:\.|uding|usive)?\b|\bincl(?:\.|uding|usive)?\s+vat", re.I)
+
+
+def _document_states_vat(text: str) -> bool:
+    """Whether the document itself mentions VAT ("VAT", "excl.", "excluding VAT", "BTW"). A document
+    that never mentions VAT is never treated as priced excluding it."""
+    return bool(_VAT_WORDS.search(text or ""))
 
 
 async def _analyze_document(tenant_id: str, filename: str, local_path,
@@ -5851,6 +5862,13 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                                          (full_text or text) + ("\n" + plain_text if structured else ""))
             if totals_disagree(checked):
                 checked["_check"] = "subtotal + VAT does not make the total"
+            # "priced excluding VAT" only when the document says so: 10 Nov 2026, DIGG's skip and
+            # Nelito invoices never mention VAT, the model guessed "excluding", and 15% was added
+            # (R2,800 booked as R3,220, R27,100 as R31,165). STE's quotes, which do say "excluding
+            # VAT", are unaffected.
+            if checked.get("amounts_exclude_vat") and not _document_states_vat(
+                    (full_text or text) + "\n" + (plain_text or "")):
+                checked["amounts_exclude_vat"] = False
             result["fields"] = checked
         if result and result.get("category") == "Bill of Quantities (BOQ)":
             result = await _complete_boq_lines(result, local_path, full_text, filename)

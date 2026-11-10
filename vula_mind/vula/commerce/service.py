@@ -2870,6 +2870,22 @@ async def commit_inbound_document(
     db = _client()
     today = date.today()
 
+    # a document kept as a duplicate at filing (vula/integrations/doc_filing.earlier_copy) is never
+    # booked a second time, whichever channel it came in on
+    if filed_document_id:
+        try:
+            filed = (db.table("vula_filed_documents").select("status,commerce_invoice_id").eq("tenant_id", tenant_id)
+                     .eq("id", filed_document_id).limit(1).execute().data or [{}])[0]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("duplicate status check skipped: %s", exc)
+            filed = {}
+        if filed.get("status") == "duplicate":
+            return {"committed": False, "duplicate": True}
+        # the same file sent again lands on the row already filed — which is booked already
+        # (10 Nov 2026: DIGG skip invoices re-sent as the same PDF got a second draft bill each)
+        if filed.get("commerce_invoice_id") and auto_commit:
+            return {"committed": False, "already_booked": True, "invoice_id": filed["commerce_invoice_id"]}
+
     supplier_name = (extracted.get("supplier") or "").strip()
     tax_id = (extracted.get("tax_id") or "").strip()
     layout_signature = compute_layout_signature(extracted)
