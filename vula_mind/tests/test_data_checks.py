@@ -131,3 +131,12 @@ def test_the_health_list_finds_a_bill_booked_at_the_wrong_amount():
     out = dc.bill_amount_mismatches("t1", docs, bills)
     assert [o["bill"] for o in out] == ["DIG-BILL-00098"]
     assert out[0]["detail"].startswith("Booked at R2,300.00, the document says R2,000.00. 15% VAT was added")
+
+
+def test_a_document_the_owner_took_off_the_link_stays_off():
+    docs = [{"id": "q1", "category": "Quote / Estimate", "fields": {"_hidden_from_client": True, "supplier": "Flush"},
+             "filename": "MERRQUO-329634.1.pdf", "created_at": "2026-09-22"},
+            {"id": "q4", "category": "Quote / Estimate", "fields": {"supplier": "Flush"}, "filename": "MERRQUO-329634.4.pdf",
+             "created_at": "2026-10-08"}]
+    rows = pf.organise(docs, pf._Suppliers([], "DIGG"))["rows"]
+    assert {r["id"]: r["client"] for r in rows} == {"q1": False, "q4": True}

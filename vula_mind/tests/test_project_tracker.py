@@ -417,20 +417,23 @@ def test_a_project_priced_as_per_the_bill_shows_the_contract_and_invoices():
 
 # ── what the client still owes, at the top ─────────────────────────────────────────────────
 
-def test_the_client_sees_what_they_still_owe_at_the_top():
-    v = _ob(final_account=_FA, to_pay_directly_cents=6770200)
+def test_the_client_sees_where_the_money_stands_today_at_the_top():
+    v = _ob(final_account=_FA, to_pay_directly_cents=6770200, paid_directly_cents=28381608)
     page = pt.render({"name": "DIGG"}, v)
     top = page[:page.index("<div class=\"grid\">")]
-    assert "Still owed to us" in top and "R32 839.40" in top and "per the final account of 2026-11-02" in top
-    assert "Still to pay your suppliers directly" in top and "R67 702.00" in top
-    assert "Total still to pay on the project" in top and "R100 541.40" in top
+    assert "Where the money stands today" in top
+    assert "Paid to us so far" in top and "R211 407.98" in top
+    assert "Paid by you directly to suppliers" in top and "R283 816.08" in top
+    assert "Balance due to us" in top and "R32 839.40" in top and "per the final account of 2026-11-02" in top
+    # today's position only: no other suppliers' balances, nothing projected
+    assert "R67 702.00" not in top and "Total still to pay" not in top
     assert "Open book · final account of 2026-11-02" in page and "cost-plus" not in page
 
 
 def test_no_owed_summary_without_an_agreed_fee_or_final_account():
     page = pt.render({"name": "DIGG"}, _ob(final_account=None, fee_basis=None, fee_cents=None,
                                            open_book_balance_cents=None))
-    assert "Still owed to us" not in page
+    assert "Where the money stands today" not in page
 
 
 def test_the_heading_says_how_the_account_works():

@@ -575,30 +575,32 @@ def _basis_label(v: Dict[str, Any]) -> str:
 
 
 def _owed_summary(v: Dict[str, Any], e) -> str:
-    """What the client still has to pay, at the top of an open-book page (10 Nov 2026, Ian: "we need to
-    show what Rudi still owes DIGG — we need to be fully open"): to the business, to suppliers
-    directly, and the two together. Only figures the page already carries; nothing estimated."""
+    """Where the money stands today, at the top of an open-book page (10 Nov 2026, Ian: "show what Rudi
+    still owes DIGG — fully open … just the current status on money"): what the client has paid the
+    business, what they've paid suppliers directly, and the balance due to the business. Nothing
+    projected and no other suppliers' balances; only figures the page already carries."""
     if v.get("view") != "open_book":
         return ""
     fa = v.get("final_account")
     if fa:
         to_us, how = fa["balance_cents"], f"per the final account of {fa['as_of']}"
+        received = fa.get("received_cents") or 0
     elif v.get("open_book_balance_cents") is not None:
         to_us, how = v["open_book_balance_cents"], "cost plus the agreed fee, less what you've paid"
+        received = v.get("received_cents") or 0
     elif v.get("fee_basis") == "per_bill":
         to_us, how = v.get("invoices_owed_cents") or 0, "on our invoices"
+        received = v.get("invoices_paid_cents") or 0
     else:
         return ""
-    direct = int(v.get("to_pay_directly_cents") or 0)
-    rows = [("Still owed to us" if to_us >= 0 else "We owe you", abs(to_us), how)]
-    if direct:
-        rows.append(("Still to pay your suppliers directly", direct, "listed below"))
-    if direct and to_us >= 0:
-        rows.append(("Total still to pay on the project", to_us + direct, ""))
-    body = "".join(f"<div class='owe{' tot' if i == len(rows) - 1 and len(rows) > 2 else ''}'>"
-                   f"<span>{e(label)}<small>{e(sub)}</small></span><b>{_r(c)}</b></div>"
+    rows = [("Paid to us so far", received, ""),
+            ("Paid by you directly to suppliers", int(v.get("paid_directly_cents") or 0), ""),
+            ("Balance due to us" if to_us >= 0 else "Balance due to you", abs(to_us), how)]
+    rows = [r for r in rows if r[1] or r is rows[-1]]
+    body = "".join(f"<div class='owe{' tot' if i == len(rows) - 1 else ''}'>"
+                   f"<span>{e(label)}{f'<small>{e(sub)}</small>' if sub else ''}</span><b>{_r(c)}</b></div>"
                    for i, (label, c, sub) in enumerate(rows))
-    return f"<div class='owed'>{body}</div>"
+    return f"<div class='owed'><div class='oweh'>Where the money stands today</div>{body}</div>"
 
 
 def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, str]] = None,
@@ -754,10 +756,11 @@ box-shadow:0 2px 10px rgba(0,0,0,.06);overflow:hidden}}
 .muted{{color:#6e6a63;margin:0 0 8px;font-size:14px;line-height:1.45}}h3{{font-size:15px;margin:28px 0 8px;color:{accent}}}
 .owed{{margin:18px 0 6px;border:1.5px solid {accent};border-radius:12px;overflow:hidden}}
 .owe{{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:12px 14px;border-top:1px solid #eee}}
-.owe:first-child{{border-top:0}}.owe span{{min-width:0;overflow-wrap:anywhere}}
+.oweh + .owe{{border-top:0}}.owe span{{min-width:0;overflow-wrap:anywhere}}
 .owe small{{display:block;color:#8a857c;font-size:12px;margin-top:2px}}
 .owe b{{white-space:nowrap;font-variant-numeric:tabular-nums;font-size:17px}}
-.owe:first-child b{{color:{accent};font-size:20px}}.owe.tot{{background:#f5f3ee}}
+.oweh{{padding:10px 14px;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#6e6a63;background:#f5f3ee}}
+.owe.tot{{background:#f5f3ee}}.owe.tot b{{color:{accent};font-size:20px}}
 /* the account blocks side by side on a wide screen, one column on a phone */
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));column-gap:40px;align-items:start}}
 .blk{{min-width:0}}.blk.wide{{grid-column:1/-1}}
