@@ -151,7 +151,7 @@ def test_mark_stale_notified_never_raises_on_error():
 def _mock_db_abandoned(rows):
     mock_table = MagicMock()
     chain = mock_table.select.return_value.eq.return_value.in_.return_value \
-        .lt.return_value.is_.return_value.is_.return_value.limit.return_value
+        .lt.return_value.gt.return_value.is_.return_value.is_.return_value.limit.return_value
     chain.execute.return_value = MagicMock(data=rows)
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
