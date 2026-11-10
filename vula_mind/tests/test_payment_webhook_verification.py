@@ -184,7 +184,9 @@ class _Req:
         return b"{}"
 
 
-async def _run(db, verified):
+async def _run(db, verified, genuine=True):
+    """genuine: what the PayFast merchant + server check says (tests/test_money_audit_1109.py
+    covers that check itself)."""
     prov = AsyncMock()
     prov.verify_webhook = AsyncMock(return_value=verified)
     upd = AsyncMock(return_value={"id": "inv-1"})
@@ -193,7 +195,8 @@ async def _run(db, verified):
          patch.object(payments, "_client", return_value=_DB({})), \
          patch("vula.commerce.service._client", return_value=db), \
          patch("vula.commerce.service.update_invoice_status", upd), \
-         patch("vula.api.yoco._notify_order_paid", notify):
+         patch("vula.api.yoco._notify_order_paid", notify), \
+         patch.object(payments_api, "_payfast_genuine", AsyncMock(return_value=genuine)):
         await payments_api.payment_webhook("t1", "payfast", _Req())
     return upd, notify
 

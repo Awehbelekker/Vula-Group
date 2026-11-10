@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Optional
-from urllib.parse import urlencode
 
-import httpx
 
 from vula import payments
 from vula.tap.service import REF_PREFIX
@@ -106,13 +104,4 @@ class PayFastGateway:
 
     async def _server_confirms(self, mode: str, body: bytes, form: dict) -> bool:
         """PayFast ITN step: POST the notification back to PayFast and require 'VALID'. Fails closed."""
-        host = "sandbox.payfast.co.za" if mode == "test" else "www.payfast.co.za"
-        payload = urlencode([(k, v) for k, v in form.items() if k != "signature"])
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                r = await c.post(f"https://{host}/eng/query/validate", content=payload,
-                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
-            return r.status_code == 200 and r.text.strip().upper().startswith("VALID")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("PayFast server validation unreachable: %s", exc)
-            return False
+        return await payments.payfast_server_confirms(mode, form)

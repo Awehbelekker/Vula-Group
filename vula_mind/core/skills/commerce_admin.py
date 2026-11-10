@@ -1912,26 +1912,53 @@ def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]
 # send_invoice with confirm=true straight away, e.g. on "make a quote for Sam and send it" in a
 # voice note, so the customer could get it before the owner saw anything. The Confirm button
 # re-runs the tool via _dispatch_tool directly and is not affected.
+_CONFIRM_ONLY = ("confirm", "refund_made")   # what a "yes" adds; everything else is the preview's
 _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "record_payment",
-                            "send_broadcast", "send_payment_reminders", "send_purchase_order"})
+                            "send_broadcast", "send_payment_reminders", "send_purchase_order",
+                            # 9 Nov 2026 audit H3: each has a preview, but a first call with
+                            # confirm=true acted at once. order_payment WhatsApps the customer a
+                            # Pay button; create_manual_order can book cash or ask for a deposit;
+                            # cancel/refund change what the customer was promised; the staff tools
+                            # message the team; a discount code changes prices.
+                            "order_payment", "create_manual_order", "create_discount_code",
+                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking"})
 
 
-def _preview_was_shown(tenant_id: str, phone: Optional[str], tool: str) -> bool:
-    """True (and the pending row is used up) when this phone has an unexpired preview of this
-    tool waiting: the owner typed "yes" to it. Any doubt is False: show the preview again."""
+def _claim_preview(tenant_id: str, phone: Optional[str], tool: str) -> Optional[Dict[str, Any]]:
+    """The arguments of this phone's newest unexpired preview of this tool, claimed (used up),
+    or None: no preview, already used, or any doubt (then the preview is shown again).
+
+    The owner typed "yes" to a preview. What runs is what they were shown: these stored
+    arguments, as the Confirm button does (whatsapp.py re-dispatches row["tool_args"]). Before
+    9 Nov 2026 (audit M2) only the tool name was checked and the model's NEW arguments ran, so a
+    "R1,200 to Sam" preview followed by "yes" could send R12,000."""
     if not phone:
-        return False
+        return None
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
     try:
-        upd = (service._client().table("commerce_pending_confirmations")
+        db = service._client()
+        rows = (db.table("commerce_pending_confirmations").select("id,tool_args")
+                .eq("tenant_id", tenant_id).eq("phone", phone).eq("tool_name", tool)
+                .eq("status", "pending").gt("expires_at", now)
+                .order("created_at", desc=True).limit(1).execute().data or [])
+        if not rows:
+            return None
+        upd = (db.table("commerce_pending_confirmations")
                .update({"status": "confirmed", "resolved_at": now})
-               .eq("tenant_id", tenant_id).eq("phone", phone).eq("tool_name", tool)
-               .eq("status", "pending").gt("expires_at", now).execute())
-        return bool(upd.data)
+               .eq("id", rows[0]["id"]).eq("status", "pending").execute())
+        if not upd.data:
+            return None          # the Confirm button (or another "yes") got there first
+        args = dict(rows[0].get("tool_args") or {})
+        args.pop("_caller", None)
+        return args
     except Exception as exc:  # noqa: BLE001
         logger.warning("pending-confirmation check failed, previewing instead: %s", exc)
-        return False
+        return None
+
+
+def _preview_was_shown(tenant_id: str, phone: Optional[str], tool: str) -> bool:
+    return _claim_preview(tenant_id, phone, tool) is not None
 
 
 class HandOver(Exception):
@@ -2437,11 +2464,19 @@ class CommerceAdminSkill(BaseSkill):
                 logger.warning("commerce_admin: refused tool %s — not offered to this caller", name)
                 return {"error": f"{name} isn't available here. Use one of the tools you were given, "
                                  f"or tell the user you can't do that."}
-            if (name in _PREVIEW_FIRST and args.get("confirm")
-                    and not _preview_was_shown(ctx["tenant_id"], ctx.get("phone"), name)):
-                logger.warning("commerce_admin: %s called with confirm before any preview, "
-                               "showing the preview instead", name)
-                args = {k: v for k, v in args.items() if k not in ("confirm", "refund_made")}
+            if name in _PREVIEW_FIRST and args.get("confirm"):
+                shown = _claim_preview(ctx["tenant_id"], ctx.get("phone"), name)
+                if shown is None:
+                    logger.warning("commerce_admin: %s called with confirm before any preview, "
+                                   "showing the preview instead", name)
+                    args = {k: v for k, v in args.items() if k not in _CONFIRM_ONLY}
+                else:
+                    # Run what the owner was shown, not what the model sends now (audit M2).
+                    asked = {k: v for k, v in args.items() if k not in _CONFIRM_ONLY}
+                    if asked != {k: v for k, v in shown.items() if k not in _CONFIRM_ONLY}:
+                        logger.warning("commerce_admin: %s confirmed with different arguments "
+                                       "than its preview; running the previewed ones", name)
+                    args = {**shown, **{k: v for k, v in args.items() if k in _CONFIRM_ONLY}, "confirm": True}
             return await self._dispatch_tool(name, args, ctx)
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]

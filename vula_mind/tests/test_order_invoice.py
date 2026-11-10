@@ -14,7 +14,7 @@ _ORDER = {
     "id": "order1", "display_id": "OTH-00042", "tenant_id": "off-the-hook",
     "customer_name": "Jane Client", "customer_phone": "27821234567",
     "customer_email": "jane@example.com", "delivery_address": "12 Main Rd",
-    "delivery_cents": 8000,
+    "delivery_cents": 8000, "total_cents": 38000,   # what the customer was charged
     "commerce_order_items": [
         {"product_id": "p1", "product_name": "Yellowtail 1kg", "quantity": 2,
          "unit_price_cents": 15000, "total_cents": 30000},
@@ -66,7 +66,7 @@ async def test_happy_path_creates_invoice_with_delivery_line_and_sends():
 
 @pytest.mark.asyncio
 async def test_no_delivery_fee_omits_delivery_line():
-    order = {**_ORDER, "delivery_cents": 0}
+    order = {**_ORDER, "delivery_cents": 0, "total_cents": 30000}
     patches = _patches(order=order)
     with patches[0], patches[1] as mock_create, patches[2], patches[3], \
          patches[4], patches[5], patches[6]:

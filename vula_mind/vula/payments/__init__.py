@@ -159,6 +159,24 @@ class PayFast(_Provider):
                 "amount_cents": _rands_to_cents(d.get("amount_gross")), "raw": d}
 
 
+async def payfast_server_confirms(mode: str, form: dict) -> bool:
+    """PayFast ITN step 4: POST the notification back to PayFast and require 'VALID'. Fails
+    closed. The signature alone isn't proof: without a passphrase it's an MD5 over fields anyone
+    can read off a pay link (the merchant id and key are in its URL), so a forged COMPLETE
+    notification signed itself (9 Nov 2026 audit S7). Tap-to-pay and onboarding already asked."""
+    from urllib.parse import urlencode
+    host = "sandbox.payfast.co.za" if mode == "test" else "www.payfast.co.za"
+    payload = urlencode([(k, v) for k, v in (form or {}).items() if k != "signature"])
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(f"https://{host}/eng/query/validate", content=payload,
+                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+        return r.status_code == 200 and r.text.strip().upper().startswith("VALID")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PayFast server validation unreachable: %s", exc)
+        return False
+
+
 class Paystack(_Provider):
     name = "paystack"
 
