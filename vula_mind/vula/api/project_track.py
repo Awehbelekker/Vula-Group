@@ -92,33 +92,48 @@ def _documents_html(token: str, share: dict, brand: dict, asked: str = "") -> st
     else:
         top = (f"<form class='inline' method='post' action='{base}/request'><input type='hidden' name='scope' value='all'>"
                "<button class='btn' type='submit'>Request to download all</button></form>")
-    rows = []
+    # grouped by category (10 Nov 2026): the business's own documents first, then the project file's
+    # folders in their order — invoices, quotes, drawings/BOQ/specifications — by supplier and date
+    ours_label = f"From {brand.get('name')}" if brand.get("name") else "From us"
+    groups: dict = {}
     for d in docs:
-        did = e(str(d["id"]))
-        who = d["supplier"] if d.get("by_supplier") else d.get("category") or ""
-        if who.endswith("(our documents)"):              # the business's own invoice — to the client, just its name
-            who = brand.get("name") or "Our invoices"
-        who = e(who)
-        sub = " · ".join(x for x in (d.get("number") or "", d.get("date") or "", d["folder"][3:]) if x)
-        amount = ""
-        if d.get("amount_cents") is not None and d["folder"] in ("01 Invoices", "02 Quotes"):
-            c = d["amount_cents"]
-            amount = ("-" if c < 0 else "") + f"R{abs(c) / 100:,.2f}".replace(",", " ")
-        acts = []
-        if sd.viewable(d):
-            acts.append(f"<a class='btn' href='{base}/doc/{did}'>View</a>")
-        if acc["all"] or str(d["id"]) in acc["docs"]:
-            acts.append(f"<a class='btn solid' href='{base}/download/{did}'>Download</a>")
-        elif str(d["id"]) in acc["asked"] or "all" in acc["asked"]:
-            acts.append("<span class='d'>download requested</span>")
-        else:
-            acts.append(f"<form class='inline' method='post' action='{base}/request'>"
-                        f"<input type='hidden' name='scope' value='{did}'>"
-                        "<button class='btn' type='submit'>Request download</button></form>")
-        rows.append(f"<div class='doc'><div class='who'>{who}</div><div class='amt'>{e(amount)}</div>"
-                    f"<div class='sub'>{e(sub)}</div><div class='acts'>{' '.join(acts)}</div></div>")
+        ours = bool(d.get("by_supplier") and (d.get("supplier") or "").endswith("(our documents)"))
+        groups.setdefault((0, ours_label) if ours else (1, d["folder"][3:]), []).append(d)
+    blocks = []
+    for (_rank, title), members in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[1][0]["folder"])):
+        blocks.append(f"<h4 class='grp'>{e(title)} <span class='cnt'>({len(members)})</span></h4>"
+                      f"<div class='docs'>{''.join(_doc_row(d, base, acc, brand, sd) for d in members)}</div>")
     return (f"<h3>Documents ({len(docs)})</h3>{note}<p class='muted'>View any document here. To keep a copy, "
-            f"request a download — the team says yes or no.</p>{top}<div class='docs'>{''.join(rows)}</div>")
+            f"request a download — the team says yes or no.</p>{top}{''.join(blocks)}")
+
+
+def _doc_row(d: dict, base: str, acc: dict, brand: dict, sd) -> str:
+    """One document on the client's link: who, amount, number and date, and what they can do with it."""
+    import html as _html
+    e = _html.escape
+    did = e(str(d["id"]))
+    who = d["supplier"] if d.get("by_supplier") else d.get("category") or ""
+    if who.endswith("(our documents)"):              # the business's own document — to the client, just its name
+        who = brand.get("name") or "Our documents"
+    who = e(who)
+    sub = " · ".join(x for x in (d.get("number") or "", d.get("date") or "") if x)
+    amount = ""
+    if d.get("amount_cents") is not None and d["folder"] in ("01 Invoices", "02 Quotes"):
+        c = d["amount_cents"]
+        amount = ("-" if c < 0 else "") + f"R{abs(c) / 100:,.2f}".replace(",", " ")
+    acts = []
+    if sd.viewable(d):
+        acts.append(f"<a class='btn' href='{base}/doc/{did}'>View</a>")
+    if acc["all"] or str(d["id"]) in acc["docs"]:
+        acts.append(f"<a class='btn solid' href='{base}/download/{did}'>Download</a>")
+    elif str(d["id"]) in acc["asked"] or "all" in acc["asked"]:
+        acts.append("<span class='d'>download requested</span>")
+    else:
+        acts.append(f"<form class='inline' method='post' action='{base}/request'>"
+                    f"<input type='hidden' name='scope' value='{did}'>"
+                    "<button class='btn' type='submit'>Request download</button></form>")
+    return (f"<div class='doc'><div class='who'>{who}</div><div class='amt'>{e(amount)}</div>"
+            f"<div class='sub'>{e(sub)}</div><div class='acts'>{' '.join(acts)}</div></div>")
 
 
 def _fetch():

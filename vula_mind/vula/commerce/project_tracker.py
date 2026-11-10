@@ -164,6 +164,45 @@ def _invoices(tenant_id: str, key: str) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda i: str(i.get("date") or ""))
 
 
+def _draft_invoices_cents(tenant_id: str, key: str) -> int:
+    """The project's invoices to the client still in draft (not yet sent), in cents."""
+    rows = _rows(lambda: _client().table("commerce_invoices")
+                 .select("total_cents,status,doc_type,direction,project")
+                 .eq("tenant_id", tenant_id).eq("doc_type", "invoice").eq("status", "draft"))
+    return sum(int(r.get("total_cents") or 0) for r in rows
+               if _key(r.get("project")) == key and (r.get("direction") or "outbound") == "outbound")
+
+
+def _r_text(cents: int) -> str:
+    return ("-" if cents < 0 else "") + f"R{abs(cents) / 100:,.2f}"
+
+
+def _warnings(final: Optional[Dict[str, Any]], basis: Optional[Dict[str, Any]], fee_source: Optional[str],
+              fee_pct: Optional[float], estimate_balance: Optional[int], invoices: List[Dict[str, Any]],
+              drafts_cents: int, received: int) -> List[str]:
+    """What the owner should check before the client relies on the link (10 Nov 2026: Belladonna's
+    link told the client the business owed him R57,917.27 while its invoice asked him for R32,839.40)."""
+    out: List[str] = []
+    if not final and not basis:
+        out.append("No fee is agreed for this project, so the client's open-book link shows no balance. "
+                   "Set the fee (a percentage or a fixed amount) or store the final account.")
+    elif not final and fee_source == "standard":
+        what = f"{fee_pct:g}%" if fee_pct is not None else f"{_r_text(basis['fee_cents'])} fixed"
+        out.append(f"This project uses your standard fee ({what}). If a different fee was agreed with this "
+                   "client, set it for the project.")
+    balance = final["balance_cents"] if final else estimate_balance
+    if balance is None:
+        return out
+    if balance < 0:
+        out.append(f"The client's link shows you owing the client {_r_text(-balance)}. Check that every cost is "
+                   "booked to the project and that the fee is right before they rely on it.")
+    owed = sum(i["owed_cents"] for i in invoices) + drafts_cents
+    if balance > 0 and abs(balance - owed) > 100:
+        out.append(f"The client's link shows {_r_text(balance)} due, but your invoices to the client add up to "
+                   f"{_r_text(owed)} unpaid (drafts included). Bring them in line before the client compares them.")
+    return out
+
+
 def _claims(tenant_id: str, project: str) -> Dict[str, Any]:
     """The project's progress claims (vula_project_claims): how many, and the latest's figures."""
     try:
@@ -272,8 +311,18 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
     recorded_paid = sum(r["amount_cents"] for r in recorded if r["status"] == "paid")
     to_pay_directly = sum(r["amount_cents"] for r in recorded if r["status"] == "to_pay")
     invoices = _invoices(tenant_id, key)
-    fee_pct = _fee_pct(tenant_id, name, costed)
-    fee = int(round(business_cost * fee_pct / 100))
+    # the fee as agreed for this project, else the business's standard fee — never an assumed one
+    agreed = job_costing.agreed_terms(tenant_id)
+    own = next((v for p, v in agreed.items() if p != "*" and _key(p) == key), None)
+    basis = own or agreed.get("*")
+    fee_source = "project" if own else ("standard" if basis else None)
+    fee_pct = basis["fee_pct"] if basis and basis["pricing"] == "cost_plus" else None
+    if basis and basis["pricing"] == "cost_plus":
+        fee: Optional[int] = int(round(business_cost * fee_pct / 100))
+    elif basis:
+        fee = int(basis["fee_cents"])
+    else:
+        fee = None
     final = final_account(tenant_id, key)
     if final:
         # the agreed final account is the account: what the client paid comes from the bank, live
@@ -315,11 +364,15 @@ def position(tenant_id: str, project: str) -> Dict[str, Any]:
         "spent_cents": spent,
         "budget_left_cents": budget - spent if budget else None,
         "spent_pct": round(100 * spent / budget) if budget else None,
+        "fee_basis": basis["pricing"] if basis else None, "fee_source": fee_source,
         "fee_pct": fee_pct, "fee_cents": fee,
-        "open_book_total_cents": business_cost + fee,
+        "open_book_total_cents": business_cost + fee if fee is not None else None,
         "received_cents": received,
-        "open_book_balance_cents": business_cost + fee - received,
+        "open_book_balance_cents": business_cost + fee - received if fee is not None else None,
         "final_account": final,
+        # the owner's own checks — never in a client view
+        "warnings": _warnings(final, basis, fee_source, fee_pct, business_cost + fee - received if fee is not None else None,
+                              invoices, _draft_invoices_cents(tenant_id, key), received),
         "invoices": invoices, "invoiced_cents": invoiced, "invoices_paid_cents": paid,
         "invoices_owed_cents": invoiced - paid,
         "to_invoice_cents": max(contract - invoiced, 0) if contract else None,
@@ -343,7 +396,8 @@ _QS_FIELDS = _PRICE_FIELDS + ("variations_extra_cost_cents", "baseline_locked", 
 _OPEN_BOOK_FIELDS = _PRICE_FIELDS + ("trades", "business_cost_cents", "paid_directly_cents", "spent_cents",
                                      "direct_payments", "to_pay_directly_cents",
                                      "budget_left_cents", "fee_pct", "fee_cents", "open_book_total_cents",
-                                     "received_cents", "open_book_balance_cents", "sheet", "final_account")
+                                     "received_cents", "open_book_balance_cents", "sheet", "final_account",
+                                     "fee_basis")
 
 
 def client_view(pos: Dict[str, Any], view: str) -> Dict[str, Any]:
@@ -367,10 +421,22 @@ def public_url(token: str) -> str:
     return f"{settings.public_base_url.rstrip('/')}/track/{token}"
 
 
+def _fee_agreed(tenant_id: str, project: str) -> bool:
+    from vula.commerce import job_costing
+    key = _key(project)
+    agreed = job_costing.agreed_terms(tenant_id)
+    return bool(final_account(tenant_id, key) or agreed.get("*")
+                or any(p != "*" and _key(p) == key for p in agreed))
+
+
 def create_share(tenant_id: str, project: str, view: str, by: Optional[str] = None) -> Dict[str, Any]:
     """A new link for the project in `view`. Read back before it's reported."""
     if view not in VIEWS:
         raise ValueError(f"view must be one of {VIEWS}")
+    if view == "open_book" and not _fee_agreed(tenant_id, project):
+        raise ValueError("Agree this project's fee first — a percentage on cost or a fixed amount — or store its "
+                         "final account. An open-book link shows the client a balance, and it must not be "
+                         "worked out on a guessed fee.")
     from vula.commerce.service import canonical_project
     name = canonical_project(tenant_id, project) or project
     token = secrets.token_urlsafe(24)
@@ -447,9 +513,17 @@ def summary_text(pos: Dict[str, Any], view: str) -> str:
         lines += [f"Your cost to date: {_r(v['business_cost_cents'])}",
                   f"Paid by the client directly to suppliers: {_r(v['paid_directly_cents'])}"
                   + (f" (still to pay directly: {_r(v['to_pay_directly_cents'])})" if v.get("to_pay_directly_cents") else ""),
-                  f"Fee ({v['fee_pct']:g}%): {_r(v['fee_cents'])}",
-                  f"Paid to you so far: {_r(v['received_cents'])}",
-                  f"*Balance due: {_r(v['open_book_balance_cents'])}*"]
+                  f"Paid to you so far: {_r(v['received_cents'])}"]
+        fa = v.get("final_account")
+        if fa:
+            lines += [f"Final account ({fa['as_of']}): {_r(fa['total_cents'])}",
+                      f"*Balance due: {_r(fa['balance_cents'])}*"]
+        elif v.get("fee_cents") is None:
+            lines.append("Fee: not agreed yet — the client sees no balance until you set it")
+        else:
+            lines += [(f"Fee ({v['fee_pct']:g}%)" if v.get("fee_basis") == "cost_plus" else "Fee (agreed amount)")
+                      + f": {_r(v['fee_cents'])}",
+                      f"*Balance due: {_r(v['open_book_balance_cents'])}*"]
     else:
         if view == "qs":
             c = (v.get("claims") or {}).get("latest")
@@ -532,12 +606,24 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                          abs(fa["balance_cents"]), True)]
             parts.append(table("Account", acct))
         else:
-            acct = [row("Cost through us", v.get("business_cost_cents")),
-                    row(f"Fee ({v.get('fee_pct') or 0:g}%)", v.get("fee_cents")),
-                    row("Total for our part", v.get("open_book_total_cents"), True),
-                    row("Paid to us so far", -(v.get("received_cents") or 0)),
-                    row("Balance due", v.get("open_book_balance_cents"), True)]
-            parts.append(table("Account", acct))
+            if v.get("fee_cents") is None:
+                # no fee agreed for this project: costs and payments only — never a balance on a guess
+                acct = [row("Cost through us", v.get("business_cost_cents")),
+                        "<tr><td>Fee</td><td class='n'>Not agreed yet</td></tr>",
+                        row("Paid to us so far", -(v.get("received_cents") or 0))]
+                parts.append(table("Account", acct)[:-len("</table></section>")]
+                             + "</table><p class='muted'>The balance shows here once the fee for this project is "
+                               "agreed.</p></section>")
+            else:
+                fee_label = (f"Fee ({v.get('fee_pct') or 0:g}%)" if v.get("fee_basis") == "cost_plus"
+                             else "Fee (agreed amount)")
+                acct = [row("Cost through us", v.get("business_cost_cents")),
+                        row(fee_label, v.get("fee_cents")),
+                        row("Total for our part", v.get("open_book_total_cents"), True),
+                        row("Paid to us so far", -(v.get("received_cents") or 0)),
+                        row("Balance due to us" if (v.get("open_book_balance_cents") or 0) >= 0 else "Balance due to you",
+                            abs(v.get("open_book_balance_cents") or 0), True)]
+                parts.append(table("Account", acct))
         if v.get("paid_directly_cents") or v.get("to_pay_directly_cents"):
             spent = [row("Through us", v.get("business_cost_cents")),
                      row("Paid by you directly to suppliers", v.get("paid_directly_cents")),
@@ -630,7 +716,8 @@ background:{accent};color:#fff;text-decoration:none;font-weight:600;font-size:14
 font:600 13px system-ui,sans-serif;text-decoration:none;cursor:pointer;white-space:nowrap}}.btn.solid{{background:{accent};color:#fff}}
 form.inline{{display:inline;margin:0}}.note{{background:#f2efe7;border-radius:9px;padding:9px 12px;font-size:14px;margin:10px 0}}
 /* the documents: name and amount on one line, the details under it, the buttons on their own line on a phone */
-.docs{{border-top:1px solid #eee}}
+.docs{{border-top:1px solid #eee}}h4.grp{{font-size:13px;margin:18px 0 4px;color:#2a2a2a;text-transform:uppercase;letter-spacing:.04em}}
+h4.grp .cnt{{color:#8a857c;font-weight:400}}
 .doc{{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:3px;padding:10px 0;border-bottom:1px solid #eee}}
 .doc .who{{overflow-wrap:anywhere}}.doc .amt{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}
 .doc .sub{{grid-column:1/-1;color:#8a857c;font-size:12px;overflow-wrap:anywhere}}

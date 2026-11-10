@@ -67,9 +67,13 @@ def _db():
              "invoice_number": "BILL-9", "total_cents": 1_000_00, "status": "sent"}])
 
 
-def _position(db=None):
+AGREED = {"Sample Flat": {"pricing": "cost_plus", "fee_pct": 10.0, "fee_cents": None}}
+
+
+def _position(db=None, agreed=None):
     db = db or _db()
     with (patch.object(pt, "_client", return_value=db),
+          patch("vula.commerce.job_costing.agreed_terms", return_value=AGREED if agreed is None else agreed),
           patch("vula.commerce.job_costing.costing", return_value={"projects": [COSTED]}),
           patch("vula.commerce.job_costing.direct_costs", return_value={"sample flat": {"cents": 8_000_00}})):
         return pt.position(TID, "sample flat")
@@ -109,6 +113,7 @@ def test_the_open_book_view_shows_cost_fee_and_balance_but_never_profit():
 def test_a_share_link_stores_only_a_hash_and_ends_when_revoked_or_expired():
     db = _db()
     with (patch.object(pt, "_client", return_value=db),
+          patch("vula.commerce.job_costing.agreed_terms", return_value=AGREED),
           patch("vula.commerce.service.canonical_project", return_value="Sample Flat"),
           patch("config.settings.public_base_url", "https://api.example.test")):
         share = pt.create_share(TID, "sample flat", "open_book", by="27820000000")
@@ -278,7 +283,7 @@ _FA = {"as_of": "2026-11-02", "charged_cents": 23924738, "total_cents": 24424738
 
 def _ob(**kw):
     return {"view": "open_book", "project": "Belladonna", "as_of": "2026-11-10", "trades": [],
-            "business_cost_cents": 13953701, "fee_pct": 10.0, "fee_cents": 1395370,
+            "business_cost_cents": 13953701, "fee_basis": "cost_plus", "fee_pct": 10.0, "fee_cents": 1395370,
             "open_book_total_cents": 15349071, "received_cents": 21140798,
             "open_book_balance_cents": -5791727, **kw}
 
@@ -334,3 +339,68 @@ def test_saving_a_final_account_is_read_back(monkeypatch):
     monkeypatch.setattr(pt, "final_account", lambda t, k: None)
     with pytest.raises(RuntimeError):
         pt.set_final_account("digg-demo", "belladonna", "2026-11-02", 100)
+
+
+# ── the fee as agreed, per project (migration 255) ─────────────────────────────────────────
+
+def test_no_agreed_fee_means_no_balance_for_the_client():
+    p = _position(agreed={})
+    assert p["fee_basis"] is None and p["fee_cents"] is None and p["open_book_balance_cents"] is None
+    assert any("No fee is agreed" in w for w in p["warnings"])
+    page = pt.render({"name": "Example"}, pt.client_view(p, "open_book"))
+    assert "Not agreed yet" in page and "once the fee for this project is agreed" in page
+    assert "Balance due" not in page and "Fee (10%)" not in page
+
+
+def test_an_agreed_fixed_fee_is_used_as_agreed():
+    p = _position(agreed={"sample flat": {"pricing": "fixed_fee", "fee_pct": None, "fee_cents": 48_000_00}})
+    assert (p["fee_basis"], p["fee_source"], p["fee_cents"]) == ("fixed_fee", "project", 48_000_00)
+    assert p["open_book_balance_cents"] == 40_000_00 + 48_000_00 - 30_000_00
+    page = pt.render({"name": "Example"}, pt.client_view(p, "open_book"))
+    assert "Fee (agreed amount)" in page and "R48 000.00" in page and "Balance due to us" in page
+
+
+def test_the_businesss_standard_fee_applies_with_a_warning():
+    p = _position(agreed={"*": {"pricing": "cost_plus", "fee_pct": 12.5, "fee_cents": None}})
+    assert (p["fee_source"], p["fee_pct"], p["fee_cents"]) == ("standard", 12.5, 5_000_00)
+    assert any("standard fee (12.5%)" in w for w in p["warnings"])
+
+
+def test_a_project_fee_beats_the_standard_one():
+    p = _position(agreed={"*": {"pricing": "cost_plus", "fee_pct": 12.5, "fee_cents": None},
+                          "Sample Flat": {"pricing": "cost_plus", "fee_pct": 8.0, "fee_cents": None}})
+    assert (p["fee_source"], p["fee_cents"]) == ("project", 3_200_00)
+
+
+def test_the_owner_is_warned_when_the_link_and_the_invoices_disagree():
+    # cost R40,000 + 10% − R30,000 received = R14,000 due; unpaid invoices R10,000 (INV-2)
+    p = _position()
+    assert any("R14,000.00 due" in w and "R10,000.00 unpaid" in w for w in p["warnings"])
+    assert all("standard fee" not in w for w in p["warnings"])          # this project's own fee
+
+
+def test_the_owner_is_warned_when_the_link_says_the_business_owes_the_client():
+    w = pt._warnings(None, {"pricing": "cost_plus", "fee_pct": 10.0, "fee_cents": None}, "project", 10.0,
+                     -5_791_727, [], 0, 21_140_798)
+    assert any("owing the client R57,917.27" in x for x in w)
+
+
+def test_a_final_account_matching_the_invoice_raises_no_warning():
+    fa = {"total_cents": 24424738, "balance_cents": 3283940}
+    assert pt._warnings(fa, None, None, None, None, [], 3283940, 21140798) == []
+
+
+def test_an_open_book_link_needs_an_agreed_fee():
+    db = _db()
+    with (patch.object(pt, "_client", return_value=db),
+          patch("vula.commerce.job_costing.agreed_terms", return_value={}),
+          patch("vula.commerce.service.canonical_project", return_value="Sample Flat")):
+        with pytest.raises(ValueError, match="Agree this project's fee first"):
+            pt.create_share(TID, "sample flat", "open_book")
+        assert pt.create_share(TID, "sample flat", "price")["view"] == "price"     # price only is fine
+
+
+def test_the_owners_warnings_never_reach_the_client():
+    p = _position(agreed={})
+    for view in pt.VIEWS:
+        assert "warnings" not in pt.client_view(p, view) and "fee_source" not in pt.client_view(p, view)

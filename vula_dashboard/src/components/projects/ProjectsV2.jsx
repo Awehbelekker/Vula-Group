@@ -11,7 +11,7 @@ import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
 import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, decideDownloadRequest, downloadBoq, downloadBoqPdf, downloadProjectFile, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
-  fetchProjectFile, fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, uploadToProject,
+  fetchProjectFile, fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, setProjectFee, uploadToProject,
   useProjects, withdrawDecision } from "./useProjects";
 import "./projects.css";
 
@@ -568,8 +568,14 @@ function ProjectMoney({ tenantId, project }) {
     setMade(r);
     if (!r.error) load();
   };
+  const fa = p.final_account;
+  const feeLabel = p.fee_basis === "cost_plus" ? `Fee (${p.fee_pct}%)` : p.fee_basis === "fixed_fee" ? "Fee (agreed amount)" : "Fee";
   return (
     <>
+      {(p.warnings || []).length > 0 && (
+        <Section title="Check before the client relies on the link" hint="Only you see this.">
+          {p.warnings.map((w, i) => <p key={i} className="vpj-sub" role="alert">⚠ {w}</p>)}
+        </Section>)}
       <Section title="Budget vs actual" hint="Spent = what went through your bank on this project, plus what the client paid suppliers directly.">
         <Line label={p.budget_title || "Budget (BOQ)"} value={p.budget_cents ? cents(p.budget_cents) : "not set"} />
         {p.variations_claimed_cents > 0 && <Line label="Variations claimed" value={cents(p.variations_claimed_cents)} />}
@@ -590,11 +596,19 @@ function ProjectMoney({ tenantId, project }) {
       <ClientSlips tenantId={tenantId} slips={t.proposed_slips || []} onChange={load} />
       <DownloadRequests tenantId={tenantId} requests={t.download_requests || []} onChange={load} />
       <DirectPayments tenantId={tenantId} project={project} p={p} onChange={load} />
-      <Section title="Account" hint={`Open book adds your fee (${p.fee_pct}%) to your cost; price only works from your invoices.`}>
-        <Line label="Cost through you" value={cents(p.business_cost_cents)} />
-        <Line label={`Fee (${p.fee_pct}%)`} value={cents(p.fee_cents)} />
-        <Line label="Received from the client" value={cents(p.received_cents)} />
-        <Line label={<strong>Open-book balance due</strong>} value={<strong>{cents(p.open_book_balance_cents)}</strong>} />
+      <ProjectFee tenantId={tenantId} project={project} p={p} onChange={load} />
+      <Section title="Account" hint={fa ? "The open-book link shows this project's final account." : "Open book adds your agreed fee to your cost; price only works from your invoices."}>
+        {fa ? (<>
+          <Line label={`Final account (${fa.as_of})`} value={cents(fa.charged_cents)} />
+          {(fa.adjustments || []).map((a, i) => <Line key={i} label={a.label} value={cents(a.cents)} />)}
+          <Line label="Received from the client" value={cents(fa.received_cents)} />
+          <Line label={<strong>{fa.balance_cents >= 0 ? "Balance due to you" : "You owe the client"}</strong>} value={<strong>{cents(Math.abs(fa.balance_cents))}</strong>} />
+        </>) : (<>
+          <Line label="Cost through you" value={cents(p.business_cost_cents)} />
+          <Line label={feeLabel} value={p.fee_cents == null ? "not agreed" : cents(p.fee_cents)} />
+          <Line label="Received from the client" value={cents(p.received_cents)} />
+          <Line label={<strong>Open-book balance due</strong>} value={<strong>{p.open_book_balance_cents == null ? "— set the fee" : cents(p.open_book_balance_cents)}</strong>} />
+        </>)}
         <Line label={`Invoiced (${(p.invoices || []).length})`} value={cents(p.invoiced_cents)} />
         <Line label="Invoices paid" value={cents(p.invoices_paid_cents)} />
         <Line label={<strong>Invoices owed</strong>} value={<strong>{cents(p.invoices_owed_cents)}</strong>} />
@@ -630,6 +644,43 @@ function ProjectMoney({ tenantId, project }) {
       <ProjectClients tenantId={tenantId} project={project} clients={t.clients || []} defaultView={view} onChange={load} />
       <Decisions tenantId={tenantId} project={project} decisions={t.decisions || []} onChange={load} />
     </>
+  );
+}
+
+/** The fee agreed with this client (migration 255): a percentage on cost or a fixed amount. With none
+ * agreed, the client's open-book link shows no balance — never one worked out on a guessed fee. */
+function ProjectFee({ tenantId, project, p, onChange }) {
+  const [pricing, setPricing] = useState(p.fee_basis || "cost_plus");
+  const [value, setValue] = useState(p.fee_basis === "fixed_fee" ? String((p.fee_cents || 0) / 100) : p.fee_pct != null ? String(p.fee_pct) : "");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const now = p.fee_basis == null ? "Not agreed yet — the client's open-book link shows no balance."
+    : `${p.fee_basis === "cost_plus" ? `${p.fee_pct}% on cost` : `${money(p.fee_cents)} fixed`}${p.fee_source === "standard" ? " (your standard fee)" : " (agreed for this project)"}`;
+  const save = async () => {
+    const n = Number(String(value).replace(/[^\d.]/g, ""));
+    if (!value || Number.isNaN(n)) { setMsg("Enter the percentage or the amount."); return; }
+    setBusy(true);
+    const r = await setProjectFee(tenantId, project, pricing === "cost_plus" ? { pricing, fee_pct: n } : { pricing, fee_cents: Math.round(n * 100) });
+    setBusy(false);
+    setMsg(r.error || "Saved.");
+    if (!r.error) onChange();
+  };
+  return (
+    <Section title="Fee for this project" hint={p.final_account ? `Now: ${now} The final account overrides it on the client's link.` : `Now: ${now}`}>
+      <div className="vpj-form vpj-pad">
+        <Field label="How the fee works on this project">
+          <Select value={pricing} onChange={(e) => setPricing(e.target.value)}>
+            <option value="cost_plus">A percentage on cost</option>
+            <option value="fixed_fee">An agreed fixed amount</option>
+          </Select>
+        </Field>
+        <Field label={pricing === "cost_plus" ? "Percentage" : "Amount (R)"}>
+          <Input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder={pricing === "cost_plus" ? "10" : "48000"} />
+        </Field>
+        <div className="vpj-go"><Button disabled={busy} onClick={save}>{busy ? "Saving…" : "Save the fee"}</Button></div>
+        {msg && <p className="vpj-sub" role="status">{msg}</p>}
+      </div>
+    </Section>
   );
 }
 
