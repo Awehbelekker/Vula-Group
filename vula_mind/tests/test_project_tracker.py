@@ -191,7 +191,7 @@ def test_the_clients_own_payments_count_in_the_spend_never_in_the_business_cost(
     assert [d["supplier"] for d in p["direct_payments"]] == ["Flush Bathrooms", "Edward (joinery)"]
     v = pt.client_view(p, "open_book")
     page = pt.render({"name": "Example"}, v)
-    assert "Still to be paid by you directly" in page and "Edward (joinery) — balance" in page and "Typo Co" not in page
+    assert "Still to be paid directly" in page and "Edward (joinery) — balance" in page and "Typo Co" not in page
     assert "direct_payments" not in pt.client_view(p, "price")
 
 
@@ -544,3 +544,15 @@ def test_with_the_bill_the_client_sees_what_is_left_to_finish_not_owed_to_us():
     assert "Still to pay to finish the work" in top and "R185 120.00" in top and "not owed to us" in top
     assert "R67 702.00" not in top            # already inside the bill's figure: never shown twice
     assert top.index("R32 839.40") < top.index("R185 120.00")
+
+
+def test_the_account_reads_business_paid_received_and_the_difference_in_red():
+    # 10 Nov 2026 (Judy, DIGG): "DIGG paid", "DIGG received", then the balance as "Difference", in red
+    page = pt.render({"name": "DIGG"}, _ob(final_account=_FA))
+    acct = page[page.index("<h3>Account</h3>"):]
+    acct = acct[:acct.index("</section>")]
+    assert "DIGG paid" in acct and "R244 247.38" in acct
+    assert "DIGG received" in acct and "-R211 407.98" in acct
+    assert "<tr class='total diff'><td>Difference</td><td class='n'>R32 839.40</td></tr>" in acct
+    assert "Total for our part" not in acct and "Balance due to us" not in acct
+    assert "tr.diff td{color:#b42318" in page
