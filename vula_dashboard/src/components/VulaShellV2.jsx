@@ -16,6 +16,7 @@ import { Bell, CalendarCheck, Camera, Download, Inbox, LogOut, Menu, Moon, Panel
   FilePlus2, Wallet, ScanLine, UserPlus, Megaphone } from "lucide-react";
 import { getThemeMode, setThemeMode, DARK_MODE_READY, THEME_EVENT } from "../theme/tokens";
 import { iconFor, houseGroups, flattenNav, ADD_ACTIONS } from "../navConfig";
+import { mainScreen } from "../lib/mainScreen";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import { IconButton, Sheet, ListRow, CommandPalette, useCommandPaletteHotkey, FloatingToolbar } from "./ui/index.jsx";
 import { useInstall } from "../lib/install";
@@ -135,6 +136,7 @@ export default function VulaShellV2({
   const has = (id) => pages.some((p) => p.id === id);
   const go = (id) => (onNavigate ? onNavigate(id) : onSelect(id));
   const inboxItem = pages.find((p) => p.id === "inbox");
+  const mainItem = mainScreen(pages);     // the phone bar's own button for it (lib/mainScreen.js)
   const inboxCount = baseGroups.flatMap((g) => g.items).find((it) => it.id === "inbox")?.badge;
 
   const addActions = ADD_ACTIONS
@@ -238,8 +240,13 @@ export default function VulaShellV2({
           ...(addActions.length ? [{ id: "add", label: "Add", Icon: Plus, onClick: () => setAdd(true), primary: true }] : []),
           ...(pages.some((p) => p.id === "today") ? [{ id: "today", label: "Today", Icon: CalendarCheck,
             onClick: () => select("today"), current: activeId === "today" }] : []),
-          ...(inboxItem ? [{ id: "inbox", label: "Inbox", Icon: Inbox, onClick: () => select("inbox"),
-            count: Number(String(inboxCount || "").replace("+", "")) || 0, current: activeId === "inbox" }] : []),
+          // Five buttons at most: six don't fit a 360px phone (tests/visual/phonemenu.spec.js). The
+          // business's everyday screen (lib/mainScreen.js) takes Inbox's place, since the header
+          // shows Inbox with its count on a phone anyway.
+          ...(mainItem ? [{ id: mainItem.id, label: mainItem.label, Icon: iconFor(mainItem.id) || Menu,
+            onClick: () => go(mainItem.id), current: activeId === mainItem.id || activeId === mainItem.section }]
+            : inboxItem ? [{ id: "inbox", label: "Inbox", Icon: Inbox, onClick: () => select("inbox"),
+              count: Number(String(inboxCount || "").replace("+", "")) || 0, current: activeId === "inbox" }] : []),
           { id: "more", label: "More", Icon: Menu, onClick: () => setMore(true) },
         ]} />)}
 

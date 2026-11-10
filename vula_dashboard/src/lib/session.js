@@ -8,16 +8,14 @@
  *   false — Supabase says there is no valid session: the sign-in has run out.
  *   true  — the session is fine (the 401 was something else): carry on.
  *   null  — couldn't tell (offline, Supabase down): carry on; never sign anyone out for that.
+ * Which answer is which: lib/sessionVerdict.js (a refused refresh token, a 400, is "run out").
  */
 import { supabase } from './supabase'
+import { signedInFromAuthResult } from './sessionVerdict'
 
 export async function stillSignedIn() {
   try {
-    const { data, error } = await supabase.auth.getUser()
-    if (!error) return Boolean(data?.user)
-    if (error.name === 'AuthSessionMissingError') return false
-    if (error.status === 401 || error.status === 403) return false
-    return null
+    return signedInFromAuthResult(await supabase.auth.getUser())
   } catch {
     return null
   }
