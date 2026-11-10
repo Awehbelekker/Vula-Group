@@ -62,6 +62,8 @@ MODULES: dict[str, str] = {
     "wa_shop":    "WhatsApp shop (photo cards, tap to order, web basket)",
     # 2026-10-14: materials, recipes, batches and the true cost per unit — vula/commerce/costing.py.
     "manufacturing": "Manufacturing & costing (recipes, batches, cost per unit, margin)",
+    # 2026-11-10: properties for sale / to rent, agents, website enquiries — vula/listings/.
+    "listings":   "Property listings (real estate)",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
@@ -89,6 +91,11 @@ BUSINESS_TYPES: dict[str, dict] = {
     # side — quotes, invoices, payment links, expenses, books. Nothing else switched on.
     "solo":     {"label": "Solo operator (invoices & money only)",
                  "modules": ["invoices", "payments", "finances", "documents", "crm", "reports"]},
+    # 2026-11-10: estate agencies and letting agents — listings, agents, enquiries, viewings
+    # (bookings), a website to show the listings on, and follow-ups on every lead.
+    "real_estate": {"label": "Real estate / Estate agency / Rentals",
+                    "modules": ["listings", "bookings", "crm", "followups", "pages", "inbox",
+                                "broadcasts", "marketing", "documents", "team", "reports", "invoices"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team"]},
 }
@@ -271,6 +278,8 @@ def what_i_do(tenant_id: str) -> str:
     name = p["display_name"]
     if p["description"]:
         return f"{name} — {p['description']}"
+    if p["business_type"] == "real_estate":
+        return f"{name}: properties for sale and to rent, viewings and enquiries."
     if p["is_rep_business"]:
         return f"{name}: product information, samples, pricing questions and follow-ups."
     if p["uses_projects"]:

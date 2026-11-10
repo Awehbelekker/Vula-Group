@@ -53,7 +53,7 @@ export const UNSUPPORTED_FEATURE_LABELS = { blog: "a blog", login: "account/logi
 export const URL_RE = /https?:\/\/[^\s]+/gi;
 
 // Starter templates — a page is never a blank scary canvas. Homepage templates are keyed by
-// business_type (food|retail|services|trades|health|other, the same taxonomy _map_business_type
+// business_type (food|retail|services|trades|health|real_estate|other, the same taxonomy _map_business_type
 // already uses server-side — see tenants.py) so a tenant gets copy and blocks that actually fit
 // their business, not fish-shop language regardless of what they sell (the bug this replaces:
 // every tenant used to get "Fresh from the harbour" / FeaturedProducts / CategoryNav no matter
@@ -124,6 +124,21 @@ export const TEMPLATES = {
       { type: "WhatsAppCTA", props: { id: "t-health-wa", phone: "", message: "Hi! I'd like to book an appointment.", buttonText: "💬 Book on WhatsApp" } },
     ] },
   },
+  home_real_estate: {
+    label: "Homepage — Real estate",
+    data: { content: [
+      { type: "Hero", props: { id: "t-re-hero", title: "Find your next home", subtitle: "Homes for sale and to rent — tell us what you're looking for.", image: "", ctaText: "View properties", ctaHref: "#listings" } },
+      { type: "PropertyGrid", props: { id: "t-re-featured", title: "Featured properties", listingType: "", showFilters: false, featuredOnly: true, includeSold: false, count: 6 } },
+      { type: "PropertyGrid", props: { id: "t-re-all", title: "All properties", listingType: "", showFilters: true, featuredOnly: false, includeSold: false, count: 24 } },
+      { type: "Features", props: { id: "t-re-why", title: "Why list with us", items: [
+        { heading: "Local knowledge", body: "Describe the areas you know best." }, { heading: "Serious buyers", body: "How you find and vet buyers and tenants." }, { heading: "Always reachable", body: "Ask us anything on WhatsApp." }] } },
+      { type: "PropertyAgents", props: { id: "t-re-agents", title: "Meet our agents", subtitle: "" } },
+      { type: "Testimonials", props: { id: "t-re-test", title: "What clients say", items: [
+        { quote: "They sold our home quickly and kept us informed the whole way.", author: "A happy seller", role: "" }] } },
+      { type: "PropertyEnquiry", props: { id: "t-re-val", title: "Thinking of selling or renting out?", subtitle: "Leave your details and an agent will contact you for a free valuation.", buttonText: "Request a valuation" } },
+      { type: "ContactCard", props: { id: "t-re-contact", title: "Visit our office", phone: "", email: "", address: "", hours: "" } },
+    ] },
+  },
   home_other: {
     label: "Homepage — General",
     data: { content: [
@@ -159,7 +174,7 @@ export const TEMPLATES = {
 // taxonomy exactly). Falls back to the generic template for "other"/unrecognised.
 export const HOME_TEMPLATE_BY_BUSINESS_TYPE = {
   food: "home_food", retail: "home_retail", trades: "home_trades",
-  services: "home_services", health: "home_health",
+  services: "home_services", health: "home_health", real_estate: "home_real_estate",
 };
 export function homeTemplateFor(businessType) {
   return TEMPLATES[HOME_TEMPLATE_BY_BUSINESS_TYPE[businessType]] || TEMPLATES.home_other;

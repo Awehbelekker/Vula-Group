@@ -14,7 +14,7 @@
  * not per block — the dashboard config has no <style> tag anywhere otherwise, and :hover/@keyframes
  * can't be expressed as inline styles.
  */
-import { useEffect, useState, useRef } from "react";
+import { Fragment, useEffect, useState, useRef } from "react";
 import VulaImageUpload from "../components/VulaImageUpload";
 import { todaySA } from "../lib/dates";
 
@@ -619,6 +619,58 @@ export const config = {
       defaultProps: { title: "Book an appointment", subtitle: "Pick a service and a time that works for you." },
       render: (props) => <LiveBooking {...props} />,
     },
+    // 2026-11-10: real-estate blocks — live listings from vula/api/listings.py (migration 254).
+    PropertyGrid: {
+      label: "Property listings (live)",
+      fields: {
+        title: { type: "text" },
+        listingType: {
+          type: "select", label: "Show",
+          options: [
+            { label: "For sale and to rent", value: "" },
+            { label: "For sale only", value: "sale" },
+            { label: "To rent only", value: "rent" },
+          ],
+        },
+        showFilters: {
+          type: "radio", label: "Search filters",
+          options: [{ label: "On", value: true }, { label: "Off", value: false }],
+        },
+        featuredOnly: {
+          type: "radio", label: "Featured listings only",
+          options: [{ label: "Yes", value: true }, { label: "No", value: false }],
+        },
+        includeSold: {
+          type: "radio", label: "Include sold / let",
+          options: [{ label: "Yes", value: true }, { label: "No", value: false }],
+        },
+        count: { type: "number", label: "Max listings" },
+      },
+      defaultProps: { title: "Properties", listingType: "", showFilters: true, featuredOnly: false, includeSold: false, count: 12 },
+      render: (props) => <LiveProperties {...props} />,
+    },
+    PropertyAgents: {
+      label: "Our agents (live)",
+      fields: { title: { type: "text" }, subtitle: { type: "text" } },
+      defaultProps: { title: "Meet our agents", subtitle: "" },
+      render: (props) => <LiveAgents {...props} />,
+    },
+    PropertyEnquiry: {
+      label: "Property enquiry form",
+      fields: {
+        title: { type: "text" },
+        subtitle: { type: "text" },
+        buttonText: { type: "text" },
+      },
+      defaultProps: { title: "Thinking of selling or renting out?", subtitle: "Leave your details and an agent will contact you for a free valuation.", buttonText: "Send" },
+      render: (props) => (
+        <section style={{ ...wrap, padding: "48px 16px" }}>
+          {props.title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 8, color: INK, fontFamily: FONT_DISPLAY }}>{props.title}</h2> : null}
+          {props.subtitle ? <p style={{ textAlign: "center", color: "#666", marginBottom: 24 }}>{props.subtitle}</p> : null}
+          <div style={{ maxWidth: 480, margin: "0 auto" }}><EnquiryForm buttonText={props.buttonText} /></div>
+        </section>
+      ),
+    },
     FAQ: {
       label: "FAQ",
       fields: {
@@ -946,6 +998,308 @@ function LiveBooking({ title, subtitle }) {
             </button>
           </>
         ) : null}
+      </div>
+    </section>
+  );
+}
+
+/* ── Real-estate blocks (2026-11-10) — live listings, agents and enquiries from
+   vula/api/listings.py (migration 254). Same pageTenant()/apiBase() plumbing as the product and
+   booking blocks. Prices arrive as integer cents and are only formatted here. A listing opens in
+   an in-page dialog (photos, key facts, agent, enquiry form) rather than a separate detail route,
+   so the block works unchanged in the editor, the public page route and the storefronts. */
+
+const PROPERTY_TYPE_LABELS = { house: "House", apartment: "Apartment", townhouse: "Townhouse", land: "Vacant land", commercial: "Commercial", farm: "Farm", other: "Property" };
+const STATUS_BADGES = { under_offer: "Under offer", sold: "Sold", let: "Let" };
+
+function propertyPrice(p) {
+  if (p.price_cents == null) return "Price on request";
+  const rands = Math.floor(p.price_cents / 100).toLocaleString("en-ZA").replace(/,/g, " ");
+  return `R${rands}${p.listing_type === "rent" ? " pm" : ""}`;
+}
+
+function propertyFacts(p) {
+  const n = (v) => (v == null ? null : Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1));
+  return [
+    p.bedrooms != null ? `${n(p.bedrooms)} bed` : null,
+    p.bathrooms != null ? `${n(p.bathrooms)} bath` : null,
+    p.garages ? `${p.garages} garage${p.garages > 1 ? "s" : ""}` : null,
+    p.floor_m2 ? `${p.floor_m2} m²` : null,
+    !p.floor_m2 && p.erf_m2 ? `${p.erf_m2} m² erf` : null,
+  ].filter(Boolean);
+}
+
+function waLink(phone, text) {
+  const digits = String(phone || "").replace(/\D/g, "").replace(/^0/, "27");
+  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(text || "")}` : null;
+}
+
+function LiveProperties({ title, listingType, showFilters, featuredOnly, includeSold, count }) {
+  const [rows, setRows] = useState(null);
+  const [type, setType] = useState(listingType || "");
+  const [beds, setBeds] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [suburb, setSuburb] = useState("");
+  const [open, setOpen] = useState(null);
+  const gridRef = useStaggerReveal();
+
+  useEffect(() => { setType(listingType || ""); }, [listingType]);
+  useEffect(() => {
+    const q = new URLSearchParams();
+    if (type) q.set("type", type);
+    if (beds) q.set("beds", beds);
+    if (maxPrice) q.set("max_price", maxPrice);
+    if (suburb.trim()) q.set("suburb", suburb.trim());
+    if (featuredOnly) q.set("featured", "true");
+    if (includeSold) q.set("include_sold", "true");
+    q.set("limit", String(count || 12));
+    setRows(null);
+    const t = setTimeout(() => {
+      fetch(`${apiBase()}/v1/commerce/${pageTenant()}/properties?${q}`)
+        .then((r) => r.json())
+        .then((d) => setRows(d.properties || []))
+        .catch(() => setRows([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [type, beds, maxPrice, suburb, featuredOnly, includeSold, count]);
+
+  const inputStyle = { padding: "10px 12px", border: "1px solid #ddd", borderRadius: 8, fontSize: 14, background: "#fff", minWidth: 0 };
+  const priceOptions = type === "rent"
+    ? [["", "Any rent"], ["8000", "Up to R8 000"], ["15000", "Up to R15 000"], ["25000", "Up to R25 000"], ["40000", "Up to R40 000"]]
+    : [["", "Any price"], ["1000000", "Up to R1m"], ["2000000", "Up to R2m"], ["3500000", "Up to R3.5m"], ["5000000", "Up to R5m"], ["10000000", "Up to R10m"]];
+
+  return (
+    <section id={showFilters !== false ? "listings" : undefined} style={{ ...wrap, padding: "40px 16px", scrollMarginTop: 80 }}>
+      {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 24, color: INK, fontFamily: FONT_DISPLAY }}>{title}</h2> : null}
+      {showFilters !== false ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 24 }}>
+          {!listingType ? (
+            <select value={type} onChange={(e) => { setType(e.target.value); setMaxPrice(""); }} style={inputStyle} aria-label="Buy or rent">
+              <option value="">Buy or rent</option>
+              <option value="sale">Buy</option>
+              <option value="rent">Rent</option>
+            </select>
+          ) : null}
+          <input value={suburb} onChange={(e) => setSuburb(e.target.value)} placeholder="Suburb" style={inputStyle} aria-label="Suburb" />
+          <select value={beds} onChange={(e) => setBeds(e.target.value)} style={inputStyle} aria-label="Bedrooms">
+            <option value="">Any bedrooms</option>
+            {[1, 2, 3, 4, 5].map((b) => <option key={b} value={b}>{b}+ bedrooms</option>)}
+          </select>
+          <select value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} style={inputStyle} aria-label="Price">
+            {priceOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
+      ) : null}
+      {rows === null ? (
+        <ProductSkeletonGrid count={Math.min(count || 6, 6)} />
+      ) : rows.length === 0 ? (
+        <p style={{ textAlign: "center", color: "#888" }}>No properties match right now — try widening the search.</p>
+      ) : (
+        <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 20 }}>
+          {rows.map((p, i) => {
+            const img = (p.images || [])[0];
+            const badge = STATUS_BADGES[p.status] || (p.listing_type === "rent" ? "To rent" : "For sale");
+            return (
+              <button key={p.id || p.slug} type="button" onClick={() => setOpen(p)}
+                className="vula-stagger-item vula-card-lift"
+                style={{ ...staggerDelay(i), textAlign: "left", padding: 0, cursor: "pointer", color: INK, borderRadius: 14, border: "1px solid #e5e5e5", background: "#fff", display: "block", boxShadow: SHADOW_SM, font: "inherit" }}>
+                <div style={{ position: "relative", height: 190, overflow: "hidden" }}>
+                  <div className="vula-zoom-target" style={{ height: "100%", background: "#ece9e2", backgroundImage: img ? `url("${img}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
+                  <span style={{ position: "absolute", top: 12, left: 12, background: STATUS_BADGES[p.status] ? "#1a1a1a" : ACCENT, color: STATUS_BADGES[p.status] ? "#fff" : ACCENT_FG, fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999 }}>{badge}</span>
+                </div>
+                <div style={{ padding: "14px 16px" }}>
+                  <div style={{ fontWeight: 800, fontSize: 19, color: ACCENT, marginBottom: 4 }}>{propertyPrice(p)}</div>
+                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{p.title}</div>
+                  <div style={{ color: "#777", fontSize: 13.5, marginBottom: 10 }}>{[p.suburb, p.city].filter(Boolean).join(", ")}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 13, color: "#555" }}>
+                    {propertyFacts(p).map((f) => <span key={f}>{f}</span>)}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {open ? <PropertyDialog p={open} onClose={() => setOpen(null)} /> : null}
+    </section>
+  );
+}
+
+function PropertyDialog({ p, onClose }) {
+  const [idx, setIdx] = useState(0);
+  const images = p.images || [];
+  const facts = propertyFacts(p);
+  const money = (c) => (c ? `R${Math.floor(c / 100).toLocaleString("en-ZA").replace(/,/g, " ")}` : null);
+  const extras = [
+    p.property_type ? ["Type", PROPERTY_TYPE_LABELS[p.property_type] || p.property_type] : null,
+    p.erf_m2 ? ["Erf size", `${p.erf_m2} m²`] : null,
+    p.parking ? ["Parking", String(p.parking)] : null,
+    p.levies_cents ? ["Levies", `${money(p.levies_cents)} pm`] : null,
+    p.rates_cents ? ["Rates", `${money(p.rates_cents)} pm`] : null,
+    p.available_from ? ["Available from", p.available_from] : null,
+  ].filter(Boolean);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label={p.title} onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "24px 12px" }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: "#fff", color: INK, borderRadius: 16, width: "100%", maxWidth: 880, overflow: "hidden", boxShadow: SHADOW_LG }}>
+        <div style={{ position: "relative", background: "#ece9e2", aspectRatio: "16 / 9", backgroundImage: images[idx] ? `url("${images[idx]}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }}>
+          <button type="button" onClick={onClose} aria-label="Close"
+            style={{ position: "absolute", top: 12, right: 12, width: 36, height: 36, borderRadius: 999, border: "none", background: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 18 }}>✕</button>
+          {images.length > 1 ? (<>
+            <button type="button" aria-label="Previous photo" onClick={() => setIdx((idx - 1 + images.length) % images.length)}
+              style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", width: 40, height: 40, borderRadius: 999, border: "none", background: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 18 }}>‹</button>
+            <button type="button" aria-label="Next photo" onClick={() => setIdx((idx + 1) % images.length)}
+              style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", width: 40, height: 40, borderRadius: 999, border: "none", background: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 18 }}>›</button>
+            <span style={{ position: "absolute", bottom: 12, right: 12, background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 12, padding: "3px 9px", borderRadius: 999 }}>{idx + 1} / {images.length}</span>
+          </>) : null}
+        </div>
+        <div style={{ padding: "20px 22px 26px", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 28 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 26, color: ACCENT }}>{propertyPrice(p)}</div>
+            <h3 style={{ fontSize: 20, fontWeight: 700, margin: "4px 0", fontFamily: FONT_DISPLAY }}>{p.title}</h3>
+            <div style={{ color: "#777", fontSize: 14, marginBottom: 14 }}>{p.address || [p.suburb, p.city, p.province].filter(Boolean).join(", ")}</div>
+            {facts.length ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                {facts.map((f) => <span key={f} style={{ background: "#f4f2ed", borderRadius: 999, padding: "5px 12px", fontSize: 13 }}>{f}</span>)}
+              </div>
+            ) : null}
+            {p.description ? <p style={{ whiteSpace: "pre-line", lineHeight: 1.6, fontSize: 14.5, color: "#333" }}>{p.description}</p> : null}
+            {extras.length ? (
+              <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", fontSize: 14, marginTop: 16 }}>
+                {extras.map(([k, v]) => <Fragment key={k}><dt style={{ color: "#777" }}>{k}</dt><dd style={{ margin: 0 }}>{v}</dd></Fragment>)}
+              </dl>
+            ) : null}
+            {(p.features || []).length ? (
+              <ul style={{ marginTop: 16, paddingLeft: 18, columns: 2, fontSize: 14, color: "#333" }}>
+                {p.features.map((f) => <li key={f}>{f}</li>)}
+              </ul>
+            ) : null}
+          </div>
+          <div>
+            {p.agent ? (
+              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+                <div style={{ width: 52, height: 52, borderRadius: 999, background: "#ece9e2", backgroundImage: p.agent.photo_url ? `url("${p.agent.photo_url}")` : undefined, backgroundSize: "cover", flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: 700 }}>{p.agent.name}</div>
+                  {p.agent.title ? <div style={{ color: "#777", fontSize: 13 }}>{p.agent.title}</div> : null}
+                  {p.agent.whatsapp ? (
+                    <a href={waLink(p.agent.whatsapp, `Hi ${p.agent.name}, I'm interested in "${p.title}".`)} target="_blank" rel="noreferrer"
+                      style={{ color: ACCENT, fontSize: 13.5, fontWeight: 600 }}>WhatsApp {p.agent.name.split(" ")[0]}</a>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            {STATUS_BADGES[p.status] && p.status !== "under_offer" ? (
+              <p style={{ color: "#777", fontSize: 14 }}>This property is {STATUS_BADGES[p.status].toLowerCase()}. Ask us about similar homes.</p>
+            ) : null}
+            <EnquiryForm propertySlug={p.slug} viewing={!STATUS_BADGES[p.status] || p.status === "under_offer"} buttonText="Send enquiry" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EnquiryForm({ propertySlug, viewing, buttonText }) {
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [wantsViewing, setWantsViewing] = useState(!!viewing);
+  const [hp, setHp] = useState("");
+  const [status, setStatus] = useState(""); // "" | "sending" | "done" | "error"
+  const [errMsg, setErrMsg] = useState("");
+  const inputStyle = { padding: "10px 12px", border: "1px solid #ddd", borderRadius: 8, fontSize: 14, width: "100%", boxSizing: "border-box", font: "inherit" };
+
+  const send = async (e) => {
+    e.preventDefault();
+    if (!name.trim() || (!phone.trim() && !email.trim())) {
+      setStatus("error"); setErrMsg("Please add your name and a WhatsApp number or email."); return;
+    }
+    setStatus("sending"); setErrMsg("");
+    try {
+      const res = await fetch(`${apiBase()}/v1/commerce/${pageTenant()}/property-enquiries`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(), whatsapp: phone.trim() || undefined, email: email.trim() || undefined,
+          message: message.trim() || undefined, property_slug: propertySlug || undefined,
+          wants_viewing: wantsViewing, website: hp || undefined,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setStatus("error"); setErrMsg(d.detail || "Couldn't send that — please try again."); return; }
+      setStatus("done");
+    } catch {
+      setStatus("error"); setErrMsg("Couldn't send that — please try again.");
+    }
+  };
+
+  if (status === "done") {
+    return (
+      <div style={{ background: "#f4f2ed", borderRadius: 12, padding: 18, textAlign: "center" }}>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>Thanks — we've got your details ✓</div>
+        <div style={{ color: "#666", fontSize: 14 }}>An agent will be in touch shortly.</div>
+      </div>
+    );
+  }
+  return (
+    <form onSubmit={send} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} aria-label="Your name" />
+      <input placeholder="WhatsApp number" value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} inputMode="tel" aria-label="WhatsApp number" />
+      <input placeholder="Email (optional)" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} type="email" aria-label="Email" />
+      <textarea placeholder="Message (optional)" value={message} onChange={(e) => setMessage(e.target.value)} rows={3} style={inputStyle} aria-label="Message" />
+      {/* honeypot — hidden from people, bots fill it in */}
+      <input value={hp} onChange={(e) => setHp(e.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true"
+        style={{ position: "absolute", left: -9999, width: 1, height: 1, opacity: 0 }} name="website" />
+      {propertySlug ? (
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14 }}>
+          <input type="checkbox" checked={wantsViewing} onChange={(e) => setWantsViewing(e.target.checked)} /> I'd like to arrange a viewing
+        </label>
+      ) : null}
+      {errMsg ? <p style={{ color: "#c0392b", fontSize: 13, margin: 0 }}>{errMsg}</p> : null}
+      <button type="submit" disabled={status === "sending"} className="vula-btn-lift"
+        style={{ padding: "12px 20px", borderRadius: 999, border: "none", background: ACCENT, color: ACCENT_FG, fontWeight: 600, cursor: "pointer", font: "inherit" }}>
+        {status === "sending" ? "Sending…" : (buttonText || "Send")}
+      </button>
+    </form>
+  );
+}
+
+function LiveAgents({ title, subtitle }) {
+  const [agents, setAgents] = useState(null);
+  const gridRef = useStaggerReveal();
+  useEffect(() => {
+    fetch(`${apiBase()}/v1/commerce/${pageTenant()}/property-agents`)
+      .then((r) => r.json())
+      .then((d) => setAgents(d.agents || []))
+      .catch(() => setAgents([]));
+  }, []);
+  if (agents && agents.length === 0) return null;
+  return (
+    <section style={{ ...wrap, padding: "40px 16px" }}>
+      {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 8, color: INK, fontFamily: FONT_DISPLAY }}>{title}</h2> : null}
+      {subtitle ? <p style={{ textAlign: "center", color: "#666", marginBottom: 24 }}>{subtitle}</p> : null}
+      <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 20, marginTop: 16 }}>
+        {(agents || []).map((a, i) => (
+          <div key={a.id} className="vula-stagger-item" style={{ ...staggerDelay(i), textAlign: "center", border: "1px solid #e5e5e5", borderRadius: 14, padding: 20, background: "#fff", boxShadow: SHADOW_SM }}>
+            <div style={{ width: 96, height: 96, borderRadius: 999, margin: "0 auto 12px", background: "#ece9e2", backgroundImage: a.photo_url ? `url("${a.photo_url}")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
+            <div style={{ fontWeight: 700, fontSize: 16 }}>{a.name}</div>
+            {a.title ? <div style={{ color: "#777", fontSize: 13.5, marginBottom: 8 }}>{a.title}</div> : null}
+            {a.bio ? <p style={{ fontSize: 13.5, color: "#555", lineHeight: 1.5 }}>{a.bio}</p> : null}
+            {a.whatsapp ? (
+              <a href={waLink(a.whatsapp, `Hi ${a.name}`)} target="_blank" rel="noreferrer" className="vula-btn-lift"
+                style={{ display: "inline-block", marginTop: 8, padding: "8px 16px", borderRadius: 999, background: ACCENT, color: ACCENT_FG, fontSize: 13.5, fontWeight: 600, textDecoration: "none" }}>💬 WhatsApp</a>
+            ) : null}
+          </div>
+        ))}
       </div>
     </section>
   );
