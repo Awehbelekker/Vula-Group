@@ -164,7 +164,7 @@ def test_an_unknown_project_is_asked_about_not_shared():
 def test_the_public_page_refuses_an_unknown_link():
     from vula.api.project_track import project_page
     with patch.object(pt, "share_for_token", return_value=None):
-        res = asyncio.run(project_page("not-a-real-token"))
+        res = asyncio.run(project_page("not-a-real-token", None))
     assert res.status_code == 404 and b"isn't valid" in res.body
 
 

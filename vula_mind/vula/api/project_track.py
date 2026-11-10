@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
@@ -27,12 +28,23 @@ _NOT_YET = ("<!doctype html><meta name='viewport' content='width=device-width,in
             "yes first. Go back to the project page and request it.</h3>")
 
 
-async def _open(token: str):
+def _wrong_address(share: dict, request: Optional[Request]) -> bool:
+    """A link opened on another business's own address (projects.<their domain>) is not served there:
+    each business's address only opens its own clients' links. Vula's own address opens any."""
+    if request is None:
+        return False
+    from vula.commerce.web_basket import tenant_for_link_host, tenant_for_shop_host
+    host = request.headers.get("host") or ""
+    owner = tenant_for_link_host(host) or tenant_for_shop_host(host)
+    return bool(owner and owner != share.get("tenant_id"))
+
+
+async def _open(token: str, request: Optional[Request] = None):
     """(share, brand, client view, priced-bill lines) for a live link, else None."""
     from vula.api.commerce import public_brand
     from vula.commerce import boq_online, project_tracker as pt
     share = await asyncio.to_thread(pt.share_for_token, token)
-    if not share:
+    if not share or _wrong_address(share, request):
         return None
     pos = await asyncio.to_thread(pt.position, share["tenant_id"], share["project"])
     brand = await public_brand(share["tenant_id"])
@@ -49,10 +61,18 @@ def _name(view: dict) -> str:
     return "".join(ch for ch in str(view.get("project") or "Project") if ch.isalnum() or ch in " -_").strip().replace(" ", "_")
 
 
+@router.get("/link-ping")
+async def link_ping(request: Request):
+    """Which business this address belongs to — how Vula knows a client-links address is live
+    (web_basket.check_link_host), like /shop-ping for a shop's address."""
+    from vula.commerce.web_basket import tenant_for_link_host
+    return {"links": tenant_for_link_host(request.headers.get("host") or "")}
+
+
 @router.get("/track/{token}", response_class=HTMLResponse)
-async def project_page(token: str, asked: str = ""):
+async def project_page(token: str, request: Request, asked: str = ""):
     from vula.commerce import project_tracker as pt
-    got = await _open(token)
+    got = await _open(token, request)
     if not got:
         return HTMLResponse(_GONE, status_code=404)
     share, brand, view, lines = got
@@ -142,11 +162,11 @@ def _fetch():
 
 
 @router.get("/track/{token}/doc/{doc_id}", response_class=HTMLResponse)
-async def project_doc_view(token: str, doc_id: str):
+async def project_doc_view(token: str, doc_id: str, request: Request):
     """One document, view only: its pages as watermarked pictures, no file to save."""
     import html as _html
     from vula.commerce import project_share_docs as sd
-    got = await _open(token)
+    got = await _open(token, request)
     if not got:
         return HTMLResponse(_GONE, status_code=404)
     share, brand, _view, _lines = got
@@ -189,9 +209,9 @@ user-select:none;-webkit-user-drag:none;pointer-events:none}}</style></head>
 
 
 @router.get("/track/{token}/doc/{doc_id}/{page}.png")
-async def project_doc_page(token: str, doc_id: str, page: int):
+async def project_doc_page(token: str, doc_id: str, page: int, request: Request):
     from vula.commerce import project_share_docs as sd
-    got = await _open(token)
+    got = await _open(token, request)
     if not got:
         return HTMLResponse(_GONE, status_code=404)
     share, brand, _view, _lines = got
@@ -213,7 +233,7 @@ async def project_doc_request(token: str, request: Request):
     from fastapi.responses import RedirectResponse
     from vula.commerce import project_share_docs as sd
     from vula.commerce import project_tracker as pt
-    got = await _open(token)
+    got = await _open(token, request)
     if not got:
         return HTMLResponse(_GONE, status_code=404)
     share, brand, _view, _lines = got
@@ -243,10 +263,10 @@ async def _ask_owner(share: dict, request_id: str, text: str) -> None:
 
 
 @router.get("/track/{token}/download/{doc_id}")
-async def project_doc_download(token: str, doc_id: str):
+async def project_doc_download(token: str, doc_id: str, request: Request):
     """The original file — only while the business's yes for it (or for all) is current."""
     from vula.commerce import project_share_docs as sd
-    got = await _open(token)
+    got = await _open(token, request)
     if not got:
         return HTMLResponse(_GONE, status_code=404)
     share, brand, _view, _lines = got
@@ -262,10 +282,10 @@ async def project_doc_download(token: str, doc_id: str):
 
 
 @router.get("/track/{token}/download.zip")
-async def project_docs_zip(token: str):
+async def project_docs_zip(token: str, request: Request):
     """Every client document as the project file's client copy — only after a yes for 'all'."""
     from vula.commerce import project_file, project_share_docs as sd
-    got = await _open(token)
+    got = await _open(token, request)
     if not got:
         return HTMLResponse(_GONE, status_code=404)
     share, brand, _view, _lines = got
@@ -283,9 +303,9 @@ async def project_docs_zip(token: str):
 
 
 @router.get("/track/{token}/pdf")
-async def project_page_pdf(token: str):
+async def project_page_pdf(token: str, request: Request):
     from vula.commerce import project_tracker as pt
-    got = await _open(token)
+    got = await _open(token, request)
     if not got:
         return HTMLResponse(_GONE, status_code=404)
     _share, brand, view, _lines = got
@@ -293,9 +313,9 @@ async def project_page_pdf(token: str):
 
 
 @router.get("/track/{token}/bill.pdf")
-async def project_bill_pdf(token: str):
+async def project_bill_pdf(token: str, request: Request):
     from vula.commerce import boq_online
-    got = await _open(token)
+    got = await _open(token, request)
     if not got or not got[3]:
         return HTMLResponse(_GONE, status_code=404)
     share, brand, view, _lines = got

@@ -419,9 +419,18 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def public_url(token: str) -> str:
+def public_url(token: str, tenant_id: Optional[str] = None) -> str:
+    """The client's link: on the business's own address (projects.<their domain>) once it's live,
+    else on Vula's. The same token opens on either."""
     from config import settings
-    return f"{settings.public_base_url.rstrip('/')}/track/{token}"
+    base = settings.public_base_url.rstrip("/")
+    if tenant_id:
+        try:
+            from vula.commerce.web_basket import link_base
+            base = link_base(tenant_id) or base
+        except Exception as exc:  # noqa: BLE001 — never fail a link over the address
+            log.debug("client link address check skipped: %s", exc)
+    return f"{base}/track/{token}"
 
 
 def _fee_agreed(tenant_id: str, project: str) -> bool:
@@ -452,7 +461,7 @@ def create_share(tenant_id: str, project: str, view: str, by: Optional[str] = No
             .eq("tenant_id", tenant_id).eq("token_hash", _hash(token)).limit(1).execute().data or [])
     if not rows:
         raise RuntimeError("the share link was not saved")
-    return {**rows[0], "url": public_url(token)}
+    return {**rows[0], "url": public_url(token, tenant_id)}
 
 
 def list_shares(tenant_id: str, project: Optional[str] = None) -> List[Dict[str, Any]]:
