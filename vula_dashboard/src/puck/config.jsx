@@ -1305,4 +1305,23 @@ function LiveAgents({ title, subtitle }) {
   );
 }
 
+// Blocks only offered in the editor to businesses with the matching module switched on, so a
+// vertical add-on never shows up in another tenant's block picker (2026-11-10). The public
+// renderer keeps the full config: a page only contains these blocks if its tenant added them.
+export const MODULE_BLOCKS = {
+  listings: ["PropertyGrid", "PropertyAgents", "PropertyEnquiry"],
+};
+
+const _editorConfigs = new Map();   // stable object per module set, so the editor doesn't re-init
+export function editorConfigFor(modules) {
+  const have = new Set(modules || []);
+  const hidden = new Set(Object.entries(MODULE_BLOCKS).filter(([m]) => !have.has(m)).flatMap(([, b]) => b));
+  const key = [...hidden].sort().join(",");
+  if (!_editorConfigs.has(key)) {
+    const components = Object.fromEntries(Object.entries(config.components).filter(([k]) => !hidden.has(k)));
+    _editorConfigs.set(key, { ...config, components });
+  }
+  return _editorConfigs.get(key);
+}
+
 export default config;

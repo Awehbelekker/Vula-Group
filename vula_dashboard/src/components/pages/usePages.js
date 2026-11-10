@@ -176,6 +176,13 @@ export const HOME_TEMPLATE_BY_BUSINESS_TYPE = {
   food: "home_food", retail: "home_retail", trades: "home_trades",
   services: "home_services", health: "home_health", real_estate: "home_real_estate",
 };
+// Templates that need a module (2026-11-10): hidden from tenants without it.
+const TEMPLATE_MODULE = { home_real_estate: "listings" };
+export function templatesFor(modules) {
+  const have = new Set(modules || []);
+  return Object.fromEntries(Object.entries(TEMPLATES).filter(([k]) => !TEMPLATE_MODULE[k] || have.has(TEMPLATE_MODULE[k])));
+}
+
 export function homeTemplateFor(businessType) {
   return TEMPLATES[HOME_TEMPLATE_BY_BUSINESS_TYPE[businessType]] || TEMPLATES.home_other;
 }
@@ -192,6 +199,7 @@ export function usePages({ tenantId }) {
   const [versions, setVersions] = useState(null);
   const [msg, setMsg] = useState("");
   const [storeUrl, setStoreUrl] = useState(null);
+  const [modules, setModules] = useState([]);           // gates vertical add-ons (editorConfigFor / templatesFor)
   const [businessType, setBusinessType] = useState(null);  // drives which niche template "Customize homepage" seeds
   const [showLivePreview, setShowLivePreview] = useState(false);
   const [storeSettings, setStoreSettings] = useState(null); // real hero copy — seeds "Customize homepage" with truth, not placeholder text
@@ -283,8 +291,8 @@ export function usePages({ tenantId }) {
   // domain is configured yet.
   useEffect(() => {
     fetch(`${VULA_API}/v1/tenants/${tenantId}`).then((r) => r.json())
-      .then((d) => { setStoreUrl(d.store_url || null); setBusinessType(d.business_type || null); })
-      .catch(() => { setStoreUrl(null); setBusinessType(null); });
+      .then((d) => { setStoreUrl(d.store_url || null); setBusinessType(d.business_type || null); setModules(d.modules || []); })
+      .catch(() => { setStoreUrl(null); setBusinessType(null); setModules([]); });
     fetch(`${VULA_API}/v1/commerce/${tenantId}/settings`).then((r) => r.json())
       .then((d) => setStoreSettings(d.settings || null)).catch(() => setStoreSettings(null));
   }, [tenantId]);
@@ -607,5 +615,5 @@ export function usePages({ tenantId }) {
       setRefineSending(false);
     }
   };
-  return { pages, setPages, editing, setEditing, creating, setCreating, openMenuSlug, setOpenMenuSlug, newForm, setNewForm, showSeo, setShowSeo, showHistory, setShowHistory, versions, setVersions, msg, setMsg, storeUrl, setStoreUrl, businessType, setBusinessType, showLivePreview, setShowLivePreview, storeSettings, setStoreSettings, latestData, brand, setBrand, aiDraftBusy, setAiDraftBusy, aiDraftErr, setAiDraftErr, editorKey, setEditorKey, aiDraftTarget, setAiDraftTarget, aiDraftDescription, setAiDraftDescription, aiDraftMood, setAiDraftMood, aiDraftRefImageUrl, setAiDraftRefImageUrl, aiDraftTheme, setAiDraftTheme, applyingTheme, setApplyingTheme, showRefine, setShowRefine, refineMessages, setRefineMessages, refineInput, setRefineInput, refineSending, setRefineSending, refineFoundFeatures, setRefineFoundFeatures, refineEndRef, fontDef, brandCss, liveUrl, load, open, homeSeed, createNew, persist, rename, duplicate, del, tryNewTemplate, makeLive, move, loadVersions, restoreVersion, openAiDraft, runAiDraft, applyAiDraftTheme, applyRefinedContent, sendRefine, addFeature };
+  return { pages, setPages, editing, setEditing, creating, setCreating, openMenuSlug, setOpenMenuSlug, newForm, setNewForm, showSeo, setShowSeo, showHistory, setShowHistory, versions, setVersions, msg, setMsg, storeUrl, setStoreUrl, businessType, setBusinessType, modules, showLivePreview, setShowLivePreview, storeSettings, setStoreSettings, latestData, brand, setBrand, aiDraftBusy, setAiDraftBusy, aiDraftErr, setAiDraftErr, editorKey, setEditorKey, aiDraftTarget, setAiDraftTarget, aiDraftDescription, setAiDraftDescription, aiDraftMood, setAiDraftMood, aiDraftRefImageUrl, setAiDraftRefImageUrl, aiDraftTheme, setAiDraftTheme, applyingTheme, setApplyingTheme, showRefine, setShowRefine, refineMessages, setRefineMessages, refineInput, setRefineInput, refineSending, setRefineSending, refineFoundFeatures, setRefineFoundFeatures, refineEndRef, fontDef, brandCss, liveUrl, load, open, homeSeed, createNew, persist, rename, duplicate, del, tryNewTemplate, makeLive, move, loadVersions, restoreVersion, openAiDraft, runAiDraft, applyAiDraftTheme, applyRefinedContent, sendRefine, addFeature };
 }

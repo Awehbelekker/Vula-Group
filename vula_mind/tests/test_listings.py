@@ -236,6 +236,10 @@ def test_real_estate_business_type():
     assert _map_business_type("Property sales agent") == "real_estate"
     assert _map_business_type("Letting agent") == "real_estate"
     assert _map_business_type("Flooring sales rep for Gerflor") == "rep"     # unchanged
+    # existing kinds of business don't drift into real estate
+    assert _map_business_type("Property maintenance and renovations") == "trades"
+    assert _map_business_type("Property development and construction") == "trades"
+    assert _map_business_type("Seafood retail") == "food"
     preset = tenants.BUSINESS_TYPES["real_estate"]
     assert "listings" in preset["modules"] and "bookings" in preset["modules"]
     assert tenants.valid_modules(preset["modules"]) == preset["modules"]
