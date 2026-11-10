@@ -703,7 +703,8 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
 
     def wide(title, head, body):
         # a table with several money columns: full width, and on a phone it scrolls inside its own box
-        return (f"<section class='blk wide'><h3>{e(title)}</h3><p class='muted swipe'>Swipe the table sideways to see every column.</p>"
+        # on a phone each row becomes a small card: the name, then its labelled amounts side by side
+        return (f"<section class='blk wide'><h3>{e(title)}</h3>"
                 f"<div class='scroll'><table class='cols'>{head}{body}</table></div></section>")
 
     parts = []
@@ -775,21 +776,21 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
         parts.append(table("Account", acct))
     secs = v.get("sections") or []
     if secs and v["view"] == "qs" and any("certified_cents" in s or "anticipated_cents" in s for s in secs):
-        cell = lambda c: f"<td class='n'>{_r(c)}</td>"
-        body = [f"<tr><td>{e(s['section'])}</td>{cell(s['budget_cents'])}{cell(s.get('certified_cents'))}"
-                f"{cell(s.get('anticipated_cents'))}</tr>" for s in secs]
+        cell = lambda label, c: f"<td class='n' data-label='{label}'>{_r(c)}</td>"
+        body = [f"<tr><td>{e(s['section'])}</td>{cell('Contract', s['budget_cents'])}{cell('Certified', s.get('certified_cents'))}"
+                f"{cell('Anticipated final', s.get('anticipated_cents'))}</tr>" for s in secs]
         tot = lambda k: sum(s.get(k) or 0 for s in secs)
-        body.append(f"<tr class='total'><td>Total</td>{cell(tot('budget_cents'))}{cell(tot('certified_cents'))}"
-                    f"{cell(tot('anticipated_cents'))}</tr>")
+        body.append(f"<tr class='total'><td>Total</td>{cell('Contract', tot('budget_cents'))}"
+                    f"{cell('Certified', tot('certified_cents'))}{cell('Anticipated final', tot('anticipated_cents'))}</tr>")
         parts.append(wide("By bill", "<tr class='h'><td></td><td class='n'>Contract</td><td class='n'>Certified</td>"
                                      "<td class='n'>Anticipated final</td></tr>", ''.join(body)))
     elif secs and v["view"] == "open_book" and v.get("sheet"):
-        cell = lambda c: f"<td class='n'>{_r(c)}</td>"
-        body = [f"<tr><td>{e(s['section'])}</td>{cell(s['budget_cents'])}{cell(s.get('actual_cents'))}"
-                f"{cell(s.get('paid_cents'))}</tr>" for s in secs]
+        cell = lambda label, c: f"<td class='n' data-label='{label}'>{_r(c)}</td>"
+        body = [f"<tr><td>{e(s['section'])}</td>{cell('Budget', s['budget_cents'])}{cell('Actual', s.get('actual_cents'))}"
+                f"{cell('Paid', s.get('paid_cents'))}</tr>" for s in secs]
         sh = v["sheet"]
-        body.append(f"<tr class='total'><td>Total</td>{cell(sum(s['budget_cents'] for s in secs))}"
-                    f"{cell(sh['actual_cents'])}{cell(sh['paid_cents'])}</tr>")
+        body.append(f"<tr class='total'><td>Total</td>{cell('Budget', sum(s['budget_cents'] for s in secs))}"
+                    f"{cell('Actual', sh['actual_cents'])}{cell('Paid', sh['paid_cents'])}</tr>")
         parts.append(wide("By section", "<tr class='h'><td></td><td class='n'>Budget</td><td class='n'>Actual</td>"
                                         "<td class='n'>Paid</td></tr>", ''.join(body)))
     elif secs:
@@ -865,10 +866,18 @@ h4.grp .cnt{{color:#8a857c;font-weight:400}}
 .doc{{grid-template-columns:minmax(0,1fr) 140px auto;align-items:center}}
 .doc .who{{grid-column:1;grid-row:1}}.doc .sub{{grid-column:1;grid-row:2}}
 .doc .amt{{grid-column:2;grid-row:1 / span 2}}.doc .acts{{grid-column:3;grid-row:1 / span 2;justify-content:flex-end;margin:0}}
-.swipe{{display:none}}}}
+}}
 @media (max-width:480px){{.card{{padding:20px 16px;margin:12px auto}}table{{font-size:14px}}h1{{font-size:20px}}
 .btn{{flex:1 1 auto;justify-content:center}}}}
-@media print{{.swipe{{display:none}}.grid{{display:block}}.card{{box-shadow:none;max-width:none}}.scroll{{overflow:visible}}table.cols{{min-width:0}}}}
+@media (max-width:640px){{
+table.cols{{min-width:0}}table.cols tr.h{{display:none}}
+table.cols tr{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:10px;row-gap:2px;
+padding:12px 0;border-bottom:1px solid #eee}}
+table.cols tr.total{{border-top:2px solid {accent};border-bottom:0}}table.cols tr.total td{{border-top:0}}
+table.cols td{{border:0;padding:0}}table.cols td:first-child{{grid-column:1/-1;font-weight:600;padding:0 0 4px}}
+table.cols td.n{{text-align:left;padding-left:0;white-space:normal;font-size:14px}}
+table.cols td.n::before{{content:attr(data-label);display:block;font-size:11px;font-weight:400;color:#8a857c}}}}
+@media print{{.grid{{display:block}}.card{{box-shadow:none;max-width:none}}.scroll{{overflow:visible}}table.cols{{min-width:0}}}}
 {powered_by.pill_css(dark_mode=False)}
 </style></head><body><div class="card">{logo_html}<h1>{title}</h1>
 <p class="muted">Project account · {e(basis)} · as of {e(str(v.get('as_of') or ''))}</p>{summary}

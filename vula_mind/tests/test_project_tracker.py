@@ -271,7 +271,7 @@ def test_the_page_fits_a_phone_and_uses_a_wide_screen():
     page = pt.render({"name": "Example"}, v, extra_html="<div class='docs'></div>")
     assert "max-width:1040px" in page and "max-width:560px" not in page
     assert "<div class=\"grid\">" in page and "class='blk wide'" in page and "class='scroll'" in page
-    assert "Swipe the table sideways" in page and "@media print" in page
+    assert "data-label='Budget'" in page and "content:attr(data-label)" in page and "@media print" in page
 
 
 # ── the agreed final account (migration 254) ───────────────────────────────────────────────
