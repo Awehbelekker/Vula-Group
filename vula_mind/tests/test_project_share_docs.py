@@ -44,6 +44,7 @@ class _Q:
     def select(self, *a): return self
     def limit(self, *a): return self
     def order(self, *a, **k): return self
+    def range(self, *a): return self
     def eq(self, k, v): self.f.append((k, v)); return self
     def insert(self, row): self.row = row; return self
     def update(self, patch): self.patch = patch; return self

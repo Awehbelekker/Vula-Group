@@ -116,5 +116,5 @@ def test_every_takeoff_waits_for_the_owner_even_when_readings_agree(tmp_path):
 
 def test_the_document_path_offers_plans_to_takeoff_before_filing():
     from vula.api import whatsapp
-    src = inspect.getsource(whatsapp._handle_document_ingest)
+    src = inspect.getsource(whatsapp._handle_document_ingest_one)
     assert src.index("_returned_form_first") < src.index("plan_first") < src.index("content_hash")

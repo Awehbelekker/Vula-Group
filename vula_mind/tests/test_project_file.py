@@ -20,6 +20,7 @@ class _Q:
 
     def select(self, *a): return self
     def order(self, *a, **k): return self
+    def range(self, *a): return self
     def limit(self, *a): return self
     def eq(self, k, v): self.filters.append(lambda r, k=k, v=v: r.get(k) == v); return self
 
