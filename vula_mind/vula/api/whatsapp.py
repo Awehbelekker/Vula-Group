@@ -3095,6 +3095,22 @@ async def _handle_document_ingest(
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
     route_mode: Optional[str] = None, caption: str = "",
 ) -> None:
+    """One document from a sender, inside its burst (vula/api/doc_batch.py): from the second
+    document in a row, the replies are held and sent as one summary when the last is done."""
+    from vula.api import doc_batch
+    token = doc_batch.enter(phone)
+    try:
+        await _handle_document_ingest_one(phone, media_id, filename, mime_type, route_tenant_id=route_tenant_id,
+                                          content_sha=content_sha, route_mode=route_mode, caption=caption)
+    finally:
+        await doc_batch.leave(phone, token, _send_reply)
+
+
+async def _handle_document_ingest_one(
+    phone: str, media_id: str, filename: str, mime_type: str,
+    route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
+    route_mode: Optional[str] = None, caption: str = "",
+) -> None:
     """Ingest a document/image sent by a tenant into their knowledge base.
 
     On a knowledge-mode tenant's dedicated line (route_tenant_id set, route_mode
@@ -8761,12 +8777,22 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, message):     # capability benchmark: recorded, not sent
         return True
+    # a reply from a batch of documents is held and sent as one summary (vula/api/doc_batch.py)
+    if not idem_key:
+        from vula.api import doc_batch
+        if doc_batch.capture(to, message, tenant_id):
+            return True
     if idem_key:
         import asyncio as _aio
         if not await _aio.to_thread(_claim_outbound, tenant_id, idem_key):
             logger.info("skipping duplicate automated send %s", idem_key)
             return True
-        ok = await _send_reply(to, message, tenant_id)
+        from vula.api import doc_batch
+        _paused = doc_batch.pause()          # a keyed send (the "Got it") is never held for a batch
+        try:
+            ok = await _send_reply(to, message, tenant_id)
+        finally:
+            doc_batch.resume(_paused)
         if not ok:
             await _aio.to_thread(_release_outbound, tenant_id, idem_key)
         return ok
