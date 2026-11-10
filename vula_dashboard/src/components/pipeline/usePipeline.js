@@ -1,6 +1,6 @@
 /**
  * usePipeline.js — data and actions for the deals Pipeline board (2026-11-10, `pipeline` module).
- * Backend: /v1/commerce/{tenant}/admin/deals (vula_mind/vula/api/pipeline.py, migration 255).
+ * Backend: /v1/commerce/{tenant}/admin/deals (vula_mind/vula/api/pipeline.py, migration 258).
  * Stages come from the server (they depend on the business type); the board's totals are
  * computed server-side from integer cents. Moves are optimistic and roll back if the server
  * doesn't confirm them.

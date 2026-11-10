@@ -1,7 +1,7 @@
 /**
  * useListings.js — data and actions for the real-estate Listings screen (2026-11-10).
  * Backend: /v1/commerce/{tenant}/admin/properties | property-agents | property-enquiries
- * (vula_mind/vula/api/listings.py, migration 254). Prices go to the server as rands text
+ * (vula_mind/vula/api/listings.py, migration 257). Prices go to the server as rands text
  * ("R2.4m", "2 450 000") and come back as integer cents — the browser never does the maths.
  */
 import { useCallback, useEffect, useState } from "react";

@@ -1,5 +1,5 @@
 """
-vula/api/pipeline.py — the deals pipeline (vula/pipeline/service.py, migration 255).
+vula/api/pipeline.py — the deals pipeline (vula/pipeline/service.py, migration 258).
 
 Mounted under /v1/commerce, so every route here (/{tenant}/admin/...) is behind the tenant guard
 (server._TENANT_GUARD_RES). Each route also requires the `pipeline` module, so a business that

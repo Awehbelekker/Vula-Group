@@ -1,1 +1,1 @@
-"""Deals pipeline for every business type (migration 255)."""
+"""Deals pipeline for every business type (migration 258)."""

@@ -1,4 +1,4 @@
--- 254: property listings for real-estate businesses (2026-11-10, Ian: "can we build this for our
+-- 257 (written as 254, renumbered before merge — master took 254–256): property listings for real-estate businesses (2026-11-10, Ian: "can we build this for our
 -- real estate tenants"). A real-estate tenant (business_type 'real_estate', vula/api/tenants.py)
 -- lists properties for sale or to rent, shows its agents, and takes enquiries ("I'd like to view
 -- this") from its website. Viewings themselves reuse the existing bookings system

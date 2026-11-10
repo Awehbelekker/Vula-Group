@@ -1,4 +1,4 @@
--- 255: a deals pipeline for every kind of business (2026-11-10, Ian: "long term vision we need
+-- 258 (written as 255, renumbered before merge — master took 254–256): a deals pipeline for every kind of business (2026-11-10, Ian: "long term vision we need
 -- things in place for all types of clients"). One table, one API (vula/pipeline/service.py),
 -- one dashboard board. Which stages a business sees depends on its business_type (estate
 -- agency: viewing → offer → negotiation → under contract → won/lost; everyone else:

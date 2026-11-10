@@ -1,6 +1,6 @@
 """
 core/skills/pipeline_tools.py — WhatsApp tools for the deals pipeline (the `pipeline` module,
-vula/pipeline/service.py, migration 255). Works for every business type: the stages come from
+vula/pipeline/service.py, migration 258). Works for every business type: the stages come from
 the business's own stage set (estate agency: viewing → offer → …; others: lead → quoted → …).
 
 Agent/staff side only: see the pipeline, and add / move / update a deal ("record Priya's offer of

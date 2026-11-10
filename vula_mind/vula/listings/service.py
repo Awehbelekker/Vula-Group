@@ -1,5 +1,5 @@
 """
-vula/listings/service.py — property listings, agents and enquiries (migration 254).
+vula/listings/service.py — property listings, agents and enquiries (migration 257).
 
 For real-estate businesses (business_type 'real_estate'): the business lists properties for sale
 or to rent, shows its agents, and takes enquiries from its website. Viewings reuse the bookings
@@ -206,7 +206,7 @@ async def list_agents(tenant_id: str, active_only: bool = True) -> List[dict]:
     try:
         return q.order("sort").order("name").execute().data or []
     except Exception as exc:
-        log.debug("list_agents skipped (run migration 254?): %s", exc)
+        log.debug("list_agents skipped (run migration 257?): %s", exc)
         return []
 
 
@@ -280,7 +280,7 @@ async def list_properties(
         return (q.order("featured", desc=True).order("sort").order("created_at", desc=True)
                 .limit(min(max(limit, 1), 500)).execute().data or [])
     except Exception as exc:
-        log.debug("list_properties skipped (run migration 254?): %s", exc)
+        log.debug("list_properties skipped (run migration 257?): %s", exc)
         return []
 
 
@@ -431,7 +431,7 @@ async def list_enquiries(tenant_id: str, status: Optional[str] = None, limit: in
     try:
         return q.order("created_at", desc=True).limit(min(max(limit, 1), 500)).execute().data or []
     except Exception as exc:
-        log.debug("list_enquiries skipped (run migration 254?): %s", exc)
+        log.debug("list_enquiries skipped (run migration 257?): %s", exc)
         return []
 
 

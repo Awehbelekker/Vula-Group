@@ -1,5 +1,5 @@
 """The deals pipeline (vula/pipeline/service.py, vula/api/pipeline.py, core/skills/pipeline_tools.py,
-migration 255): stages come from the business type, values are integer cents parsed server-side,
+migration 258): stages come from the business type, values are integer cents parsed server-side,
 won/lost stamp closed_at, the board's numbers are computed server-side, the API and the WhatsApp
 tools need the `pipeline` module, and WhatsApp changes go preview → confirm → read back."""
 from types import SimpleNamespace

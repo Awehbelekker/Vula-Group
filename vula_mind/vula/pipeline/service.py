@@ -1,5 +1,5 @@
 """
-vula/pipeline/service.py — a deals pipeline that fits every kind of business (migration 255).
+vula/pipeline/service.py — a deals pipeline that fits every kind of business (migration 258).
 
 One table and one set of rules; the stages a business works through come from its
 business_type (STAGE_SETS), so an estate agency sees viewing → offer → negotiation → under
@@ -142,7 +142,7 @@ async def list_deals(tenant_id: str, *, stage: Optional[str] = None, open_only: 
     try:
         rows = q.order("position").order("updated_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
     except Exception as exc:
-        log.debug("list_deals skipped (run migration 255?): %s", exc)
+        log.debug("list_deals skipped (run migration 258?): %s", exc)
         return []
     if open_only:
         rows = [r for r in rows if r.get("stage") not in CLOSED]

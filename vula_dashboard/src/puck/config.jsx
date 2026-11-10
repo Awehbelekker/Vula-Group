@@ -620,7 +620,7 @@ export const config = {
       defaultProps: { title: "Book an appointment", subtitle: "Pick a service and a time that works for you." },
       render: (props) => <LiveBooking {...props} />,
     },
-    // 2026-11-10: real-estate blocks — live listings from vula/api/listings.py (migration 254).
+    // 2026-11-10: real-estate blocks — live listings from vula/api/listings.py (migration 257).
     PropertyGrid: {
       label: "Property listings (live)",
       fields: {
@@ -1005,7 +1005,7 @@ function LiveBooking({ title, subtitle }) {
 }
 
 /* ── Real-estate blocks (2026-11-10) — live listings, agents and enquiries from
-   vula/api/listings.py (migration 254). Same pageTenant()/apiBase() plumbing as the product and
+   vula/api/listings.py (migration 257). Same pageTenant()/apiBase() plumbing as the product and
    booking blocks. Prices arrive as integer cents and are only formatted here. A listing opens in
    an in-page dialog (photos, key facts, agent, enquiry form) rather than a separate detail route,
    so the block works unchanged in the editor, the public page route and the storefronts. */

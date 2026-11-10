@@ -1,6 +1,6 @@
 """
 core/skills/listing_tools.py — WhatsApp tools for real-estate businesses (the `listings` module,
-vula/listings/service.py, migration 254).
+vula/listings/service.py, migration 257).
 
 Kept in one module, separate from the two big WhatsApp skills, so the add-on is easy to review
 and switch off: commerce_assistant / commerce_admin only offer these tools when the tenant has

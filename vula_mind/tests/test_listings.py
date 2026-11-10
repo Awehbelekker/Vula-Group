@@ -1,5 +1,5 @@
 """Property listings for real-estate businesses (vula/listings/service.py, vula/api/listings.py,
-migration 254): prices are parsed to integer cents server-side, the public view never leaks a
+migration 257): prices are parsed to integer cents server-side, the public view never leaks a
 hidden address or a draft, every query is scoped to the tenant, and an enquiry reaches the
 listing's agent and the team."""
 from types import SimpleNamespace
