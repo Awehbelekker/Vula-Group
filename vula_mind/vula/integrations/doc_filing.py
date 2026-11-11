@@ -602,6 +602,31 @@ async def attach_into_project(tenant_id: str, project: Optional[str],
         return {"clickup_list_id": list_id, "clickup_task_id": None}
 
 
+# ── A bank statement is the whole business's (11 Nov 2026, Ian) ─────────────────────────────
+# Twelve of DIGG's FNB statements for its main business account were filed under Porterfield because a
+# line on them named "22 Porterfield". A statement is never a project's document; its lines go on
+# projects one by one, on their own evidence (vula/commerce/bank_rec.py::reconcile), or all of them when
+# the owner ties that account to a project (vula/commerce/bank_accounts.py).
+_BANK_NAME = re.compile(r"\b(first national bank|fnb|standard bank|absa|nedbank|capitec|investec|tymebank|"
+                        r"discovery bank|african bank|bidvest bank)\b", re.IGNORECASE)
+_SUPPLIER_STATEMENT = re.compile(r"accounts? receivable|statement of account|activity statement|customer statement|"
+                                 r"debtors?\b|amount due|balance due|overdue|age ?analysis|ageing|aging",
+                                 re.IGNORECASE)
+_STATEMENT_WORDS = re.compile(r"bank statement|account statement|statement (?:for|of) (?:the |a |your )?[\w ]{0,40}"
+                              r"account|opening balance|closing balance|transaction history", re.IGNORECASE)
+
+
+def is_bank_statement(category: str = "", summary: str = "", filename: str = "") -> bool:
+    """A bank's statement of one of the business's own accounts (not a supplier's statement of what
+    the business owes them)."""
+    text = f"{filename or ''} {category or ''} {summary or ''}"
+    if _SUPPLIER_STATEMENT.search(text):
+        return False
+    if "bank statement" in (category or "").lower():
+        return True
+    return bool(_BANK_NAME.search(text) and _STATEMENT_WORDS.search(text))
+
+
 async def file_document(
     tenant_id: str, *, filename: str, data: Optional[bytes], content_type: str,
     category: str = "", summary: str = "", fields: Optional[dict] = None,
@@ -622,6 +647,10 @@ async def file_document(
     exception; check_document_quota itself fails open on a metering read error.
     """
     from vula.commerce.plan_limits import PlanLimitError, check_document_quota
+    if is_bank_statement(category, summary, filename):
+        project, clickup_list_id = None, None          # the whole business's, never a project's
+        if status == "pending_project":
+            status = "filed"
     if project:
         from vula.commerce.service import canonical_project
         project = canonical_project(tenant_id, project)

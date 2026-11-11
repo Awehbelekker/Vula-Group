@@ -494,7 +494,7 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
 
 
 async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str = "",
-                    auto_settle: bool = True) -> Dict[str, Any]:
+                    auto_settle: bool = True, bank_account: Optional[str] = None) -> Dict[str, Any]:
     """Persist transactions and reconcile: credits → mark matching invoices paid; debits → expenses.
     Each transaction is also allocated to a chart-of-accounts category (learned/AI) with VAT.
 
@@ -594,6 +594,12 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             best = e
             break
         return best
+
+    # The account these lines came from, and the project that account belongs to, if the owner tied
+    # it to one (vula/commerce/bank_accounts.py, migration 258). Otherwise the whole business's.
+    from vula.commerce import bank_accounts
+    with_accounts = bank_accounts.available()
+    account_project = bank_accounts.project_for(tenant_id, bank_account) if with_accounts else None
 
     # Re-ingesting the same statement must NEVER clobber human work: rows the owner (or a
     # receipt/worker match) already allocated keep their allocation on upsert.
@@ -764,9 +770,15 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         s_project, s_trade = ((None, None) if own_wages
                               else allocation.suggest(alloc_rules, t.get("description"), None, tenant_id))
         n_project = None if own_wages else allocation.named_project(naming, t.get("description"))
-        project = (prior or {}).get("project") or bill_project or n_project or wk_project or s_project
-        if n_project and project == n_project and not (prior or {}).get("project"):
+        # An account tied to a project (migration 258) outranks everything but the owner's own choice.
+        project, project_source = next(((p, src) for p, src in (
+            ((prior or {}).get("project"), "owner"), (account_project, "account"), (bill_project, "bill"),
+            (n_project, "named"), (wk_project, "worker"), (s_project, "rule")) if p), (None, None))
+        if n_project and project == n_project and project_source == "named":
             named_counts[n_project] = named_counts.get(n_project, 0) + 1
+        if with_accounts:
+            row["bank_account"] = bank_account
+            row["project_source"] = project_source
         trade = (prior or {}).get("trade") or s_trade
         if project:
             if project not in canon:
@@ -783,7 +795,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             # 058/059/074 columns may not exist yet (account_code/vat/worker_id/project/matched_order_id)
             # — retry with core columns only.
             for k in ("account_code", "vat_cents", "vat_treatment", "categorized_by", "worker_id",
-                     "project", "matched_order_id", "trade"):
+                     "project", "matched_order_id", "trade", "bank_account", "project_source"):
                 row.pop(k, None)
             try:
                 db.table("commerce_bank_transactions").upsert(
@@ -1008,6 +1020,17 @@ def supersede_misread(tenant_id: str, txns: List[Dict[str, Any]]) -> Dict[str, A
     return {"superseded": len(out), "allocations_carried": carried}
 
 
+def _statement_account(tenant_id: str, text: str, txns: List[Dict[str, Any]]) -> Optional[str]:
+    """The account a statement is for, remembered in the business's accounts (migration 258)."""
+    from vula.commerce import bank_accounts
+    number = bank_accounts.account_number(text)
+    if number:
+        dates = sorted(str(t.get("date")) for t in txns if t.get("date"))
+        bank_accounts.remember(tenant_id, number, bank=bank_accounts.bank_name(text),
+                               seen=dates[-1] if dates else None)
+    return number
+
+
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,
                            source_file: str = "", trusted: bool = False) -> Dict[str, Any]:
     """Full pipeline: decrypt (stored ID password if not given) → parse → reconcile.
@@ -1017,16 +1040,19 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     An FNB statement is read deterministically first (vula/ingestion/fnb_statement.py) and only
     accepted when every running balance reconciles; anything else goes to the LLM as before."""
     pwd = password if password is not None else get_statement_password(tenant_id)
-    exact = None
+    exact, fnb_text = None, ""
     try:
         from vula.ingestion import fnb_statement
-        exact = fnb_statement.parse(fnb_statement.pdf_text(Path(pdf_path), pwd))
+        fnb_text = fnb_statement.pdf_text(Path(pdf_path), pwd)
+        exact = fnb_statement.parse(fnb_text)
     except Exception as exc:
         log.debug("deterministic statement read skipped: %s", exc)
     if exact and exact["transactions"]:
         txns = exact["transactions"]
+        acct = _statement_account(tenant_id, fnb_text, txns)
         result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
-                                 auto_settle=True)
+                                 auto_settle=True, bank_account=acct)
+        result["bank_account"] = acct
         result.update(supersede_misread(tenant_id, txns))
         result["extraction_reconciled"] = True
         result["parser"] = "fnb"
@@ -1047,6 +1073,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     if not txns:
         return {"error": "no transactions found in the statement"}
     reconciled = reconciliation_ok(txns)
+    acct = _statement_account(tenant_id, text, txns)
     if not reconciled:
         log.warning("bank statement extraction quality check FAILED for %s (%s) — running "
                     "balances don't reconcile, at least one transaction was likely misread",
@@ -1055,8 +1082,9 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     # save and categorise it for review, but don't let it settle invoices/orders or message
     # customers "your payment was received" on the strength of a possibly-wrong figure.
     result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
-                             auto_settle=reconciled)
+                             auto_settle=reconciled, bank_account=acct)
     result["extraction_reconciled"] = reconciled
+    result["bank_account"] = acct
     log.info("bank statement reconciled for %s: %s", tenant_id, result)
     return result
 

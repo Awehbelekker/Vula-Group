@@ -5225,8 +5225,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                     match = {"project": None, "ambiguous": True, "candidates": [resolved["project"]]}
             except Exception as exc:
                 logger.debug("project resolver skipped: %s", exc)
-        if not uses_projects(tenant_id):
-            # A commerce business (Off the Hook): no projects — file it, never ask.
+        from vula.integrations.doc_filing import is_bank_statement
+        if not uses_projects(tenant_id) or is_bank_statement(category, summary, result.filename):
+            # A commerce business (Off the Hook): no projects — file it, never ask. Nor a bank
+            # statement: the whole business's, whatever project a line on it names (11 Nov 2026).
             row = await file_document(
                 tenant_id, filename=result.filename, data=data, content_type=ctype,
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,

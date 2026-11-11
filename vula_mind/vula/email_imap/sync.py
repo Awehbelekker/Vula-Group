@@ -714,6 +714,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
     # below (payment_matched) — it's already been handled, and "project" is the wrong question
     # for a payment confirmation on a non-project business anyway.
     payment_matched = False
+    bank_statement = False        # one of the business's own bank statements: the whole business's
     _BANK_DOMAINS = ("standardbank.co.za", "fnb.co.za", "nedbank.co.za", "absa.co.za",
                      "capitecbank.co.za", "investec.co.za", "tymebank.co.za", "africanbank.co.za",
                      "bidvestbank.co.za", "discovery.co.za")
@@ -724,6 +725,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         from vula.commerce import bank_rec
         if att["name"].lower().endswith(".pdf") and ("statement" in blob or "capitec" in blob):
             rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"])
+            bank_statement = not rec.get("not_bank_statement") and not rec.get("error")
             logger.info("bank statement auto-reconciled (%s): %s", tenant_id, rec)
             # Ask the owner to finish the ones Vula wasn't sure about (one nudge per statement).
             to_review = int(rec.get("needs_input", 0)) + int(rec.get("unmatched_credits", 0))
@@ -825,9 +827,11 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         # is the wrong question for a POP, and the owner's already been told either way.
         from vula.api.tenants import uses_projects
         # A commerce business has no projects to ask about (Off the Hook, 2026-09-28).
-        ask = not confident and not payment_matched and uses_projects(tenant_id)
-        if not confident:
-            match = None
+        from vula.integrations.doc_filing import is_bank_statement
+        bank_statement = bank_statement or is_bank_statement(category, summary or "", att["name"])
+        ask = not confident and not payment_matched and not bank_statement and uses_projects(tenant_id)
+        if not confident or bank_statement:
+            match, confident = None, False
         # file_document() does what this used to hand-roll, plus the two things it was
         # missing: a durable Supabase Storage copy (file_url) and — when the match carries
         # a ClickUp list — attaching the file into that project's ClickUp task.
