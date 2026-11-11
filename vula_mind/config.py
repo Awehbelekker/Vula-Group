@@ -103,6 +103,9 @@ class Settings(BaseSettings):
     # POPIA (2026-10-31): uploaded plans and their takeoff jobs are deleted this many days after
     # upload (vula/takeoff/api.purge_expired, run daily). 0 keeps them forever — not recommended.
     takeoff_retention_days: int = 90
+    # How often connected mailboxes are checked for new mail (vula/api/server.py::_email_sync_loop).
+    # A check with nothing new is one IMAP login; AI cost is per email read, not per check.
+    email_sync_minutes: int = 10
     # POPIA s14 retention, in days (0 keeps it). Agreed 9 Nov 2026: technical data briefly,
     # conversations and unconverted leads for a year. vula/retention.py; docs/security-model.md.
     wa_dedup_retention_days: int = 30          # vula_wa_msg_dedup (inbound dedupe, once-only send keys)

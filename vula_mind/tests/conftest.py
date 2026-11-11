@@ -36,6 +36,18 @@ def _fresh_classifier_cache():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_document_batches():
+    """A sender's documents within 3 minutes form one batch (vula/api/doc_batch.py); one test's
+    documents must not make the next test's the second of a batch."""
+    from vula.api import doc_batch
+    doc_batch._bursts.clear()
+    doc_batch._last_doc.clear()
+    yield
+    doc_batch._bursts.clear()
+    doc_batch._last_doc.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_tenant_db(tmp_path, monkeypatch):
     """Give every test its own empty tenant registry.
 

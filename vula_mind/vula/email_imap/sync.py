@@ -762,6 +762,7 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
         await _record_sync_recovery(db, tenant_id, account_id, creds["email"], was_error=row.get("status") == "error")
     for em in inbox_result["emails"]:
         em["is_sent"] = False
+        em["historic"] = _is_historic(em)     # a new mailbox's history: filed, nobody messaged
 
     sent_result = {"emails": [], "max_uid": int(row.get("last_sync_uid_sent") or 0), "folder": None, "oversized": []}
     if row.get("sync_sent") is not False:
@@ -773,6 +774,7 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
             logger.debug("email sync fetch (Sent) skipped for %s/%s: %s", tenant_id, creds["email"], exc)
         for em in sent_result["emails"]:
             em["is_sent"] = True
+            em["historic"] = _is_historic(em)
 
     # Every other folder (migration 257: on for every mailbox unless switched off). Read separately
     # so a database without the migration syncs Inbox and Sent exactly as before.
@@ -808,8 +810,8 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
             else:
                 folder_cursors[em["folder"]] = {"uidvalidity": em.get("uidvalidity"), "last_uid": 0}
 
-    oversized = (inbox_result.get("oversized", []) + sent_result.get("oversized", [])
-                 + [o for o in other.get("oversized", []) if not _is_historic(o)])
+    oversized = [o for o in inbox_result.get("oversized", []) + sent_result.get("oversized", [])
+                 + other.get("oversized", []) if not _is_historic(o)]
     if oversized:
         await _notify_oversized(tenant_id, oversized)
 
@@ -1105,6 +1107,84 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             await _report_filing_failure(tenant_id, em, att, exc, "filed_documents record failed")
 
 
+# ── The one-time catch-up when a mailbox is connected (11 Nov 2026) ─────────────────────────
+# "We should have a once-off on onboarding to sync so Vula can be filled in on all comms." The
+# 15-minute sync reads 20 emails a folder per run, so a 10,000-email mailbox took about five days to
+# be read. Connecting a mailbox (and the Backfill button, and every mailbox whose history hasn't been
+# read since migration 257) now starts a catch-up in the background: bigger batches, back to back,
+# until Inbox, Sent and every folder are read to the newest email. Old mail asks nobody anything.
+
+CATCH_UP_BATCH = 50
+CATCH_UP_ROUNDS = 600          # a ceiling, not a target: 600 x 50 = 30,000 emails a folder
+_catch_ups: dict = {}
+
+
+async def catch_up(tenant_id: str, account_id: str, batch: int = CATCH_UP_BATCH,
+                   rounds: int = CATCH_UP_ROUNDS, pause: float = 2.0) -> dict:
+    """Read the whole mailbox once: sync rounds of `batch` until a round finds nothing new, then
+    record history_read_at. A round the 15-minute sync is already running waits and tries again."""
+    import asyncio
+    total, done = 0, False
+    for _ in range(rounds):
+        res = await process_email_sync(tenant_id, account_id, max_emails=batch)
+        if res.get("skipped"):
+            await asyncio.sleep(pause * 5)
+            continue
+        if res.get("error"):
+            break
+        total += int(res.get("synced") or 0)
+        if not res.get("synced"):
+            done = True
+            break
+        await asyncio.sleep(pause)
+    if done:
+        try:
+            _client().table("vula_email_accounts").update({"history_read_at": "now()"}) \
+                .eq("id", account_id).execute()
+        except Exception as exc:
+            logger.debug("history_read_at not saved (run migration 257?): %s", exc)
+    logger.info("email catch-up for %s/%s: %s emails, %s", tenant_id, account_id, total,
+                "finished" if done else "will carry on")
+    return {"synced": total, "finished": done}
+
+
+def start_catch_up(tenant_id: str, account_id: str) -> bool:
+    """Start the catch-up for this mailbox unless one is already running here. True if started."""
+    import asyncio
+    if not account_id:
+        return False
+    running = _catch_ups.get(account_id)
+    if running and not running.done():
+        return False
+    _catch_ups[account_id] = asyncio.create_task(catch_up(tenant_id, account_id))
+    return True
+
+
+def reset_history(account_id: str) -> None:
+    """Read this mailbox again from its first email: every cursor back to the start."""
+    db = _client()
+    try:
+        db.table("vula_email_accounts").update({"last_sync_uid": 0, "last_sync_uid_sent": 0}) \
+            .eq("id", account_id).execute()
+    except Exception as exc:
+        logger.warning("email history reset failed for %s: %s", account_id, exc)
+    try:
+        db.table("vula_email_accounts").update({"folder_cursors": {}, "history_read_at": None}) \
+            .eq("id", account_id).execute()
+    except Exception as exc:
+        logger.debug("folder cursors not reset (run migration 257?): %s", exc)
+
+
+def _history_unread(account_id: str) -> bool:
+    """This mailbox's history (every folder) hasn't been read yet. False before migration 257."""
+    try:
+        row = (_client().table("vula_email_accounts").select("sync_all_folders,history_read_at")
+               .eq("id", account_id).limit(1).execute().data or [{}])[0]
+    except Exception:
+        return False
+    return row.get("sync_all_folders") is True and not row.get("history_read_at")
+
+
 async def process_all_email_sync() -> int:
     """Sync every connected mailbox, tenant or not (called by the background loop). Each
     connected account is its own row now (migration 093) — iterate rows directly rather than
@@ -1133,6 +1213,8 @@ async def process_all_email_sync() -> int:
     for r in rows:
         tenant_id, account_id = r["tenant_id"], r["id"]
         try:
+            if _history_unread(account_id) and start_catch_up(tenant_id, account_id):
+                continue                  # the catch-up reads this mailbox, new mail included
             res = await process_email_sync(tenant_id, account_id)
             total += res.get("synced", 0)
             # Daily nudge for emails still awaiting a reply — once per tenant, not once per

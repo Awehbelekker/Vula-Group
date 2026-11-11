@@ -9,10 +9,13 @@
 --                     set false to keep one mailbox to Inbox and Sent.
 --   folder_cursors    per folder: {"<folder>": {"uidvalidity": n, "last_uid": n}} — IMAP UIDs
 --                     only mean something within one folder and one UIDVALIDITY.
+--   history_read_at   when the one-time catch-up finished reading the whole mailbox (null: still to
+--                     do — started on connect, and for every mailbox once this migration is in).
 -- Old mail found in a folder for the first time is filed without messaging anyone (it waits under
 -- To check); see vula/email_imap/sync.py::HISTORIC_DAYS.
 -- Idempotent.
 
 alter table vula_email_accounts add column if not exists sync_all_folders boolean not null default true;
 alter table vula_email_accounts add column if not exists folder_cursors jsonb not null default '{}'::jsonb;
+alter table vula_email_accounts add column if not exists history_read_at timestamptz;
 alter table vula_email_accounts enable row level security;

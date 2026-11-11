@@ -85,8 +85,11 @@ async def connect(body: ConnectIn, authorization: str = Header(default="")) -> d
         return {"status": "error", "error": f"store failed (run migration 093?): {exc}"}
     account_id = (row.data or [{}])[0].get("id")
     invalidate(body.tenant_id, account_id)
+    # Read the whole mailbox now, every folder, in the background (vula/email_imap/sync.py::catch_up).
+    from vula.email_imap.sync import start_catch_up
+    reading = start_catch_up(body.tenant_id, account_id)
     return {"status": "connected", "account_id": account_id, "email": body.email,
-            "is_primary": is_first, "send_mode": body.send_mode}
+            "is_primary": is_first, "send_mode": body.send_mode, "reading_history": reading}
 
 
 @router.get("/status/{tenant_id}")
@@ -137,29 +140,21 @@ async def sync_now(tenant_id: str) -> dict:
 
 @router.post("/backfill/{tenant_id}")
 async def backfill(tenant_id: str, count: int = 200, account_id: Optional[str] = None) -> dict:
-    """Catch Vula up on a mailbox's back-history: pull the most-recent `count` emails (regardless
-    of the sync cursor) so historical invoices, proofs-of-payment and statements get filed. Runs
-    in the BACKGROUND (attachment OCR/ingest is slow ~3s/email) and returns immediately; poll
-    /status to see contacts grow. Scoped to one account if given, else every connected mailbox
-    for the tenant — pass account_id when backfilling a mailbox you just connected, so you're
-    not re-scanning mailboxes that are already caught up."""
-    import asyncio
+    """Read a mailbox again from its first email, every folder, in the background (the catch-up,
+    vula/email_imap/sync.py::catch_up). Until 11 Nov 2026 this re-read only the OLDEST `count`
+    emails and never moved the sync on. A file already in the library is recognised by its bytes and
+    skipped; one the old filename check dropped ("Payment Certificate.pdf" a second time) is filed now.
+    Old mail messages nobody. Scoped to one account if given, else every connected mailbox. `count`
+    is kept for older dashboards and ignored."""
     from vula.email_imap.credentials import list_email_accounts
-    from vula.email_imap.sync import process_email_sync
-    n = max(1, min(count, 500))
-
-    async def _run():
-        accounts = [a for a in list_email_accounts(tenant_id) if not account_id or a["id"] == account_id]
-        for acct in accounts:
-            try:
-                res = await process_email_sync(tenant_id, acct["id"], max_emails=n, from_uid=0)
-                log.info("email backfill for %s/%s done: %s", tenant_id, acct["email"], res)
-            except Exception as exc:
-                log.warning("email backfill for %s/%s failed: %s", tenant_id, acct["email"], exc)
-
-    asyncio.create_task(_run())
-    return {"status": "started", "count": n, "account_id": account_id,
-            "note": "Backfill running in the background — filing contacts + attachments. Check /status."}
+    from vula.email_imap.sync import reset_history, start_catch_up
+    started = []
+    for acct in [a for a in list_email_accounts(tenant_id) if not account_id or a["id"] == account_id]:
+        reset_history(acct["id"])
+        if start_catch_up(tenant_id, acct["id"]):
+            started.append(acct["email"])
+    return {"status": "started", "accounts": started, "account_id": account_id,
+            "note": "Vula is reading the mailbox from the start, every folder, in the background."}
 
 
 @router.get("/contacts/{tenant_id}")

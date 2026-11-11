@@ -1409,7 +1409,9 @@ async def _recurring_bills_loop() -> None:
 
 
 async def _email_sync_loop() -> None:
-    """Auto-sync connected mailboxes every 15 min: build contacts + file attachments."""
+    """Check connected mailboxes every settings.email_sync_minutes (10): contacts, attachments,
+    follow-ups. Until 11 Nov 2026 this ran hourly (the docstring said 15 min), so a supplier's emailed
+    invoice could take an hour to appear and a mailbox's history took days."""
     import asyncio as _asyncio
     await _asyncio.sleep(45)  # settle on boot
     while True:
@@ -1420,7 +1422,8 @@ async def _email_sync_loop() -> None:
                 log.info("Email sync processed %d new message(s)", n)
         except Exception as exc:
             log.warning("Email sync loop error: %s", exc)
-        await _asyncio.sleep(60 * 60)   # hourly — email isn't time-critical; saves AI cost
+        from config import settings as _s
+        await _asyncio.sleep(max(1, int(getattr(_s, "email_sync_minutes", 10) or 10)) * 60)
 
 
 async def _clickup_sync_loop() -> None:

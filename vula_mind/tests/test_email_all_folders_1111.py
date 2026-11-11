@@ -234,3 +234,108 @@ def test_every_tenants_mailboxes_get_all_folders():
     from pathlib import Path
     sql = (Path(__file__).resolve().parents[1] / "migrations" / "257_email_all_folders.sql").read_text()
     assert "sync_all_folders boolean not null default true" in sql
+
+
+# ── the one-time catch-up when a mailbox is connected ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_connecting_a_mailbox_reads_its_whole_history_once(monkeypatch):
+    rounds = iter([{"synced": 50}, {"synced": 0, "skipped": "sync already running"}, {"synced": 50},
+                   {"synced": 12}, {"synced": 0}])
+    calls = []
+
+    async def sync(tenant_id, account_id, max_emails=20, from_uid=None):
+        calls.append(max_emails)
+        return next(rounds)
+    db = MagicMock()
+    monkeypatch.setattr(email_sync, "process_email_sync", sync)
+    monkeypatch.setattr(email_sync, "_client", lambda: db)
+    res = await email_sync.catch_up("digg-demo", "acc1", pause=0)
+    assert res == {"synced": 112, "finished": True}
+    assert calls == [email_sync.CATCH_UP_BATCH] * 5            # bigger batches than the 15-minute sync's 20
+    db.table.return_value.update.assert_called_with({"history_read_at": "now()"})
+
+
+@pytest.mark.asyncio
+async def test_a_catch_up_that_hits_an_error_carries_on_next_time(monkeypatch):
+    async def sync(*a, **k):
+        return {"synced": 0, "error": "connection timed out"}
+    db = MagicMock()
+    monkeypatch.setattr(email_sync, "process_email_sync", sync)
+    monkeypatch.setattr(email_sync, "_client", lambda: db)
+    assert (await email_sync.catch_up("digg-demo", "acc1", pause=0))["finished"] is False
+    db.table.return_value.update.assert_not_called()          # history_read_at stays empty
+
+
+@pytest.mark.asyncio
+async def test_one_catch_up_per_mailbox_at_a_time(monkeypatch):
+    import asyncio
+    gate = asyncio.Event()
+
+    async def slow(tenant_id, account_id, **k):
+        await gate.wait()
+        return {"synced": 0, "finished": True}
+    monkeypatch.setattr(email_sync, "catch_up", slow)
+    email_sync._catch_ups.clear()
+    assert email_sync.start_catch_up("digg-demo", "acc1") is True
+    assert email_sync.start_catch_up("digg-demo", "acc1") is False
+    assert email_sync.start_catch_up("digg-demo", "acc2") is True
+    gate.set()
+    await asyncio.gather(*email_sync._catch_ups.values())
+    assert email_sync.start_catch_up("digg-demo", "acc1") is True  # finished: Backfill can start another
+    gate.set()
+    await asyncio.gather(*email_sync._catch_ups.values())
+    email_sync._catch_ups.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_new_mailboxs_old_inbox_mail_asks_nobody():
+    """A mailbox connected today is read from its first email: months of Inbox mail must not each
+    send a "which project?" WhatsApp or open a follow-up."""
+    old = {"uid": 1, "when": (NOW - timedelta(days=200)).isoformat(), "people": [], "subject": "Invoice",
+           "from": "a@supplier.co.za", "body": "", "bulk": False, "attachments": [{"name": "INV1.pdf", "data": b"1"}]}
+    new = dict(old, uid=2, when=NOW.isoformat(), attachments=[{"name": "INV2.pdf", "data": b"2"}])
+    db = _sync_db({"auto_sync": True, "sync_all_folders": False})
+    filed, tracked = [], []
+    with (patch.object(email_sync, "get_email_creds", return_value={"email": "owner@shop.co.za"}),
+          patch.object(email_sync, "_client", return_value=db),
+          patch.object(email_sync, "_fetch_new", side_effect=[
+              {"emails": [old, new], "max_uid": 2, "folder": "INBOX", "oversized": []},
+              {"emails": [], "max_uid": 0, "folder": None, "oversized": []}]),
+          patch.object(email_sync, "_advance_cursor"),
+          patch.object(email_sync, "_file_attachment",
+                       new=AsyncMock(side_effect=lambda t, em, att, phone, quiet=False: filed.append((att["name"], quiet)))),
+          patch.object(email_sync, "_track_followup", new=AsyncMock(side_effect=lambda *a: tracked.append(a[3]["uid"]))),
+          patch.object(email_sync, "_needs_reply", return_value="request"),
+          patch.object(email_sync, "_resolve_replied_followups", new=AsyncMock(return_value=0)),
+          patch.object(email_sync, "_capture_voice_samples", new=AsyncMock())):
+        await email_sync._do_email_sync("shop", "acc1", 50)
+    assert filed == [("INV1.pdf", True), ("INV2.pdf", False)] and tracked == [2]
+
+
+@pytest.mark.asyncio
+async def test_backfill_reads_the_mailbox_again_from_the_start(monkeypatch):
+    from vula.api import email_connect
+    resets, started = [], []
+    monkeypatch.setattr("vula.email_imap.credentials.list_email_accounts",
+                        lambda t: [{"id": "acc1", "email": "judy@digg-ct.co.za"}])
+    monkeypatch.setattr(email_sync, "reset_history", resets.append)
+    monkeypatch.setattr(email_sync, "start_catch_up", lambda t, a: started.append(a) or True)
+    res = await email_connect.backfill("digg-demo")
+    assert resets == ["acc1"] and started == ["acc1"] and res["accounts"] == ["judy@digg-ct.co.za"]
+
+
+def test_reset_puts_every_cursor_back_to_the_start():
+    db = MagicMock()
+    with patch.object(email_sync, "_client", return_value=db):
+        email_sync.reset_history("acc1")
+    updates = [c.args[0] for c in db.table.return_value.update.call_args_list]
+    assert {"last_sync_uid": 0, "last_sync_uid_sent": 0} in updates
+    assert {"folder_cursors": {}, "history_read_at": None} in updates
+
+
+def test_every_mailbox_whose_history_is_unread_gets_a_catch_up():
+    src = inspect.getsource(email_sync.process_all_email_sync)
+    assert "_history_unread(account_id) and start_catch_up(tenant_id, account_id)" in src
+    from vula.api import email_connect
+    assert "start_catch_up(body.tenant_id, account_id)" in inspect.getsource(email_connect.connect)
