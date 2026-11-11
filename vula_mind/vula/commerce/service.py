@@ -2840,7 +2840,7 @@ def client_pays_directly(tenant_id: str, supplier: Optional[str],
 async def commit_inbound_document(
     tenant_id: str, extracted: dict, *, auto_commit: bool = True, source: str = "scanner",
     filed_document_id: Optional[str] = None, project: Optional[str] = None,
-    is_boq: bool = False,
+    is_boq: bool = False, notify: bool = True,
 ) -> dict:
     """Commit an extracted inbound document (invoice/quote/delivery_note/receipt) into the
     books: supplier match (or auto-create for a genuinely new supplier), due-date calc,
@@ -3162,7 +3162,9 @@ async def commit_inbound_document(
     # WhatsApp — supplier bill / our invoice / an expense — because filing it silently is what
     # put 51 of off-the-hook's own sales invoices on the wrong side of the books, and a
     # needs_review flag on its own reaches nobody in this case.
-    if ask_direction_of:
+    # notify=False (old mail found in a mailbox folder, 11 Nov 2026): it stays flagged for review
+    # on the dashboard; nobody gets a WhatsApp per old document.
+    if ask_direction_of and notify:
         try:
             from vula.api.whatsapp import ask_document_kind
             await ask_document_kind(tenant_id, ask_direction_of, supplier_name,
@@ -3174,7 +3176,7 @@ async def commit_inbound_document(
     # supplier bill — route the candidate match to the tenant's own admin team for a yes/no,
     # reusing the existing WhatsApp APPROVE/REJECT approval engine (vula/commerce/approvals.py)
     # rather than silently guessing or leaving it unresolved with no path to close it out.
-    if needs_review and is_invoice and supplier_match:
+    if needs_review and is_invoice and supplier_match and notify:
         try:
             from vula.commerce.approvals import create_approval, tenant_admin_approvers
             approvers = await tenant_admin_approvers(tenant_id)

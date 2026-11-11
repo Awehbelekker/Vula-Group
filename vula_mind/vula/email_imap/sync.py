@@ -288,63 +288,206 @@ def _fetch_new(creds: dict, last_uid: int, max_emails: int, folder: str = "INBOX
         uids = [int(u) for u in (data[0].split() if data and data[0] else [])]
         new = sorted(u for u in uids if u > last_uid)
         batch = new[:max_emails]  # oldest-first — see docstring
-        out = []
-        oversized = []
-        for u in batch:
-            # BODY.PEEK[] (not RFC822/BODY[]) — a plain fetch implicitly sets \Seen server-side,
-            # which was silently marking the owner's real inbox as "read" before they ever opened
-            # it themselves (confirmed live — Judy was missing real mail because it no longer
-            # showed as unread by the time she checked). PEEK returns identical bytes, no side effect.
-            typ, md = m.uid("fetch", str(u).encode(), "(BODY.PEEK[])")
-            raw = _extract_msg_bytes(md)
-            if not raw:
-                continue
-            msg = email.message_from_bytes(raw)
-            when = None
-            try:
-                when = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).isoformat()
-            except Exception:
-                when = datetime.now(timezone.utc).isoformat()
-            people = [(_hdr(n), a) for n, a in
-                      getaddresses([msg.get("From", ""), msg.get("To", ""), msg.get("Cc", "")])]
-            body, attachments = "", []
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain" and not body and "attachment" not in str(part.get("Content-Disposition") or "").lower():
-                    try:
-                        body = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "ignore")
-                    except Exception:
-                        body = ""
-                elif _is_real_attachment(part):
-                    payload = part.get_payload(decode=True)
-                    name = _hdr(part.get_filename()) or f"attachment-{u}"
-                    if payload and len(payload) <= _MAX_ATTACH_BYTES:
-                        attachments.append({"name": name, "data": payload,
-                                            "mime": part.get_content_type() or "application/octet-stream"})
-                    elif payload:
-                        # Previously dropped with no trace — now surfaced so the team knows
-                        # something didn't get auto-filed, instead of it just vanishing.
-                        oversized.append({"name": name, "size_mb": round(len(payload) / 1024 / 1024, 1),
-                                          "subject": _hdr(msg.get("Subject")) or "(no subject)",
-                                          "from": _hdr(msg.get("From"))})
-            out.append({"uid": u, "when": when, "subject": _hdr(msg.get("Subject")) or "(no subject)",
-                        "from": _hdr(msg.get("From")), "people": people, "body": body[:2000],
-                        "attachments": attachments,
-                        "bulk": bool(msg.get("List-Unsubscribe")),
-                        # Threading headers — captured on every email (cheap), used for
-                        # reply-detection: an inbound message's own Message-ID gets stored on
-                        # the follow-up it creates; an outbound (Sent) message's In-Reply-To/
-                        # References name the message(s) it's replying to.
-                        "message_id": (msg.get("Message-ID") or "").strip(),
-                        "in_reply_to": (msg.get("In-Reply-To") or "").strip(),
-                        "references": (msg.get("References") or "").strip(),
-                        # Set by vula/email_imap/service.py::_build() on anything Vula composed
-                        # (auto-sent or a draft) — excluded from voice-profile learning below.
-                        "vula_sent": bool((msg.get("X-Vula-Sent") or "").strip())})
+        out, oversized = _read_messages(m, batch)
         return {"emails": out, "max_uid": max(batch) if batch else last_uid, "folder": resolved,
                 "oversized": oversized}
     finally:
         try: m.logout()
         except Exception: pass
+
+
+def _read_messages(m, batch: list) -> tuple:
+    """[blocking] Read `batch` (UIDs in the folder `m` has selected) into the sync's email dicts.
+    Returns (emails, oversized attachments)."""
+    out, oversized = [], []
+    for u in batch:
+        # BODY.PEEK[] (not RFC822/BODY[]) — a plain fetch implicitly sets \Seen server-side,
+        # which was silently marking the owner's real inbox as "read" before they ever opened
+        # it themselves (confirmed live — Judy was missing real mail because it no longer
+        # showed as unread by the time she checked). PEEK returns identical bytes, no side effect.
+        typ, md = m.uid("fetch", str(u).encode(), "(BODY.PEEK[])")
+        raw = _extract_msg_bytes(md)
+        if not raw:
+            continue
+        msg = email.message_from_bytes(raw)
+        when = None
+        try:
+            when = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).isoformat()
+        except Exception:
+            when = datetime.now(timezone.utc).isoformat()
+        people = [(_hdr(n), a) for n, a in
+                  getaddresses([msg.get("From", ""), msg.get("To", ""), msg.get("Cc", "")])]
+        body, attachments = "", []
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain" and not body and "attachment" not in str(part.get("Content-Disposition") or "").lower():
+                try:
+                    body = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "ignore")
+                except Exception:
+                    body = ""
+            elif _is_real_attachment(part):
+                payload = part.get_payload(decode=True)
+                name = _hdr(part.get_filename()) or f"attachment-{u}"
+                if payload and len(payload) <= _MAX_ATTACH_BYTES:
+                    attachments.append({"name": name, "data": payload,
+                                        "mime": part.get_content_type() or "application/octet-stream"})
+                elif payload:
+                    # Previously dropped with no trace — now surfaced so the team knows
+                    # something didn't get auto-filed, instead of it just vanishing.
+                    oversized.append({"name": name, "size_mb": round(len(payload) / 1024 / 1024, 1),
+                                      "subject": _hdr(msg.get("Subject")) or "(no subject)",
+                                      "from": _hdr(msg.get("From")), "when": when})
+        out.append({"uid": u, "when": when, "subject": _hdr(msg.get("Subject")) or "(no subject)",
+                    "from": _hdr(msg.get("From")), "people": people, "body": body[:2000],
+                    "attachments": attachments,
+                    "bulk": bool(msg.get("List-Unsubscribe")),
+                    # Threading headers — captured on every email (cheap), used for
+                    # reply-detection: an inbound message's own Message-ID gets stored on
+                    # the follow-up it creates; an outbound (Sent) message's In-Reply-To/
+                    # References name the message(s) it's replying to.
+                    "message_id": (msg.get("Message-ID") or "").strip(),
+                    "in_reply_to": (msg.get("In-Reply-To") or "").strip(),
+                    "references": (msg.get("References") or "").strip(),
+                    # Set by vula/email_imap/service.py::_build() on anything Vula composed
+                    # (auto-sent or a draft) — excluded from voice-profile learning below.
+                    "vula_sent": bool((msg.get("X-Vula-Sent") or "").strip())})
+    return out, oversized
+
+
+# ── Every other folder (11 Nov 2026, migration 257) ───────────────────────────────────────────
+# HPC's payment certificates 1 and 5-13 sat in Judy's mailbox but never reached Vula: the sync read
+# INBOX and Sent only, and anything a mail rule (or Judy) moved into a folder was never seen. Now
+# every other selectable folder is read too, each with its own cursor, for every connected mailbox
+# (sync_all_folders, on by default; false keeps a mailbox to Inbox and Sent).
+
+# Folders never worth reading: deleted, junk, drafts, and Gmail's views that repeat other folders.
+_SKIP_FOLDER_FLAGS = {"\\noselect", "\\nonexistent", "\\trash", "\\junk", "\\drafts", "\\all",
+                      "\\flagged", "\\important", "\\sent"}
+_SKIP_FOLDER_NAME = re.compile(
+    r"(^|[/.])(trash|deleted( items| messages)?|bin|junk( e-?mail)?|spam|bulk mail|drafts?|outbox|"
+    r"sync issues|conflicts|local failures|server failures|notes|calendar|contacts|tasks|journal|"
+    r"rss( feeds| subscriptions)?|conversation history|all mail|starred|important)$", re.IGNORECASE)
+# Mail older than this, found in a folder for the first time, is filed without asking anyone
+# anything: a "which project?" WhatsApp per old document would bury the owner.
+HISTORIC_DAYS = 7
+_LIST_LINE = re.compile(r'^\((?P<flags>[^)]*)\)\s+(?P<delim>"(?:[^"\\]|\\.)*"|NIL)\s*(?P<name>.*)$', re.IGNORECASE)
+
+
+def _parse_list_item(item) -> Optional[tuple]:
+    """One entry of an IMAP LIST reply → (flags as a lower-case set, folder name), else None.
+    imaplib gives a name with special characters as a (line, literal) tuple."""
+    if isinstance(item, tuple):
+        line = item[0].decode("utf-8", "replace") if isinstance(item[0], (bytes, bytearray)) else str(item[0])
+        lit = item[1].decode("utf-8", "replace") if isinstance(item[1], (bytes, bytearray)) else str(item[1])
+        line = re.sub(r"\{\d+\}\s*$", "", line).rstrip() + " " + '"' + lit.replace('"', '\\"') + '"'
+    elif isinstance(item, (bytes, bytearray)):
+        line = item.decode("utf-8", "replace")
+    else:
+        return None
+    m = _LIST_LINE.match(line.strip())
+    if not m:
+        return None
+    name = m.group("name").strip()
+    if len(name) >= 2 and name[0] == name[-1] == '"':
+        name = re.sub(r'\\(["\\])', r"\1", name[1:-1])
+    flags = {f.lower() for f in m.group("flags").split()}
+    return (flags, name) if name else None
+
+
+def _folder_skipped(flags: set, name: str, skip: set) -> bool:
+    if flags & _SKIP_FOLDER_FLAGS or name.lower() in skip:
+        return True
+    return bool(_SKIP_FOLDER_NAME.search(name))
+
+
+def _quote_mailbox(name: str) -> str:
+    """imaplib passes a mailbox name as-is; one with a space must be quoted."""
+    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _uidvalidity(m) -> Optional[int]:
+    try:
+        typ, data = m.response("UIDVALIDITY")
+        return int(data[0]) if data and data[0] is not None else None
+    except Exception:
+        return None
+
+
+def _fetch_other_folders(creds: dict, cursors: dict, skip: set, budget: int) -> dict:
+    """[blocking] New mail (oldest first) from every folder except INBOX, the Sent folder and the
+    ones never worth reading (_folder_skipped). `cursors` is the account's folder_cursors; at most
+    `budget` emails are read per sync, shared out between the folders that have new mail so one big
+    Archive can't hold the others back. Folders are opened read-only (EXAMINE): nothing changes in
+    the mailbox. Returns {emails (each with its "folder"), cursors (updated), oversized, folders}."""
+    m = _imap_login(creds)
+    try:
+        typ, listing = m.list()
+        names = []
+        for item in (listing or []) if typ == "OK" else []:
+            parsed = _parse_list_item(item)
+            if parsed and not _folder_skipped(parsed[0], parsed[1], skip):
+                names.append(parsed[1])
+        names = sorted(set(names), key=str.lower)
+        pending = []      # (name, uidvalidity, new uids)
+        cursors = {k: dict(v) for k, v in (cursors or {}).items() if isinstance(v, dict)}
+        for name in names:
+            try:
+                typ, _ = m.select(_quote_mailbox(name), readonly=True)
+                if typ != "OK":
+                    continue
+                validity = _uidvalidity(m)
+                cur = cursors.get(name) or {}
+                last = int(cur.get("last_uid") or 0) if cur.get("uidvalidity") == validity else 0
+                typ, data = m.uid("search", None, f"UID {last + 1}:*")
+                uids = sorted(int(u) for u in (data[0].split() if typ == "OK" and data and data[0] else [])
+                              if int(u) > last)
+                if cur.get("uidvalidity") != validity:
+                    cursors[name] = {"uidvalidity": validity, "last_uid": last}
+                if uids:
+                    pending.append((name, validity, uids))
+            except Exception as exc:
+                logger.info("email folder %r skipped: %s", name, exc)
+        out, oversized, left = [], [], max(0, int(budget))
+        for i, (name, validity, uids) in enumerate(pending):
+            if left <= 0:
+                break
+            share = max(1, -(-left // (len(pending) - i)))      # ceil: what's left, split evenly
+            batch = uids[:share]
+            try:
+                typ, _ = m.select(_quote_mailbox(name), readonly=True)
+                if typ != "OK":
+                    continue
+                emails, big = _read_messages(m, batch)
+            except Exception as exc:
+                logger.info("email folder %r read failed: %s", name, exc)
+                continue
+            for em in emails:
+                em["folder"], em["uidvalidity"] = name, validity
+            out += emails
+            oversized += big
+            left -= len(batch)
+            cursors[name] = {"uidvalidity": validity, "last_uid": max(batch)}
+        return {"emails": out, "cursors": cursors, "oversized": oversized, "folders": names}
+    finally:
+        try: m.logout()
+        except Exception: pass
+
+
+def _is_historic(em: dict, now: Optional[datetime] = None) -> bool:
+    try:
+        when = datetime.fromisoformat(str(em.get("when")))
+    except (TypeError, ValueError):
+        return False
+    now = now or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (now - when).days >= HISTORIC_DAYS
+
+
+def _save_folder_cursors(db, account_id: str, cursors: dict) -> None:
+    try:
+        db.table("vula_email_accounts").update({"folder_cursors": cursors}).eq("id", account_id).execute()
+    except Exception as exc:
+        logger.debug("folder cursor save skipped (run migration 257?): %s", exc)
 
 
 def _upsert_contact(db, tenant_id: str, addr: str, name: str, kind: str, when: str) -> None:
@@ -631,7 +774,42 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
         for em in sent_result["emails"]:
             em["is_sent"] = True
 
-    oversized = inbox_result.get("oversized", []) + sent_result.get("oversized", [])
+    # Every other folder (migration 257: on for every mailbox unless switched off). Read separately
+    # so a database without the migration syncs Inbox and Sent exactly as before.
+    other = {"emails": [], "cursors": None, "oversized": []}
+    try:
+        extra = (db.table("vula_email_accounts").select("sync_all_folders,folder_cursors")
+                 .eq("id", account_id).limit(1).execute().data or [{}])[0]
+    except Exception:
+        extra = {}
+    if extra.get("sync_all_folders") is True:
+        skip = {"inbox"} | {n.lower() for n in _SENT_FOLDER_CANDIDATES}
+        if sent_result.get("folder"):
+            skip.add(sent_result["folder"].lower())
+        try:
+            other = await asyncio.to_thread(_fetch_other_folders, creds, extra.get("folder_cursors") or {},
+                                            skip, max_emails)
+        except Exception as exc:
+            logger.warning("email sync fetch (other folders) failed for %s/%s: %s",
+                           tenant_id, creds["email"], exc)
+            other = {"emails": [], "cursors": None, "oversized": []}
+        for em in other["emails"]:
+            em["is_sent"] = False
+            em["historic"] = _is_historic(em)
+    folder_cursors = dict(other["cursors"] or {}) if other["cursors"] is not None else None
+    if folder_cursors is not None:
+        # Each folder restarts where it was before this batch; it moves up email by email below,
+        # so a crash while filing one email's attachments skips that email next time (as for INBOX).
+        before = extra.get("folder_cursors") or {}
+        for em in other["emails"]:
+            prev = before.get(em["folder"]) or {}
+            if prev.get("uidvalidity") == em.get("uidvalidity"):
+                folder_cursors[em["folder"]] = dict(prev)
+            else:
+                folder_cursors[em["folder"]] = {"uidvalidity": em.get("uidvalidity"), "last_uid": 0}
+
+    oversized = (inbox_result.get("oversized", []) + sent_result.get("oversized", [])
+                 + [o for o in other.get("oversized", []) if not _is_historic(o)])
     if oversized:
         await _notify_oversized(tenant_id, oversized)
 
@@ -641,10 +819,15 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
 
     await _capture_voice_samples(db, tenant_id, sent_result["emails"])
 
-    emails = inbox_result["emails"] + sent_result["emails"]
+    emails = inbox_result["emails"] + sent_result["emails"] + other["emails"]
     contacts_seen, filed = set(), 0
     for em in emails:
-        if em["attachments"] and from_uid is None:
+        if em.get("folder") is not None and folder_cursors is not None:
+            # Another folder's own cursor, saved before its attachments are filed (as below).
+            folder_cursors[em["folder"]] = {"uidvalidity": em.get("uidvalidity"), "last_uid": int(em["uid"])}
+            if em["attachments"]:
+                _save_folder_cursors(db, account_id, folder_cursors)
+        elif em["attachments"] and from_uid is None:
             # Save the cursor up to this email BEFORE filing its attachments. 2026-09-23: one
             # emailed drawing pack killed the worker mid-ingest; the cursor only advanced after
             # the whole batch, so every sweep re-fetched the same batch and died again — mail
@@ -657,17 +840,23 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
             contacts_seen.add(addr.lower())
         for att in em["attachments"]:
             try:
-                await _file_attachment(tenant_id, em, att, notify_phone)
+                await _file_attachment(tenant_id, em, att, notify_phone, quiet=bool(em.get("historic")))
                 filed += 1
             except Exception as exc:
-                await _report_filing_failure(tenant_id, em, att, exc, "attachment file failed")
+                if em.get("historic"):
+                    logger.warning("attachment file failed for %s (%s, folder %s): %s",
+                                   att.get("name"), tenant_id, em.get("folder"), exc)
+                else:
+                    await _report_filing_failure(tenant_id, em, att, exc, "attachment file failed")
         # Track emails that look like they need a reply — mail the tenant SENT never needs
         # one from them, so skip Sent-folder items outright rather than rely on _needs_reply's
-        # own-domain check to filter them out incidentally.
-        if not em["is_sent"]:
+        # own-domain check to filter them out incidentally. Nor does old mail found in a folder.
+        if not em["is_sent"] and not em.get("historic"):
             reason = _needs_reply(em, own_domain)
             if reason:
                 await _track_followup(db, tenant_id, account_id, em, reason)
+    if folder_cursors is not None:
+        _save_folder_cursors(db, account_id, folder_cursors)
 
     try:
         # Scoped to this ONE account's row — with several mailboxes per tenant, filtering by
@@ -680,27 +869,44 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
         pass
     return {"synced": len(emails), "contacts": len(contacts_seen), "filed_attachments": filed,
             "last_uid": inbox_result["max_uid"], "sent_folder": sent_result["folder"],
-            "sent_last_uid": sent_result["max_uid"], "resolved_followups": resolved_followups}
+            "sent_last_uid": sent_result["max_uid"], "resolved_followups": resolved_followups,
+            "other_folders": len(other.get("folders") or []), "other_folder_emails": len(other["emails"])}
 
 
-async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: str = None) -> None:
+def _already_filed(db, tenant_id: str, att: dict) -> bool:
+    """The same file is already in the library. By its bytes (content_hash, migration 143): until
+    11 Nov 2026 this matched the FILENAME, so the second "Payment Certificate.pdf" or "Invoice.pdf"
+    a business ever received by email was dropped as a duplicate of the first, whatever was in it.
+    A row saved before content hashes existed still matches by name, so old mail found in a folder
+    for the first time doesn't file (and read into the bank) a second copy of something already in."""
+    import hashlib
+    digest = hashlib.sha256(att.get("data") or b"").hexdigest()
+    try:
+        if (db.table("vula_filed_documents").select("id").eq("tenant_id", tenant_id)
+                .eq("content_hash", digest).limit(1).execute().data):
+            return True
+        return bool(db.table("vula_filed_documents").select("id").eq("tenant_id", tenant_id)
+                    .eq("source", "email").eq("filename", att["name"]).is_("content_hash", "null")
+                    .limit(1).execute().data)
+    except Exception:
+        return False
+
+
+async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: str = None,
+                           quiet: bool = False) -> None:
     """Ingest an attachment into the KB + record it in the Documents library. The AI
     analyses the document (category/summary/fields) and project-matches on its CONTENT —
     so e.g. a 'payment notification' that is actually a wage payment for a project gets
-    classified and filed correctly rather than dropped as noise."""
+    classified and filed correctly rather than dropped as noise.
+
+    `quiet` (old mail found in a folder for the first time): filed the same way, but nobody is
+    messaged about it — a document Vula can't place waits under To check instead of a WhatsApp."""
     from config import settings
     from vula.ingestion.pipeline import VulaIngestionPipeline
 
     db = _client()
-    # Dedup: don't re-file the same attachment if it's already in the library.
-    try:
-        dup = (db.table("vula_filed_documents").select("id")
-               .eq("tenant_id", tenant_id).eq("source", "email")
-               .eq("filename", att["name"]).limit(1).execute().data or [])
-        if dup:
-            return
-    except Exception:
-        pass
+    if _already_filed(db, tenant_id, att):
+        return
 
     d = settings.upload_dir / tenant_id
     d.mkdir(parents=True, exist_ok=True)
@@ -727,7 +933,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             logger.info("bank statement auto-reconciled (%s): %s", tenant_id, rec)
             # Ask the owner to finish the ones Vula wasn't sure about (one nudge per statement).
             to_review = int(rec.get("needs_input", 0)) + int(rec.get("unmatched_credits", 0))
-            if not rec.get("error") and to_review > 0:
+            if not rec.get("error") and to_review > 0 and not quiet:
                 try:
                     from vula.integrations.notify import notify_team
                     await notify_team(tenant_id, "bank_statement",
@@ -744,6 +950,8 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             matched = int(rec.get("matched_invoices", 0)) + int(rec.get("matched_orders", 0))
             if not rec.get("error") and matched > 0:
                 payment_matched = True  # suppress the generic "which project?" ask below
+            elif not rec.get("error") and quiet:
+                payment_matched = True  # old mail: it waits on the Bank tab, nobody is messaged
             elif not rec.get("error"):
                 # Read fine, but nothing outstanding matched the amount — ask right here instead
                 # of silently falling through to a "which project" question about a payment, or
@@ -869,7 +1077,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
                 committed = await commerce_service.commit_inbound_document(
                     tenant_id, commit_fields, auto_commit=True, source="email",
                     filed_document_id=filed_row.get("id") if filed_row else None,
-                    project=match["project"] if match else None,
+                    project=match["project"] if match else None, notify=not quiet,
                 )
         except Exception as exc:
             logger.warning("commit_inbound_document failed for email attachment %s: %s",
@@ -881,7 +1089,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         supplier_question = bool(committed and committed.get("needs_review")
                                  and committed.get("supplier_match")
                                  and committed.get("record_type") == "invoice")
-        if ask and filed_row and filed_row.get("id") and not supplier_question:
+        if ask and filed_row and filed_row.get("id") and not supplier_question and not quiet:
             try:
                 from vula.integrations.doc_filing import ask_project
                 from vula.integrations.notify import recipients_for
@@ -891,7 +1099,10 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             except Exception as exc:
                 logger.debug("notify ask failed: %s", exc)
     except Exception as exc:
-        await _report_filing_failure(tenant_id, em, att, exc, "filed_documents record failed")
+        if quiet:
+            logger.warning("filed_documents record failed for %s (%s): %s", att.get("name"), tenant_id, exc)
+        else:
+            await _report_filing_failure(tenant_id, em, att, exc, "filed_documents record failed")
 
 
 async def process_all_email_sync() -> int:
