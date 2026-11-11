@@ -100,6 +100,11 @@ deletes. There is deliberately one sweep, not a loop per feature.
 | Rule | Setting | Default | Deletes |
 |---|---|---|---|
 | `takeoff_plans` | `TAKEOFF_RETENTION_DAYS` | 90 | uploaded drawings on the volume, `vula_takeoff_jobs` rows, in-memory jobs |
+| `whatsapp_dedupe` | `WA_DEDUP_RETENTION_DAYS` | 30 | `vula_wa_msg_dedup` (inbound dedupe and once-only send keys; every key is for one event) |
+| `whatsapp_logins` | `WA_LOGIN_RETENTION_DAYS` | 30 | `vula_wa_login_requests` |
+| `app_errors` | `APP_ERROR_RETENTION_DAYS` | 90 | `vula_app_errors`, by `last_seen` |
+| `website_leads` | `LEAD_RETENTION_DAYS` | 365 | `vula_website_leads` that were never won |
+| `conversation_turns` | `TURN_RETENTION_DAYS` | 365 | `vula_turns`, `vula_kb_turns` (crisis messages included) |
 
 Data that is **not** swept, and why:
 
@@ -108,10 +113,9 @@ Data that is **not** swept, and why:
 - Filed documents (`vula/api/server.py` upload dir, Supabase storage): business records, the
   owner's to keep or delete.
 
-Candidates waiting for an owner decision (each would be one more `Rule`): WhatsApp message
-dedupe rows (`vula_wa_msg_dedup`), app error reports (`vula_app_errors`), WhatsApp login requests
-(`vula_wa_login_requests`), website leads that never converted (`vula_website_leads`),
-conversation turns (`vula_turns`, `vula_kb_turns`).
+The five rules after `takeoff_plans` were the owner's decision on 9 Nov 2026 (go-live audit):
+technical data briefly, conversations and unconverted leads for a year. Each period is a setting.
+Not yet decided: `vula_wa_outbound` message previews, escalations and platform feedback.
 
 ## Crisis support (self-harm)
 

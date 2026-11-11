@@ -773,7 +773,11 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
         order = None            # get_order uses .single() → raises when the order doesn't exist
     if not order or order.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="Order not found")
-    await service.update_order_status(order_id, new_status)
+    refund_cents = int(body["amount_cents"]) if new_status == "refunded" and body.get("amount_cents") else None
+    try:
+        await service.update_order_status(order_id, new_status, refund_cents=refund_cents)
+    except service.OrderStatusRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     # Keep stock in sync: restore on cancel/refund, deduct once when it enters fulfilment.
     if new_status in ("cancelled", "refunded"):
         await service.apply_order_stock(order_id, restore=True)
@@ -795,7 +799,8 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
             now = service._now()
             if result.get("ok"):
                 refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
-                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
+                # refunded_amount_cents is the running total, kept by update_order_status.
+                patch = {"refund_status": "pending",
                          "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
             else:
                 refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
@@ -3764,6 +3769,15 @@ class ProjectShareIn(BaseModel):
     by: Optional[str] = None
 
 
+@router.get("/{tenant_id}/admin/projects/overview")
+async def admin_projects_overview(tenant_id: str):
+    """Every project at a glance: status, budget, spent, received, still owed to the business, how the
+    fee is agreed, and warnings (vula/commerce/project_tracker.overview). Money access."""
+    import asyncio
+    from vula.commerce import project_tracker as pt
+    return await asyncio.to_thread(pt.overview, tenant_id)
+
+
 @router.get("/{tenant_id}/admin/projects/tracker")
 async def admin_project_tracker(tenant_id: str, project: str):
     """One project's money picture (vula/commerce/project_tracker.py), with what each client view
@@ -4043,6 +4057,8 @@ async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
     # Off the event loop: costing pages through every bank line (PR B, 2026-09-29).
     res = await asyncio.to_thread(job_costing.costing, tenant_id, since=since)
     res["fee_default_pct"] = (await asyncio.to_thread(job_costing.terms, tenant_id))["*"]
+    # whether the business actually set that standard fee, or it's the assumed 10% (migration 255)
+    res["fee_default_agreed"] = "*" in await asyncio.to_thread(job_costing.agreed_terms, tenant_id)
     return res
 
 
@@ -4107,19 +4123,25 @@ async def admin_project_today(tenant_id: str, day: Optional[str] = None):
 
 class ProjectTermsIn(BaseModel):
     project: str = "*"
-    fee_pct: float
+    pricing: str = "cost_plus"          # cost_plus (fee_pct on cost) | fixed_fee (an agreed fee_cents)
+    fee_pct: Optional[float] = None
+    fee_cents: Optional[int] = None
 
 
 @router.post("/{tenant_id}/admin/projects/terms")
 async def admin_project_terms(tenant_id: str, body: ProjectTermsIn, request: Request):
-    """Set a project's cost-plus fee % (project "*" = the business default)."""
+    """Agree a project's fee (project "*" = the business's standard fee): a percentage on cost, or a
+    fixed amount in cents (migration 255). Read back."""
+    import asyncio
     from vula.commerce import job_costing
     if not await _may_apply_stock(request, tenant_id):
         raise HTTPException(status_code=403, detail="Only the owner or a manager can set fees.")
-    if not 0 <= body.fee_pct <= 100:
-        raise HTTPException(status_code=400, detail="fee_pct must be 0–100")
-    job_costing.set_fee(tenant_id, body.project or "*", body.fee_pct)
-    return {"ok": True, "project": body.project or "*", "fee_pct": body.fee_pct}
+    try:
+        out = await asyncio.to_thread(job_costing.set_terms, tenant_id, body.project or "*", body.pricing,
+                                      fee_pct=body.fee_pct, fee_cents=body.fee_cents)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **out}
 
 
 @router.get("/{tenant_id}/admin/projects/price-advice")
@@ -4740,15 +4762,35 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
             raise HTTPException(status_code=409, detail=(
                 f"{cur.get('invoice_number')} has been sent, so its amounts can't be changed — "
                 "issue a credit note for the difference instead."))
+    # The amounts come from the server, never the browser (9 Nov 2026 audit H5): the dashboard
+    # recomputed VAT-exclusive, so a R1,200 VAT-inclusive payment-link draft was re-saved as R1,380
+    # and its pay page then asked for R1,380.
+    for k in ("subtotal_cents", "vat_cents", "total_cents", "discount_cents"):
+        update.pop(k, None)
+    if not update and not body.get("project"):
+        raise HTTPException(status_code=400, detail="Amounts are worked out from the lines: send line_items.")
 
     # A status change is routed through update_invoice_status so a transition to "paid"
     # always stamps paid_at server-side AND posts to the general ledger — a raw field write
     # here silently skipped both (2026-08-15 fix: the dashboard's "Mark paid" button used this
     # endpoint directly, so every invoice marked paid this way was invisible to the trial
     # balance report). Never trust a client-supplied paid_at either — always server time.
+    cur_doc = None
+    if "line_items" in update or "vat_rate" in update or "status" in update:
+        cur_doc = await service.get_invoice(tenant_id, invoice_id) or {}
+        if not cur_doc:
+            raise HTTPException(status_code=404, detail="No such document.")
+    if "line_items" in update or "vat_rate" in update:
+        update.update(await _server_totals(tenant_id, cur_doc, body))
+
     new_status = update.pop("status", None)
     update.pop("paid_at", None)
     if new_status:
+        refused = _status_refusal(cur_doc, new_status)
+        if refused:
+            raise HTTPException(status_code=409, detail=refused)
+        if new_status == "paid" and cur_doc.get("status") == "paid" and not update:
+            return cur_doc     # already paid: nothing to do, and never a second ledger entry
         result = await service.update_invoice_status(tenant_id, invoice_id, new_status)
         if new_status == "sent" and update.get("sent_channel"):
             update["sent_at"] = service._now()  # server time, never trust a client value
@@ -4778,6 +4820,55 @@ async def admin_move_invoice_project(tenant_id: str, invoice_id: str, body: dict
 
 
 _ISSUED = ("sent", "overdue", "part_paid", "paid")
+
+
+def _status_refusal(cur: dict, new_status: str) -> str:
+    """Why an issued invoice or credit note can't go to new_status, or "" when it can.
+
+    Status had no rules (9 Nov 2026 audit H5): PATCH "draft" on a sent or paid invoice, then edit
+    its amounts or delete it, got round the sent-invoice lock, broke the numbered series a tax
+    invoice must keep, and left its ledger entry with nothing behind it. Quotes and other
+    documents keep their own statuses."""
+    if (cur or {}).get("doc_type") not in ("invoice", "credit_note"):
+        return ""
+    status, number = cur.get("status"), cur.get("invoice_number") or "This invoice"
+    if status == "paid" and new_status != "paid":
+        return (f"{number} is paid. To reverse it, issue a credit note (and refund if the money "
+                "came in) so the books stay complete.")
+    if status in _ISSUED and new_status in ("draft", "cancelled", "void"):
+        return (f"{number} has been sent, so it can't go back to {new_status}. Cancel it with a "
+                "credit note so the numbering and the books stay complete.")
+    return ""
+
+
+async def _server_totals(tenant_id: str, cur: dict, body: dict) -> dict:
+    """Subtotal, discount, VAT and total for an edited document, worked out here from its lines
+    (service._compute_totals, the same sums create_invoice uses) on the document's own VAT
+    basis: an inclusive document stores an ex-VAT subtotal below the sum of its lines; with no
+    lines to tell, the business's setting."""
+    lines = body.get("line_items") if "line_items" in body else (cur.get("line_items") or [])
+    vat_rate = float(body["vat_rate"] if body.get("vat_rate") is not None else (cur.get("vat_rate") or 0))
+    old_lines = sum(int(i.get("total_cents") or 0) for i in (cur.get("line_items") or []))
+    if old_lines and float(cur.get("vat_rate") or 0) > 0:
+        inclusive = old_lines > int(cur.get("subtotal_cents") or 0) + 1
+    else:
+        s = await service.get_invoice_settings(tenant_id) or {}
+        inclusive = bool(s.get("prices_include_vat"))
+    entered = sum(int(round(float(i.get("quantity") or 0) * int(i.get("unit_price_cents") or 0)
+                            * (1 - float(i.get("discount_pct") or 0) / 100.0))) for i in lines)
+    if body.get("discount_pct") is not None:
+        pct = float(body.get("discount_pct") or 0)
+    elif body.get("discount_cents") is not None and entered:
+        pct = 100.0 * int(body.get("discount_cents") or 0) / entered
+    else:
+        pct = 100.0 * int(cur.get("discount_cents") or 0) / old_lines if old_lines and not inclusive else 0.0
+    pct = max(0.0, min(100.0, pct))
+    try:
+        subtotal, discount, vat, total, items = service._compute_totals(lines, vat_rate, inclusive, pct)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"A line is missing its description, quantity or price ({exc}).")
+    return {"line_items": items, "vat_rate": vat_rate, "subtotal_cents": subtotal,
+            "discount_cents": discount, "vat_cents": vat, "total_cents": total}
 _LOCKED_ONCE_SENT = {"line_items", "subtotal_cents", "vat_rate", "vat_cents", "total_cents",
                      "discount_cents", "deposit_cents", "customer_name", "customer_address"}
 
@@ -5521,51 +5612,54 @@ async def cron_recurring_invoices():
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/credit-note")
 async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict = None):
-    """Create a credit note against an invoice (full, or partial via body.line_items).
-    Invoices have no 'refunded' status (unlike orders) — a credit note IS the refund record —
-    so body.auto_refund here does what body.auto_refund does on the order status endpoint:
-    opt-in, real money-back-to-customer via Yoco, keyed off the invoice's own checkout id."""
+    """A credit note against an invoice: the whole of what's left to credit, or body.line_items.
+
+    Goes through service.credit_invoice like the WhatsApp tool (9 Nov 2026 audit, money): it
+    used to make the credit note on its own with no cap, priced on the business's current VAT
+    setting rather than the invoice's, without reducing what the invoice still owed, and
+    body.auto_refund sent Yoco the whole credit-note total even when the invoice was unpaid.
+
+    The part of a credit that is money already received must be refunded: body.auto_refund does
+    it through Yoco (that part only); otherwise the answer is 409 refund_needed with the amount,
+    and the owner confirms they refunded it themselves (body.refund_made)."""
     body = body or {}
-    try:
-        cn = await service.create_credit_note(tenant_id, invoice_id, body.get("line_items"))
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    src = await service.get_invoice(tenant_id, invoice_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    lines = body.get("line_items") or None
+    args = dict(reason=body.get("reason") or "", line_items=lines)
     refund_result = None
-    if body.get("auto_refund"):
-        src = await service.get_invoice(tenant_id, invoice_id)
-        checkout_id = (src or {}).get("yoco_checkout_id")
-        amount = int(cn.get("total_cents") or 0)
-        if not checkout_id:
-            refund_result = {"gateway": "yoco", "status": "failed",
-                              "detail": "This invoice has no online (Yoco) payment on record."}
-        elif amount <= 0:
-            refund_result = {"gateway": "yoco", "status": "failed", "detail": "Nothing to refund."}
-        else:
-            from vula.api.yoco import refund_yoco_payment
-            # One key per credit note: two partial credit notes of the same amount on one
-            # invoice are two refunds. The default checkout+amount key would make Yoco replay
-            # the first and move no money, while we recorded the second as pending.
-            result = await refund_yoco_payment(tenant_id, checkout_id, amount,
-                                               idempotency_key=f"refund-cn-{cn.get('id') or invoice_id}")
-            now = service._now()
-            if result.get("ok"):
-                refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
-                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
-                         "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
-                try:   # money went back → reverse that part of the sale (idempotent per CN)
-                    from vula.commerce import ledger
-                    ledger.post_invoice_refund(tenant_id, src, cn, amount)
-                except Exception as exc:
-                    log.warning("refund ledger posting failed for %s: %s", cn.get("id"), exc)
-            else:
-                refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
-                patch = {"refund_status": "failed"}
-            try:
-                service._client().table("commerce_invoices").update(patch) \
-                    .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
-            except Exception as exc:
-                log.warning("refund tracking update failed for invoice %s: %s", invoice_id, exc)
-    return {"credit_note": cn, "refund": refund_result}
+    try:
+        res = await service.credit_invoice(tenant_id, invoice_id, refund_made=bool(body.get("refund_made")), **args)
+    except service.RefundNeeded as exc:
+        checkout_id = src.get("yoco_checkout_id")
+        if not (body.get("auto_refund") and checkout_id):
+            raise HTTPException(status_code=409, detail={
+                "code": "refund_needed", "refund_cents": exc.refund_cents, "message": str(exc)})
+        from vula.api.yoco import refund_yoco_payment
+        # One key per invoice + amount already refunded: a second part credit is a second refund.
+        done = int(src.get("refunded_amount_cents") or 0)
+        result = await refund_yoco_payment(tenant_id, checkout_id, exc.refund_cents,
+                                           idempotency_key=f"refund-inv-{invoice_id}-{done}-{exc.refund_cents}")
+        if not result.get("ok"):
+            raise HTTPException(status_code=502, detail={
+                "code": "refund_failed", "refund_cents": exc.refund_cents,
+                "message": f"Yoco didn't refund it ({result.get('detail') or 'no reason given'}). "
+                           "Nothing was credited. Refund the customer yourself, then try again."})
+        try:
+            service._client().table("commerce_invoices").update({
+                "refund_status": "pending", "refunded_amount_cents": done + exc.refund_cents,
+                "refunded_at": service._now(), "yoco_refund_id": result.get("refund_id")}) \
+                .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+        except Exception as e:  # noqa: BLE001
+            log.warning("refund tracking update failed for invoice %s: %s", invoice_id, e)
+        # The money went back: the credit note and its ledger refund are recorded once, here.
+        res = await service.credit_invoice(tenant_id, invoice_id, refund_made=True, **args)
+        refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": exc.refund_cents}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"credit_note": res["credit_note"], "invoice": res["invoice"], "refund": refund_result,
+            "credited_cents": res["credited_cents"], "refund_cents": res["refund_cents"]}
 
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")
@@ -7799,6 +7893,111 @@ async def admin_upsert_supplier(tenant_id: str, body: dict):
     if not body.get("name"):
         raise HTTPException(status_code=400, detail="Supplier name is required.")
     return await service.upsert_supplier(tenant_id, body)
+
+
+@router.get("/{tenant_id}/admin/data-health")
+async def admin_data_health(tenant_id: str):
+    """What Vula found to check in the business's data (vula/commerce/data_checks.py): client links that
+    could mislead, internal sheets a client would see, bills on the wrong project, dates that can't be
+    right, bills unpaid beside a matching payment, duplicate suppliers, job payments with no project."""
+    import asyncio
+    from vula.commerce import data_checks
+    return await asyncio.to_thread(data_checks.sweep, tenant_id)
+
+
+@router.post("/{tenant_id}/admin/documents/{doc_id}/client-link")
+async def admin_document_client_link(tenant_id: str, doc_id: str, body: dict):
+    """Show a document on its project's client link even though it names another project (or stop
+    showing it): body {show: true|false} (vula/commerce/project_share_docs.other_projects). Read back."""
+    import asyncio
+    from vula.commerce import service as cs
+    show = bool((body or {}).get("show"))
+
+    def _set():
+        db = cs._client()
+        rows = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id).eq("id", doc_id)
+                .limit(1).execute().data or [])
+        if not rows:
+            return None
+        f = dict(rows[0].get("fields") or {})
+        if show:
+            f["_show_on_client_link"] = True
+        else:
+            f.pop("_show_on_client_link", None)
+        db.table("vula_filed_documents").update({"fields": f}).eq("tenant_id", tenant_id).eq("id", doc_id).execute()
+        back = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id).eq("id", doc_id)
+                .limit(1).execute().data or [{}])[0].get("fields") or {}
+        return bool(back.get("_show_on_client_link")) == show
+    ok = await asyncio.to_thread(_set)
+    if ok is None:
+        raise HTTPException(status_code=404, detail="No such document.")
+    if not ok:
+        raise HTTPException(status_code=500, detail="That didn't save — please try again.")
+    return {"id": doc_id, "show_on_client_link": show}
+
+
+@router.get("/{tenant_id}/admin/documents/{doc_id}/site-split")
+async def admin_site_split(tenant_id: str, doc_id: str):
+    """An invoice that covers several jobs: its proposed split and the bank payments that could be its
+    own (vula/commerce/site_split.py)."""
+    import asyncio
+    from vula.commerce import site_split
+    doc = await asyncio.to_thread(site_split._doc, tenant_id, doc_id)
+    s = ((doc or {}).get("fields") or {}).get("_site_split")
+    if not s:
+        raise HTTPException(status_code=404, detail="There's no split on that document.")
+    pays = await asyncio.to_thread(site_split.payments, tenant_id, doc)
+    return {"split": s, "payments": [{k: r.get(k) for k in ("id", "txn_date", "description", "amount_cents", "project")}
+                                     for r in pays]}
+
+
+@router.post("/{tenant_id}/admin/documents/{doc_id}/site-split")
+async def admin_apply_site_split(tenant_id: str, doc_id: str, body: dict, request: Request):
+    """Split the invoice's bank payment across its jobs, as proposed. body: {txn_id?} — needed only when
+    more than one payment could be the invoice's (409 lists them). Read back."""
+    import asyncio
+    from vula.commerce import site_split
+    by = _actor(request)
+    try:
+        return await asyncio.to_thread(site_split.apply, tenant_id, doc_id, (body or {}).get("txn_id"), by)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        doc = await asyncio.to_thread(site_split._doc, tenant_id, doc_id)
+        pays = await asyncio.to_thread(site_split.payments, tenant_id, doc or {})
+        raise HTTPException(status_code=409, detail={"message": str(exc), "payments": [
+            {k: r.get(k) for k in ("id", "txn_date", "description", "amount_cents", "project")} for r in pays]})
+
+
+@router.get("/{tenant_id}/admin/suppliers/duplicates")
+async def admin_supplier_duplicates(tenant_id: str):
+    """Suppliers on file that look like one business — same VAT number, bank account, email, or the
+    same name give or take "SA (Pty) Ltd" (vula/commerce/supplier_identity.py). Nothing changes until
+    a group is merged."""
+    from vula.commerce import supplier_identity as si
+    own_names, own_numbers = await service.own_business_names(tenant_id)
+    suppliers, own_accounts = si.split_own(await service.list_suppliers(tenant_id), own_names, own_numbers)
+    groups = si.find_duplicates(suppliers, own_accounts)
+    slim = lambda s: {k: s.get(k) for k in ("id", "name", "aliases", "category", "tax_id", "contact_email")}  # noqa: E731
+    return {"groups": [{"keep": slim(g["keep"]), "duplicates": [slim(d) for d in g["duplicates"]],
+                        "why": g["why"]} for g in groups], "count": len(groups)}
+
+
+class SupplierMergeIn(BaseModel):
+    keep_id: str
+    duplicate_ids: List[str]
+
+
+@router.post("/{tenant_id}/admin/suppliers/merge")
+async def admin_supplier_merge(tenant_id: str, body: SupplierMergeIn):
+    """Fold duplicate suppliers into one: their bills, expenses, documents, orders and products move
+    to the kept supplier, their names become its aliases, then they are deleted. Read back."""
+    import asyncio
+    from vula.commerce import supplier_identity as si
+    res = await asyncio.to_thread(si.merge, tenant_id, body.keep_id, body.duplicate_ids)
+    if not res.get("ok") and not res.get("merged"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "Nothing was merged.")
+    return {**res, "message": si.merge_summary(res)}
 
 
 @router.delete("/{tenant_id}/admin/suppliers/{supplier_id}")

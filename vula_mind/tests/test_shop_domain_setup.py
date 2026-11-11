@@ -50,7 +50,7 @@ def railway(monkeypatch):
                                 "customDomains": [{"id": "d1", "domain": d} for d in saved]}}
         return {}
     monkeypatch.setattr(sd, "_gql", gql)
-    monkeypatch.setattr(sd, "_save", lambda tid, d: saved.append(d) if d else saved.clear())
+    monkeypatch.setattr(sd, "_save", lambda tid, d, *kind: saved.append(d) if d else saved.clear())
     monkeypatch.setattr("vula.api.tenants.tenant_for_host", lambda h: None)
     monkeypatch.setattr(sd, "status", AsyncMock(return_value={"state": "waiting_dns"}))
     return calls, saved
@@ -73,7 +73,7 @@ async def test_without_a_railway_token_the_address_is_still_saved(monkeypatch):
     from config import settings
     monkeypatch.setattr(settings, "railway_api_token", "")
     saved = []
-    monkeypatch.setattr(sd, "_save", lambda tid, d: saved.append(d))
+    monkeypatch.setattr(sd, "_save", lambda tid, d, *kind: saved.append(d))
     monkeypatch.setattr("vula.api.tenants.tenant_for_host", lambda h: None)
     monkeypatch.setattr(sd, "status", AsyncMock(return_value={"state": "waiting_dns", "automated": False}))
     assert (await sd.connect("seedleme", "shop.seedleme.com"))["automated"] is False
@@ -92,7 +92,7 @@ async def test_status_reads_live_when_the_address_answers(monkeypatch):
     from vula.commerce import web_basket
     monkeypatch.setattr(web_basket, "configured_shop_host", lambda tid: "shop.seedleme.com")
     monkeypatch.setattr(web_basket, "check_shop_host", AsyncMock(return_value=True))
-    monkeypatch.setattr(sd, "suggestion", lambda tid: "")
+    monkeypatch.setattr(sd, "suggestion", lambda tid, *kind: "")
     st = await sd.status("seedleme")
     assert (st["domain"], st["state"]) == ("shop.seedleme.com", "live")
 

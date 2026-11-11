@@ -17,7 +17,7 @@ router = APIRouter(tags=["shop-domain"])        # mounted at /v1/commerce
 async def _owner_or_manager(request: Request, tenant_id: str) -> None:
     from vula.api.commerce import _may_apply_stock
     if not await _may_apply_stock(request, tenant_id):
-        raise HTTPException(status_code=403, detail="Only the owner or a manager can change the shop's address.")
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can change your web addresses.")
 
 
 def _with_instructions(st: dict) -> dict:
@@ -49,5 +49,35 @@ async def shop_domain_disconnect(tenant_id: str, request: Request):
     await _owner_or_manager(request, tenant_id)
     try:
         return await shop_domain.disconnect(tenant_id)
+    except shop_domain.DomainError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── where the business's client links open (10 Nov 2026) ─────────────────────────────────────
+#     GET/POST/DELETE /v1/commerce/{tenant}/admin/link-domain — projects.<their domain>, the same
+#     set-up as the shop's address; client links (/track/…) switch to it once it's live.
+
+@router.get("/{tenant_id}/admin/link-domain")
+async def link_domain_status(tenant_id: str):
+    from vula.commerce import shop_domain
+    return _with_instructions(await shop_domain.status(tenant_id, "links"))
+
+
+@router.post("/{tenant_id}/admin/link-domain")
+async def link_domain_connect(tenant_id: str, body: dict, request: Request):
+    from vula.commerce import shop_domain
+    await _owner_or_manager(request, tenant_id)
+    try:
+        return _with_instructions(await shop_domain.connect(tenant_id, (body or {}).get("domain") or "", "links"))
+    except shop_domain.DomainError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{tenant_id}/admin/link-domain")
+async def link_domain_disconnect(tenant_id: str, request: Request):
+    from vula.commerce import shop_domain
+    await _owner_or_manager(request, tenant_id)
+    try:
+        return await shop_domain.disconnect(tenant_id, "links")
     except shop_domain.DomainError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

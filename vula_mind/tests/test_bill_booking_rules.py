@@ -141,3 +141,13 @@ def test_a_project_name_waits_for_the_document_still_being_read():
         assert wa._caption_waits_for_document(TID, "27820000002", "Seaview") is False  # someone else
     finally:
         wa._SENDER_LOCKS.pop(key, None)
+
+
+def test_vat_is_never_added_to_a_total_that_already_differs_from_its_subtotal():
+    # Sea Point Hire 113631: subtotal R1,880.00, "total amount due R2,000.00" — booked as R2,300.00
+    assert vat_inclusive(200000, 0, True, True, subtotal_cents=188000) == (200000, 0)
+    # Solucent 10571: total R31,777.20, read with a different subtotal — booked as R36,543.78
+    assert vat_inclusive(3177720, 0, True, None, subtotal_cents=4997520) == (3177720, 0)
+    # STE's quote: one figure, priced excluding VAT — 15% is still added, as before
+    assert vat_inclusive(4175247, 0, True, None, subtotal_cents=None) == (4801534, 626287)
+    assert vat_inclusive(4175247, 0, True, None, subtotal_cents=4175247) == (4801534, 626287)

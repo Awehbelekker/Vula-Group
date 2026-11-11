@@ -44,6 +44,7 @@ class _Q:
     def select(self, *a): return self
     def limit(self, *a): return self
     def order(self, *a, **k): return self
+    def range(self, *a): return self
     def eq(self, k, v): self.f.append((k, v)); return self
     def insert(self, row): self.row = row; return self
     def update(self, patch): self.patch = patch; return self
@@ -122,7 +123,7 @@ def world(monkeypatch):
 def test_the_link_lists_the_client_documents_view_only(world):
     page = world["client"].get(f"/track/{TOKEN}").text
     assert "Documents (4)" in page                                   # invoices, quote, BOQ — no statement
-    assert "(our documents)" not in page and "Thandi Builders<span" in page    # the business's own invoice
+    assert "(our documents)" not in page and "<div class='who'>Thandi Builders</div>" in page   # the business's own invoice
     assert f"/track/{TOKEN}/doc/inv" in page and f"/track/{TOKEN}/doc/quote" in page
     assert f"/track/{TOKEN}/doc/xls'" not in page                    # a spreadsheet can't be shown — request only
     assert "IN-9" not in page and "IN-8" not in page                 # another project's, another business's

@@ -61,7 +61,17 @@ def _signed(payload, secret="sek"):
 
 
 async def _call(req, db, secret="sek", debug=False):
+    # Orders move through the atomic, business-scoped helpers (9 Nov 2026 audit S6); the mocks
+    # stand for "this call moved it". upd_order records (order_id, new status) either way.
     upd_order = AsyncMock()
+
+    async def paid(tid, oid, method="online", **k):
+        await upd_order(oid, "paid")
+        return {"id": oid}
+
+    async def cancelled(tid, oid):
+        await upd_order(oid, "cancelled")
+        return {"id": oid}
     upd_inv = AsyncMock()
     notify = AsyncMock()
     stock = AsyncMock()
@@ -69,7 +79,8 @@ async def _call(req, db, secret="sek", debug=False):
          patch.object(yoco.settings, "debug", debug), \
          patch.object(yoco, "_get_tenant_yoco_creds", AsyncMock(return_value=None)), \
          patch.object(yoco.commerce, "_client", return_value=db), \
-         patch.object(yoco.commerce, "update_order_status", upd_order), \
+         patch.object(yoco.commerce, "mark_order_paid", paid), \
+         patch.object(yoco.commerce, "cancel_unpaid_order", cancelled), \
          patch.object(yoco.commerce, "update_invoice_status", upd_inv), \
          patch.object(yoco.commerce, "apply_order_stock", stock), \
          patch.object(yoco, "_notify_order_paid", notify):
@@ -94,14 +105,15 @@ async def test_bad_signature_rejected():
 
 @pytest.mark.asyncio
 async def test_standard_webhooks_signature_accepted():
-    payload = {"type": "payment.succeeded", "payload": {"amount": 100, "metadata": {"order_id": "o1"}}}
+    payload = {"type": "payment.succeeded",
+               "payload": {"amount": 100, "metadata": {"order_id": "o1", "tenant_id": "t1"}}}
     raw = json.dumps(payload).encode()
     key = b"k3y"
     secret = "whsec_" + base64.b64encode(key).decode()
     sig = base64.b64encode(hmac.new(key, b"msg_1.1700000000." + raw, hashlib.sha256).digest()).decode()
     req = _Req(payload, {"webhook-id": "msg_1", "webhook-timestamp": "1700000000",
                          "webhook-signature": f"v1,{sig}"})
-    db = _DB({"commerce_orders": [{"id": "o1", "status": "pending_payment"}]})
+    db = _DB({"commerce_orders": [{"id": "o1", "tenant_id": "t1", "status": "pending_payment", "total_cents": 100}]})
     upd, _, notify, _ = await _call(req, db, secret=secret)
     upd.assert_awaited_once_with("o1", "paid")
     notify.assert_awaited_once()
@@ -109,8 +121,9 @@ async def test_standard_webhooks_signature_accepted():
 
 @pytest.mark.asyncio
 async def test_duplicate_success_event_notifies_once():
-    payload = {"type": "checkout.completed", "payload": {"amount": 100, "metadata": {"order_id": "o1"}}}
-    db = _DB({"commerce_orders": [{"id": "o1", "status": "paid"}]})
+    payload = {"type": "checkout.completed",
+               "payload": {"amount": 100, "metadata": {"order_id": "o1", "tenant_id": "t1"}}}
+    db = _DB({"commerce_orders": [{"id": "o1", "tenant_id": "t1", "status": "paid", "total_cents": 100}]})
     upd, _, notify, _ = await _call(_signed(payload), db)
     upd.assert_not_awaited()
     notify.assert_not_awaited()
@@ -122,7 +135,7 @@ async def test_pay_link_reference_resolves_to_order():
                "payload": {"amount": 9000, "metadata": {"reference": "OTH-1001", "tenant_id": "t1"}}}
     db = _DB({"commerce_orders": [{"id": "o1", "tenant_id": "t1", "display_id": "OTH-1001",
                                    "status": "pending_payment", "customer_phone": "27820000000",
-                                   "customer_name": "Jane"}]})
+                                   "customer_name": "Jane", "total_cents": 9000}]})
     upd, _, notify, _ = await _call(_signed(payload), db)
     upd.assert_awaited_once_with("o1", "paid")
     assert notify.await_args.kwargs["customer_phone"] == "27820000000"
@@ -139,8 +152,8 @@ async def test_pay_link_reference_resolves_to_invoice():
 
 @pytest.mark.asyncio
 async def test_failed_payment_cancels_and_releases_stock():
-    payload = {"type": "payment.failed", "payload": {"metadata": {"order_id": "o1"}}}
-    db = _DB({"commerce_orders": [{"id": "o1", "status": "pending_payment"}]})
+    payload = {"type": "payment.failed", "payload": {"metadata": {"order_id": "o1", "tenant_id": "t1"}}}
+    db = _DB({"commerce_orders": [{"id": "o1", "tenant_id": "t1", "status": "pending_payment"}]})
     upd, _, _, stock = await _call(_signed(payload), db)
     upd.assert_awaited_once_with("o1", "cancelled")
     stock.assert_awaited_once_with("o1", restore=True)

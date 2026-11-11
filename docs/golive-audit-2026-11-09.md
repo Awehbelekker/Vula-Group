@@ -159,11 +159,42 @@ A green suite doesn't cover the gaps below. Most of them are paths no test exerc
 
 ## Status
 
-- **9 Nov, security PR** (branch `ccr-2e32801b-3mouyf`): S1–S5, H1, H2 and H12 fixed.
+- **9 Nov, security PR** (branch `ccr-2e32801b-3mouyf`): S1–S5, H1, H2 and H12 fixed. **Merged as
+  #285 on 10 Nov and live in production from 08:31** (clean boot, health check answering).
   Tests: `vula_mind/tests/test_security_audit_1109.py` (40). 38 of them fail on the code before
   the fix. The other 2 are a lowercase `application/json` case that already worked and a
   "same tenant and forms still work" regression check. S6 and S7 (forged payments) are in the
   money PR.
+- **9 Nov, money fixes:** S6, S7, M1, M2, H3, H4 and H5 fixed. **Merged as #286 on 10 Nov, live from 08:42.**
+  Tests: `vula_mind/tests/test_money_audit_1109.py` (35). 33 of them fail on the code before the
+  fix. The other 2 are regression checks: a full payment is marked paid once, and a draft still
+  moves to "sent". MEDIUM money items (partial refunds, credit-note caps, overpayment, the
+  `vat_registered` default, journal immutability, rounding) are still open.
+- **9 Nov, WhatsApp fixes:** H7–H10 and the checkout double tap fixed. **Merged as #287 on 10 Nov, live from 08:48.**
+  Tests: `vula_mind/tests/test_whatsapp_audit_1109.py` (10). 9 of them fail on the code before the
+  fix; the other checks that a failed placement can be tried again. Still open: 8 businesses have
+  no number row and send from the server's default line by design. Whether that line should
+  speak for a business at all is a product decision.
+- **9 Nov, dashboard + POPIA (merged as #288 on 10 Nov):** retention rules added (owner's periods: dedupe and WhatsApp
+  logins 30 days, error reports 90, unconverted leads and conversation turns 365). The website lead
+  form has a privacy notice. The dashboard no longer goes blank without its Supabase settings, no
+  longer opens the full menu when the member lookup fails, keeps the menu working when one screen
+  crashes (no "tell Ian"), and says when Vula's server can't be reached. The client-secret check
+  now covers the site, the dashboard's public/pay/r folders and the mobile app's app.json.
+- **10 Nov, remaining money items:** fixed.
+  - Part refunds post the amount refunded.
+  - A never-paid order posts no refund, and a paid order is refunded, not cancelled.
+  - Credit notes are capped at what's left to credit, keep the invoice's own VAT basis and never
+    refund more than was received. The dashboard's credit note goes through the same path, so a
+    Yoco auto-refund sends only the paid part.
+  - Payments can't exceed what's owed.
+  - No settings means not VAT-registered, in the code and (migration 253) the DB default.
+  - Rounding is half-up.
+  - The ledger is append-only (migration 253).
+  - Tests: `vula_mind/tests/test_money2_audit_1109.py` (17; 14 fail before the fix, 3 are
+    rounding cases where both rules agree).
+  - **ShopEazy** is marked VAT-registered with no VAT number: probably the old DB default. Check
+    before it invoices.
 
 ## Suggested order
 

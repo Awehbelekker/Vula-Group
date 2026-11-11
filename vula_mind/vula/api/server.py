@@ -1216,25 +1216,9 @@ async def _stale_escalation_scheduler_loop() -> None:
                         if await _send_reply(row["helper_phone"], msg, tenant_id=tenant_id):
                             esc.mark_stale_notified(row["id"])
 
-                    # Close the loop with the CUSTOMER on anything the helper never answered.
-                    # Silence is the worst reply to a real buying question — see
-                    # find_abandoned_escalations for the incident this comes from.
-                    for row in esc.find_abandoned_escalations(tenant_id):
-                        q = (row.get("question") or "").strip()
-                        apology = (
-                            "Hi 👋 You asked me earlier:\n\n"
-                            f"\"{q}\"\n\n"
-                            "I'm sorry — I checked with the team and haven't been able to get "
-                            "you a firm answer. I didn't want to leave you waiting with no "
-                            "reply. Please send me a message and I'll get someone onto it "
-                            "right away."
-                        )
-                        if await _send_reply(row["customer_phone"], apology, tenant_id=tenant_id):
-                            esc.mark_customer_notified(row["id"])
-                            log.info("apologised to customer for unanswered escalation %s", row["id"])
-                            from core.mass_mind import health as _mm_health
-                            _mm_health.record_event(tenant_id, "stale_escalation_abandoned",
-                                                     {"escalation_id": row["id"]})
+                    # Close the loop with the CUSTOMER on anything the helper never answered:
+                    # one apology attempt each (escalation.apologise_abandoned).
+                    await esc.apologise_abandoned(tenant_id, _send_reply)
                 except Exception as exc:
                     log.warning("stale escalation nudge failed for %s: %s", tenant_id, exc)
         except Exception as exc:
@@ -1965,10 +1949,21 @@ _SECTION_RULES = [
     # cost, fee and profit — Money access only. A QS login limited to Projects keeps the online
     # BOQ, its PDF and the QS view (admin/projects/qs-view).
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:boq-template\.xlsx|boq-library|projects/boq-online\.xlsx|"
-                      r"projects/(?:tracker|share|shares|costing|direct-payments|download-requests))(?:/|$)"), _MONEY_TABS),
+                      r"projects/(?:tracker|overview|share|shares|costing|direct-payments|download-requests))(?:/|$)"), _MONEY_TABS),
     # 2026-11-03: a project's whole file (every invoice, statement and proof of payment, as a
     # zip) — owner and managers only, like the team settings.
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/file(?:\.zip)?(?:/|$)"), frozenset()),
+    # 2026-11-10: merging duplicate suppliers moves bills between records and deletes the duplicates —
+    # owner and managers only; seeing the likely duplicates is Money access (vula/commerce/supplier_identity.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/merge/?$"), frozenset()),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/suppliers/duplicates/?$"), _MONEY_TABS),
+    # 2026-11-10: the business's data health list — the books, bills and client links: Money access
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/data-health/?$"), _MONEY_TABS),
+    # 2026-11-10: an invoice for several jobs, split across them — the books: Money access (vula/commerce/site_split.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/documents/[^/]+/site-split/?$"), _MONEY_TABS),
+    # 2026-11-10: showing a document on a client link although it names another project — what the
+    # client sees: owner and managers only (vula/commerce/project_share_docs.other_projects)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/documents/[^/]+/client-link/?$"), frozenset()),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)

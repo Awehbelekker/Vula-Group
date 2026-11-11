@@ -26,8 +26,30 @@ export default class ErrorBoundary extends Component {
     reportError(error, { source: "render" });   // Master › Health sees it (lib/appErrors.js)
   }
 
+  componentDidUpdate(prev) {
+    // A screen boundary clears when the person moves to another screen.
+    if (this.state.error && this.props.resetKey !== prev.resetKey) this.setState({ error: null });
+  }
+
   render() {
     if (!this.state.error) return this.props.children;
+    if (this.props.screen) {
+      // One screen failed: the rest of the app (menu, other screens) keeps working
+      // (9 Nov 2026 audit: one crash used to replace the whole app).
+      return (
+        <div role="alert" style={{ padding: "var(--space-4, 16px)" }}>
+          <h2 style={{ margin: "0 0 8px", fontSize: 17 }}>This screen couldn't open</h2>
+          <p style={{ margin: "0 0 12px", fontSize: 13.5, color: "var(--text)" }}>
+            Something went wrong on this screen. The rest of Vula still works, and the error has
+            been reported. Try again, or open another screen from the menu.
+          </p>
+          <button onClick={() => this.setState({ error: null })} style={{
+            padding: "8px 16px", border: "none", borderRadius: 6, background: "var(--accent)",
+            color: "var(--on-accent)", fontSize: 13, fontWeight: 600, cursor: "pointer",
+          }}>Try again</button>
+        </div>
+      );
+    }
     return (
       <div style={{
         minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
@@ -37,10 +59,10 @@ export default class ErrorBoundary extends Component {
           maxWidth: 480, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12,
           padding: 24, boxShadow: "0 4px 16px rgba(30,30,30,0.08)",
         }}>
-          <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Something broke</h2>
+          <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Something went wrong</h2>
           <p style={{ margin: "0 0 12px", fontSize: 13.5, color: "var(--text)" }}>
-            This screen hit an unexpected error and can't render. Reloading usually fixes it —
-            if it keeps happening, tell Ian what you clicked right before this showed up.
+            This screen hit an unexpected error. Reloading usually fixes it. The error has been
+            reported; if it keeps happening, tell your Vula contact what you tapped just before.
           </p>
           <pre style={{
             margin: "0 0 16px", fontSize: 11.5, color: "var(--danger)", background: "var(--surface-alt)",

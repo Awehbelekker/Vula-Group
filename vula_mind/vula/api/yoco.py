@@ -62,14 +62,6 @@ def _tenant_team(tenant_id: str) -> list[tuple[str, str, str]]:
         log.debug("team DB lookup skipped: %s", exc)
     return _TENANT_TEAM.get(tenant_id, [])
 
-# Last-resort fallback if the vula_whatsapp_accounts DB lookup fails below — keep in sync
-# with the tenant's CURRENT number (this table went stale for weeks pointing at a retired
-# number and silently 400'd every send; the DB lookup is the source of truth, this is backup only).
-_TENANT_PHONE_IDS: dict[str, str] = {
-    "off-the-hook": "1216487374874418",  # +27 79 178 3933
-    "digg-demo": "1180015145200511",     # +27 66 566 9387
-}
-
 
 async def _notify_order_paid(
     tenant_id: str,
@@ -86,17 +78,15 @@ async def _notify_order_paid(
         await _cs.apply_order_stock(order_id, restore=False)
     except Exception as exc:
         log.debug("order-paid stock decrement skipped: %s", exc)
-    # Resolve the tenant's LIVE WhatsApp creds (phone_id + token), not a hardcoded
-    # (retired) number. Falls back to env/global.
+    # The business's own line (whatsapp._send_creds): never the server's line for a business
+    # whose numbers are disconnected (9 Nov 2026 audit H9). A failed lookup uses the last known
+    # numbers — the hardcoded phone ids that used to back this up went stale for weeks.
     creds = None
     try:
-        from vula.api.whatsapp import _get_tenant_wa_creds
-        creds = await _get_tenant_wa_creds(tenant_id)
+        from vula.api.whatsapp import _send_creds
+        creds = await _send_creds(tenant_id)
     except Exception:
         creds = None
-    if not creds and settings.whatsapp_token and (settings.whatsapp_phone_id or _TENANT_PHONE_IDS.get(tenant_id)):
-        creds = {"token": settings.whatsapp_token,
-                 "phone_id": _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_id}
     if not creds:
         log.info("Order notify: no WhatsApp creds for %s", tenant_id)
         return
@@ -351,7 +341,6 @@ async def yoco_webhook(request: Request) -> dict:
     customer_phone = metadata.get("customer_phone")
     customer_name = metadata.get("customer_name", "")
     display_id = metadata.get("display_id", "")
-    amount_cents = data.get("amount", 0)
 
     # Invoice pay-links carry invoice_id (not order_id) → mark the invoice paid.
     invoice_id = metadata.get("invoice_id")
@@ -368,10 +357,18 @@ async def yoco_webhook(request: Request) -> dict:
 
     if invoice_id and event_type in ("payment.succeeded", "checkout.completed"):
         try:
-            inv = (commerce._client().table("commerce_invoices").select("status")
+            inv = (commerce._client().table("commerce_invoices").select("status,total_cents,total_paid_cents")
                    .eq("tenant_id", tenant_id).eq("id", invoice_id).limit(1).execute().data or [])
-            if inv and inv[0].get("status") == "paid":
+            if not inv:
+                log.warning("Yoco: invoice %s isn't %s's — ignored", invoice_id, tenant_id)
+                return {"received": True}
+            if inv[0].get("status") == "paid":
                 log.info("Invoice %s already paid — duplicate Yoco event ignored", invoice_id)
+                return {"received": True}
+            owed = int(inv[0].get("total_cents") or 0) - int(inv[0].get("total_paid_cents") or 0)
+            if not _paid_enough(data, owed):
+                log.warning("Invoice %s NOT marked paid via Yoco: %s %s paid, %s owed", invoice_id,
+                            data.get("currency"), data.get("amount"), owed)
                 return {"received": True}
             # Routed through the shared service function (not a direct table write) so this
             # also fires the general-ledger posting hook — a direct write here would silently
@@ -392,44 +389,75 @@ async def yoco_webhook(request: Request) -> dict:
         log.warning("Yoco webhook missing order_id in metadata")
         return {"received": True}
 
-    current = await _order_status(order_id)
+    # The order is looked up for the business the signed payload names, never by id alone
+    # (9 Nov 2026 audit S6): the secret that verified this event is that business's own, so a
+    # business could sign a payload naming another business's order id.
+    order = await _order_for(tenant_id, order_id)
+    if not order:
+        log.warning("Yoco %s: order %s isn't %s's — ignored", event_type, order_id, tenant_id or "(no business)")
+        return {"received": True}
+    display_id = order.get("display_id") or display_id
 
     if event_type in ("payment.succeeded", "checkout.completed"):
-        # Idempotent: Yoco retries and sends both payment.succeeded and checkout.completed for
-        # one payment. Only the first transition out of pending_payment notifies anyone —
-        # repeats used to re-send the customer confirmation and re-create approvals/dispatch.
-        if current is not None and current != "pending_payment":
-            log.info("Order %s already %s — duplicate Yoco %s ignored", display_id or order_id, current, event_type)
+        if order.get("status") != "pending_payment":
+            log.info("Order %s already %s — duplicate Yoco %s ignored", display_id, order.get("status"), event_type)
             return {"received": True}
-        await commerce.update_order_status(order_id, "paid")
+        total = int(order.get("total_cents") or 0)
+        if not _paid_enough(data, total):
+            log.warning("Order %s NOT marked paid via Yoco: %s %s paid, %s owed", display_id,
+                        data.get("currency"), data.get("amount"), total)
+            return {"received": True}
+        # One conditional write: of payment.succeeded and checkout.completed arriving together,
+        # only the one that moves the order out of pending_payment tells anyone.
+        paid = await commerce.mark_order_paid(tenant_id, order["id"], "card")
+        if not paid:
+            log.info("Order %s was settled by another event — Yoco %s ignored", display_id, event_type)
+            return {"received": True}
         log.info("Order %s paid via Yoco", display_id)
-
-        # Send WhatsApp confirmation to customer + team alerts
         await _notify_order_paid(
             tenant_id=tenant_id,
             display_id=display_id,
-            order_id=order_id,
-            customer_phone=customer_phone,
-            customer_name=customer_name,
-            amount_cents=amount_cents,
+            order_id=order["id"],
+            customer_phone=order.get("customer_phone") or customer_phone,
+            customer_name=order.get("customer_name") or customer_name,
+            amount_cents=total,
         )
-
 
     elif event_type in ("payment.failed", "checkout.expired"):
         # Only an unpaid order is cancelled (a late "expired" for a checkout that was paid via
         # another link must not cancel a paid order), and the stock reserved for it at checkout
         # (migration 122) is released — it used to stay reserved forever.
-        if current is not None and current != "pending_payment":
-            log.info("Order %s is %s — Yoco %s ignored", display_id or order_id, current, event_type)
+        if not await commerce.cancel_unpaid_order(tenant_id, order["id"]):
+            log.info("Order %s is %s — Yoco %s ignored", display_id, order.get("status"), event_type)
             return {"received": True}
-        await commerce.update_order_status(order_id, "cancelled")
         try:
-            await commerce.apply_order_stock(order_id, restore=True)
+            await commerce.apply_order_stock(order["id"], restore=True)
         except Exception as exc:
             log.warning("stock release after failed payment skipped for %s: %s", order_id, exc)
         log.info("Order %s payment failed/expired", display_id)
 
     return {"received": True}
+
+
+def _paid_enough(data: dict, owed_cents: int) -> bool:
+    """Yoco's stated amount covers what's owed, in rand. No amount, another currency or less
+    than owed: not marked paid (the owner can still record it by hand)."""
+    from vula.api.payments import _amount_covers
+    currency = (data.get("currency") or "ZAR").upper()
+    return currency == "ZAR" and _amount_covers(data.get("amount"), owed_cents)
+
+
+async def _order_for(tenant_id: str, order_id: str) -> Optional[dict]:
+    if not tenant_id or not order_id:
+        return None
+    try:
+        rows = (commerce._client().table("commerce_orders")
+                .select("id,tenant_id,display_id,status,total_cents,customer_phone,customer_name")
+                .eq("tenant_id", tenant_id).eq("id", order_id).limit(1).execute().data or [])
+        return rows[0] if rows else None
+    except Exception as exc:
+        log.warning("order lookup failed for %s/%s: %s", tenant_id, order_id, exc)
+        return None
 
 
 def _yoco_signature_ok(secret: str, raw_body: bytes, legacy_sig: str, headers) -> bool:
@@ -458,16 +486,6 @@ def _yoco_signature_ok(secret: str, raw_body: bytes, legacy_sig: str, headers) -
         if sig and hmac.compare_digest(sig, expected):
             return True
     return False
-
-
-async def _order_status(order_id: str) -> Optional[str]:
-    try:
-        rows = (commerce._client().table("commerce_orders").select("status")
-                .eq("id", order_id).limit(1).execute().data or [])
-        return rows[0].get("status") if rows else None
-    except Exception as exc:
-        log.debug("order status lookup skipped for %s: %s", order_id, exc)
-        return None
 
 
 async def _resolve_reference(tenant_id: str, reference: str) -> tuple[Optional[str], Optional[str], dict]:

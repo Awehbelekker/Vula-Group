@@ -46,11 +46,90 @@ def _now() -> datetime:
 # ── which documents ─────────────────────────────────────────────────────────
 
 def client_documents(tenant_id: str, project: str, business: str = "") -> List[Dict[str, Any]]:
-    """The project's client documents, in the project file's order (tenant-scoped)."""
+    """The project's client documents, in the project file's order (tenant-scoped) — never one that
+    names another of the business's projects (other_projects), unless the owner chose to show it."""
     from vula.commerce import project_file as pf
     sup = pf._Suppliers(pf._supplier_rows(tenant_id), business)
-    rows = pf.organise(pf._documents(tenant_id, project), sup)["rows"]
-    return [r for r in rows if r["client"]]
+    docs = pf._documents(tenant_id, project)
+    rows = pf.organise(docs, sup)["rows"]
+    named = other_projects_by_doc(tenant_id, project, docs)
+    return [r for r in rows if r["client"] and not named.get(str(r["id"]))]
+
+
+def _doc_text(doc: Dict[str, Any]) -> str:
+    f = doc.get("fields") or {}
+    parts = [doc.get("summary") or "", doc.get("filename") or ""]
+    parts += [str(v) for k, v in f.items() if isinstance(v, (str, int, float)) and not str(k).startswith("_")]
+    parts += [str(li.get("description") or "") for li in f.get("line_items") or [] if isinstance(li, dict)]
+    return " ".join(parts)
+
+
+def _related(tenant_id: str, project: str) -> set:
+    """Keys of projects that are the same client's or a phase of this one ("Sporty TV – Phase 2";
+    "Breco Seafoods" and "Atlantis Paarden Eiland" are both Atlantis Foods): naming them is no leak."""
+    from vula.integrations import project_resolver as pr
+    own = pr._key(project)
+    out = {own}
+    try:
+        reg = (_client().table("vula_projects").select("name,client").eq("tenant_id", tenant_id)
+               .limit(500).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        log.debug("project clients read skipped: %s", exc)
+        reg = []
+    mine = next((pr._key(r.get("client") or "") for r in reg if pr._key(r.get("name")) == own), "")
+    for r in reg:
+        k = pr._key(r.get("name"))
+        if (mine and pr._key(r.get("client") or "") == mine) or k.startswith(own + " ") or own.startswith(k + " "):
+            out.add(k)
+    return out
+
+
+def other_projects(tenant_id: str, project: str, doc: Dict[str, Any],
+                   projects: Optional[List[Dict[str, Any]]] = None, related: Optional[set] = None) -> List[str]:
+    """The business's OTHER projects a document names — its site, address or name (10 Nov 2026, DIGG:
+    a skip invoice for Belladonna and Paarden Island, and a Pudlo invoice delivered to HPC's site, were
+    on Belladonna's client link). Matched on a project's full name, its aliases (site addresses), and
+    its long identifying words; a short word only in capitals ("HPC" — never "Life's" in a company
+    name for "Life Changers"). The business's own address is ignored. [] when the owner chose to show
+    the document anyway (fields._show_on_client_link)."""
+    import re
+    from vula.integrations import project_resolver as pr
+    from vula.integrations.doc_filing import without_own_address
+    f = doc.get("fields") or {}
+    if f.get("_show_on_client_link"):
+        return []
+    projects = pr._projects(tenant_id) if projects is None else projects
+    raw = without_own_address(tenant_id, _doc_text(doc))
+    text = " " + pr._key(raw) + " "
+    caps = set(re.findall(r"\b[A-Z]{2,4}\b", raw))
+    related = _related(tenant_id, project) if related is None else related
+    hits = []
+    for p in projects:
+        if pr._key(p["name"]) in related:
+            continue
+        ids = [i for i in p.get("ids") or () if len(i) >= 4 and " " in i or len(i) >= 6]
+        words = [w for w in p.get("words") or () if len(w) >= 5 or w.upper() in caps]
+        if any(f" {i} " in text for i in ids) or any(f" {w} " in text for w in words):
+            hits.append(p["name"])
+    return hits
+
+
+def other_projects_by_doc(tenant_id: str, project: str, docs: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """{doc id: other projects it names} for a project's documents. Fail-open to {} — the check never
+    takes a client's page down."""
+    try:
+        from vula.integrations import project_resolver as pr
+        projects = pr._projects(tenant_id)
+        related = _related(tenant_id, project)
+        out = {}
+        for d in docs:
+            named = other_projects(tenant_id, project, d, projects, related)
+            if named:
+                out[str(d["id"])] = named
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("client link check for other projects skipped: %s", exc)
+        return {}
 
 
 def find(tenant_id: str, project: str, doc_id: str, business: str = "") -> Optional[Dict[str, Any]]:
@@ -59,7 +138,10 @@ def find(tenant_id: str, project: str, doc_id: str, business: str = "") -> Optio
 
 
 def label(row: Dict[str, Any]) -> str:
-    bits = [row.get("supplier") if row.get("by_supplier") else row.get("category"),
+    # the business's own document is labelled with its name, not "<name> (our documents)" (the
+    # project file's internal grouping) — this is what the client sees
+    who = (row.get("supplier") or "").removesuffix(" (our documents)") if row.get("by_supplier") else row.get("category")
+    bits = [who,
             row.get("number") or "", row.get("date") or ""]
     return " · ".join(b for b in bits if b) or (row.get("filename") or "Document")
 

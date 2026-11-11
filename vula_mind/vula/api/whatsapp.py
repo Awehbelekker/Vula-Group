@@ -837,7 +837,12 @@ async def receive_message(
                         _run_bg(_onb.answer(phone, msg, _action), label="vula_number")
                         continue
                     _ps.REPLY_VIA_PLATFORM.set(_as_tenant)
-                    route_tenant, route_mode = _as_tenant, "knowledge"
+                    # Only the business's own people get here (onboard_wa.decide). For a shop, the
+                    # shop-line route sends them to the admin agent, as on its own number; as a
+                    # knowledge line "what orders came in today?" reached the CUSTOMER shopping
+                    # assistant with the owner as the customer (9 Nov 2026 audit H10).
+                    route_tenant = _as_tenant
+                    route_mode = await _aio2.to_thread(_platform_route_mode, _as_tenant)
                 else:
                     route_tenant, route_mode = _resolve_number_route(phone_number_id)
                 # Replies go from the number this message came in on (a business can have several,
@@ -2894,6 +2899,20 @@ def _project_named_in_caption(tenant_id: str, filename: str) -> Optional[str]:
         return None
 
 
+def _project_named_in_text(tenant_id: str, text: str) -> Optional[str]:
+    """The one project a caption's own words name ("Belladonna", "skip slips for HPC"), or None —
+    the strict named match only, never a loose shared word."""
+    if not (text or "").strip() or not tenant_id:
+        return None
+    try:
+        from vula.integrations.project_resolver import resolve
+        r = resolve(tenant_id, {}, text)
+        return r["project"] if r and r.get("kind") == "named" else None
+    except Exception as exc:
+        logger.debug("caption project check skipped: %s", exc)
+        return None
+
+
 def _caption_hint(filename: str) -> str:
     """The caption a photo was named after, or "" for a generated name."""
     stem = (filename or "").rsplit(".", 1)[0].strip()
@@ -3086,6 +3105,22 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
 
 
 async def _handle_document_ingest(
+    phone: str, media_id: str, filename: str, mime_type: str,
+    route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
+    route_mode: Optional[str] = None, caption: str = "",
+) -> None:
+    """One document from a sender, inside its burst (vula/api/doc_batch.py): from the second
+    document in a row, the replies are held and sent as one summary when the last is done."""
+    from vula.api import doc_batch
+    token = doc_batch.enter(phone)
+    try:
+        await _handle_document_ingest_one(phone, media_id, filename, mime_type, route_tenant_id=route_tenant_id,
+                                          content_sha=content_sha, route_mode=route_mode, caption=caption)
+    finally:
+        await doc_batch.leave(phone, token, _send_reply)
+
+
+async def _handle_document_ingest_one(
     phone: str, media_id: str, filename: str, mime_type: str,
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
     route_mode: Optional[str] = None, caption: str = "",
@@ -3597,10 +3632,21 @@ async def _handle_document_ingest(
             file_note, filed_row = await _join_to_first_page(
                 tenant_id, phone, result, local_path, mime_type, doc_category, fields, first_page)
         else:
+            # The project the sender named: in this document's caption (a PDF's caption, or a photo's,
+            # carried in its filename), else in the caption of an earlier document of the same batch
+            # (10 Nov 2026, DIGG: "Belladonna" on the first of 20 skip slips — the rest were asked
+            # about one by one). vula/api/doc_batch.py keeps the batch's project.
+            from vula.api import doc_batch
+            named_project = (_project_named_in_text(tenant_id, caption)
+                             or _project_named_in_caption(tenant_id, filename))
+            if named_project:
+                doc_batch.note_project(phone, named_project)
+            else:
+                named_project = doc_batch.project(phone)
             file_note, filed_row = await _file_uploaded_document(
                 tenant_id, phone, result, local_path, mime_type,
                 doc_category, summary, fields, already_committed=already_committed,
-                project=_project_named_in_caption(tenant_id, filename),
+                project=named_project, doc_text=doc_text,
             )
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
@@ -5028,7 +5074,8 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
         total, vat = cs.vat_inclusive(int(merged.get("total_cents") or 0),
                                       int(merged.get("vat_cents") or 0),
                                       bool(merged.get("amounts_exclude_vat")),
-                                      cs.vat_registered(merged.get("tax_id"), merged.get("supplier_vat_no")))
+                                      cs.vat_registered(merged.get("tax_id"), merged.get("supplier_vat_no")),
+                                      cs._cents_or_none(merged.get("subtotal_cents")))
         note += f", total R{total / 100:,.2f}." if total else "."
         if merged.get("_unverified_figures") or not total:
             return note + " I've not booked the total — please check it in your Invoices tab.", row
@@ -5085,7 +5132,7 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
 
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
                                   category, summary, fields, already_committed=False,
-                                  source="whatsapp", project=None):
+                                  source="whatsapp", project=None, doc_text: str = ""):
     """Match the document to a project and file it (durable copy + record + ClickUp).
     Also books it via the shared commit path (same as email/Smart Scanner) when it's a
     financial category the vision-scan shortcut hasn't already committed.
@@ -5136,7 +5183,9 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             from vula.api.tenants import uses_projects as _up
             if _up(tenant_id):
                 from vula.integrations.project_resolver import resolve as _resolve
-                _named = _resolve(tenant_id, {}, hint)
+                # the document's own words too — a skip invoice prints its site ("07 Belladonna Drive")
+                # but the reading doesn't always copy it into a field (10 Nov 2026, DIGG)
+                _named = _resolve(tenant_id, {}, hint + " " + (doc_text or "")[:8000])
                 if (_named and _named.get("kind") == "named" and not (match or {}).get("chosen")
                         and (match or {}).get("project") != _named["project"]):
                     match = {"project": _named["project"], "clickup_list_id": None,
@@ -5218,7 +5267,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
                 note = (f"📂 Which project is this for?{hint_txt} "
                         f"Reply with the project name and I'll file it (or 'skip').")
-            if row.get("id"):
+            if row.get("id") and row.get("status") != "duplicate":
                 from vula import open_questions
                 open_questions.ask(tenant_id, phone, "doc_project", row["id"],
                                    f"Which project: {result.filename}")
@@ -5228,6 +5277,8 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # Starter tenant at the cap sees the real reason instead of a false "Filed under X".
         if row.get("plan_limit_reached"):
             note = f"📂 {row.get('error')}"
+        elif row.get("status") == "duplicate":
+            note = ""                        # the duplicate notice (row["checks"]) says what happened
 
         unverified = (fields or {}).get("_unverified_figures")
         if not already_committed and category in _FINANCIAL_DOC_CATEGORIES:
@@ -5311,6 +5362,11 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                         tenant_id, name=payee_name, tax_id=pf.get("tax_id"))
                     if match and match.get("auto_apply"):
                         supplier_note = f"🏢 *{payee_name}* is already on your supplier list."
+                    elif match:
+                        # A near match is not a new supplier (10 Nov 2026: "Isoboard" was added next
+                        # to "Isoboard SA (Pty) Ltd" this way). Say which one it looks like instead.
+                        supplier_note = (f"🏢 *{payee_name}* looks like *{match['supplier'].get('name')}* "
+                                         "on your supplier list, so I haven't added it again.")
                     else:
                         details = []
                         if pf.get("payee_bank"):
@@ -5319,7 +5375,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                             details.append(f"Branch code: {pf['payee_branch_code']}")
                         if pf.get("tax_id"):
                             details.append(f"Tax/VAT no: {pf['tax_id']}")
-                        await commerce_service.upsert_supplier(tenant_id, {
+                        saved = await commerce_service.upsert_supplier(tenant_id, {
                             "name": payee_name,
                             "account_number": pf.get("payee_account_number"),
                             "tax_id": pf.get("tax_id"),
@@ -5327,12 +5383,20 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                                      f"added automatically from a {category.lower()} "
                                      f"forwarded {_dt2.now().strftime('%Y-%m-%d')}.",
                         })
-                        supplier_note = f"🏢 Added *{payee_name}* to your supplier list."
+                        if (saved or {}).get("matched_existing"):
+                            supplier_note = (f"🏢 *{payee_name}* is *{saved.get('name')}* on your supplier "
+                                             "list — I've noted the name, not added it again.")
+                        else:
+                            supplier_note = f"🏢 Added *{payee_name}* to your supplier list."
                     note = (note + "\n\n" if note else "") + supplier_note
             except Exception as exc:
                 logger.warning("Supplier auto-add from %s failed for %s: %s",
                               category, result.filename, exc)
 
+        # what the filing checks found (vula/commerce/data_checks.py) — told to whoever sent it
+        if row and row.get("checks"):
+            from vula.commerce.data_checks import notice
+            note = (note + "\n\n" if note else "") + notice(row["checks"])
         return note, row
     except Exception as exc:
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
@@ -5511,6 +5575,15 @@ def _content_fingerprint(category: str, fields: dict) -> str:
         return ""  # not enough distinct identifying signal
     raw = (category or "").lower() + "|" + "|".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+_VAT_WORDS = re.compile(r"\bv\.?\s?a\.?\s?t\b|\bbtw\b|\bexcl(?:\.|uding|usive)?\b|\bincl(?:\.|uding|usive)?\s+vat", re.I)
+
+
+def _document_states_vat(text: str) -> bool:
+    """Whether the document itself mentions VAT ("VAT", "excl.", "excluding VAT", "BTW"). A document
+    that never mentions VAT is never treated as priced excluding it."""
+    return bool(_VAT_WORDS.search(text or ""))
 
 
 async def _analyze_document(tenant_id: str, filename: str, local_path,
@@ -5816,6 +5889,13 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                                          (full_text or text) + ("\n" + plain_text if structured else ""))
             if totals_disagree(checked):
                 checked["_check"] = "subtotal + VAT does not make the total"
+            # "priced excluding VAT" only when the document says so: 10 Nov 2026, DIGG's skip and
+            # Nelito invoices never mention VAT, the model guessed "excluding", and 15% was added
+            # (R2,800 booked as R3,220, R27,100 as R31,165). STE's quotes, which do say "excluding
+            # VAT", are unaffected.
+            if checked.get("amounts_exclude_vat") and not _document_states_vat(
+                    (full_text or text) + "\n" + (plain_text or "")):
+                checked["amounts_exclude_vat"] = False
             result["fields"] = checked
         if result and result.get("category") == "Bill of Quantities (BOQ)":
             result = await _complete_boq_lines(result, local_path, full_text, filename)
@@ -7978,7 +8058,14 @@ async def _get_tenant_wa_creds(tenant_id: str, phone_number_id: Optional[str] = 
             _wa_creds_cache[tenant_id] = rows
             _WA_CREDS_AT[tenant_id] = _t.time()
         except Exception as exc:
-            logger.debug("Supabase WA creds lookup failed for %s: %s", tenant_id, exc)
+            # A failed read is not "no numbers": the last rows we had, however old, else nothing
+            # (9 Nov 2026 audit H9: a database blip sent any business's messages from the
+            # server's line).
+            rows = _wa_creds_cache.get(tenant_id) if isinstance(_wa_creds_cache.get(tenant_id), list) else None
+            logger.warning("WhatsApp line lookup failed for %s (%s): %s", tenant_id,
+                           "using the last known numbers" if rows is not None else "not sending", exc)
+            if rows is None:
+                return None
 
     if rows:
         row = _nums.pick(rows, phone_number_id, to)
@@ -8013,6 +8100,31 @@ async def _get_tenant_wa_creds(tenant_id: str, phone_number_id: Optional[str] = 
     return None
 
 
+def _platform_route_mode(tenant_id: str) -> str:
+    """How a business's own people are handled when they message Vula's number on its behalf:
+    a shop as a shop line (its owner and staff reach the admin agent), anything else as a
+    knowledge line."""
+    from vula import onboard_wa
+    return "commerce" if onboard_wa._sells(tenant_id) else "knowledge"
+
+
+async def _send_creds(tenant_id: str, phone_number_id: Optional[str] = None,
+                      to: Optional[str] = None) -> dict | None:
+    """The line a message for this business goes out on, or None: send nothing.
+
+    With a business: exactly what _get_tenant_wa_creds says. It already uses the server's line
+    for a business that has no number yet (setup), and deliberately says None for one whose
+    numbers are all disconnected. Every send path used to fall back to the server's line on that
+    None too (9 Nov 2026 audit H9), so a disconnected business's reminders and customer messages
+    still went out, from another business's number. Without a business (a reply to a number no
+    business owns): the server's line."""
+    if tenant_id:
+        return await _get_tenant_wa_creds(tenant_id, phone_number_id, to)
+    if settings.whatsapp_token and settings.whatsapp_phone_id:
+        return {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+    return None
+
+
 async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str) -> bool:
     """Send an APPROVED WhatsApp template message. Proactive/scheduled notifications must use a
     template — free text to someone who hasn't messaged recently fails with 'Re-engagement message'
@@ -8023,13 +8135,10 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, str(template)):   # capability benchmark
         return True
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            logger.info("WhatsApp not configured — skipping template send to %s", to)
-            return False
+        logger.info("No WhatsApp line for %s — template not sent to %s", tenant_id or "(none)", to)
+        return False
 
     number = to.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
@@ -8330,10 +8439,7 @@ async def send_template_message(tenant_id: str, to: str, name: str, params: list
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, f"[template {name}] " + " | ".join(str(p) for p in params)):
         return "dry-run"
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
-    if not creds:
-        creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-                 if settings.whatsapp_token and settings.whatsapp_phone_id else None)
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
         logger.error("template %s not sent to %s — no WhatsApp credentials for %s", name, to, tenant_id)
         return None
@@ -8369,10 +8475,7 @@ async def send_template(tenant_id: str, to: str, name: str, params: list,
                         lang: Optional[str] = None) -> bool:
     """Send an approved Meta template with body parameters (works outside the 24-hour window).
     False when it couldn't be sent — logged as an error, never silently."""
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
-    if not creds:
-        creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-                 if settings.whatsapp_token and settings.whatsapp_phone_id else None)
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
         logger.error("template %s not sent to %s — no WhatsApp credentials for %s", name, to, tenant_id)
         return False
@@ -8409,6 +8512,15 @@ async def _send_notify_template(creds: dict, number: str, tenant_id: str) -> boo
     """
     name = (settings.whatsapp_notify_template or "").strip()
     if not name:
+        return False
+    # Once per number per day, across workers (9 Nov 2026 audit H8): the owner digest and the
+    # advisor retry every 15 minutes on a failed send, and each failure used to send this
+    # template again, about 8-12 nudges a morning. Not released on failure, so a refused
+    # template isn't retried all day either.
+    import asyncio as _aio
+    from datetime import date as _date
+    if not await _aio.to_thread(_claim_outbound, tenant_id, f"notify-template:{number}:{_date.today().isoformat()}"):
+        logger.info("notification template already sent to %s today — not again", number)
         return False
     try:
         from vula.api.tenants import get_config
@@ -8634,13 +8746,9 @@ async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
         return
     # The number the message came in on — a message is marked read by the number it was sent to.
     from vula import whatsapp_numbers as _nums
-    creds = (await _get_tenant_wa_creds(tenant_id, (_nums.INBOUND.get() or {}).get("pnid"))
-             if tenant_id else None)
+    creds = await _send_creds(tenant_id, (_nums.INBOUND.get() or {}).get("pnid"))
     if not creds:
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            return
+        return
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
@@ -8714,26 +8822,32 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, message):     # capability benchmark: recorded, not sent
         return True
+    # a reply from a batch of documents is held and sent as one summary (vula/api/doc_batch.py)
+    if not idem_key:
+        from vula.api import doc_batch
+        if doc_batch.capture(to, message, tenant_id):
+            return True
     if idem_key:
         import asyncio as _aio
         if not await _aio.to_thread(_claim_outbound, tenant_id, idem_key):
             logger.info("skipping duplicate automated send %s", idem_key)
             return True
-        ok = await _send_reply(to, message, tenant_id)
+        from vula.api import doc_batch
+        _paused = doc_batch.pause()          # a keyed send (the "Got it") is never held for a batch
+        try:
+            ok = await _send_reply(to, message, tenant_id)
+        finally:
+            doc_batch.resume(_paused)
         if not ok:
             await _aio.to_thread(_release_outbound, tenant_id, idem_key)
         return ok
     message = _sanitize_outbound(message)
     from vula import turns as _turns
     _turns.reply(message, to=to)
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
-        # Try global env var fallback
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            logger.info("WhatsApp not configured — skipping reply to %s", to)
-            return False
+        logger.info("No WhatsApp line for %s — reply not sent to %s", tenant_id or "(none)", to)
+        return False
 
     number = to.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
@@ -8833,13 +8947,10 @@ async def _send_invoice_document(
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, f"[document {filename}] {caption}"):   # capability benchmark
         return True
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
+    creds = await _send_creds(tenant_id, to=to)
     if not creds:
-        if settings.whatsapp_token and settings.whatsapp_phone_id:
-            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-        else:
-            logger.info("WhatsApp not configured — skipping document to %s", to)
-            return False
+        logger.info("No WhatsApp line for %s — document not sent to %s", tenant_id or "(none)", to)
+        return False
 
     number = to.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
@@ -10424,10 +10535,7 @@ async def _send_wa_image(creds: dict, number: str, image_url: str, caption: str 
 
 
 async def _resolve_wa(tenant_id: str, to: Optional[str] = None) -> Optional[dict]:
-    creds = await _get_tenant_wa_creds(tenant_id, to=to) if tenant_id else None
-    if not creds and settings.whatsapp_token and settings.whatsapp_phone_id:
-        creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
-    return creds
+    return await _send_creds(tenant_id, to=to)
 
 
 def _wa_number(phone: str) -> str:
@@ -10884,9 +10992,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     the tenant's own name/catalog — not hardcoded to any one tenant."""
     # Use the tenant's LIVE WhatsApp creds (phone_id + token) — same source as _send_reply —
     # not a hardcoded (retired) number. Falls back to env. Failures fall back to a text menu.
-    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
-    if not creds and settings.whatsapp_token and settings.whatsapp_phone_id:
-        creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+    creds = await _send_creds(tenant_id)
     if not creds:
         logger.info("Commerce welcome: no WhatsApp creds for %s", tenant_id)
         return

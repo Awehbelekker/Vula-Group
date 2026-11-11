@@ -11,8 +11,9 @@ export async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast('Copied') } catch { toast('Copy failed — select and copy it instead', 'danger') }
 }
 
-export function useShopDomain(tenantId) {
-  const base = `${VULA_API}/v1/commerce/${tenantId}/admin/shop-domain`
+/** kind: "shop" (the shop's address) or "links" (where client project links open, 10 Nov 2026). */
+export function useShopDomain(tenantId, kind = 'shop') {
+  const base = `${VULA_API}/v1/commerce/${tenantId}/admin/${kind === 'links' ? 'link-domain' : 'shop-domain'}`
   const [info, setInfo] = useState(null)
   const [domain, setDomain] = useState('')
   const [busy, setBusy] = useState(false)
@@ -53,7 +54,9 @@ export function useShopDomain(tenantId) {
   }
 
   async function remove() {
-    if (!(await confirmDialog('Stop using your own address? Links go back to Vula’s, hidden behind the WhatsApp buttons as before.'))) return
+    if (!(await confirmDialog(kind === 'links'
+      ? 'Stop using your own address for client links? New links go back to Vula’s address; links already sent keep working on both.'
+      : 'Stop using your own address? Links go back to Vula’s, hidden behind the WhatsApp buttons as before.'))) return
     const r = await fetch(base, { method: 'DELETE' })
     if (r.ok) { setInfo(await r.json()); toast('Removed.') }
   }

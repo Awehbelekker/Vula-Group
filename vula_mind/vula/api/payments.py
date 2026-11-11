@@ -83,11 +83,12 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
     if not prov:
         return {"received": True}
     # Load this provider's creds (may differ from default).
-    creds = {}
+    creds, mode = {}, "live"
     try:
-        rows = (payments._client().table("vula_payment_providers").select("credentials")
+        rows = (payments._client().table("vula_payment_providers").select("credentials,mode")
                 .eq("tenant_id", tenant_id).eq("provider", provider).limit(1).execute().data or [])
         creds = payments._decrypt_creds(rows[0].get("credentials") if rows else {})
+        mode = (rows[0].get("mode") if rows else None) or "live"
     except Exception:
         pass
     raw = await request.body()
@@ -113,6 +114,8 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
         result = await prov.verify_webhook(creds, headers, raw, form)
     except Exception as exc:
         log.warning("payment webhook verify failed (%s): %s", provider, exc)
+        return {"received": True}
+    if result and result.get("paid") and provider == "payfast" and not await _payfast_genuine(creds, mode, form):
         return {"received": True}
     if result and result.get("paid") and result.get("reference"):
         ref = result["reference"]
@@ -162,10 +165,12 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
                 elif not _amount_covers(paid_cents, int(o.get("total_cents") or 0)):
                     log.warning("Order %s NOT marked paid via %s: notified amount %s < total %s",
                                 ref, provider, paid_cents, o.get("total_cents"))
+                elif not await cs.mark_order_paid(tenant_id, o["id"], "online"):
+                    # Another notification for the same payment got there first.
+                    log.info("Order %s was settled already — %s notification ignored", ref, provider)
                 else:
-                    db.table("commerce_orders").update(
-                        {"status": "paid", "payment_method": "online", "updated_at": cs._now()}
-                    ).eq("id", o["id"]).eq("status", "pending_payment").execute()
+                    # mark_order_paid posts the sale to the ledger: the direct table write here
+                    # never did, so these orders were missing from the books (9 Nov 2026 audit H4).
                     from vula.api.yoco import _notify_order_paid
                     await _notify_order_paid(
                         tenant_id, o["display_id"], o["id"], o.get("customer_phone"),
@@ -174,6 +179,20 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
         except Exception as exc:
             log.warning("order mark-paid failed: %s", exc)
     return {"received": True}
+
+
+async def _payfast_genuine(creds: dict, mode: str, form: dict) -> bool:
+    """A COMPLETE PayFast ITN is only acted on when it is for this business's merchant account
+    and PayFast itself confirms it (9 Nov 2026 audit S7: a business with no passphrase could be
+    sent a forged one that passed the signature check)."""
+    want = str((creds or {}).get("merchant_id") or "").strip()
+    if not want or str((form or {}).get("merchant_id") or "").strip() != want:
+        log.warning("PayFast ITN for another merchant account ignored")
+        return False
+    if not await payments.payfast_server_confirms(mode, form):
+        log.warning("PayFast ITN not confirmed by PayFast — ignored")
+        return False
+    return True
 
 
 def _amount_covers(paid_cents, owed_cents: int) -> bool:

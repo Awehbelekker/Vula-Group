@@ -29,6 +29,8 @@ NO_PROBE = {
     "216": "widens the commerce_expenses status CHECK only — no table or column to probe",
     "217": "changes a column default and backfills ui_v2 — 215's sentinel already probes the column",
     "241": "sets search_path on three trigger functions (function config) — no table or column to probe",
+    "253": "a column default and two append-only triggers on the ledger — no table or column to probe",
+    "256": "replaces two CHECK constraints on vula_project_terms (adds per_bill) — 255's sentinel probes the table",
 }
 
 
