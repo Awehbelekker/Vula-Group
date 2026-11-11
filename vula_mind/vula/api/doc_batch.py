@@ -25,7 +25,18 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
-GRACE_SECONDS = 20.0
+GRACE_SECONDS = 90.0
+# 11 Nov 2026 (DIGG): ~30 FNB statements forwarded one at a time, 30-90 s apart. Each was read and
+# answered before the next arrived, so every one was "the first of a new burst" and got its own
+# reply (plus a "Got it" every two minutes). A document within PACE_SECONDS of the sender's previous
+# one now joins that batch, and the summary waits GRACE_SECONDS after the last one is done.
+PACE_SECONDS = 180.0
+_last_doc: Dict[str, float] = {}
+
+
+def _clock() -> float:
+    import time
+    return time.monotonic()
 _current: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("doc_batch_sender", default=None)
 
 
@@ -50,13 +61,28 @@ def _key(phone: str) -> str:
 def enter(phone: str) -> contextvars.Token:
     """A document from `phone` starts being worked on."""
     k = _key(phone)
-    b = _bursts.setdefault(k, _Burst())
+    now = _clock()
+    recent = now - _last_doc.get(k, float("-inf")) <= PACE_SECONDS
+    _last_doc[k] = now
+    for other in [p for p, t in _last_doc.items() if now - t > PACE_SECONDS]:
+        _last_doc.pop(other, None)
+    b = _bursts.get(k)
+    if b is None:
+        b = _bursts[k] = _Burst()
+        if recent:
+            b.seen = 1                       # the previous document came moments ago: same batch
     b.active += 1
     b.seen += 1
     if b.flush and not b.flush.done():
         b.flush.cancel()                     # more is coming: hold the summary
     b.flush = None
     return _current.set(k)
+
+
+def continuing(phone: str) -> bool:
+    """This document is not the first of its batch (so the sender already had a "Got it")."""
+    b = _bursts.get(_key(phone))
+    return bool(b and b.seen >= 2)
 
 
 def capture(to: str, message: str, tenant_id: str) -> bool:
