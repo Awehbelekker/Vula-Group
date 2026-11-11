@@ -7905,6 +7905,37 @@ async def admin_data_health(tenant_id: str):
     return await asyncio.to_thread(data_checks.sweep, tenant_id)
 
 
+@router.post("/{tenant_id}/admin/documents/{doc_id}/client-link")
+async def admin_document_client_link(tenant_id: str, doc_id: str, body: dict):
+    """Show a document on its project's client link even though it names another project (or stop
+    showing it): body {show: true|false} (vula/commerce/project_share_docs.other_projects). Read back."""
+    import asyncio
+    from vula.commerce import service as cs
+    show = bool((body or {}).get("show"))
+
+    def _set():
+        db = cs._client()
+        rows = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id).eq("id", doc_id)
+                .limit(1).execute().data or [])
+        if not rows:
+            return None
+        f = dict(rows[0].get("fields") or {})
+        if show:
+            f["_show_on_client_link"] = True
+        else:
+            f.pop("_show_on_client_link", None)
+        db.table("vula_filed_documents").update({"fields": f}).eq("tenant_id", tenant_id).eq("id", doc_id).execute()
+        back = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id).eq("id", doc_id)
+                .limit(1).execute().data or [{}])[0].get("fields") or {}
+        return bool(back.get("_show_on_client_link")) == show
+    ok = await asyncio.to_thread(_set)
+    if ok is None:
+        raise HTTPException(status_code=404, detail="No such document.")
+    if not ok:
+        raise HTTPException(status_code=500, detail="That didn't save — please try again.")
+    return {"id": doc_id, "show_on_client_link": show}
+
+
 @router.get("/{tenant_id}/admin/documents/{doc_id}/site-split")
 async def admin_site_split(tenant_id: str, doc_id: str):
     """An invoice that covers several jobs: its proposed split and the bank payments that could be its

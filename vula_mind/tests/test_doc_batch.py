@@ -118,3 +118,19 @@ async def test_send_reply_holds_document_replies_but_not_the_got_it(monkeypatch)
     await db.leave(PHONE, t1, fake_send, grace=0.01)
     await asyncio.sleep(0.05)
     assert len(out) == 1 and "Filed invoice 1044" in out[0]
+
+
+def test_a_caption_names_the_project_for_the_senders_next_documents(monkeypatch):
+    # 10 Nov 2026, DIGG: "Belladonna" on the first of 20 skip slips, sent a few minutes apart
+    import time
+    db._recent_project.clear()
+    assert db.project(PHONE) is None
+    t = db.enter(PHONE)
+    db.note_project(PHONE, "Belladonna")
+    assert db.project(PHONE) == "Belladonna"
+    asyncio.run(db.leave(PHONE, t, lambda *a: None, grace=0.01))
+    assert db.project(PHONE) == "Belladonna"                       # the next slip, a minute later
+    assert db.project("27820000000") is None                        # never another sender's
+    later = time.monotonic() + db.CAPTION_MINUTES * 60 + 1
+    monkeypatch.setattr(time, "monotonic", lambda: later)
+    assert db.project(PHONE) is None                                # an hour later: asked again

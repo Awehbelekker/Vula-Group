@@ -270,6 +270,35 @@ def unallocated_job_payments(tenant_id: str, days: int = 120) -> Dict[str, Any]:
                       for r in sorted(mine, key=lambda r: str(r.get("txn_date") or ""), reverse=True)[:25]]}
 
 
+def kept_off_links(tenant_id: str) -> List[Dict[str, Any]]:
+    """Documents on a project with a live client link that the link leaves off because they name
+    another of the business's projects (vula/commerce/project_share_docs.other_projects) — the owner
+    sees why, and can show one anyway."""
+    from vula.commerce import project_file as pf, project_share_docs as sd
+    shares = _rows(lambda: _client().table("vula_project_shares").select("project,expires_at,revoked_at")
+                   .eq("tenant_id", tenant_id).is_("revoked_at", "null"))
+    now = datetime.now(timezone.utc).isoformat()
+    out = []
+    for project in sorted({s["project"] for s in shares if str(s.get("expires_at") or "") > now}):
+        try:
+            docs = pf._documents(tenant_id, project)
+            organised = {str(r["id"]): r for r in pf.organise(docs, pf._Suppliers([], ""))["rows"]}
+            for doc_id, named in sd.other_projects_by_doc(tenant_id, project, docs).items():
+                row = organised.get(doc_id)
+                if not row or not row.get("client_ok", row.get("client", True)):
+                    continue
+                d = next(x for x in docs if str(x["id"]) == doc_id)
+                f = d.get("fields") or {}
+                what = " ".join(x for x in (str(f.get("supplier") or ""), str(f.get("document_number") or "")) if x) \
+                    or d.get("filename") or "A document"
+                out.append({"id": doc_id, "project": project, "filename": d.get("filename"),
+                            "detail": f"{what} names {', '.join(named)} — kept off {project}'s client link",
+                            "action": "show_anyway"})
+        except Exception as exc:  # noqa: BLE001
+            log.debug("kept-off check skipped for %s: %s", project, exc)
+    return out
+
+
 def link_warnings(tenant_id: str) -> List[Dict[str, Any]]:
     """The owner's warnings for every project with a live client link."""
     from vula.commerce import project_tracker as pt
@@ -297,6 +326,7 @@ _TITLES = {
     "duplicates": "Suppliers on file more than once",
     "unallocated": "Job payments in the bank with no project",
     "multi_site": "Invoices for several jobs — confirm the split",
+    "other_project": "Kept off a client link: names another of your projects",
 }
 
 
@@ -309,6 +339,10 @@ def sweep(tenant_id: str) -> Dict[str, Any]:
             sections.append({"code": code, "title": _TITLES[code], "count": len(items), "items": items[:25], **extra})
 
     add("link", link_warnings(tenant_id))
+    try:
+        add("other_project", kept_off_links(tenant_id))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("kept-off list skipped: %s", exc)
     docs = _documents(tenant_id)
     found = document_issues(docs)
     try:

@@ -206,9 +206,13 @@ def own_address_phrases(tenant_id: str) -> list:
 
 
 def without_own_address(tenant_id: str, text: str) -> str:
+    """The text without the business's own street address. Any spacing or line break between its
+    words (10 Nov 2026: a skip invoice prints "Digg Architects 22 \nPorterfield Road", so the address
+    wasn't removed and every slip addressed to DIGG also "named" the Porterfield project)."""
     out = text or ""
     for ph in own_address_phrases(tenant_id):
-        out = re.sub(re.escape(ph), " ", out, flags=re.IGNORECASE)
+        pattern = r"\b" + r"[\s,]+".join(re.escape(w) for w in ph.split()) + r"\b"
+        out = re.sub(pattern, " ", out, flags=re.IGNORECASE)
     return out
 
 
