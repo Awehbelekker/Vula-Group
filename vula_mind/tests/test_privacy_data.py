@@ -68,7 +68,8 @@ def test_erase_removes_every_conversation_store_for_this_number_only():
         out = privacy_data.erase(T, ME)
     assert out["failed"] == []
     assert out["removed"] == {"chat_messages": 3, "conversations": 3, "turn_records": 1,
-                              "question_log": 1, "open_questions": 1, "escalations": 1, "client_note": 1}
+                              "question_log": 1, "open_questions": 1, "escalations": 1, "client_note": 1,
+                              "private_notes": 0}        # a customer: no staff notes to remove
     assert [r["client_key"] for r in db.rows["commerce_client_summaries"]] == ["27820000009"]
     # nothing of theirs is left in this business
     assert [r["phone"] for r in db.rows["vula_chat_messages"]] == [OTHER, ME]       # other person; other business

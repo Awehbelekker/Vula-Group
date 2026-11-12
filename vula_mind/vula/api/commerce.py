@@ -1822,6 +1822,17 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
     if person is not None and person.access is not None and not person.access:
         raise HTTPException(status_code=403, detail="Your login has no access to this workspace.")
 
+    # Their own private notes ("remember that I…", "what do you remember about me") are handled
+    # in code and never written to the chat history (vula/personal_memory.py).
+    from vula import personal_memory
+    notes_block = ""
+    if person is not None:
+        import asyncio as _asyncio
+        note_reply = await _asyncio.to_thread(personal_memory.handle, person, body.message, "dashboard")
+        if note_reply:
+            return {"answer": note_reply, "ok": True, "private": True}
+        notes_block = await personal_memory.load(person)
+
     metadata: Dict[str, Any] = {"session_id": session_key, "channel": "dashboard"}
     user_label = "Customer"
     if person is not None:
@@ -1844,12 +1855,15 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
         history = service.format_history(
             await service.get_recent_messages(tenant_id, sid, limit=service.DEFAULT_HISTORY_LIMIT),
             user_label=user_label)
+        if person is not None:      # their own thread: what they raised earlier in the week
+            history += await service.earlier_topics(tenant_id, sid)
     except Exception as exc:
         log.debug("Assistant session/history load failed (non-fatal): %s", exc)
 
     from core import voice
     skill = get_skill("commerce_admin")
-    with voice.use(tenant_id, "team", "dashboard", person.prefs if person is not None else None):
+    with voice.use(tenant_id, "team", "dashboard", person.prefs if person is not None else None), \
+            personal_memory.use(notes_block):
         out = await skill(SkillInput(
             question=body.message, tenant_id=tenant_id,
             conversation_history=history, metadata=metadata,

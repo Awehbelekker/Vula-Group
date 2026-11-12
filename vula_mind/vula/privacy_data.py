@@ -106,6 +106,11 @@ def _erase_client_note(tenant_id: str, variants: List[str]) -> int:
     return client_memory.erase(tenant_id, variants)
 
 
+def _erase_private_notes(tenant_id: str, variants: List[str]) -> int:
+    from vula import personal_memory
+    return personal_memory.erase_for_phone(tenant_id, variants)
+
+
 # (label, step). Order matters only for readability; each step stands alone.
 ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("chat_messages", _erase_chat_messages),
@@ -115,6 +120,7 @@ ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("open_questions", _erase_open_questions),
     ("escalations", _erase_escalations),
     ("client_note", _erase_client_note),
+    ("private_notes", _erase_private_notes),
 ]
 
 

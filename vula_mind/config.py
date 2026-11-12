@@ -493,6 +493,17 @@ class Settings(BaseSettings):
     # One local model call per conversation. Off = nothing is written or shown.
     client_memory_enabled: bool = False
 
+    # ── Private notes (vula/personal_memory.py) ──────────────────────────────
+    # A staff member can ask Vula to remember something about them ("remember that I…"). It is
+    # kept for that person only, encrypted, and shown to the assistant only when they are the
+    # one talking. Nothing is saved unless they ask. Off = the phrases are not recognised and
+    # nothing is stored or shown.
+    personal_memory_enabled: bool = False
+    # A staff member's own thread with Vula also gets a few of their own messages from earlier in
+    # the week, cut short and marked as old (vula/commerce/service.py::earlier_topics), so
+    # planning that spans days isn't lost at the 24-hour history window. No model call.
+    history_earlier_topics_enabled: bool = False
+
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every
     # keyword silently falls through to the generic "reasoning" skill (the exact mechanism

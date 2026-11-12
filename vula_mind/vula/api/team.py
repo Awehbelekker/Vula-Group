@@ -178,6 +178,13 @@ async def update_member(tenant: str, member_id: str, body: MemberPatch,
 async def remove_member(tenant: str, member_id: str,
                         identity: dict = Depends(require_tenant_admin)) -> dict:
     try:
+        # Their private notes go with them (vula/personal_memory.py) — first, so a failure here
+        # never leaves notes behind for a member who no longer exists.
+        try:
+            from vula import personal_memory
+            personal_memory.erase_member(tenant, member_id)
+        except Exception as exc:
+            log.warning("private notes not removed for a removed member (tenant=%s): %s", tenant, exc)
         _client().table("vula_team_members").delete().eq("id", member_id).eq("tenant_id", tenant).execute()
         _team_index.invalidate(tenant)
         merchant_audit.audit(tenant, identity, "member_removed", member_id=member_id)

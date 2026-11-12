@@ -7,7 +7,9 @@ another person's settings through these routes.
 Mounted under /v1/commerce, so the paths are /v1/commerce/{tenant_id}/admin/me/… and pass the
 same membership guard as the rest of the tenant admin API.
 
-  GET/PATCH  /{tenant_id}/admin/me/prefs    how Vula talks to me (core/voice.py)
+  GET/PATCH  /{tenant_id}/admin/me/prefs          how Vula talks to me (core/voice.py)
+  GET/POST   /{tenant_id}/admin/me/memory         what Vula remembers about me (vula/personal_memory.py)
+  DELETE     /{tenant_id}/admin/me/memory[/{id}]  forget one note, or all of them
 """
 from __future__ import annotations
 
@@ -85,3 +87,72 @@ async def set_my_prefs(tenant_id: str, body: PrefsPatch, request: Request) -> di
     team_index.invalidate(tenant_id)
     saved = rows[0].get("prefs") if isinstance(rows[0], dict) else None
     return {"ok": True, "prefs": voice.clean_prefs(saved if isinstance(saved, dict) else prefs)}
+
+
+# ── what Vula remembers about me (vula/personal_memory.py) ───────────────────────────────────
+
+class NoteIn(BaseModel):
+    text: str
+
+
+def _memory_on() -> None:
+    from vula import personal_memory
+    if not personal_memory.enabled():
+        raise HTTPException(status_code=404, detail="Private notes aren't switched on for this workspace.")
+
+
+@router.get("/{tenant_id}/admin/me/memory")
+async def get_my_memory(tenant_id: str, request: Request) -> dict:
+    """Everything Vula is keeping about me. Only ever the caller's own notes."""
+    import asyncio
+    from vula import personal_memory
+    person = await _me(tenant_id, request)
+    if not personal_memory.enabled():
+        return {"enabled": False, "notes": []}
+    try:
+        notes = await asyncio.to_thread(personal_memory.notes, person)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't read your notes ({exc}). Run migration 259?")
+    return {"enabled": True, "limit": personal_memory.MAX_NOTES, "notes": notes}
+
+
+@router.post("/{tenant_id}/admin/me/memory")
+async def add_my_memory(tenant_id: str, body: NoteIn, request: Request) -> dict:
+    """Ask Vula to remember something about me. Typing it here is the consent."""
+    import asyncio
+    from vula import personal_memory
+    _memory_on()
+    person = await _me(tenant_id, request)
+    try:
+        out = await asyncio.to_thread(personal_memory.remember, person, body.text, "dashboard")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't save that ({exc}). Run migration 259?")
+    if out.get("saved"):
+        return {"ok": True, "saved": out["saved"]}
+    detail = {"empty": "Write what you'd like me to remember.",
+              "full": f"I'm already keeping {personal_memory.MAX_NOTES} things about you. Remove one first."}
+    raise HTTPException(status_code=400 if out.get("error") in detail else 503,
+                        detail=detail.get(out.get("error"), "That wasn't saved. Please try again."))
+
+
+@router.delete("/{tenant_id}/admin/me/memory/{note_id}")
+async def forget_my_note(tenant_id: str, note_id: str, request: Request) -> dict:
+    """Forget one of my notes. Someone else's note id is simply not found."""
+    import asyncio
+    from vula import personal_memory
+    _memory_on()
+    person = await _me(tenant_id, request)
+    if not await asyncio.to_thread(personal_memory.forget, person, note_id):
+        raise HTTPException(status_code=404, detail="That note wasn't found.")
+    return {"ok": True}
+
+
+@router.delete("/{tenant_id}/admin/me/memory")
+async def forget_all_my_memory(tenant_id: str, request: Request) -> dict:
+    """Forget everything Vula is keeping about me."""
+    import asyncio
+    from vula import personal_memory
+    _memory_on()
+    person = await _me(tenant_id, request)
+    removed = await asyncio.to_thread(personal_memory.forget_all, person)
+    return {"ok": True, "removed": removed}

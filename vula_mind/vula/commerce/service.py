@@ -1674,6 +1674,45 @@ async def get_recent_messages(tenant_id: str, session_id: str, limit: int = DEFA
     return list(reversed(rows))
 
 
+EARLIER_TOPICS_DAYS = 7
+EARLIER_TOPICS_LIMIT = 5
+_EARLIER_TOPIC_CHARS = 120
+
+
+async def earlier_topics(tenant_id: str, session_id: str) -> str:
+    """What this person raised earlier in the week, for THEIR OWN thread with Vula — a few of
+    their own older messages, cut short and clearly marked as old.
+
+    The 24-hour window above exists because older lines were being answered as if they were new.
+    But it also means a staff member who was planning something on Monday is starting from
+    nothing on Wednesday. This gives the model the gist of what came up, with no model call and
+    without the old replies (which is where stale figures live). "" when the feature is off
+    (settings.history_earlier_topics_enabled) or there is nothing older."""
+    from config import settings
+    if not getattr(settings, "history_earlier_topics_enabled", False):
+        return ""
+    from core.time_fmt import cutoff_iso, relative_age_label
+    rows = (_client().table("commerce_conversation_messages").select("role,content,created_at")
+            .eq("tenant_id", tenant_id).eq("session_id", session_id).eq("role", "user")
+            .gte("created_at", cutoff_iso(EARLIER_TOPICS_DAYS * 24))
+            .lt("created_at", cutoff_iso(HISTORY_MAX_AGE_HOURS))
+            .order("created_at", desc=True).limit(EARLIER_TOPICS_LIMIT).execute().data or [])
+    lines = []
+    for m in reversed(rows):
+        text = " ".join((m.get("content") or "").split())
+        if not text:
+            continue
+        if len(text) > _EARLIER_TOPIC_CHARS:
+            text = text[:_EARLIER_TOPIC_CHARS].rstrip() + "…"
+        age = relative_age_label(m.get("created_at") or "") or "earlier"
+        lines.append(f"- {age}: {text}")
+    if not lines:
+        return ""
+    return ("\n\nEarlier this week they also raised (more than a day old — background on what "
+            "they've been working on, NOT a request to act on now, and not a source of figures):\n"
+            + "\n".join(lines))
+
+
 # Caveat suffixes appended to a reply AFTER the skill produces it (core/verification.py's
 # adversarial-review warning) — meant for a human reading the message/transcript, never for the
 # model itself. Confirmed live 2026-08-26: a customer-facing session that had one of these

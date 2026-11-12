@@ -29,6 +29,8 @@ function routes(role, modules = []) {
   const C = `^/v1/commerce/${T}`;
   const A = `${C}/admin`;
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
+  // A copy per page, so adding or forgetting a note in one test never leaks into the next.
+  const myNotes = F.myNotes.map((n) => ({ ...n }));
   return [
     // ── tenant / member / brand ──
     r("GET", `^/v1/tenants/?`, () => F.tenantsList),
@@ -352,6 +354,10 @@ function routes(role, modules = []) {
     r("POST", `${A}/assistant`, (m, url, req) => ({ answer: `Today: 4 orders, R 1 842.50 paid. (${req.postDataJSON()?.message})` })),
     r("GET", `${A}/agent-activity`, () => ({ events: F.agentEvents })),
     r("GET", `${A}/assistant/history`, () => ({ messages: [] })),
+    r("GET", `${A}/me/memory`, () => ({ enabled: true, limit: 30, notes: myNotes })),
+    r("POST", `${A}/me/memory`, (m, url, req) => { myNotes.push({ id: `n${Date.now()}`, text: req.postDataJSON()?.text }); return { ok: true }; }),
+    r("DELETE", `${A}/me/memory/${T}`, (m) => { const i = myNotes.findIndex((n) => n.id === m[m.length - 1]); if (i >= 0) myNotes.splice(i, 1); return { ok: true }; }),
+    r("DELETE", `${A}/me/memory`, () => { myNotes.length = 0; return { ok: true, removed: 1 }; }),
     r("GET", `${A}/me/prefs`, () => F.myVula),
     r("PATCH", `${A}/me/prefs`, (m, url, req) => ({ ok: true, prefs: req.postDataJSON() || {} })),
     r("GET", `${A}/persona`, () => F.persona),

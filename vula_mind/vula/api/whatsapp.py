@@ -2546,6 +2546,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # can't name them, and the generic label stays.
     caller_name, caller_role = _caller_identity(tenant_id, phone)
 
+    # Their own private notes ("remember that I…") — before anything is saved to the history.
+    if await _private_note_reply(tenant_id, phone, text):
+        _note_handler("private_note")
+        return
+
     # Only a known team member teaches Vula corrections. On a dedicated line every sender gets
     # role "admin" (the number identifies the tenant), so before 2026-09-29 a member of the
     # public's reply could be captured as an "owner correction" and learned.
@@ -7728,22 +7733,68 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
     # Who this reply is for decides its voice: the business's own people get the team voice and
     # their own style; anyone else gets the customer voice (core/voice.py).
     insider = (not phone) or _is_insider(caller_role) or _is_tenant_owner(tenant_id, phone)
+    from vula import personal_memory
+    notes = await _private_notes_block(tenant_id, phone) if (insider and phone) else ""
     with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)), \
             voice.use(tenant_id, "team" if insider else "customer", "whatsapp" if phone else "dashboard",
-                      _voice_prefs(tenant_id, phone) if insider else None):
+                      _voice_prefs(tenant_id, phone) if insider else None), \
+            personal_memory.use(notes):
         return await _rag_reply_inner(tenant_id, question, conversation_history, phone,
                                       caller_name=caller_name, caller_role=caller_role)
 
 
-def _voice_prefs(tenant_id: str, phone: str) -> Optional[dict]:
-    """The staff member's own style choices (how they like Vula to talk to them), or None."""
+def _staff_person(tenant_id: str, phone: str):
+    """The team member writing from this number (vula/identity.py), or None."""
     try:
         from vula.identity import person_for_phone
-        person = person_for_phone(tenant_id, phone)
-        return dict(person.prefs) if person else None
+        return person_for_phone(tenant_id, phone) if phone else None
     except Exception as exc:  # noqa: BLE001
-        logger.debug("voice prefs skipped: %s", exc)
+        logger.debug("staff person lookup skipped: %s", exc)
         return None
+
+
+def _voice_prefs(tenant_id: str, phone: str) -> Optional[dict]:
+    """The staff member's own style choices (how they like Vula to talk to them), or None."""
+    person = _staff_person(tenant_id, phone)
+    return dict(person.prefs) if person else None
+
+
+async def _private_notes_block(tenant_id: str, phone: str) -> str:
+    """What this staff member asked Vula to remember about them, for the assistant that is
+    about to answer THEM (vula/personal_memory.py). "" for anyone else."""
+    try:
+        from vula import personal_memory
+        return await personal_memory.load(_staff_person(tenant_id, phone))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("private notes skipped: %s", exc)
+        return ""
+
+
+async def _private_note_reply(tenant_id: str, phone: str, text: str) -> bool:
+    """A staff member's "remember that I…", "what do you remember about me" or "forget note 2":
+    handled in code, replied to, and kept out of the chat history and the turn record — the
+    note itself is the only thing stored, encrypted. True when this message was one of those."""
+    try:
+        from vula import personal_memory
+        if not personal_memory.enabled():
+            return False
+        person = _staff_person(tenant_id, phone)
+        if person is None:
+            return False
+        import asyncio as _asyncio
+        reply = await _asyncio.to_thread(personal_memory.handle, person, text, "whatsapp")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("private note handling skipped: %s", exc)
+        return False
+    if not reply:
+        return False
+    try:
+        from vula import turns as _turns
+        _turns.mark_private()
+    except Exception:  # noqa: BLE001
+        pass
+    await _send_reply(phone, reply, tenant_id)
+    return True
 
 
 async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
@@ -9812,6 +9863,10 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
             await _send_reply(phone, costing_reply, tenant_id)
             return True
 
+    # Their own private notes ("remember that I…") — before the session or history is touched.
+    if await _private_note_reply(tenant_id, phone, text):
+        return True
+
     admin_session_key = f"admin:{phone}"
     history = ""
     session_id: Optional[str] = None
@@ -9829,6 +9884,7 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
             await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT),
             user_label=(f"{_who} ({_who_role})" if _who and _who_role else (_who or "Owner")),
         )
+        history += await commerce_service.earlier_topics(tenant_id, session_id)
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)
 
@@ -9904,7 +9960,9 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     # below (_run_with_holding_message), so an owner isn't left wondering if anything is
     # happening during a real live-IMAP round trip.
     from core import voice
-    with voice.use(tenant_id, "team", "whatsapp", _voice_prefs(tenant_id, phone)):
+    from vula import personal_memory
+    _notes = await _private_notes_block(tenant_id, phone)
+    with voice.use(tenant_id, "team", "whatsapp", _voice_prefs(tenant_id, phone)), personal_memory.use(_notes):
         output = await _run_with_holding_message(
             phone, tenant_id,
             skill(

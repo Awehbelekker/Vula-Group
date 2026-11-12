@@ -236,6 +236,15 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
         parts.append(who_block)
     if agentic:
         parts.append(AGENTIC_RULES)
+    try:
+        # Things the person talking asked Vula to remember about themselves — set by the entry
+        # point only when that person is the caller (vula/personal_memory.py). Empty otherwise.
+        from vula import personal_memory
+        notes_block = personal_memory.current_block()
+        if notes_block:
+            parts.append(notes_block)
+    except Exception:  # noqa: BLE001
+        pass
     if voice_block:
         # Last, after every rule: style is the lowest priority and says so itself.
         parts.append(voice_block)

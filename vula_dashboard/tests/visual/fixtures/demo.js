@@ -1089,6 +1089,8 @@ export const agentEvents = [
   { kind: "route", task: "document_extract", escalated: true, reason: "local GPU unreachable", at: "2026-10-16T15:20:00Z" },
 ];
 export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name.", team_voice_prompt: "Relaxed and direct. We're a small team." };
+// "What Vula remembers about you" — the signed-in person's private notes (assistant/MyVula.jsx).
+export const myNotes = [{ id: "n1", text: "I prefer the numbers first, then the detail" }, { id: "n2", text: "I'm off on Fridays" }];
 // "How Vula talks to you" — the signed-in person's own style (assistant/MyVula.jsx).
 export const myVula = {
   known: true, name: "Demo Owner", prefs: { style: "friendly", reply_length: "short" },

@@ -1575,7 +1575,39 @@ async def master_turns(tenant_id: Optional[str] = None, phone: Optional[str] = N
         rows = q.limit(max(1, min(int(limit), 200))).execute().data or []
     except Exception as exc:
         return {"turns": [], "error": f"turn record unavailable (run migration 195?): {exc}"}
-    return {"turns": rows}
+    return {"turns": _without_staff_words(rows)}
+
+
+_STEP_KEYS_KEPT = ("step", "ms", "name", "skill", "route", "outcome", "error", "model", "verified")
+
+
+def _without_staff_words(rows: list) -> list:
+    """What a business's own people write to Vula is private to them, including from the
+    operator (owner's decision, 12 Nov 2026). Their turns still show here — that something was
+    asked, which skill and tools ran, how long it took, and any error — but not the message,
+    the replies, or step details that could quote either. If it can't be told whose a turn is,
+    it is treated as a staff member's."""
+    from vula.identity import is_staff_thread, staff_phone_digits
+    staff_by_tenant: dict = {}
+    out = []
+    for r in rows:
+        tid = r.get("tenant_id")
+        if tid not in staff_by_tenant:
+            try:
+                staff_by_tenant[tid] = staff_phone_digits(tid) if tid else None
+            except Exception as exc:
+                log.warning("turns: staff lookup failed for %s (%s) — hiding the words", tid, exc)
+                staff_by_tenant[tid] = None
+        staff = staff_by_tenant[tid]
+        if staff is not None and not is_staff_thread(r.get("phone"), staff):
+            out.append(r)
+            continue
+        out.append({**r, "text": None, "private": True,
+                    "replies": [{"kind": x.get("kind"), "ms": x.get("ms")} for x in (r.get("replies") or [])
+                                if isinstance(x, dict)],
+                    "steps": [{k: st[k] for k in _STEP_KEYS_KEPT if k in st} for st in (r.get("steps") or [])
+                              if isinstance(st, dict)]})
+    return out
 
 
 # ── Decision benchmark (31 Oct 2026): Jev against today's classifiers ───────────────────────

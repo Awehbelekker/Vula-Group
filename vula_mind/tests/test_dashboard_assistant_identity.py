@@ -124,3 +124,31 @@ def test_a_restricted_dashboard_member_is_not_offered_money_tools():
     assert offered and not (offered & money)
     everything = {t["function"]["name"] for t in ca._restrict_to_access(tools, ca._ctx_access(T, {"access": None}))}
     assert offered < everything
+
+
+# ── continuity beyond the 24-hour window ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_earlier_topics_are_their_own_older_messages_cut_short_and_marked_old():
+    from datetime import datetime, timedelta, timezone
+    from config import settings
+
+    def ago(**kw):
+        return (datetime.now(timezone.utc) - timedelta(**kw)).isoformat()
+
+    db = FakeSupabase({"commerce_conversation_messages": [
+        {"tenant_id": T, "session_id": "s1", "role": "user", "content": "help me plan the December roster " + "x" * 200, "created_at": ago(days=3)},
+        {"tenant_id": T, "session_id": "s1", "role": "assistant", "content": "Sales were R9,999.00", "created_at": ago(days=3)},
+        {"tenant_id": T, "session_id": "s1", "role": "user", "content": "today's question", "created_at": ago(hours=2)},
+        {"tenant_id": T, "session_id": "s1", "role": "user", "content": "too old to matter", "created_at": ago(days=20)},
+        {"tenant_id": T, "session_id": "s2", "role": "user", "content": "someone else's thread", "created_at": ago(days=3)},
+    ]})
+    with patch.object(service, "_client", return_value=db):
+        assert await service.earlier_topics(T, "s1") == ""                 # off by default
+        with patch.object(settings, "history_earlier_topics_enabled", True):
+            block = await service.earlier_topics(T, "s1")
+            assert await service.earlier_topics(T, "nothing-here") == ""
+    assert "help me plan the December roster" in block and block.count("\n- ") == 1
+    assert "NOT a request to act on now" in block and "…" in block
+    for absent in ("R9,999.00", "today's question", "too old", "someone else"):
+        assert absent not in block

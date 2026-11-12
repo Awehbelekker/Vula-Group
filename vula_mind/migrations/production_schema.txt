@@ -150,6 +150,7 @@ vula_open_questions: answer:text, answered_at:timestamptz, asked_at:timestamptz,
 vula_page_versions: created_at:timestamptz, id:uuid, page_id:uuid, puck_data:jsonb, seo:jsonb, status:text, title:text
 vula_pages: created_at:timestamptz, id:uuid, puck_data:jsonb, seo:jsonb, slug:text, sort_order:int4, status:text, tenant_id:text, title:text, updated_at:timestamptz
 vula_payment_providers: active:bool, created_at:timestamptz, credentials:jsonb, id:uuid, is_default:bool, mode:text, provider:text, tenant_id:text, updated_at:timestamptz
+vula_personal_memory: content:text, created_at:timestamptz, id:uuid, member_id:uuid, source:text, tenant_id:text, user_id:uuid
 vula_platform_feedback: created_at:timestamptz, id:uuid, message:text, phone:text, sender_name:text, status:text, tenant_id:text
 vula_platform_state: key:text, updated_at:timestamptz, value:text
 vula_price_observations: created_at:timestamptz, description:text, doc_id:text, id:uuid, kind:text, norm_key:text, observed_on:date, project:text, quantity:numeric, section:text, source_kind:text, supplier:text, tenant_id:text, unit:text, unit_price_cents:int8
