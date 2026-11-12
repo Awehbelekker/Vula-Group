@@ -156,6 +156,25 @@ class ReasoningSkill(BaseSkill):
                 sources=sources,
             )
 
+        # A question about THIS business's own facts (hours, delivery, address, policies) with no
+        # document of its own to answer from. The shared KB, the web and model memory can't know
+        # them, so there is nothing to fall back on: say so. A customer's reply is marked low
+        # confidence, which hands the question to a person (vula/escalation.py); the team is
+        # told how to give Vula the answer. Behind settings.strict_tenant_grounding.
+        if not kb_context:
+            from config import settings as _settings
+            from core.skills.base import (BUSINESS_FACT_NOT_ON_FILE_CUSTOMER, BUSINESS_FACT_NOT_ON_FILE_TEAM,
+                                          looks_like_business_specific_question)
+            if (getattr(_settings, "strict_tenant_grounding", False)
+                    and looks_like_business_specific_question(inp.question)):
+                _record("no_doc")
+                insider = kb_learning.is_insider(role)
+                return SkillOutput(
+                    answer=BUSINESS_FACT_NOT_ON_FILE_TEAM if insider else BUSINESS_FACT_NOT_ON_FILE_CUSTOMER,
+                    skill_name=self.name, confidence=0.3, sources=sources,
+                    verification={"verifier": "deterministic.business_fact_not_on_file",
+                                  "outcome": "accepted", "escalated": False, "extra": {}})
+
         # 2026-09-17: before ever guessing OR spending a web search, check Vula's own curated
         # shared knowledge — general SA construction (vula_training) and general SA small-
         # business (business_basics) content, already proven safe and already consulted by

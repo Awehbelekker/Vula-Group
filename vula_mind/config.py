@@ -504,6 +504,19 @@ class Settings(BaseSettings):
     # planning that spans days isn't lost at the 24-hour history window. No model call.
     history_earlier_topics_enabled: bool = False
 
+    # ── Accuracy (12 Nov 2026) ───────────────────────────────────────────────
+    # A question about this business's own facts (hours, delivery, address, policies) with no
+    # document of its own behind it is declined instead of answered from general knowledge or a
+    # web search (core/skills/reasoning.py). Expect more "I don't have that" and more hand-offs
+    # to a person until the business profile is filled in.
+    strict_tenant_grounding: bool = False
+    # Short replies with no figures ("Yes, we deliver to Paarl") are checked by the second-opinion
+    # pass when the business's documents were retrieved for them (core/verification.py).
+    verify_short_assertions: bool = False
+    # A follow-up ("and for next week?") is routed with the previous message and the skill that
+    # answered it in view, and the last skill survives a restart (vula/route_memory.py).
+    follow_up_routing_enabled: bool = False
+
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every
     # keyword silently falls through to the generic "reasoning" skill (the exact mechanism

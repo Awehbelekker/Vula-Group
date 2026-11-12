@@ -1870,14 +1870,17 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
         ))
     answer = out.answer if (out.success and out.answer) else (out.error or "Sorry, I couldn't process that just now.")
 
+    message_id = None
     if sid:
         try:
             await service.append_message(tenant_id, sid, "user", body.message)
-            await service.append_message(tenant_id, sid, "assistant", strip_caveat(answer))
+            message_id = await service.append_message(tenant_id, sid, "assistant", strip_caveat(answer))
         except Exception:
             pass
 
-    return {"answer": answer, "ok": bool(out.success and out.answer)}
+    # session_id + message_id let the person rate this reply (👍/👎), like a reply in the Inbox.
+    return {"answer": answer, "ok": bool(out.success and out.answer),
+            "session_id": sid, "message_id": message_id if isinstance(message_id, str) else None}
 
 
 @router.get("/{tenant_id}/admin/assistant/history")
@@ -1897,7 +1900,8 @@ async def admin_assistant_history(tenant_id: str, request: Request,
     except Exception as exc:
         log.debug("assistant history load failed: %s", exc)
         return {"messages": []}
-    return {"messages": [{"id": m.get("id"), "role": m.get("role"), "content": m.get("content"),
+    return {"session_id": rows[0]["id"],
+            "messages": [{"id": m.get("id"), "role": m.get("role"), "content": m.get("content"),
                           "created_at": m.get("created_at")}
                          for m in msgs if m.get("role") in ("user", "assistant")]}
 

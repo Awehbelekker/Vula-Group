@@ -4,8 +4,8 @@
  * and the agent takes real actions through the admin tools. Works full-page (Assistant tab) and
  * inside the Quick Launcher's sheet (inSheet).
  */
-import { Send, Sparkles } from 'lucide-react'
-import { Button, Input } from '../ui/index.jsx'
+import { Send, Sparkles, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { Button, IconButton, Input } from '../ui/index.jsx'
 import { SUGGESTIONS, useAssistantChat } from './useAssistantChat'
 import MyVula from './MyVula'
 import './assistant.css'
@@ -20,6 +20,14 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
         {x.messages.map((m, i) => (
           <li key={i} className={`vas-msg vas-msg--${m.role === 'user' ? 'me' : 'vula'}`}>
             <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.text}
+            {m.role !== 'user' && m.id && (
+              <span className="vas-rate" role="group" aria-label="Rate this reply">
+                <IconButton Icon={ThumbsUp} label="Good answer" quiet aria-pressed={m.rating === 'up'}
+                  className={m.rating === 'up' ? 'vas-rate--on' : ''} onClick={() => x.rate(m, 'up')} />
+                <IconButton Icon={ThumbsDown} label="Wrong or unhelpful" quiet aria-pressed={m.rating === 'down'}
+                  className={m.rating === 'down' ? 'vas-rate--on' : ''} onClick={() => x.rate(m, 'down')} />
+                {m.rateError && <span className="vas-warn" role="alert">Couldn't save that rating.</span>}
+              </span>)}
           </li>))}
         {x.sending && <li className="vas-msg vas-msg--vula vas-typing" aria-label="Vula is typing"><span /><span /><span /></li>}
         <li ref={x.endRef} aria-hidden="true" className="vas-end" />

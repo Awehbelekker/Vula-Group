@@ -217,6 +217,18 @@ def _figures(text: str) -> set:
     return {re.sub(r"[,  ]", "", m).rstrip(".") for m in _FIGURE_RE.findall(text or "")} - {""}
 
 
+def _short_assertions_on() -> bool:
+    try:
+        return bool(getattr(settings, "verify_short_assertions", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _has_documents(sources: list) -> bool:
+    return any(isinstance(s, dict) and "kb" in (s.get("type") or "") and s.get("text")
+               for s in (sources or []))
+
+
 def nothing_to_check(answer: str, sources: list) -> str:
     """Why the second-opinion pass can be skipped, or "" to run it. 2026-10-15: one SeedleMe
     reply in five carried "⚠️ Worth double-checking" — including "Today's sales are R0.00 from 0
@@ -228,7 +240,16 @@ def nothing_to_check(answer: str, sources: list) -> str:
     figures = _figures(answer)
     if not figures:
         words = len((answer or "").split())
-        if (answer or "").rstrip().endswith("?") or words <= 30:
+        if (answer or "").rstrip().endswith("?"):
+            return "no_figures_short"
+        if words <= 30:
+            # A short reply with no figures used to be skipped outright — which let a flat
+            # "Yes, we deliver to Paarl" through unchecked. When the business's own documents
+            # were retrieved for this answer there IS something to check it against, and a
+            # short yes/no is exactly where an invented fact hides. Acknowledgements and
+            # one-word replies still skip. Behind settings.verify_short_assertions.
+            if _short_assertions_on() and words >= 4 and _has_documents(sources):
+                return ""
             return "no_figures_short"
         return ""
     tool_text = " ".join(str(s.get("text", "")) for s in sources if s.get("type") == "tool")

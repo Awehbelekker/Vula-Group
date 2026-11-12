@@ -647,6 +647,80 @@ _POSSESSIVE_RE = re.compile(
     r"\b(my|our|ons|we|this project|hierdie projek|the client|die klant)\b", re.IGNORECASE)
 
 
+# A question about THIS business's own facts — when it's open, where it delivers, what it
+# charges for delivery, its address, its policies, how it takes payment, who to speak to. Only
+# the business can state these: the shared knowledge base holds general guidance, the web holds
+# other businesses, and a model's memory holds nothing about this one. With no document of the
+# business's own to answer from, the honest reply is "I don't have that" — the reasoning skill
+# used to answer these from general knowledge with a caveat, or from a web search that didn't
+# even include the business's name.
+_BUSINESS_FACT_TOPIC = re.compile(
+    r"\b("
+    r"open(?:ing)?\s+(?:hours?|times?)|trading\s+hours?|business\s+hours?|closing\s+time|"
+    r"(?:what|which)\s+(?:time|days?)\s+(?:do|are|is)\b|open\s+(?:on|today|tomorrow|now|this)|"
+    r"closed?\s+(?:on|today|tomorrow)|"
+    r"deliver(?:y|ies|ing)?\b|collect(?:ion)?\b|pick\s*-?\s*up|shipping|courier|"
+    r"address|located|location|directions|branch(?:es)?|where\s+(?:are|is)\b|"
+    r"(?:returns?|refunds?|exchange|cancellation|warranty|guarantee|privacy)\s+polic(?:y|ies)|"
+    r"refund|warranty|guarantee|"
+    r"payment\s+(?:methods?|options?|terms)|(?:accept|take)\s+(?:cards?|cash|eft|snapscan|zapper)|"
+    r"minimum\s+order|lead\s+time|turnaround|"
+    r"(?:phone|contact|whatsapp)\s+(?:number|details)|email\s+address|"
+    r"who\s+(?:is|are|do\s+i)\b|"
+    # Afrikaans
+    r"oop|lewer\w*|aflewer\w*|afhaal|adres|terugbetaling|waarborg"
+    r")\b", re.IGNORECASE)
+# …asked of the business itself ("do YOU deliver", "what are OUR hours", "the shop's address").
+_BUSINESS_SELF = re.compile(
+    r"\b(you|your|yours|u|ur|we|our|ours|us|the\s+(?:shop|store|business|company|office|restaurant|"
+    r"salon|practice|clinic|studio)|julle|jou|ons|die\s+winkel)\b", re.IGNORECASE)
+
+
+def looks_like_business_specific_question(text: str) -> bool:
+    """True for a question about this business's own facts (hours, delivery, address, policies,
+    payment, contacts) — something only the business itself can state. General questions on the
+    same subjects ("what does a typical returns policy say?") have no "you/our/the shop" and
+    are not matched."""
+    t = text or ""
+    return bool(_BUSINESS_FACT_TOPIC.search(t) and _BUSINESS_SELF.search(t))
+
+
+BUSINESS_FACT_NOT_ON_FILE_TEAM = (
+    "I don't have that on file for the business, so I won't guess. If you tell me, I can keep it "
+    "for next time (say \"remember that we…\"), or you can add it to the business profile.")
+BUSINESS_FACT_NOT_ON_FILE_CUSTOMER = (
+    "I don't have that information on file, and I don't want to give you a wrong answer.")
+
+
+def grounding_of(sources: Any) -> str:
+    """What an answer rested on, as one label for the turn record: the business's own documents
+    ("kb"), a tool or the database ("records"), Vula's shared guidance ("shared"), the web
+    ("web"), or nothing ("none"). The strongest present wins."""
+    kinds = {str((s or {}).get("type") or "") for s in (sources or []) if isinstance(s, dict)}
+    if any(k in ("tool", "database") for k in kinds):
+        return "records"
+    if any(k in ("kb", "tenant_kb") for k in kinds):
+        return "kb"
+    if "training_kb" in kinds:
+        return "shared"
+    if "web" in kinds:
+        return "web"
+    return "none"
+
+
+def source_names(sources: Any, limit: int = 6) -> str:
+    """The documents and tools behind an answer, by name only (never their text), for the turn
+    record — so a wrong answer can be traced to what it was read from."""
+    names: List[str] = []
+    for s in (sources or []):
+        if not isinstance(s, dict):
+            continue
+        n = str(s.get("filename") or s.get("name") or "").strip()
+        if n and n not in names:
+            names.append(n)
+    return "; ".join(names[:limit])
+
+
 def looks_like_tenant_data_question(text: str, require_possessive: bool = False) -> bool:
     """True if `text` is shaped like a question about the tenant's OWN records (an invoice,
     expense, BOQ, project, payment) rather than general knowledge. `require_possessive=True`
@@ -1223,6 +1297,10 @@ class BaseSkill(ABC):
             pass
         _turn_note_skill(self.name, confidence=result.confidence, latency_ms=result.latency_ms,
                          error=result.error, sources=len(result.sources or []),
+                         # What the answer rested on and which documents or tools it read —
+                         # names only — so a wrong answer can be traced to its source.
+                         grounding=grounding_of(result.sources),
+                         source_names=source_names(result.sources) or None,
                          verified=(result.verification or {}).get("outcome"))
         return result
 

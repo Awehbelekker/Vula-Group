@@ -15,6 +15,7 @@ export function useAgentActivity(tenantId) {
 
   const [persona, setPersona] = useState("");
   const [suggested, setSuggested] = useState("");
+  const [quality, setQuality] = useState(null);
   const [teamVoice, setTeamVoice] = useState("");
   const [teamMsg, setTeamMsg] = useState("");
   const [voiceMsg, setVoiceMsg] = useState("");
@@ -35,6 +36,15 @@ export function useAgentActivity(tenantId) {
     setTeamVoice(d.team_voice_prompt || "");
   }, [tenantId]);
   useEffect(() => { loadPersona(); }, [loadPersona]);
+
+  // How well Vula answered this week: counts only (vula/quality.py). Absent on failure.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/quality`)
+      .then(r => (r.ok ? r.json() : null)).then(d => { if (!cancelled) setQuality(d); })
+      .catch(() => { if (!cancelled) setQuality(null); });
+    return () => { cancelled = true; };
+  }, [tenantId]);
 
   const savePersona = async (text) => {
     setVoiceMsg("Saving…");
@@ -82,5 +92,5 @@ export function useAgentActivity(tenantId) {
     setTimeout(() => setMsg(""), 4000);
   };
 
-  return { events, q, setQ, a, setA, msg, persona, setPersona, suggested, voiceMsg, analyzing, load, savePersona, analyzeVoice, teach, teamVoice, setTeamVoice, teamMsg, saveTeamVoice }
+  return { events, q, setQ, a, setA, msg, persona, setPersona, suggested, voiceMsg, analyzing, load, savePersona, analyzeVoice, teach, teamVoice, setTeamVoice, teamMsg, saveTeamVoice, quality }
 }

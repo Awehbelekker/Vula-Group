@@ -36,7 +36,8 @@ export function useAssistantChat(tenantId) {
       .then(r => (r.ok ? r.json() : { messages: [] }))
       .then(d => {
         const earlier = (d.messages || []).filter(m => m.content)
-          .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.content }))
+          .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.content,
+            id: m.role === 'user' ? null : m.id, sessionId: d.session_id }))
         // Only fill an untouched chat: never overwrite something typed while this loaded.
         if (!cancelled && earlier.length) setMessages(m => (m.length === 1 ? [...m, ...earlier] : m))
       })
@@ -56,7 +57,8 @@ export function useAssistantChat(tenantId) {
         body: JSON.stringify({ message: msg, session_id: sessionId.current }),
       })
       const d = await r.json()
-      setMessages(m => [...m, { role: 'assistant', text: d.answer || "Sorry, I couldn't process that." }])
+      setMessages(m => [...m, { role: 'assistant', text: d.answer || "Sorry, I couldn't process that.",
+        id: d.message_id || null, sessionId: d.session_id || null }])
     } catch {
       setMessages(m => [...m, { role: 'assistant', text: 'Connection error — please try again.' }])
     } finally {
@@ -64,5 +66,22 @@ export function useAssistantChat(tenantId) {
     }
   }
 
-  return { messages, input, setInput, sending, endRef, send }
+  // 👍/👎 on a reply — the same record a rating in the Inbox makes. Only the rating is sent: this
+  // is the person's own thread, so what was asked and answered is not copied anywhere.
+  async function rate(message, rating) {
+    if (!message.id || !message.sessionId) return
+    const before = message.rating
+    setMessages(m => m.map(x => (x.id === message.id ? { ...x, rating, rateError: false } : x)))
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${message.sessionId}/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: message.id, rating }),
+      })
+      if (!r.ok) throw new Error('not saved')
+    } catch {
+      setMessages(m => m.map(x => (x.id === message.id ? { ...x, rating: before, rateError: true } : x)))
+    }
+  }
+
+  return { messages, input, setInput, sending, endRef, send, rate }
 }

@@ -7635,9 +7635,16 @@ _STICKY_SKILLS = {"email_admin", "commerce_admin", "finance_admin", "calculation
 _LAST_SKILL: dict = {}
 
 
-def _remember_skill(tenant_id: str, phone: str, skill: Optional[str]) -> None:
+def _remember_skill(tenant_id: str, phone: str, skill: Optional[str], question: str = "") -> None:
     if tenant_id and phone and skill in _STICKY_SKILLS:
         _LAST_SKILL[(tenant_id, phone)] = (skill, time.time())
+    # Also kept where a restart and the other worker can find it, and with the question it
+    # answered, so the classifier can tell a follow-up from a new subject (vula/route_memory.py).
+    try:
+        from vula import route_memory
+        route_memory.remember(tenant_id, phone, skill, question, sticky=skill in _STICKY_SKILLS)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("route memory skipped: %s", exc)
 
 
 # The last real request from this person (not a bare "proceed"), for 30 minutes — so "Proceed" /
@@ -7675,7 +7682,13 @@ def _last_skill(tenant_id: str, phone: str) -> Optional[str]:
     hit = _LAST_SKILL.get((tenant_id, phone))
     if hit and time.time() - hit[1] < _STICKY_TTL:
         return hit[0]
-    return None
+    # Not in this process's memory (a restart, or the other worker answered last time).
+    try:
+        from vula import route_memory
+        return route_memory.sticky(tenant_id, phone, allowed=_STICKY_SKILLS)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("route memory skipped: %s", exc)
+        return None
 
 
 def _kb_audience_for(tenant_id: str, phone: str, caller_role: Optional[str]) -> Optional[str]:
@@ -7999,18 +8012,23 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
         # commerce_admin/commerce_assistant's calls into this helper. Safe when phone is empty
         # (the dashboard-chat caller, vula/api/chat.py) — _run_with_holding_message's own
         # try/except swallows a failed send with no effect on the real result.
-        result = await _run_with_holding_message(
-            phone, tenant_id,
-            runner.run(
-                question=question,
-                tenant_id=tenant_id,
-                conversation_history=conversation_history,
-                metadata=metadata,
-                max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
-                max_tokens=700,    # room to hold working facts + show code calcs
-                top_k=5,           # retrieve enough to surface the right clause/doc
-            ),
-        )
+        # The router sees one message at a time; give it what this person asked last and which
+        # skill answered, so "and for next week?" isn't routed as a brand-new subject.
+        from core.hrm.orchestrator import route_context
+        from vula import route_memory
+        with route_context(route_memory.latest(tenant_id, phone) if phone else None):
+            result = await _run_with_holding_message(
+                phone, tenant_id,
+                runner.run(
+                    question=question,
+                    tenant_id=tenant_id,
+                    conversation_history=conversation_history,
+                    metadata=metadata,
+                    max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
+                    max_tokens=700,    # room to hold working facts + show code calcs
+                    top_k=5,           # retrieve enough to surface the right clause/doc
+                ),
+            )
         if result.final_answer and result.final_answer.strip():
             logger.info(
                 "Agent answered tenant=%s skill=%s confidence=%.2f",
@@ -8018,7 +8036,7 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
             )
             _note_route("agent", skill=result.skill_used)
             if _is_insider(caller_role):
-                _remember_skill(tenant_id, phone, result.skill_used)
+                _remember_skill(tenant_id, phone, result.skill_used, question)
             try:
                 _LAST_CONF.set(float(result.confidence or 0.0))
             except Exception:

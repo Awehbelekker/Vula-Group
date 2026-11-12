@@ -1512,11 +1512,13 @@ async def set_session_language(tenant_id: str, session_key: str, language: str) 
         logger.debug("set_session_language skipped (run migration 052?): %s", exc)
 
 
-async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> None:
-    """Persist a single conversation turn and update the session snapshot."""
+async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> str:
+    """Persist a single conversation turn and update the session snapshot. Returns the new
+    message's id (so a reply can be rated — the dashboard chat had no way to say "that's wrong")."""
+    message_id = str(uuid.uuid4())
     _client().table("commerce_conversation_messages").insert(
         {
-            "id": str(uuid.uuid4()),
+            "id": message_id,
             "tenant_id": tenant_id,
             "session_id": session_id,
             "role": role,
@@ -1535,6 +1537,7 @@ async def append_message(tenant_id: str, session_id: str, role: str, content: st
         }).eq("id", session_id).execute()
     except Exception:
         pass
+    return message_id
 
 
 async def set_session_paused(tenant_id: str, session_id: str, paused: bool,

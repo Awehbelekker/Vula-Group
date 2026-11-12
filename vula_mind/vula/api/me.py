@@ -10,6 +10,9 @@ same membership guard as the rest of the tenant admin API.
   GET/PATCH  /{tenant_id}/admin/me/prefs          how Vula talks to me (core/voice.py)
   GET/POST   /{tenant_id}/admin/me/memory         what Vula remembers about me (vula/personal_memory.py)
   DELETE     /{tenant_id}/admin/me/memory[/{id}]  forget one note, or all of them
+
+Also here, because it is small and belongs to the same Assistant page:
+  GET        /{tenant_id}/admin/quality            how well Vula is answering (vula/quality.py)
 """
 from __future__ import annotations
 
@@ -156,3 +159,15 @@ async def forget_all_my_memory(tenant_id: str, request: Request) -> dict:
     person = await _me(tenant_id, request)
     removed = await asyncio.to_thread(personal_memory.forget_all, person)
     return {"ok": True, "removed": removed}
+
+
+# ── how well Vula is answering (vula/quality.py) ─────────────────────────────────────────────
+
+@router.get("/{tenant_id}/admin/quality")
+async def answer_quality(tenant_id: str, days: int = 7) -> dict:
+    """Four numbers for the last `days` days: answers backed by the business's own records,
+    answers Vula was unsure of, replies marked wrong, and questions handed to a person. Counts
+    only — nothing anyone wrote is returned."""
+    import asyncio
+    from vula import quality
+    return await asyncio.to_thread(quality.weekly, tenant_id, max(1, min(int(days), 90)))

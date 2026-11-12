@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -192,6 +194,23 @@ _ARCHITECTURE_WEAK_KEYWORDS = [
 _ARCHITECTURE_WEAK_BUSINESS_TYPES = {"services", "trades"}
 
 
+# What this person asked last and which skill answered it, for the classifier (see
+# _classifier_prompt). Set by the entry point for one turn; empty everywhere else, and only used
+# when settings.follow_up_routing_enabled.
+_ROUTE_CONTEXT: ContextVar[Optional[dict]] = ContextVar("vula_route_context", default=None)
+
+
+@contextmanager
+def route_context(previous: Optional[dict]):
+    """`previous` is {"skill", "question"} (vula/route_memory.py::latest) or None."""
+    on = bool(getattr(settings, "follow_up_routing_enabled", False))
+    token = _ROUTE_CONTEXT.set(previous if (on and previous) else None)
+    try:
+        yield
+    finally:
+        _ROUTE_CONTEXT.reset(token)
+
+
 class HRMOrchestrator:
     def __init__(
         self,
@@ -369,9 +388,21 @@ class HRMOrchestrator:
 
     def _classifier_prompt(self, prompt: str) -> str:
         options = ", ".join(SKILL_KEYWORDS.keys())
+        # The classifier used to see the bare message, so "and for next week?" could only ever
+        # come back as 'none'. When the entry point knows what this person asked last and which
+        # skill answered it (route_context), the classifier is told.
+        context = ""
+        prev = _ROUTE_CONTEXT.get()
+        if prev and prev.get("skill") in SKILL_KEYWORDS:
+            said = f' Their previous message was: "{prev["question"]}".' if prev.get("question") else ""
+            context = (f"Context:{said} It was handled by '{prev['skill']}'. If this request only "
+                       f"makes sense as a follow-up to that (for example 'and for next week?' or "
+                       f"'what about the other one'), pick '{prev['skill']}'. If it is a new "
+                       f"subject, ignore the context.\n")
         return (f"Pick the ONE best-fitting skill for this request from this exact "
                 f"list: {options}. If none clearly fits, reply 'none'. Reply with only "
                 f"the skill name, nothing else.\n"
+                f"{context}"
                 f"Request: {prompt}")
 
     @staticmethod
