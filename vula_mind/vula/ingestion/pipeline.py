@@ -223,6 +223,7 @@ class OCRProcessor:
     def __init__(self, ollama_base: str = OLLAMA_BASE):
         self.ollama_base = ollama_base
         self._local_ocr_failures = 0
+        self.last_local_model: Optional[str] = None     # the reader of the last clean local read
 
     def _local_ocr_disabled(self) -> bool:
         return self._local_ocr_failures >= self._LOCAL_OCR_FAILURE_LIMIT
@@ -256,16 +257,12 @@ class OCRProcessor:
             return "Text Recognition:"
         return general_prompt
 
-    async def process_image(self, image_path: Path) -> str:
-        """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
-        failure, timeout, OR a hallucinated-looking response, then to local pytesseract as the
-        last resort."""
-        import base64
-        with open(image_path, "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode()
-
-        prompt = "Parse this document to Markdown. Extract all text, tables, and structure accurately."
-
+    async def read_local(self, image_b64: str, prompt: str, doc_reader_only: bool = False) -> tuple:
+        """Read one page image on the local box only: (text, clean). clean is False when local was
+        skipped or failed, or the text looks invented (then text may still hold what came back).
+        doc_reader_only: only the document reader (MODEL_DOC_OCR), never the general vision model
+        — the Smart Scanner's text path, which has its own vision fallback."""
+        self.last_local_model = None
         local_text = ""
         # Skip the local model entirely when the shared health probe already knows the tunnel
         # is unreachable (its result is cached ~30s, so this is nearly free and shared across
@@ -275,6 +272,8 @@ class OCRProcessor:
         local_model = None
         if not self._local_ocr_disabled():
             local_model = await self._local_reader()
+            if doc_reader_only and local_model != DOC_OCR_MODEL:
+                return "", False
         if self._local_ocr_disabled():
             logger.info("local OCR skipped — %d consecutive failures this run",
                         self._local_ocr_failures)
@@ -311,7 +310,8 @@ class OCRProcessor:
                     local_text = resp.json().get("response", "").strip()
                     if local_text and not self._looks_hallucinated(local_text):
                         self._local_ocr_failures = 0     # healthy again
-                        return local_text
+                        self.last_local_model = local_model
+                        return local_text, True
                     if local_text:
                         self._local_ocr_failures += 1
                         logger.warning(f"Local OCR ({local_model}) output looks hallucinated (bracket placeholders) — "
@@ -320,6 +320,21 @@ class OCRProcessor:
                 self._local_ocr_failures += 1
                 logger.warning(f"Local OCR ({local_model}) failed ({self._local_ocr_failures} in a row), "
                                f"escalating to cloud vision: {type(e).__name__}: {e}")
+        return local_text, False
+
+    async def process_image(self, image_path: Path) -> str:
+        """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
+        failure, timeout, OR a hallucinated-looking response, then to local pytesseract as the
+        last resort."""
+        import base64
+        with open(image_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+
+        prompt = "Parse this document to Markdown. Extract all text, tables, and structure accurately."
+
+        local_text, clean = await self.read_local(image_b64, prompt)
+        if clean:
+            return local_text
 
         # 2026-08-17: cloud vision isn't immune either — reproduced live, the SAME image
         # hallucinated on 2 of 3 consecutive cloud vision calls (identical bracket-placeholder
