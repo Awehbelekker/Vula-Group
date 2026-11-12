@@ -122,7 +122,8 @@ def get_tracker() -> IngestionTracker:
 # ─── Config (from settings / .env) ───────────────────────────────────────────
 OLLAMA_BASE = settings.ollama_base
 QDRANT_BASE = settings.qdrant_base
-GLM_OCR_MODEL = settings.model_ocr
+GLM_OCR_MODEL = settings.model_ocr          # fallback page reader (general vision)
+DOC_OCR_MODEL = settings.model_doc_ocr      # preferred page reader (document OCR)
 EMBED_MODEL = settings.model_embed
 CHUNK_SIZE = settings.chunk_size
 CHUNK_OVERLAP = settings.chunk_overlap
@@ -226,6 +227,35 @@ class OCRProcessor:
     def _local_ocr_disabled(self) -> bool:
         return self._local_ocr_failures >= self._LOCAL_OCR_FAILURE_LIMIT
 
+    async def _local_reader(self) -> Optional[str]:
+        """The local model to read this page with, or None to skip local.
+
+        12 Nov 2026: three pages of a scanned DIGG form each waited the full 90 s for the general
+        vision model (MODEL_OCR) and got nothing back. The document reader (MODEL_DOC_OCR,
+        GLM-OCR) is used when the box has it; otherwise MODEL_OCR, as before. The probe checks the
+        model is installed, so a missing one is skipped at once instead of costing 90 s."""
+        try:
+            from core.llm_router import ollama_available as _oa
+        except Exception:
+            return GLM_OCR_MODEL
+        try:
+            if not await _oa():
+                return None
+            for model in dict.fromkeys(m for m in (DOC_OCR_MODEL, GLM_OCR_MODEL) if m):
+                if await _oa(model=model):
+                    return model
+            return None
+        except Exception:
+            return GLM_OCR_MODEL
+
+    @staticmethod
+    def _local_prompt(model: str, general_prompt: str) -> str:
+        """GLM-OCR reads with its own task prompts ("Text Recognition:"); given a free-form
+        instruction it may not stop, which on a busy card runs past the 90 s limit."""
+        if (model or "").split(":")[0].lower() == "glm-ocr":
+            return "Text Recognition:"
+        return general_prompt
+
     async def process_image(self, image_path: Path) -> str:
         """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
         failure, timeout, OR a hallucinated-looking response, then to local pytesseract as the
@@ -235,17 +265,6 @@ class OCRProcessor:
             image_b64 = base64.b64encode(f.read()).decode()
 
         prompt = "Parse this document to Markdown. Extract all text, tables, and structure accurately."
-        payload = {
-            "model": GLM_OCR_MODEL,
-            "prompt": prompt,
-            "images": [image_b64],
-            "stream": False,
-            # 2026-10-25: this call bypasses litellm entirely (raw httpx to Ollama's own API), so
-            # it was NOT covered by core/llm_router.py's install_ollama_auth num_ctx cap — it
-            # silently inherited whatever OLLAMA_CONTEXT_LENGTH the Ollama app's own settings had
-            # (observed at 262144 in the 2026-10-24 eviction incident). Set it explicitly here too.
-            "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
-        }
 
         local_text = ""
         # Skip the local model entirely when the shared health probe already knows the tunnel
@@ -253,17 +272,31 @@ class OCRProcessor:
         # every pipeline stage / document). 2026-09-10: with the SA GPU box 503-ing, every
         # OCR call was still trying local first, failing, and escalating — one payment PDF hit
         # that path ~6 times across its ingest/bank-check/scanner stages.
-        try:
-            from core.llm_router import ollama_available as _oa
-            _local_up = await _oa()
-        except Exception:
-            _local_up = True
+        local_model = None
+        if not self._local_ocr_disabled():
+            local_model = await self._local_reader()
         if self._local_ocr_disabled():
             logger.info("local OCR skipped — %d consecutive failures this run",
                         self._local_ocr_failures)
-        elif not _local_up:
-            logger.info("local OCR skipped — Ollama tunnel unreachable (health probe)")
+        elif not local_model:
+            logger.info("local OCR skipped — Ollama tunnel unreachable or no reader installed "
+                        "(health probe)")
         else:
+            payload = {
+                "model": local_model,
+                "prompt": self._local_prompt(local_model, prompt),
+                "images": [image_b64],
+                "stream": False,
+                # Pages of one document arrive back to back: keep the reader loaded between them
+                # (Ollama still unloads it if the card needs the room for another model).
+                "keep_alive": "10m",
+                # 2026-10-25: this call bypasses litellm entirely (raw httpx to Ollama's own API),
+                # so it was NOT covered by core/llm_router.py's install_ollama_auth num_ctx cap —
+                # it silently inherited whatever OLLAMA_CONTEXT_LENGTH the Ollama app's own
+                # settings had (observed at 262144 in the 2026-10-24 eviction incident). Set it
+                # explicitly here too.
+                "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
+            }
             try:
                 # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
                 # (same ones llm_router uses) or this call is blocked at the edge with a redirect
@@ -281,12 +314,12 @@ class OCRProcessor:
                         return local_text
                     if local_text:
                         self._local_ocr_failures += 1
-                        logger.warning(f"GLM-OCR output looks hallucinated (bracket placeholders) — "
+                        logger.warning(f"Local OCR ({local_model}) output looks hallucinated (bracket placeholders) — "
                                        f"escalating to cloud vision instead of trusting it: {local_text[:200]!r}")
             except Exception as e:
                 self._local_ocr_failures += 1
-                logger.warning(f"GLM-OCR failed ({self._local_ocr_failures} in a row), "
-                               f"escalating to cloud vision: {e}")
+                logger.warning(f"Local OCR ({local_model}) failed ({self._local_ocr_failures} in a row), "
+                               f"escalating to cloud vision: {type(e).__name__}: {e}")
 
         # 2026-08-17: cloud vision isn't immune either — reproduced live, the SAME image
         # hallucinated on 2 of 3 consecutive cloud vision calls (identical bracket-placeholder
