@@ -504,11 +504,12 @@ class Settings(BaseSettings):
     decision_api_url: str = "https://openrouter.ai/api/alpha/decisions"
     decision_timeout_s: float = 1.0
     decision_min_confidence: float = 0.75
-    # Monday-morning advisor WhatsApp to each owner (vula/owner_advisor.py). Off until the team
-    # has previewed it per tenant in Master › Conversations.
+    # Monday-morning advisor WhatsApp to each owner (vula/owner_advisor.py). This is the platform
+    # default: a business that switched it on or off itself (Team › Briefs, vula/owner_briefs.py)
+    # keeps its own choice.
     owner_advisor_enabled: bool = False
-    # Weekday-morning money digest to owners (vula/owner_digest.py). Off until previewed with
-    # the owner, like the weekly advisor.
+    # Weekday-morning brief to owners (vula/owner_digest.py): money plus what needs a person
+    # today. Platform default, like the weekly advisor; each business can switch it for itself.
     owner_digest_enabled: bool = False
     # Daily automatic re-read of documents missing a required detail (vula/commerce/doc_quality.py),
     # each tried once; at most this many per tenant per day. 0 turns it off.

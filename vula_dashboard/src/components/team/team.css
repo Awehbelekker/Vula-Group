@@ -62,3 +62,4 @@
 .vtm-tasks > ul { list-style: none; margin: 0; padding: 0; }
 .vtm-task { padding: var(--space-2) 0; border-bottom: 1px solid var(--line); color: var(--ink); }
 .vtm-task:last-child { border-bottom: 0; }
+.vtm-brief-preview { white-space: pre-wrap; font: var(--fs-caption)/1.5 var(--font-sans); color: var(--ink); background: var(--surface-2); border-radius: var(--radius-md); padding: var(--space-2); margin: var(--space-2) 0 var(--space-3); max-width: 100%; overflow-wrap: anywhere; }

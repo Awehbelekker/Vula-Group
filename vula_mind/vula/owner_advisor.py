@@ -12,7 +12,8 @@ WhatsApp built ONLY from real rows — never a model, never a figure that isn't 
   waiting         documents filed but not yet put on a project
 
 A section with nothing to say is left out; a week with nothing at all sends nothing.
-Gated by settings.owner_advisor_enabled (off until previewed in Master › Conversations).
+Each business can switch it on or off (vula/owner_briefs.py); one that hasn't chosen follows
+settings.owner_advisor_enabled (off until previewed in Master › Conversations).
 """
 from __future__ import annotations
 
@@ -223,13 +224,10 @@ def due(now: datetime) -> bool:
 
 
 async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
-    from config import settings
-    if not settings.owner_advisor_enabled:
-        return {"sent": 0, "reason": "owner_advisor_enabled is off"}
     now = now or datetime.now(SAST)
     y, w, _ = now.isocalendar()
     week = f"{y}-W{w:02d}"
-    from vula import team_index
+    from vula import owner_briefs, team_index
     from vula.api.whatsapp import _send_reply
     from vula.api import tenants as _t
     try:
@@ -241,6 +239,8 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
         return {"sent": 0}
     sent = 0
     for tid in tenants:
+        if not owner_briefs.enabled(tid, "weekly"):
+            continue
         try:
             text = render(build(tid, now.date()))
             if not text:

@@ -1,11 +1,20 @@
 """
-vula/owner_digest.py — the weekday-morning money digest to each owner (finance brief, capability 3).
+vula/owner_digest.py — the weekday-morning brief to each owner (finance brief, capability 3).
 
-07:00–09:00 SAST, Monday to Friday, one WhatsApp per owner per day: what was paid yesterday,
-what is overdue (by customer), and what falls due in the next 7 days. Every figure is a DB
+07:00–09:00 SAST, Monday to Friday, one WhatsApp per owner per day:
+
+  today     what needs a person today — customers waiting for a person, follow-ups due, emails
+            needing a reply, quotes Vula drafted, documents to check, today's bookings. The same
+            rows as the dashboard's Today list (command_centre.compute_today), so a business
+            that doesn't open the dashboard still sees them.
+  money     what was paid yesterday, what is overdue (by customer), what falls due in the next
+            7 days, and tax deadlines.
+
+Every business type gets it (shops, project and service businesses alike). Every figure is a DB
 query here, in integer cents — the message is built in code, no model involved. Nothing to
-say (no invoices moving) → nothing is sent. Outside the 24-hour window _send_reply falls back
-to the approved notification template.
+say → nothing is sent. Outside the 24-hour window _send_reply falls back to the approved
+notification template. Each business can switch it on or off (vula/owner_briefs.py); one that
+hasn't chosen follows settings.owner_digest_enabled.
 """
 from __future__ import annotations
 
@@ -27,7 +36,54 @@ def _r(cents: int) -> str:
     return f"R{cents / 100:,.2f}"
 
 
-def build(tenant_id: str, today: date) -> Dict[str, Any]:
+def today_items(tenant_id: str, now: datetime) -> Dict[str, Any]:
+    """The dashboard's Today list, counted for a WhatsApp line each. The owner gets the full
+    list (scope full), the same as the owner sees on the dashboard."""
+    from vula.api.command_centre import compute_today
+    items = compute_today(_client(), tenant_id, {"full": True}, now).get("items") or []
+    out: Dict[str, Any] = {"waiting": 0, "follow_ups": 0, "follow_ups_overdue": 0, "emails": 0,
+                           "emails_urgent": 0, "quotes": 0, "quotes_cents": 0, "documents": 0,
+                           "bookings": []}
+    for it in items:
+        kind = it.get("kind")
+        if kind == "chat":
+            out["waiting"] += 1
+        elif kind == "follow_up":
+            out["follow_ups"] += 1
+            if "overdue" in (it.get("label") or ""):
+                out["follow_ups_overdue"] += 1
+        elif kind == "email":
+            out["emails"] += 1
+            if it.get("detail") == "urgent":
+                out["emails_urgent"] += 1
+        elif kind == "quote":
+            out["quotes"] += 1
+            out["quotes_cents"] += int(it.get("amount_cents") or 0)
+        elif kind == "document":
+            out["documents"] += 1
+        elif kind == "booking":
+            at = _when(it.get("at"))
+            what = (it.get("label") or "").replace("Booking · ", "", 1) or "appointment"
+            out["bookings"].append(f"{at} {what}" if at else what)
+    return out
+
+
+def _when(value: Any) -> str:
+    """'09:30' in SAST for an ISO timestamp, or '' when it can't be read."""
+    try:
+        t = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            return ""
+        return t.astimezone(SAST).strftime("%H:%M")
+    except Exception:
+        return ""
+
+
+def _n(count: int, one: str, many: str) -> str:
+    return f"{count} {one if count == 1 else many}"
+
+
+def build(tenant_id: str, today: date, now: Optional[datetime] = None) -> Dict[str, Any]:
     db = _client()
     y0 = (today - timedelta(days=1)).isoformat()
     paid = [p for p in (db.table("commerce_invoice_payments")
@@ -64,7 +120,14 @@ def build(tenant_id: str, today: date) -> Dict[str, Any]:
     except Exception as exc:
         log.debug("digest tax lines skipped: %s", exc)
         tax_lines = []
+    try:
+        day = now or datetime.combine(today, datetime.min.time().replace(hour=7), tzinfo=SAST)
+        today_list = today_items(tenant_id, day)
+    except Exception as exc:
+        log.debug("digest today list skipped: %s", exc)
+        today_list = {}
     return {
+        "today": today_list,
         "tax": tax_lines,
         "paid": [{"customer": (names.get(p.get("invoice_id")) or {}).get("customer_name") or "?",
                   "invoice": (names.get(p.get("invoice_id")) or {}).get("invoice_number"),
@@ -74,10 +137,36 @@ def build(tenant_id: str, today: date) -> Dict[str, Any]:
     }
 
 
+def _today_lines(t: Dict[str, Any]) -> list:
+    out = []
+    if t.get("waiting"):
+        out.append(f"• {_n(t['waiting'], 'customer is', 'customers are')} waiting for a person")
+    if t.get("follow_ups"):
+        late = f" ({t['follow_ups_overdue']} overdue)" if t.get("follow_ups_overdue") else ""
+        out.append(f"• {_n(t['follow_ups'], 'follow-up', 'follow-ups')} due{late}")
+    if t.get("emails"):
+        urgent = f" ({t['emails_urgent']} urgent)" if t.get("emails_urgent") else ""
+        out.append(f"• {_n(t['emails'], 'email needs', 'emails need')} a reply{urgent}")
+    if t.get("quotes"):
+        out.append(f"• {_n(t['quotes'], 'quote', 'quotes')} drafted by Vula, {_r(t.get('quotes_cents') or 0)} "
+                   f"— waiting for your approval")
+    if t.get("documents"):
+        out.append(f"• {_n(t['documents'], 'document', 'documents')} to check")
+    if t.get("bookings"):
+        out.append(f"• {_n(len(t['bookings']), 'booking', 'bookings')} today: " + ", ".join(t["bookings"][:6])
+                   + (f" and {len(t['bookings']) - 6} more" if len(t["bookings"]) > 6 else ""))
+    return out
+
+
 def render(d: Dict[str, Any]) -> Optional[str]:
-    if not (d["paid"] or d["overdue"] or d["upcoming_n"] or d.get("tax")):
+    today = _today_lines(d.get("today") or {})
+    money = bool(d["paid"] or d["overdue"] or d["upcoming_n"] or d.get("tax"))
+    if not (today or money):
         return None
-    lines = ["☀️ *Good morning — your money today*"]
+    lines = ["☀️ *Good morning — here's your day*"]
+    if today:
+        lines.append("\n📋 *Needs you today:*")
+        lines += today
     if d["paid"]:
         total = sum(p["cents"] for p in d["paid"])
         lines.append(f"\n💰 *Paid yesterday:* {_r(total)}")
@@ -95,7 +184,10 @@ def render(d: Dict[str, Any]) -> Optional[str]:
         lines.append("\n🧾 *Tax coming up:*")
         lines += d["tax"]
         lines.append("Reply *tax* for the estimate.")
-    lines.append("\nReply *who owes me* for detail, or *send reminders*.")
+    if d["overdue"] or d["upcoming_n"]:
+        lines.append("\nReply *who owes me* for detail, or *send reminders*.")
+    if today:
+        lines.append("The full list is under *Today* on your dashboard.")
     return "\n".join(lines)
 
 
@@ -104,10 +196,7 @@ def due(now: datetime) -> bool:
 
 
 async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
-    from config import settings
-    if not settings.owner_digest_enabled:
-        return {"sent": 0, "reason": "owner_digest_enabled is off"}
-    from vula import team_index
+    from vula import owner_briefs, team_index
     from vula.api import tenants as _t
     from vula.api.whatsapp import _send_reply
     now = now or datetime.now(SAST)
@@ -121,8 +210,10 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
         return {"sent": 0}
     sent = 0
     for tid in tenants:
+        if not owner_briefs.enabled(tid, "morning"):
+            continue
         try:
-            text = render(build(tid, now.date()))
+            text = render(build(tid, now.date(), now))
             if not text:
                 continue
             for m in team_index.active_members(tid):

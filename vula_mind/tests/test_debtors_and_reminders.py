@@ -164,9 +164,11 @@ def test_digest_figures_are_sums_from_the_rows():
 
 @pytest.mark.asyncio
 async def test_digest_is_off_until_enabled(monkeypatch):
+    """Off by default: a business that hasn't switched it on itself gets nothing."""
     from config import settings
-    from vula import owner_digest
+    from vula import owner_briefs, owner_digest
     monkeypatch.setattr(settings, "owner_digest_enabled", False)
+    monkeypatch.setattr(owner_briefs, "saved_for", lambda tid: {})
     assert (await owner_digest.send_all())["sent"] == 0
 
 

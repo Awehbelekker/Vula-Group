@@ -13,6 +13,7 @@ import { BellRing, Cake, CalendarClock, Lock, Megaphone, Plus, Send, TestTube2, 
 import { VULA_API } from "../../lib/authFetch";
 import { Button, Card, EmptyState, Field, Input, Select, StatusChip, Textarea, toast } from "../ui/index.jsx";
 import { ROLE_LABELS, ROLES } from "./useTeam";
+import OwnerBriefs from "./OwnerBriefs";
 
 const KIND_LABEL = { notice: "Notice", newsletter: "Newsletter", birthday: "Birthday", holiday: "Public holiday",
   poll: "Poll", anniversary: "Work anniversary", special_day: "Special day" };
@@ -224,6 +225,8 @@ export default function NoticesV2({ tenantId }) {
           <Button Icon={Send} disabled={busy} onClick={sendPoll}>Send poll to everyone</Button>
         </div>
       </Card>
+
+      <OwnerBriefs tenantId={tenantId} />
 
       {settings && (
         <Card className="vtm-block">
