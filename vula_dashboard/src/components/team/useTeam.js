@@ -10,7 +10,7 @@ import { REP_DEFAULT_ACCESS, MERCHANT_GROUPS } from "../../navConfig.jsx";
 import { VULA_API } from "../../lib/authFetch";
 
 // Sales rep ("My Work") tabs — a sales_rep login gets these by default (see createLogin).
-export const REP_MODULES = [["rep-contacts", "My Contacts"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
+export const REP_MODULES = [["rep-contacts", "My Contacts"], ["rep-chats", "My chats"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
   ["rep-documents", "My Documents"], ["rep-reminders", "My Reminders"], ["rep-expenses", "My Expenses"], ["rep-crm", "My Dynamics 365"]];
 
 // Access modules map 1:1 to dashboard tab ids — generated from the sidebar (navConfig) so a
@@ -39,6 +39,7 @@ export const EVENTS = [
   ["procurement_done", "Procurement done"],
   ["invoice_overdue_escalated", "Overdue invoice escalations (14+ days)"],
   ["project_margin", "Project check (weekly: jobs below their fee)"],
+  ["chat_assigned", "A customer chat is assigned to me"],
 ];
 export const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
 // Friendly display label per role — the stored value stays the plain enum (used by the

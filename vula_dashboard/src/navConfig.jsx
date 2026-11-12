@@ -147,6 +147,7 @@ export const MERCHANT_GROUPS = [
   { label: "My Work", items: [
     { id: "my-work", icon: "🧑‍💼", label: "My Work", subtabs: [
       { id: "rep-contacts", icon: "📇", label: "Contacts" },
+      { id: "rep-chats", icon: "💬", label: "My chats" },
       { id: "rep-callsheet", icon: "📋", label: "Call Sheet" },
       { id: "rep-bookings", icon: "📅", label: "Bookings" },
       { id: "rep-documents", icon: "📚", label: "Product knowledge" },
@@ -160,7 +161,7 @@ export const MERCHANT_GROUPS = [
 
 /** The full set of ids a fresh sales_rep dashboard login gets by default (VulaTeam.jsx uses
  * this when creating a login with role="sales_rep") — every "My Work" leaf, nothing tenant-wide. */
-export const REP_DEFAULT_ACCESS = ["rep-contacts", "rep-callsheet", "rep-bookings",
+export const REP_DEFAULT_ACCESS = ["rep-contacts", "rep-chats", "rep-callsheet", "rep-bookings",
   "rep-documents", "rep-reminders", "rep-expenses", "rep-expense-sheet", "rep-crm"];
 
 // Master shell (Vula operator console — NOT a tenant's own tools). ids = App.jsx TABS ids.
@@ -224,7 +225,7 @@ export const MASTER_GROUPS = MASTER_ZONES.flatMap((z) => z.groups);
 const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'pages', 'marketing', 'bank', 'books', 'expenses', 'import', 'wa-templates', 'scheduling']);
 // Sales rep ("My Work") tabs: for a rep's own login (its `access` list) or a rep business —
 // not for every owner, who used to see a "Dynamics 365" tab whatever their business.
-const REP_TABS = new Set(['rep-contacts', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-expense-sheet', 'rep-crm']);
+const REP_TABS = new Set(['rep-contacts', 'rep-chats', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-expense-sheet', 'rep-crm']);
 const MERCHANT_MODMAP = {
   qsrates: ['estimating', 'projects'],   // a business that prices building work
   labour: ['projects', 'fieldops'],      // site workers' day rates

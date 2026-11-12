@@ -368,6 +368,7 @@ function MyWorkSection({ tenantId, repPhone, subtabs, pendingSubtab, onConsumePe
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       <ScreenSuspense resetKey={active}>
       {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-chats' && <VulaInbox tenantId={tenantId} mine />}
       {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} />}
       {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}

@@ -1586,15 +1586,35 @@ async def find_stale_paused_sessions(tenant_id: str, hours: float = 2.0) -> list
     return rows
 
 
-async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
-    """Return recent conversation sessions for the shared inbox list view."""
+async def list_conversations(tenant_id: str, limit: int = 50,
+                             assigned_member_id: Optional[str] = None) -> List[dict]:
+    """Return recent conversation sessions for the shared inbox list view — only the ones
+    assigned to one team member when assigned_member_id is given (migration 261)."""
     base = "id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at"
-    try:
+    if assigned_member_id is not None:
         result = (
             _client().table("commerce_conversation_sessions")
-            .select(base + ",assigned_to,agent_note,tags,paused_by")
-            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+            .select(base + ",assigned_to,agent_note,tags,paused_by,assigned_member_id")
+            .eq("tenant_id", tenant_id).eq("assigned_member_id", assigned_member_id)
+            .order("updated_at", desc=True).limit(limit).execute()
         )
+        rows = result.data or []
+        for r in rows:
+            r["session_id"] = r["id"]
+        return rows
+    try:
+        try:
+            result = (
+                _client().table("commerce_conversation_sessions")
+                .select(base + ",assigned_to,agent_note,tags,paused_by,assigned_member_id")
+                .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+            )
+        except Exception:
+            result = (                                   # migration 261 not run yet
+                _client().table("commerce_conversation_sessions")
+                .select(base + ",assigned_to,agent_note,tags,paused_by")
+                .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+            )
     except Exception:
         # team-inbox columns not present yet (migration 048 not run) — fall back gracefully.
         result = (
@@ -1633,6 +1653,7 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
         "paused": bool(session.get("paused")),
         "paused_by": session.get("paused_by"),
         "assigned_to": session.get("assigned_to"),
+        "assigned_member_id": session.get("assigned_member_id"),
         "agent_note": session.get("agent_note"),
         "tags": session.get("tags") or [],
         "messages": [{"id": m.get("id"), "role": m["role"], "content": m["content"],

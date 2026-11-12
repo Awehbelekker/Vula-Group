@@ -201,11 +201,12 @@ async def me(tenant: str, email: str = "", authorization: str = Header(default="
     m = scope.get("member") or {}
     return {"role": scope.get("role"), "access": scope.get("access") or [],
             "notify": (m.get("notify") or []) if m else list(_EVENTS),
-            "name": m.get("name"), "whatsapp": m.get("whatsapp"), "full": bool(scope.get("full"))}
+            "name": m.get("name"), "whatsapp": m.get("whatsapp"), "full": bool(scope.get("full")),
+            "member_id": m.get("id")}
 
 
 _EVENTS = ("which_project", "followup_digest", "payment_received", "new_invoice", "new_order",
-          "low_stock", "help_request", "procurement_done", "project_margin")
+          "low_stock", "help_request", "procurement_done", "project_margin", "chat_assigned")
 
 
 @router.get("/{tenant}/audit")

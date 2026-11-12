@@ -8415,15 +8415,56 @@ async def admin_setup_checklist(tenant_id: str):
 
 
 @router.get("/{tenant_id}/admin/conversations")
-async def admin_list_conversations(tenant_id: str, limit: int = Query(50, ge=1, le=200)):
-    """Return recent WhatsApp conversation sessions for the shared inbox."""
+async def admin_list_conversations(tenant_id: str, request: Request, limit: int = Query(50, ge=1, le=200)):
+    """Return recent WhatsApp conversation sessions for the shared inbox. Someone without Inbox
+    access gets only the chats assigned to them (their "My chats")."""
+    sees_all, member_id = await _inbox_access(request, tenant_id)
+    if not sees_all:
+        conversations = (await service.list_conversations(tenant_id, limit=limit, assigned_member_id=member_id)
+                         if member_id else [])
+        return {"tenant_id": tenant_id, "conversations": conversations, "mine_only": True}
     conversations = await service.list_conversations(tenant_id, limit=limit)
-    return {"tenant_id": tenant_id, "conversations": conversations}
+    return {"tenant_id": tenant_id, "conversations": conversations, "mine_only": False}
+
+
+async def _inbox_access(request: Request, tenant_id: str) -> tuple:
+    """(sees every chat, the caller's team member id). Every chat: a full member (owner, manager)
+    or one given the Inbox tab. Anyone else: only chats assigned to them (12 Nov 2026 — before
+    this, any member could read every chat through the API whatever their dashboard showed).
+    No auth header (API key / internal callers): every chat, as before."""
+    auth = request.headers.get("authorization", "")
+    if not isinstance(auth, str) or not auth.removeprefix("Bearer ").strip():
+        return True, None
+    try:
+        from vula.api.tenant_auth import member_scope
+        scope = await member_scope(auth, tenant_id) or {}
+    except Exception:
+        return False, None
+    member_id = str((scope.get("member") or {}).get("id") or "") or None
+    return bool(scope.get("full") or "inbox" in (scope.get("access") or [])), member_id
+
+
+async def _require_chat(request: Request, tenant_id: str, session_id: str) -> None:
+    """403 unless the caller sees every chat or this one is assigned to them."""
+    sees_all, member_id = await _inbox_access(request, tenant_id)
+    if sees_all:
+        return
+    rows = []
+    if member_id:
+        try:
+            rows = (service._client().table("commerce_conversation_sessions").select("id")
+                    .eq("tenant_id", tenant_id).eq("id", session_id).eq("assigned_member_id", member_id)
+                    .limit(1).execute().data or [])
+        except Exception:
+            rows = []
+    if not rows:
+        raise HTTPException(status_code=403, detail="This chat isn't assigned to you.")
 
 
 @router.get("/{tenant_id}/admin/conversations/{session_id}/messages")
 async def admin_get_thread(tenant_id: str, session_id: str, request: Request):
     """Return the full thread for one conversation (header + all messages)."""
+    await _require_chat(request, tenant_id, session_id)
     thread = await service.get_conversation_thread(tenant_id, session_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -8456,6 +8497,7 @@ async def admin_handoff(tenant_id: str, session_id: str, body: HandoffRequest, r
     paused=true  → bot goes quiet; human replies via the /reply endpoint.
     paused=false → bot resumes handling messages.
     """
+    await _require_chat(request, tenant_id, session_id)
     who = await _takeover_name(request, tenant_id) if body.paused else None
     updated = await service.set_session_paused(tenant_id, session_id, body.paused, paused_by=who)
     if not updated:
@@ -8474,6 +8516,7 @@ async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest, 
     Automatically takes over the session (sets paused=true) if not already paused,
     so the bot stays quiet after the agent replies.
     """
+    await _require_chat(request, tenant_id, session_id)
     text = (body.message or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
@@ -8514,22 +8557,53 @@ async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest, 
 # ── Team inbox: assignment, notes, tags, canned replies (migration 048) ───────
 class ConvMetaRequest(BaseModel):
     assigned_to: Optional[str] = None
+    assigned_member_id: Optional[str] = None     # a vula_team_members.id; "" to unassign
     agent_note: Optional[str] = None
     tags: Optional[list] = None
 
 
 @router.post("/{tenant_id}/admin/conversations/{session_id}/meta")
-async def admin_conv_meta(tenant_id: str, session_id: str, body: ConvMetaRequest):
-    """Assign a conversation to a team member, add an internal note, or set triage tags."""
+async def admin_conv_meta(tenant_id: str, session_id: str, body: ConvMetaRequest, request: Request):
+    """Assign a conversation to a team member, add an internal note, or set triage tags.
+    Only someone who sees every chat can (re)assign one."""
+    await _require_chat(request, tenant_id, session_id)
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
     if not patch:
         return {"ok": True, "session_id": session_id, "unchanged": True}
+    assignee = None
+    if "assigned_member_id" in patch:
+        sees_all, _ = await _inbox_access(request, tenant_id)
+        if not sees_all:
+            raise HTTPException(status_code=403, detail="Only the owner, a manager or an Inbox user can assign chats.")
+        if patch["assigned_member_id"]:
+            from vula import team_index
+            assignee = next((m for m in team_index.active_members(tenant_id)
+                             if str(m.get("id")) == str(patch["assigned_member_id"])), None)
+            if not assignee:
+                raise HTTPException(status_code=400, detail="That person isn't on the team.")
+            patch["assigned_to"] = assignee.get("name") or assignee.get("whatsapp")
+        else:
+            patch["assigned_member_id"], patch["assigned_to"] = None, None
     patch["updated_at"] = service._now()
     try:
         service._client().table("commerce_conversation_sessions").update(patch).eq(
             "tenant_id", tenant_id).eq("id", session_id).execute()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"{exc} (run migration 048?)")
+        raise HTTPException(status_code=503, detail=f"{exc} (run migrations 048/261?)")
+    if assignee and "chat_assigned" in (assignee.get("notify") or []) and assignee.get("whatsapp"):
+        # Only for someone who ticked "A chat is assigned to me" under Team (opt-in, 12 Nov).
+        try:
+            row = (service._client().table("commerce_conversation_sessions")
+                   .select("customer_name,customer_phone").eq("tenant_id", tenant_id).eq("id", session_id)
+                   .limit(1).execute().data or [{}])[0]
+            who = await _takeover_name(request, tenant_id) or "Someone"
+            customer = row.get("customer_name") or row.get("customer_phone") or "a customer"
+            from vula.api.whatsapp import _send_reply
+            await _send_reply(assignee["whatsapp"], f"💬 {who} assigned you the chat with {customer}. "
+                              "It's under My chats on the dashboard.", tenant_id,
+                              idem_key=f"chat_assigned:{session_id}:{assignee.get('id')}")
+        except Exception as exc:
+            log.debug("chat-assigned notice skipped: %s", exc)
     return {"ok": True, "session_id": session_id, **patch}
 
 
