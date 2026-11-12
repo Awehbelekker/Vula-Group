@@ -1899,6 +1899,17 @@ def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
     return None
 
 
+def _ctx_access(tenant_id: str, ctx: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """The caller's granted scopes for this turn. On WhatsApp that is looked up from their
+    number; a dashboard chat has no number, so the endpoint passes the signed-in member's access
+    in the context ("access": a list, or None for full). Without this a restricted login got
+    every tool in the dashboard chat, because "no phone" read as "full access"."""
+    ctx = ctx or {}
+    if "access" in ctx:
+        return list(ctx["access"]) if ctx["access"] else None
+    return _member_access(tenant_id, ctx.get("phone") or None)
+
+
 def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]) -> List[Dict[str, Any]]:
     if not access:
         return tools
@@ -1977,12 +1988,13 @@ def _turn_note(step: str, **detail: Any) -> None:
         pass
 
 
-def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str]) -> List[Dict[str, Any]]:
+def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str],
+                ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The whole team's tools for this caller: today's set, minus what only a switched-off
     employee does."""
     from core.skills import employees
     tools = _restrict_to_access(_tools_for(tenant_id, role=role, message=message),
-                                _member_access(tenant_id, phone))
+                                _ctx_access(tenant_id, ctx if ctx is not None else {"phone": phone}))
     settings = employees.settings_for(tenant_id)
     return employees.without_switched_off(tools, {k for k, v in settings.items() if v["enabled"]})
 
@@ -2187,9 +2199,11 @@ class CommerceAdminSkill(BaseSkill):
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
                "message": inp.question}
+        if "access" in inp.metadata:     # dashboard chat: the signed-in member's own access
+            ctx["access"] = inp.metadata["access"]
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         if caller_role != "sales_rep":   # reps already get their own narrow set
-            tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
+            tools = _restrict_to_access(tools, _ctx_access(inp.tenant_id, ctx))
         lang = inp.metadata.get("preferred_language", "")
         # The team of AI employees (core/skills/employees.py): the front desk hands a clear
         # message to one employee with only its job's tools; anything unclear stays with the team.
@@ -2209,7 +2223,7 @@ class CommerceAdminSkill(BaseSkill):
                 # The employee was given someone else's job: the whole team takes the turn, once.
                 logger.info("commerce_admin: %s handed over (%s)", employee.id if employee else "-", ho.reason)
                 _turn_note("employee_hand_over", name=employee.id if employee else None)
-                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"])
+                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"], ctx)
                 system_msg = (self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
                                                   lang=lang)
                               + self._decisions_block(inp.tenant_id, inp.question or ""))
@@ -3865,7 +3879,7 @@ class CommerceAdminSkill(BaseSkill):
         if kind not in forms.TYPES:
             return {"status": "need_info", "message": "Which form — a quote / order form, a site checklist, a timesheet or a stock count?"}
         title, scope = forms.TYPES[kind]
-        access = _member_access(tid, phone or None)
+        access = _ctx_access(tid, {**(ctx or {}), "phone": phone or None})
         if scope and access is not None and scope not in access:
             return {"status": "need_info", "message": f"Your access doesn't include the {title.lower()} — ask the owner."}
         try:
@@ -3937,7 +3951,7 @@ class CommerceAdminSkill(BaseSkill):
         ctx = ctx or {}
         phone = ctx.get("phone") or ""
         by = phone or "dashboard"
-        access = _member_access(tid, phone or None)
+        access = _ctx_access(tid, {**(ctx or {}), "phone": phone or None})
         action = args.get("action") or "design"
 
         def refused(spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:

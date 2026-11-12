@@ -78,7 +78,13 @@ async def assemble_export(tenant_id: str, phone: str) -> Dict[str, Any]:
     """Everything this phone number's own for this tenant: chat history + their own orders/
     invoices. Never the tenant's full filed-document library or other customers' data."""
     from vula.chat.history import get_db
-    messages = get_db().get(tenant_id, phone, limit=_MAX_MESSAGES, max_age_hours=None)
+    from vula import privacy_data
+    # Both stores: on a shop's WhatsApp line the conversation is in the commerce tables, which
+    # this export used to leave out entirely.
+    messages = privacy_data.merge_messages(
+        get_db().get(tenant_id, phone, limit=_MAX_MESSAGES, max_age_hours=None),
+        privacy_data.conversation_messages(tenant_id, phone, limit=_MAX_MESSAGES),
+    )[-_MAX_MESSAGES:]
     orders = await _own_orders(tenant_id, phone)
     invoices = await _own_invoices(tenant_id, phone)
     email = None

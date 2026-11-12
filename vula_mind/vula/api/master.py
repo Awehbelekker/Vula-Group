@@ -460,6 +460,17 @@ def setup_checklist(tenant_id: str) -> dict:
             "progress_pct": round(100 * done / len(steps))}
 
 
+def _staff_digits_or_refuse(tenant_id: str) -> set:
+    """The business's own people's numbers, for keeping their threads out of operator views. If
+    the team can't be read the request fails (503) — showing every thread would be the unsafe
+    way to fail."""
+    try:
+        from vula.identity import staff_phone_digits
+        return staff_phone_digits(tenant_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't check whose conversations these are: {exc}")
+
+
 @router.get("/tenants/{tenant_id}/conversations")
 async def master_tenant_conversations(tenant_id: str, limit: int = 30) -> dict:
     """Recent conversation threads for a tenant (Master Build Brief section 6a item 2) — support
@@ -468,7 +479,12 @@ async def master_tenant_conversations(tenant_id: str, limit: int = 30) -> dict:
     (vula/chat/history.py's vula_chat_messages) — this is the thread picker; see the sibling
     /conversations/{phone} endpoint below for one thread's actual messages."""
     from vula.chat.history import get_db
-    threads = get_db().list_threads(tenant_id, limit=min(limit, 100))
+    staff = _staff_digits_or_refuse(tenant_id)
+    from vula.identity import is_staff_thread
+    # Over-read, then drop the business's own people: what a staff member asks Vula is private
+    # to them, including from the platform operator.
+    threads = [t for t in get_db().list_threads(tenant_id, limit=min(limit, 100) + 50)
+               if not is_staff_thread(t.get("phone"), staff)][:min(limit, 100)]
     return {"tenant_id": tenant_id, "threads": threads}
 
 
@@ -479,6 +495,9 @@ async def master_tenant_conversation_messages(tenant_id: str, phone: str, limit:
     a conversation from days ago, unlike the AI's own prompt-context read which only wants
     recent turns."""
     from vula.chat.history import get_db
+    from vula.identity import is_staff_thread
+    if is_staff_thread(phone, _staff_digits_or_refuse(tenant_id)):
+        raise HTTPException(status_code=404, detail="Conversation not found")
     msgs = get_db().get(tenant_id, phone=phone, limit=min(limit, 200), max_age_hours=None)
     return {"tenant_id": tenant_id, "phone": phone,
             "messages": [{"role": m.role, "text": m.text, "created_at": m.created_at}

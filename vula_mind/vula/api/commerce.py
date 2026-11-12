@@ -1789,13 +1789,28 @@ class AssistantRequest(BaseModel):
     session_id: Optional[str] = None     # web chat session key (per browser/user)
 
 
+async def _assistant_session(tenant_id: str, request: Request, fallback_id: Optional[str]):
+    """(person, session_key) for the dashboard chat. A signed-in member gets ONE thread of their
+    own, keyed on who they are — the browser used to invent a new session id on every page load,
+    so the chat forgot everything on refresh and belonged to nobody. A caller with no login (an
+    API key) keeps the old browser-supplied key."""
+    from vula.identity import person_for_login
+    person = await person_for_login(request.headers.get("authorization", ""), tenant_id)
+    if person and person.web_session_key:
+        return person, person.web_session_key
+    return None, f"webadmin:{fallback_id or 'default'}"
+
+
 @router.post("/{tenant_id}/admin/assistant")
-async def admin_assistant(tenant_id: str, body: AssistantRequest):
+async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Request):
     """Chat to the Vula admin agent from inside the web portal.
 
     Same commerce_admin skill that powers the WhatsApp owner agent — so the
     tenant can run the shop (sales, orders, stock, invoices, expenses,
     broadcast previews) by chatting here instead of WhatsApp.
+
+    The agent is told who is signed in (name, role) and is limited to that member's own access:
+    it ran anonymous before, with every tool, whoever was logged in.
     """
     from core.skills.base import SkillInput
     from core.skills.loader import get_skill
@@ -1803,20 +1818,39 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     if not (body.message or "").strip():
         raise HTTPException(status_code=400, detail="message is required")
 
-    session_key = f"webadmin:{body.session_id or 'default'}"
+    person, session_key = await _assistant_session(tenant_id, request, body.session_id)
+    if person is not None and person.access is not None and not person.access:
+        raise HTTPException(status_code=403, detail="Your login has no access to this workspace.")
+
+    metadata: Dict[str, Any] = {"session_id": session_key, "channel": "dashboard"}
+    user_label = "Customer"
+    if person is not None:
+        metadata["access"] = person.access
+        if person.name:
+            metadata["caller_name"] = person.name
+            user_label = person.name
+        if person.role:
+            metadata["caller_role"] = person.role
+        # A rep's tools are scoped to their own contacts and visits by their number.
+        if person.role == "sales_rep" and person.phone:
+            metadata["customer_phone"] = person.phone
+
     history, sid = "", None
     try:
         session = await service.get_or_create_session(tenant_id, session_key=session_key, channel="web")
         sid = session["id"]
+        if session.get("preferred_language"):
+            metadata["preferred_language"] = session["preferred_language"]
         history = service.format_history(
-            await service.get_recent_messages(tenant_id, sid, limit=service.DEFAULT_HISTORY_LIMIT))
+            await service.get_recent_messages(tenant_id, sid, limit=service.DEFAULT_HISTORY_LIMIT),
+            user_label=user_label)
     except Exception as exc:
         log.debug("Assistant session/history load failed (non-fatal): %s", exc)
 
     skill = get_skill("commerce_admin")
     out = await skill(SkillInput(
         question=body.message, tenant_id=tenant_id,
-        conversation_history=history, metadata={"session_id": session_key},
+        conversation_history=history, metadata=metadata,
     ))
     answer = out.answer if (out.success and out.answer) else (out.error or "Sorry, I couldn't process that just now.")
 
@@ -1828,6 +1862,28 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
             pass
 
     return {"answer": answer, "ok": bool(out.success and out.answer)}
+
+
+@router.get("/{tenant_id}/admin/assistant/history")
+async def admin_assistant_history(tenant_id: str, request: Request,
+                                  limit: int = Query(50, ge=1, le=200)):
+    """The signed-in member's own earlier chat with Vula, oldest first, so the dashboard chat
+    opens where they left off. Only ever the caller's own thread."""
+    person, session_key = await _assistant_session(tenant_id, request, None)
+    if person is None:
+        return {"messages": []}
+    try:
+        rows = (service._client().table("commerce_conversation_sessions").select("id")
+                .eq("tenant_id", tenant_id).eq("session_key", session_key).limit(1).execute().data or [])
+        if not rows:
+            return {"messages": []}
+        msgs = await service.get_recent_messages(tenant_id, rows[0]["id"], limit=limit, max_age_hours=None)
+    except Exception as exc:
+        log.debug("assistant history load failed: %s", exc)
+        return {"messages": []}
+    return {"messages": [{"id": m.get("id"), "role": m.get("role"), "content": m.get("content"),
+                          "created_at": m.get("created_at")}
+                         for m in msgs if m.get("role") in ("user", "assistant")]}
 
 
 # Tools that use the confirm=true two-layer gate (widened confirm-gate coverage) — a call with
@@ -2293,12 +2349,13 @@ class ReplyFeedback(BaseModel):
 
 
 @router.post("/{tenant_id}/admin/conversations/{session_id}/feedback")
-async def admin_reply_feedback(tenant_id: str, session_id: str, body: ReplyFeedback):
+async def admin_reply_feedback(tenant_id: str, session_id: str, body: ReplyFeedback, request: Request = None):
     """👍/👎 on an AI reply in the Inbox (migration 176). A correction is also TAUGHT (same
     path as agent-teach) so the assistant uses it next time; 👎 rows are the raw material for
     new eval cases (vula_mind/evals). One rating per message — re-rating replaces it."""
     if body.rating not in ("up", "down"):
         raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
+    await _guard_staff_thread(tenant_id, session_id, request)
     row = {"tenant_id": tenant_id, "session_id": session_id, "message_id": body.message_id,
            "rating": body.rating, "question": (body.question or "")[:2000] or None,
            "answer": (body.answer or "")[:4000] or None,
@@ -6620,7 +6677,7 @@ async def admin_create_campaign(tenant_id: str, body: dict):
 @router.delete("/{tenant_id}/admin/campaigns/{campaign_id}")
 async def admin_delete_campaign(tenant_id: str, campaign_id: str):
     service._client().table("commerce_campaigns").update(
-        {"active": False}).eq("id", campaign_id).execute()
+        {"active": False}).eq("tenant_id", tenant_id).eq("id", campaign_id).execute()
     return {"id": campaign_id, "active": False}
 
 
@@ -6769,7 +6826,10 @@ async def admin_create_segment(tenant_id: str, body: dict):
 
 @router.delete("/{tenant_id}/admin/segments/{segment_id}")
 async def admin_delete_segment(tenant_id: str, segment_id: str):
-    service._client().table("commerce_segments").delete().eq("id", segment_id).execute()
+    # Scoped to this tenant: by id alone, a member of one business who knew another's segment
+    # id could delete it.
+    service._client().table("commerce_segments").delete().eq(
+        "tenant_id", tenant_id).eq("id", segment_id).execute()
     return {"id": segment_id, "deleted": True}
 
 
@@ -8408,6 +8468,22 @@ async def admin_setup_checklist(tenant_id: str):
     return setup_checklist(tenant_id)
 
 
+async def _guard_staff_thread(tenant_id: str, session_id: str, request: Optional[Request]) -> None:
+    """A staff member's own thread with Vula (admin:{phone} / webadmin:{…}) can be opened only by
+    that member. To everyone else — colleagues, the owner — it does not exist (404), the same
+    answer as a wrong id. Customer conversations are unaffected."""
+    from vula.identity import is_staff_session_key, owns_session, person_for_login
+    rows = (service._client().table("commerce_conversation_sessions").select("session_key")
+            .eq("tenant_id", tenant_id).eq("id", session_id).limit(1).execute().data or [])
+    key = rows[0].get("session_key") if rows and isinstance(rows[0], dict) else None
+    if not is_staff_session_key(key):
+        return
+    auth = request.headers.get("authorization", "") if request is not None else ""
+    person = await person_for_login(auth, tenant_id)
+    if not owns_session(person, key):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+
 @router.get("/{tenant_id}/admin/conversations")
 async def admin_list_conversations(tenant_id: str, limit: int = Query(50, ge=1, le=200)):
     """Return recent WhatsApp conversation sessions for the shared inbox."""
@@ -8418,6 +8494,7 @@ async def admin_list_conversations(tenant_id: str, limit: int = Query(50, ge=1, 
 @router.get("/{tenant_id}/admin/conversations/{session_id}/messages")
 async def admin_get_thread(tenant_id: str, session_id: str, request: Request):
     """Return the full thread for one conversation (header + all messages)."""
+    await _guard_staff_thread(tenant_id, session_id, request)
     thread = await service.get_conversation_thread(tenant_id, session_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -8450,6 +8527,7 @@ async def admin_handoff(tenant_id: str, session_id: str, body: HandoffRequest, r
     paused=true  → bot goes quiet; human replies via the /reply endpoint.
     paused=false → bot resumes handling messages.
     """
+    await _guard_staff_thread(tenant_id, session_id, request)
     who = await _takeover_name(request, tenant_id) if body.paused else None
     updated = await service.set_session_paused(tenant_id, session_id, body.paused, paused_by=who)
     if not updated:
@@ -8472,6 +8550,7 @@ async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest, 
     if not text:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
+    await _guard_staff_thread(tenant_id, session_id, request)
     thread = await service.get_conversation_thread(tenant_id, session_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -8513,8 +8592,9 @@ class ConvMetaRequest(BaseModel):
 
 
 @router.post("/{tenant_id}/admin/conversations/{session_id}/meta")
-async def admin_conv_meta(tenant_id: str, session_id: str, body: ConvMetaRequest):
+async def admin_conv_meta(tenant_id: str, session_id: str, body: ConvMetaRequest, request: Request = None):
     """Assign a conversation to a team member, add an internal note, or set triage tags."""
+    await _guard_staff_thread(tenant_id, session_id, request)
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
     if not patch:
         return {"ok": True, "session_id": session_id, "unchanged": True}

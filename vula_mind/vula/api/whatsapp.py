@@ -6580,24 +6580,36 @@ async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
     except Exception as exc:
         logger.warning("tenant_phones removal failed for %s: %s", phone, exc)
 
-    # Clear chat history
-    try:
-        from vula.chat.history import get_db
-        chat_db = get_db()
-        if tenant_id:
-            chat_db.clear(tenant_id, phone)
-            removed.append("message history")
-    except Exception as exc:
-        logger.warning("chat history removal failed for %s: %s", phone, exc)
+    # Every store that holds what this person said (vula/privacy_data.py), deleted now — not one
+    # table with a promise about the rest.
+    failed: list = []
+    if tenant_id:
+        try:
+            from vula import privacy_data
+            result = privacy_data.erase(tenant_id, phone)
+            failed = result["failed"]
+            if sum(result["removed"].values()):
+                removed.append("conversations with us")
+        except Exception as exc:
+            logger.error("data erase failed for %s: %s", phone, exc)
+            failed = ["conversations"]
 
-    await _send_reply(
-        phone,
-        "✅ Your data deletion request has been received. "
-        f"We've removed your {', '.join(removed) if removed else 'records'} from Vula. "
-        "Any remaining data will be deleted within 30 days per POPIA. "
-        "For a full deletion or questions, email hello@vula.co.za.",
-        tenant_id,
-    )
+    await _send_reply(phone, _deletion_reply(removed, failed), tenant_id)
+
+
+def _deletion_reply(removed: list, failed: list) -> str:
+    """What to tell someone who asked for their data to be deleted — only what was really done.
+    The old reply promised "any remaining data will be deleted within 30 days"; nothing did
+    that."""
+    if failed:
+        return ("Your data deletion request has been received, but I couldn't remove everything "
+                "just now. Please email hello@vula.co.za and we'll finish it by hand and confirm "
+                "to you when it's done.")
+    done = f"We've deleted your {' and '.join(removed)}." if removed else \
+        "We had no conversation history on file for this number."
+    return ("✅ Your data deletion request has been received. " + done + " "
+            "Orders and invoices are kept, because a business must keep its financial records by "
+            "law. You won't be sent any more messages. Questions: hello@vula.co.za.")
 
 
 _EXPORT_FAILURE_REPLY = (
@@ -9793,8 +9805,12 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         )
         session_id = session["id"]
         preferred_language = session.get("preferred_language")
+        # This is the owner's / a staff member's own thread: label their turns with who they
+        # are, not "Customer" (the admin agent used to read its colleague back as a customer).
+        _who, _who_role = _caller_identity(tenant_id, phone)
         history = commerce_service.format_history(
-            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT)
+            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT),
+            user_label=(f"{_who} ({_who_role})" if _who and _who_role else (_who or "Owner")),
         )
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)

@@ -1,7 +1,12 @@
 /**
  * useAssistantChat.js — "Chat to Vula", shared by VulaAssistant (current look) and assistant/AssistantV2
  * (the redesign, 2026-10-20). Moved verbatim: the same commerce_admin agent the owner uses on
- * WhatsApp, one session per mount, with the starter suggestions.
+ * WhatsApp, with the starter suggestions.
+ *
+ * The thread belongs to the signed-in person: the server keys it on who they are, and the earlier
+ * messages are loaded when the chat opens. (It used to start a new, anonymous session on every
+ * page load, so the chat forgot everything on refresh.) session_id is only a fallback for a
+ * caller the server can't identify.
  */
 import { useState, useRef, useEffect } from 'react'
 import { VULA_API } from '../../lib/authFetch'
@@ -23,6 +28,21 @@ export function useAssistantChat(tenantId) {
   const endRef = useRef(null)
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, sending])
+
+  useEffect(() => {
+    if (!tenantId) return
+    let cancelled = false
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant/history`)
+      .then(r => (r.ok ? r.json() : { messages: [] }))
+      .then(d => {
+        const earlier = (d.messages || []).filter(m => m.content)
+          .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.content }))
+        // Only fill an untouched chat: never overwrite something typed while this loaded.
+        if (!cancelled && earlier.length) setMessages(m => (m.length === 1 ? [...m, ...earlier] : m))
+      })
+      .catch(() => { /* the chat still works without its history */ })
+    return () => { cancelled = true }
+  }, [tenantId])
 
   async function send(text) {
     const msg = (text ?? input).trim()
