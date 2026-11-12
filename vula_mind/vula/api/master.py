@@ -1580,8 +1580,22 @@ async def decision_bench_start(body: Optional[dict] = None):
     run_id = "bench-" + uuid.uuid4().hex[:10]
     decisions = [d for d in (body.get("decisions") or []) if d in ("skill", "escalation", "expense_purpose")] or None
     limit = int(body["limit"]) if str(body.get("limit") or "").isdigit() else None
-    _BENCH_TASKS[run_id] = asyncio.create_task(decision_bench.run(run_id, decisions=decisions, limit=limit))
-    return {"run_id": run_id, "started": True}
+    # 12 Nov 2026: compare models on the local box too ("qwen3:8b", "llama3.1:8b"): each is asked
+    # today's prompt with no cloud fallback, next to today's classifier ("current").
+    local = [str(m).strip() for m in (body.get("local_models") or []) if str(m).strip()]
+    providers = None
+    if local:
+        if len(local) > 3:
+            raise HTTPException(status_code=422, detail="Compare up to 3 local models at a time.")
+        bad = [m for m in local if not decision_bench.LOCAL_MODEL_RE.match(m)]
+        if bad:
+            raise HTTPException(status_code=422, detail=f"Not an Ollama model name: {', '.join(bad)}")
+        providers = ["current"] + [decision_bench.LOCAL_PREFIX + m for m in local]
+        if body.get("include_jev"):
+            providers.insert(0, "jev")
+    _BENCH_TASKS[run_id] = asyncio.create_task(decision_bench.run(run_id, decisions=decisions, limit=limit,
+                                                                  providers=providers))
+    return {"run_id": run_id, "started": True, "providers": providers or list(decision_bench.PROVIDERS)}
 
 
 @router.get("/decision-bench")
