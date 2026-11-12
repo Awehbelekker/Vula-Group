@@ -1,0 +1,16 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Brainstorm
+summary: Come up with ideas and options for something the business wants to try or
+  fix.
+triggers:
+- brainstorm
+- ideas
+- any idea
+- ways to
+tools:
+- sales_summary
+- recent_orders
+- recent_promotions
+- customer_lookup
+- competitor_check
+- stock_status

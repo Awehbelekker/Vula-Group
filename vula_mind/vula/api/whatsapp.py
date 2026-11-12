@@ -7756,6 +7756,21 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                                       caller_name=caller_name, caller_role=caller_role)
 
 
+def _wants_advisor(tenant_id: str, question: str) -> bool:
+    """True when the front desk would hand this message to the AI advisor and this business has
+    the advisor switched on."""
+    try:
+        from core.skills import employees
+        settings_ = employees.settings_for(tenant_id)
+        if not (settings_.get("advisor") or {}).get("enabled"):
+            return False
+        enabled = {k for k, v in settings_.items() if v["enabled"]}
+        return employees.is_advisor(employees.pick(question, enabled))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("advisor check skipped: %s", exc)
+        return False
+
+
 def _staff_person(tenant_id: str, phone: str):
     """The team member writing from this number (vula/identity.py), or None."""
     try:
@@ -7952,7 +7967,10 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
         from core.skills.base import looks_like_owner_admin_question
-        if looks_like_owner_admin_question(question):
+        # …and thinking something through ("should we…", "brainstorm…", "pros and cons…") goes
+        # to the AI advisor there, when this business has it on, instead of the general skill,
+        # which has no tools to check the numbers with (employees/advisor).
+        if looks_like_owner_admin_question(question) or _wants_advisor(tenant_id, question):
             try:
                 from core.skills.base import SkillInput
                 from core.skills.loader import get_skill

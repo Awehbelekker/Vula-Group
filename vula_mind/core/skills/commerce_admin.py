@@ -2245,6 +2245,15 @@ class CommerceAdminSkill(BaseSkill):
                                                 tools, sources=collected_sources)
             if not answer:
                 raise RuntimeError("empty answer from admin agent loop")
+            advising = False
+            try:
+                from core.skills import employees as _employees
+                advising = _employees.is_advisor(employee)
+                if advising:
+                    # Thinking aloud that looked nothing up says so, in code (employees/advisor).
+                    answer = _employees.mark_ideas(answer, collected_sources)
+            except Exception:  # noqa: BLE001
+                pass
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
             # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
@@ -2287,8 +2296,14 @@ class CommerceAdminSkill(BaseSkill):
                            f"these figures:\n{fixes}\n\nLet me redo the quote properly rather "
                            "than you working off a wrong total.")
                 confidence = 0.3
-            return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence,
-                               sources=collected_sources)
+            return SkillOutput(
+                answer=answer, skill_name=self.name, confidence=confidence, sources=collected_sources,
+                # The second-opinion pass looks for claims the records don't support — which is
+                # every idea an advisor offers, so it would caveat all of them. The advisor's
+                # reply is kept honest another way: figures still pass the supervisor's check
+                # against what the tools returned, and ideas are labelled as ideas.
+                verification=({"verifier": "advisor.ideas_labelled", "outcome": "skipped",
+                               "escalated": False, "defects": [], "extra": {}} if advising else None))
         except ConfirmationRequired as cr:
             summary = _preview_summary(cr.result)
             row = {

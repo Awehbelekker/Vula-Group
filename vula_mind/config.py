@@ -517,6 +517,12 @@ class Settings(BaseSettings):
     # answered it in view, and the last skill survives a restart (vula/route_memory.py).
     follow_up_routing_enabled: bool = False
 
+    # ── Advisor (employees/advisor) ───────────────────────────────────────────
+    # The AI advisor — a thinking partner for staff (ideas, options, planning), read-only, with
+    # facts and ideas kept apart. Off = each business switches it on for itself under Team ›
+    # AI employees. On = it is on for every business unless they switch it off.
+    advisor_mode_enabled: bool = False
+
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every
     # keyword silently falls through to the generic "reasoning" skill (the exact mechanism
