@@ -99,6 +99,7 @@ vula_background_jobs: kind:text, running:bool, started_at:timestamptz, status:js
 vula_boq_drafts: lines:jsonb, project:text, tenant_id:text, total_cents:int8, updated_at:timestamptz, updated_by:text
 vula_business_profile: answers:jsonb, drafts:jsonb, public_keys:jsonb, tenant_id:text, updated_at:timestamptz, updated_by:text
 vula_business_rules: created_at:timestamptz, created_by:text, id:uuid, rule:text, source:text, status:text, tenant_id:text, topic:text, updated_at:timestamptz
+vula_buyer_wishes: active:bool, created_at:timestamptz, id:uuid, listing_type:text, max_price_cents:int8, min_bedrooms:numeric, name:text, phone:text, property_types:jsonb, source:text, suburbs:jsonb, tenant_id:text, updated_at:timestamptz
 vula_buying_settings: approver_phones:_text, default_account:text, default_project:text, enabled:bool, monthly_limit_cents:int8, per_purchase_limit_cents:int8, tenant_id:text, updated_at:timestamptz, updated_by:text, who_can_ask:text
 vula_buying_shops: active:bool, created_at:timestamptz, created_by:text, domain:text, how:text, id:uuid, name:text, supplier_id:text, tenant_id:text
 vula_call_sheets: created_at:timestamptz, entries:jsonb, id:uuid, rep_whatsapp:text, sent_at:timestamptz, status:text, tenant_id:text
@@ -139,6 +140,7 @@ vula_imports: created_at:timestamptz, cutover_date:date, error:text, id:uuid, pr
 vula_infra_snapshot: day:date, est_cost_usd:numeric, id:uuid, storage_mb:numeric, tenant_id:text, updated_at:timestamptz, vectors:int8
 vula_kb_turns: answer_docs:jsonb, asker:text, candidates:jsonb, channel:text, created_at:timestamptz, feedback:text, feedback_at:timestamptz, id:uuid, outcome:text, picked_at:timestamptz, picked_doc:text, question:text, role:text, skill:text, tenant_id:text
 vula_learned_answers: answer:text, approved_at:timestamptz, approved_by:text, created_at:timestamptz, id:uuid, promoted_by:text, promoted_to_shared_kb_at:timestamptz, question:text, share_scope:text, source:text, status:text, tenant_id:text
+vula_listing_shares: created_at:timestamptz, id:uuid, phone:text, property_id:uuid, shared_by:text, source:text, tenant_id:text
 vula_mass_mind_patterns: avg_score:float8, business_type:text, id:int8, model_tier:text, sample_count:int4, skill:text, updated_at:timestamptz, win_rate:float8
 vula_material_rate_log: error:text, id:int8, rates_extracted:int4, scraped_at:text, source:text, status:text, url:text
 vula_material_rates: change_pct:float8, high:float8, key:text, label:text, low:float8, mid:float8, notes:text, prev_mid:float8, scraped_at:text, source:text, unit:text

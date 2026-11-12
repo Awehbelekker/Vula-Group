@@ -181,6 +181,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # real-estate listings: the newest column of its three tables (enquiry source/preferred times)
     ("257", "vula_property_enquiries", "preferred_times"),
     ("258", "vula_deals", None),                      # deals pipeline
+    ("259", "vula_buyer_wishes", None),               # listings sent + clients' wish lists
 ]
 
 

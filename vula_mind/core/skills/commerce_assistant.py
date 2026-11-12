@@ -1215,6 +1215,7 @@ class CommerceAssistantSkill(BaseSkill):
                 confidence=confidence,
                 sources=sources,
                 media_url=ctx.get("media_url"),
+                cards=ctx.get("cards"),
             )
         except Exception as exc:
             logger.warning("commerce_assistant tool loop failed (%s) — falling back", exc)
