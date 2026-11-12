@@ -1559,6 +1559,13 @@ async def _local_llm_watch_loop() -> None:
     await run_forever()
 
 
+async def _local_models_loop() -> None:
+    """Download any model in LOCAL_MODELS_ENSURE that the local box doesn't have (12 Nov 2026),
+    through the same tunnel every local call uses. See vula/local_models.py."""
+    from vula.local_models import run_forever
+    await run_forever()
+
+
 async def _qdrant_backup_loop() -> None:
     """Daily per-tenant Qdrant collection snapshot → private Supabase Storage bucket, see
     docs/dr.md. Qdrant previously had zero backup mechanism — the highest-severity finding in
@@ -1722,6 +1729,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
+    # Missing local models (LOCAL_MODELS_ENSURE) → Ollama downloads them (2026-11-12).
+    _scheduled_job_tasks.append(_asyncio.create_task(_local_models_loop()))
     # Weekly: customers see only public documents, or the operator hears about it (2026-10-20).
     _scheduled_job_tasks.append(_asyncio.create_task(_kb_customer_view_weekly_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
