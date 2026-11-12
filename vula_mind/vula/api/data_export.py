@@ -93,7 +93,14 @@ async def assemble_export(tenant_id: str, phone: str) -> Dict[str, Any]:
         if candidate:
             email = candidate
             break
-    return {"messages": messages, "orders": orders, "invoices": invoices, "email": email}
+    # The note Vula keeps of earlier conversations (vula/client_memory.py) is theirs too.
+    try:
+        from vula import client_memory
+        note = client_memory.summary_for(tenant_id, phone)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: client note skipped: %s", exc)
+        note = ""
+    return {"messages": messages, "orders": orders, "invoices": invoices, "email": email, "note": note}
 
 
 def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
@@ -111,6 +118,11 @@ def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
     else:
         lines.append("_No conversation history on file._")
     lines.append("")
+
+    if data.get("note"):
+        lines.append("## What we remember from earlier conversations")
+        lines.append(data["note"])
+        lines.append("")
 
     lines.append(f"## Orders ({len(orders)})")
     if orders:

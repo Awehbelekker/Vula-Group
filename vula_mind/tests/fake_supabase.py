@@ -1,7 +1,7 @@
 """A small in-memory stand-in for the Supabase client, for tests that need real filtering.
 
 Supports the query shapes the code under test uses: select / insert / upsert / update / delete with
-eq, neq, in_, like, gte, lt, order, limit, range. Rows are plain dicts held per table, so a test can
+eq, neq, in_, like, ilike, gt, gte, lt, order, limit, range. Rows are plain dicts held per table, so a test can
 seed `db.rows["table"]` and then assert on what is left.
 """
 from __future__ import annotations
@@ -32,8 +32,9 @@ class _Query:
         self._op, self._payload = "insert", payload
         return self
 
-    def upsert(self, payload, **_k):
-        self._op, self._payload = "insert", payload
+    def upsert(self, payload, on_conflict: str = "", **_k):
+        self._op, self._payload = "upsert", payload
+        self._conflict = [c.strip() for c in on_conflict.split(",") if c.strip()]
         return self
 
     def update(self, payload):
@@ -63,6 +64,15 @@ class _Query:
         self._filters.append(lambda r: fnmatch.fnmatchcase(str(r.get(col) or ""), glob))
         return self
 
+    def ilike(self, col, pattern):
+        glob = pattern.lower().replace("%", "*").replace("_", "?")
+        self._filters.append(lambda r: fnmatch.fnmatchcase(str(r.get(col) or "").lower(), glob))
+        return self
+
+    def gt(self, col, val):
+        self._filters.append(lambda r: str(r.get(col) or "") > str(val))
+        return self
+
     def gte(self, col, val):
         self._filters.append(lambda r: str(r.get(col) or "") >= str(val))
         return self
@@ -88,7 +98,18 @@ class _Query:
         rows = self._db.rows.setdefault(self._table, [])
         if self._table in self._db.fail:
             raise RuntimeError(f"{self._table} unavailable")
-        if self._op == "insert":
+        if self._op == "upsert" and self._conflict:
+            out = []
+            for new in (self._payload if isinstance(self._payload, list) else [self._payload]):
+                hit = next((r for r in rows if all(r.get(c) == new.get(c) for c in self._conflict)), None)
+                if hit:
+                    hit.update(new)
+                else:
+                    hit = dict(new)
+                    rows.append(hit)
+                out.append(dict(hit))
+            return _Result(out)
+        if self._op in ("insert", "upsert"):
             new = self._payload if isinstance(self._payload, list) else [self._payload]
             new = [{"id": str(uuid.uuid4()), **r} if "id" not in r else dict(r) for r in new]
             rows.extend(new)

@@ -101,6 +101,11 @@ def _erase_escalations(tenant_id: str, variants: List[str]) -> int:
                   .eq("tenant_id", tenant_id).in_("customer_phone", variants).execute())
 
 
+def _erase_client_note(tenant_id: str, variants: List[str]) -> int:
+    from vula import client_memory
+    return client_memory.erase(tenant_id, variants)
+
+
 # (label, step). Order matters only for readability; each step stands alone.
 ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("chat_messages", _erase_chat_messages),
@@ -109,6 +114,7 @@ ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("question_log", _erase_kb_turns),
     ("open_questions", _erase_open_questions),
     ("escalations", _erase_escalations),
+    ("client_note", _erase_client_note),
 ]
 
 

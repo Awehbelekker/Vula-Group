@@ -990,6 +990,24 @@ async def _conversation_check_loop() -> None:
         await _asyncio.sleep(900)
 
 
+async def _client_memory_loop() -> None:
+    """Every 20 minutes: fold conversations that have gone quiet into each client's note
+    (vula/client_memory.py), so a client who returns later isn't a stranger. A no-op unless
+    CLIENT_MEMORY_ENABLED. Logs counts only."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(330)
+    while True:
+        try:
+            from vula import client_memory
+            if client_memory.enabled():
+                counts = await client_memory.sweep()
+                if counts.get("written") or counts.get("failed"):
+                    log.info("client memory sweep: %s", counts)
+        except Exception as exc:
+            log.warning("client memory loop error: %s", exc)
+        await _asyncio.sleep(1200)
+
+
 async def _shared_kb_loop() -> None:
     """Keeps the shared general-business KB and the sector packs seeded (vula/training/
     seeder.py::ensure_shared_kbs) — on boot, then daily. A no-op when nothing changed."""
@@ -1679,6 +1697,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_client_memory_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_advisor_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))

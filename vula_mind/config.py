@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     app_error_retention_days: int = 90         # vula_app_errors (by last_seen)
     lead_retention_days: int = 365             # vula_website_leads not won
     turn_retention_days: int = 365             # vula_turns, vula_kb_turns
+    # Conversations and the per-client note (vula/client_memory.py), counted from the LAST message
+    # in the conversation — an active client keeps their history. 12 Nov 2026, owner's decision:
+    # 24 months. 0 keeps them indefinitely.
+    conversation_retention_days: int = 730     # commerce_conversation_*, commerce_client_summaries
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
@@ -482,6 +486,12 @@ class Settings(BaseSettings):
     # voice in the two commerce skills only). Turn on per environment once the weekly benchmark
     # has been compared before/after — it changes every prompt at once.
     voice_compose_enabled: bool = False
+
+    # ── Client memory (vula/client_memory.py) ────────────────────────────────
+    # A short dated note per client, written when a conversation goes quiet and shown to the
+    # assistant on their next message, so a client who returns after a month isn't a stranger.
+    # One local model call per conversation. Off = nothing is written or shown.
+    client_memory_enabled: bool = False
 
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every

@@ -70,6 +70,35 @@ def _turns(days: int) -> Dict[str, int]:
     return out
 
 
+def _conversations(days: int) -> Dict[str, int]:
+    """Conversations whose LAST message is older than the period, with their messages, ratings
+    and the client's note. Counted from the last contact, so an active client keeps their
+    history; orders and invoices are accounting records and are never touched here."""
+    from datetime import datetime, timedelta, timezone
+    from vula.commerce.service import _client
+    db = _client()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    out = {"sessions": 0, "messages": 0, "client_notes": 0}
+    while True:
+        rows = (db.table("commerce_conversation_sessions").select("id,tenant_id,session_key,customer_phone")
+                .lt("updated_at", cutoff).limit(200).execute().data or [])
+        if not rows:
+            break
+        ids = [r["id"] for r in rows]
+        out["messages"] += len(db.table("commerce_conversation_messages").delete().in_("session_id", ids).execute().data or [])
+        db.table("vula_reply_feedback").delete().in_("session_id", ids).execute()
+        from vula import client_memory
+        for r in rows:
+            key = client_memory.client_key(r.get("customer_phone") or r.get("session_key"))
+            if key:
+                out["client_notes"] += len(db.table(client_memory.TABLE).delete()
+                                           .eq("tenant_id", r["tenant_id"]).eq("client_key", key).execute().data or [])
+        out["sessions"] += len(db.table("commerce_conversation_sessions").delete().in_("id", ids).execute().data or [])
+        if len(rows) < 200:
+            break
+    return out
+
+
 RULES: List[Rule] = [
     Rule("takeoff_plans", "takeoff_retention_days", _takeoff),
     # 9 Nov 2026 (owner's decision, golive audit): the candidates docs/security-model.md listed.
@@ -78,6 +107,8 @@ RULES: List[Rule] = [
     Rule("app_errors", "app_error_retention_days", _app_errors),
     Rule("website_leads", "lead_retention_days", _leads),
     Rule("conversation_turns", "turn_retention_days", _turns),
+    # 12 Nov 2026 (owner's decision): 24 months after a client's last message.
+    Rule("conversations", "conversation_retention_days", _conversations),
 ]
 
 

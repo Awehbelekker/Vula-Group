@@ -1142,6 +1142,15 @@ class CommerceAssistantSkill(BaseSkill):
         system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"),
                                          booking_focused=ctx["booking_focused"],
                                          customer_profile=profile)
+        # What was said in earlier conversations with this customer — the model itself only
+        # reads the last 24 hours, so someone back after a month was a stranger
+        # (vula/client_memory.py). Matched on the number this message came from, nothing else.
+        if ctx["customer_phone"]:
+            try:
+                from vula import client_memory
+                system_msg += client_memory.block_for_prompt(inp.tenant_id, ctx["customer_phone"])
+            except Exception as exc:
+                logger.debug("client note skipped: %s", exc)
         if ctx["forwarded"]:
             # 2026-10-23 (Off the Hook): a forwarded post put 2 × Hake Fillets in a cart.
             system_msg += FORWARDED_NOTE

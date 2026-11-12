@@ -1401,8 +1401,19 @@ SUBSCRIPTION_TOOLS = [
 CRM_TOOLS = [
     {"type": "function", "function": {
         "name": "customer_lookup",
-        "description": "Look up a customer by phone or name: lifetime value, orders, last seen, preferred language.",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+        "description": (
+            "Everything on file about ONE client, found by their name, phone number or email "
+            "address: contact details, their orders and lifetime value, their invoices and "
+            "quotes with what is still owed, what was said in earlier conversations (a dated "
+            "note plus the latest messages), open follow-ups, and how much email there has been. "
+            "Use it whenever the owner or staff ask about a client — 'what's the story with "
+            "Sarah', 'does Thabo owe us anything', 'when did we last hear from 082…', 'summarise "
+            "this client'. Every amount in the result is read from the books: quote it exactly, "
+            "never add or re-total. If the result says a part was not read, say so rather than "
+            "assume there is nothing. If it asks which client was meant, ask the user that."),
+        "parameters": {"type": "object", "properties": {"query": {
+            "type": "string", "description": "The client's name, phone number or email address."}},
+            "required": ["query"]}}},
     {"type": "function", "function": {
         "name": "dynamics_lookup",
         "description": "Search the connected Dynamics 365 CRM for an account (company), contact (person), "
@@ -1879,6 +1890,8 @@ for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
         _TOOL_SCOPE.setdefault(_t["function"]["name"], _scope)
 
 _FULL_ACCESS_ROLES = {"owner", "manager", "admin"}
+# Access that lets a member see what a client was billed and owes (customer_lookup).
+_MONEY_SCOPES = {"invoices", "finances"}
 
 
 def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
@@ -2249,7 +2262,9 @@ class CommerceAdminSkill(BaseSkill):
             # see the incident note on unverified_prices' definition.
             bad_prices = unverified_prices(answer, collected_sources,
                                            {"lookup_business_info", "competitor_check",
-                                            "find_document", "email_thread_summary"})
+                                            "find_document", "email_thread_summary",
+                                            # a client's invoices and order totals, read from the books
+                                            "customer_lookup"})
             if bad_prices:
                 logger.warning("commerce_admin unverified price(s) in answer, tenant=%s: %s",
                                inp.tenant_id, bad_prices)
@@ -2936,7 +2951,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "generate_marketing": return await self._generate_marketing(tid, args)
             if name == "create_subscription": return await self._create_subscription(tid, args)
             if name == "list_subscriptions": return await self._list_subscriptions(tid, args.get("status"))
-            if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""))
+            if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""), ctx)
             if name == "dynamics_lookup":    return await self._dynamics_lookup(tid, args.get("query", ""), args.get("kind", "contact"))
             if name == "send_broadcast":     return await self._send_broadcast(tid, args)
             if name == "list_storefront_pages": return await self._list_storefront_pages(tid)
@@ -4972,23 +4987,28 @@ class CommerceAdminSkill(BaseSkill):
         return await email_service.summarize_correspondence(
             creds, args.get("query") or "", since=args.get("since"))
 
-    async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
-        from vula.api.commerce import _aggregate_customers, _norm_phone
-        q = (query or "").strip().lower()
-        if not q:
-            return {"error": "Give a name or phone to look up."}
-        customers = await _aggregate_customers(tid)
-        qd = _norm_phone(q)
-        match = None
-        for c in customers.values():
-            if (qd and qd in _norm_phone(c.get("phone"))) or (q in (c.get("name") or "").lower()):
-                match = c
-                break
-        if not match:
-            return {"message": f"No customer found for '{query}'."}
-        return {"name": match.get("name"), "phone": match.get("phone"),
-                "orders": match.get("orders", 0), "lifetime_value": self._rands(match.get("total_spent_cents")),
-                "last_seen": match.get("last_order_at") or match.get("last_seen_at")}
+    async def _customer_lookup(self, tid: str, query: str,
+                               ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The client's whole record (vula/clients.py). This used to return five things — name,
+        phone, order count, lifetime value, last seen — so "what's the story with Sarah" had no
+        conversations, invoices or notes behind it. Amounts are left out for a member whose
+        access doesn't include Money."""
+        import asyncio
+        from vula import client_memory, clients
+        if not (query or "").strip():
+            return {"error": "Give a name, phone number or email address to look up."}
+        found = await asyncio.to_thread(clients.resolve, tid, query)
+        if found.get("ambiguous"):
+            return {"status": "need_info",
+                    "message": f"More than one client matches '{query}'. Which one? "
+                               + "; ".join(found["ambiguous"])}
+        client = found.get("client")
+        if not client:
+            return {"message": f"No client found for '{query}'."}
+        access = _ctx_access(tid, ctx)
+        money = access is None or bool(set(access) & _MONEY_SCOPES)
+        summary = await asyncio.to_thread(client_memory.summary_for, tid, client.phone)
+        return await asyncio.to_thread(clients.brief, tid, client, money=money, summary=summary or None)
 
     async def _dynamics_lookup(self, tid: str, query: str, kind: str) -> Dict[str, Any]:
         q = (query or "").strip()

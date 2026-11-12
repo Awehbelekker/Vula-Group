@@ -22,6 +22,7 @@ commerce_cards: active:bool, created_at:timestamptz, id:uuid, label:text, last4:
 commerce_cart_items: cart_id:uuid, created_at:timestamptz, id:uuid, product_id:uuid, quantity:numeric, unit_price_cents:int4, updated_at:timestamptz, variant_id:uuid
 commerce_carts: created_at:timestamptz, customer_name:text, customer_phone:text, delivery_address:text, delivery_cents:int4, delivery_slot:text, id:uuid, session_id:text, status:text, tenant_id:text, updated_at:timestamptz
 commerce_categories: created_at:timestamptz, id:uuid, key:text, label:text, sort_order:int4, tenant_id:text
+commerce_client_summaries: client_key:text, covers_until:timestamptz, created_at:timestamptz, summary:text, tenant_id:text, updated_at:timestamptz
 commerce_consent: created_at:timestamptz, id:uuid, phone:text, source:text, status:text, tenant_id:text, updated_at:timestamptz
 commerce_consent_log: action:text, created_at:timestamptz, id:uuid, phone:text, purpose:text, source:text, tenant_id:text
 commerce_contacts: address:text, area:text, company:text, consent_at:timestamptz, consent_status:text, created_at:timestamptz, created_by:text, email:text, id:uuid, name:text, notes:text, onboarding_at:timestamptz, onboarding_state:text, phone:text, product:text, source:text, tags:_text, tenant_id:text, title:text, updated_at:timestamptz
