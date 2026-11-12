@@ -523,6 +523,11 @@ class Settings(BaseSettings):
     # AI employees. On = it is on for every business unless they switch it off.
     advisor_mode_enabled: bool = False
 
+    # Website import (vula/commerce/site_import.py): copy each product's photos into the
+    # business's own storage, so they survive the old site changing. Off = keep the shop's CDN
+    # addresses, as before.
+    site_import_copy_images: bool = True
+
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every
     # keyword silently falls through to the generic "reasoning" skill (the exact mechanism

@@ -32,6 +32,9 @@ _COMMON: List[Dict[str, str]] = [
     {"key": "what_we_do", "public": True, "q": "In a sentence or two: what does the business sell or do, and for whom?"},
     {"key": "area", "public": True, "q": "Where do you work or deliver? (areas, towns, or 'collection only')"},
     {"key": "hours", "public": True, "q": "What are your working hours, and when are you closed?"},
+    # 12 Nov 2026: how customers reach the business — filled exactly from the website's own
+    # contact data when there is any (site_facts.py), so "what's your number?" has an answer.
+    {"key": "contact", "public": True, "q": "How can customers reach you: phone, email and address?"},
     {"key": "payment", "public": True, "q": "How do customers pay you (EFT, card, cash, payment link), and what are your payment terms?"},
     {"key": "pricing", "q": "How do you price — fixed price list, quote per job, or per hour/m²? Anything you always add (call-out, delivery)?"},
     {"key": "lead_times", "public": True, "q": "How quickly can you usually deliver or start a job?"},

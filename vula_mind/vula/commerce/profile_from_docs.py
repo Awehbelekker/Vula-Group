@@ -121,6 +121,15 @@ async def run(tenant_id: str, files: List[Dict[str, Any]], file_it=None) -> Dict
     return st
 
 
+async def file_into_kb(tenant_id: str, path: Path, mime: Optional[str]) -> None:
+    """Exactly what POST /ingest does for one upload: into the knowledge base, then filed."""
+    from vula.api import server as srv
+    from vula.ingestion.pipeline import VulaIngestionPipeline
+    result = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(path)
+    if result.status in ("success", "done"):
+        await srv._analyze_and_file_upload(tenant_id, result, path, mime)
+
+
 def already_running(tenant_id: str) -> bool:
     return bool(status(tenant_id).get("running"))
 

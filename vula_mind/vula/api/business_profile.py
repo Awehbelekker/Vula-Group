@@ -5,7 +5,7 @@ Mounted under /v1/commerce, so /v1/commerce/{tenant_id}/admin/... is covered by 
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -102,14 +102,7 @@ async def setup_from_documents(tenant_id: str, files: List[UploadFile] = File(..
         raise HTTPException(status_code=400, detail="None of those files could be used: "
                             + "; ".join(f"{s['name']} ({s['reason']})" for s in skipped))
 
-    async def file_it(tid: str, path, mime: Optional[str]) -> None:
-        # Exactly what POST /ingest does for one upload: into the knowledge base, then filed.
-        from vula.ingestion.pipeline import VulaIngestionPipeline
-        result = await VulaIngestionPipeline(tenant_id=tid).ingest_file(path)
-        if result.status in ("success", "done"):
-            await srv._analyze_and_file_upload(tid, result, path, mime)
-
-    run_background(tenant_id, "setup_from_documents", pfd.run(tenant_id, saved, file_it=file_it))
+    run_background(tenant_id, "setup_from_documents", pfd.run(tenant_id, saved, file_it=pfd.file_into_kb))
     return {"status": "queued", "files": [s["name"] for s in saved], "skipped": skipped,
             "message": f"Reading {len(saved)} document{'s' if len(saved) != 1 else ''}. "
                        "What I find will be listed for you to check."}
