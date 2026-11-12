@@ -4702,9 +4702,11 @@ async def admin_list_invoices(
 
 
 @router.post("/{tenant_id}/admin/invoices")
-async def admin_create_invoice(tenant_id: str, body: InvoiceCreate):
+async def admin_create_invoice(tenant_id: str, body: InvoiceCreate, request: Request):
     """Create an invoice, quote, or proforma. Totals computed server-side."""
-    created = await service.create_invoice(tenant_id, body.model_dump(mode="json"))
+    from vula import acting
+    with acting.acting_as(await acting.from_dashboard(request.headers.get("authorization", ""), tenant_id)):
+        created = await service.create_invoice(tenant_id, body.model_dump(mode="json"))
     return created
 
 
@@ -5729,11 +5731,13 @@ async def admin_list_quotes(
 
 
 @router.post("/{tenant_id}/admin/quotes")
-async def admin_create_quote(tenant_id: str, body: InvoiceCreate):
+async def admin_create_quote(tenant_id: str, body: InvoiceCreate, request: Request):
     """Create a quote or proforma. Totals computed server-side in integer cents."""
     if body.doc_type.value not in ("quote", "proforma"):
         raise HTTPException(status_code=400, detail="doc_type must be 'quote' or 'proforma'")
-    created = await service.create_invoice(tenant_id, body.model_dump(mode="json"))
+    from vula import acting
+    with acting.acting_as(await acting.from_dashboard(request.headers.get("authorization", ""), tenant_id)):
+        created = await service.create_invoice(tenant_id, body.model_dump(mode="json"))
     return created
 
 
@@ -8298,7 +8302,7 @@ async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
 
 
 @router.post("/{tenant_id}/admin/orders/manual")
-async def admin_create_manual_order(tenant_id: str, body: dict):
+async def admin_create_manual_order(tenant_id: str, body: dict, request: Request):
     """Create an order on a customer's behalf: items [{product_id, quantity}], customer
     name/phone, address, slot, payment_method, mark_paid. Uses the same cart→order path as
     the storefront so sale pricing and stock behave identically."""
@@ -8325,14 +8329,16 @@ async def admin_create_manual_order(tenant_id: str, body: dict):
         raise HTTPException(status_code=400, detail="no valid items")
     cart = await service.get_or_create_cart(tenant_id, session_id)  # re-read with items joined
     try:
-        order = await service.create_order(tenant_id, cart, {
-            "customer_phone": phone, "customer_name": name,
-            "customer_email": b.get("customer_email"),
-            "delivery_address": b.get("delivery_address") or "Collection / to arrange",
-            "delivery_slot": b.get("delivery_slot") or "morning",
-            "delivery_notes": b.get("delivery_notes"),
-            "channel": "manual", "payment_method": b.get("payment_method") or "cod",
-        })
+        from vula import acting
+        with acting.acting_as(await acting.from_dashboard(request.headers.get("authorization", ""), tenant_id)):
+            order = await service.create_order(tenant_id, cart, {
+                "customer_phone": phone, "customer_name": name,
+                "customer_email": b.get("customer_email"),
+                "delivery_address": b.get("delivery_address") or "Collection / to arrange",
+                "delivery_slot": b.get("delivery_slot") or "morning",
+                "delivery_notes": b.get("delivery_notes"),
+                "channel": "manual", "payment_method": b.get("payment_method") or "cod",
+            })
     except service.OutOfStockError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if b.get("mark_paid"):

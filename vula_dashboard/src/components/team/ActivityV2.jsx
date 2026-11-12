@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Download } from "lucide-react";
 import { VULA_API } from "../../lib/authFetch";
 import { downloadCsv } from "../../lib/csv";
+import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, Select, Table, toast } from "../ui/index.jsx";
 
 const PERIODS = [["this_week", "This week"], ["last_week", "Last week"], ["next_week", "Next week"],
@@ -27,7 +28,15 @@ const COLS = [
   { key: "follow_ups_done", label: "Follow-ups done", align: "right" },
   { key: "follow_ups_overdue", label: "Overdue", align: "right" },
   { key: "contacts_added", label: "New contacts", align: "right" },
+  ...["quotes", "invoices", "orders"].map((k) => ({
+    key: k, label: k[0].toUpperCase() + k.slice(1), align: "right",
+    render: (r) => (r[k] ? `${r[k]} · ${formatMoney(r[`${k}_cents`])}` : "0"),
+    get: (r) => r[k],
+  })),
+  ...["quotes", "invoices", "orders"].map((k) => ({ key: `${k}_cents`, label: `${k} value (R)`, hidden: true,
+    get: (r) => (r[`${k}_cents`] / 100).toFixed(2) })),
 ];
+const SHOWN = COLS.filter((c) => !c.hidden);
 const when = (iso) => (iso ? new Date(iso).toLocaleString("en-ZA", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 const mapsLink = (a) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a)}`;
 
@@ -59,7 +68,7 @@ export default function ActivityV2({ tenantId }) {
   const rows = data?.people || [];
   return (
     <Card className="vtm-block">
-      <p className="vtm-sub">What each person has on and has done, from what they booked and logged with Vula. Quotes, invoices and orders aren't counted per person yet. Tap a person for their week.</p>
+      <p className="vtm-sub">What each person has on and has done, from what they booked, logged and made with Vula. Quotes, invoices and orders count for whoever made them; a customer's own checkout counts for no one. Tap a person for their week.</p>
       <div className="vtm-form">
         <Field label="Period">
           <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
@@ -69,7 +78,7 @@ export default function ActivityV2({ tenantId }) {
         <Button size="sm" variant="secondary" Icon={Download} disabled={!rows.length}
           onClick={() => downloadCsv(`team-activity-${data.since}`, rows, COLS)}>CSV</Button>
       </div>
-      <Table columns={COLS} rows={rows} loading={!data} rowKey="member_id" onRowClick={open}
+      <Table columns={SHOWN} rows={rows} loading={!data} rowKey="member_id" onRowClick={open}
         empty="Nobody on the team has a WhatsApp number yet." />
     </Card>
   );
@@ -96,6 +105,9 @@ function PersonWeek({ p, onBack }) {
               {d.address && <> · <a href={mapsLink(d.address)} target="_blank" rel="noreferrer">{d.address}</a></>}
               {d.checked_in && <> · {d.checked_in}</>}</li>))}
         </ul>)}
+      {p.sales && ["quotes", "invoices", "orders"].some((k) => p.sales[k].count > 0) && (
+        <p className="vtm-sub">Made: {["quotes", "invoices", "orders"].filter((k) => p.sales[k].count > 0)
+          .map((k) => `${p.sales[k].count} ${k} (${formatMoney(p.sales[k].cents)})`).join(", ")}</p>)}
       <h3 className="vtm-sub">Logged</h3>
       {done.length === 0 ? <p className="vtm-sub">Nothing logged in this period.</p> : (
         <ul className="vtm-activity-list">{done.map((d, i) => <li key={i}>{when(d.at)} — {d.text}</li>)}</ul>)}

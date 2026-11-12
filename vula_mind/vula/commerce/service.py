@@ -787,6 +787,10 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
         "created_at": _now(),
         "updated_at": _now(),
     }
+    from vula import acting
+    who = checkout_data.get("created_by") or acting.current()
+    if who:
+        order["created_by"] = who                          # a team member's order (migration 260)
 
     try:
         try:
@@ -800,6 +804,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
             order.pop("discount_code", None)
             order.pop("discount_cents", None)
             order.pop("attributed_broadcast_id", None)
+            order.pop("created_by", None)
             if method:
                 note = order.get("delivery_notes") or ""
                 order["delivery_notes"] = (f"[pay:{method}] " + note).strip()
@@ -1848,11 +1853,17 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
         "created_at": _now(),
         "updated_at": _now(),
     }
+    from vula import acting
+    who = data.get("created_by") or acting.current()
+    if who:
+        invoice["created_by"] = who                        # migration 260
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
-        # discount_cents/deposit_cents (053), project (055), or requires_approval (136) columns
-        # may not exist yet — drop them and retry so invoicing never breaks on a missing column.
+        # discount_cents/deposit_cents (053), project (055), requires_approval (136) or
+        # created_by (260) columns may not exist yet — drop them and retry so invoicing never
+        # breaks on a missing column.
+        invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)
         invoice.pop("deposit_cents", None)
         invoice.pop("project", None)
@@ -2204,11 +2215,14 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
         "created_at": _now(),
         "updated_at": _now(),
     }
+    if quote.get("created_by"):
+        invoice["created_by"] = quote["created_by"]      # the person who quoted keeps the sale (260)
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
-        # discount_cents/deposit_cents (053) or project (055) columns may not exist yet in
-        # this environment — same graceful-degrade retry create_invoice() already uses.
+        # discount_cents/deposit_cents (053), project (055) or created_by (260) columns may not
+        # exist yet in this environment — same graceful-degrade retry create_invoice() uses.
+        invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)
         invoice.pop("deposit_cents", None)
         invoice.pop("project", None)

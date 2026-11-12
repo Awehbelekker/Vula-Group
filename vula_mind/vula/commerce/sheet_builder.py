@@ -107,16 +107,17 @@ SOURCES: Dict[str, Source] = {
         _f(("number", "Invoice no.", "text"), ("type", "Type", "text"), ("customer", "Customer", "text"),
            ("date", "Date", "date"), ("due", "Due", "date"), ("project", "Project", "text"),
            ("excl_vat", "Excl VAT", "money"), ("vat", "VAT", "money"), ("total", "Total", "money"),
-           ("paid", "Paid", "money"), ("owed", "Still owed", "money"), ("status", "Status", "text")),
+           ("paid", "Paid", "money"), ("owed", "Still owed", "money"), ("status", "Status", "text"),
+           ("person", "Made by", "text")),
         ("number", "customer", "date", "project", "total", "paid", "owed", "status"),
-        ("period", "customer", "project", "status", "type"), "_customer_invoices", party="customer"),
+        ("period", "customer", "project", "status", "type", "person"), "_customer_invoices", party="customer"),
     "orders": Source(
         "orders", "Orders", "orders",
         _f(("number", "Order", "text"), ("date", "Date", "date"), ("customer", "Customer", "text"),
            ("channel", "Channel", "text"), ("status", "Status", "text"), ("subtotal", "Subtotal", "money"),
-           ("delivery", "Delivery", "money"), ("total", "Total", "money")),
+           ("delivery", "Delivery", "money"), ("total", "Total", "money"), ("person", "Made by", "text")),
         ("number", "date", "customer", "status", "total"),
-        ("period", "customer", "status"), "_orders", party="customer"),
+        ("period", "customer", "status", "person"), "_orders", party="customer"),
     # 12 Nov 2026: what the team did (vula/team_activity.py) — Team access only (owners/managers).
     "meetings": Source(
         "meetings", "Meetings", "team",
@@ -450,10 +451,12 @@ _DOC_TYPE_LABEL = {"invoice": "Invoice", "credit_note": "Credit note", "quote": 
 
 
 def _customer_invoices(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
     def make():
         q = (_db().table("commerce_invoices")
              .select("id,invoice_number,doc_type,direction,customer_name,issue_date,due_date,project,"
-                     "subtotal_cents,vat_cents,total_cents,total_paid_cents,status")
+                     "subtotal_cents,vat_cents,total_cents,total_paid_cents,status,created_by")
              .eq("tenant_id", tenant_id))
         if since:
             q = q.gte("issue_date", since)
@@ -474,14 +477,17 @@ def _customer_invoices(tenant_id, since, until, labels):
                     "date": str(r.get("issue_date") or "")[:10], "due": str(r.get("due_date") or "")[:10],
                     "project": r.get("project") or "",
                     "excl_vat": sign * abs(int(r.get("subtotal_cents") or 0)) if r.get("subtotal_cents") is not None else total - vat,
-                    "vat": vat, "total": total, "paid": paid, "owed": total - paid, "status": r.get("status") or ""})
+                    "vat": vat, "total": total, "paid": paid, "owed": total - paid, "status": r.get("status") or "",
+                    "person": who(r.get("created_by")) if r.get("created_by") else ""})
     return out
 
 
 def _orders(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
     def make():
         q = (_db().table("commerce_orders")
-             .select("id,display_id,created_at,customer_name,channel,status,subtotal_cents,delivery_cents,total_cents")
+             .select("id,display_id,created_at,customer_name,channel,status,subtotal_cents,delivery_cents,total_cents,created_by")
              .eq("tenant_id", tenant_id))
         if since:
             q = q.gte("created_at", since)
@@ -491,7 +497,8 @@ def _orders(tenant_id, since, until, labels):
     return [{"number": r.get("display_id") or "", "date": str(r.get("created_at") or "")[:10],
              "customer": r.get("customer_name") or "", "channel": r.get("channel") or "",
              "status": r.get("status") or "", "subtotal": int(r.get("subtotal_cents") or 0),
-             "delivery": int(r.get("delivery_cents") or 0), "total": int(r.get("total_cents") or 0)}
+             "delivery": int(r.get("delivery_cents") or 0), "total": int(r.get("total_cents") or 0),
+             "person": who(r.get("created_by")) if r.get("created_by") else ""}
             for r in _pages(make)]
 
 
@@ -504,7 +511,19 @@ def _people(tenant_id: str) -> Callable[[Any], str]:
                  for m in active_members(tenant_id) if m.get("whatsapp")}
     except Exception:  # noqa: BLE001 — a name is never why a sheet fails
         pass
-    return lambda phone: names.get(digits_za(str(phone or ""))[-9:]) or (str(phone or "") or "—")
+    emails = {}
+    try:
+        emails = {(m.get("email") or "").lower(): m.get("name") or m.get("email")
+                  for m in active_members(tenant_id) if m.get("email")}
+    except Exception:  # noqa: BLE001
+        pass
+
+    def name(who: Any) -> str:
+        w = str(who or "")
+        if "@" in w:
+            return emails.get(w.lower()) or w
+        return names.get(digits_za(w)[-9:]) or (w or "—")
+    return name
 
 
 def _sast(value: Any) -> Tuple[str, str]:

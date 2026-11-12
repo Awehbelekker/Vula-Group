@@ -14,7 +14,8 @@ custom sheets (vula/commerce/sheet_builder.py meetings/bookings/follow_ups/meeti
   call sheet      vula_call_sheets        rep_whatsapp   entries[].created_at
   check-ins       vula_checkins           person         at           (vula/checkins.py)
 
-Invoices, quotes and orders don't record who made them yet, so they aren't counted per person.
+Quotes, invoices and orders count for the person who made them (created_by, migration 260);
+a customer's own checkout, and anything from before, belongs to no one.
 Counts are listed by name, never ranked. Every read is scoped to the tenant and a table that
 isn't there counts as nothing (it never fails the answer). Times are SAST (vula/when.py).
 """
@@ -174,16 +175,41 @@ def collect(tenant_id: str, since: datetime, until: datetime,
     out["calls"] = calls
     from vula import checkins
     out["checkins"] = checkins.for_period(tenant_id, since, until, phones)
+    # Quotes, invoices and orders a team member made (created_by, migration 260 — set from the
+    # WhatsApp sender or the signed-in dashboard member; a customer's own checkout has none).
+    docs = _rows(lambda: q("commerce_invoices", "id,created_by,doc_type,direction,total_cents,status,issue_date",
+                           "created_by", "issue_date").limit(2000).execute().data)
+    docs = [r for r in docs if r.get("created_by") and r.get("direction") != "inbound"
+            and (r.get("status") or "") not in ("cancelled", "void")]
+    out["quotes"] = [r for r in docs if r.get("doc_type") == "quote"]
+    out["invoices"] = [r for r in docs if r.get("doc_type") == "invoice"]
+    out["orders"] = [r for r in _rows(lambda: q("commerce_orders", "id,created_by,total_cents,status,created_at",
+                                                "created_by", "created_at").limit(2000).execute().data)
+                     if r.get("created_by") and (r.get("status") or "") not in ("cancelled", "abandoned")]
     return out
 
 
 _PERSON_COL = {"meetings": "created_by", "bookings": "booked_by", "notes": "filed_by", "done": "created_by",
-               "contacts": "created_by", "overdue": "created_by", "calls": "rep_whatsapp", "checkins": "person"}
+               "contacts": "created_by", "overdue": "created_by", "calls": "rep_whatsapp", "checkins": "person",
+               "quotes": "created_by", "invoices": "created_by", "orders": "created_by"}
 
 
 def _owner_key(phone: Any) -> str:
+    """A stored person → a comparable key: an email as itself, a number by its last 9 digits."""
     from vula.team_index import digits_za
-    return digits_za(str(phone or ""))[-9:]
+    w = str(phone or "").strip()
+    return w.lower() if "@" in w else digits_za(w)[-9:]
+
+
+def _keys(member: Dict[str, Any]) -> set:
+    keys = {_owner_key(member.get("whatsapp"))}
+    if member.get("email"):
+        keys.add(str(member["email"]).lower())
+    return {k for k in keys if k}
+
+
+def _rands(cents: int) -> str:
+    return f"R{cents / 100:,.2f}"
 
 
 def team_summary(tenant_id: str, since: datetime, until: datetime, role: Optional[str] = None,
@@ -194,10 +220,10 @@ def team_summary(tenant_id: str, since: datetime, until: datetime, role: Optiona
     data = collect(tenant_id, since, until)
     rows = []
     for m in people:
-        key = _owner_key(m["whatsapp"])
+        keys = _keys(m)
 
         def mine(kind: str) -> List[Dict[str, Any]]:
-            return [r for r in data[kind] if _owner_key(r.get(_PERSON_COL[kind])) == key]
+            return [r for r in data[kind] if _owner_key(r.get(_PERSON_COL[kind])) in keys]
         meetings = mine("meetings")
         rows.append({
             "member_id": m.get("id"), "name": m.get("name") or m["whatsapp"], "role": m.get("role"),
@@ -207,6 +233,8 @@ def team_summary(tenant_id: str, since: datetime, until: datetime, role: Optiona
             "follow_ups_done": len(mine("done")), "follow_ups_overdue": len(mine("overdue")),
             "contacts_added": len(mine("contacts")), "call_sheet_entries": len(mine("calls")),
             "check_ins": len(mine("checkins")),
+            **{f"{k}": len(mine(k)) for k in ("quotes", "invoices", "orders")},
+            **{f"{k}_cents": sum(int(r.get("total_cents") or 0) for r in mine(k)) for k in ("quotes", "invoices", "orders")},
         })
     return rows
 
@@ -214,7 +242,8 @@ def team_summary(tenant_id: str, since: datetime, until: datetime, role: Optiona
 def person_week(tenant_id: str, member: Dict[str, Any], since: datetime, until: datetime,
                 now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or now_sast()
-    d = collect(tenant_id, since, until, phone_variants(member.get("whatsapp")))
+    who = phone_variants(member.get("whatsapp")) + ([str(member["email"]).lower()] if member.get("email") else [])
+    d = collect(tenant_id, since, until, who)
     coming = sorted([("meeting", _ts(r["starts_at"]), r) for r in d["meetings"]]
                     + [("booking", _ts(r["start_at"]), r) for r in d["bookings"]],
                     key=lambda x: x[1] or now)
@@ -226,6 +255,7 @@ def person_week(tenant_id: str, member: Dict[str, Any], since: datetime, until: 
     return {"name": member.get("name") or member.get("whatsapp"), "since": since, "until": until,
             "diary": coming, "notes": d["notes"], "done": d["done"], "overdue": d["overdue"],
             "contacts": d["contacts"], "calls": d["calls"], "checkins": d["checkins"],
+            "quotes": d["quotes"], "invoices": d["invoices"], "orders": d["orders"],
             "checked_in": by_meeting}
 
 
@@ -272,6 +302,12 @@ def person_text(p: Dict[str, Any], label: str, now: Optional[datetime] = None) -
     done_bits = [f"{n} {one if n == 1 else many}" for n, one, many in done_bits if n]
     if done_bits:
         out.append("\n✅ " + ", ".join(done_bits))
+    sales = [f"{len(p.get(k) or [])} {one if len(p.get(k) or []) == 1 else many} "
+             f"({_rands(sum(int(r.get('total_cents') or 0) for r in p.get(k) or []))})"
+             for k, one, many in (("quotes", "quote", "quotes"), ("invoices", "invoice", "invoices"),
+                                  ("orders", "order", "orders")) if p.get(k)]
+    if sales:
+        out.append("💰 Made: " + ", ".join(sales))
     if p["overdue"]:
         out.append(f"\n🔴 {len(p['overdue'])} follow-up{'s' if len(p['overdue']) != 1 else ''} overdue:")
         out += [f"• {r.get('text')}" for r in p["overdue"][:5]]
@@ -290,6 +326,9 @@ def team_text(rows: List[Dict[str, Any]], label: str) -> str:
                 (r["call_sheet_entries"], "call-sheet entry", "call-sheet entries"),
                 (r["follow_ups_done"], "follow-up done", "follow-ups done"),
                 (r["contacts_added"], "new contact", "new contacts")]
+        bits += [(r.get(k, 0), f"{one} ({_rands(r.get(k + '_cents', 0))})", f"{many} ({_rands(r.get(k + '_cents', 0))})")
+                 for k, one, many in (("quotes", "quote", "quotes"), ("invoices", "invoice", "invoices"),
+                                      ("orders", "order", "orders"))]
         line = ", ".join(f"{n} {one if n == 1 else many}" for n, one, many in bits if n) or "nothing logged"
         if r["follow_ups_overdue"]:
             line += f" · 🔴 {r['follow_ups_overdue']} overdue"

@@ -1225,8 +1225,8 @@ SHEET_TOOLS = [
                        "date, description, payee, reference, money_in, money_out, amount, project, account, "
                        "status; expenses: date, supplier, description, amount, vat, account, project, "
                        "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
-                       "date, due, project, excl_vat, vat, total, paid, owed, status; orders: number, date, "
-                       "customer, channel, status, subtotal, delivery, total; and what the TEAM did (owners/managers): meetings: "
+                       "date, due, project, excl_vat, vat, total, paid, owed, status, person (who made it); orders: "
+                       "number, date, customer, channel, status, subtotal, delivery, total, person; and what the TEAM did (owners/managers): meetings: "
                        "date, time, person, with, address, status, checked_in, distance_m; bookings: date, time, person, customer, service, "
                        "status; follow_ups: date (due), person, text, status, done; meeting_notes: date, person, summary, "
                        "actions — filter by person, group by person ('every meeting Thabo had this month', 'follow-ups "
@@ -3016,6 +3016,13 @@ class CommerceAdminSkill(BaseSkill):
 
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
+        """Every tool call runs as the person who sent the message, so a quote, invoice or order it
+        creates records who made it (vula/acting.py, migration 260)."""
+        from vula import acting
+        with acting.acting_as(ctx.get("phone")):
+            return await self._dispatch_tool_as(name, args, ctx)
+
+    async def _dispatch_tool_as(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
         _log_tool_call(tid, "admin", name, args)
         try:

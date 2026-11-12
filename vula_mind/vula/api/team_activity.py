@@ -69,6 +69,8 @@ async def activity(tenant: str, period: str = Query("this_week"), member_id: Opt
             "overdue": [{"due": r.get("due_at"), "text": r.get("text")} for r in p["overdue"]],
             "contacts_added": [{"at": r.get("created_at"), "name": r.get("name")} for r in p["contacts"]],
             "call_sheet": [{"at": r.get("created_at"), "text": r.get("text")} for r in p["calls"]],
+            "sales": {k: {"count": len(p[k]), "cents": sum(int(r.get("total_cents") or 0) for r in p[k])}
+                      for k in ("quotes", "invoices", "orders")},
             "check_ins": [{"at": c.get("at"), "place": c.get("place"), "distance_m": c.get("distance_m"),
                            "photos": c.get("photos") or 0, "lat": c.get("lat"), "lng": c.get("lng")}
                           for c in p["checkins"]]}
