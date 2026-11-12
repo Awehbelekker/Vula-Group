@@ -378,6 +378,8 @@ async def create_enquiry(tenant_id: str, body: Dict[str, Any], ip: str = "") -> 
         "source": body.get("source") or "website",
         "ip": ip or None,
     }
+    if body.get("external_ref"):
+        row["external_ref"] = body["external_ref"]          # e.g. a portal email's Message-ID
     res = _client().table(ENQUIRIES).insert(row).execute()
     saved = (res.data or [row])[0]
     await _tell_people(tenant_id, saved, prop)
@@ -419,7 +421,9 @@ def enquiry_alert_text(enquiry: Dict[str, Any], prop: Optional[Dict[str, Any]]) 
         lines.append(f"Preferred times: {enquiry['preferred_times']}")
     if enquiry.get("message"):
         lines.append(f"“{enquiry['message']}”")
-    if enquiry.get("source") and enquiry["source"] != "website":
+    if enquiry.get("source") == "portal":
+        lines.append("Came in by email from a property portal.")
+    elif enquiry.get("source") and enquiry["source"] != "website":
         lines.append(f"Came in via {enquiry['source']}.")
     if enquiry.get("whatsapp"):
         lines.append(f"Reply on WhatsApp: https://wa.me/{enquiry['whatsapp']}")

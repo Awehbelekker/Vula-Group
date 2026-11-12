@@ -206,3 +206,58 @@ def test_sharing_tools_need_a_preview_and_the_listings_module():
     from core.skills import commerce_admin as ca
     assert "share_listings" in ca._PREVIEW_FIRST
     assert {"share_listings", "listing_matches", "save_buyer_wish"} <= lt.ADMIN_TOOL_NAMES
+
+
+# ── Property-portal enquiry emails (vula/listings/portal_leads.py) ─────────────
+from vula.listings import portal_leads as pl
+
+P24_BODY = """You have received a new enquiry on Property24.
+
+Listing: Family home
+Name: Thandi Nkosi
+Cell: 083 555 1234
+Email: thandi@example.com
+Message: Is the property still available? Can I view on Saturday?
+"""
+
+
+def test_portal_of_and_parse():
+    assert pl.portal_of("Property24 <leads@mail.property24.com>") == "Property24"
+    assert pl.portal_of("noreply@privateproperty.co.za") == "Private Property"
+    assert pl.portal_of("scam@property24.com.evil.io") is None
+    assert pl.portal_of("someone@gmail.com") is None
+    lead = pl.parse_lead(P24_BODY)
+    assert lead == {"name": "Thandi Nkosi", "whatsapp": "27835551234", "email": "thandi@example.com",
+                    "message": "Is the property still available? Can I view on Saturday?"}
+    assert pl.parse_lead("Hello there") == {"name": None, "whatsapp": None, "email": None, "message": None}
+
+
+@pytest.mark.asyncio
+async def test_portal_email_becomes_one_enquiry(env, monkeypatch):
+    from vula.api import tenants
+    monkeypatch.setattr(tenants, "enabled_modules", lambda tid: ["listings"] if tid == "estate" else ["products"])
+    await _listing("Family home")
+    em = {"from": "Property24 <leads@property24.com>", "subject": "New enquiry: Family home",
+          "body": P24_BODY, "message_id": "<abc@p24>", "is_sent": False}
+    assert await pl.maybe_take("estate", dict(em)) is True
+    enq = env.db.rows["vula_property_enquiries"][-1]
+    assert enq["source"] == "portal" and enq["whatsapp"] == "27835551234" and enq["property_id"]
+    assert enq["message"].startswith("[Property24] Is the property still available")
+    assert await pl.maybe_take("estate", dict(em)) is False             # same email: filed once
+    assert len(env.db.rows["vula_property_enquiries"]) == 1
+    assert env.sent["carousel"] == [] and env.sent["buttons"] == []     # the person isn't messaged
+    # other businesses, our own sent mail, and non-portal mail are left alone
+    assert await pl.maybe_take("shop", {**em, "message_id": "<x>"}) is False
+    assert await pl.maybe_take("estate", {**em, "message_id": "<y>", "is_sent": True}) is False
+    assert await pl.maybe_take("estate", {**em, "message_id": "<z>", "from": "a@gmail.com"}) is False
+
+
+@pytest.mark.asyncio
+async def test_unreadable_portal_email_is_still_filed_for_the_agent(env, monkeypatch):
+    from vula.api import tenants
+    monkeypatch.setattr(tenants, "enabled_modules", lambda tid: ["listings"])
+    assert await pl.maybe_take("estate", {"from": "x@privateproperty.co.za", "subject": "New lead for you",
+                                          "body": "", "message_id": "<html-only>", "is_sent": False})
+    enq = env.db.rows["vula_property_enquiries"][-1]
+    assert enq["name"] == "Private Property enquiry" and "check your inbox" in enq["message"]
+    assert enq["property_id"] is None and enq["whatsapp"] is None

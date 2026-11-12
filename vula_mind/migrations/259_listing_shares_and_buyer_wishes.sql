@@ -11,6 +11,9 @@
 --   is sent to a person automatically. One row per person per business; `active=false` once they
 --   ask to stop or the agent closes it (POPIA: they can be forgotten with the enquiry).
 --
+-- vula_property_enquiries.external_ref: where an enquiry came from outside Vula — a property
+--   portal's enquiry email's Message-ID (vula/listings/portal_leads.py) — so it's filed once.
+--
 -- Money is integer cents. Idempotent. RLS on, service role only, like every other vula_* table.
 
 create table if not exists vula_listing_shares (
@@ -44,3 +47,7 @@ create table if not exists vula_buyer_wishes (
 );
 create index if not exists vula_buyer_wishes_tenant_idx on vula_buyer_wishes (tenant_id, active);
 alter table vula_buyer_wishes enable row level security;
+
+alter table vula_property_enquiries add column if not exists external_ref text;
+create index if not exists vula_property_enquiries_ref_idx
+  on vula_property_enquiries (tenant_id, external_ref) where external_ref is not null;
