@@ -7717,14 +7717,63 @@ from vula.commerce.extraction_quality import scan_quality_ok as _scan_quality_ok
 from core.verification import strip_caveat
 
 
+def _parse_scan_json(content: str) -> dict:
+    """A scan reply -> dict; {"raw", "confidence": "low"} when it isn't JSON."""
+    import json as _json
+    content = re.sub(r"<think>.*?</think>", "", content or "{}", flags=re.DOTALL)
+    content = re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=re.MULTILINE).strip()
+    try:
+        out = _json.loads(content)
+        return out if isinstance(out, dict) else {"raw": content, "confidence": "low"}
+    except Exception:
+        m = re.search(r"\{.*\}", content, re.DOTALL)
+        try:
+            return _json.loads(m.group(0)) if m else {"raw": content, "confidence": "low"}
+        except Exception:
+            return {"raw": content, "confidence": "low"}
+
+
+async def _scan_via_doc_ocr(img_b64: str, system: str, instruction: str):
+    """(extracted, model, page_text) read on the local box, or None to use the vision path.
+
+    The general local vision model (llava) is slow and invents figures on documents. The document
+    reader (MODEL_DOC_OCR, GLM-OCR) reads the text; the local text model (model_worker_cheap_local)
+    fills the scanner's schema from that text. None when either model isn't on the box or the
+    read fails — never sends anything to the cloud itself."""
+    from config import settings
+    from core.llm_router import _local_prefix, generation_kwargs, ollama_available
+    from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+    from vula.ingestion.pipeline import OCRProcessor
+    text_model = settings.model_worker_cheap_local
+    try:
+        if not text_model or not await ollama_available(model=text_model):
+            return None
+        text, clean = await OCRProcessor().read_local(
+            img_b64, "Extract all text and tables from this document.", doc_reader_only=True)
+        if not clean or len(text.strip()) < 20:
+            return None
+        import litellm
+        route = f"{_local_prefix()}/{text_model}"
+        resp = await litellm.acompletion(
+            model=route, api_base=settings.ollama_base, temperature=0.1, max_tokens=2000,
+            response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system.replace(
+                          "Look at the image and return", "Read the document text below and return")},
+                      {"role": "user", "content": f"{instruction}\n\n{UNTRUSTED_CONTENT_RULE}"
+                                                  f"{fence('DOCUMENT_TEXT', text[:12000])}"}],
+            **generation_kwargs(route))
+        return _parse_scan_json(resp.choices[0].message.content or "{}"), route, text
+    except Exception as exc:  # noqa: BLE001
+        log.info("Smart scan text path skipped: %s", type(exc).__name__)
+        return None
+
+
 @router.post("/{tenant_id}/admin/scan")
 async def admin_smart_scan(tenant_id: str, body: ScanRequest):
     """
     AI Smart Scanner — vision LLM extracts structured data from a photographed document.
     Returns JSON the frontend can use to pre-fill an expense, stock update, or invoice.
     """
-    import json as _json
-    import re as _re
 
     img = body.image_base64
     if img.startswith("data:"):
@@ -7801,31 +7850,34 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
                 api_key=api_key,
                 api_base=api_base,
             )
-            content = response.choices[0].message.content or "{}"
-            content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
-            content = _re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=_re.MULTILINE).strip()
-            try:
-                return _json.loads(content)
-            except Exception:
-                m = _re.search(r"\{.*\}", content, _re.DOTALL)
-                return _json.loads(m.group(0)) if m else {"raw": content, "confidence": "low"}
+            return _parse_scan_json(response.choices[0].message.content or "{}")
 
-        # ── Local-first: try the on-device vision model (free, private) ──────
-        model, api_key, api_base = await resolve_vision_route()
-        extracted = await _extract(model, api_key, api_base)
+        # ── Local-first, 12 Nov 2026: the document reader (GLM-OCR) reads the text, the local text
+        # model fills the schema from it. Only when both are on the box; else the local vision
+        # model reads the image for the schema directly, as before.
+        source_text = ""
+        via_text = await _scan_via_doc_ocr(img, system, instruction)
+        if via_text:
+            extracted, model, source_text = via_text
+        else:
+            model, api_key, api_base = await resolve_vision_route()
+            extracted = await _extract(model, api_key, api_base)
         used_model = model
         escalated = False
 
         # ── Escalate to cloud if the local read looks unreliable ─────────────
         # Triggers: explicit low confidence, missing/zero total, no line items,
-        # or an unparseable response. Only escalates when the primary was local
-        # and a cloud route is actually configured.
+        # or an unparseable response; on the text path also any amount (R10+) that isn't printed
+        # in the text the reader saw. Only escalates when the primary was local and a cloud
+        # route is actually configured.
         from core.llm_router import is_local_model
-        if is_local_model(model) and not _scan_quality_ok(extracted):
+        from vula.commerce.extraction_quality import ungrounded_figures
+        not_on_page = ungrounded_figures(extracted, source_text) if source_text else []
+        if is_local_model(model) and (not _scan_quality_ok(extracted) or not_on_page):
             cloud = resolve_cloud_vision_route()
             if cloud:
-                log.info("Smart scan: local read weak (%s) — escalating to cloud %s",
-                         extracted.get("confidence"), cloud[0])
+                log.info("Smart scan: local read weak (%s; %d amount(s) not on the page) — escalating to cloud %s",
+                         extracted.get("confidence"), len(not_on_page), cloud[0])
                 try:
                     cloud_extracted = await _extract(*cloud)
                     if _scan_quality_ok(cloud_extracted) or cloud_extracted.get("total_cents"):
@@ -7835,7 +7887,11 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
                 except Exception as cloud_exc:
                     log.warning("Cloud vision escalation failed: %s", cloud_exc)
 
-        return {"ok": True, "extracted": extracted, "model": used_model, "escalated": escalated}
+        if not escalated and not_on_page:
+            # Kept local (no cloud route): say which amounts weren't seen, so nothing is booked unread.
+            extracted = {**extracted, "confidence": "low", "_unverified_figures": not_on_page}
+        return {"ok": True, "extracted": extracted, "model": used_model, "escalated": escalated,
+                "read_with": "document reader" if source_text and not escalated else "vision"}
 
     except Exception as exc:
         log.error("Smart scan failed for %s: %s", tenant_id, exc)

@@ -220,6 +220,7 @@ const DECISION_LABEL = { skill: 'Which skill answers', escalation: 'Wants a pers
 function DecisionBench({ onError }) {
   const [state, setState] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [localModels, setLocalModels] = useState('')
   const load = () => authFetch('/v1/master/decision-bench').then(setState).catch(e => onError?.(e.message))
   useEffect(() => { load() }, [])
   useEffect(() => {
@@ -230,23 +231,32 @@ function DecisionBench({ onError }) {
   const start = async () => {
     setBusy(true)
     try {
+      const local_models = localModels.split(',').map(m => m.trim()).filter(Boolean)
       const r = await authFetch('/v1/master/decision-bench', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(local_models.length ? { local_models } : {}) })
       if (r.detail) onError?.(r.detail)
       await load()
     } catch (e) { onError?.(e.message) } finally { setBusy(false) }
   }
   const s = state?.summary
-  const rows = s ? Object.entries(s.results || {}).flatMap(([d, r]) => ['jev', 'current'].map(p => ({
-    key: `${d}-${p}`, decision: DECISION_LABEL[d] || d, provider: p === 'jev' ? 'Jev' : 'Today', verdict: p === 'jev' ? r.verdict : '', ...(r[p] || {}) }))) : []
+  // Local models ("local:qwen3:8b") are measured next to today's classifier, on the same bar as Jev.
+  const providerLabel = (p) => (p === 'jev' ? 'Jev' : p === 'current' ? 'Today' : `Local · ${p.slice(6)}`)
+  const verdictFor = (r, p) => (p === 'jev' ? r.verdict : (r.local_verdicts || {})[p] || '')
+  const rows = s ? Object.entries(s.results || {}).flatMap(([d, r]) => (s.providers || ['jev', 'current'])
+    .filter(p => r[p]?.n).map(p => ({
+      key: `${d}-${p}`, decision: DECISION_LABEL[d] || d, provider: providerLabel(p), verdict: verdictFor(r, p), ...(r[p] || {}) }))) : []
   const ms = (v) => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`)
   return (
     <>
       <Card className="vms-form">
         <h3 className="vms-h"><FlaskConical size={16} aria-hidden="true" className="vms-ic" />Decision benchmark — Jev against today</h3>
         <p className="vms-muted">About 600 made-up, labelled messages (which skill answers, wants a person / upset in seven languages, expense purpose) through Jev and through today's classifiers. Nothing is sent to anyone and no business data is used. Jev is recommended for a decision only within 2 points of today's accuracy and with under 20% fallback.</p>
+        <Field label="Local models to compare (optional)" hint="Ollama names on the local AI server, comma-separated, up to 3 — e.g. qwen3:8b, llama3.1:8b. Each gets today's prompts with no cloud fallback, one model at a time (about 10 minutes each). Blank = Jev against today.">
+          <Input value={localModels} onChange={e => setLocalModels(e.target.value)} placeholder="qwen3:8b, llama3.1:8b" />
+        </Field>
         <Button Icon={Play} disabled={busy || state?.running} onClick={start}>
-          {state?.running ? 'Running… (about 10 minutes)' : busy ? 'Starting…' : 'Run decision benchmark'}</Button>
+          {state?.running ? 'Running…' : busy ? 'Starting…' : 'Run decision benchmark'}</Button>
         {state?.failed && <p className="vms-muted" role="alert">The last run stopped with an error — see the server log.</p>}
       </Card>
       {s && (
@@ -259,7 +269,7 @@ function DecisionBench({ onError }) {
             { key: 'fallback_rate', label: 'Fallback', render: (r) => (r.fallback_rate == null ? '—' : `${Math.round(r.fallback_rate * 100)}%`) },
             { key: 'cost_per_1k_usd', label: 'Cost / 1k', render: (r) => (r.cost_per_1k_usd == null ? '—' : `$${r.cost_per_1k_usd}`) },
             { key: 'by_lang', label: 'By language', render: (r) => <span className="vms-muted">{Object.entries(r.by_lang || {}).map(([l, a]) => `${l} ${a}%`).join(' · ')}{r.lagging_languages?.length ? ` — behind in ${r.lagging_languages.join(', ')}` : ''}</span> },
-            { key: 'verdict', label: 'Verdict', render: (r) => (r.verdict ? <StatusChip tone={r.verdict === 'flip' ? 'ok' : 'warn'}>{r.verdict === 'flip' ? 'Jev ready' : r.verdict === 'keep current' ? 'Keep today' : r.verdict}</StatusChip> : '') },
+            { key: 'verdict', label: 'Verdict', render: (r) => (r.verdict ? <StatusChip tone={r.verdict === 'flip' || r.verdict === 'ready' ? 'ok' : 'warn'}>{r.verdict === 'flip' ? 'Jev ready' : r.verdict === 'ready' ? 'Ready' : r.verdict === 'keep current' ? 'Keep today' : r.verdict}</StatusChip> : '') },
           ]} />
         </Card>)}
     </>

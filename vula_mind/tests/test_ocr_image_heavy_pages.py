@@ -18,6 +18,8 @@ no image-heavy pages at all, so they must still cost nothing.
 """
 from unittest.mock import MagicMock
 
+import pytest
+
 from vula.ingestion.pipeline import (
     OCR_IMAGE_COVERAGE, OCR_MAX_PAGES_PER_DOC, DocumentParser,
 )
@@ -123,20 +125,48 @@ def test_the_failure_counter_is_scoped_per_instance_not_shared_globally():
         "a fresh instance must not inherit another instance's failure count"
 
 
-def test_one_success_forgives_earlier_failures():
-    """Consecutive, not cumulative — a healthy box that blips once is not written off."""
-    import inspect
+@pytest.mark.asyncio
+async def test_one_success_forgives_earlier_failures(tmp_path):
+    """Consecutive, not cumulative — a healthy box that blips once is not written off.
+    (12 Nov 2026: was a check on process_image's source; the local read moved to read_local.)"""
+    from unittest.mock import AsyncMock, MagicMock, patch
     from vula.ingestion.pipeline import OCRProcessor
-    src = inspect.getsource(OCRProcessor.process_image)
-    assert "_local_ocr_failures = 0" in src, "a good read resets the counter"
-    assert "_local_ocr_failures += 1" in src
+    img = tmp_path / "p.png"
+    img.write_bytes(b"x")
+    proc = OCRProcessor()
+    proc._local_ocr_failures = OCRProcessor._LOCAL_OCR_FAILURE_LIMIT - 1
+
+    def client(post):
+        cm = AsyncMock()
+        cm.__aenter__.return_value = MagicMock(post=post)
+        return cm
+    ok = MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value={"response": "TOTAL R 185.00"}))
+    with (patch.object(proc, "_local_reader", new=AsyncMock(return_value="glm-ocr")),
+          patch("core.llm_router._ollama_headers", return_value={}),
+          patch("httpx.AsyncClient", return_value=client(AsyncMock(return_value=ok)))):
+        assert await proc.process_image(img) == "TOTAL R 185.00"
+    assert proc._local_ocr_failures == 0, "a good read resets the counter"
+    with (patch.object(proc, "_local_reader", new=AsyncMock(return_value="glm-ocr")),
+          patch("core.llm_router._ollama_headers", return_value={}),
+          patch("httpx.AsyncClient", return_value=client(AsyncMock(side_effect=RuntimeError("x")))),
+          patch.object(proc, "_cloud_vision_fallback", new=AsyncMock(return_value="cloud"))):
+        await proc.process_image(img)
+    assert proc._local_ocr_failures == 1, "a failure counts"
 
 
-def test_the_cloud_path_is_never_short_circuited():
+@pytest.mark.asyncio
+async def test_the_cloud_path_is_never_short_circuited(tmp_path):
     """Only the LOCAL step is skipped. Cloud vision reads these pages correctly and must always
     be tried, or an image-heavy page would silently yield nothing."""
-    import inspect
+    from unittest.mock import AsyncMock, patch
     from vula.ingestion.pipeline import OCRProcessor
-    src = inspect.getsource(OCRProcessor.process_image)
-    i = src.index("_local_ocr_disabled")
-    assert "_cloud_vision_fallback" in src[i:], "cloud still runs when local is skipped"
+    img = tmp_path / "p.png"
+    img.write_bytes(b"x")
+    proc = OCRProcessor()
+    proc._local_ocr_failures = OCRProcessor._LOCAL_OCR_FAILURE_LIMIT      # local switched off
+    cloud = AsyncMock(return_value="read by cloud")
+    with (patch.object(proc, "_cloud_vision_fallback", new=cloud),
+          patch("httpx.AsyncClient") as local_client):
+        assert await proc.process_image(img) == "read by cloud", "cloud still runs when local is skipped"
+    cloud.assert_awaited()
+    local_client.assert_not_called()

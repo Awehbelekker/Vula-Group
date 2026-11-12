@@ -196,6 +196,7 @@ class LLMExtractor:
             f"{schema_hint}"
         )
 
+        from core.llm_router import think_off
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
@@ -204,6 +205,7 @@ class LLMExtractor:
                         "model": self.model,
                         "prompt": full_prompt,
                         "stream": False,
+                        **think_off(self.model),
                         "options": {"temperature": 0.1, "num_predict": 2048},
                     },
                 )
@@ -227,6 +229,7 @@ class LLMExtractor:
 
     async def summarise(self, text: str, instruction: str) -> str:
         """Generate a plain text summary."""
+        from core.llm_router import think_off
         from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
         prompt = f"{instruction}\n\n{UNTRUSTED_CONTENT_RULE}{fence('SCRAPED_PAGE_TEXT', text[:6000])}\n\nSummary:"
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -236,6 +239,7 @@ class LLMExtractor:
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False,
+                    **think_off(self.model),
                     "options": {"temperature": 0.3, "num_predict": 1024},
                 },
             )
