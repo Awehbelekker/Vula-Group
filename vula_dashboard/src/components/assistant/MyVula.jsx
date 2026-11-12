@@ -3,6 +3,7 @@
  * remembers about you" (their private notes) and "How Vula talks to you" (their own style within
  * the company voice). Nobody else sees or changes either. See assistant/useMyVula.js.
  */
+import { useState } from 'react'
 import { Check, Lock, Plus, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { Button, Field, IconButton, Input, Select, confirmDialog } from '../ui/index.jsx'
 import { useMyVula } from './useMyVula'
@@ -19,6 +20,19 @@ function Choice({ label, value, onChange, options, blank }) {
   )
 }
 
+// A fold-away section whose contents exist only while it is open. A closed <details> still keeps
+// its buttons in the page, where the phone layout check (and some screen readers) find them
+// sitting under the bottom bar.
+function Panel({ Icon, title, children }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="vas-mine" onToggle={e => setOpen(e.currentTarget.open)}>
+      <summary className="vas-mine-sum"><Icon size={16} aria-hidden="true" />{title}</summary>
+      {open && children}
+    </details>
+  )
+}
+
 function Notes({ x }) {
   const busy = x.memoryStatus === 'working'
   const failed = x.memoryStatus && !busy
@@ -28,8 +42,7 @@ function Notes({ x }) {
     if (yes) x.forgetAll()
   }
   return (
-    <details className="vas-mine">
-      <summary className="vas-mine-sum"><Lock size={16} aria-hidden="true" />What Vula remembers about you</summary>
+    <Panel Icon={Lock} title="What Vula remembers about you">
       <p className="vas-muted">Things you asked Vula to remember about you. Nobody else at the business can see them, and Vula only keeps what you ask it to. You can also say "remember that I…" in the chat or on WhatsApp.</p>
       {x.notes.length === 0
         ? <p className="vas-muted">Vula isn't keeping anything about you.</p>
@@ -50,15 +63,14 @@ function Notes({ x }) {
         {x.notes.length > 0 && <Button size="sm" variant="secondary" Icon={Trash2} disabled={busy} onClick={forgetAll}>Forget everything</Button>}
         {failed && <span className="vas-warn" role="alert">{x.memoryStatus}</span>}
       </div>
-    </details>
+    </Panel>
   )
 }
 
 function Style({ x }) {
   const failed = x.status && x.status !== 'saving' && x.status !== 'saved'
   return (
-    <details className="vas-mine">
-      <summary className="vas-mine-sum"><SlidersHorizontal size={16} aria-hidden="true" />How Vula talks to you</summary>
+    <Panel Icon={SlidersHorizontal} title="How Vula talks to you">
       <p className="vas-muted">Your own preferences, on WhatsApp and here. They change how Vula words things for you, never the facts. Only you can see or change them.</p>
       <form className="vas-mine-grid" onSubmit={e => { e.preventDefault(); x.save() }}>
         <Choice label="Style" value={x.prefs.style} onChange={v => x.set('style', v)}
@@ -77,7 +89,7 @@ function Style({ x }) {
           {failed && <span className="vas-warn" role="alert">{x.status}</span>}
         </div>
       </form>
-    </details>
+    </Panel>
   )
 }
 
