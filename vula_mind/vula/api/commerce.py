@@ -2774,9 +2774,19 @@ async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
 
     async def _run():
         try:
-            return await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
-                                                   source_file=body.filename or "upload.pdf",
-                                                   trusted=True)
+            rec = await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
+                                                  source_file=body.filename or "upload.pdf",
+                                                  trusted=True)
+            if rec.get("private"):
+                # One member's own account: filed for them alone, never the business's books.
+                from vula import private_docs
+                from vula.ingestion.pipeline import VulaIngestionPipeline
+                res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(Path(tmp), private_to=rec["private_to"])
+                await private_docs.store(tenant_id, rec["private_to"], filename=body.filename or "statement.pdf",
+                                         doc_id=getattr(res, "doc_id", None), category="Bank Statement",
+                                         summary=f"Private bank statement, account ending {str(rec.get('bank_account'))[-4:]}",
+                                         source="dashboard")
+            return rec
         finally:
             try:
                 os.unlink(tmp)
@@ -3632,12 +3642,48 @@ async def admin_allocate_txn(tenant_id: str, txn_id: str, body: AllocateIn):
         raise HTTPException(status_code=404, detail="transaction not found")
     project = service.canonical_project(tenant_id, body.project) if body.project else None
     trade = (body.trade or "").strip() or None
-    (db.table("commerce_bank_transactions").update({"project": project, "trade": trade})
+    patch = {"project": project, "trade": trade}
+    from vula.commerce import bank_accounts
+    if bank_accounts.available():         # the owner's own choice: an account's project never overrides it
+        patch["project_source"] = "owner" if project else None
+    (db.table("commerce_bank_transactions").update(patch)
      .eq("tenant_id", tenant_id).eq("id", txn_id).execute())
     if project:
         allocation.learn(tenant_id, rows[0].get("description"), project, trade,
                          payee=rows[0].get("payee"))
     return {"ok": True, "project": project, "trade": trade}
+
+
+@router.get("/{tenant_id}/admin/bank/accounts")
+async def admin_bank_accounts(tenant_id: str):
+    """The business's bank accounts Vula has read statements of (migration 261), and the project
+    each belongs to (none = the whole business). The first look also tags the lines read before 261
+    with their account, from the statement files still on the server."""
+    import asyncio
+    from vula.commerce import bank_accounts
+    if not bank_accounts.available():
+        return {"accounts": [], "needs_migration": True}
+    asyncio.get_running_loop().run_in_executor(None, bank_accounts.backfill_from_files, tenant_id)
+    return {"accounts": await asyncio.to_thread(bank_accounts.list_accounts, tenant_id)}
+
+
+class BankAccountIn(BaseModel):
+    project: Optional[str] = None       # None / "" = the whole business
+    name: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/bank/accounts/{account_id}")
+async def admin_set_bank_account(tenant_id: str, account_id: str, body: BankAccountIn, request: Request):
+    """Tie an account to a project (every line from it is that project's, the owner's own placements
+    excepted) or back to the whole business. Owner or manager."""
+    import asyncio
+    from vula.commerce import bank_accounts
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can change this.")
+    res = await asyncio.to_thread(bank_accounts.set_project, tenant_id, account_id, body.project, body.name)
+    if res.get("error"):
+        raise HTTPException(status_code=404 if res["error"] == "account not found" else 400, detail=res["error"])
+    return res
 
 
 @router.post("/{tenant_id}/admin/bank/statement/sheet")

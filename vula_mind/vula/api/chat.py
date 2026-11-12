@@ -85,8 +85,11 @@ async def send_message(tenant_id: str, body: ChatMessageRequest) -> ChatMessageR
     # Get RAG reply (same logic as WhatsApp, reused here)
     try:
         from vula.api.whatsapp import _rag_reply
-        reply = await _rag_reply(tenant_id, body.message, conversation_history=history,
-                                 caller_name=caller_name, caller_role=caller_role)
+        from vula.ingestion.pipeline import kb_viewer
+        from vula.private_docs import member_id_for_phone
+        with kb_viewer(member_id_for_phone(tenant_id, phone)):    # this member's private documents too
+            reply = await _rag_reply(tenant_id, body.message, conversation_history=history,
+                                     caller_name=caller_name, caller_role=caller_role)
     except Exception as exc:
         logger.error("Chat RAG error for tenant %s: %s", tenant_id, exc)
         reply = "I'm having trouble right now. Please try again in a moment."

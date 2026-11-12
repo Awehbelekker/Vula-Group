@@ -184,6 +184,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # listings sent, clients' wish lists; external_ref is the last thing 259 adds
     ("259", "vula_property_enquiries", "external_ref"),
     ("260", "vula_email_accounts", "folder_cursors"),
+    ("261", "commerce_bank_accounts", "project"),
 ]
 
 
