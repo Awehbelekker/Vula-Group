@@ -1048,12 +1048,13 @@ MEETING_TOOLS = [
             "The person's OWN diary of meetings, appointments and site visits, on WhatsApp — e.g. "
             "'meeting with Acme Builders Thursday 10am at 12 Main Road', 'remind me an hour before "
             "the Acme meeting', 'what meetings do I have this week?', 'move the Acme meeting to "
-            "11', 'add the address: 5 Dock Rd', 'cancel tomorrow's meeting'. action=book / list / "
-            "update / cancel. NOT a customer booking a service (create_booking) and NOT notes "
+            "11', 'add the address: 5 Dock Rd', 'cancel tomorrow's meeting', and checking in on arrival: "
+            "'arrived', 'I'm at Acme', 'check in' (action=check_in, `with` = where if they said). "
+            "action=book / list / update / cancel / check_in. NOT a customer booking a service (create_booking) and NOT notes "
             "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
             "them — never work out a date or time yourself. No reminder unless they ask for one."),
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["book", "list", "update", "cancel"]},
+            "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in"]},
             "with": {"type": "string", "description": "Who or which company the meeting is with "
                                                       "(for update/cancel: which meeting)."},
             "when": {"type": "string", "description": "The person's own words, e.g. 'Thursday at 10'."},
@@ -1226,7 +1227,7 @@ SHEET_TOOLS = [
                        "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
                        "date, due, project, excl_vat, vat, total, paid, owed, status; orders: number, date, "
                        "customer, channel, status, subtotal, delivery, total; and what the TEAM did (owners/managers): meetings: "
-                       "date, time, person, with, address, status; bookings: date, time, person, customer, service, "
+                       "date, time, person, with, address, status, checked_in, distance_m; bookings: date, time, person, customer, service, "
                        "status; follow_ups: date (due), person, text, status, done; meeting_notes: date, person, summary, "
                        "actions — filter by person, group by person ('every meeting Thabo had this month', 'follow-ups "
                        "per person last week'). Maths the owner asks for ('total minus "
@@ -6406,6 +6407,20 @@ class CommerceAdminSkill(BaseSkill):
             if not m:
                 return {"error": "I couldn't save the meeting just now — nothing was booked. Try again shortly."}
             return done(m, "📅 Booked:", asked_remind=bool(remind_words))
+
+        if action == "check_in":
+            from vula import checkins
+            try:
+                got = checkins.start(tid, phone, who)
+            except Exception as exc:
+                logger.warning("check-in start failed for %s: %s", tid, exc)
+                return {"error": "I couldn't start your check-in just now — try again in a minute."}
+            if not got.get("row"):
+                return {"error": "I couldn't start your check-in just now — try again in a minute."}
+            m = got.get("meeting")
+            head = (f"📍 Checking in for {mt.line(m)}." if m else
+                    f"📍 Checking in{' at *' + who + '*' if who else ''}.")
+            return {"reply_verbatim": f"{head}\n{checkins.ASK_PIN}"}
 
         if action == "list":
             rows = mt.upcoming(tid, phone)

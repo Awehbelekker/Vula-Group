@@ -1,7 +1,7 @@
 /**
  * ActivityV2.jsx — Team › Activity (12 Nov 2026): what each person has on and has done.
  *
- * One row per person for the chosen period — meetings held and coming up, bookings, meeting
+ * One row per person for the chosen period — meetings held and coming up, check-ins, bookings, meeting
  * notes, call-sheet entries, follow-ups done and overdue, new contacts — listed by name, never
  * ranked. Tap a person for their week: the diary with addresses, and what they logged. CSV export.
  * Owners and managers only; the tab only shows where it fits (TeamV2). On WhatsApp the same is
@@ -20,6 +20,7 @@ const COLS = [
   { key: "name", label: "Person" },
   { key: "meetings_held", label: "Meetings held", align: "right" },
   { key: "meetings_coming", label: "Coming up", align: "right" },
+  { key: "check_ins", label: "Check-ins", align: "right" },
   { key: "bookings", label: "Bookings", align: "right" },
   { key: "notes", label: "Notes", align: "right" },
   { key: "call_sheet_entries", label: "Call sheet", align: "right" },
@@ -80,6 +81,8 @@ function PersonWeek({ p, onBack }) {
     ...p.call_sheet.map((c) => ({ at: c.at, text: `Call sheet: ${c.text || ""}` })),
     ...p.follow_ups_done.map((f) => ({ at: f.at, text: `Follow-up done: ${f.text || ""}` })),
     ...p.contacts_added.map((c) => ({ at: c.at, text: `New contact: ${c.name || ""}` })),
+    ...(p.check_ins || []).map((c) => ({ at: c.at, text: `Checked in${c.place ? ` at ${c.place}` : ""}`
+      + (c.distance_m != null ? ` (${c.distance_m} m from the address)` : "") + (c.photos ? `, ${c.photos} photo(s)` : "") })),
   ].sort((a, b) => String(a.at).localeCompare(String(b.at)));
   return (
     <Card className="vtm-block">
@@ -90,7 +93,8 @@ function PersonWeek({ p, onBack }) {
         <ul className="vtm-activity-list">
           {p.diary.map((d, i) => (
             <li key={i}>{when(d.at)} — {d.title}
-              {d.address && <> · <a href={mapsLink(d.address)} target="_blank" rel="noreferrer">{d.address}</a></>}</li>))}
+              {d.address && <> · <a href={mapsLink(d.address)} target="_blank" rel="noreferrer">{d.address}</a></>}
+              {d.checked_in && <> · {d.checked_in}</>}</li>))}
         </ul>)}
       <h3 className="vtm-sub">Logged</h3>
       {done.length === 0 ? <p className="vtm-sub">Nothing logged in this period.</p> : (

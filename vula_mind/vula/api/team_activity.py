@@ -60,10 +60,15 @@ async def activity(tenant: str, period: str = Query("this_week"), member_id: Opt
     diary = [{"kind": kind, "at": t.isoformat() if t else None,
               "title": (f"Meeting with {r.get('with_name')}" if kind == "meeting"
                         else f"{r.get('service_name') or 'Booking'}" + (f" — {r['customer_name']}" if r.get("customer_name") else "")),
-              "address": r.get("address")} for kind, t, r in p["diary"]]
+              "address": r.get("address"),
+              "checked_in": ta.checkin_note(p["checked_in"].get(r.get("id"))).replace(" · ", "", 1) if kind == "meeting" else ""}
+             for kind, t, r in p["diary"]]
     return {**out, "name": p["name"], "diary": diary,
             "notes": [{"at": r.get("created_at"), "summary": r.get("summary")} for r in p["notes"]],
             "follow_ups_done": [{"at": r.get("completed_at"), "text": r.get("text")} for r in p["done"]],
             "overdue": [{"due": r.get("due_at"), "text": r.get("text")} for r in p["overdue"]],
             "contacts_added": [{"at": r.get("created_at"), "name": r.get("name")} for r in p["contacts"]],
-            "call_sheet": [{"at": r.get("created_at"), "text": r.get("text")} for r in p["calls"]]}
+            "call_sheet": [{"at": r.get("created_at"), "text": r.get("text")} for r in p["calls"]],
+            "check_ins": [{"at": c.get("at"), "place": c.get("place"), "distance_m": c.get("distance_m"),
+                           "photos": c.get("photos") or 0, "lat": c.get("lat"), "lng": c.get("lng")}
+                          for c in p["checkins"]]}

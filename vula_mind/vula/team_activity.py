@@ -12,6 +12,7 @@ custom sheets (vula/commerce/sheet_builder.py meetings/bookings/follow_ups/meeti
   follow-ups      vula_reminders          created_by     due_at / completed_at
   contacts added  commerce_contacts       created_by     created_at
   call sheet      vula_call_sheets        rep_whatsapp   entries[].created_at
+  check-ins       vula_checkins           person         at           (vula/checkins.py)
 
 Invoices, quotes and orders don't record who made them yet, so they aren't counted per person.
 Counts are listed by name, never ranked. Every read is scoped to the tenant and a table that
@@ -171,11 +172,13 @@ def collect(tenant_id: str, since: datetime, until: datetime,
             if t and since <= t < until and e.get("source") == "manual":   # log_meeting ones are notes
                 calls.append({"rep_whatsapp": s.get("rep_whatsapp"), "text": e.get("text"), "created_at": e.get("created_at")})
     out["calls"] = calls
+    from vula import checkins
+    out["checkins"] = checkins.for_period(tenant_id, since, until, phones)
     return out
 
 
 _PERSON_COL = {"meetings": "created_by", "bookings": "booked_by", "notes": "filed_by", "done": "created_by",
-               "contacts": "created_by", "overdue": "created_by", "calls": "rep_whatsapp"}
+               "contacts": "created_by", "overdue": "created_by", "calls": "rep_whatsapp", "checkins": "person"}
 
 
 def _owner_key(phone: Any) -> str:
@@ -203,6 +206,7 @@ def team_summary(tenant_id: str, since: datetime, until: datetime, role: Optiona
             "bookings": len(mine("bookings")), "notes": len(mine("notes")),
             "follow_ups_done": len(mine("done")), "follow_ups_overdue": len(mine("overdue")),
             "contacts_added": len(mine("contacts")), "call_sheet_entries": len(mine("calls")),
+            "check_ins": len(mine("checkins")),
         })
     return rows
 
@@ -214,9 +218,27 @@ def person_week(tenant_id: str, member: Dict[str, Any], since: datetime, until: 
     coming = sorted([("meeting", _ts(r["starts_at"]), r) for r in d["meetings"]]
                     + [("booking", _ts(r["start_at"]), r) for r in d["bookings"]],
                     key=lambda x: x[1] or now)
+    from vula import checkins
+    for c in d["checkins"][:30]:                 # photos sent in the hour after each check-in
+        t = _ts(c.get("at"))
+        c["photos"] = checkins.photos_after(tenant_id, member.get("whatsapp") or "", t) if t else 0
+    by_meeting = {c.get("meeting_id"): c for c in d["checkins"] if c.get("meeting_id")}
     return {"name": member.get("name") or member.get("whatsapp"), "since": since, "until": until,
             "diary": coming, "notes": d["notes"], "done": d["done"], "overdue": d["overdue"],
-            "contacts": d["contacts"], "calls": d["calls"]}
+            "contacts": d["contacts"], "calls": d["calls"], "checkins": d["checkins"],
+            "checked_in": by_meeting}
+
+
+def checkin_note(c: Optional[Dict[str, Any]]) -> str:
+    """' · checked in 09:58 (40 m away)' for a meeting's check-in, or ''."""
+    if not c:
+        return ""
+    t = _ts(c.get("at"))
+    dist = c.get("distance_m")
+    far = "" if dist is None else (f" ({dist / 1000:.1f} km away)" if dist >= 1000 else f" ({dist} m away)")
+    pics = c.get("photos") or 0
+    snaps = f", {pics} photo{'s' if pics != 1 else ''}" if pics else ""
+    return f" · checked in {t.astimezone(SAST).strftime('%H:%M') if t else ''}{far}{snaps}"
 
 
 # ── WhatsApp text ────────────────────────────────────────────────────────────────────────
@@ -234,7 +256,8 @@ def person_text(p: Dict[str, Any], label: str, now: Optional[datetime] = None) -
             if kind == "meeting":
                 done = "✓ " if t and t < now else ""
                 out.append(f"• {done}{_when(t)} — meeting with {r.get('with_name')}"
-                           + (f", {r['address']}" if r.get("address") else ""))
+                           + (f", {r['address']}" if r.get("address") else "")
+                           + checkin_note((p.get("checked_in") or {}).get(r.get("id"))))
             else:
                 out.append(f"• {_when(t)} — booking: {r.get('service_name') or 'appointment'}"
                            + (f" for {r['customer_name']}" if r.get("customer_name") else ""))
@@ -242,7 +265,8 @@ def person_text(p: Dict[str, Any], label: str, now: Optional[datetime] = None) -
             out.append(f"…and {len(p['diary']) - 15} more")
     else:
         out.append("No meetings or bookings in the diary.")
-    done_bits = [(len(p["notes"]), "meeting note", "meeting notes"), (len(p["done"]), "follow-up done", "follow-ups done"),
+    done_bits = [(len(p.get("checkins") or []), "check-in", "check-ins"),
+                 (len(p["notes"]), "meeting note", "meeting notes"), (len(p["done"]), "follow-up done", "follow-ups done"),
                  (len(p["calls"]), "call-sheet entry", "call-sheet entries"),
                  (len(p["contacts"]), "new contact", "new contacts")]
     done_bits = [f"{n} {one if n == 1 else many}" for n, one, many in done_bits if n]
@@ -261,6 +285,7 @@ def team_text(rows: List[Dict[str, Any]], label: str) -> str:
     for r in rows:
         bits = [(r["meetings_held"], "meeting held", "meetings held"),
                 (r["meetings_coming"], "coming up", "coming up"),
+                (r.get("check_ins", 0), "check-in", "check-ins"),
                 (r["bookings"], "booking", "bookings"), (r["notes"], "note", "notes"),
                 (r["call_sheet_entries"], "call-sheet entry", "call-sheet entries"),
                 (r["follow_ups_done"], "follow-up done", "follow-ups done"),

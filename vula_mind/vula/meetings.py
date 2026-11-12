@@ -181,6 +181,7 @@ def reminder_text(m: Dict[str, Any], now: Optional[datetime] = None) -> str:
     out += where_lines(m)
     if m.get("notes"):
         out.append(f"📝 {m['notes']}")
+    out.append("When you get there, say *arrived* and share your location to check in.")
     return "\n".join(out)
 
 

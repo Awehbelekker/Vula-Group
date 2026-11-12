@@ -712,6 +712,7 @@ _OWNER_ADMIN_RE = re.compile(
     r"\bhow (?:does|is) [\w' ]{1,30}?day look(?:ing)?\b|"
     r"\bwhat did (?:the )?(?:team|reps|sales team)\b|\bwhat did [\w']{2,20} do (?:this|last) (?:week|month)\b|"
     r"\bteam activity\b|"
+    r"^\s*(?:i'?ve |i have |just )?(?:arrived|checking in|check(?:ed)? in)\b|^\s*i'?m (?:here|at [\w' &-]{2,40})\s*[.!]?\s*$|"
     r"\bare we making\b|\bmaking (?:our|my|the) (?:\d+\s?%|fee|margin|profit)\b|"
     r"\b(?:profit|margin|loss)\s+on\s+(?:the\s+)?\w+|\blos(?:e|ing) money\b|"
     r"\bhow(?:'s| is)\s+[\w\s]{2,25}?\s+doing\b|\bon (?:track|budget) for (?:our|the|my) fee\b|"

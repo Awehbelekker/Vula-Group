@@ -121,8 +121,9 @@ SOURCES: Dict[str, Source] = {
     "meetings": Source(
         "meetings", "Meetings", "team",
         _f(("date", "Date", "date"), ("time", "Time", "text"), ("person", "Who", "text"),
-           ("with", "Meeting with", "text"), ("address", "Address", "text"), ("status", "Status", "text")),
-        ("date", "time", "person", "with", "address"),
+           ("with", "Meeting with", "text"), ("address", "Address", "text"), ("status", "Status", "text"),
+           ("checked_in", "Checked in", "text"), ("distance_m", "Metres from address", "number")),
+        ("date", "time", "person", "with", "address", "checked_in"),
         ("period", "person", "customer", "status"), "_meetings", party="with"),
     "bookings": Source(
         "bookings", "Bookings", "team",
@@ -530,11 +531,24 @@ def _meetings(tenant_id, since, until, labels):
     def make():
         return _day_bounds(_db().table("vula_meetings").select("id,created_by,with_name,address,starts_at,status")
                            .eq("tenant_id", tenant_id), "starts_at", since, until).order("starts_at")
+    rows = _pages(make)
+    checked: Dict[str, Dict[str, Any]] = {}
+    ids = [r["id"] for r in rows if r.get("id")]
+    for i in range(0, len(ids), 200):            # their check-ins (vula/checkins.py)
+        try:
+            for c in (_db().table("vula_checkins").select("meeting_id,at,distance_m").eq("tenant_id", tenant_id)
+                      .eq("status", "checked_in").in_("meeting_id", ids[i:i + 200]).execute().data or []):
+                checked.setdefault(c["meeting_id"], c)
+        except Exception:  # noqa: BLE001 — no check-ins table yet is not a reason to fail the sheet
+            break
     out = []
-    for r in _pages(make):
+    for r in rows:
         d, t = _sast(r.get("starts_at"))
+        c = checked.get(r.get("id")) or {}
         out.append({"date": d, "time": t, "person": who(r.get("created_by")), "with": r.get("with_name") or "",
-                    "address": r.get("address") or "", "status": r.get("status") or ""})
+                    "address": r.get("address") or "", "status": r.get("status") or "",
+                    "checked_in": _sast(c["at"])[1] if c.get("at") else "",
+                    "distance_m": c.get("distance_m")})
     return out
 
 

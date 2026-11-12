@@ -1096,15 +1096,12 @@ async def receive_message(
                                              f"delivery radius)")
                             except Exception as _exc:
                                 logger.debug("pin coverage check skipped: %s", _exc)
-                            if route_mode == "commerce":
-                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message",
-                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
-                            elif route_mode == "knowledge":
-                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message",
-                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
-                            else:
-                                _run_bg(_handle_message(phone, text, msg_id), label="text_message",
-                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
+                            # 12 Nov 2026: a team member's pin may be a check-in at a meeting
+                            # (vula/checkins.py); anything else goes the usual way, unchanged.
+                            _run_bg(_handle_location(phone, text, msg_id, route_mode, route_tenant,
+                                                     float(lat), float(lng), label, msg.get("timestamp")),
+                                    label="location_message",
+                                    turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
 
                     elif msg_type == "document":
                         doc = msg.get("document") or {}
@@ -9695,6 +9692,31 @@ async def check_and_nudge_quiet_team_members() -> int:
             sent += 1
             logger.info("Sent keep-window-open nudge to %s (%s)", whatsapp, tenant_id)
     return sent
+
+
+async def _handle_location(phone: str, text: str, msg_id: str, route_mode: Optional[str],
+                           route_tenant: Optional[str], lat: float, lng: float, place: str,
+                           wa_timestamp: Any) -> None:
+    """A shared location pin: a team member's check-in at a meeting when it is one
+    (vula/checkins.py — "arrived" in the last 30 minutes, or a meeting starting about now),
+    otherwise the same text routing every pin had before."""
+    if route_tenant:
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            from vula import checkins
+            sent_at = _dt.fromtimestamp(int(wa_timestamp), tz=_tz.utc) if str(wa_timestamp or "").isdigit() else None
+            reply = await checkins.from_pin(route_tenant, phone, lat, lng, place, sent_at)
+            if reply:
+                await _send_reply(phone, reply, route_tenant)
+                return
+        except Exception as exc:
+            logger.warning("check-in from pin failed, routing as usual: %s", exc)
+    if route_mode == "commerce":
+        await _handle_commerce_message(phone, text, msg_id, route_tenant)
+    elif route_mode == "knowledge":
+        await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
+    else:
+        await _handle_message(phone, text, msg_id)
 
 
 async def check_and_nudge_due_reminders() -> int:
