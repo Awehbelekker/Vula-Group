@@ -211,37 +211,45 @@ def _ext(doc: Dict[str, Any]) -> str:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx"}.get(doc.get("mime") or "", "")
 
 
+def _pages(make) -> List[Dict[str, Any]]:
+    """Every row of a query, page by page in a stable order (PostgREST caps a response at 1,000 rows)."""
+    from vula.commerce.ledger import _all_pages
+    return _all_pages(lambda: make().order("id"))
+
+
 def _documents(tenant_id: str, project: str) -> List[Dict[str, Any]]:
     from vula.commerce.service import project_key
     db = _client()
-    rows = (db.table("vula_filed_documents")
-            .select("id,project,category,status,supplier_id,fields,filename,file_url,mime,created_at,summary")
-            .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+    # every page (10 Nov 2026: PostgREST answers at most 1,000 rows, whatever .limit() asks — DIGG's
+    # 1,054th document and any just edited fell off the client's link)
+    rows = _pages(lambda: db.table("vula_filed_documents")
+                  .select("id,project,category,status,supplier_id,fields,filename,file_url,mime,created_at,summary")
+                  .eq("tenant_id", tenant_id))
     key = project_key(project)
     return [r for r in rows if project_key(r.get("project")) == key and (r.get("status") or "") != "duplicate"]
 
 
 def _unfiled(tenant_id: str) -> List[Dict[str, Any]]:
     db = _client()
-    return (db.table("vula_filed_documents")
-            .select("id,project,category,status,supplier_id,fields,filename,file_url,summary,created_at")
-            .eq("tenant_id", tenant_id).eq("status", "pending_project").limit(2000).execute().data or [])
+    return _pages(lambda: db.table("vula_filed_documents")
+                  .select("id,project,category,status,supplier_id,fields,filename,file_url,summary,created_at")
+                  .eq("tenant_id", tenant_id).eq("status", "pending_project"))
 
 
 def _bank_lines(tenant_id: str, project: str) -> List[Dict[str, Any]]:
     from vula.commerce.service import project_key
     db = _client()
-    rows = (db.table("commerce_bank_transactions")
-            .select("id,txn_date,description,reference,amount_cents,direction,account_code,project")
-            .eq("tenant_id", tenant_id).eq("direction", "out").limit(10000).execute().data or [])
+    rows = _pages(lambda: db.table("commerce_bank_transactions")
+                  .select("id,txn_date,description,reference,amount_cents,direction,account_code,project")
+                  .eq("tenant_id", tenant_id).eq("direction", "out"))
     key = project_key(project)
     return [r for r in rows if project_key(r.get("project")) == key]
 
 
 def _supplier_rows(tenant_id: str) -> List[Dict[str, Any]]:
     try:
-        return (_client().table("commerce_suppliers").select("id,name,aliases")
-                .eq("tenant_id", tenant_id).limit(2000).execute().data or [])
+        return _pages(lambda: _client().table("commerce_suppliers").select("id,name,aliases")
+                      .eq("tenant_id", tenant_id))
     except Exception as exc:  # noqa: BLE001 — group by the printed names instead
         log.warning("project file: supplier register unavailable for %s: %s", tenant_id, exc)
         return []

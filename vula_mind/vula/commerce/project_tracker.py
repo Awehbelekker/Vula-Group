@@ -752,7 +752,7 @@ def _owed_summary(v: Dict[str, Any], e) -> str:
                  f"item by item; this is not owed to us</small></span><b>{_r(to_finish)}</b></div>")
     elif fa and still:
         body += (f"<div class='owe aside'><span>Still owed by you directly to suppliers<small>Your own balances with "
-                 f"them, not owed to us; listed under Paid by you directly</small></span><b>{_r(still)}</b></div>")
+                 f"them, not owed to us; listed under Paid directly</small></span><b>{_r(still)}</b></div>")
     title = "If the work stopped today" if fa else "Where the money stands today"
     return f"<div class='owed'><div class='oweh'>{title}</div>{body}</div>"
 
@@ -799,11 +799,12 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
             # the agreed final account, not the cost + fee estimate
             acct = [row(f"Costs and fee (final account, {fa['as_of']})", fa["charged_cents"])]
             acct += [row(a["label"], a["cents"]) for a in fa.get("adjustments") or []]
-            if fa.get("adjustments"):
-                acct.append(row("Total for our part", fa["total_cents"], True))
-            acct += [row("Paid to us so far", -(fa.get("received_cents") or 0)),
-                     row("Balance due to us" if fa["balance_cents"] >= 0 else "Balance due to you",
-                         abs(fa["balance_cents"]), True)]
+            # 10 Nov 2026 (Judy, DIGG): read it as "<business> paid", "<business> received" and the difference,
+            # the difference in red — plain words for the client, not "our part" / "due to us".
+            who = brand.get("name") or "We"
+            acct.append(row(f"{who} paid", fa["total_cents"], True))
+            acct.append(row(f"{who} received", -(fa.get("received_cents") or 0)))
+            acct.append(f"<tr class='total diff'><td>Difference</td><td class='n'>{_r(fa['balance_cents'])}</td></tr>")
             parts.append(table("Account", acct))
         else:
             if v.get("fee_basis") == "per_bill":
@@ -838,7 +839,7 @@ def render(brand: Dict[str, Any], v: Dict[str, Any], links: Optional[Dict[str, s
                 spent.append(row("Budget left", v["budget_left_cents"]))
             parts.append(table("Against the budget", spent))
             mine = v.get("direct_payments") or []
-            for status, title in (("paid", "Paid by you directly"), ("to_pay", "Still to be paid by you directly")):
+            for status, title in (("paid", "Paid directly"), ("to_pay", "Still to be paid directly")):
                 rows_ = [row(f"{d['supplier']}{' — ' + d['description'] if d.get('description') else ''}", d["amount_cents"])
                          for d in mine if d["status"] == status]
                 if rows_:
@@ -927,7 +928,7 @@ box-shadow:0 2px 10px rgba(0,0,0,.06);overflow:hidden}}
 .owe b{{white-space:nowrap;font-variant-numeric:tabular-nums;font-size:17px}}
 .oweh{{padding:10px 14px;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#6e6a63;background:#f5f3ee}}
 .owe.tot{{background:#f5f3ee}}.owe.tot b{{color:{accent};font-size:20px}}
-.owe.sub span,.owe.sub b{{font-weight:600}}.owe.aside{{border-top:1.5px solid {accent};font-size:14px}}.owe.aside b{{font-size:15px;color:#6e6a63}}
+.owe.sub span,.owe.sub b{{font-weight:600}}tr.diff td{{color:#b42318;font-weight:700}}.owe.aside{{border-top:1.5px solid {accent};font-size:14px}}.owe.aside b{{font-size:15px;color:#6e6a63}}
 /* the account blocks side by side on a wide screen, one column on a phone */
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));column-gap:40px;align-items:start}}
 .blk{{min-width:0}}.blk.wide{{grid-column:1/-1}}

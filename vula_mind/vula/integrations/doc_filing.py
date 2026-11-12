@@ -206,9 +206,13 @@ def own_address_phrases(tenant_id: str) -> list:
 
 
 def without_own_address(tenant_id: str, text: str) -> str:
+    """The text without the business's own street address. Any spacing or line break between its
+    words (10 Nov 2026: a skip invoice prints "Digg Architects 22 \nPorterfield Road", so the address
+    wasn't removed and every slip addressed to DIGG also "named" the Porterfield project)."""
     out = text or ""
     for ph in own_address_phrases(tenant_id):
-        out = re.sub(re.escape(ph), " ", out, flags=re.IGNORECASE)
+        pattern = r"\b" + r"[\s,]+".join(re.escape(w) for w in ph.split()) + r"\b"
+        out = re.sub(pattern, " ", out, flags=re.IGNORECASE)
     return out
 
 
@@ -669,8 +673,39 @@ async def file_document(
 
     # What the business adds is checked before anything relies on it (vula/commerce/data_checks.py):
     # a date years off, an internal cost sheet a client link would show, an invoice with no supplier.
-    from vula.commerce import data_checks
+    from vula.commerce import data_checks, site_split
     fields, checks = data_checks.at_filing(category, filename, fields)
+    # one invoice for several jobs (a skip company's invoice lists each site): propose the split, keep
+    # it off client links, and ask the owner to confirm (vula/commerce/site_split.py)
+    fields, more = site_split.at_filing(tenant_id, category, fields, project)
+    checks = list(checks) + more
+    # the same invoice sent again (another scan, a re-sent PDF): kept as a duplicate, never booked twice
+    try:
+        first = earlier_copy(tenant_id, category, fields)
+    except Exception as exc:  # noqa: BLE001 — never stop a document being filed
+        logger.debug("duplicate invoice check skipped: %s", exc)
+        first = None
+    if first and first.get("_revised"):
+        f0 = first.get("fields") or {}
+        checks.append({"code": "revised",
+                       "message": (f"{(fields or {}).get('supplier') or 'This supplier'} has already sent invoice "
+                                   f"{(fields or {}).get('document_number')} (filed {str(first.get('created_at') or '')[:10]}, "
+                                   f"{_money(f0.get('total_cents'))}) for a different amount. Is this a revised invoice? "
+                                   "Check before paying both.")})
+        first = None
+    if first:
+        status = "duplicate"
+        fields = dict(fields or {})
+        fields["_duplicate_of"] = {"id": first.get("id"), "filename": first.get("filename"),
+                                   "filed": str(first.get("created_at") or "")[:10]}
+        f0 = first.get("fields") or {}
+        what = " ".join(x for x in (f"{category.split(' /')[0].lower()} {(fields or {}).get('document_number') or ''}".strip(),
+                                    f"from {(fields or {}).get('supplier')}" if (fields or {}).get("supplier") else "") if x)
+        checks.append({"code": "duplicate",
+                       "message": (f"This {what} is already on file (filed {str(first.get('created_at') or '')[:10]}"
+                                   f"{', ' + _money(f0.get('total_cents')) if f0.get('total_cents') else ''}). I've kept this "
+                                   "copy as a duplicate and haven't booked it again. If it's a different invoice, "
+                                   "tell me and I'll book it.")})
     row = {
         "tenant_id": tenant_id, "project": project, "clickup_list_id": clickup_list_id,
         "clickup_task_id": clickup_task_id, "category": category, "summary": summary,
@@ -780,6 +815,67 @@ def _money(cents) -> str:
         return f"R{int(cents) / 100:,.2f}"
     except (TypeError, ValueError):
         return ""
+
+
+DUPLICATE_CATEGORIES = frozenset({"Invoice", "Quote / Estimate"})
+
+
+def _doc_number(v) -> str:
+    """'INV-0972', 'inv 972', '972' → '972': the number a supplier prints, as compared."""
+    s = re.sub(r"[^a-z0-9]", "", str(v or "").lower())
+    s = re.sub(r"^(invoice|inv|tax|number|no|nr|quotation|quote|quo|qte)+", "", s)
+    return s.lstrip("0")
+
+
+def _same_amount(a, b) -> bool:
+    """The same money, or the same with 15% VAT added by mistake to one reading of it."""
+    try:
+        a, b = int(a), int(b)
+    except (TypeError, ValueError):
+        return False
+    lo, hi = sorted((abs(a), abs(b)))
+    return lo > 0 and (hi - lo <= 1 or abs(hi - lo * 115 // 100) <= 2)
+
+
+def earlier_copy(tenant_id: str, category: str, fields: Optional[dict]) -> Optional[dict]:
+    """The invoice or quote already on file that this one repeats (10 Nov 2026, DIGG: skip invoice
+    972 was sent again months later as a new PDF — different bytes, so the file check let it through,
+    and it was booked as a second bill): the same supplier, the same kind of document, the same number
+    and the same amount (or the same with VAT added to one reading) — or, with no number, the same
+    supplier, total and date. Returns the earlier row; with "_revised": True when the number matches
+    but the amount doesn't (a revised invoice? — never kept as a duplicate, only flagged). None when
+    it's new. A revision number ("Rev 04") is never matched."""
+    if category not in DUPLICATE_CATEGORIES:
+        return None
+    f = fields or {}
+    sup = (f.get("supplier") or "").strip()
+    num = _doc_number(f.get("document_number") or f.get("invoice_number"))
+    if num.startswith("rev"):
+        return None
+    if sup and num:
+        first = re.sub(r"[^a-z0-9]", "", sup.lower().split()[0])
+        try:
+            rows = (_client().table("vula_filed_documents").select("id,filename,fields,status,created_at,category")
+                    .eq("tenant_id", tenant_id).eq("category", category).neq("status", "duplicate")
+                    .ilike("fields->>supplier", f"%{first}%").limit(500).execute().data or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("invoice number duplicate check skipped: %s", exc)
+            rows = []
+        revised = None
+        for r in rows if isinstance(rows, list) else []:
+            rf = r.get("fields") or {}
+            other = (rf.get("supplier") or "").strip().lower()
+            if not (other and re.sub(r"[^a-z0-9]", "", other.split()[0]) == first
+                    and _doc_number(rf.get("document_number") or rf.get("invoice_number")) == num
+                    and r.get("status") != "ignored"):
+                continue
+            if _same_amount(rf.get("total_cents"), f.get("total_cents")) or not (rf.get("total_cents") and f.get("total_cents")):
+                return r
+            revised = revised or dict(r, _revised=True)
+        if revised:
+            return revised
+        return None
+    return probable_duplicate(tenant_id, {"fields": f})
 
 
 def probable_duplicate(tenant_id: str, doc: dict) -> Optional[dict]:

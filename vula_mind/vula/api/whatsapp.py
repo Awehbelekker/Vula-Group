@@ -2924,6 +2924,20 @@ def _project_named_in_caption(tenant_id: str, filename: str) -> Optional[str]:
         return None
 
 
+def _project_named_in_text(tenant_id: str, text: str) -> Optional[str]:
+    """The one project a caption's own words name ("Belladonna", "skip slips for HPC"), or None —
+    the strict named match only, never a loose shared word."""
+    if not (text or "").strip() or not tenant_id:
+        return None
+    try:
+        from vula.integrations.project_resolver import resolve
+        r = resolve(tenant_id, {}, text)
+        return r["project"] if r and r.get("kind") == "named" else None
+    except Exception as exc:
+        logger.debug("caption project check skipped: %s", exc)
+        return None
+
+
 def _caption_hint(filename: str) -> str:
     """The caption a photo was named after, or "" for a generated name."""
     stem = (filename or "").rsplit(".", 1)[0].strip()
@@ -3121,6 +3135,22 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
 
 
 async def _handle_document_ingest(
+    phone: str, media_id: str, filename: str, mime_type: str,
+    route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
+    route_mode: Optional[str] = None, caption: str = "",
+) -> None:
+    """One document from a sender, inside its burst (vula/api/doc_batch.py): from the second
+    document in a row, the replies are held and sent as one summary when the last is done."""
+    from vula.api import doc_batch
+    token = doc_batch.enter(phone)
+    try:
+        await _handle_document_ingest_one(phone, media_id, filename, mime_type, route_tenant_id=route_tenant_id,
+                                          content_sha=content_sha, route_mode=route_mode, caption=caption)
+    finally:
+        await doc_batch.leave(phone, token, _send_reply)
+
+
+async def _handle_document_ingest_one(
     phone: str, media_id: str, filename: str, mime_type: str,
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
     route_mode: Optional[str] = None, caption: str = "",
@@ -3632,10 +3662,21 @@ async def _handle_document_ingest(
             file_note, filed_row = await _join_to_first_page(
                 tenant_id, phone, result, local_path, mime_type, doc_category, fields, first_page)
         else:
+            # The project the sender named: in this document's caption (a PDF's caption, or a photo's,
+            # carried in its filename), else in the caption of an earlier document of the same batch
+            # (10 Nov 2026, DIGG: "Belladonna" on the first of 20 skip slips — the rest were asked
+            # about one by one). vula/api/doc_batch.py keeps the batch's project.
+            from vula.api import doc_batch
+            named_project = (_project_named_in_text(tenant_id, caption)
+                             or _project_named_in_caption(tenant_id, filename))
+            if named_project:
+                doc_batch.note_project(phone, named_project)
+            else:
+                named_project = doc_batch.project(phone)
             file_note, filed_row = await _file_uploaded_document(
                 tenant_id, phone, result, local_path, mime_type,
                 doc_category, summary, fields, already_committed=already_committed,
-                project=_project_named_in_caption(tenant_id, filename),
+                project=named_project, doc_text=doc_text,
             )
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
@@ -5121,7 +5162,7 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
 
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
                                   category, summary, fields, already_committed=False,
-                                  source="whatsapp", project=None):
+                                  source="whatsapp", project=None, doc_text: str = ""):
     """Match the document to a project and file it (durable copy + record + ClickUp).
     Also books it via the shared commit path (same as email/Smart Scanner) when it's a
     financial category the vision-scan shortcut hasn't already committed.
@@ -5172,7 +5213,9 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             from vula.api.tenants import uses_projects as _up
             if _up(tenant_id):
                 from vula.integrations.project_resolver import resolve as _resolve
-                _named = _resolve(tenant_id, {}, hint)
+                # the document's own words too — a skip invoice prints its site ("07 Belladonna Drive")
+                # but the reading doesn't always copy it into a field (10 Nov 2026, DIGG)
+                _named = _resolve(tenant_id, {}, hint + " " + (doc_text or "")[:8000])
                 if (_named and _named.get("kind") == "named" and not (match or {}).get("chosen")
                         and (match or {}).get("project") != _named["project"]):
                     match = {"project": _named["project"], "clickup_list_id": None,
@@ -5254,7 +5297,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
                 note = (f"📂 Which project is this for?{hint_txt} "
                         f"Reply with the project name and I'll file it (or 'skip').")
-            if row.get("id"):
+            if row.get("id") and row.get("status") != "duplicate":
                 from vula import open_questions
                 open_questions.ask(tenant_id, phone, "doc_project", row["id"],
                                    f"Which project: {result.filename}")
@@ -5264,6 +5307,8 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # Starter tenant at the cap sees the real reason instead of a false "Filed under X".
         if row.get("plan_limit_reached"):
             note = f"📂 {row.get('error')}"
+        elif row.get("status") == "duplicate":
+            note = ""                        # the duplicate notice (row["checks"]) says what happened
 
         unverified = (fields or {}).get("_unverified_figures")
         if not already_committed and category in _FINANCIAL_DOC_CATEGORIES:
@@ -5560,6 +5605,15 @@ def _content_fingerprint(category: str, fields: dict) -> str:
         return ""  # not enough distinct identifying signal
     raw = (category or "").lower() + "|" + "|".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+_VAT_WORDS = re.compile(r"\bv\.?\s?a\.?\s?t\b|\bbtw\b|\bexcl(?:\.|uding|usive)?\b|\bincl(?:\.|uding|usive)?\s+vat", re.I)
+
+
+def _document_states_vat(text: str) -> bool:
+    """Whether the document itself mentions VAT ("VAT", "excl.", "excluding VAT", "BTW"). A document
+    that never mentions VAT is never treated as priced excluding it."""
+    return bool(_VAT_WORDS.search(text or ""))
 
 
 async def _analyze_document(tenant_id: str, filename: str, local_path,
@@ -5865,6 +5919,13 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                                          (full_text or text) + ("\n" + plain_text if structured else ""))
             if totals_disagree(checked):
                 checked["_check"] = "subtotal + VAT does not make the total"
+            # "priced excluding VAT" only when the document says so: 10 Nov 2026, DIGG's skip and
+            # Nelito invoices never mention VAT, the model guessed "excluding", and 15% was added
+            # (R2,800 booked as R3,220, R27,100 as R31,165). STE's quotes, which do say "excluding
+            # VAT", are unaffected.
+            if checked.get("amounts_exclude_vat") and not _document_states_vat(
+                    (full_text or text) + "\n" + (plain_text or "")):
+                checked["amounts_exclude_vat"] = False
             result["fields"] = checked
         if result and result.get("category") == "Bill of Quantities (BOQ)":
             result = await _complete_boq_lines(result, local_path, full_text, filename)
@@ -8791,12 +8852,22 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, message):     # capability benchmark: recorded, not sent
         return True
+    # a reply from a batch of documents is held and sent as one summary (vula/api/doc_batch.py)
+    if not idem_key:
+        from vula.api import doc_batch
+        if doc_batch.capture(to, message, tenant_id):
+            return True
     if idem_key:
         import asyncio as _aio
         if not await _aio.to_thread(_claim_outbound, tenant_id, idem_key):
             logger.info("skipping duplicate automated send %s", idem_key)
             return True
-        ok = await _send_reply(to, message, tenant_id)
+        from vula.api import doc_batch
+        _paused = doc_batch.pause()          # a keyed send (the "Got it") is never held for a batch
+        try:
+            ok = await _send_reply(to, message, tenant_id)
+        finally:
+            doc_batch.resume(_paused)
         if not ok:
             await _aio.to_thread(_release_outbound, tenant_id, idem_key)
         return ok

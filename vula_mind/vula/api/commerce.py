@@ -7905,6 +7905,70 @@ async def admin_data_health(tenant_id: str):
     return await asyncio.to_thread(data_checks.sweep, tenant_id)
 
 
+@router.post("/{tenant_id}/admin/documents/{doc_id}/client-link")
+async def admin_document_client_link(tenant_id: str, doc_id: str, body: dict):
+    """Show a document on its project's client link even though it names another project (or stop
+    showing it): body {show: true|false} (vula/commerce/project_share_docs.other_projects). Read back."""
+    import asyncio
+    from vula.commerce import service as cs
+    show = bool((body or {}).get("show"))
+
+    def _set():
+        db = cs._client()
+        rows = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id).eq("id", doc_id)
+                .limit(1).execute().data or [])
+        if not rows:
+            return None
+        f = dict(rows[0].get("fields") or {})
+        if show:
+            f["_show_on_client_link"] = True
+        else:
+            f.pop("_show_on_client_link", None)
+        db.table("vula_filed_documents").update({"fields": f}).eq("tenant_id", tenant_id).eq("id", doc_id).execute()
+        back = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id).eq("id", doc_id)
+                .limit(1).execute().data or [{}])[0].get("fields") or {}
+        return bool(back.get("_show_on_client_link")) == show
+    ok = await asyncio.to_thread(_set)
+    if ok is None:
+        raise HTTPException(status_code=404, detail="No such document.")
+    if not ok:
+        raise HTTPException(status_code=500, detail="That didn't save — please try again.")
+    return {"id": doc_id, "show_on_client_link": show}
+
+
+@router.get("/{tenant_id}/admin/documents/{doc_id}/site-split")
+async def admin_site_split(tenant_id: str, doc_id: str):
+    """An invoice that covers several jobs: its proposed split and the bank payments that could be its
+    own (vula/commerce/site_split.py)."""
+    import asyncio
+    from vula.commerce import site_split
+    doc = await asyncio.to_thread(site_split._doc, tenant_id, doc_id)
+    s = ((doc or {}).get("fields") or {}).get("_site_split")
+    if not s:
+        raise HTTPException(status_code=404, detail="There's no split on that document.")
+    pays = await asyncio.to_thread(site_split.payments, tenant_id, doc)
+    return {"split": s, "payments": [{k: r.get(k) for k in ("id", "txn_date", "description", "amount_cents", "project")}
+                                     for r in pays]}
+
+
+@router.post("/{tenant_id}/admin/documents/{doc_id}/site-split")
+async def admin_apply_site_split(tenant_id: str, doc_id: str, body: dict, request: Request):
+    """Split the invoice's bank payment across its jobs, as proposed. body: {txn_id?} — needed only when
+    more than one payment could be the invoice's (409 lists them). Read back."""
+    import asyncio
+    from vula.commerce import site_split
+    by = _actor(request)
+    try:
+        return await asyncio.to_thread(site_split.apply, tenant_id, doc_id, (body or {}).get("txn_id"), by)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        doc = await asyncio.to_thread(site_split._doc, tenant_id, doc_id)
+        pays = await asyncio.to_thread(site_split.payments, tenant_id, doc or {})
+        raise HTTPException(status_code=409, detail={"message": str(exc), "payments": [
+            {k: r.get(k) for k in ("id", "txn_date", "description", "amount_cents", "project")} for r in pays]})
+
+
 @router.get("/{tenant_id}/admin/suppliers/duplicates")
 async def admin_supplier_duplicates(tenant_id: str):
     """Suppliers on file that look like one business — same VAT number, bank account, email, or the
