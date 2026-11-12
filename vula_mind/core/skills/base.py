@@ -707,6 +707,11 @@ _OWNER_ADMIN_RE = re.compile(
     r"\b(?:meeting|appointment|site visit) with\b.{0,60}?\b(?:mon|tue|wed|thu|fri|sat|sun|today|tomorrow|at \d|\d{1,2}(?:am|pm|:\d\d))|"
     r"\bmy (?:meetings|appointments|diary)\b|\bwhat meetings\b|\b(?:move|cancel|reschedule) my [\w' -]{0,30}?meeting\b|"
     r"\bremind me\b.{0,40}\bbefore (?:the|my) (?:meeting|appointment|visit)\b|"
+    # What a team member has on / has done (team_activity tool, 12 Nov).
+    r"\bhow (?:does|is|did) [\w' ]{1,30}?(?:week|diary|schedule)(?: look(?:ing)?)?\b|"
+    r"\bhow (?:does|is) [\w' ]{1,30}?day look(?:ing)?\b|"
+    r"\bwhat did (?:the )?(?:team|reps|sales team)\b|\bwhat did [\w']{2,20} do (?:this|last) (?:week|month)\b|"
+    r"\bteam activity\b|"
     r"\bare we making\b|\bmaking (?:our|my|the) (?:\d+\s?%|fee|margin|profit)\b|"
     r"\b(?:profit|margin|loss)\s+on\s+(?:the\s+)?\w+|\blos(?:e|ing) money\b|"
     r"\bhow(?:'s| is)\s+[\w\s]{2,25}?\s+doing\b|\bon (?:track|budget) for (?:our|the|my) fee\b|"

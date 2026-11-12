@@ -11,8 +11,13 @@ triggers:
 - met with
 - diary
 - my meetings
+- week look
+- team activity
+- what did the team
+- what did the reps
 tools:
 - meeting
+- team_activity
 - log_meeting
 - draft_followup_email
 - view_call_sheet

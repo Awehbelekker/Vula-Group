@@ -5,12 +5,14 @@
  * chips are grouped by menu section — the redesign's menu, so Stock and Suppliers sit under
  * Operate — and each is a toggle button (aria-pressed). Ids are the same as before.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Cake, History, KeyRound, Plus, RotateCcw, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
 import { MERCHANT_GROUPS, withV2Moves } from "../../navConfig.jsx";
 import { Button, Card, EmptyState, Field, Input, PageHeader, SectionTabs, Select, StatusChip } from "../ui/index.jsx";
 import EmployeesV2 from "./EmployeesV2";
 import NoticesV2 from "./NoticesV2";
+import ActivityV2 from "./ActivityV2";
+import { VULA_API } from "../../lib/authFetch";
 import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, toggle, useTeam } from "./useTeam";
 import "./team.css";
 
@@ -93,12 +95,22 @@ function Chip({ on, label, onClick }) {
 
 export default function TeamV2({ tenantId }) {
   const [tab, setTab] = useState("people");
+  // Team › Activity only where it fits (more than one person, a business with meetings/visits/
+  // bookings/follow-ups) — vula/api/team_activity.py decides.
+  const [activity, setActivity] = useState(false);
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${VULA_API}/v1/team/${tenantId}/activity/available`).then((r) => (r.ok ? r.json() : {}))
+      .then((d) => setActivity(!!d.available)).catch(() => setActivity(false));
+  }, [tenantId]);
+  const tabs = [{ id: "people", label: "People" }, ...(activity ? [{ id: "activity", label: "Activity" }] : []),
+    { id: "ai", label: "AI employees" }, { id: "notices", label: "Notices" }];
   return (
     <div>
       <PageHeader sub="Add people, give each their own WhatsApp, and choose what they see and get notified about. Send them notices, birthday wishes and public holiday reminders." />
-      <SectionTabs label="Team" active={tab} onChange={setTab}
-        tabs={[{ id: "people", label: "People" }, { id: "ai", label: "AI employees" }, { id: "notices", label: "Notices" }]} />
+      <SectionTabs label="Team" active={tab} onChange={setTab} tabs={tabs} />
       {tab === "notices" ? <NoticesV2 tenantId={tenantId} />
+        : tab === "activity" && activity ? <ActivityV2 tenantId={tenantId} />
         : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <People tenantId={tenantId} />}
     </div>
   );

@@ -39,9 +39,9 @@ MAX_ROWS = 5000
 PREVIEW_ROWS = 5
 DRAFT_DAYS = 7
 MAX_GROUPS = 300
-PERIODS = ("this_month", "last_month", "this_year", "last_year", "tax_year", "last_tax_year",
-           "last_12_months", "all")
-GROUPS = ("none", "month", "project", "supplier", "customer", "account", "status")
+PERIODS = ("this_week", "last_week", "this_month", "last_month", "this_year", "last_year", "tax_year",
+           "last_tax_year", "last_12_months", "all")
+GROUPS = ("none", "month", "project", "supplier", "customer", "account", "status", "person")
 
 
 @dataclass(frozen=True)
@@ -117,10 +117,35 @@ SOURCES: Dict[str, Source] = {
            ("delivery", "Delivery", "money"), ("total", "Total", "money")),
         ("number", "date", "customer", "status", "total"),
         ("period", "customer", "status"), "_orders", party="customer"),
+    # 12 Nov 2026: what the team did (vula/team_activity.py) — Team access only (owners/managers).
+    "meetings": Source(
+        "meetings", "Meetings", "team",
+        _f(("date", "Date", "date"), ("time", "Time", "text"), ("person", "Who", "text"),
+           ("with", "Meeting with", "text"), ("address", "Address", "text"), ("status", "Status", "text")),
+        ("date", "time", "person", "with", "address"),
+        ("period", "person", "customer", "status"), "_meetings", party="with"),
+    "bookings": Source(
+        "bookings", "Bookings", "team",
+        _f(("date", "Date", "date"), ("time", "Time", "text"), ("person", "Booked by", "text"),
+           ("customer", "Customer", "text"), ("service", "Service", "text"), ("status", "Status", "text")),
+        ("date", "time", "person", "customer", "service", "status"),
+        ("period", "person", "customer", "status"), "_bookings", party="customer"),
+    "follow_ups": Source(
+        "follow_ups", "Follow-ups", "team",
+        _f(("date", "Due", "date"), ("person", "Who", "text"), ("text", "Follow-up", "text"),
+           ("status", "Status", "text"), ("done", "Done on", "date")),
+        ("date", "person", "text", "status", "done"),
+        ("period", "person", "status"), "_follow_ups"),
+    "meeting_notes": Source(
+        "meeting_notes", "Meeting notes", "team",
+        _f(("date", "Date", "date"), ("person", "Who", "text"), ("summary", "Summary", "text"),
+           ("actions", "Action items", "number")),
+        ("date", "person", "summary", "actions"),
+        ("period", "person"), "_meeting_notes"),
 }
 
 _GROUP_FIELD = {"month": "date", "project": "project", "supplier": "supplier", "customer": "customer",
-                "account": "account", "status": "status"}
+                "account": "account", "status": "status", "person": "person"}
 
 
 class SpecError(ValueError):
@@ -288,6 +313,9 @@ def period_range(filters: Dict[str, Any], today: Optional[date] = None) -> Tuple
     p = filters.get("period")
     if not p or p == "all":
         return None, None
+    if p in ("this_week", "last_week"):
+        monday = t - timedelta(days=t.weekday()) - timedelta(days=7 if p == "last_week" else 0)
+        return monday.isoformat(), (monday + timedelta(days=6)).isoformat()
     if p == "last_year":
         return date(t.year - 1, 1, 1).isoformat(), date(t.year - 1, 12, 31).isoformat()
     return reports.period_dates(p, today=t)
@@ -466,11 +494,99 @@ def _orders(tenant_id, since, until, labels):
             for r in _pages(make)]
 
 
+def _people(tenant_id: str) -> Callable[[Any], str]:
+    """A stored WhatsApp number → the team member's name (the number itself if not on the team)."""
+    from vula.team_index import active_members, digits_za
+    names = {}
+    try:
+        names = {digits_za(m.get("whatsapp") or "")[-9:]: m.get("name") or m.get("whatsapp")
+                 for m in active_members(tenant_id) if m.get("whatsapp")}
+    except Exception:  # noqa: BLE001 — a name is never why a sheet fails
+        pass
+    return lambda phone: names.get(digits_za(str(phone or ""))[-9:]) or (str(phone or "") or "—")
+
+
+def _sast(value: Any) -> Tuple[str, str]:
+    """('2026-11-13', '10:00') in South African time."""
+    from vula.when import SAST
+    try:
+        t = datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(SAST)
+        return t.date().isoformat(), t.strftime("%H:%M")
+    except Exception:
+        return str(value or "")[:10], ""
+
+
+def _day_bounds(q, col: str, since: Optional[str], until: Optional[str]):
+    if since:
+        q = q.gte(col, since + "T00:00:00+02:00")
+    if until:
+        q = q.lte(col, until + "T23:59:59+02:00")
+    return q
+
+
+def _meetings(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("vula_meetings").select("id,created_by,with_name,address,starts_at,status")
+                           .eq("tenant_id", tenant_id), "starts_at", since, until).order("starts_at")
+    out = []
+    for r in _pages(make):
+        d, t = _sast(r.get("starts_at"))
+        out.append({"date": d, "time": t, "person": who(r.get("created_by")), "with": r.get("with_name") or "",
+                    "address": r.get("address") or "", "status": r.get("status") or ""})
+    return out
+
+
+def _bookings(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("commerce_bookings")
+                           .select("id,booked_by,customer_name,service_name,start_at,status")
+                           .eq("tenant_id", tenant_id), "start_at", since, until).order("start_at")
+    out = []
+    for r in _pages(make):
+        d, t = _sast(r.get("start_at"))
+        out.append({"date": d, "time": t, "person": who(r.get("booked_by")) if r.get("booked_by") else "—",
+                    "customer": r.get("customer_name") or "", "service": r.get("service_name") or "",
+                    "status": r.get("status") or ""})
+    return out
+
+
+def _follow_ups(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("vula_reminders").select("id,created_by,text,due_at,status,completed_at")
+                           .eq("tenant_id", tenant_id), "due_at", since, until).order("due_at")
+    return [{"date": _sast(r.get("due_at"))[0] if r.get("due_at") else "", "person": who(r.get("created_by")),
+             "text": r.get("text") or "", "status": r.get("status") or "",
+             "done": _sast(r.get("completed_at"))[0] if r.get("completed_at") else ""}
+            for r in _pages(make)]
+
+
+def _meeting_notes(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("vula_filed_documents").select("id,filed_by,summary,fields,created_at")
+                           .eq("tenant_id", tenant_id).eq("category", "meeting_notes"),
+                           "created_at", since, until).order("created_at")
+    return [{"date": _sast(r.get("created_at"))[0], "person": who(r.get("filed_by")),
+             "summary": r.get("summary") or "",
+             "actions": len((r.get("fields") or {}).get("action_items") or [])}
+            for r in _pages(make)]
+
+
 _LOADERS: Dict[str, Callable] = {"_supplier_invoices": _supplier_invoices, "_supplier_lines": _supplier_lines,
                                  "_bank": _bank, "_expenses": _expenses,
-                                 "_customer_invoices": _customer_invoices, "_orders": _orders}
+                                 "_customer_invoices": _customer_invoices, "_orders": _orders,
+                                 "_meetings": _meetings, "_bookings": _bookings,
+                                 "_follow_ups": _follow_ups, "_meeting_notes": _meeting_notes}
 # Left out unless the owner asks for that status: they're not real money.
-_NOT_COUNTED = {"expenses": {"cancelled", "void", "deleted"},
+_NOT_COUNTED = {"meetings": {"cancelled"}, "bookings": {"cancelled"},
+                "expenses": {"cancelled", "void", "deleted"},
                 "customer_invoices": {"cancelled", "void", "draft"},
                 "orders": {"cancelled", "abandoned", "pending_payment"}}
 
@@ -535,6 +651,9 @@ def rows_for(tenant_id: str, spec: Dict[str, Any], resolved: Dict[str, Any],
         if f.get("account") and _norm(f["account"]) not in _norm(f"{r.get('account')} {r.get('account_code')}"):
             continue
         if f.get("type") and _norm(f["type"]) not in _norm(f"{r.get('type')} {r.get('doc_type')}"):
+            continue
+        if f.get("person") and not all(w in _norm(r.get("person") or "").split()
+                                       for w in _norm(f["person"]).split()):
             continue
         if not _status_ok(src.id, r, f.get("status")):
             continue
@@ -669,6 +788,8 @@ def understood(spec: Dict[str, Any], resolved: Dict[str, Any], today: Optional[d
         out.append(f"• Category: {f['account']}")
     if f.get("type"):
         out.append(f"• Type: {f['type']}")
+    if f.get("person"):
+        out.append(f"• Person: {f['person']}")
     if f.get("status"):
         out.append(f"• Status: {f['status']}")
     elif spec["source"] in _NOT_COUNTED:
@@ -757,7 +878,7 @@ def _avg(field: Field, v: float) -> str:
 # ── the file ───────────────────────────────────────────────────────────────
 
 _GROUP_LABEL = {"month": "Month", "project": "Project", "supplier": "Supplier", "customer": "Customer",
-                "account": "Category", "status": "Status"}
+                "account": "Category", "status": "Status", "person": "Person"}
 _STAT_FUNC = {"count": "COUNT", "average": "AVERAGE", "min": "MIN", "max": "MAX"}
 
 

@@ -2094,6 +2094,8 @@ from vula.api.staff_notices import router as staff_notices_router  # noqa: E402
 app.include_router(staff_notices_router, prefix="/v1/team")   # before team's /{tenant}/{member_id}
 from vula.api.owner_briefs import router as owner_briefs_router  # noqa: E402
 app.include_router(owner_briefs_router, prefix="/v1/team")    # before team's /{tenant}/{member_id}
+from vula.api.team_activity import router as team_activity_router  # noqa: E402
+app.include_router(team_activity_router, prefix="/v1/team")   # before team's /{tenant}/{member_id}
 app.include_router(team_router, prefix="/v1/team")
 app.include_router(payments_router, prefix="/v1/payments")
 app.include_router(tenants_router, prefix="/v1/tenants")

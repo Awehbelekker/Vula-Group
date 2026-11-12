@@ -1025,6 +1025,24 @@ CONTACT_TOOLS = [
 ]
 MEETING_TOOLS = [
     {"type": "function", "function": {
+        "name": "team_activity",
+        "description": (
+            "What a team member has on and has done — meetings, bookings, meeting notes, call-sheet "
+            "entries, follow-ups done and overdue, new contacts — or the same counts for the whole "
+            "team. E.g. 'how does Thabo's week look?', 'what did Thabo do last week?', 'what did the "
+            "team do this week?', 'the reps this month', 'how does my week look?'. action=person "
+            "(with `who`, or 'me' for the person asking) or team (optional role, e.g. sales_rep). "
+            "Pass `period` as the person said it (this week, last week, next week, today, tomorrow, "
+            "this month, last month). Only owners and managers can see other people; the tool "
+            "enforces it. For a spreadsheet use custom_sheet with the meetings/bookings/follow_ups/"
+            "meeting_notes sources."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["person", "team"]},
+            "who": {"type": "string", "description": "A name or number as said, or 'me'."},
+            "role": {"type": "string", "enum": ["sales_rep", "staff", "manager", "bookkeeper"]},
+            "period": {"type": "string"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "meeting",
         "description": (
             "The person's OWN diary of meetings, appointments and site visits, on WhatsApp — e.g. "
@@ -1207,7 +1225,11 @@ SHEET_TOOLS = [
                        "status; expenses: date, supplier, description, amount, vat, account, project, "
                        "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
                        "date, due, project, excl_vat, vat, total, paid, owed, status; orders: number, date, "
-                       "customer, channel, status, subtotal, delivery, total. Maths the owner asks for ('total minus "
+                       "customer, channel, status, subtotal, delivery, total; and what the TEAM did (owners/managers): meetings: "
+                       "date, time, person, with, address, status; bookings: date, time, person, customer, service, "
+                       "status; follow_ups: date (due), person, text, status, done; meeting_notes: date, person, summary, "
+                       "actions — filter by person, group by person ('every meeting Thabo had this month', 'follow-ups "
+                       "per person last week'). Maths the owner asks for ('total minus "
                        "VAT', 'margin %', 'quantity times price') goes in computed; 'running balance' in running; "
                        "'average/count/highest' in summary; 'totals per supplier only' is detail false with "
                        "group_by; 'with a chart' is chart (needs a grouping). The reply is sent exactly as returned.",
@@ -1217,10 +1239,11 @@ SHEET_TOOLS = [
             "name": {"type": "string", "description": "For save/use: the sheet's name, e.g. 'Tile Co monthly'."},
             "spec": {"type": "object", "properties": {
                 "source": {"type": "string", "enum": ["supplier_invoices", "supplier_lines", "bank", "expenses",
-                                                      "customer_invoices", "orders"]},
+                                                      "customer_invoices", "orders", "meetings", "bookings",
+                                                      "follow_ups", "meeting_notes"]},
                 "columns": {"type": "array", "items": {"type": "string"}},
                 "group_by": {"type": "string", "enum": ["none", "month", "project", "supplier", "customer",
-                                                        "account", "status"]},
+                                                        "account", "status", "person"]},
                 "totals": {"type": "array", "items": {"type": "string"},
                            "description": "Money columns to total; omit for all of them."},
                 "title": {"type": "string"},
@@ -1240,13 +1263,15 @@ SHEET_TOOLS = [
                 "chart": {"type": "string", "enum": ["bar", "line", "pie"], "description": "Needs group_by."},
                 "chart_of": {"type": "string", "description": "The totalled money column the chart shows."},
                 "filters": {"type": "object", "properties": {
-                    "period": {"type": "string", "enum": ["this_month", "last_month", "this_year", "last_year",
-                                                          "tax_year", "last_tax_year", "last_12_months", "all"]},
+                    "period": {"type": "string", "enum": ["this_week", "last_week", "this_month", "last_month",
+                                                          "this_year", "last_year", "tax_year", "last_tax_year",
+                                                          "last_12_months", "all"]},
                     "since": {"type": "string", "description": "YYYY-MM-DD"},
                     "until": {"type": "string", "description": "YYYY-MM-DD"},
                     "supplier": {"type": "string"}, "project": {"type": "string"},
                     "customer": {"type": "string"}, "account": {"type": "string"},
-                    "status": {"type": "string"}, "type": {"type": "string"}}}}}},
+                    "status": {"type": "string"}, "type": {"type": "string"},
+                    "person": {"type": "string", "description": "A team member's name as said (team sources)."}}}}}},
             "required": ["action"]}}},
 ]
 
@@ -3067,6 +3092,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
             if name == "meeting":            return self._meeting(tid, args, ctx)
+            if name == "team_activity":      return self._team_activity(tid, args, ctx)
             if name == "setup_project":
                 # Only ever reached from the owner's Confirm tap on a plan Vula showed them
                 # (vula/api/whatsapp.py::_maybe_project_setup) — never offered to the model.
@@ -6281,6 +6307,40 @@ class CommerceAdminSkill(BaseSkill):
                 "creates the draft. Never save anything before they've confirmed."
             ),
         }
+
+    def _team_activity(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """One person's week or the team's counts (vula/team_activity.py). Owners and managers
+        see anyone; everyone else only themselves — checked here, not left to the prompt."""
+        from vula import team_activity as ta
+        from vula import team_index
+        phone = ctx.get("phone") or ""
+        me = team_index.member_for_phone(tid, phone) if phone else None
+        sees_all = bool(me) and ((me.get("role") or "").lower() in _FULL_ACCESS_ROLES or not (me.get("access") or []))
+        since, until, label = ta.period(str(args.get("period") or ""))
+        action = str(args.get("action") or "person").lower()
+        who = str(args.get("who") or "").strip()
+        if action == "team":
+            if not sees_all:
+                return {"reply_verbatim": "Only the owner or a manager can see the whole team. "
+                                          "Ask *how does my week look?* for your own."}
+            return {"reply_verbatim": ta.team_text(ta.team_summary(tid, since, until, args.get("role") or None), label)}
+        if not who or who.lower() in ("me", "my", "mine", "myself", "i"):
+            if not phone:
+                return {"error": "I can only show the diary of someone messaging me on WhatsApp."}
+            person = me or {"whatsapp": phone, "name": "You"}
+        else:
+            found = ta.match_member(tid, who)
+            if not found:
+                return {"status": "need_info", "message": f"I can't find *{who}* on the team list. Who do you mean?"}
+            if len(found) > 1:
+                names = "\n".join(f"• {m.get('name')} ({m.get('whatsapp')})" for m in found[:6])
+                return {"status": "need_info", "message": f"Which one?\n{names}"}
+            person = found[0]
+            is_me = me and ta._owner_key(person.get("whatsapp")) == ta._owner_key(phone)
+            if not sees_all and not is_me:
+                return {"reply_verbatim": "Only the owner or a manager can see someone else's diary. "
+                                          "Ask *how does my week look?* for your own."}
+        return {"reply_verbatim": ta.person_text(ta.person_week(tid, person, since, until), label)}
 
     def _meeting(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         """The person's own meetings (vula/meetings.py): book, list, update, cancel. Every change is
