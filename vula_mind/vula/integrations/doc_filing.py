@@ -647,6 +647,15 @@ async def file_document(
     exception; check_document_quota itself fails open on a metering read error.
     """
     from vula.commerce.plan_limits import PlanLimitError, check_document_quota
+    # A document of one member's private account (12 Nov 2026, Richard's own statements) is theirs
+    # alone: filed in their private documents, never the business's (vula/private_docs.py).
+    from vula import private_docs
+    import json as _json
+    member = private_docs.owner_of(tenant_id, filename, summary, _json.dumps(fields or {}, default=str))
+    if member:
+        return await private_docs.store(
+            tenant_id, member, filename=filename, doc_id=doc_id or None, category=category, summary=summary,
+            fields=fields, source=source, content_hash=hashlib.sha256(data).hexdigest() if data else None)
     if is_bank_statement(category, summary, filename):
         project, clickup_list_id = None, None          # the whole business's, never a project's
         if status == "pending_project":

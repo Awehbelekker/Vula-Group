@@ -3069,6 +3069,24 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
     rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
     if rec.get("not_bank_statement"):
         return False                  # a supplier's statement of account → filed as a document
+    if rec.get("private"):
+        # One member's own account (12 Nov 2026, Richard's): not the business's books — filed for
+        # them alone, and only they can ask Vula about it (vula/private_docs.py).
+        from vula import private_docs
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        owner = rec["private_to"]
+        res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(local_path, audience="owner",
+                                                                           private_to=owner)
+        await private_docs.store(tenant_id, owner, filename=local_path.name,
+                                 doc_id=getattr(res, "doc_id", None), category="Bank Statement",
+                                 summary=f"Private bank statement, account ending {str(rec.get('bank_account'))[-4:]}",
+                                 source="whatsapp")
+        mine = private_docs.member_id_for_phone(tenant_id, phone) == owner
+        await _send_reply(phone, ("🔒 Filed privately for you — it isn't in the business's books, and only "
+                                  "you can ask me about it." if mine else
+                                  "🔒 That statement is for a private account, so it's filed privately for "
+                                  "its owner and isn't in the business's books."), tenant_id)
+        return True
     if rec.get("error"):
         await _send_reply(phone, f"🏦 That looks like a bank statement, but I couldn't "
                                  f"process it: {rec['error']}", tenant_id)
@@ -7713,8 +7731,12 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — see _rag_reply_inner. Every KB search made while answering an outsider
     is limited to customer-visible documents (vula/ingestion/pipeline.py::kb_audience)."""
-    from vula.ingestion.pipeline import kb_audience
-    with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)):
+    from vula.ingestion.pipeline import kb_audience, kb_viewer
+    from vula.private_docs import member_id_for_phone
+    import contextlib as _ctx
+    # Their own private documents too; with no phone (the staff app's chat) the caller already said who.
+    with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)), \
+            (kb_viewer(member_id_for_phone(tenant_id, phone)) if phone else _ctx.nullcontext()):
         return await _rag_reply_inner(tenant_id, question, conversation_history, phone,
                                       caller_name=caller_name, caller_role=caller_role)
 
@@ -9754,6 +9776,16 @@ async def _sender_is_sales_rep(phone: str, tenant_id: str) -> bool:
 
 async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
                               detected_lang: Optional[str] = None) -> bool:
+    """Drive the commerce_admin skill (owner running the shop) with memory — answering this member,
+    so their own private documents may be used (vula/private_docs.py), nobody else's."""
+    from vula.ingestion.pipeline import kb_viewer
+    from vula.private_docs import member_id_for_phone
+    with kb_viewer(member_id_for_phone(tenant_id, phone)):
+        return await _run_commerce_admin_inner(phone, text, tenant_id, detected_lang)
+
+
+async def _run_commerce_admin_inner(phone: str, text: str, tenant_id: str,
+                                    detected_lang: Optional[str] = None) -> bool:
     """Drive the commerce_admin skill (owner running the shop) with memory."""
     try:
         from core.skills.base import SkillInput

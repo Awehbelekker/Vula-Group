@@ -1408,6 +1408,20 @@ async def _recurring_bills_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+async def _private_moves_loop() -> None:
+    """Move documents that belong to one team member out of the business's documents, chunks first
+    (vula/private_docs.py, migration 258). Every 5 minutes; nothing to do is one small read."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(30)
+    while True:
+        try:
+            from vula.private_docs import process_moves
+            await process_moves()
+        except Exception as exc:
+            log.warning("private document moves failed: %s", exc)
+        await _asyncio.sleep(300)
+
+
 async def _email_sync_loop() -> None:
     """Auto-sync connected mailboxes every 15 min: build contacts + file attachments."""
     import asyncio as _asyncio
@@ -1681,6 +1695,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_advisor_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_private_moves_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))

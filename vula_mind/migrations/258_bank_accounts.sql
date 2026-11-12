@@ -32,3 +32,40 @@ alter table commerce_bank_transactions add column if not exists bank_account tex
 alter table commerce_bank_transactions add column if not exists project_source text;
 create index if not exists commerce_bank_transactions_account_idx
     on commerce_bank_transactions (tenant_id, bank_account);
+
+-- 12 Nov 2026 (Ian): "Private account is kept for Richard only, if he wants to ask questions about
+-- it; this is his data and only visible to him." A document or an account can be private to one
+-- team member. Private documents live in their own table, so nothing that reads the business's
+-- documents (Documents, reports, project files, client links) can include one by accident; their
+-- knowledge-base chunks carry private_to and are used only when answering that member.
+alter table commerce_bank_accounts add column if not exists private_to text;   -- vula_team_members.id
+
+create table if not exists vula_private_documents (
+    id          uuid primary key default gen_random_uuid(),
+    tenant_id   text not null,
+    member_id   text not null,               -- vula_team_members.id: the only person who sees it
+    filename    text not null,
+    doc_id      text,                         -- its knowledge-base chunks (private_to = member_id)
+    file_url    text,
+    category    text,
+    summary     text,
+    fields      jsonb not null default '{}'::jsonb,
+    source      text,
+    content_hash text,
+    created_at  timestamptz not null default now()
+);
+alter table vula_private_documents enable row level security;
+create index if not exists vula_private_documents_member_idx on vula_private_documents (tenant_id, member_id);
+
+-- Documents already filed for the business that belong to one member: the server moves each one
+-- (row + knowledge chunks) and marks it done.
+create table if not exists vula_private_moves (
+    id                  uuid primary key default gen_random_uuid(),
+    tenant_id           text not null,
+    filed_document_id   uuid not null,
+    member_id           text not null,
+    done_at             timestamptz,
+    error               text,
+    created_at          timestamptz not null default now()
+);
+alter table vula_private_moves enable row level security;

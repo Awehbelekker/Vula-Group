@@ -131,6 +131,8 @@ def list_accounts(tenant_id: str) -> List[Dict[str, Any]]:
         return []
     out = []
     for r in rows:
+        if r.get("private_to"):
+            continue                          # one member's own account: not listed for the business
         try:
             n = len(db.table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id)
                     .eq("bank_account", r["account_number"]).execute().data or [])
@@ -155,6 +157,8 @@ def set_project(tenant_id: str, account_id: str, project: Optional[str],
     if not rows:
         return {"error": "account not found"}
     acct = rows[0]
+    if acct.get("private_to"):
+        return {"error": "account not found"}  # private to one member: not the business's to change
     project = canonical_project(tenant_id, project) if (project or "").strip() else None
     patch: Dict[str, Any] = {"project": project, "updated_at": "now()"}
     if name is not None:

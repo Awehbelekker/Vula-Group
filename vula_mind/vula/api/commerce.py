@@ -2774,9 +2774,19 @@ async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
 
     async def _run():
         try:
-            return await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
-                                                   source_file=body.filename or "upload.pdf",
-                                                   trusted=True)
+            rec = await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
+                                                  source_file=body.filename or "upload.pdf",
+                                                  trusted=True)
+            if rec.get("private"):
+                # One member's own account: filed for them alone, never the business's books.
+                from vula import private_docs
+                from vula.ingestion.pipeline import VulaIngestionPipeline
+                res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(Path(tmp), private_to=rec["private_to"])
+                await private_docs.store(tenant_id, rec["private_to"], filename=body.filename or "statement.pdf",
+                                         doc_id=getattr(res, "doc_id", None), category="Bank Statement",
+                                         summary=f"Private bank statement, account ending {str(rec.get('bank_account'))[-4:]}",
+                                         source="dashboard")
+            return rec
         finally:
             try:
                 os.unlink(tmp)

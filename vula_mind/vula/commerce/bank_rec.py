@@ -1020,6 +1020,14 @@ def supersede_misread(tenant_id: str, txns: List[Dict[str, Any]]) -> Dict[str, A
     return {"superseded": len(out), "allocations_carried": carried}
 
 
+def _private_owner(tenant_id: str, account: Optional[str]) -> Optional[str]:
+    """The member an account is private to: its statement never enters the business's books."""
+    if not account:
+        return None
+    from vula import private_docs
+    return private_docs.private_accounts(tenant_id).get(account)
+
+
 def _statement_account(tenant_id: str, text: str, txns: List[Dict[str, Any]]) -> Optional[str]:
     """The account a statement is for, remembered in the business's accounts (migration 258)."""
     from vula.commerce import bank_accounts
@@ -1050,6 +1058,9 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     if exact and exact["transactions"]:
         txns = exact["transactions"]
         acct = _statement_account(tenant_id, fnb_text, txns)
+        private = _private_owner(tenant_id, acct)
+        if private:
+            return {"private": True, "private_to": private, "bank_account": acct, "parsed": len(txns)}
         result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
                                  auto_settle=True, bank_account=acct)
         result["bank_account"] = acct
@@ -1074,6 +1085,9 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         return {"error": "no transactions found in the statement"}
     reconciled = reconciliation_ok(txns)
     acct = _statement_account(tenant_id, text, txns)
+    private = _private_owner(tenant_id, acct)
+    if private:
+        return {"private": True, "private_to": private, "bank_account": acct, "parsed": len(txns)}
     if not reconciled:
         log.warning("bank statement extraction quality check FAILED for %s (%s) — running "
                     "balances don't reconcile, at least one transaction was likely misread",

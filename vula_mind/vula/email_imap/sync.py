@@ -726,6 +726,16 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         if att["name"].lower().endswith(".pdf") and ("statement" in blob or "capitec" in blob):
             rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"])
             bank_statement = not rec.get("not_bank_statement") and not rec.get("error")
+            if rec.get("private"):
+                # One member's own account: filed for them alone, not the business (vula/private_docs.py).
+                from vula import private_docs
+                res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(
+                    p, source_type="document", private_to=rec["private_to"])
+                await private_docs.store(tenant_id, rec["private_to"], filename=att["name"],
+                                         doc_id=getattr(res, "doc_id", None), category="Bank Statement",
+                                         summary=f"Private bank statement, account ending {str(rec.get('bank_account'))[-4:]}",
+                                         source="email")
+                return
             logger.info("bank statement auto-reconciled (%s): %s", tenant_id, rec)
             # Ask the owner to finish the ones Vula wasn't sure about (one nudge per statement).
             to_review = int(rec.get("needs_input", 0)) + int(rec.get("unmatched_credits", 0))
