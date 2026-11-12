@@ -11,8 +11,10 @@ same membership guard as the rest of the tenant admin API.
   GET/POST   /{tenant_id}/admin/me/memory         what Vula remembers about me (vula/personal_memory.py)
   DELETE     /{tenant_id}/admin/me/memory[/{id}]  forget one note, or all of them
 
-Also here, because it is small and belongs to the same Assistant page:
+Also here, because they are small and are the owner's own view of their workspace:
   GET        /{tenant_id}/admin/quality            how well Vula is answering (vula/quality.py)
+  GET        /{tenant_id}/admin/setup/owner        what is left to set up (vula/commerce/owner_setup.py)
+  GET        /{tenant_id}/admin/plan               the plan, the trial, and the link to pay
 """
 from __future__ import annotations
 
@@ -171,3 +173,27 @@ async def answer_quality(tenant_id: str, days: int = 7) -> dict:
     import asyncio
     from vula import quality
     return await asyncio.to_thread(quality.weekly, tenant_id, max(1, min(int(days), 90)))
+
+
+# ── getting set up, and the plan (vula/commerce/owner_setup.py) ──────────────────────────────
+
+@router.get("/{tenant_id}/admin/setup/owner")
+async def owner_setup(tenant_id: str) -> dict:
+    """What is left to set up, in the owner's words, with WhatsApp as an optional step. Built
+    from the same live checklist the operator sees."""
+    import asyncio
+    from vula.api.master import setup_checklist
+    from vula.commerce.owner_setup import owner_view
+    return owner_view(await asyncio.to_thread(setup_checklist, tenant_id))
+
+
+@router.get("/{tenant_id}/admin/plan")
+async def my_plan(tenant_id: str, request: Request) -> dict:
+    """This business's plan, trial and limits. The link to pay is included only for the owner
+    or a manager — a restricted staff login sees the plan, not a way to commit the business."""
+    import asyncio
+    from vula.api.tenant_auth import member_scope, scope_allows
+    from vula.commerce.owner_setup import plan_view
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    can_pay = scope is not None and scope_allows(scope, frozenset())
+    return await asyncio.to_thread(lambda: plan_view(tenant_id, with_pay_link=can_pay))

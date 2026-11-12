@@ -1,0 +1,23 @@
+/* Home's "Finish setting up" card (GettingStarted.jsx). Tokens only. */
+.vgs { margin-bottom: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vgs-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); }
+.vgs-title { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
+.vgs-hide { margin-left: auto; }
+.vgs-muted { color: var(--muted); font-size: var(--fs-caption); line-height: 1.45; }
+.vgs-warn { color: var(--warn-text); }
+.vgs-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vgs-bar { width: 100%; height: 6px; border: 0; border-radius: var(--radius-md); overflow: hidden; background: var(--surface-2); accent-color: var(--brand); }
+.vgs-bar::-webkit-progress-bar { background: var(--surface-2); }
+.vgs-bar::-webkit-progress-value { background: var(--brand); }
+.vgs-bar::-moz-progress-bar { background: var(--brand); }
+.vgs-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vgs-step { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--line); min-width: 0; }
+.vgs-step:first-child { border-top: 0; }
+.vgs-step-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.vgs-step-label { font-size: var(--fs-body); color: var(--ink); }
+.vgs-step--done .vgs-step-label { color: var(--muted); }
+.vgs-tick { color: var(--ok-text); flex: 0 0 auto; }
+.vgs-todo { color: var(--muted); flex: 0 0 auto; }
+.vgs-opt { margin-left: var(--space-2); padding: 1px 6px; border: 1px solid var(--line); border-radius: var(--radius-md); font-size: var(--fs-caption); color: var(--muted); }
+.vgs-plan { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); color: var(--ink); }
+.vgs-plan-text { flex: 1 1 220px; margin: 0; min-width: 0; font-size: var(--fs-body); }

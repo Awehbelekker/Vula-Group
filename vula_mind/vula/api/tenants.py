@@ -65,22 +65,28 @@ MODULES: dict[str, str] = {
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
+# 12 Nov 2026: every type gets "documents". A food, retail or health business had no Documents
+# tab, so no way to give Vula its price list, policies or menu — and Vula can only answer a
+# business's own facts from what the business has given it.
 BUSINESS_TYPES: dict[str, dict] = {
     "food":     {"label": "Food / Restaurant / Takeaway",
                  "modules": ["products", "orders", "payments", "invoices", "delivery", "wa_shop",
-                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations",
+                             "documents"]},
     "retail":   {"label": "Retail / E-commerce",
                  "modules": ["products", "orders", "payments", "invoices", "pages", "wa_shop",
-                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations",
+                             "documents"]},
     "services": {"label": "Professional services (architecture, agency, consulting)",
                  "modules": ["invoices", "bookings", "projects", "documents", "finances", "fieldops",
                              "followups", "reports", "team", "estimating", "ai_draft", "training", "workspace"]},
     "trades":   {"label": "Trades / Construction / Field work",
                  "modules": ["invoices", "fieldops", "projects", "budget", "scanner",
-                             "finances", "followups", "team", "estimating", "ai_draft", "training", "workspace"]},
+                             "finances", "followups", "team", "estimating", "ai_draft", "training", "workspace",
+                             "documents"]},
     "health":   {"label": "Health / Wellness / Bookings",
                  "modules": ["bookings", "invoices", "crm", "followups", "broadcasts", "marketing",
-                             "inbox", "reports", "pages", "team"]},
+                             "inbox", "reports", "pages", "team", "documents"]},
     # 2026-09-29: a sales-rep business (Gerflor Western Cape): no products or orders of its own,
     # no projects — contacts, follow-ups, product knowledge and expense slips.
     "rep":      {"label": "Sales rep / Agency (represents a brand)",
@@ -90,7 +96,7 @@ BUSINESS_TYPES: dict[str, dict] = {
     "solo":     {"label": "Solo operator (invoices & money only)",
                  "modules": ["invoices", "payments", "finances", "documents", "crm", "reports"]},
     "other":    {"label": "Other / General",
-                 "modules": ["invoices", "crm", "reports", "marketing", "followups", "team"]},
+                 "modules": ["invoices", "crm", "reports", "marketing", "followups", "team", "documents"]},
 }
 
 

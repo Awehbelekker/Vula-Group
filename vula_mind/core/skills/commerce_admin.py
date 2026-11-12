@@ -566,13 +566,19 @@ INVOICE_TOOLS = [
             "required": ["customer_name", "line_items"]}}},
     {"type": "function", "function": {
         "name": "send_invoice",
-        "description": "Send an existing invoice to the customer on WhatsApp, by its number "
-                       "(e.g. OTH-INV-00001). Without confirm=true, returns a preview of who it "
-                       "goes to instead of sending — only pass confirm=true after the owner has "
-                       "explicitly said to go ahead.",
-        "parameters": {"type": "object", "properties": {"invoice_number": {"type": "string"},
-                                                        "confirm": {"type": "boolean"}},
-                       "required": ["invoice_number"]}}},
+        "description": "Send an existing invoice to the customer, by its number (e.g. "
+                       "OTH-INV-00001) — on WhatsApp or by email. Leave `channel` out to use "
+                       "whichever the business and the customer's details allow (WhatsApp when "
+                       "the business has a number connected and the invoice has a phone number, "
+                       "otherwise email); set it when the owner says which. Without confirm=true "
+                       "it returns a preview of who it goes to and how, instead of sending — only "
+                       "pass confirm=true after the owner has explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_number": {"type": "string"},
+            "channel": {"type": "string", "enum": ["whatsapp", "email"],
+                        "description": "Only when the owner said how to send it."},
+            "confirm": {"type": "boolean"}},
+            "required": ["invoice_number"]}}},
     {"type": "function", "function": {
         "name": "payment_link",
         "description": "Send a customer a link to pay an amount — 'send Sam a payment link for "
@@ -1890,6 +1896,31 @@ for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
         _TOOL_SCOPE.setdefault(_t["function"]["name"], _scope)
 
 _FULL_ACCESS_ROLES = {"owner", "manager", "admin"}
+def _has_whatsapp(tenant_id: str) -> bool:
+    """True when this business has its own WhatsApp number connected. One that doesn't (it uses
+    Vula from the dashboard, e.g. for invoicing only) is sent email instead."""
+    try:
+        from vula import whatsapp_numbers
+        return bool(whatsapp_numbers.main_number(tenant_id))
+    except Exception as exc:  # noqa: BLE001 — can't tell: behave as before
+        logger.debug("whatsapp number check skipped: %s", exc)
+        return True
+
+
+def _dashboard_note(tenant_id: str) -> str:
+    """For a turn that came from the dashboard chat. The prompt above was written for WhatsApp
+    ("reachable on WhatsApp", "keep replies WhatsApp-friendly"), which is wrong on a web page and
+    misleading for a business with no WhatsApp number at all."""
+    note = ("\n\nTHIS CONVERSATION IS IN THE WEB DASHBOARD, not on WhatsApp. Don't call it "
+            "WhatsApp or say you'll message the person there; a file or link you produce is "
+            "shown here.")
+    if not _has_whatsapp(tenant_id):
+        note += (" This business has NOT connected a WhatsApp number, so nothing can be sent to "
+                 "its customers on WhatsApp: send by email, and if a tool can only use WhatsApp, "
+                 "say so and that a number can be connected under Settings › WhatsApp.")
+    return note
+
+
 # Access that lets a member see what a client was billed and owes (customer_lookup).
 _MONEY_SCOPES = {"invoices", "finances"}
 
@@ -2227,6 +2258,9 @@ class CommerceAdminSkill(BaseSkill):
                                          lang=lang, role_label=employee.title if employee else None)
         if caller_role != "sales_rep":
             system_msg += self._decisions_block(inp.tenant_id, inp.question or "") + emp_note
+        from_dashboard = inp.metadata.get("channel") == "dashboard"
+        if from_dashboard:
+            system_msg += _dashboard_note(inp.tenant_id)
         collected_sources: List[Dict[str, Any]] = []
         try:
             try:
@@ -2239,7 +2273,8 @@ class CommerceAdminSkill(BaseSkill):
                 tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"], ctx)
                 system_msg = (self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
                                                   lang=lang)
-                              + self._decisions_block(inp.tenant_id, inp.question or ""))
+                              + self._decisions_block(inp.tenant_id, inp.question or "")
+                              + (_dashboard_note(inp.tenant_id) if from_dashboard else ""))
                 collected_sources.clear()
                 answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
                                                 tools, sources=collected_sources)
@@ -2929,7 +2964,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
-            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
+            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")), args.get("channel"))
             if name == "payment_link":       return await self._payment_link(tid, args)
             if name == "financial_report":   return await self._financial_report(tid, args)
             if name == "credit_note":        return await self._credit_note(tid, args)
@@ -3587,23 +3622,65 @@ class CommerceAdminSkill(BaseSkill):
                 "Say 'send it' to WhatsApp it to the customer."))
         return result
 
-    async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False) -> Dict[str, Any]:
+    async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False,
+                            channel: Optional[str] = None) -> Dict[str, Any]:
+        """Send an invoice on WhatsApp or by email. It was WhatsApp-only, and refused an invoice
+        with no phone number — so a business that invoices by email (or has no WhatsApp number at
+        all) could create an invoice in chat and then not send it."""
         num = (invoice_number or "").strip()
         rows = (service._client().table("commerce_invoices")
-                .select("id,invoice_number,customer_phone,customer_name,total_cents")
+                .select("id,invoice_number,customer_phone,customer_email,customer_name,total_cents")
                 .eq("tenant_id", tid).eq("invoice_number", num).limit(1).execute().data or [])
         if not rows:
             return {"error": f"No invoice {num} found."}
-        if not rows[0].get("customer_phone"):
-            return {"error": f"Invoice {num} has no customer phone on file to send to."}
+        inv = rows[0]
+        phone = (inv.get("customer_phone") or "").strip()
+        email = (inv.get("customer_email") or "").strip()
+        via = (channel or "").strip().lower()
+        if via not in ("whatsapp", "email"):
+            # Not said: WhatsApp when the business can send on it, otherwise email.
+            via = "whatsapp" if (phone and _has_whatsapp(tid)) else ("email" if email else
+                                                                    ("whatsapp" if phone else ""))
+        who = inv.get("customer_name") or "the customer"
+        if via == "whatsapp" and not phone:
+            return {"status": "need_info", "message": (
+                f"Invoice {num} has no phone number on it."
+                + (f" I can email it to {email} instead — shall I?" if email else
+                   f" What's {who}'s WhatsApp number or email address?"))}
+        if via == "email" and not email:
+            return {"status": "need_info",
+                    "message": f"Invoice {num} has no email address on it. What's {who}'s email address?"}
+        if not via:
+            return {"status": "need_info", "message": (
+                f"Invoice {num} has no phone number or email address on it. Where should I send it?")}
+        to = phone if via == "whatsapp" else email
         if not confirm:
             # Messages a customer — preview who it goes to first, like every other outbound tool.
-            return {"preview": True, "invoice_number": num, "customer": rows[0].get("customer_name"),
-                    "to": rows[0].get("customer_phone"), "total": self._rands(rows[0].get("total_cents")),
-                    "message": "Confirm to send this invoice on WhatsApp (call again with confirm=true)."}
-        from vula.api.commerce import admin_send_invoice_whatsapp
-        await admin_send_invoice_whatsapp(tid, rows[0]["id"], {})
-        return {"sent": True, "invoice_number": num}
+            return {"preview": True, "invoice_number": num, "customer": inv.get("customer_name"),
+                    "to": to, "via": "WhatsApp" if via == "whatsapp" else "email",
+                    "total": self._rands(inv.get("total_cents")),
+                    "message": ("Confirm to send this invoice "
+                                + ("on WhatsApp" if via == "whatsapp" else "by email")
+                                + " (call again with confirm=true).")}
+        if via == "whatsapp":
+            from vula.api.commerce import admin_send_invoice_whatsapp
+            await admin_send_invoice_whatsapp(tid, inv["id"], {})
+            return {"sent": True, "invoice_number": num}
+        from fastapi import HTTPException
+        from vula.api.commerce import admin_send_invoice_email
+        try:
+            out = await admin_send_invoice_email(tid, inv["id"], {})
+        except HTTPException as exc:
+            return {"error": f"The invoice was not sent: {exc.detail}"}
+        if not (out or {}).get("sent"):
+            return {"error": "The invoice was not sent."}
+        # Read back, not reported: the invoice itself says it went by email.
+        back = (service._client().table("commerce_invoices").select("sent_channel,sent_at")
+                .eq("tenant_id", tid).eq("id", inv["id"]).limit(1).execute().data or [{}])[0]
+        result = {"sent": True, "invoice_number": num, "via": "email", "to": out.get("to") or email}
+        if (back or {}).get("sent_channel") != "email":
+            result["note"] = "Emailed, but the invoice record doesn't show it as sent yet."
+        return result
 
     async def _payment_link(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Invoice for exactly the amount asked + the tenant's pay page, sent on WhatsApp after

@@ -1089,6 +1089,19 @@ export const agentEvents = [
   { kind: "route", task: "document_extract", escalated: true, reason: "local GPU unreachable", at: "2026-10-16T15:20:00Z" },
 ];
 export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name.", team_voice_prompt: "Relaxed and direct. We're a small team." };
+// Home's "Finish setting up" card and the plan under it (GettingStarted.jsx).
+export const ownerSetup = { done: 4, total: 6, complete: false, next: "profile", whatsapp_connected: false, steps: [
+  { id: "branding", label: "Add your logo and colour", why: "Your invoices and your dashboard carry your brand.", optional: false, done: true, tab: "settings" },
+  { id: "payments", label: "Say how customers pay you", why: "Bank details or a card gateway go on every invoice.", optional: false, done: true, tab: "payments" },
+  { id: "vat", label: "Confirm your VAT status", why: "Invoices are worked out with or without VAT from this.", optional: false, done: true, tab: "invoices" },
+  { id: "first_invoice", label: "Send your first invoice", why: "Create one in Invoices, or just ask Vula in the chat.", optional: false, done: true, tab: "invoices" },
+  { id: "profile", label: "Tell Vula about your business", why: "Hours, areas, policies: what Vula answers your customers from.", optional: false, done: false, tab: "settings" },
+  { id: "knowledge", label: "Add your products or documents", why: "Price lists, menus and policies Vula can look things up in.", optional: false, done: false, tab: "products" },
+  { id: "team", label: "Add your team", why: "Give staff their own login and say what each can see.", optional: true, done: true, tab: "team" },
+  { id: "whatsapp", label: "Connect a WhatsApp number", why: "Lets customers and staff talk to Vula on WhatsApp. You can run everything from this dashboard without one.", optional: true, done: false, tab: "settings" },
+] };
+export const myPlan = { plan: "starter", label: "Starter — R1,500/mo", paid: false, on_trial: true, trial_over: false, trial_days_left: 9,
+  users: { used: 2, limit: 2 }, documents: { used: 7, limit: 25 }, pay_url: "https://pay.vula.test/checkout" };
 // "How Vula answered this week" — counts only (assistant/AgentActivityV2.jsx).
 export const quality = { days: 7, answers: 212, backed: { count: 151, of: 180, pct: 84 }, unsure: { count: 17, pct: 8 },
   corrected: { count: 4, pct: 2 }, handed_on: { count: 9 } };

@@ -18,6 +18,7 @@ import { ActivityDetail, ActivityList, shortWhen, useActivity } from "./VulaActi
 import { TodayList, useToday } from "./VulaToday";
 import { InstallCard } from "./install/InstallVula.jsx";
 import MakeItYours from "./MakeItYours.jsx";
+import GettingStarted from "./GettingStarted.jsx";
 import DataHealth from "./DataHealth.jsx";
 import ProjectsOverview from "./projects/ProjectsOverview";
 
@@ -82,6 +83,7 @@ export default function VulaHomeV2({ tenantId, onNavigate }) {
     <div>
       <PageHeader headline title={greeting(user?.name)} sub={status || undefined} />
       <MakeItYours tenantId={tenantId} onNavigate={onNavigate} />
+      <GettingStarted tenantId={tenantId} onNavigate={onNavigate} />
       <InstallCard />
       {error && <ErrorCard what="your Home figures" onRetry={load} />}
       {!home && <Skeleton lines={4} height={22} />}
