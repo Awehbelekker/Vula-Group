@@ -12,8 +12,8 @@ At the time and on the days the owner chose (vula/owner_briefs.py), one WhatsApp
 
 Every business type gets it (shops, project and service businesses alike). Every figure is a DB
 query here, in integer cents — the message is built in code, no model involved. Nothing to
-say → nothing is sent. Outside the 24-hour window _send_reply falls back to the approved
-notification template. It goes only to a business whose owner switched it on, at the time and
+say → nothing is sent. Outside the 24-hour window the morning_brief template carries a one-line
+summary instead (vula/proactive.py); replying *brief* brings the full text. It goes only to a business whose owner switched it on, at the time and
 on the days they chose (vula/owner_briefs.py) — off for everyone else.
 """
 from __future__ import annotations
@@ -198,6 +198,27 @@ def render(d: Dict[str, Any]) -> Optional[str]:
     return "\n".join(lines)
 
 
+def summary_line(d: Dict[str, Any]) -> str:
+    """The brief in one line, for the morning_brief template when the full text can't go
+    (outside WhatsApp's 24-hour window): '3 follow-ups due, 2 meetings, R4,500.00 overdue'."""
+    t = d.get("today") or {}
+    bits = []
+    for key, one, many in (("waiting", "customer waiting", "customers waiting"),
+                           ("follow_ups", "follow-up due", "follow-ups due"),
+                           ("emails", "email to answer", "emails to answer"),
+                           ("quotes", "quote to approve", "quotes to approve")):
+        if t.get(key):
+            bits.append(_n(t[key], one, many))
+    for key, one, many in (("meetings", "meeting", "meetings"), ("bookings", "booking", "bookings")):
+        if t.get(key):
+            bits.append(_n(len(t[key]), one, many))
+    if d.get("overdue"):
+        bits.append(f"{_r(sum(c for _, c in d['overdue']))} overdue")
+    if d.get("paid"):
+        bits.append(f"{_r(sum(p['cents'] for p in d['paid']))} paid yesterday")
+    return ", ".join(bits[:5]) or "a few things to look at"
+
+
 # (tenant, day) already handled today — sent, or nothing to say — so the 5-minute loop doesn't
 # rebuild it for the rest of the window. In memory: after a restart the idem key still stops a
 # second send.
@@ -209,7 +230,6 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
     they chose (vula/owner_briefs.py). Nobody else gets anything."""
     from vula import owner_briefs, team_index
     from vula.api import tenants as _t
-    from vula.api.whatsapp import _send_reply
     now = now or datetime.now(SAST)
     day = now.date().isoformat()
     try:
@@ -228,14 +248,18 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
         if not owner_briefs.due("morning", owner_briefs.settings_for(tid)["morning"], now):
             continue
         try:
-            text = render(build(tid, now.date(), now))
+            d = build(tid, now.date(), now)
+            text = render(d)
             _HANDLED.add((tid, day))
             if not text:
                 continue
+            from vula import proactive
             for m in team_index.active_members(tid):
                 if (m.get("role") or "") == "owner" and m.get("whatsapp"):
-                    if await _send_reply(m["whatsapp"], text, tid,
-                                         idem_key=f"digest:{tid}:{day}:{m['whatsapp']}"):
+                    first = (m.get("name") or "").split(" ")[0] or "there"
+                    if await proactive.send(tid, m["whatsapp"], text, suffix="morning_brief",
+                                            params=[first, summary_line(d)],
+                                            idem_key=f"digest:{tid}:{day}:{m['whatsapp']}"):
                         sent += 1
         except Exception as exc:
             log.warning("brief failed for %s: %s", tid, exc)

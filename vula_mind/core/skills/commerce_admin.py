@@ -531,7 +531,9 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "the morning brief?', 'show me today's brief'. action=status says what's on; "
                        "on/off switches; schedule changes the time/days; preview shows today's text "
                        "without sending. Pass time/days ONLY as the owner said them — never invent a "
-                       "time; when switching on without one, the tool asks the owner.",
+                       "time; when switching on without one, the tool asks the owner. A bare 'brief' is "
+                       "the reply to the morning-brief WhatsApp → action=preview, which=morning; 'weekly "
+                       "check' → action=preview, which=weekly. ('meeting brief' is the meeting tool.)",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["status", "on", "off", "schedule", "preview"]},
             "which": {"type": "string", "enum": ["morning", "weekly", "both"],
@@ -1056,7 +1058,8 @@ MEETING_TOOLS = [
             "'arrived', 'I'm at Acme', 'check in' (action=check_in, `with` = where if they said), and a "
             "brief on who they're meeting — last WhatsApp messages, emails, open quotes and invoices, "
             "past meeting notes: 'brief me on the Acme meeting' (action=brief), or with_brief=true when "
-            "they ask for one on the reminder ('remind me an hour before with a brief'). "
+            "they ask for one on the reminder ('remind me an hour before with a brief'); 'meeting "
+            "brief' on its own (the reply to a meeting reminder) = action=brief for their next meeting. "
             "action=book / list / update / cancel / check_in / brief. NOT a customer booking a service (create_booking) and NOT notes "
             "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
             "them — never work out a date or time yourself. No reminder unless they ask for one."),

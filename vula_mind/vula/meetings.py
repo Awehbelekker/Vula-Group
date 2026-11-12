@@ -206,7 +206,6 @@ def reminder_text(m: Dict[str, Any], now: Optional[datetime] = None) -> str:
 async def send_due_reminders(now: Optional[datetime] = None) -> int:
     """Every meeting whose reminder time has come and that hasn't been reminded. Each is claimed
     (reminded_at set where it was still empty) before it's sent, so two workers never both send."""
-    from vula.api.whatsapp import _send_reply
     now = now or now_sast()
     try:
         rows = _select(lambda c: _client().table(TABLE).select(c).eq("status", "scheduled")
@@ -233,8 +232,11 @@ async def send_due_reminders(now: Optional[datetime] = None) -> int:
                     text += "\n\n" + meeting_brief.build(m["tenant_id"], m, m["created_by"])
                 except Exception as exc:
                     log.debug("meeting brief skipped: %s", exc)
-            if await _send_reply(m["created_by"], text, m["tenant_id"],
-                                 idem_key=f"meeting:{m['id']}:{m['starts_at']}"):
+            from vula import proactive
+            where = m.get("address") or "no address saved"
+            if await proactive.send(m["tenant_id"], m["created_by"], text, suffix="meeting_reminder",
+                                    params=[say(_at(m), now), m["with_name"], where],
+                                    idem_key=f"meeting:{m['id']}:{m['starts_at']}"):
                 sent += 1
         except Exception as exc:
             log.warning("meeting reminder failed for %s: %s", m.get("id"), exc)

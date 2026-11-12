@@ -339,6 +339,25 @@ STANDARD_JOB_TEMPLATES = [
      "You have {{1}} filed document(s) waiting to be assigned to a project in Vula.",
      "UTILITY", {"projects"}),
 ]
+# 12 Nov 2026: the messages a person ASKED for — their morning brief, weekly check, a reminder,
+# a meeting reminder, a chat assigned to them. Sent as normal text when the person messaged in the
+# last 24 hours; otherwise Meta refuses free text, so vula/proactive.py sends these instead, with
+# the key facts in the variables (one line each — Meta refuses a variable with a line break).
+# (suffix, body, example values) — UTILITY, every business.
+PROACTIVE_TEMPLATES = [
+    ("morning_brief", "☀️ Good morning {{1}}. Today: {{2}}. Reply *brief* to see the full brief.",
+     ["Thandi", "3 follow-ups due, 2 meetings, R4,500.00 overdue"]),
+    ("weekly_check", "📊 Your weekly check for {{1}}: {{2}}. Reply *weekly check* to see it all.",
+     ["Seaview Tiles", "R12,500 overdue from 2 customers, 3 products low on stock"]),
+    ("reminder", "⏰ Reminder: {{1}} — you asked me to remind you. Reply here if you need anything.",
+     ["Call Acme about the revised quote"]),
+    ("meeting_reminder", "⏰ Meeting {{1}} with {{2}}. Where: {{3}}. Reply *meeting brief* for a brief, "
+     "or *arrived* when you get there.",
+     ["today at 10:00", "Acme Builders", "12 Main Road, Paarden Eiland"]),
+    ("chat_assigned", "💬 {{1}} assigned you the chat with {{2}}. Open My chats on the dashboard to reply.",
+     ["Ian", "Sam Naidoo"]),
+]
+
 # Shared by every business on Vula's WhatsApp account — submitted once, reused by name.
 SHARED_TEMPLATES = [
     ("vula_notification", "You have a new update from {{1}}. Open Vula to see the details.", "UTILITY"),
@@ -448,6 +467,8 @@ def standard_templates(tenant_id: str, modules: Optional[set] = None,
         if (needs and not (needs & mods)) or (types and business_type not in types):
             continue
         out.append({"name": template_name(tenant_id, suffix), "body": body, "category": category})
+    out += [{"name": template_name(tenant_id, suffix), "body": body, "category": "UTILITY", "examples": ex}
+            for suffix, body, ex in PROACTIVE_TEMPLATES]
     out += [{"name": n, "body": b, "category": c} for n, b, c in SHARED_TEMPLATES]
     return out
 
@@ -565,7 +586,7 @@ async def submit_standard(tenant_id: str) -> Dict[str, Any]:
             already.append(t["name"])
             continue
         res = await create_template(tenant_id, t["name"], t["body"], category=t["category"],
-                                    created_by="standard set")
+                                    example_params=t.get("examples"), created_by="standard set")
         if res.get("error"):
             failed.append({"name": t["name"], "error": res["error"]})
         else:

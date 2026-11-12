@@ -8598,10 +8598,11 @@ async def admin_conv_meta(tenant_id: str, session_id: str, body: ConvMetaRequest
                    .limit(1).execute().data or [{}])[0]
             who = await _takeover_name(request, tenant_id) or "Someone"
             customer = row.get("customer_name") or row.get("customer_phone") or "a customer"
-            from vula.api.whatsapp import _send_reply
-            await _send_reply(assignee["whatsapp"], f"💬 {who} assigned you the chat with {customer}. "
-                              "It's under My chats on the dashboard.", tenant_id,
-                              idem_key=f"chat_assigned:{session_id}:{assignee.get('id')}")
+            from vula import proactive
+            await proactive.send(tenant_id, assignee["whatsapp"],
+                                 f"💬 {who} assigned you the chat with {customer}. It's under My chats on the dashboard.",
+                                 suffix="chat_assigned", params=[who, customer],
+                                 idem_key=f"chat_assigned:{session_id}:{assignee.get('id')}")
         except Exception as exc:
             log.debug("chat-assigned notice skipped: %s", exc)
     return {"ok": True, "session_id": session_id, **patch}

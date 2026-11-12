@@ -8896,7 +8896,9 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
         # that reaches nobody. Returns False regardless: the message the caller asked to send
         # did NOT go, and callers that check must not be told otherwise.
         if "131047" in (body or "") and tenant_id:
-            await _send_notify_template(creds, number, tenant_id)
+            WINDOW_CLOSED.set(True)               # vula/proactive.py sends its own template instead
+            if NOTIFY_FALLBACK.get():
+                await _send_notify_template(creds, number, tenant_id)
         return False
     except Exception as exc:
         # str() of an httpx timeout is empty — name the exception so the log says what happened
@@ -8906,6 +8908,14 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
 
 
 _UNSENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+# 12 Nov 2026 (vula/proactive.py): a message the person asked for that WhatsApp refuses for being
+# outside the 24-hour window goes out as its own template (the brief's summary, the meeting's time
+# and place) rather than the generic "you have an update" nudge. proactive.send turns the generic
+# fallback off for its call and reads whether the window was the reason.
+import contextvars as _contextvars                                         # noqa: E402
+NOTIFY_FALLBACK: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("notify_fallback", default=True)
+WINDOW_CLOSED: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("window_closed", default=False)
 
 
 async def _post_unsent_retry(client, req, attempts: int = 3):
@@ -9744,7 +9754,10 @@ async def check_and_nudge_due_reminders() -> int:
         tenant_id, phone, text = r.get("tenant_id"), r.get("created_by"), r.get("text")
         if not (tenant_id and phone and text):
             continue
-        ok = await _send_reply(phone, f"⏰ Reminder: {text}", tenant_id)
+        # Outside the 24-hour window its own template carries the reminder (vula/proactive.py).
+        from vula import proactive
+        ok = await proactive.send(tenant_id, phone, f"⏰ Reminder: {text}", suffix="reminder", params=[text],
+                                  idem_key=f"reminder:{r['id']}")
         if ok:
             sent += 1
             try:
