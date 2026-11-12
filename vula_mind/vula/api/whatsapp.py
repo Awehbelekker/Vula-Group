@@ -26,6 +26,7 @@ import hmac
 import logging
 import json
 import time
+import threading
 import re
 from typing import Any, Dict, Optional
 
@@ -3254,7 +3255,8 @@ async def _handle_document_ingest_one(
     # Tell them what happens next — but ONCE per burst (per phone, 8s), so a batch of 7 docs
     # or a client re-sending one file 7× both get a single "Got it", then a result per
     # distinct document.
-    if _local_media_claim(tenant_id, f"ack:{phone}", 8.0):
+    from vula.api import doc_batch as _doc_batch
+    if _local_media_claim(tenant_id, f"ack:{phone}", 8.0) and not _doc_batch.continuing(phone):
         if kind == "image":
             ack = ("📸 Got it — reading that now. If it's a receipt or invoice I'll book it "
                    "straight into your books; anything else gets filed. Give me a minute…")
@@ -8805,14 +8807,23 @@ def _outbound_key_id(tenant_id: str, idem_key: str) -> str:
     return f"out:{tenant_id or '-'}:{idem_key}"[:200]
 
 
+_SENT_KEYS_LOCK = threading.Lock()
+
+
 def _claim_outbound(tenant_id: str, idem_key: str) -> bool:
     """Claim a once-only automated send. False = already sent (this worker, or any worker via
-    the vula_wa_msg_dedup primary key). A DB outage fails open to the in-memory check."""
+    the vula_wa_msg_dedup primary key). A DB outage fails open to the in-memory check.
+
+    The in-memory key is reserved under a lock BEFORE the database is asked (12 Nov 2026): callers
+    run this in threads, and two at once (a double tap on a checkout pay button) both found the key
+    free while the first was still waiting on the database, so both claimed it when it was down."""
     import time as _time
     key = _outbound_key_id(tenant_id, idem_key)
     now = _time.monotonic()
-    if now - _sent_keys.get(key, -1e9) < 86400:
-        return False
+    with _SENT_KEYS_LOCK:
+        if now - _sent_keys.get(key, -1e9) < 86400:
+            return False
+        _sent_keys[key] = now
     try:
         from vula.commerce import service as _cs
         _cs._client().table("vula_wa_msg_dedup").insert({"msg_id": key}).execute()

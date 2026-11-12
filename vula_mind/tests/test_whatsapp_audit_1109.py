@@ -223,3 +223,19 @@ async def test_a_placement_that_didnt_go_through_can_be_tried_again(monkeypatch)
     await bc._place("27820000001", TID, "eft")
     await bc._place("27820000001", TID, "eft")
     assert place.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_two_claims_at_once_get_one_even_when_the_database_is_slow_and_down(monkeypatch):
+    """The checkout's double-tap guard failed on CI (12 Nov 2026): callers claim in threads, and two
+    at once both found the key free while the first was still waiting on a database that then
+    failed. The key is now reserved in memory, under a lock, before the database is asked."""
+    import time as _time
+
+    def slow_then_down():
+        _time.sleep(0.05)
+        raise RuntimeError("no db")
+    monkeypatch.setattr("vula.commerce.service._client", slow_then_down)
+    wa._sent_keys.clear()
+    got = await asyncio.gather(*[asyncio.to_thread(wa._claim_outbound, TID, "place-order:cart-9") for _ in range(4)])
+    assert sorted(got) == [False, False, False, True]
