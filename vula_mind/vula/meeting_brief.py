@@ -15,7 +15,8 @@ is with, in a few lines:
 
 Built in code from rows — no model, nothing invented; a section with nothing is left out, and a
 brief with nothing says so. Only sent when the person asked for it (a brief on the reminder, or
-"brief me on the Acme meeting"). Public research on the company is a later step.
+"brief me on the Acme meeting"). For a company, what the public web says is added after it
+(vula/company_research.py — companies only, marked as not checked).
 """
 from __future__ import annotations
 

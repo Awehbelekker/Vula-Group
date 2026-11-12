@@ -3149,7 +3149,14 @@ class CommerceAdminSkill(BaseSkill):
                 return await draft_letter(args, tid, ctx.get("phone") or "")
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
-            if name == "meeting":            return self._meeting(tid, args, ctx)
+            if name == "meeting":
+                out = self._meeting(tid, args, ctx)
+                if out.get("brief_for"):             # the public web on the company (vula/company_research.py)
+                    from vula import company_research
+                    web = await company_research.section(tid, out.pop("brief_for"))
+                    if web:
+                        out["reply_verbatim"] += "\n" + web
+                return out
             if name == "team_activity":      return self._team_activity(tid, args, ctx)
             if name == "setup_project":
                 # Only ever reached from the owner's Confirm tap on a plan Vula showed them
@@ -6513,7 +6520,8 @@ class CommerceAdminSkill(BaseSkill):
         m = found[0]
         if action == "brief":
             from vula import meeting_brief
-            return {"reply_verbatim": f"{mt.line(m)}\n\n" + meeting_brief.build(tid, m, phone)}
+            return {"reply_verbatim": f"{mt.line(m)}\n\n" + meeting_brief.build(tid, m, phone),
+                    "brief_for": m.get("with_name")}
         if action == "cancel":
             back = mt.update(tid, m["id"], {"status": "cancelled"})
             if not back or back.get("status") != "cancelled":

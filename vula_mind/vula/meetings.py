@@ -230,6 +230,10 @@ async def send_due_reminders(now: Optional[datetime] = None) -> int:
                 try:
                     from vula import meeting_brief
                     text += "\n\n" + meeting_brief.build(m["tenant_id"], m, m["created_by"])
+                    from vula import company_research
+                    web = await company_research.section(m["tenant_id"], m["with_name"])
+                    if web:
+                        text += "\n" + web
                 except Exception as exc:
                     log.debug("meeting brief skipped: %s", exc)
             from vula import proactive

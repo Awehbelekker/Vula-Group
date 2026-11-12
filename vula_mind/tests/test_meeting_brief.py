@@ -86,6 +86,11 @@ def world(monkeypatch):
     monkeypatch.setattr(mt, "_client", lambda: client)
     import vula.commerce.service as service
     monkeypatch.setattr(service, "_client", lambda: client)
+    import vula.company_research as cr
+
+    async def no_web(tid, name):
+        return ""
+    monkeypatch.setattr(cr, "section", no_web)                     # never the real web in tests
     access = {REP: ["rep-contacts"], OWNER: None}
     import core.skills.commerce_admin as ca
     monkeypatch.setattr(ca, "_member_access", lambda tid, phone: access.get(phone, ["inbox"]))
