@@ -1398,10 +1398,10 @@ async def master_conversation_check_send(identity: dict = Depends(require_master
 @router.get("/advisor/preview")
 async def master_advisor_preview(tenant_id: str) -> dict:
     """What this tenant's owner would get on Monday (vula/owner_advisor.py) — nothing is sent."""
-    from config import settings
-    from vula import owner_advisor
+    from vula import owner_advisor, owner_briefs
     d = owner_advisor.build(tenant_id)
-    return {"enabled": settings.owner_advisor_enabled, "data": d, "text": owner_advisor.render(d)}
+    weekly = owner_briefs.settings_for(tenant_id)["weekly"]
+    return {"enabled": bool(weekly["on"]), "when": weekly["when"], "data": d, "text": owner_advisor.render(d)}
 
 
 # ── Content titles for generically-named documents (vula/commerce/doc_titles.py) ──────────

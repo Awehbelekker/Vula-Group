@@ -4,7 +4,6 @@ from datetime import date, datetime
 
 import pytest
 
-from config import settings
 from vula import owner_advisor, owner_briefs, owner_digest
 
 NOW = datetime(2026, 11, 11, 7, 30, tzinfo=owner_digest.SAST)       # a Wednesday morning
@@ -84,50 +83,84 @@ def test_build_survives_a_broken_today_list(monkeypatch):
     assert d["today"] == {} and owner_digest.render(d) is None
 
 
-# ── each business's switch ──────────────────────────────────────────────────────────────
+# ── off unless asked, at the owner's own time ────────────────────────────────────────────
 
 def _config(monkeypatch, briefs):
     import vula.api.tenants as tenants
     monkeypatch.setattr(tenants, "get_config", lambda tid, fresh=False: {"owner_briefs": briefs.get(tid)})
 
 
-def test_unchosen_business_follows_the_platform_default(monkeypatch):
-    _config(monkeypatch, {})
-    monkeypatch.setattr(settings, "owner_digest_enabled", False)
-    monkeypatch.setattr(settings, "owner_advisor_enabled", True)
-    assert owner_briefs.enabled("t1", "morning") is False
-    assert owner_briefs.enabled("t1", "weekly") is True
-
-
-def test_business_choice_beats_the_default(monkeypatch):
-    _config(monkeypatch, {"on": {"morning": True}, "off": {"morning": False, "weekly": "yes"}})
-    monkeypatch.setattr(settings, "owner_digest_enabled", False)
-    monkeypatch.setattr(settings, "owner_advisor_enabled", True)
-    assert owner_briefs.enabled("on", "morning") is True
-    monkeypatch.setattr(settings, "owner_digest_enabled", True)
-    assert owner_briefs.enabled("off", "morning") is False
-    assert owner_briefs.enabled("off", "weekly") is True          # a non-bool is ignored → default
-    assert owner_briefs.settings_for("off")["chosen"] == ["morning"]
-
-
-def test_save_merges_and_none_goes_back_to_default(monkeypatch):
-    store = {"t1": {"weekly": False}}
+def _writable(monkeypatch, store):
+    """A tenant config the briefs can write to and read back."""
     _config(monkeypatch, store)
-    writes = []
 
     class _T:
-        def update(self, row): writes.append(row); store["t1"] = row["owner_briefs"]; return self
-        def eq(self, *a): return self
+        def __init__(self): self.tid = None
+        def update(self, row): self.row = row; return self
+        def eq(self, col, val): store[val] = self.row["owner_briefs"]; return self
         def execute(self): return None
-
     import vula.api.tenants as tenants
     monkeypatch.setattr(tenants, "_client", lambda: type("C", (), {"table": lambda s, n: _T()})())
     monkeypatch.setattr(tenants, "invalidate", lambda tid: None)
-    monkeypatch.setattr(settings, "owner_advisor_enabled", True)
-    out = owner_briefs.save("t1", {"morning": True})
-    assert writes[-1] == {"owner_briefs": {"weekly": False, "morning": True}} and out["morning"] is True
-    out = owner_briefs.save("t1", {"weekly": None, "morning": None, "other": True})
-    assert writes[-1] == {"owner_briefs": None} and out["weekly"] is True      # back to the default
+
+
+def test_nothing_is_on_unless_the_business_asked(monkeypatch):
+    _config(monkeypatch, {})
+    s = owner_briefs.settings_for("t1")
+    assert s["morning"]["on"] is False and s["weekly"]["on"] is False
+    assert not owner_briefs.enabled("t1", "morning") and not owner_briefs.enabled("t1", "weekly")
+
+
+def test_the_owner_s_own_time_and_days(monkeypatch):
+    _config(monkeypatch, {"t1": {"morning": {"on": True, "hour": 6, "minute": 30, "days": [0, 1, 2, 3, 4, 5]},
+                                 "weekly": {"on": True, "day": 4, "hour": 15}}})
+    s = owner_briefs.settings_for("t1")
+    assert s["morning"]["when"] == "Mon–Sat at 06:30" and s["weekly"]["when"] == "Fridays at 15:00"
+    sat = datetime(2026, 11, 14, 6, 35, tzinfo=owner_digest.SAST)
+    assert owner_briefs.due("morning", s["morning"], sat)
+    assert not owner_briefs.due("morning", s["morning"], sat.replace(hour=6, minute=0))     # too early
+    assert not owner_briefs.due("morning", s["morning"], sat.replace(hour=9, minute=0))     # window over
+    assert not owner_briefs.due("morning", s["morning"], datetime(2026, 11, 15, 6, 35, tzinfo=owner_digest.SAST))  # Sun
+    assert owner_briefs.due("weekly", s["weekly"], datetime(2026, 11, 13, 15, 10, tzinfo=owner_digest.SAST))
+    assert not owner_briefs.due("weekly", s["weekly"], datetime(2026, 11, 10, 15, 10, tzinfo=owner_digest.SAST))
+
+
+def test_odd_saved_values_are_ignored(monkeypatch):
+    _config(monkeypatch, {"t1": {"morning": {"on": "yes", "hour": 3, "days": [9, "mon"]}, "weekly": True}})
+    s = owner_briefs.settings_for("t1")
+    assert s["morning"]["on"] is False and s["morning"]["hour"] == 7 and s["morning"]["days"] == [0, 1, 2, 3, 4]
+    assert s["weekly"]["on"] is True                     # an early {"weekly": true} still reads
+
+
+@pytest.mark.parametrize("text,want", [
+    ("weekdays at 7", {"on": True, "hour": 7, "minute": 0, "days": [0, 1, 2, 3, 4]}),
+    ("Mon-Sat 6:30", {"on": True, "hour": 6, "minute": 30, "days": [0, 1, 2, 3, 4, 5]}),
+    ("every day at 8am", {"on": True, "hour": 8, "minute": 0, "days": list(range(7))}),
+    ("monday and thursday 7.15", {"on": True, "hour": 7, "minute": 15, "days": [0, 3]}),
+    ("6pm", {"on": True, "hour": 18, "minute": 0}),
+    ("yes please", {"on": True}),
+    ("no thanks", {"on": False}),
+    ("maybe later on", None),
+    ("at 2am", None),                                       # not a sensible hour to message anyone
+])
+def test_parse_the_owner_s_words(text, want):
+    assert owner_briefs.parse_schedule("morning", text) == want
+
+
+def test_weekly_takes_one_day():
+    assert owner_briefs.parse_schedule("weekly", "Friday 3pm") == {"on": True, "hour": 15, "minute": 0, "day": 4}
+
+
+def test_save_merges_and_reads_back(monkeypatch):
+    store = {"t1": {"weekly": {"on": True, "day": 4, "hour": 15}}}
+    _writable(monkeypatch, store)
+    out = owner_briefs.save("t1", {"morning": {"on": True, "hour": 6}})
+    assert store["t1"]["morning"] == {"on": True, "hour": 6} and store["t1"]["weekly"]["day"] == 4
+    assert out["morning"]["when"] == "weekdays at 06:00"
+    owner_briefs.save("t1", {"morning": {"on": False}})
+    assert store["t1"]["morning"] == {"on": False, "hour": 6}     # off keeps the chosen time for later
+    owner_briefs.save("t1", {"morning": None, "weekly": None})
+    assert store["t1"] is None
 
 
 # ── sending ─────────────────────────────────────────────────────────────────────────────
@@ -135,6 +168,7 @@ def test_save_merges_and_none_goes_back_to_default(monkeypatch):
 def _send_env(monkeypatch, briefs, module, kind_fn):
     """Two businesses, one owner each; records who was sent what."""
     _config(monkeypatch, briefs)
+    module._HANDLED.clear()
 
     class _Rows:
         def __getattr__(self, n): return lambda *a, **k: self
@@ -148,43 +182,59 @@ def _send_env(monkeypatch, briefs, module, kind_fn):
     monkeypatch.setattr(tenants, "is_active", lambda tid: True)
     monkeypatch.setattr(team_index, "active_members", lambda tid: [
         {"role": "owner", "whatsapp": f"2782000000{tid}"}, {"role": "staff", "whatsapp": "27820000999"}])
-    monkeypatch.setattr(module, "build", kind_fn)
+    calls = []
+
+    def counting(*a, **k):
+        calls.append(a[0])
+        return kind_fn(*a, **k)
+    monkeypatch.setattr(module, "build", counting)
     sent = []
 
     async def fake_send(phone, text, tid, idem_key=None):
         sent.append((tid, phone, idem_key))
         return True
     monkeypatch.setattr(wa, "_send_reply", fake_send)
-    return sent
+    return sent, calls
 
 
-def test_morning_brief_goes_only_to_businesses_that_have_it_on(monkeypatch):
-    monkeypatch.setattr(settings, "owner_digest_enabled", False)
-    sent = _send_env(monkeypatch, {"a": {"morning": True}}, owner_digest,
-                     lambda tid, today, now=None: {**EMPTY_MONEY, "today": {"documents": 1}})
-    res = asyncio.run(owner_digest.send_all(NOW))
+ON_AT_7 = {"morning": {"on": True, "hour": 7, "minute": 0, "days": [0, 1, 2, 3, 4]}}
+
+
+def test_morning_brief_only_for_a_business_that_asked_at_its_time(monkeypatch):
+    sent, calls = _send_env(monkeypatch, {"a": ON_AT_7, "b": {"morning": {"on": True, "hour": 9}}}, owner_digest,
+                            lambda tid, today, now=None: {**EMPTY_MONEY, "today": {"documents": 1}})
+    res = asyncio.run(owner_digest.send_all(NOW))                   # 07:30: a's time, not b's
     assert res["sent"] == 1 and sent == [("a", "2782000000a", "digest:a:2026-11-11:2782000000a")]
+    asyncio.run(owner_digest.send_all(NOW.replace(minute=35)))      # the next loop: not built again
+    assert calls == ["a"] and len(sent) == 1
 
 
-def test_morning_brief_default_on_skips_a_business_that_said_no(monkeypatch):
-    monkeypatch.setattr(settings, "owner_digest_enabled", True)
-    sent = _send_env(monkeypatch, {"b": {"morning": False}}, owner_digest,
-                     lambda tid, today, now=None: {**EMPTY_MONEY, "today": {"documents": 1}})
+def test_a_business_that_never_asked_gets_nothing(monkeypatch):
+    sent, calls = _send_env(monkeypatch, {}, owner_digest,
+                            lambda tid, today, now=None: {**EMPTY_MONEY, "today": {"documents": 1}})
+    assert asyncio.run(owner_digest.send_all(NOW))["sent"] == 0 and sent == [] and calls == []
+
+
+def test_owners_only_never_staff(monkeypatch):
+    sent, _ = _send_env(monkeypatch, {"a": ON_AT_7, "b": ON_AT_7}, owner_digest,
+                        lambda tid, today, now=None: {**EMPTY_MONEY, "today": {"documents": 1}})
     asyncio.run(owner_digest.send_all(NOW))
-    assert [s[0] for s in sent] == ["a"]                              # owners only, never staff
+    assert sorted(s[1] for s in sent) == ["2782000000a", "2782000000b"]
 
 
 def test_nothing_to_say_sends_nothing(monkeypatch):
-    monkeypatch.setattr(settings, "owner_digest_enabled", True)
-    sent = _send_env(monkeypatch, {}, owner_digest, lambda tid, today, now=None: {**EMPTY_MONEY, "today": {}})
+    sent, _ = _send_env(monkeypatch, {"a": ON_AT_7}, owner_digest,
+                        lambda tid, today, now=None: {**EMPTY_MONEY, "today": {}})
     assert asyncio.run(owner_digest.send_all(NOW))["sent"] == 0 and sent == []
 
 
-def test_weekly_advisor_respects_the_business_switch(monkeypatch):
-    monkeypatch.setattr(settings, "owner_advisor_enabled", False)
-    sent = _send_env(monkeypatch, {"b": {"weekly": True}}, owner_advisor, lambda tid, today=None: {})
+def test_weekly_advisor_on_the_owner_s_day(monkeypatch):
+    sent, _ = _send_env(monkeypatch, {"b": {"weekly": {"on": True, "day": 4, "hour": 15}}}, owner_advisor,
+                        lambda tid, today=None: {})
     monkeypatch.setattr(owner_advisor, "render", lambda d: "Weekly")
-    asyncio.run(owner_advisor.send_all(datetime(2026, 11, 9, 9, 0, tzinfo=owner_advisor.SAST)))
+    asyncio.run(owner_advisor.send_all(datetime(2026, 11, 9, 15, 30, tzinfo=owner_advisor.SAST)))   # Monday
+    assert sent == []
+    asyncio.run(owner_advisor.send_all(datetime(2026, 11, 13, 15, 30, tzinfo=owner_advisor.SAST)))  # Friday
     assert [s[0] for s in sent] == ["b"]
 
 
@@ -219,32 +269,46 @@ def test_preview_and_writes_need_the_owner_or_a_manager():
     assert any(require_tenant_admin in v for p, v in guarded.items() if p == "/{tenant}/briefs")
 
 
-# ── switching by asking on WhatsApp (commerce_admin owner_briefs tool) ─────────────────────
+# ── by asking on WhatsApp (commerce_admin owner_briefs tool) ────────────────────────────
 
 def _skill():
     from core.skills.commerce_admin import CommerceAdminSkill
     return CommerceAdminSkill()
 
 
-def test_owner_can_switch_the_morning_brief_off_by_asking(monkeypatch):
-    store = {"t1": {}}
-    _config(monkeypatch, store)
+def test_switching_on_without_a_time_asks_for_one(monkeypatch):
+    store = {}
+    _writable(monkeypatch, store)
+    out = _skill()._owner_briefs("t1", {"action": "on", "which": "morning"})
+    assert out["status"] == "need_info" and "What time" in out["message"] and "weekdays at 07:00" in out["message"]
+    assert store == {}                                    # nothing switched on behind the owner's back
 
-    class _T:
-        def update(self, row): store["t1"] = row["owner_briefs"]; return self
-        def eq(self, *a): return self
-        def execute(self): return None
-    import vula.api.tenants as tenants
-    monkeypatch.setattr(tenants, "_client", lambda: type("C", (), {"table": lambda s, n: _T()})())
-    monkeypatch.setattr(tenants, "invalidate", lambda tid: None)
-    monkeypatch.setattr(settings, "owner_digest_enabled", True)
+
+def test_switching_on_with_the_owner_s_time(monkeypatch):
+    store = {}
+    _writable(monkeypatch, store)
+    out = _skill()._owner_briefs("t1", {"action": "on", "which": "morning", "when": "Mon-Sat at 6:30"})
+    assert store["t1"]["morning"] == {"on": True, "hour": 6, "minute": 30, "days": [0, 1, 2, 3, 4, 5]}
+    assert "morning brief is *on* — Mon–Sat at 06:30" in out["reply_verbatim"]
+
+
+def test_off_then_on_again_keeps_the_chosen_time(monkeypatch):
+    store = {"t1": {"morning": {"on": True, "hour": 6, "minute": 30, "days": [0, 1, 2, 3, 4]}}}
+    _writable(monkeypatch, store)
     out = _skill()._owner_briefs("t1", {"action": "off", "which": "morning"})
-    assert store["t1"] == {"morning": False}
-    assert "morning brief (weekdays around 07:00) is *off*" in out["reply_verbatim"]
-    assert out["settings"]["morning"] is False
+    assert "morning brief is *off*" in out["reply_verbatim"] and store["t1"]["morning"]["on"] is False
+    out = _skill()._owner_briefs("t1", {"action": "on", "which": "morning"})
+    assert "weekdays at 06:30" in out["reply_verbatim"]
 
 
-def test_a_switch_that_doesnt_stick_is_not_reported_done(monkeypatch):
+def test_moving_the_weekly_advisor(monkeypatch):
+    store = {}
+    _writable(monkeypatch, store)
+    out = _skill()._owner_briefs("t1", {"action": "schedule", "which": "weekly", "when": "Friday 3pm"})
+    assert "weekly advisor is *on* — Fridays at 15:00" in out["reply_verbatim"]
+
+
+def test_a_change_that_doesnt_stick_is_not_reported_done(monkeypatch):
     _config(monkeypatch, {})                     # the write "succeeds" but the read-back is unchanged
 
     class _T:
@@ -254,16 +318,14 @@ def test_a_switch_that_doesnt_stick_is_not_reported_done(monkeypatch):
     import vula.api.tenants as tenants
     monkeypatch.setattr(tenants, "_client", lambda: type("C", (), {"table": lambda s, n: _T()})())
     monkeypatch.setattr(tenants, "invalidate", lambda tid: None)
-    monkeypatch.setattr(settings, "owner_advisor_enabled", False)
-    out = _skill()._owner_briefs("t1", {"action": "on", "which": "weekly"})
+    out = _skill()._owner_briefs("t1", {"action": "on", "which": "weekly", "when": "Monday at 8"})
     assert "error" in out and "reply_verbatim" not in out
 
 
 def test_status_lists_both_briefs(monkeypatch):
-    _config(monkeypatch, {"t1": {"weekly": True}})
-    monkeypatch.setattr(settings, "owner_digest_enabled", False)
+    _config(monkeypatch, {"t1": {"weekly": {"on": True, "day": 0, "hour": 8}}})
     text = _skill()._owner_briefs("t1", {"action": "status"})["reply_verbatim"]
-    assert "morning brief (weekdays around 07:00) is *off*" in text and "weekly advisor (Mondays) is *on*" in text
+    assert "morning brief is *off*" in text and "weekly advisor is *on* — Mondays at 08:00" in text
 
 
 def test_preview_by_asking_sends_nothing(monkeypatch):

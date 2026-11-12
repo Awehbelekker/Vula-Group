@@ -1,7 +1,7 @@
 """Weekly advisor message for each owner (2026-09-30).
 
 Ian: "Can Vula recommend?" — it had price advice and job-costing alerts, but nothing that looked
-across the business and said what needs attention. Monday mornings each owner gets one short
+across the business and said what needs attention. each owner who asked for it gets one short
 WhatsApp built ONLY from real rows — never a model, never a figure that isn't in the database:
 
   money owed      customer invoices past their due date, biggest first
@@ -12,8 +12,8 @@ WhatsApp built ONLY from real rows — never a model, never a figure that isn't 
   waiting         documents filed but not yet put on a project
 
 A section with nothing to say is left out; a week with nothing at all sends nothing.
-Each business can switch it on or off (vula/owner_briefs.py); one that hasn't chosen follows
-settings.owner_advisor_enabled (off until previewed in Master › Conversations).
+It goes only to a business whose owner switched it on, on the day and at the time they chose
+(vula/owner_briefs.py) — off for everyone else.
 """
 from __future__ import annotations
 
@@ -219,11 +219,12 @@ def render(d: Dict[str, Any]) -> Optional[str]:
     return f"Good morning 👋 Your week at {d['name']}:\n\n" + "\n\n".join(parts)
 
 
-def due(now: datetime) -> bool:
-    return now.weekday() == 0 and 8 <= now.hour < 11
+_HANDLED: set = set()      # (tenant, ISO week) built already — see owner_digest._HANDLED
 
 
 async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Every business whose owner switched the weekly advisor on, on the day and at the time they
+    chose (vula/owner_briefs.py). Nobody else gets anything."""
     now = now or datetime.now(SAST)
     y, w, _ = now.isocalendar()
     week = f"{y}-W{w:02d}"
@@ -237,12 +238,17 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
     except Exception as exc:
         log.warning("advisor: tenant list failed: %s", exc)
         return {"sent": 0}
+    if len(_HANDLED) > 20_000:
+        _HANDLED.clear()
     sent = 0
     for tid in tenants:
-        if not owner_briefs.enabled(tid, "weekly"):
+        if (tid, week) in _HANDLED:
+            continue
+        if not owner_briefs.due("weekly", owner_briefs.settings_for(tid)["weekly"], now):
             continue
         try:
             text = render(build(tid, now.date()))
+            _HANDLED.add((tid, week))
             if not text:
                 continue
             for m in team_index.active_members(tid):

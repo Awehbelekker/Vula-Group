@@ -416,7 +416,7 @@ function AdvisorV2({ onError }) {
   return (
     <Card className="vms-form">
       <h3 className="vms-h"><Sparkles size={16} aria-hidden="true" className="vms-ic" />Weekly owner advisor — preview</h3>
-      <p className="vms-muted">The Monday WhatsApp each owner gets: overdue invoices, spending jumps, low stock, unanswered questions, documents waiting and profile gaps — from real rows only. Sending is {x.res ? (x.res.enabled ? <b>on</b> : <b>off</b>) : 'off until OWNER_ADVISOR_ENABLED=true'}.</p>
+      <p className="vms-muted">The weekly WhatsApp an owner gets if they asked for it: overdue invoices, spending jumps, low stock, unanswered questions, documents waiting and profile gaps — from real rows only. For this business it is {x.res ? (x.res.enabled ? <b>on ({x.res.when})</b> : <b>off</b>) : 'off unless the owner switched it on'}.</p>
       <div className="vms-filters">
         <TenantSelect value={x.tenant} tenants={tenants} onChange={x.setTenant} />
         <Button variant="secondary" disabled={!x.tenant} onClick={x.load}>Preview</Button>

@@ -112,6 +112,12 @@ STEPS: List[Dict[str, str]] = [
     {"key": "team", "kind": "team", "label": "Team",
      "q": "Who else in the team should use Vula? Send each person as *name, WhatsApp number, role* "
           "(role: manager or staff), e.g. *Thandi, 082 123 4567, manager*. Reply *done* when that's everyone."},
+    # 12 Nov 2026 (Ian): notifications stay off unless the owner asked — here, or later by asking.
+    # "no" (or skip) leaves the morning brief off; a time and days switch it on (vula/owner_briefs.py).
+    {"key": "briefs", "kind": "briefs", "label": "Morning brief",
+     "q": "Would you like a short WhatsApp from me in the morning with what needs you that day (customers "
+          "waiting, follow-ups, quotes to approve, bookings) and the money paid and owed? Reply with a time "
+          "and days, e.g. *weekdays at 7* or *Mon–Sat 6:30*, or *no*. You can change it any time by asking me."},
 ]
 _BY_KEY = {s["key"]: s for s in STEPS}
 
@@ -556,6 +562,19 @@ async def _save(row: Dict[str, Any], step: Dict[str, str], text: str) -> Tuple[O
             ok = s.get("vat_registered") is True and s.get("vat_number") == compact
             return (f"VAT registered, number {compact}", None) if ok else (None, "I couldn't save that just now — send it again?")
         return None, "A South African VAT number has 10 digits and starts with 4. Send it again, or reply *no*."
+    if kind == "briefs":
+        from vula import owner_briefs
+        parsed = owner_briefs.parse_schedule("morning", text)
+        if parsed is None:
+            return None, "Send a time and days, e.g. *weekdays at 7*, or reply *no*."
+        try:
+            now_set = owner_briefs.save(tid, {"morning": parsed})["morning"]
+        except Exception as exc:
+            log.warning("onboarding brief choice failed for %s: %s", tid, exc)
+            return None, "I couldn't save that just now — send it again?"
+        if now_set["on"] != parsed["on"]:
+            return None, "I couldn't save that just now — send it again?"
+        return (f"On, {now_set['when']}" if now_set["on"] else "Off — ask me any time"), None
     if kind == "bank":
         b = parse_bank(text)
         if not b:

@@ -162,22 +162,7 @@ def test_digest_figures_are_sums_from_the_rows():
     assert owner_digest.render({"paid": [], "overdue": [], "upcoming_cents": 0, "upcoming_n": 0}) is None
 
 
-@pytest.mark.asyncio
-async def test_digest_is_off_until_enabled(monkeypatch):
-    """Off by default: a business that hasn't switched it on itself gets nothing."""
-    from config import settings
-    from vula import owner_briefs, owner_digest
-    monkeypatch.setattr(settings, "owner_digest_enabled", False)
-    monkeypatch.setattr(owner_briefs, "saved_for", lambda tid: {})
-    assert (await owner_digest.send_all())["sent"] == 0
-
-
-def test_digest_runs_weekday_mornings_only():
-    from datetime import datetime
-    from vula import owner_digest
-    assert owner_digest.due(datetime(2026, 10, 6, 7, 30, tzinfo=owner_digest.SAST))        # Tue
-    assert not owner_digest.due(datetime(2026, 10, 10, 7, 30, tzinfo=owner_digest.SAST))   # Sat
-    assert not owner_digest.due(datetime(2026, 10, 6, 10, 0, tzinfo=owner_digest.SAST))
+# Off unless the owner asked, and at their own time: tests/test_owner_briefs.py.
 
 
 # ── "I paid" ────────────────────────────────────────────────────────────────────

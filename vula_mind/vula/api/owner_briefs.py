@@ -2,7 +2,8 @@
 vula/api/owner_briefs.py — a business's own switches for the owner briefs (vula/owner_briefs.py).
 
     GET /v1/team/{tenant}/briefs                  on/off for the morning brief and weekly advisor
-    PUT /v1/team/{tenant}/briefs                  {"morning": bool|null, "weekly": bool|null}
+    PUT /v1/team/{tenant}/briefs                  {"morning": {"on", "hour", "minute", "days"},
+                                                   "weekly": {"on", "day", "hour", "minute"}}
     GET /v1/team/{tenant}/briefs/preview?kind=    today's text, exactly as it would be sent
 
 Writes to /v1/team/{tenant}/… are owner-and-managers only (server.py _SECTION_RULES), and the
@@ -27,9 +28,8 @@ router = APIRouter(tags=["owner-briefs"])
 
 
 class BriefsIn(BaseModel):
-    morning: Optional[bool] = None
-    weekly: Optional[bool] = None
-    reset: bool = False          # true → both follow the platform default again
+    morning: Optional[dict] = None      # {"on": bool, "hour": 7, "minute": 0, "days": [0..6]}
+    weekly: Optional[dict] = None       # {"on": bool, "day": 0, "hour": 8, "minute": 0}
 
 
 @router.get("/{tenant}/briefs")
@@ -39,8 +39,9 @@ async def get_briefs(tenant: str) -> dict:
 
 @router.put("/{tenant}/briefs")
 async def put_briefs(tenant: str, body: BriefsIn, identity: dict = Depends(require_tenant_admin)) -> dict:
-    patch = ({k: None for k in owner_briefs.KINDS} if body.reset
-             else {k: v for k, v in body.model_dump(exclude={"reset"}).items() if v is not None})
+    patch = {k: v for k, v in body.model_dump().items() if isinstance(v, dict)}
+    if not patch:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
     try:
         saved = owner_briefs.save(tenant, patch)
     except Exception as exc:

@@ -920,39 +920,35 @@ async def _programme_briefs_loop() -> None:
 
 
 async def _owner_advisor_loop() -> None:
-    """Monday 08:00–11:00 SAST: the weekly advisor WhatsApp to each owner (vula/owner_advisor.py).
-    Gated by settings.owner_advisor_enabled; one send per owner per ISO week (idem key)."""
+    """Every 5 minutes: the weekly advisor to each owner who switched it on, on their own day and
+    time (vula/owner_advisor.py, vula/owner_briefs.py). One per owner per ISO week (idem key)."""
     import asyncio as _asyncio
-    from datetime import datetime as _dt
     await _asyncio.sleep(330)
     while True:
         try:
             from vula import owner_advisor as _oa
-            if _oa.due(_dt.now(_oa.SAST)):
-                res = await _oa.send_all()
-                if res.get("sent"):
-                    log.info("owner advisor sent: %s", res)
+            res = await _oa.send_all()
+            if res.get("sent"):
+                log.info("owner advisor sent: %s", res)
         except Exception as exc:
             log.warning("owner advisor loop error: %s", exc)
-        await _asyncio.sleep(900)
+        await _asyncio.sleep(300)
 
 
 async def _owner_digest_loop() -> None:
-    """Weekdays 07:00–09:00 SAST: the morning money digest to each owner (vula/owner_digest.py).
-    One per owner per day (idem key)."""
+    """Every 5 minutes: the morning brief to each owner who switched it on, at their own time and
+    days (vula/owner_digest.py, vula/owner_briefs.py). One per owner per day (idem key)."""
     import asyncio as _asyncio
-    from datetime import datetime as _dt
     await _asyncio.sleep(300)
     while True:
         try:
             from vula import owner_digest as _od
-            if _od.due(_dt.now(_od.SAST)):
-                res = await _od.send_all()
-                if res.get("sent"):
-                    log.info("owner digest sent: %s", res)
+            res = await _od.send_all()
+            if res.get("sent"):
+                log.info("owner brief sent: %s", res)
         except Exception as exc:
-            log.warning("owner digest loop error: %s", exc)
-        await _asyncio.sleep(900)
+            log.warning("owner brief loop error: %s", exc)
+        await _asyncio.sleep(300)
 
 
 async def _staff_notices_loop() -> None:

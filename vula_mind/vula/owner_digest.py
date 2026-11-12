@@ -1,7 +1,7 @@
 """
 vula/owner_digest.py — the weekday-morning brief to each owner (finance brief, capability 3).
 
-07:00–09:00 SAST, Monday to Friday, one WhatsApp per owner per day:
+At the time and on the days the owner chose (vula/owner_briefs.py), one WhatsApp per owner per day:
 
   today     what needs a person today — customers waiting for a person, follow-ups due, emails
             needing a reply, quotes Vula drafted, documents to check, today's bookings. The same
@@ -13,8 +13,8 @@ vula/owner_digest.py — the weekday-morning brief to each owner (finance brief,
 Every business type gets it (shops, project and service businesses alike). Every figure is a DB
 query here, in integer cents — the message is built in code, no model involved. Nothing to
 say → nothing is sent. Outside the 24-hour window _send_reply falls back to the approved
-notification template. Each business can switch it on or off (vula/owner_briefs.py); one that
-hasn't chosen follows settings.owner_digest_enabled.
+notification template. It goes only to a business whose owner switched it on, at the time and
+on the days they chose (vula/owner_briefs.py) — off for everyone else.
 """
 from __future__ import annotations
 
@@ -191,11 +191,15 @@ def render(d: Dict[str, Any]) -> Optional[str]:
     return "\n".join(lines)
 
 
-def due(now: datetime) -> bool:
-    return now.weekday() < 5 and 7 <= now.hour < 9
+# (tenant, day) already handled today — sent, or nothing to say — so the 5-minute loop doesn't
+# rebuild it for the rest of the window. In memory: after a restart the idem key still stops a
+# second send.
+_HANDLED: set = set()
 
 
 async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Every business whose owner switched the morning brief on, at the time and on the days
+    they chose (vula/owner_briefs.py). Nobody else gets anything."""
     from vula import owner_briefs, team_index
     from vula.api import tenants as _t
     from vula.api.whatsapp import _send_reply
@@ -206,14 +210,19 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
                    .select("tenant_id").execute().data or [])
                    if r.get("tenant_id") and _t.is_active(r["tenant_id"])]
     except Exception as exc:
-        log.warning("digest: tenant list failed: %s", exc)
+        log.warning("brief: tenant list failed: %s", exc)
         return {"sent": 0}
+    if len(_HANDLED) > 20_000:
+        _HANDLED.clear()
     sent = 0
     for tid in tenants:
-        if not owner_briefs.enabled(tid, "morning"):
+        if (tid, day) in _HANDLED:
+            continue
+        if not owner_briefs.due("morning", owner_briefs.settings_for(tid)["morning"], now):
             continue
         try:
             text = render(build(tid, now.date(), now))
+            _HANDLED.add((tid, day))
             if not text:
                 continue
             for m in team_index.active_members(tid):
@@ -222,5 +231,5 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
                                          idem_key=f"digest:{tid}:{day}:{m['whatsapp']}"):
                         sent += 1
         except Exception as exc:
-            log.warning("digest failed for %s: %s", tid, exc)
+            log.warning("brief failed for %s: %s", tid, exc)
     return {"sent": sent, "day": day}
