@@ -61,7 +61,8 @@ async def preview_brief(tenant: str, kind: str = Query("morning"),
         if kind == "morning":
             from vula import owner_digest as mod
             now = datetime.now(mod.SAST)
-            text = mod.render(mod.build(tenant, now.date(), now))
+            text = mod.render(owner_briefs.apply_sections(mod.build(tenant, now.date(), now),
+                                                          owner_briefs.settings_for(tenant)["morning"].get("sections")))
         else:
             from vula import owner_advisor as mod
             text = mod.render(mod.build(tenant, datetime.now(mod.SAST).date()))

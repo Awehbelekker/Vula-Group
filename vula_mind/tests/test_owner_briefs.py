@@ -345,3 +345,61 @@ def test_brief_requests_reach_the_owner_assistant_on_a_knowledge_line():
               "show me today's morning briefing"):
         assert q(s), s
     assert not q("what's on the programme today")
+
+
+# ── what the brief shows: the owner's choice (12 Nov 2026) ─────────────────────────────────
+
+@pytest.mark.parametrize("words,want", [
+    ("money and meetings", ["meetings", "paid", "overdue", "due_soon", "tax"]),
+    ("only overdue", ["overdue"]),
+    (["tax", "emails"], ["emails", "tax"]),
+    ("customers waiting, follow ups", ["chats", "follow_ups"]),
+    ("diary", ["bookings", "meetings"]),
+    ("nonsense", []),
+])
+def test_sections_from_words(words, want):
+    assert owner_briefs.sections_from_words(words) == want
+
+
+def test_apply_sections_leaves_out_what_wasnt_chosen():
+    d = {"paid": [{"customer": "Sam", "invoice": None, "cents": 120000}], "overdue": [("Lerato", 40000)],
+         "upcoming_cents": 9900, "upcoming_n": 1, "tax": ["• VAT due 25 Nov"],
+         "today": {"waiting": 1, "meetings": ["10:00 Acme"], "documents": 2}}
+    text = owner_digest.render(owner_briefs.apply_sections(d, ["meetings", "overdue"]))
+    assert "1 meeting today: 10:00 Acme" in text and "Overdue" in text
+    for gone in ("waiting for a person", "documents to check", "Paid yesterday", "Due in the next 7 days", "VAT"):
+        assert gone not in text
+    assert owner_briefs.apply_sections(d, None) is d                      # never chosen → everything
+
+
+def test_owner_chooses_sections_on_whatsapp(monkeypatch):
+    store = {"t1": {"morning": {"on": True, "hour": 7}}}
+    _writable(monkeypatch, store)
+    out = _skill()._owner_briefs("t1", {"action": "sections", "sections": "money and meetings", "mode": "only"})
+    assert store["t1"]["morning"]["sections"] == ["meetings", "paid", "overdue", "due_soon", "tax"]
+    assert out["reply_verbatim"].startswith("✅ Your morning brief now shows: meetings, money paid")
+    _skill()._owner_briefs("t1", {"action": "sections", "sections": "tax", "mode": "remove"})
+    assert "tax" not in store["t1"]["morning"]["sections"]
+    _skill()._owner_briefs("t1", {"action": "sections", "sections": "documents", "mode": "add"})
+    assert "documents" in store["t1"]["morning"]["sections"]
+    _skill()._owner_briefs("t1", {"action": "sections", "mode": "all"})
+    assert store["t1"]["morning"]["sections"] == list(owner_briefs.SECTIONS)
+    assert store["t1"]["morning"]["on"] is True and store["t1"]["morning"]["hour"] == 7    # rest untouched
+
+
+def test_an_empty_brief_is_refused(monkeypatch):
+    store = {"t1": {"morning": {"on": True, "sections": ["tax"]}}}
+    _writable(monkeypatch, store)
+    out = _skill()._owner_briefs("t1", {"action": "sections", "sections": "tax", "mode": "remove"})
+    assert out["status"] == "need_info" and store["t1"]["morning"]["sections"] == ["tax"]
+
+
+def test_the_sent_brief_uses_the_chosen_sections(monkeypatch):
+    sent, _ = _send_env(monkeypatch, {"a": {"morning": {**ON_AT_7["morning"], "sections": ["overdue"]}}}, owner_digest,
+                        lambda tid, today, now=None: {**EMPTY_MONEY, "today": {"documents": 1}})
+    assert asyncio.run(owner_digest.send_all(NOW))["sent"] == 0 and sent == []   # only documents → nothing to say
+
+
+def test_sections_routing():
+    from core.skills.base import looks_like_owner_admin_question as q
+    assert q("only show money and meetings in my brief") and q("take tax dates out of the brief")

@@ -531,11 +531,18 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "the morning brief?', 'show me today's brief'. action=status says what's on; "
                        "on/off switches; schedule changes the time/days; preview shows today's text "
                        "without sending. Pass time/days ONLY as the owner said them — never invent a "
-                       "time; when switching on without one, the tool asks the owner. A bare 'brief' is "
+                       "time; when switching on without one, the tool asks the owner. What the MORNING brief "
+                       "shows is the owner's choice too: 'only show money and meetings in my brief' "
+                       "(action=sections, mode=only), 'add tax dates', 'take out documents', 'show everything "
+                       "again' (mode=all). A bare 'brief' is "
                        "the reply to the morning-brief WhatsApp → action=preview, which=morning; 'weekly "
                        "check' → action=preview, which=weekly. ('meeting brief' is the meeting tool.)",
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["status", "on", "off", "schedule", "preview"]},
+            "action": {"type": "string", "enum": ["status", "on", "off", "schedule", "preview", "sections"]},
+            "sections": {"type": "string", "description": "For action=sections: what to show/add/remove, in "
+                         "the owner's words ('money and meetings', 'tax', 'everything')."},
+            "mode": {"type": "string", "enum": ["only", "add", "remove", "all"],
+                     "description": "only = show just these; add/remove one; all = everything again."},
             "which": {"type": "string", "enum": ["morning", "weekly", "both"],
                       "description": "Which brief; 'both' only when the owner meant both."},
             "when": {"type": "string",
@@ -2900,13 +2907,43 @@ class CommerceAdminSkill(BaseSkill):
                 if k == "morning":
                     from vula import owner_digest as mod
                     now = datetime.now(mod.SAST)
-                    text = mod.render(mod.build(tid, now.date(), now))
+                    text = mod.render(ob.apply_sections(mod.build(tid, now.date(), now),
+                                                        ob.settings_for(tid)["morning"].get("sections")))
                 else:
                     from vula import owner_advisor as mod
                     text = mod.render(mod.build(tid, datetime.now(mod.SAST).date()))
                 parts.append(text or f"Nothing for the {names[k]} today, so nothing would go out.")
             return {"reply_verbatim": "\n\n".join(parts)}
         current = ob.settings_for(tid)
+        if action == "sections":
+            mode = str(args.get("mode") or "only").lower()
+            asked = ob.sections_from_words(args.get("sections") or "")
+            have = list(current["morning"].get("sections") or ob.SECTIONS)
+            if mode == "all":
+                new = list(ob.SECTIONS)
+            elif not asked:
+                choices = ", ".join(ob.SECTION_LABELS[x] for x in ob.SECTIONS)
+                return {"status": "need_info", "message": f"Which parts? You can have: {choices} — or *money* / *work*."}
+            elif mode == "add":
+                new = [x for x in ob.SECTIONS if x in set(have) | set(asked)]
+            elif mode == "remove":
+                new = [x for x in have if x not in asked]
+            else:
+                new = asked
+            if not new:
+                return {"status": "need_info", "message": "That would leave the brief empty — switch it off instead? "
+                                                          "Say *stop my morning brief*."}
+            try:
+                ob.save(tid, {"morning": {"sections": new}})
+            except Exception as exc:
+                logger.warning("brief sections change failed for %s: %s", tid, exc)
+                return {"error": "I couldn't change that just now. Nothing was changed."}
+            back = ob.settings_for(tid)["morning"].get("sections")     # read back
+            if back != new:
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+            shown = ", ".join(ob.SECTION_LABELS[x] for x in back)
+            tail = "" if current["morning"]["on"] else "\nIt's switched off — say e.g. *send me a morning brief at 7 on weekdays*."
+            return {"reply_verbatim": f"✅ Your morning brief now shows: {shown}.{tail}"}
         patch: Dict[str, Any] = {}
         if action == "off":
             patch = {k: {"on": False} for k in kinds}

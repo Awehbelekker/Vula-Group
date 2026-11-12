@@ -245,10 +245,11 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
     for tid in tenants:
         if (tid, day) in _HANDLED:
             continue
-        if not owner_briefs.due("morning", owner_briefs.settings_for(tid)["morning"], now):
+        cfg = owner_briefs.settings_for(tid)["morning"]
+        if not owner_briefs.due("morning", cfg, now):
             continue
         try:
-            d = build(tid, now.date(), now)
+            d = owner_briefs.apply_sections(build(tid, now.date(), now), cfg.get("sections"))
             text = render(d)
             _HANDLED.add((tid, day))
             if not text:

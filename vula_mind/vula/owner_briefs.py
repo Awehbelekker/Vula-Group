@@ -31,6 +31,70 @@ DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 WINDOW = {"morning": timedelta(hours=2), "weekly": timedelta(hours=3)}   # a late server still sends
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+# What the morning brief can hold (12 Nov 2026, Ian: "can the tenant ask what details they want to
+# see … not just a defaulted response"). A business that never chose gets them all.
+SECTIONS = ("chats", "follow_ups", "emails", "quotes", "documents", "bookings", "meetings",
+            "paid", "overdue", "due_soon", "tax")
+SECTION_LABELS = {"chats": "customers waiting", "follow_ups": "follow-ups", "emails": "emails to answer",
+                  "quotes": "quotes to approve", "documents": "documents to check", "bookings": "bookings",
+                  "meetings": "meetings", "paid": "money paid", "overdue": "overdue", "due_soon": "due this week",
+                  "tax": "tax dates"}
+GROUPS = {"money": ("paid", "overdue", "due_soon", "tax"),
+          "work": ("chats", "follow_ups", "emails", "quotes", "documents", "bookings", "meetings"),
+          "diary": ("bookings", "meetings")}
+_WORDS = {"chats": ("chat", "customer", "waiting"), "follow_ups": ("follow",), "emails": ("email", "mail"),
+          "quotes": ("quote",), "documents": ("document", "doc", "paper"), "bookings": ("booking", "appointment"),
+          "meetings": ("meeting",), "paid": ("paid", "payment", "came in"), "overdue": ("overdue", "owe", "debtor"),
+          "due_soon": ("due", "upcoming"), "tax": ("tax", "vat", "sars")}
+
+
+def sections_from_words(words: Any) -> List[str]:
+    """['money', 'meetings'] or 'money and meetings' → the section ids, in their usual order."""
+    items = words if isinstance(words, list) else re.split(r",|\band\b|&|\+", str(words or ""))
+    picked = set()
+    for w in items:
+        w = str(w).strip().lower().replace("-", "_").replace(" ", "_")
+        if not w:
+            continue
+        if w in SECTIONS:
+            picked.add(w)
+            continue
+        if w.strip("_") in GROUPS:
+            picked.update(GROUPS[w.strip("_")])
+            continue
+        plain = w.replace("_", " ")
+        for g, members_ in GROUPS.items():
+            if g in plain:
+                picked.update(members_)
+        for sid, keys in _WORDS.items():
+            if any(re.search(rf"\b{re.escape(k)}", plain) for k in keys):   # "overdue" isn't "due"
+                picked.add(sid)
+    return [x for x in SECTIONS if x in picked]
+
+
+def apply_sections(d: Dict[str, Any], sections: Optional[List[str]]) -> Dict[str, Any]:
+    """The brief's data with the sections the business didn't choose taken out (all when None)."""
+    if not sections:
+        return d
+    keep = set(sections)
+    t = dict(d.get("today") or {})
+    for sid, keys in (("chats", ("waiting",)), ("follow_ups", ("follow_ups", "follow_ups_overdue")),
+                      ("emails", ("emails", "emails_urgent")), ("quotes", ("quotes", "quotes_cents")),
+                      ("documents", ("documents",)), ("bookings", ("bookings",)), ("meetings", ("meetings",))):
+        if sid not in keep:
+            for k in keys:
+                t.pop(k, None)
+    out = {**d, "today": t}
+    if "paid" not in keep:
+        out["paid"] = []
+    if "overdue" not in keep:
+        out["overdue"] = []
+    if "due_soon" not in keep:
+        out["upcoming_cents"], out["upcoming_n"] = 0, 0
+    if "tax" not in keep:
+        out["tax"] = []
+    return out
 _DAY_FULL = ("Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays")
 
 
@@ -56,6 +120,11 @@ def _clean(kind: str, raw: Any) -> Dict[str, Any]:
             ok = sorted({d for d in days if isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6})
             if ok:
                 out["days"] = ok
+        secs = raw.get("sections")
+        if isinstance(secs, list):
+            ok = [x for x in SECTIONS if x in {str(v) for v in secs}]
+            if ok:
+                out["sections"] = ok
     else:
         d = raw.get("day")
         if isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6:
@@ -83,6 +152,9 @@ def settings_for(tenant_id: str) -> Dict[str, Any]:
     for k in KINDS:
         cfg = {**DEFAULTS[k], **saved.get(k, {})}
         cfg["when"] = describe(k, cfg)
+        if k == "morning":
+            cfg["sections"] = cfg.get("sections") or list(SECTIONS)
+            cfg["sections_chosen"] = "sections" in saved.get(k, {})
         cfg["time_chosen"] = "hour" in saved.get(k, {})
         out[k] = cfg
     return out

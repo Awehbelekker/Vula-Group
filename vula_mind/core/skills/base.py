@@ -710,6 +710,7 @@ _OWNER_ADMIN_RE = re.compile(
     r"\bbrief me (?:on|about|before)\b|\b(?:meeting|visit) brief\b|"
     # The replies the proactive templates ask for (vula/proactive.py, wa_templates.PROACTIVE_TEMPLATES).
     r"^\s*(?:brief|my brief|the brief|weekly check|my weekly check)\s*[.!]?\s*$|"
+    r"\b(?:in|from|to|on) (?:my|the) (?:morning )?brief\b|"
     # What a team member has on / has done (team_activity tool, 12 Nov).
     r"\bhow (?:does|is|did) [\w' ]{1,30}?(?:week|diary|schedule)(?: look(?:ing)?)?\b|"
     r"\bhow (?:does|is) [\w' ]{1,30}?day look(?:ing)?\b|"

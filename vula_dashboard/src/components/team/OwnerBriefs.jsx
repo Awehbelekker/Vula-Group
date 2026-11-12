@@ -6,6 +6,7 @@
  * Morning brief: what needs a person today — customers waiting, follow-ups, emails, quotes Vula
  * drafted, documents to check, today's bookings — plus money paid, owed and due.
  * Weekly advisor: money owed, unusual spending, low stock, unanswered questions.
+ * The owner picks what the morning brief shows (money only, meetings only…).
  * "See today's" shows exactly what would be sent. Owners and managers only.
  * Backend: vula/api/owner_briefs.py, vula/owner_briefs.py.
  */
@@ -29,6 +30,11 @@ const BRIEFS = [
     help: "Money owed, spending that's higher than usual, low stock and questions Vula couldn't answer." },
 ];
 const pad = (n) => String(n ?? 0).padStart(2, "0");
+// What the morning brief can hold (vula/owner_briefs.py SECTIONS) — the owner picks.
+const SECTIONS = [["chats", "Customers waiting"], ["follow_ups", "Follow-ups"], ["emails", "Emails to answer"],
+  ["quotes", "Quotes to approve"], ["documents", "Documents to check"], ["bookings", "Bookings"],
+  ["meetings", "Meetings"], ["paid", "Money paid"], ["overdue", "Overdue"], ["due_soon", "Due this week"],
+  ["tax", "Tax dates"]];
 
 export default function OwnerBriefs({ tenantId }) {
   const [settings, setSettings] = useState(null);
@@ -80,6 +86,22 @@ export default function OwnerBriefs({ tenantId }) {
                   <Input type="time" min="05:00" max="21:59" defaultValue={`${pad(cfg.hour)}:${pad(cfg.minute)}`}
                     onBlur={(e) => setTime(b.id, e.target.value)} />
                 </Field>
+                {b.id === "morning" && (
+                  <Field label="Show in the brief">
+                    <div className="vtm-brief-days">
+                      {SECTIONS.map(([id, label]) => {
+                        const on = (cfg.sections || []).includes(id);
+                        return (
+                          <label key={id} className="vtm-check">
+                            <input type="checkbox" checked={on} onChange={() => {
+                              const next = on ? cfg.sections.filter((x) => x !== id) : [...(cfg.sections || []), id];
+                              if (next.length) save("morning", { sections: next });
+                            }} />{label}
+                          </label>);
+                      })}
+                    </div>
+                  </Field>
+                )}
                 {b.id === "weekly" ? (
                   <Field label="Day">
                     <Select value={cfg.day} onChange={(e) => save("weekly", { day: Number(e.target.value) })}>
