@@ -7804,7 +7804,7 @@ async def _private_note_reply(tenant_id: str, phone: str, text: str) -> bool:
     note itself is the only thing stored, encrypted. True when this message was one of those."""
     try:
         from vula import personal_memory
-        if not personal_memory.enabled():
+        if not personal_memory.enabled(tenant_id):
             return False
         person = _staff_person(tenant_id, phone)
         if person is None:
@@ -8034,7 +8034,7 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
         # skill answered, so "and for next week?" isn't routed as a brand-new subject.
         from core.hrm.orchestrator import route_context
         from vula import route_memory
-        with route_context(route_memory.latest(tenant_id, phone) if phone else None):
+        with route_context(route_memory.latest(tenant_id, phone) if phone else None, tenant_id):
             result = await _run_with_holding_message(
                 phone, tenant_id,
                 runner.run(

@@ -201,9 +201,14 @@ _ROUTE_CONTEXT: ContextVar[Optional[dict]] = ContextVar("vula_route_context", de
 
 
 @contextmanager
-def route_context(previous: Optional[dict]):
-    """`previous` is {"skill", "question"} (vula/route_memory.py::latest) or None."""
-    on = bool(getattr(settings, "follow_up_routing_enabled", False))
+def route_context(previous: Optional[dict], tenant_id: Optional[str] = None):
+    """`previous` is {"skill", "question"} (vula/route_memory.py::latest) or None. Used when
+    follow-up routing is on for everyone or for this business (vula/features.py)."""
+    try:
+        from vula import features
+        on = features.on(tenant_id, "follow_up_routing")
+    except Exception:  # noqa: BLE001
+        on = False
     token = _ROUTE_CONTEXT.set(previous if (on and previous) else None)
     try:
         yield

@@ -53,7 +53,7 @@ Dashboard (`vula_dashboard/`): `npm install && npm run dev` (Vite), `npm run bui
 
 **Deploy:** backend → Railway (`railway up`; Dockerfile build, health check `/status`). Dashboard + storefronts → Vercel. **After changing Railway env vars you must `railway up` again** — env changes alone redeploy stale code. Test risky changes on staging first — see `docs/staging.md` (Supabase branch + Railway `staging` environment + Meta test number; not set up yet).
 
-**Migrations:** SQL files in `vula_mind/migrations/` (numbered, idempotent, currently ~157). Applied **manually** in the Supabase SQL editor — there is no migration runner. `vula_mind/db/migrations/` is a near-empty legacy path; ignore it.
+**Migrations:** SQL files in `vula_mind/migrations/` (numbered, idempotent, currently up to 261). Applied in the Supabase SQL editor or with `tools/migrate.py` (records them in `vula_schema_migrations`). `vula_mind/db/migrations/` is a near-empty legacy path; ignore it.
 
 ## Architecture — the big picture
 
@@ -108,7 +108,8 @@ Money-document extraction in `_analyze_document` (`vula/api/whatsapp.py`) layers
 - **Private notes** (`vula/personal_memory.py`): what a staff member asked Vula to remember about them. Saved only on request, recognised and stored in code, encrypted, shown only to the assistant answering that person.
 - **Deleting and exporting a person's data** goes through `vula/privacy_data.py`. A new store that holds what someone said adds a step there.
 - **Personal routes** live in `vula/api/me.py` and act on the caller only; no route takes another person's id.
-- **Switches** (all off by default, in `config.py`): `voice_compose_enabled`, `client_memory_enabled`, `personal_memory_enabled`, `history_earlier_topics_enabled`, `strict_tenant_grounding`, `verify_short_assertions`, `follow_up_routing_enabled`, `advisor_mode_enabled`. Migrations 257–260 must be applied first.
+- **Switches** (all off by default): on for everyone via the `config.py` setting (`voice_compose_enabled`, `client_memory_enabled`, `personal_memory_enabled`, `history_earlier_topics_enabled`, `strict_tenant_grounding`, `verify_short_assertions`, `follow_up_routing_enabled`, `advisor_mode_enabled`), or for one business via `vula_tenant_config.features` (Master › tenant › Features to pilot). Check them with `vula/features.py::on(tenant_id, name)`, never the setting directly. Migrations 257–261 must be applied first; rollout order in `docs/rollout-2026-11.md`.
+- **Website import** (`vula/commerce/site_import.py` + `site_facts.py`): `inspect_site` / `tools/site_check.py <url>` reads a real site and writes nothing — use it to measure a change.
 
 ## Engineering non-negotiables
 

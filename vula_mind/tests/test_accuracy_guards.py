@@ -199,7 +199,8 @@ def test_it_survives_a_restart_when_switched_on():
 
 def test_without_the_switch_nothing_is_read_from_or_written_to_the_database():
     db = MagicMock()
-    with patch.object(service, "_client", return_value=db):
+    with patch.object(service, "_client", return_value=db), \
+         patch("vula.api.tenants.get_config", return_value={}):       # the business's switches: none on
         route_memory.remember(T, "27821112222", "finance_admin", "q", sticky=True)
         route_memory.clear()
         assert route_memory.sticky(T, "27821112222") is None

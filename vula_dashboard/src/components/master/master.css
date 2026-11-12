@@ -99,3 +99,9 @@
 .vms-setup-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .vms-setup-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .vms-setup-item > span:first-child { display: flex; flex-direction: column; min-width: 0; flex: 1 1 200px; }
+
+/* Features to pilot (TenantDetailV2) */
+.vms-features { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.vms-features > li + li { border-top: 1px solid var(--line); }
+.vms-feature { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); min-height: 44px; cursor: pointer; overflow-wrap: anywhere; }
+.vms-feature input { width: 20px; height: 20px; flex: 0 0 auto; accent-color: var(--brand); }

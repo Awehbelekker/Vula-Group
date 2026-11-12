@@ -1691,8 +1691,8 @@ async def earlier_topics(tenant_id: str, session_id: str) -> str:
     nothing on Wednesday. This gives the model the gist of what came up, with no model call and
     without the old replies (which is where stale figures live). "" when the feature is off
     (settings.history_earlier_topics_enabled) or there is nothing older."""
-    from config import settings
-    if not getattr(settings, "history_earlier_topics_enabled", False):
+    from vula import features
+    if not features.on(tenant_id, "history_earlier_topics"):
         return ""
     from core.time_fmt import cutoff_iso, relative_age_label
     rows = (_client().table("commerce_conversation_messages").select("role,content,created_at")

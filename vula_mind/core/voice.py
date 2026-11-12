@@ -97,10 +97,11 @@ class Voice:
 _CURRENT: ContextVar[Optional[Voice]] = ContextVar("vula_voice", default=None)
 
 
-def enabled() -> bool:
+def enabled(tenant_id: Optional[str] = None) -> bool:
+    """On for everyone (VOICE_COMPOSE_ENABLED), or for this business (vula/features.py)."""
     try:
-        from config import settings
-        return bool(getattr(settings, "voice_compose_enabled", False))
+        from vula import features
+        return features.on(tenant_id, "voice_compose")
     except Exception:  # noqa: BLE001
         return False
 
@@ -121,7 +122,8 @@ def use(tenant_id: str, audience: str = "customer", channel: str = "whatsapp",
 
 
 def current() -> Optional[Voice]:
-    return _CURRENT.get() if enabled() else None
+    v = _CURRENT.get()
+    return v if v is not None and enabled(v.tenant_id) else None
 
 
 def active() -> bool:

@@ -1096,6 +1096,12 @@ export const profileDrafts = {
   cancellations: { answer: "Cancel up to 24 hours before delivery for a full refund.", quote: "You may cancel up to 24 hours before delivery for a full refund.", ...fromTerms },
   faq: { answer: "Do you cater for events? Yes, with three days' notice.", quote: "We cater for events with three days' notice.", ...fromTerms },
 };
+// Master › a tenant › Features to pilot (vula/features.py).
+export const masterFeatures = [
+  { name: "voice_compose", label: "Company voice, each person's own style and the channel, in every reply", here: false, everywhere: false },
+  { name: "client_memory", label: "A dated note per client, shown on their next message", here: true, everywhere: false },
+  { name: "follow_up_routing", label: "Follow-ups keep their thread (the last question is given to the router)", here: false, everywhere: true },
+];
 // The first-run welcome (Welcome.jsx). `show` is false so other screens are unchanged; the
 // welcome spec turns it on.
 export const firstRun = {

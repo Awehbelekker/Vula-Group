@@ -58,10 +58,12 @@ _PROMPT = (
 )
 
 
-def enabled() -> bool:
+def enabled(tenant_id: Optional[str] = None) -> bool:
+    """On for everyone (CLIENT_MEMORY_ENABLED), or for this business (vula/features.py).
+    With no business given: on anywhere — whether the sweep has anything to do."""
     try:
-        from config import settings
-        return bool(getattr(settings, "client_memory_enabled", False))
+        from vula import features
+        return features.on(tenant_id, "client_memory") if tenant_id else features.on_anywhere("client_memory")
     except Exception:  # noqa: BLE001
         return False
 
@@ -100,7 +102,7 @@ def summary_for(tenant_id: str, phone: Any) -> str:
 def block_for_prompt(tenant_id: str, phone: Any) -> str:
     """The note, framed for the assistant that is about to talk to this client. "" when the
     feature is off or there is nothing on file."""
-    if not enabled():
+    if not enabled(tenant_id):
         return ""
     row = get(tenant_id, phone)
     if not row:
@@ -216,6 +218,8 @@ async def sweep(limit: int = 25, now: Optional[datetime] = None) -> Dict[str, in
         if done >= limit:
             break
         if not isinstance(s, dict) or is_staff_session_key(s.get("session_key")):
+            continue
+        if not enabled(s.get("tenant_id")):            # on for this business?
             continue
         key = client_key(s.get("customer_phone") or s.get("session_key"))
         if not key:

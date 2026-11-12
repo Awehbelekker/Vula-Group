@@ -101,9 +101,9 @@ class NoteIn(BaseModel):
     text: str
 
 
-def _memory_on() -> None:
+def _memory_on(tenant_id: str) -> None:
     from vula import personal_memory
-    if not personal_memory.enabled():
+    if not personal_memory.enabled(tenant_id):
         raise HTTPException(status_code=404, detail="Private notes aren't switched on for this workspace.")
 
 
@@ -113,7 +113,7 @@ async def get_my_memory(tenant_id: str, request: Request) -> dict:
     import asyncio
     from vula import personal_memory
     person = await _me(tenant_id, request)
-    if not personal_memory.enabled():
+    if not personal_memory.enabled(tenant_id):
         return {"enabled": False, "notes": []}
     try:
         notes = await asyncio.to_thread(personal_memory.notes, person)
@@ -127,7 +127,7 @@ async def add_my_memory(tenant_id: str, body: NoteIn, request: Request) -> dict:
     """Ask Vula to remember something about me. Typing it here is the consent."""
     import asyncio
     from vula import personal_memory
-    _memory_on()
+    _memory_on(tenant_id)
     person = await _me(tenant_id, request)
     try:
         out = await asyncio.to_thread(personal_memory.remember, person, body.text, "dashboard")
@@ -146,7 +146,7 @@ async def forget_my_note(tenant_id: str, note_id: str, request: Request) -> dict
     """Forget one of my notes. Someone else's note id is simply not found."""
     import asyncio
     from vula import personal_memory
-    _memory_on()
+    _memory_on(tenant_id)
     person = await _me(tenant_id, request)
     if not await asyncio.to_thread(personal_memory.forget, person, note_id):
         raise HTTPException(status_code=404, detail="That note wasn't found.")
@@ -158,7 +158,7 @@ async def forget_all_my_memory(tenant_id: str, request: Request) -> dict:
     """Forget everything Vula is keeping about me."""
     import asyncio
     from vula import personal_memory
-    _memory_on()
+    _memory_on(tenant_id)
     person = await _me(tenant_id, request)
     removed = await asyncio.to_thread(personal_memory.forget_all, person)
     return {"ok": True, "removed": removed}

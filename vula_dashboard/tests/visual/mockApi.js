@@ -30,6 +30,7 @@ function routes(role, modules = []) {
   const A = `${C}/admin`;
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
   let docsRun = { running: false };
+  const masterFeatures = F.masterFeatures.map((f) => ({ ...f }));
   // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
   let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
   const profile = { ...F.businessProfile, answers: { ...F.businessProfile.answers }, drafts: {} };
@@ -255,6 +256,8 @@ function routes(role, modules = []) {
     // ── Master ──
     r("GET", `^/status`, () => ({ status: "ok" })),   // server.py health check (master's Dashboard tab)
     r("GET", `^/v1/master/tenants`, () => (role === "master" ? { tenants: F.masterTenants } : { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Master access required."}' } })),
+    r("GET", `^/v1/master/tenants/${T}/features`, () => ({ features: masterFeatures })),
+    r("PATCH", `^/v1/master/tenants/${T}/features`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const f of masterFeatures) if (f.name in b) f.here = !!b[f.name]; return { features: masterFeatures }; }),
     r("GET", `^/v1/master/tenants/${T}/setup`, () => F.setup),
     r("POST", `${A}/scan`, () => F.scanResult),
     r("POST", `${A}/scan/commit`, (m, url, req) => (req.postDataJSON()?.auto_commit

@@ -232,10 +232,12 @@ def _client():
 OPT_IN = frozenset({"advisor"})
 
 
-def _default_off() -> FrozenSet[str]:
+def _default_off(tenant_id: Optional[str] = None) -> FrozenSet[str]:
+    """Opt-in employees that start off — unless switched on for everyone or for this business
+    (vula/features.py). An owner's own on/off under Team › AI employees still wins."""
     try:
-        from config import settings
-        return frozenset() if getattr(settings, "advisor_mode_enabled", False) else OPT_IN
+        from vula import features
+        return frozenset() if features.on(tenant_id, "advisor_mode") else OPT_IN
     except Exception:  # noqa: BLE001
         return OPT_IN
 
@@ -261,7 +263,8 @@ def mark_ideas(answer: str, sources: list) -> str:
 def settings_for(tenant_id: str) -> Dict[str, Dict]:
     """{employee_id: {"enabled": bool, "instructions": str}} for every employee; defaults (on, no
     instructions) when nothing is saved or before migration 236."""
-    out = {e.id: {"enabled": e.id not in _default_off(), "instructions": ""} for e in TEAM}
+    off = _default_off(tenant_id)
+    out = {e.id: {"enabled": e.id not in off, "instructions": ""} for e in TEAM}
     try:
         rows = (_client().table(TABLE).select("employee,enabled,instructions")
                 .eq("tenant_id", tenant_id).execute().data or [])

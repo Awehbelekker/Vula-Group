@@ -67,10 +67,11 @@ _FORGET_ALL = re.compile(
     re.IGNORECASE)
 
 
-def enabled() -> bool:
+def enabled(tenant_id: Optional[str] = None) -> bool:
+    """On for everyone (PERSONAL_MEMORY_ENABLED), or for this business (vula/features.py)."""
     try:
-        from config import settings
-        return bool(getattr(settings, "personal_memory_enabled", False))
+        from vula import features
+        return features.on(tenant_id, "personal_memory")
     except Exception:  # noqa: BLE001
         return False
 
@@ -217,7 +218,7 @@ def handle(person, text: str, channel: str = "whatsapp") -> Optional[str]:
     """If this message is about the person's own private notes — save one, show them, delete
     one or all — do it and return the reply. None for anything else (the message goes on to
     the assistant as usual). Never raises."""
-    if not enabled() or not _usable(person):
+    if not _usable(person) or not enabled(person.tenant_id):
         return None
     t = (text or "").strip()
     try:
@@ -265,7 +266,7 @@ _CURRENT: ContextVar[str] = ContextVar("vula_private_notes", default="")
 
 def block_for(person) -> str:
     """This person's notes as a prompt block, newest kept when there are too many to fit."""
-    if not enabled() or not _usable(person):
+    if not _usable(person) or not enabled(person.tenant_id):
         return ""
     try:
         items = notes(person)
@@ -295,7 +296,7 @@ def block_for(person) -> str:
 async def load(person) -> str:
     """block_for, off the event loop (it reads the database)."""
     import asyncio
-    if not enabled() or not _usable(person):
+    if not _usable(person) or not enabled(person.tenant_id):
         return ""
     return await asyncio.to_thread(block_for, person)
 

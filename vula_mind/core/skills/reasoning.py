@@ -160,14 +160,14 @@ class ReasoningSkill(BaseSkill):
         # document of its own to answer from. The shared KB, the web and model memory can't know
         # them, so there is nothing to fall back on: say so. A customer's reply is marked low
         # confidence, which hands the question to a person (vula/escalation.py); the team is
-        # told how to give Vula the answer. Behind settings.strict_tenant_grounding.
+        # told how to give Vula the answer. Behind the strict_tenant_grounding switch (vula/features.py).
         if not kb_context:
-            from config import settings as _settings
             from core.skills.base import (BUSINESS_FACT_NOT_ON_FILE_CUSTOMER, BUSINESS_FACT_NOT_ON_FILE_TEAM,
                                           looks_like_business_specific_question)
             # metadata "strict_grounding": one call asks for it regardless of the setting — the
             # owner's "ask Vula like a customer would" preview (vula/commerce/first_run.py).
-            if ((getattr(_settings, "strict_tenant_grounding", False) or inp.metadata.get("strict_grounding"))
+            from vula import features as _features
+            if ((_features.on(inp.tenant_id, "strict_tenant_grounding") or inp.metadata.get("strict_grounding"))
                     and looks_like_business_specific_question(inp.question)):
                 _record("no_doc")
                 insider = kb_learning.is_insider(role)

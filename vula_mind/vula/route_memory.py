@@ -34,10 +34,10 @@ _DB_MISS: Dict[Tuple[str, str], float] = {}
 _LOCK = threading.Lock()
 
 
-def _durable() -> bool:
+def _durable(tenant_id: Optional[str] = None) -> bool:
     try:
-        from config import settings
-        return bool(getattr(settings, "follow_up_routing_enabled", False))
+        from vula import features
+        return features.on(tenant_id, "follow_up_routing")
     except Exception:  # noqa: BLE001
         return False
 
@@ -84,7 +84,7 @@ def remember(tenant_id: str, phone: str, skill: Optional[str], question: str = "
         if sticky:
             _STICKY[key] = (skill, now)
         _DB_MISS.pop(key, None)
-    if _durable():
+    if _durable(tenant_id):
         threading.Thread(target=_write, args=(tenant_id, phone, skill), daemon=True).start()
 
 
@@ -96,7 +96,7 @@ def sticky(tenant_id: str, phone: str, allowed: Optional[set] = None) -> Optiona
         hit = _STICKY.get(key)
         if hit and now - hit[1] < TTL_SECONDS:
             return hit[0]
-        if not _durable() or now - _DB_MISS.get(key, 0) < _MISS_TTL:
+        if not _durable(tenant_id) or now - _DB_MISS.get(key, 0) < _MISS_TTL:
             return None
     skill = _read(tenant_id, phone)
     with _LOCK:

@@ -180,6 +180,46 @@ async def master_update_tenant(tenant_id: str, body: dict,
     return res.data[0]
 
 
+# ── Per-business switches (vula/features.py, migration 261) ────────────────────
+# New behaviour piloted on one business before it is switched on for everyone.
+
+@router.get("/tenants/{tenant_id}/features")
+async def master_tenant_features(tenant_id: str) -> dict:
+    """Every switch: on for this business, and whether it is already on for everyone."""
+    from vula import features
+    return {"tenant_id": tenant_id, "features": features.listing(tenant_id)}
+
+
+@router.patch("/tenants/{tenant_id}/features")
+async def master_set_tenant_features(tenant_id: str, body: dict,
+                                     identity: dict = Depends(require_master)) -> dict:
+    """Switch features on or off for this one business: {"voice_compose": true, …}. Read back
+    and audited."""
+    from vula import features
+    from vula.api import tenants as _tenants
+    try:
+        patch = features.validate(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    rows = (_client().table("vula_tenant_config").select("features")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
+    merged = {**(rows[0].get("features") or {}), **patch}
+    try:
+        (_client().table("vula_tenant_config").update({"features": merged})
+         .eq("tenant_id", tenant_id).execute())
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't save ({exc}). Run migration 261?")
+    _tenants.invalidate(tenant_id)
+    back = (_client().table("vula_tenant_config").select("features")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0].get("features") or {}
+    if any(bool(back.get(k)) != v for k, v in patch.items()):
+        raise HTTPException(status_code=500, detail="The switches didn't save. Nothing changed.")
+    audit(identity, "tenant_features", tenant_id, patch=patch)
+    return {"tenant_id": tenant_id, "features": features.listing(tenant_id)}
+
+
 # ── Billing lifecycle (vula_tenants: signup/payment state) ─────────────────────
 # The Tenants tab's existing Suspend/Activate toggles vula_tenant_config.active — operational,
 # any reason. These four are specifically about the *subscription*, reading/writing

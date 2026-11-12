@@ -27,7 +27,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from config import settings
 
@@ -217,9 +217,10 @@ def _figures(text: str) -> set:
     return {re.sub(r"[,  ]", "", m).rstrip(".") for m in _FIGURE_RE.findall(text or "")} - {""}
 
 
-def _short_assertions_on() -> bool:
+def _short_assertions_on(tenant_id: Optional[str] = None) -> bool:
     try:
-        return bool(getattr(settings, "verify_short_assertions", False))
+        from vula import features
+        return features.on(tenant_id, "verify_short_assertions")
     except Exception:  # noqa: BLE001
         return False
 
@@ -229,7 +230,7 @@ def _has_documents(sources: list) -> bool:
                for s in (sources or []))
 
 
-def nothing_to_check(answer: str, sources: list) -> str:
+def nothing_to_check(answer: str, sources: list, tenant_id: Optional[str] = None) -> str:
     """Why the second-opinion pass can be skipped, or "" to run it. 2026-10-15: one SeedleMe
     reply in five carried "⚠️ Worth double-checking" — including "Today's sales are R0.00 from 0
     paid orders", every figure straight from the sales tool, and "Please provide the customer's
@@ -248,7 +249,7 @@ def nothing_to_check(answer: str, sources: list) -> str:
             # were retrieved for this answer there IS something to check it against, and a
             # short yes/no is exactly where an invented fact hides. Acknowledgements and
             # one-word replies still skip. Behind settings.verify_short_assertions.
-            if _short_assertions_on() and words >= 4 and _has_documents(sources):
+            if _short_assertions_on(tenant_id) and words >= 4 and _has_documents(sources):
                 return ""
             return "no_figures_short"
         return ""
@@ -296,7 +297,7 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
             if ("kb" in (s.get("type") or "") or s.get("type") in ("tool", "web"))
             and s.get("text")
         )
-        skip = nothing_to_check(result.answer, result.sources or [])
+        skip = nothing_to_check(result.answer, result.sources or [], inp.tenant_id)
         if skip:
             result.verification = {"verifier": f"adversarial.{skill.name}", "outcome": "skipped",
                                    "escalated": False, "defects": [], "extra": {"reason": skip}}
