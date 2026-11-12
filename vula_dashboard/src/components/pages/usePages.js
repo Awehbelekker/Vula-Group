@@ -53,7 +53,7 @@ export const UNSUPPORTED_FEATURE_LABELS = { blog: "a blog", login: "account/logi
 export const URL_RE = /https?:\/\/[^\s]+/gi;
 
 // Starter templates — a page is never a blank scary canvas. Homepage templates are keyed by
-// business_type (food|retail|services|trades|health|other, the same taxonomy _map_business_type
+// business_type (food|retail|services|trades|health|real_estate|other, the same taxonomy _map_business_type
 // already uses server-side — see tenants.py) so a tenant gets copy and blocks that actually fit
 // their business, not fish-shop language regardless of what they sell (the bug this replaces:
 // every tenant used to get "Fresh from the harbour" / FeaturedProducts / CategoryNav no matter
@@ -124,6 +124,21 @@ export const TEMPLATES = {
       { type: "WhatsAppCTA", props: { id: "t-health-wa", phone: "", message: "Hi! I'd like to book an appointment.", buttonText: "💬 Book on WhatsApp" } },
     ] },
   },
+  home_real_estate: {
+    label: "Homepage — Real estate",
+    data: { content: [
+      { type: "Hero", props: { id: "t-re-hero", title: "Find your next home", subtitle: "Homes for sale and to rent — tell us what you're looking for.", image: "", ctaText: "View properties", ctaHref: "#listings" } },
+      { type: "PropertyGrid", props: { id: "t-re-featured", title: "Featured properties", listingType: "", showFilters: false, featuredOnly: true, includeSold: false, count: 6 } },
+      { type: "PropertyGrid", props: { id: "t-re-all", title: "All properties", listingType: "", showFilters: true, featuredOnly: false, includeSold: false, count: 24 } },
+      { type: "Features", props: { id: "t-re-why", title: "Why list with us", items: [
+        { heading: "Local knowledge", body: "Describe the areas you know best." }, { heading: "Serious buyers", body: "How you find and vet buyers and tenants." }, { heading: "Always reachable", body: "Ask us anything on WhatsApp." }] } },
+      { type: "PropertyAgents", props: { id: "t-re-agents", title: "Meet our agents", subtitle: "" } },
+      { type: "Testimonials", props: { id: "t-re-test", title: "What clients say", items: [
+        { quote: "They sold our home quickly and kept us informed the whole way.", author: "A happy seller", role: "" }] } },
+      { type: "PropertyEnquiry", props: { id: "t-re-val", title: "Thinking of selling or renting out?", subtitle: "Leave your details and an agent will contact you for a free valuation.", buttonText: "Request a valuation" } },
+      { type: "ContactCard", props: { id: "t-re-contact", title: "Visit our office", phone: "", email: "", address: "", hours: "" } },
+    ] },
+  },
   home_other: {
     label: "Homepage — General",
     data: { content: [
@@ -159,8 +174,15 @@ export const TEMPLATES = {
 // taxonomy exactly). Falls back to the generic template for "other"/unrecognised.
 export const HOME_TEMPLATE_BY_BUSINESS_TYPE = {
   food: "home_food", retail: "home_retail", trades: "home_trades",
-  services: "home_services", health: "home_health",
+  services: "home_services", health: "home_health", real_estate: "home_real_estate",
 };
+// Templates that need a module (2026-11-10): hidden from tenants without it.
+const TEMPLATE_MODULE = { home_real_estate: "listings" };
+export function templatesFor(modules) {
+  const have = new Set(modules || []);
+  return Object.fromEntries(Object.entries(TEMPLATES).filter(([k]) => !TEMPLATE_MODULE[k] || have.has(TEMPLATE_MODULE[k])));
+}
+
 export function homeTemplateFor(businessType) {
   return TEMPLATES[HOME_TEMPLATE_BY_BUSINESS_TYPE[businessType]] || TEMPLATES.home_other;
 }
@@ -177,6 +199,7 @@ export function usePages({ tenantId }) {
   const [versions, setVersions] = useState(null);
   const [msg, setMsg] = useState("");
   const [storeUrl, setStoreUrl] = useState(null);
+  const [modules, setModules] = useState([]);           // gates vertical add-ons (editorConfigFor / templatesFor)
   const [businessType, setBusinessType] = useState(null);  // drives which niche template "Customize homepage" seeds
   const [showLivePreview, setShowLivePreview] = useState(false);
   const [storeSettings, setStoreSettings] = useState(null); // real hero copy — seeds "Customize homepage" with truth, not placeholder text
@@ -268,8 +291,8 @@ export function usePages({ tenantId }) {
   // domain is configured yet.
   useEffect(() => {
     fetch(`${VULA_API}/v1/tenants/${tenantId}`).then((r) => r.json())
-      .then((d) => { setStoreUrl(d.store_url || null); setBusinessType(d.business_type || null); })
-      .catch(() => { setStoreUrl(null); setBusinessType(null); });
+      .then((d) => { setStoreUrl(d.store_url || null); setBusinessType(d.business_type || null); setModules(d.modules || []); })
+      .catch(() => { setStoreUrl(null); setBusinessType(null); setModules([]); });
     fetch(`${VULA_API}/v1/commerce/${tenantId}/settings`).then((r) => r.json())
       .then((d) => setStoreSettings(d.settings || null)).catch(() => setStoreSettings(null));
   }, [tenantId]);
@@ -592,5 +615,5 @@ export function usePages({ tenantId }) {
       setRefineSending(false);
     }
   };
-  return { pages, setPages, editing, setEditing, creating, setCreating, openMenuSlug, setOpenMenuSlug, newForm, setNewForm, showSeo, setShowSeo, showHistory, setShowHistory, versions, setVersions, msg, setMsg, storeUrl, setStoreUrl, businessType, setBusinessType, showLivePreview, setShowLivePreview, storeSettings, setStoreSettings, latestData, brand, setBrand, aiDraftBusy, setAiDraftBusy, aiDraftErr, setAiDraftErr, editorKey, setEditorKey, aiDraftTarget, setAiDraftTarget, aiDraftDescription, setAiDraftDescription, aiDraftMood, setAiDraftMood, aiDraftRefImageUrl, setAiDraftRefImageUrl, aiDraftTheme, setAiDraftTheme, applyingTheme, setApplyingTheme, showRefine, setShowRefine, refineMessages, setRefineMessages, refineInput, setRefineInput, refineSending, setRefineSending, refineFoundFeatures, setRefineFoundFeatures, refineEndRef, fontDef, brandCss, liveUrl, load, open, homeSeed, createNew, persist, rename, duplicate, del, tryNewTemplate, makeLive, move, loadVersions, restoreVersion, openAiDraft, runAiDraft, applyAiDraftTheme, applyRefinedContent, sendRefine, addFeature };
+  return { pages, setPages, editing, setEditing, creating, setCreating, openMenuSlug, setOpenMenuSlug, newForm, setNewForm, showSeo, setShowSeo, showHistory, setShowHistory, versions, setVersions, msg, setMsg, storeUrl, setStoreUrl, businessType, setBusinessType, modules, showLivePreview, setShowLivePreview, storeSettings, setStoreSettings, latestData, brand, setBrand, aiDraftBusy, setAiDraftBusy, aiDraftErr, setAiDraftErr, editorKey, setEditorKey, aiDraftTarget, setAiDraftTarget, aiDraftDescription, setAiDraftDescription, aiDraftMood, setAiDraftMood, aiDraftRefImageUrl, setAiDraftRefImageUrl, aiDraftTheme, setAiDraftTheme, applyingTheme, setApplyingTheme, showRefine, setShowRefine, refineMessages, setRefineMessages, refineInput, setRefineInput, refineSending, setRefineSending, refineFoundFeatures, setRefineFoundFeatures, refineEndRef, fontDef, brandCss, liveUrl, load, open, homeSeed, createNew, persist, rename, duplicate, del, tryNewTemplate, makeLive, move, loadVersions, restoreVersion, openAiDraft, runAiDraft, applyAiDraftTheme, applyRefinedContent, sendRefine, addFeature };
 }

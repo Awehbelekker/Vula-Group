@@ -1,5 +1,5 @@
 """A bank statement is the whole business's, unless the owner ties that account to one project
-(11 Nov 2026, Ian: "6574 is Porterfield's project bank account"). Migration 258. Figures made up."""
+(11 Nov 2026, Ian: "6574 is Porterfield's project bank account"). Migration 261. Figures made up."""
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -214,4 +214,4 @@ def test_before_the_migration_nothing_changes(monkeypatch):
     assert bank_accounts.remember(TID, MAIN) is None
     assert bank_accounts.project_for(TID, MAIN) is None
     assert bank_accounts.list_accounts(TID) == []
-    assert bank_accounts.set_project(TID, "a1", "Porterfield") == {"error": "Bank accounts need migration 258."}
+    assert bank_accounts.set_project(TID, "a1", "Porterfield") == {"error": "Bank accounts need migration 261."}

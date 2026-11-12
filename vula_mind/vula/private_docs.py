@@ -5,7 +5,7 @@ it; this is his data and only visible to him." Richard had sent his own FNB stat
 WhatsApp; they were filed as DIGG documents, so the owner could see them in Documents and Vula could
 quote them to anyone at DIGG.
 
-- A private document lives in vula_private_documents (migration 258), never in vula_filed_documents:
+- A private document lives in vula_private_documents (migration 261), never in vula_filed_documents:
   Documents, reports, project files and client links read the business's table, so none of them can
   include one by accident. Its knowledge-base chunks carry private_to = the member's id, and every
   search leaves them out unless it is answering that member (vula/ingestion/pipeline.py::kb_viewer).
@@ -13,7 +13,7 @@ quote them to anyone at DIGG.
   never read into the business's bank lines; they are filed privately for that member.
 - A document filed for the business before it was known to be private is moved (vula_private_moves).
 
-Before migration 258 every function here is a harmless no-op.
+Before migration 261 every function here is a harmless no-op.
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def _drop_business_copies(tenant_id: str, doc_id: Optional[str]) -> None:
 
 
 def private_accounts(tenant_id: str) -> Dict[str, str]:
-    """{account number: member id} for the business's private accounts. {} before migration 258."""
+    """{account number: member id} for the business's private accounts. {} before migration 261."""
     try:
         rows = (_client().table("commerce_bank_accounts").select("account_number,private_to")
                 .eq("tenant_id", tenant_id).execute().data or [])
@@ -121,7 +121,7 @@ async def process_moves() -> int:
         todo = (_client().table("vula_private_moves").select("*").is_("done_at", "null")
                 .limit(100).execute().data or [])
     except Exception:
-        return 0                                   # before migration 258
+        return 0                                   # before migration 261
     done = 0
     for t in todo:
         try:

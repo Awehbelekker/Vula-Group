@@ -190,7 +190,7 @@ export function useBank(tenantId) {
     load();
   };
 
-  // The business's bank accounts (migration 258). An account tied to a project puts every line
+  // The business's bank accounts (migration 261). An account tied to a project puts every line
   // from it on that project; the rest are the whole business's (11 Nov 2026, Ian).
   const [bankAccounts, setBankAccounts] = useState([]);
   const loadBankAccounts = useCallback(async () => {

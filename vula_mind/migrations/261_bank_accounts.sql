@@ -1,4 +1,4 @@
--- 258_bank_accounts.sql — a business's bank accounts, and the one project an account can belong to.
+-- 261_bank_accounts.sql — a business's bank accounts, and the one project an account can belong to.
 --
 -- 11 Nov 2026 (Ian, DIGG): "Bank statements should not be allocated to a project, it's the whole
 -- business, unless the tenant adds a bank account to a certain project." DIGG's FNB account
@@ -7,9 +7,9 @@
 --   commerce_bank_accounts   one row per account Vula has read a statement of (number as printed,
 --                            digits only); `project` set by the owner = every line from this
 --                            account is that project's. Null = the whole business.
---   commerce_bank_transactions.bank_account   the account a line came from (null: read before 258).
+--   commerce_bank_transactions.bank_account   the account a line came from (null: read before 261).
 --   commerce_bank_transactions.project_source why a line is on its project: owner | account | bill
---                            | named | worker | rule (null: before 258, or not on a project).
+--                            | named | worker | rule (null: before 261, or not on a project).
 -- Idempotent.
 
 create table if not exists commerce_bank_accounts (

@@ -668,6 +668,14 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
             reason = _needs_reply(em, own_domain)
             if reason:
                 await _track_followup(db, tenant_id, account_id, em, reason)
+            if from_uid is None:
+                # Property24 / Private Property enquiry emails → listings enquiries (real-estate
+                # add-on; a no-op unless the business has `listings`). Not on backfill: old leads.
+                try:
+                    from vula.listings import portal_leads
+                    await portal_leads.maybe_take(tenant_id, em)
+                except Exception as exc:
+                    logger.warning("portal lead check failed for %s: %s", tenant_id, exc)
 
     try:
         # Scoped to this ONE account's row — with several mailboxes per tenant, filtering by

@@ -99,6 +99,7 @@ vula_background_jobs: kind:text, running:bool, started_at:timestamptz, status:js
 vula_boq_drafts: lines:jsonb, project:text, tenant_id:text, total_cents:int8, updated_at:timestamptz, updated_by:text
 vula_business_profile: answers:jsonb, drafts:jsonb, public_keys:jsonb, tenant_id:text, updated_at:timestamptz, updated_by:text
 vula_business_rules: created_at:timestamptz, created_by:text, id:uuid, rule:text, source:text, status:text, tenant_id:text, topic:text, updated_at:timestamptz
+vula_buyer_wishes: active:bool, created_at:timestamptz, id:uuid, listing_type:text, max_price_cents:int8, min_bedrooms:numeric, name:text, phone:text, property_types:jsonb, source:text, suburbs:jsonb, tenant_id:text, updated_at:timestamptz
 vula_buying_settings: approver_phones:_text, default_account:text, default_project:text, enabled:bool, monthly_limit_cents:int8, per_purchase_limit_cents:int8, tenant_id:text, updated_at:timestamptz, updated_by:text, who_can_ask:text
 vula_buying_shops: active:bool, created_at:timestamptz, created_by:text, domain:text, how:text, id:uuid, name:text, supplier_id:text, tenant_id:text
 vula_call_sheets: created_at:timestamptz, entries:jsonb, id:uuid, rep_whatsapp:text, sent_at:timestamptz, status:text, tenant_id:text
@@ -107,6 +108,7 @@ vula_clickup_accounts: api_token:text, connected_at:timestamptz, connected_by:te
 vula_code_library: category:text, code_ref:text, created_at:timestamptz, doc_id:text, file_url:text, id:uuid, status:text, tenant_id:text, title:text, uploaded_by:text, version:text
 vula_connection_health: account_key:text, alerted_at:timestamptz, id:uuid, last_checked_at:timestamptz, problem:text, provider:text, since:timestamptz, state:text, tenant_id:text
 vula_dash_push_subs: auth:text, created_at:timestamptz, endpoint:text, failures:int4, id:uuid, last_sent_at:timestamptz, member_id:text, member_phone:text, p256dh:text, role:text, tenant_id:text, user_agent:text, user_email:text
+vula_deals: closed_at:timestamptz, contact_email:text, contact_name:text, contact_phone:text, created_at:timestamptz, enquiry_id:uuid, expected_close:date, id:uuid, notes:text, owner:text, position:int4, ref_id:uuid, ref_type:text, stage:text, tenant_id:text, title:text, updated_at:timestamptz, value_cents:int8
 vula_decisions: amount_cents:int8, created_at:timestamptz, decision:text, id:uuid, made_by:text, made_by_phone:text, made_by_role:text, project:text, refs:jsonb, source:text, status:text, subject:text, superseded_by:uuid, tenant_id:text, updated_at:timestamptz
 vula_document_extractions: category:text, created_at:timestamptz, doc_id:text, fields:jsonb, filename:text, id:uuid, source:text, summary:text, tenant_id:text
 vula_documents: chunks_stored:int4, created_at:timestamptz, doc_id:text, error:text, file_type:text, filename:text, id:int8, size_bytes:int4, status:text, tenant_id:text, updated_at:timestamptz, uploaded_by:text
@@ -138,6 +140,7 @@ vula_imports: created_at:timestamptz, cutover_date:date, error:text, id:uuid, pr
 vula_infra_snapshot: day:date, est_cost_usd:numeric, id:uuid, storage_mb:numeric, tenant_id:text, updated_at:timestamptz, vectors:int8
 vula_kb_turns: answer_docs:jsonb, asker:text, candidates:jsonb, channel:text, created_at:timestamptz, feedback:text, feedback_at:timestamptz, id:uuid, outcome:text, picked_at:timestamptz, picked_doc:text, question:text, role:text, skill:text, tenant_id:text
 vula_learned_answers: answer:text, approved_at:timestamptz, approved_by:text, created_at:timestamptz, id:uuid, promoted_by:text, promoted_to_shared_kb_at:timestamptz, question:text, share_scope:text, source:text, status:text, tenant_id:text
+vula_listing_shares: created_at:timestamptz, id:uuid, phone:text, property_id:uuid, shared_by:text, source:text, tenant_id:text
 vula_mass_mind_patterns: avg_score:float8, business_type:text, id:int8, model_tier:text, sample_count:int4, skill:text, updated_at:timestamptz, win_rate:float8
 vula_material_rate_log: error:text, id:int8, rates_extracted:int4, scraped_at:text, source:text, status:text, url:text
 vula_material_rates: change_pct:float8, high:float8, key:text, label:text, low:float8, mid:float8, notes:text, prev_mid:float8, scraped_at:text, source:text, unit:text
@@ -171,6 +174,9 @@ vula_project_terms: agreed_by:text, fee_cents:int8, fee_pct:numeric, pricing:tex
 vula_project_threads: created_at:timestamptz, created_by:text, id:uuid, project:text, tenant_id:text, title:text, updated_at:timestamptz
 vula_projects: aliases:_text, client:text, created_at:timestamptz, created_by:text, id:uuid, name:text, number:text, parent_id:uuid, phase:text, status:text, tenant_id:text
 vula_promotions: added_by:text, body:text, created_at:timestamptz, id:uuid, image_url:text, media_id:text, mime:text, source:text, tenant_id:text
+vula_properties: address:text, agent_id:uuid, available_from:date, bathrooms:numeric, bedrooms:numeric, city:text, created_at:timestamptz, description:text, erf_m2:int4, featured:bool, features:jsonb, floor_m2:int4, garages:int4, id:uuid, images:jsonb, latitude:float8, levies_cents:int8, listing_type:text, longitude:float8, parking:int4, price_cents:int8, price_on_request:bool, property_type:text, province:text, rates_cents:int8, show_address:bool, slug:text, sort:int4, status:text, suburb:text, tenant_id:text, title:text, updated_at:timestamptz
+vula_property_agents: active:bool, bio:text, created_at:timestamptz, email:text, id:uuid, name:text, photo_url:text, ppra_ffc:text, sort:int4, tenant_id:text, title:text, updated_at:timestamptz, whatsapp:text
+vula_property_enquiries: created_at:timestamptz, email:text, external_ref:text, id:uuid, ip:text, message:text, name:text, preferred_times:text, property_id:uuid, source:text, status:text, tenant_id:text, wants_viewing:bool, whatsapp:text
 vula_purchases: account_code:text, approval_id:uuid, approved_at:timestamptz, approved_by:text, bank_txn_id:uuid, created_at:timestamptz, expense_id:uuid, how:text, id:uuid, items:jsonb, link:text, notes:text, offers:jsonb, paid_at:timestamptz, po_id:uuid, project:text, reminded_at:timestamptz, request:text, requested_by:text, requested_name:text, shop_id:uuid, shop_name:text, status:text, tenant_id:text, total_cents:int8
 vula_qdrant_backup_status: last_backup_at:timestamptz, last_backup_error:text, last_backup_status:text, last_snapshot_path:text, tenant_id:text, updated_at:timestamptz
 vula_qs_rates: category:text, code:text, created_at:timestamptz, description:text, id:uuid, notes:text, rate:numeric, source:text, tenant_id:text, unit:text, updated_at:timestamptz

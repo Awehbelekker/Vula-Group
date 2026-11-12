@@ -3656,8 +3656,8 @@ async def admin_allocate_txn(tenant_id: str, txn_id: str, body: AllocateIn):
 
 @router.get("/{tenant_id}/admin/bank/accounts")
 async def admin_bank_accounts(tenant_id: str):
-    """The business's bank accounts Vula has read statements of (migration 258), and the project
-    each belongs to (none = the whole business). The first look also tags the lines read before 258
+    """The business's bank accounts Vula has read statements of (migration 261), and the project
+    each belongs to (none = the whole business). The first look also tags the lines read before 261
     with their account, from the statement files still on the server."""
     import asyncio
     from vula.commerce import bank_accounts

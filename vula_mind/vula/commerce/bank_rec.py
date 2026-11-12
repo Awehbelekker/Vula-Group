@@ -596,7 +596,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         return best
 
     # The account these lines came from, and the project that account belongs to, if the owner tied
-    # it to one (vula/commerce/bank_accounts.py, migration 258). Otherwise the whole business's.
+    # it to one (vula/commerce/bank_accounts.py, migration 261). Otherwise the whole business's.
     from vula.commerce import bank_accounts
     with_accounts = bank_accounts.available()
     account_project = bank_accounts.project_for(tenant_id, bank_account) if with_accounts else None
@@ -770,7 +770,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         s_project, s_trade = ((None, None) if own_wages
                               else allocation.suggest(alloc_rules, t.get("description"), None, tenant_id))
         n_project = None if own_wages else allocation.named_project(naming, t.get("description"))
-        # An account tied to a project (migration 258) outranks everything but the owner's own choice.
+        # An account tied to a project (migration 261) outranks everything but the owner's own choice.
         project, project_source = next(((p, src) for p, src in (
             ((prior or {}).get("project"), "owner"), (account_project, "account"), (bill_project, "bill"),
             (n_project, "named"), (wk_project, "worker"), (s_project, "rule")) if p), (None, None))
@@ -1029,7 +1029,7 @@ def _private_owner(tenant_id: str, account: Optional[str]) -> Optional[str]:
 
 
 def _statement_account(tenant_id: str, text: str, txns: List[Dict[str, Any]]) -> Optional[str]:
-    """The account a statement is for, remembered in the business's accounts (migration 258)."""
+    """The account a statement is for, remembered in the business's accounts (migration 261)."""
     from vula.commerce import bank_accounts
     number = bank_accounts.account_number(text)
     if number:

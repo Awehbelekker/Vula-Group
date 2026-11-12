@@ -32,12 +32,13 @@ TITLES = {
     "new_invoice": "New invoice", "low_stock": "Running low", "which_project": "Which project?",
     "followup_digest": "Emails waiting for a reply", "procurement_done": "Order placed",
     "project_margin": "Project margin", "bank_details_changed": "Check these bank details",
+    "property_enquiry": "New property enquiry",
 }
 PAGES = {
     "new_order": "orders", "order_paid": "orders", "approval": "orders", "customer_unanswered": "inbox",
     "payment_received": "invoices", "new_invoice": "invoices", "low_stock": "stock",
     "which_project": "documents", "procurement_done": "stock", "project_margin": "projects",
-    "bank_details_changed": "suppliers",
+    "bank_details_changed": "suppliers", "property_enquiry": "listings",
 }
 MAX_FAILURES = 5
 

@@ -4,14 +4,14 @@
 business, unless the tenant adds a bank account to a certain project." DIGG's FNB account ending 6574
 is Porterfield's own account; everything else on its statements is the whole business's.
 
-- Every statement Vula reads names its account; the account is remembered here (migration 258) and
+- Every statement Vula reads names its account; the account is remembered here (migration 261) and
   each bank line records the account it came from (commerce_bank_transactions.bank_account).
 - The owner can tie an account to one project (Bank › Tools › Bank accounts). Every line from that
   account is then that project's — new statements, and the lines already in (set_project).
 - A statement itself is never filed on a project (vula/integrations/doc_filing.py): one line naming
   "22 Porterfield" doesn't make the whole business account Porterfield's.
 
-Before migration 258 every function here is a harmless no-op.
+Before migration 261 every function here is a harmless no-op.
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ _AVAILABLE: Dict[str, float] = {}
 
 
 def available() -> bool:
-    """Migration 258 is in (cached for ten minutes either way)."""
+    """Migration 261 is in (cached for ten minutes either way)."""
     hit = _AVAILABLE.get("v")
     if hit is not None and time.monotonic() - abs(hit) < 600:
         return hit > 0
@@ -149,7 +149,7 @@ def set_project(tenant_id: str, account_id: str, project: Optional[str],
     """Tie an account to a project (None: the whole business) and re-file the lines already in.
     A line the owner put on a project by hand keeps it. Read back before it is reported."""
     if not available():
-        return {"error": "Bank accounts need migration 258."}
+        return {"error": "Bank accounts need migration 261."}
     from vula.commerce.service import canonical_project
     db = _client()
     rows = (db.table("commerce_bank_accounts").select("*").eq("tenant_id", tenant_id)
@@ -187,7 +187,7 @@ def set_project(tenant_id: str, account_id: str, project: Optional[str],
 
 
 def tag_lines(tenant_id: str, source_file: str, number: str) -> int:
-    """Lines read from `source_file` before migration 258 get the account they came from (and its
+    """Lines read from `source_file` before migration 261 get the account they came from (and its
     project, unless the owner placed them). Returns how many were tagged."""
     if not (source_file and number and available()):
         return 0
@@ -211,7 +211,7 @@ _BACKFILLED: set = set()
 
 
 def backfill_from_files(tenant_id: str) -> Dict[str, Any]:
-    """[blocking] Lines read before migration 258 don't know their account. For every statement file
+    """[blocking] Lines read before migration 261 don't know their account. For every statement file
     still on the server (settings.upload_dir, kept since the volume was added on 10 Nov 2026), read the
     account off it and tag its lines (and put them on the account's project, if it has one). Once per
     tenant per process."""
