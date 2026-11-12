@@ -1096,6 +1096,17 @@ export const profileDrafts = {
   cancellations: { answer: "Cancel up to 24 hours before delivery for a full refund.", quote: "You may cancel up to 24 hours before delivery for a full refund.", ...fromTerms },
   faq: { answer: "Do you cater for events? Yes, with three days' notice.", quote: "We cater for events with three days' notice.", ...fromTerms },
 };
+// The first-run welcome (Welcome.jsx). `show` is false so other screens are unchanged; the
+// welcome spec turns it on.
+export const firstRun = {
+  show: false,
+  brand: { logo_url: null, accent_color: "#2F5D50", set: true },
+  website: { running: false, step: "done", url: "https://harbourvine.example", products_found: 12, pages_read: 9,
+    coverage: { products: { found: 12, with_price: 12, with_image: 11, with_description: 12, images_kept: 11 },
+      policies: { terms: "https://harbourvine.example/terms/", privacy: "https://harbourvine.example/privacy/", returns: null, shipping: "https://harbourvine.example/delivery/" },
+      contact: { phone: true, email: true, address: true, hours: true, socials: false },
+      pages: { found: 9, read: 9, used: 8, skipped: 1, how: "sitemap" }, pdfs: ["Our menu (PDF)"] } },
+};
 // Home's "Finish setting up" card and the plan under it (GettingStarted.jsx).
 export const ownerSetup = { done: 4, total: 6, complete: false, next: "profile", whatsapp_connected: false, steps: [
   { id: "branding", label: "Add your logo and colour", why: "Your invoices and your dashboard carry your brand.", optional: false, done: true, tab: "settings" },

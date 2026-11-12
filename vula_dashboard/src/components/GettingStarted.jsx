@@ -22,6 +22,7 @@ import { VULA_API } from "../lib/authFetch";
 import { useAuthStore } from "../store/auth";
 import { Button, Card } from "./ui/index.jsx";
 import ProfileDrafts from "./ProfileDrafts.jsx";
+import { DOC_ACCEPT, fileLine, useDocumentSetup } from "./useDocumentSetup.js";
 import "./gettingStarted.css";
 
 const LEADS = ["owner", "manager", "admin", "master"];
@@ -37,74 +38,30 @@ const WHERE = {
   whatsapp: ["settings", "whatsapp"],
 };
 
-const ACCEPT = ".pdf,.doc,.docx,.txt,.md,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.webp";
-const OUTCOME = {
-  waiting: "waiting", reading: "reading…", failed: "couldn't be read", no_text: "no text found in it",
-};
-
 /**
  * "Let Vula fill it in": the owner uploads the documents they already have — company profile,
  * terms, price list, menu, FAQ — and Vula files each one and drafts the business profile answers
- * it finds in them (POST /admin/setup-from-documents). Progress is read back from the server
- * until the reading is done; what was found appears in the list below for the owner to check.
+ * it finds in them (useDocumentSetup.js). What was found appears in the list below for the owner
+ * to check.
  */
 function FillFromDocuments({ tenantId, onFound }) {
   const input = useRef(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [st, setSt] = useState(null);
-  const url = `${VULA_API}/v1/commerce/${tenantId}/admin/setup-from-documents`;
-
-  const poll = useCallback(() => fetch(url).then((r) => (r.ok ? r.json() : null))
-    .then((d) => { if (d?.status) setSt(d.status); return d?.status; }).catch(() => null), [url]);
-  // On opening Home: pick up a reading that is still going (or just finished).
-  useEffect(() => { poll(); }, [poll]);
-  useEffect(() => {
-    if (!st?.running) return undefined;
-    const t = setInterval(poll, 4000);
-    return () => clearInterval(t);
-  }, [st?.running, poll]);
-  // When a reading finishes, the list of what was found is loaded again.
-  const wasRunning = useRef(false);
-  useEffect(() => {
-    if (wasRunning.current && st && !st.running) onFound?.();
-    wasRunning.current = !!st?.running;
-  }, [st, onFound]);
-
-  const upload = async (e) => {
-    const files = [...(e.target.files || [])];
-    e.target.value = "";
-    if (!files.length) return;
-    setBusy(true); setErr("");
-    try {
-      const body = new FormData();
-      files.forEach((f) => body.append("files", f));
-      const r = await fetch(url, { method: "POST", body });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(d.detail || "Those couldn't be uploaded. Please try again."); return; }
-      if (d.skipped?.length) setErr(`Left out: ${d.skipped.map((s) => `${s.name} (${s.reason})`).join(", ")}.`);
-      setSt({ running: true, files: (d.files || []).map((name) => ({ name, status: "waiting", drafts: 0 })) });
-    } catch { setErr("Couldn't reach Vula. Please try again."); } finally { setBusy(false); }
-  };
-
-  const reading = !!st?.running;
+  const x = useDocumentSetup(tenantId, onFound);
+  const pick = (e) => { const files = [...(e.target.files || [])]; e.target.value = ""; x.upload(files); };
   return (
     <div className="vgs-fill" role="group" aria-label="Let Vula fill it in from your documents">
       <div className="vgs-fill-row">
         <p className="vgs-fill-text"><strong>Let Vula fill it in.</strong> Upload what you already have: your company profile, terms, price list, menu or FAQ. Vula files them and pulls out your hours, areas, policies and more for you to check.</p>
-        <input ref={input} type="file" multiple accept={ACCEPT} hidden onChange={upload} aria-label="Choose company documents to upload" />
-        <Button size="sm" Icon={Upload} disabled={busy || reading} onClick={() => input.current?.click()}>
-          {busy ? "Uploading…" : reading ? "Reading your documents…" : "Upload documents"}
+        <input ref={input} type="file" multiple accept={DOC_ACCEPT} hidden onChange={pick} aria-label="Choose company documents to upload" />
+        <Button size="sm" Icon={Upload} disabled={x.busy || x.reading} onClick={() => input.current?.click()}>
+          {x.busy ? "Uploading…" : x.reading ? "Reading your documents…" : "Upload documents"}
         </Button>
       </div>
-      {st?.files?.length > 0 && (
+      {x.st?.files?.length > 0 && (
         <ul className="vgs-files" aria-live="polite" aria-label="Documents being read">
-          {st.files.map((f) => (
-            <li key={f.name}>{f.name}: {f.status === "done"
-              ? (f.drafts ? `${f.drafts} ${f.drafts === 1 ? "answer" : "answers"} found` : "filed, no new answers in it")
-              : (OUTCOME[f.status] || f.status)}</li>))}
+          {x.st.files.map((f) => <li key={f.name}>{f.name}: {fileLine(f)}</li>)}
         </ul>)}
-      {err && <p role="alert" className="vgs-warn">{err}</p>}
+      {x.err && <p role="alert" className="vgs-warn">{x.err}</p>}
     </div>
   );
 }
@@ -133,7 +90,7 @@ function PlanLine({ plan }) {
   );
 }
 
-export default function GettingStarted({ tenantId, onNavigate }) {
+export default function GettingStarted({ tenantId, onNavigate, welcomeOpen = false }) {
   const role = useAuthStore((s) => s.role);
   const key = `vula-setup-hidden-${tenantId}`;
   const [setup, setSetup] = useState(null);
@@ -182,8 +139,10 @@ export default function GettingStarted({ tenantId, onNavigate }) {
               aria-label={`${s.label}: open`}>Open</Button>}
           </li>))}
       </ul>
-      {!setup.complete && <FillFromDocuments tenantId={tenantId} onFound={() => { setFound((n) => n + 1); load(); }} />}
-      <ProfileDrafts tenantId={tenantId} refresh={found} onChanged={load} />
+      {/* While the welcome is open it does the set-up and shows what was found; this card keeps
+          just the checklist and the plan. */}
+      {!setup.complete && !welcomeOpen && <FillFromDocuments tenantId={tenantId} onFound={() => { setFound((n) => n + 1); load(); }} />}
+      {!welcomeOpen && <ProfileDrafts tenantId={tenantId} refresh={found} onChanged={load} />}
       <PlanLine plan={plan} />
     </Card>
   );

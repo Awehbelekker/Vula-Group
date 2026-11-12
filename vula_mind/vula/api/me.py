@@ -15,6 +15,7 @@ Also here, because they are small and are the owner's own view of their workspac
   GET        /{tenant_id}/admin/quality            how well Vula is answering (vula/quality.py)
   GET        /{tenant_id}/admin/setup/owner        what is left to set up (vula/commerce/owner_setup.py)
   GET        /{tenant_id}/admin/plan               the plan, the trial, and the link to pay
+  GET/POST   /{tenant_id}/admin/setup/first-run…   the first-run welcome (vula/commerce/first_run.py)
 """
 from __future__ import annotations
 
@@ -197,3 +198,54 @@ async def my_plan(tenant_id: str, request: Request) -> dict:
     scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
     can_pay = scope is not None and scope_allows(scope, frozenset())
     return await asyncio.to_thread(lambda: plan_view(tenant_id, with_pay_link=can_pay))
+
+
+# ── the first-run welcome (vula/commerce/first_run.py) ───────────────────────────────────────
+
+async def _lead_only(tenant_id: str, request: Request) -> None:
+    """The welcome sets the business up and closes for everyone: owner or manager only."""
+    from vula.api.tenant_auth import member_scope, scope_allows
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    if not scope_allows(scope, frozenset()):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can set up the business.")
+
+
+class PreviewIn(BaseModel):
+    question: str
+
+
+class CloseIn(BaseModel):
+    reason: str
+
+
+@router.get("/{tenant_id}/admin/setup/first-run")
+async def first_run_summary(tenant_id: str, request: Request) -> dict:
+    """What set-up has found so far, whether the welcome should show, and questions to try."""
+    import asyncio
+    from vula.commerce import first_run
+    await _lead_only(tenant_id, request)
+    return await asyncio.to_thread(first_run.summary, tenant_id)
+
+
+@router.post("/{tenant_id}/admin/setup/preview-answer")
+async def first_run_preview(tenant_id: str, body: PreviewIn, request: Request) -> dict:
+    """How Vula would answer a customer now, from what the owner has kept. Nothing is saved."""
+    from vula.commerce import first_run
+    await _lead_only(tenant_id, request)
+    try:
+        return await first_run.preview_customer_answer(tenant_id, body.question)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/setup/first-run/close")
+async def first_run_close(tenant_id: str, body: CloseIn, request: Request) -> dict:
+    """Skip or finish the welcome, for the whole business."""
+    from vula.commerce import first_run
+    await _lead_only(tenant_id, request)
+    try:
+        return first_run.close(tenant_id, body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

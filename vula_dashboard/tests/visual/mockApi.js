@@ -30,6 +30,8 @@ function routes(role, modules = []) {
   const A = `${C}/admin`;
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
   let docsRun = { running: false };
+  // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
+  let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
   const profile = { ...F.businessProfile, answers: { ...F.businessProfile.answers }, drafts: {} };
   // A copy per page, so adding or forgetting a note in one test never leaks into the next.
   const myNotes = F.myNotes.map((n) => ({ ...n }));
@@ -360,6 +362,16 @@ function routes(role, modules = []) {
     r("POST", `${A}/setup-from-documents`, () => { docsRun = { running: true, files: [{ name: "Terms of trade.pdf", status: "reading", drafts: 0 }] }; return { status: "queued", files: ["Terms of trade.pdf"], skipped: [] }; }),
     r("GET", `${A}/setup-from-documents`, () => { const now = docsRun; if (docsRun.running) { docsRun = { running: false, step: "done", drafts: 2, files: [{ name: "Terms of trade.pdf", status: "done", drafts: 2 }] }; profile.drafts = { ...F.profileDrafts }; } return { status: now }; }),
     r("POST", `${A}/business-profile/drafts`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const k of b.accept || []) { if (profile.drafts[k]) { profile.answers[k] = profile.drafts[k].answer; delete profile.drafts[k]; } } for (const k of b.dismiss || []) delete profile.drafts[k]; return { ...profile, answered: Object.keys(profile.answers).length, accepted: b.accept || [], dismissed: (b.dismiss || []).length }; }),
+    r("POST", `${A}/setup-from-website`, (m, url, req) => { welcome.siteRunning = true; welcome.website = { running: true, url: req.postDataJSON()?.url, step: "reading 9 pages", pages_read: 3, products_found: 12 }; return { url: req.postDataJSON()?.url, brand: { applied: true }, import_started: true }; }),
+    r("GET", `${A}/setup/first-run`, () => {
+      if (welcome.siteRunning && welcome.website.running) { welcome.polls = (welcome.polls || 0) + 1; if (welcome.polls > 1) { welcome.website = { ...F.firstRun.website }; welcome.siteRunning = false; profile.drafts = { ...F.profileDrafts }; } }
+      const kept = Object.keys(profile.answers);
+      return { show: welcome.show, closed: welcome.closed, running: !!welcome.website.running || docsRun.running, website: welcome.website,
+        documents: docsRun.files ? docsRun : {}, brand: F.firstRun.brand, profile: { answered: kept.length, total: 9, drafts: Object.keys(profile.drafts).length },
+        try_asking: [{ key: "hours", question: "What are your opening hours?", ready: true }, { key: "cancellations", question: "Can I cancel my order?", ready: kept.includes("cancellations") }] };
+    }),
+    r("POST", `${A}/setup/first-run/close`, (m, url, req) => { welcome.show = false; welcome.closed = req.postDataJSON()?.reason; return { closed: welcome.closed }; }),
+    r("POST", `${A}/setup/preview-answer`, (m, url, req) => ({ answer: "We're open Mon–Fri 07:30–17:00 and Sat 08:00–14:00. Closed Sundays.", sources: "Business profile — for customers", grounded: true, q: req.postDataJSON()?.question })),
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
     r("POST", `${A}/conversations/${T}/feedback`, () => ({ ok: true })),

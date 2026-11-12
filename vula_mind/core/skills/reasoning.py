@@ -165,7 +165,9 @@ class ReasoningSkill(BaseSkill):
             from config import settings as _settings
             from core.skills.base import (BUSINESS_FACT_NOT_ON_FILE_CUSTOMER, BUSINESS_FACT_NOT_ON_FILE_TEAM,
                                           looks_like_business_specific_question)
-            if (getattr(_settings, "strict_tenant_grounding", False)
+            # metadata "strict_grounding": one call asks for it regardless of the setting — the
+            # owner's "ask Vula like a customer would" preview (vula/commerce/first_run.py).
+            if ((getattr(_settings, "strict_tenant_grounding", False) or inp.metadata.get("strict_grounding"))
                     and looks_like_business_specific_question(inp.question)):
                 _record("no_doc")
                 insider = kb_learning.is_insider(role)
@@ -227,7 +229,8 @@ class ReasoningSkill(BaseSkill):
         web_sources: list = []
         if not kb_context:
             import os as _os
-            if _os.environ.get("REASONING_WEB_FALLBACK_DISABLED", "false").lower() != "true":
+            if (_os.environ.get("REASONING_WEB_FALLBACK_DISABLED", "false").lower() != "true"
+                    and not inp.metadata.get("strict_grounding")):
                 try:
                     import asyncio as _asyncio
                     from core.skills.loader import get_skill  # lazy: loader imports this module
