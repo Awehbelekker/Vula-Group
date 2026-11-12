@@ -699,6 +699,8 @@ _SUPPLIER_PRICING_RE = re.compile(
 # lookup_rate live only in commerce_admin, which a knowledge-line owner never reached. The
 # WhatsApp path sends an INSIDER's question matching this to commerce_admin (never the public's).
 _OWNER_ADMIN_RE = re.compile(
+    # The owner's own WhatsApp briefs, switched on or off by asking (owner_briefs tool, 12 Nov).
+    r"\b(?:morning|daily|weekly|monday)\s+(?:brief(?:ing)?|digest|summary|advisor|update)s?\b|"
     r"\bare we making\b|\bmaking (?:our|my|the) (?:\d+\s?%|fee|margin|profit)\b|"
     r"\b(?:profit|margin|loss)\s+on\s+(?:the\s+)?\w+|\blos(?:e|ing) money\b|"
     r"\bhow(?:'s| is)\s+[\w\s]{2,25}?\s+doing\b|\bon (?:track|budget) for (?:our|the|my) fee\b|"

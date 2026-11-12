@@ -520,6 +520,19 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "closes_in_days": {"type": "number", "description": "Only if the owner said when it closes."},
             "confirm": {"type": "boolean"}},
             "required": ["question", "options"]}}},
+    {"type": "function", "function": {
+        "name": "owner_briefs",
+        "description": "The owner's own WhatsApp briefs from Vula: the MORNING brief (weekdays ~07:00 — "
+                       "what needs a person today plus money paid, owed and due) and the WEEKLY "
+                       "advisor (Mondays). Use for 'stop my morning brief', 'turn the weekly advisor "
+                       "back on', 'switch off the daily summary', 'am I getting the morning brief?', "
+                       "'show me today's brief'. action=status to say what's on, on/off to switch, "
+                       "preview to show today's text. It applies to this business's owners.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["status", "on", "off", "preview"]},
+            "which": {"type": "string", "enum": ["morning", "weekly", "both"],
+                      "description": "Which brief; 'both' only when the owner meant both."}},
+            "required": ["action"]}}},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -1870,6 +1883,8 @@ _TOOL_SCOPE: Dict[str, str] = {
     "financial_report": "finances", "finance_settings": "finances",
     "send_payment_reminders": "invoices",
     "staff_notice": "team", "staff_poll": "team",
+    # the owner's own briefs (money owed and paid): owner and managers only
+    "owner_briefs": "owner_only",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -2800,6 +2815,44 @@ class CommerceAdminSkill(BaseSkill):
             msg += " I'll remind anyone who hasn't confirmed in a day and tell you who."
         return _checked({"sent": t["sent"], "notice_id": row["id"]}, msg)
 
+    def _owner_briefs(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Switch the owner's briefs (vula/owner_briefs.py) on or off, say what's on, or show
+        today's text. A switch is read back from the DB before it's reported. It only changes
+        what Vula sends the owner, so it needs no confirm step."""
+        from vula import owner_briefs
+        action = str(args.get("action") or "status").lower()
+        which = str(args.get("which") or "morning").lower()
+        kinds = list(owner_briefs.KINDS) if which == "both" else [which]
+        if any(k not in owner_briefs.KINDS for k in kinds):
+            return {"status": "need_info", "message": "The morning brief, the weekly advisor, or both?"}
+        names = {"morning": "morning brief (weekdays around 07:00)", "weekly": "weekly advisor (Mondays)"}
+        if action == "preview":
+            parts = []
+            for k in kinds:
+                if k == "morning":
+                    from vula import owner_digest as mod
+                    now = datetime.now(mod.SAST)
+                    text = mod.render(mod.build(tid, now.date(), now))
+                else:
+                    from vula import owner_advisor as mod
+                    text = mod.render(mod.build(tid, datetime.now(mod.SAST).date()))
+                parts.append(text or f"Nothing for the {names[k]} today, so nothing would go out.")
+            return {"reply_verbatim": "\n\n".join(parts)}
+        if action in ("on", "off"):
+            want = action == "on"
+            try:
+                owner_briefs.save(tid, {k: want for k in kinds})
+            except Exception as exc:
+                logger.warning("owner brief switch failed for %s: %s", tid, exc)
+                return {"error": "I couldn't change that just now. Nothing was changed — try again shortly."}
+        now_on = owner_briefs.settings_for(tid)          # read back from the DB, not assumed
+        if action in ("on", "off") and any(now_on[k] != (action == "on") for k in kinds):
+            return {"error": "I tried, but the setting didn't stick. Nothing was changed."}
+        lines = [f"{'✅' if now_on[k] else '⏸️'} Your {names[k]} is *{'on' if now_on[k] else 'off'}*."
+                 for k in (kinds if action in ("on", "off") else owner_briefs.KINDS)]
+        lines.append("Say e.g. *stop my morning brief*, *turn the weekly advisor on*, or *show me today's brief*.")
+        return {"reply_verbatim": "\n".join(lines), "settings": {k: now_on[k] for k in owner_briefs.KINDS}}
+
     async def _staff_poll(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         """A poll to the business's own staff (vula/staff_polls.py): preview, then on Confirm send
         it and report how many it reached, read back from the recipient rows."""
@@ -2967,6 +3020,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._staff_notice(tid, args, ctx)
             if name == "staff_poll":
                 return await self._staff_poll(tid, args, ctx)
+            if name == "owner_briefs":
+                return self._owner_briefs(tid, args)
             if name == "boq_template":
                 return await self._boq_template(tid)
             if name == "share_project":

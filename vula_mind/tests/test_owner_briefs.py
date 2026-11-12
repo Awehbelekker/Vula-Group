@@ -217,3 +217,69 @@ def test_preview_and_writes_need_the_owner_or_a_manager():
     guarded = {r.path: [d.call for d in r.dependant.dependencies] for r in router.routes}
     assert require_tenant_admin in guarded["/{tenant}/briefs/preview"]
     assert any(require_tenant_admin in v for p, v in guarded.items() if p == "/{tenant}/briefs")
+
+
+# ── switching by asking on WhatsApp (commerce_admin owner_briefs tool) ─────────────────────
+
+def _skill():
+    from core.skills.commerce_admin import CommerceAdminSkill
+    return CommerceAdminSkill()
+
+
+def test_owner_can_switch_the_morning_brief_off_by_asking(monkeypatch):
+    store = {"t1": {}}
+    _config(monkeypatch, store)
+
+    class _T:
+        def update(self, row): store["t1"] = row["owner_briefs"]; return self
+        def eq(self, *a): return self
+        def execute(self): return None
+    import vula.api.tenants as tenants
+    monkeypatch.setattr(tenants, "_client", lambda: type("C", (), {"table": lambda s, n: _T()})())
+    monkeypatch.setattr(tenants, "invalidate", lambda tid: None)
+    monkeypatch.setattr(settings, "owner_digest_enabled", True)
+    out = _skill()._owner_briefs("t1", {"action": "off", "which": "morning"})
+    assert store["t1"] == {"morning": False}
+    assert "morning brief (weekdays around 07:00) is *off*" in out["reply_verbatim"]
+    assert out["settings"]["morning"] is False
+
+
+def test_a_switch_that_doesnt_stick_is_not_reported_done(monkeypatch):
+    _config(monkeypatch, {})                     # the write "succeeds" but the read-back is unchanged
+
+    class _T:
+        def update(self, row): return self
+        def eq(self, *a): return self
+        def execute(self): return None
+    import vula.api.tenants as tenants
+    monkeypatch.setattr(tenants, "_client", lambda: type("C", (), {"table": lambda s, n: _T()})())
+    monkeypatch.setattr(tenants, "invalidate", lambda tid: None)
+    monkeypatch.setattr(settings, "owner_advisor_enabled", False)
+    out = _skill()._owner_briefs("t1", {"action": "on", "which": "weekly"})
+    assert "error" in out and "reply_verbatim" not in out
+
+
+def test_status_lists_both_briefs(monkeypatch):
+    _config(monkeypatch, {"t1": {"weekly": True}})
+    monkeypatch.setattr(settings, "owner_digest_enabled", False)
+    text = _skill()._owner_briefs("t1", {"action": "status"})["reply_verbatim"]
+    assert "morning brief (weekdays around 07:00) is *off*" in text and "weekly advisor (Mondays) is *on*" in text
+
+
+def test_preview_by_asking_sends_nothing(monkeypatch):
+    monkeypatch.setattr(owner_digest, "build", lambda tid, today, now=None: {**EMPTY_MONEY, "today": {"waiting": 1}})
+    out = _skill()._owner_briefs("t1", {"action": "preview"})
+    assert "1 customer is waiting for a person" in out["reply_verbatim"]
+
+
+def test_staff_and_reps_never_get_the_tool():
+    from core.skills import commerce_admin as ca
+    assert ca._TOOL_SCOPE["owner_briefs"] == "owner_only"
+
+
+def test_brief_requests_reach_the_owner_assistant_on_a_knowledge_line():
+    from core.skills.base import looks_like_owner_admin_question as q
+    for s in ("stop my morning brief", "turn the weekly advisor back on", "switch off the daily summary",
+              "show me today's morning briefing"):
+        assert q(s), s
+    assert not q("what's on the programme today")
