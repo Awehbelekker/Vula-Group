@@ -1,17 +1,17 @@
 /**
  * VulaToday.jsx — Today: what needs a person today (2026-10-17, UX redesign E3). One list from
  * GET /admin/today — chats waiting, follow-ups due, Vula's draft quotes to approve, documents to
- * check, today's bookings — built from the data that already holds them (no separate task
+ * check, today's bookings and meetings — built from the data that already holds them (no separate task
  * system), filtered on the server to this login. Home shows the first few (TodayList).
  */
 import { useCallback, useEffect, useState } from "react";
-import { CalendarCheck, CalendarDays, FileText, Mail, MailCheck, MessageCircle, ReceiptText } from "lucide-react";
+import { CalendarCheck, CalendarDays, FileText, Mail, MailCheck, MapPin, MessageCircle, ReceiptText } from "lucide-react";
 import { VULA_API } from "../lib/authFetch";
 import { formatMoney } from "../lib/money";
 import { EmptyState, ErrorCard, ListRow, PageHeader, Skeleton, StatusChip } from "./ui/index.jsx";
 import { shortWhen } from "./VulaActivity";
 
-const ICONS = { chat: MessageCircle, follow_up: MailCheck, email: Mail, quote: ReceiptText, document: FileText, booking: CalendarDays };
+const ICONS = { chat: MessageCircle, follow_up: MailCheck, email: Mail, quote: ReceiptText, document: FileText, booking: CalendarDays, meeting: MapPin };
 
 export function useToday(tenantId) {
   const [data, setData] = useState(null);
@@ -29,7 +29,7 @@ export function useToday(tenantId) {
 }
 
 function when(it) {
-  if (it.kind === "booking") return new Date(it.at).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
+  if (it.kind === "booking" || it.kind === "meeting") return new Date(it.at).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
   return it.at ? shortWhen(it.at) : "";
 }
 

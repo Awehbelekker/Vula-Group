@@ -1025,6 +1025,27 @@ CONTACT_TOOLS = [
 ]
 MEETING_TOOLS = [
     {"type": "function", "function": {
+        "name": "meeting",
+        "description": (
+            "The person's OWN diary of meetings, appointments and site visits, on WhatsApp — e.g. "
+            "'meeting with Acme Builders Thursday 10am at 12 Main Road', 'remind me an hour before "
+            "the Acme meeting', 'what meetings do I have this week?', 'move the Acme meeting to "
+            "11', 'add the address: 5 Dock Rd', 'cancel tomorrow's meeting'. action=book / list / "
+            "update / cancel. NOT a customer booking a service (create_booking) and NOT notes "
+            "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
+            "them — never work out a date or time yourself. No reminder unless they ask for one."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["book", "list", "update", "cancel"]},
+            "with": {"type": "string", "description": "Who or which company the meeting is with "
+                                                      "(for update/cancel: which meeting)."},
+            "when": {"type": "string", "description": "The person's own words, e.g. 'Thursday at 10'."},
+            "address": {"type": "string", "description": "Where, as given."},
+            "remind": {"type": "string", "description": "The person's own words, e.g. '1 hour before', "
+                                                        "'30 min', 'the day before', or 'no'."},
+            "notes": {"type": "string", "description": "What it's about, if they said."},
+            "meeting_id": {"type": "string"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "log_meeting",
         "description": (
             "Log a client/site meeting from a description (usually a voice note transcript): "
@@ -1769,29 +1790,14 @@ def _role_label(tenant_id: str) -> str:
 
 
 def _resolve_due_at(due_phrase: Optional[str]) -> Optional[str]:
-    """Deterministic, never LLM-computed — a wrong due date is worse than none. Only trusts
-    dateutil's fuzzy parse when the phrase actually contains a real date/weekday/relative-day
-    signal (fuzzy=True alone can false-positive on ordinary text). Shared by log_meeting's
-    action-item due dates and create_reminder — both need a raw phrase resolved this same way,
-    never a date the model computed itself (confirmed live, 2026-08-26: asked to produce an ISO
-    datetime directly, the model — correctly recognizing it doesn't know today's real date —
-    asked the user what today's date was instead of just resolving "next Tuesday" itself)."""
+    """Deterministic, never LLM-computed — a wrong due date is worse than none. Shared by
+    log_meeting's action-item due dates and create_reminder. 12 Nov 2026: now vula/when.py, in
+    South African time — dateutil read "Friday at 10am" as 10:25 UTC (12:25 SAST: it kept the
+    current minutes and used UTC) and ignored "tomorrow". A day with no time means 08:00."""
     if not due_phrase:
         return None
-    if not re.search(
-        r"\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|"
-        r"sun(day)?|today|tomorrow|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|"
-        r"jul(y)?|aug(ust)?|sep(tember)?|oct(ober)?|nov(ember)?|dec(ember)?|"
-        r"\d{1,2}[/-]\d{1,2}|\d{1,2}(st|nd|rd|th)?)\b",
-        due_phrase, re.IGNORECASE,
-    ):
-        return None
-    try:
-        from dateutil import parser as _date_parser
-        dt = _date_parser.parse(due_phrase, fuzzy=True, default=datetime.now(timezone.utc))
-        return dt.isoformat()
-    except Exception:
-        return None
+    from vula.when import reminder_due
+    return reminder_due(due_phrase)
 
 
 def _product_tools_for(tenant_id: str) -> List[Dict[str, Any]]:
@@ -3060,6 +3066,7 @@ class CommerceAdminSkill(BaseSkill):
                 return await draft_letter(args, tid, ctx.get("phone") or "")
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
+            if name == "meeting":            return self._meeting(tid, args, ctx)
             if name == "setup_project":
                 # Only ever reached from the owner's Confirm tap on a plan Vula showed them
                 # (vula/api/whatsapp.py::_maybe_project_setup) — never offered to the model.
@@ -6274,6 +6281,125 @@ class CommerceAdminSkill(BaseSkill):
                 "creates the draft. Never save anything before they've confirmed."
             ),
         }
+
+    def _meeting(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """The person's own meetings (vula/meetings.py): book, list, update, cancel. Every change is
+        read back before it's reported. A reminder only when they ask for one."""
+        from vula import meetings as mt
+        from vula.when import resolve, say
+        phone = mt.digits(ctx.get("phone"))
+        if not phone:
+            return {"error": "I can only keep a diary for someone messaging me on WhatsApp."}
+        action = str(args.get("action") or "list").lower()
+        who = str(args.get("with") or "").strip()
+        remind_words = str(args.get("remind") or "").strip()
+        lead = mt.parse_lead(remind_words) if remind_words else None
+        if remind_words and lead is None:
+            return {"status": "need_info", "message": "How long before should I remind you? e.g. *1 hour before*, "
+                                                      "*30 min*, or *the day before*."}
+
+        def when_of(text: str) -> Any:
+            r = resolve(text)
+            if not r:
+                return {"status": "need_info", "message": "When is it? e.g. *Thursday at 10* or *15 Nov 2pm*."}
+            if not r["has_time"]:
+                return {"status": "need_info", "message": f"What time on {r['at'].strftime('%a %-d %b')}?"}
+            if r["at"] <= mt.now_sast():
+                return {"status": "need_info", "message": f"{say(r['at'])} has already passed — when is it?"}
+            return r["at"]
+
+        def done(m: Dict[str, Any], head: str, *, asked_remind: bool) -> Dict[str, Any]:
+            out = [f"{head} {mt.line(m)}"] + mt.where_lines(m)
+            if m.get("notes"):
+                out.append(f"📝 {m['notes']}")
+            if m.get("remind_minutes"):
+                at = mt._at(m) - timedelta(minutes=int(m["remind_minutes"]))
+                out.append(f"⏰ I'll remind you {mt.lead_text(int(m['remind_minutes']))} ({at.strftime('%H:%M')}).")
+            elif not asked_remind:
+                out.append("Want a reminder before it? Say e.g. *remind me 1 hour before*.")
+            other = mt.clashes(tid, phone, mt._at(m), skip_id=m.get("id"))
+            if other:
+                out.append("⚠️ Close to: " + "; ".join(mt.line(o) for o in other[:2]))
+            return {"reply_verbatim": "\n".join(out), "meeting_id": m.get("id")}
+
+        if action == "book":
+            if not who:
+                return {"status": "need_info", "message": "Who is the meeting with?"}
+            at = when_of(str(args.get("when") or ""))
+            if isinstance(at, dict):
+                return at
+            address, contact_phone = str(args.get("address") or "").strip(), None
+            try:
+                rows = (service._client().table("commerce_contacts").select("phone,name,address")
+                        .eq("tenant_id", tid).ilike("name", f"%{who}%").limit(1).execute().data or [])
+                if rows:
+                    contact_phone = rows[0].get("phone")
+                    address = address or (rows[0].get("address") or "")
+            except Exception as exc:
+                logger.debug("meeting contact lookup skipped: %s", exc)
+            try:
+                m = mt.create(tid, created_by=phone, with_name=who, starts_at=at, address=address or None,
+                              contact_phone=contact_phone, notes=args.get("notes"), remind_minutes=lead or None)
+            except Exception as exc:
+                logger.warning("meeting booking failed for %s: %s", tid, exc)
+                m = None
+            if not m:
+                return {"error": "I couldn't save the meeting just now — nothing was booked. Try again shortly."}
+            return done(m, "📅 Booked:", asked_remind=bool(remind_words))
+
+        if action == "list":
+            rows = mt.upcoming(tid, phone)
+            if not rows:
+                return {"reply_verbatim": "You have no meetings booked for the next two weeks."}
+            lines = [f"• {mt.line(r)}" + (f" — {r['address']}" if r.get("address") else "") for r in rows]
+            return {"reply_verbatim": "📅 Your meetings:\n" + "\n".join(lines)}
+
+        # update / cancel: which meeting
+        if args.get("meeting_id"):
+            target = mt.get(tid, str(args["meeting_id"]))
+            found = [target] if target and mt.digits(target.get("created_by")) == phone else []
+        else:
+            found = mt.find(tid, phone, who)
+        if not found:
+            return {"status": "need_info", "message": "I can't find that meeting in your diary. Which one? "
+                                                      "Say *what meetings do I have* to see them."}
+        if len(found) > 1 and not who and not args.get("meeting_id"):
+            found = found[:1]                          # "remind me an hour before" → the next one
+        elif len(found) > 1:
+            listing = "\n".join(f"• {mt.line(r)}" for r in found[:5])
+            return {"status": "need_info", "message": f"Which one?\n{listing}"}
+        m = found[0]
+        if action == "cancel":
+            back = mt.update(tid, m["id"], {"status": "cancelled"})
+            if not back or back.get("status") != "cancelled":
+                return {"error": "I couldn't cancel it just now — it's still in your diary."}
+            return {"reply_verbatim": f"❌ Cancelled: {mt.line(m)}"}
+        patch: Dict[str, Any] = {}
+        if args.get("when"):
+            at = when_of(str(args["when"]))
+            if isinstance(at, dict):
+                return at
+            patch["starts_at"] = at.isoformat()
+        if args.get("address"):
+            patch["address"] = str(args["address"]).strip()[:300]
+        if args.get("notes"):
+            patch["notes"] = str(args["notes"]).strip()[:1000]
+        if remind_words:
+            patch["remind_minutes"] = lead or None
+        if not patch:
+            return {"status": "need_info", "message": "What should I change — the time, the address, or a reminder?"}
+        back = mt.update(tid, m["id"], patch)
+        if not back:
+            return {"error": "I couldn't change it just now — nothing was changed."}
+        for k, v in patch.items():
+            got = back.get(k)
+            if k == "starts_at":
+                ok = got and mt._at(back) == datetime.fromisoformat(v)
+            else:
+                ok = got == v
+            if not ok:
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+        return done(back, "✅ Updated:", asked_remind=True)
 
     async def _create_reminder(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         text = (args.get("text") or "").strip()

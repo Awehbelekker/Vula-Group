@@ -702,6 +702,11 @@ _OWNER_ADMIN_RE = re.compile(
     # The owner's own WhatsApp briefs, switched on or off by asking (owner_briefs tool, 12 Nov).
     r"\b(?:morning|daily|weekly|monday)\s+(?:brief(?:ing)?|digest|summary|advisor|update)s?\b|"
     r"\b(?:low[- ]stock|specials|documents?|question) (?:alert|reminder)s?\b|\bteam messages?\b|"
+    # The person's own meetings (meeting tool, 12 Nov): booking, listing, reminders before them.
+    r"\b(?:book|set ?up|schedule|add|put in)\s+(?:a\s+|an\s+)?(?:meeting|appointment|site visit)\b|"
+    r"\b(?:meeting|appointment|site visit) with\b.{0,60}?\b(?:mon|tue|wed|thu|fri|sat|sun|today|tomorrow|at \d|\d{1,2}(?:am|pm|:\d\d))|"
+    r"\bmy (?:meetings|appointments|diary)\b|\bwhat meetings\b|\b(?:move|cancel|reschedule) my [\w' -]{0,30}?meeting\b|"
+    r"\bremind me\b.{0,40}\bbefore (?:the|my) (?:meeting|appointment|visit)\b|"
     r"\bare we making\b|\bmaking (?:our|my|the) (?:\d+\s?%|fee|margin|profit)\b|"
     r"\b(?:profit|margin|loss)\s+on\s+(?:the\s+)?\w+|\blos(?:e|ing) money\b|"
     r"\bhow(?:'s| is)\s+[\w\s]{2,25}?\s+doing\b|\bon (?:track|budget) for (?:our|the|my) fee\b|"

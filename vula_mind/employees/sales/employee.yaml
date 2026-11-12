@@ -51,6 +51,7 @@ tools:
 - list_quotes
 - list_subscriptions
 - log_meeting
+- meeting
 - order_payment
 - outstanding_invoices
 - payment_link

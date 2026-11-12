@@ -43,7 +43,7 @@ def today_items(tenant_id: str, now: datetime) -> Dict[str, Any]:
     items = compute_today(_client(), tenant_id, {"full": True}, now).get("items") or []
     out: Dict[str, Any] = {"waiting": 0, "follow_ups": 0, "follow_ups_overdue": 0, "emails": 0,
                            "emails_urgent": 0, "quotes": 0, "quotes_cents": 0, "documents": 0,
-                           "bookings": []}
+                           "bookings": [], "meetings": []}
     for it in items:
         kind = it.get("kind")
         if kind == "chat":
@@ -61,6 +61,10 @@ def today_items(tenant_id: str, now: datetime) -> Dict[str, Any]:
             out["quotes_cents"] += int(it.get("amount_cents") or 0)
         elif kind == "document":
             out["documents"] += 1
+        elif kind == "meeting":
+            at = _when(it.get("at"))
+            what = (it.get("label") or "").replace("Meeting · ", "", 1) or "meeting"
+            out["meetings"].append(f"{at} {what}" if at else what)
         elif kind == "booking":
             at = _when(it.get("at"))
             what = (it.get("label") or "").replace("Booking · ", "", 1) or "appointment"
@@ -152,6 +156,9 @@ def _today_lines(t: Dict[str, Any]) -> list:
                    f"— waiting for your approval")
     if t.get("documents"):
         out.append(f"• {_n(t['documents'], 'document', 'documents')} to check")
+    if t.get("meetings"):
+        out.append(f"• {_n(len(t['meetings']), 'meeting', 'meetings')} today: " + ", ".join(t["meetings"][:6])
+                   + (f" and {len(t['meetings']) - 6} more" if len(t["meetings"]) > 6 else ""))
     if t.get("bookings"):
         out.append(f"• {_n(len(t['bookings']), 'booking', 'bookings')} today: " + ", ".join(t["bookings"][:6])
                    + (f" and {len(t['bookings']) - 6} more" if len(t["bookings"]) > 6 else ""))

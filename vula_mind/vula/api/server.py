@@ -795,6 +795,14 @@ async def _automations_loop() -> None:
         except Exception as exc:
             log.warning("Reminder nudge check error: %s", exc)
         try:
+            # A person's own meetings, only those they asked to be reminded about (vula/meetings.py).
+            from vula import meetings as _meetings
+            met = await _meetings.send_due_reminders()
+            if met:
+                log.info("Meeting reminder sent for %d meeting(s)", met)
+        except Exception as exc:
+            log.warning("Meeting reminder check error: %s", exc)
+        try:
             from vula.open_questions import release_due
             released = await release_due()
             if released:
