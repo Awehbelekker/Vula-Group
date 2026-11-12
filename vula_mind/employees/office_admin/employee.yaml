@@ -16,6 +16,8 @@ keywords:
 - morning brief
 - weekly advisor
 - daily summary
+- low-stock alert
+- team messages
 - staff
 - birthday
 - public holiday
@@ -43,5 +45,6 @@ tools:
 - staff_notice
 - staff_poll
 - owner_briefs
+- team_messages
 - update_call_sheet
 - view_call_sheet

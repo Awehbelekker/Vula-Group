@@ -157,7 +157,7 @@ def test_master_makes_the_business_puts_the_owner_on_the_team_and_sends_the_welc
     row = ob.get(T)
     assert row["status"] == "invited" and row["owner_phone"] == OWNER and row["welcome_status"] == "sent"
     assert world.sent == [("template", OWNER, ps.SETUP_TEMPLATE, ("Sam", "Seaview Tiles"))]
-    assert out["onboarding"]["step_number"] == 1 and out["onboarding"]["total"] == 14   # no shop questions
+    assert out["onboarding"]["step_number"] == 1 and out["onboarding"]["total"] == 15   # no shop questions
 
 
 def test_a_bad_number_is_refused_and_nothing_is_made(world):
@@ -210,6 +210,11 @@ def test_the_owner_answers_one_question_at_a_time_and_each_answer_is_read_back(w
     _say("Thandi, 082 000 0003, manager")
     assert "Added ✅ Thandi (27820000003, manager)" in _last(world)
     _say("done")
+    assert ob.get(T)["step"] == "alerts"                 # team messages only if the owner picks them
+    assert "Nothing is sent unless you choose it" in _last(world) and "customer's question" in _last(world)
+    _say("7")
+    assert "numbers from the list" in _last(world) and ob.get(T)["step"] == "alerts"
+    _say("none")
     assert ob.get(T)["step"] == "briefs"                 # notifications only if the owner asks
     _say("sometime maybe")
     assert "weekdays at 7" in _last(world) and ob.get(T)["step"] == "briefs"
@@ -494,7 +499,7 @@ def shop(world, monkeypatch):
 
 def test_a_shop_answers_how_orders_reach_customers_and_it_lands_in_order_settings(shop):
     w = shop
-    assert "Question 8 of 19" in _last(w)                             # 14 + 5 shop questions
+    assert "Question 8 of 20" in _last(w)                             # 15 + 5 shop questions
     _say("we do both")
     assert w.orders[T]["collection_enabled"] is True and w.orders[T]["delivery_enabled"] is True
     assert "Delivery and collection" in _last(w) and ob.get(T)["step"] == "collection_point"
@@ -519,7 +524,7 @@ def test_collection_only_skips_the_delivery_question_and_another_number_gets_ale
     assert w.orders[T]["delivery_enabled"] is False and w.orders[T]["collection_enabled"] is True
     _say("12 Harbour Road")
     assert ob.get(T)["step"] == "min_order"                            # no delivery question
-    assert "Question 10 of 18" in _last(w)
+    assert "Question 10 of 19" in _last(w)
     _say("no")
     assert w.orders[T]["min_order_cents"] is None and "No minimum" in _last(w)
     _say("082 000 0009")
@@ -537,10 +542,10 @@ def test_delivery_only_skips_the_collection_question(shop):
 def test_a_business_that_doesnt_sell_products_never_sees_the_shop_questions(world):
     _make(world)
     _say("Start")
-    assert "Question 1 of 14" in _last(world)
+    assert "Question 1 of 15" in _last(world)
     ob._update(T, {"step": "pricing"})
     _say("Quote per job")
-    assert ob.get(T)["step"] == "email" and "Question 8 of 14" in _last(world)
+    assert ob.get(T)["step"] == "email" and "Question 8 of 15" in _last(world)
 
 
 def test_the_parsers():

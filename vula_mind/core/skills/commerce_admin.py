@@ -538,6 +538,22 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                      "description": "The owner's own words for the time and days, e.g. 'weekdays at 7', "
                                     "'Mon-Sat 6:30', 'Friday 3pm', or 'yes' to accept the suggested time."}},
             "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "team_messages",
+        "description": "Switch the business's SCHEDULED messages to its own team on or off, or change "
+                       "their time: the morning list of the day's orders, the low-stock alert, the "
+                       "end-of-day sales message, the specials reminder, the documents-not-on-a-project "
+                       "reminder, and the reminder when a customer's question is still waiting. Use for "
+                       "'stop the low-stock alert', 'send the team the end-of-day sales at 6pm', "
+                       "'which messages does the team get?'. NOT for reading figures now (use the "
+                       "report tools for that). Pass a time only as the owner said it.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["status", "on", "off"]},
+            "message": {"type": "string", "enum": ["delivery_briefing", "low_stock_alert", "sales_summary",
+                                                   "friday_catch_reminder", "pending_project_nudge",
+                                                   "stale_escalation_nudge"]},
+            "when": {"type": "string", "description": "The owner's words for the time/day, e.g. '6pm', 'Friday 8am'."}},
+            "required": ["action"]}}},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -1890,6 +1906,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "staff_notice": "team", "staff_poll": "team",
     # the owner's own briefs (money owed and paid): owner and managers only
     "owner_briefs": "owner_only",
+    "team_messages": "owner_only",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -2878,6 +2895,47 @@ class CommerceAdminSkill(BaseSkill):
         return {"reply_verbatim": "\n".join(lines),
                 "settings": {k: {"on": now_set[k]["on"], "when": now_set[k]["when"]} for k in ob.KINDS}}
 
+    def _team_messages(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """The team's scheduled WhatsApp messages (vula/commerce/job_config.py): which are on, and
+        switching one on or off or moving its time — read back before it's reported."""
+        from vula import owner_briefs as ob
+        from vula.commerce import job_config as jc
+        action = str(args.get("action") or "status").lower()
+        job = str(args.get("message") or "")
+        fits = jc.team_message_choices(tid)
+        if action in ("on", "off"):
+            if job not in jc.TEAM_MESSAGES:
+                listing = "\n".join(f"• {jc.TEAM_MESSAGES[j]}" for j in fits)
+                return {"status": "need_info", "message": f"Which one?\n{listing}"}
+            patch: Dict[str, Any] = {"enabled": action == "on"}
+            when = str(args.get("when") or "").strip()
+            kind = jc.JOB_TYPES[job]["kind"]
+            if action == "on" and when and kind != "interval":
+                t, days = ob.parse_time(when), ob.parse_days(when)
+                if not t and not days:
+                    return {"status": "need_info", "message": "What time should it go? e.g. *6pm* or *Friday 8am*."}
+                if t:
+                    patch["hour"], patch["minute"] = t
+                if days and kind == "weekly":
+                    patch["day_of_week"] = days[0]
+            res = jc.upsert_config(tid, job, patch)
+            if res.get("error"):
+                logger.warning("team message change failed for %s: %s", tid, res["error"])
+                return {"error": "I couldn't change that just now. Nothing was changed — try again shortly."}
+            now = jc.get_configs(tid)[job]          # read back from the DB, not assumed
+            if any(now.get(k) != v for k, v in patch.items()):
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+            line = (f"✅ *{jc.TEAM_MESSAGES[job]}* is on — {jc.when_text(now)}." if now["enabled"]
+                    else f"⏸️ *{jc.TEAM_MESSAGES[job]}* is off.")
+            return {"reply_verbatim": line + "\nIt goes to the people on your team who chose it under Team."}
+        cfgs = jc.get_configs(tid)
+        lines = [f"{'✅' if cfgs[j]['enabled'] else '⏸️'} {jc.TEAM_MESSAGES[j]}"
+                 + (f" — {jc.when_text(cfgs[j])}" if cfgs[j]["enabled"] else " — off") for j in fits]
+        if not lines:
+            return {"reply_verbatim": "There are no scheduled team messages for this kind of business."}
+        return {"reply_verbatim": "Messages Vula sends your team:\n" + "\n".join(lines)
+                + "\nSay e.g. *stop the low-stock alert* or *send the end-of-day sales at 6pm*."}
+
     async def _staff_poll(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         """A poll to the business's own staff (vula/staff_polls.py): preview, then on Confirm send
         it and report how many it reached, read back from the recipient rows."""
@@ -3047,6 +3105,8 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._staff_poll(tid, args, ctx)
             if name == "owner_briefs":
                 return self._owner_briefs(tid, args)
+            if name == "team_messages":
+                return self._team_messages(tid, args)
             if name == "boq_template":
                 return await self._boq_template(tid)
             if name == "share_project":

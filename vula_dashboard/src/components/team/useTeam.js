@@ -127,7 +127,7 @@ export function useTeam(tenantId) {
     if (!form.name && !form.whatsapp) return;
     await fetch(`${VULA_API}/v1/team/${tenantId}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, access: [], notify: ["which_project", "followup_digest"] }),
+      body: JSON.stringify({ ...form, access: [], notify: [] }),   // nothing until they choose (12 Nov 2026)
     });
     setForm({ name: "", whatsapp: "", role: "staff" }); load();
   };
