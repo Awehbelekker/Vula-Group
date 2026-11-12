@@ -11,12 +11,12 @@ import { Puck } from "@measured/puck";
 import "@measured/puck/puck.css";
 import { ArrowDown, ArrowLeft, ArrowUp, Copy, ExternalLink, Eye, EyeOff, History, Home, LayoutTemplate, MessageSquare,
   MoreHorizontal, Palette, Pause, Pencil, Plus, Rocket, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
-import { config, VULA_PUCK_STYLES } from "../../puck/config";
+import { editorConfigFor, VULA_PUCK_STYLES } from "../../puck/config";
 import { FONT_PAIRINGS } from "../../theme/tokens";
 import { SA_TZ } from "../../lib/dates";
 import VulaImageUpload from "../VulaImageUpload";
 import { Button, Card, EmptyState, Field, IconButton, Input, Select, Sheet, Skeleton, StatusChip, Textarea } from "../ui/index.jsx";
-import { ADDABLE_FEATURES, MOOD_PRESETS, PREVIEW_VIEWPORTS, STOREFRONT_ROOT_DOMAIN, TEMPLATES, norm, usePages } from "./usePages";
+import { ADDABLE_FEATURES, MOOD_PRESETS, PREVIEW_VIEWPORTS, STOREFRONT_ROOT_DOMAIN, norm, templatesFor, usePages } from "./usePages";
 import "./pages.css";
 
 const plain = (t) => String(t || "").replace(/\s*✓\s*/g, " ").replace(/\s+—\s+/g, ": ").trim();
@@ -89,7 +89,7 @@ function List({ x, tenantId }) {
         <form className="vpg-form" onSubmit={(e) => { e.preventDefault(); x.createNew(); }}>
           <Field label="Page name" hint="e.g. Winter specials"><Input value={x.newForm.title} autoFocus onChange={(e) => x.setNewForm((f) => ({ ...f, title: e.target.value }))} /></Field>
           <Field label="Start from"><Select value={x.newForm.template} onChange={(e) => x.setNewForm((f) => ({ ...f, template: e.target.value }))}>
-            {Object.entries(TEMPLATES).map(([k, t]) => <option key={k} value={k}>{t.label}</option>)}</Select></Field>
+            {Object.entries(templatesFor(x.modules)).map(([k, t]) => <option key={k} value={k}>{t.label}</option>)}</Select></Field>
         </form>
       </Sheet>
 
@@ -189,7 +189,7 @@ function Editor({ x }) {
 
       <div className="vpg-editor">
         <style>{VULA_PUCK_STYLES}{x.brandCss}</style>
-        <Puck key={x.editorKey} config={config} data={e.data} onPublish={(data) => x.persist(data, "published")}
+        <Puck key={x.editorKey} config={editorConfigFor(x.modules)} data={e.data} onPublish={(data) => x.persist(data, "published")}
           onChange={(data) => { x.latestData.current = data; }} viewports={PREVIEW_VIEWPORTS} overrides={{ headerActions, fields }} />
       </div>
       <div className="vpg-row">

@@ -1,4 +1,4 @@
--- 259_personal_memory.sql — what a staff member asked Vula to remember about them, private to them.
+-- 264_personal_memory.sql — what a staff member asked Vula to remember about them, private to them.
 --
 -- 12 Nov 2026 (Ian): staff talk to Vula for advice, planning and brainstorming, and some of what
 -- they'd like it to remember is personal. Until now "remember…" could only become a company-wide

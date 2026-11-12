@@ -14,8 +14,10 @@ PHONE = "27645550000"
 @pytest.fixture(autouse=True)
 def _clean():
     db._bursts.clear()
+    db._last_doc.clear()
     yield
     db._bursts.clear()
+    db._last_doc.clear()
 
 
 def _sender():
@@ -134,3 +136,44 @@ def test_a_caption_names_the_project_for_the_senders_next_documents(monkeypatch)
     later = time.monotonic() + db.CAPTION_MINUTES * 60 + 1
     monkeypatch.setattr(time, "monotonic", lambda: later)
     assert db.project(PHONE) is None                                # an hour later: asked again
+
+
+@pytest.mark.asyncio
+async def test_statements_sent_one_at_a_time_a_minute_apart_get_one_summary(monkeypatch):
+    """11 Nov 2026 (DIGG): ~30 FNB statements forwarded one by one, 30-90 s apart. Each finished
+    before the next came, so each was "a new burst" and got its own reply."""
+    clock = [1000.0]
+    monkeypatch.setattr(db, "_clock", lambda: clock[0])
+    sent, send = _sender()
+    now = []
+    for i in range(1, 6):
+        await _document(i, now, send)        # done before the next one arrives
+        clock[0] += 60
+    await asyncio.sleep(0.05)
+    assert now == ["Filed invoice 1"]                      # the first is answered at once, as before
+    assert len(sent) == 1 and sent[0][1].startswith("📄 Done — 4 documents")   # the rest: one summary
+    assert all(f"Filed invoice {i}" in sent[0][1] for i in range(2, 6))
+
+
+@pytest.mark.asyncio
+async def test_a_document_hours_later_is_answered_at_once(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(db, "_clock", lambda: clock[0])
+    sent, send = _sender()
+    now = []
+    await _document(1, now, send)
+    clock[0] += db.PACE_SECONDS + 1
+    await _document(2, now, send)
+    await asyncio.sleep(0.05)
+    assert now == ["Filed invoice 1", "Filed invoice 2"] and sent == []
+
+
+@pytest.mark.asyncio
+async def test_got_it_is_said_once_per_batch():
+    token = db.enter(PHONE)
+    assert db.continuing(PHONE) is False                   # first document: "Got it"
+    token2 = db.enter(PHONE)
+    assert db.continuing(PHONE) is True                    # the rest: no second "Got it"
+    _sent, send = _sender()
+    await db.leave(PHONE, token2, send, grace=0.01)
+    await db.leave(PHONE, token, send, grace=0.01)

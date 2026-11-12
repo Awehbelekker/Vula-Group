@@ -1,4 +1,4 @@
--- 260_session_last_skill_at.sql — when a conversation's last skill answered (vula/route_memory.py).
+-- 265_session_last_skill_at.sql — when a conversation's last skill answered (vula/route_memory.py).
 --
 -- 12 Nov 2026. Routing looks at one message at a time, so a follow-up ("and for next week?")
 -- lost its thread. The skill that answered each person's last question was kept in a dict in the

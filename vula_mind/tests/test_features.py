@@ -1,4 +1,4 @@
-"""Switches on for one business before everyone (vula/features.py, migration 261): each new
+"""Switches on for one business before everyone (vula/features.py, migration 266): each new
 behaviour can be piloted on one business while every other business is unchanged."""
 from unittest.mock import AsyncMock, MagicMock, patch
 

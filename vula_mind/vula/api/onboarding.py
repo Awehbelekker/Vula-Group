@@ -339,6 +339,13 @@ def _slugify(text: str) -> str:
 def _map_business_type(industry: str | None) -> str:
     """Map free-text industry → a control-plane business_type (drives default modules)."""
     s = (industry or "").lower()
+    # Estate agencies before everything else: "estate agency" / "property sales agent" would
+    # otherwise read as a sales rep or professional services (2026-11-10).
+    # Not bare "property": "property maintenance" / "property development" are trades.
+    if any(k in s for k in ("real estate", "estate agen", "property sales", "property agen",
+                            "property practitioner", "property management", "property rental",
+                            "realtor", "letting agen", "lettings", "rental agen")):
+        return "real_estate"
     # A business that represents a brand's products (Gerflor's Western Cape rep): checked first,
     # since "flooring agency" would otherwise read as professional services.
     if any(k in s for k in ("sales rep", "representative", "rep for", "agency for", "distributor",

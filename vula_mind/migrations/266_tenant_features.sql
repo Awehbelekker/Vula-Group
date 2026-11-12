@@ -1,4 +1,4 @@
--- 261_tenant_features.sql — new behaviour switched on for one business before everyone.
+-- 266_tenant_features.sql — new behaviour switched on for one business before everyone.
 --
 -- 12 Nov 2026. The switches added this month (composed voice, client memory, private notes,
 -- stricter grounding, follow-up routing, the advisor…) were global env settings, so trying one

@@ -24,11 +24,13 @@ def test_default_audience_is_conservative():
 
 
 def test_only_a_customer_is_filtered():
-    assert audience_filter(None) == {} and audience_filter("staff") == {}
-    assert audience_filter("public") == {
+    # Every search also leaves out other people's private chunks (12 Nov 2026, vula/private_docs.py).
+    private = {"is_empty": {"key": "private_to"}}
+    assert audience_filter(None) == {"must": [private]} and audience_filter("staff") == {"must": [private]}
+    assert audience_filter("public") == {"must": [private],
         "must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
     with patch.object(pl.settings, "kb_customer_audience_strict", True):
-        assert audience_filter("public") == {"must": [{"key": "audience", "match": {"value": "public"}}]}
+        assert audience_filter("public") == {"must": [{"key": "audience", "match": {"value": "public"}}, private]}
 
 
 async def _seed(mem, tenant="shop"):

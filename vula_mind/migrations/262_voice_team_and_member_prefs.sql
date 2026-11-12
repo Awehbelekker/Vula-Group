@@ -1,4 +1,4 @@
--- 257_voice_team_and_member_prefs.sql — how Vula sounds, per audience and per person (core/voice.py).
+-- 262_voice_team_and_member_prefs.sql — how Vula sounds, per audience and per person (core/voice.py).
 -- 2026-11-12, Ian: replies should fit the company's vibe and the staff member Vula is talking to
 -- ("fun, formal, and so on"), without the tone ever changing the facts.
 --

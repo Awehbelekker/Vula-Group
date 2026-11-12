@@ -85,7 +85,7 @@ async def set_my_prefs(tenant_id: str, body: PrefsPatch, request: Request) -> di
         res = (service._client().table("vula_team_members").update({"prefs": prefs})
                .eq("tenant_id", tenant_id).eq("id", person.member_id).execute())
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Couldn't save that ({exc}). Run migration 257?")
+        raise HTTPException(status_code=503, detail=f"Couldn't save that ({exc}). Run migration 262?")
     # Read back what was stored, rather than report what was sent.
     rows = getattr(res, "data", None) or []
     if not rows:
@@ -118,7 +118,7 @@ async def get_my_memory(tenant_id: str, request: Request) -> dict:
     try:
         notes = await asyncio.to_thread(personal_memory.notes, person)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Couldn't read your notes ({exc}). Run migration 259?")
+        raise HTTPException(status_code=503, detail=f"Couldn't read your notes ({exc}). Run migration 264?")
     return {"enabled": True, "limit": personal_memory.MAX_NOTES, "notes": notes}
 
 
@@ -132,7 +132,7 @@ async def add_my_memory(tenant_id: str, body: NoteIn, request: Request) -> dict:
     try:
         out = await asyncio.to_thread(personal_memory.remember, person, body.text, "dashboard")
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Couldn't save that ({exc}). Run migration 259?")
+        raise HTTPException(status_code=503, detail=f"Couldn't save that ({exc}). Run migration 264?")
     if out.get("saved"):
         return {"ok": True, "saved": out["saved"]}
     detail = {"empty": "Write what you'd like me to remember.",

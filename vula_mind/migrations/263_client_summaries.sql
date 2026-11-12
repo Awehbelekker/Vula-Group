@@ -1,4 +1,4 @@
--- 258_client_summaries.sql — what Vula remembers about a client between conversations.
+-- 263_client_summaries.sql — what Vula remembers about a client between conversations.
 --
 -- 12 Nov 2026 (Ian): "if a client has been chatting and after a month Vula does not remember the
 -- conversation … it could be very frustrating". The model reads only the last 24 hours of a

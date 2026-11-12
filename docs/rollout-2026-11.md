@@ -5,14 +5,14 @@ Nothing here has run against live data yet: go one step at a time.
 
 ## 1. Before deploying
 
-1. **Apply migrations 257–261** in the Supabase SQL editor, in order (or `python tools/migrate.py`):
+1. **Apply migrations 262–266** in the Supabase SQL editor, in order (or `python tools/migrate.py`):
    | # | What |
    |---|---|
-   | 257 | `vula_tenant_config.team_voice_prompt`, `vula_team_members.prefs` |
-   | 258 | `commerce_client_summaries` (client notes) |
-   | 259 | `vula_personal_memory` (staff private notes, encrypted) |
-   | 260 | `commerce_conversation_sessions.last_skill_at` |
-   | 261 | `vula_tenant_config.features` (per-business switches) |
+   | 262 | `vula_tenant_config.team_voice_prompt`, `vula_team_members.prefs` |
+   | 263 | `commerce_client_summaries` (client notes) |
+   | 264 | `vula_personal_memory` (staff private notes, encrypted) |
+   | 265 | `commerce_conversation_sessions.last_skill_at` |
+   | 266 | `vula_tenant_config.features` (per-business switches) |
 2. Deploy the backend (`railway up`) and the dashboard (Vercel).
 3. Open `/ready`: no migration should be listed as missing.
 

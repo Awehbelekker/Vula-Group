@@ -45,13 +45,13 @@ def active_members(tenant_id: str) -> List[Dict[str, Any]]:
         return (service._client().table("vula_team_members").select(columns)
                 .eq("tenant_id", tenant_id).eq("active", True).execute().data)
 
-    # `prefs` (migration 257) is each member's own style choices. If that migration hasn't been
+    # `prefs` (migration 262) is each member's own style choices. If that migration hasn't been
     # applied yet the column doesn't exist — fall back to the columns that always have, rather
     # than fail the read and have every staff member treated as a customer.
     try:
         rows = read(_COLUMNS + ",prefs")
     except Exception as exc:
-        logger.debug("team read without prefs (run migration 257?): %s", exc)
+        logger.debug("team read without prefs (run migration 262?): %s", exc)
         rows = read(_COLUMNS)
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     with _LOCK:

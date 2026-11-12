@@ -1426,8 +1426,24 @@ async def _recurring_bills_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+async def _private_moves_loop() -> None:
+    """Move documents that belong to one team member out of the business's documents, chunks first
+    (vula/private_docs.py, migration 261). Every 5 minutes; nothing to do is one small read."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(30)
+    while True:
+        try:
+            from vula.private_docs import process_moves
+            await process_moves()
+        except Exception as exc:
+            log.warning("private document moves failed: %s", exc)
+        await _asyncio.sleep(300)
+
+
 async def _email_sync_loop() -> None:
-    """Auto-sync connected mailboxes every 15 min: build contacts + file attachments."""
+    """Check connected mailboxes every settings.email_sync_minutes (10): contacts, attachments,
+    follow-ups. Until 11 Nov 2026 this ran hourly (the docstring said 15 min), so a supplier's emailed
+    invoice could take an hour to appear and a mailbox's history took days."""
     import asyncio as _asyncio
     await _asyncio.sleep(45)  # settle on boot
     while True:
@@ -1438,7 +1454,8 @@ async def _email_sync_loop() -> None:
                 log.info("Email sync processed %d new message(s)", n)
         except Exception as exc:
             log.warning("Email sync loop error: %s", exc)
-        await _asyncio.sleep(60 * 60)   # hourly — email isn't time-critical; saves AI cost
+        from config import settings as _s
+        await _asyncio.sleep(max(1, int(getattr(_s, "email_sync_minutes", 10) or 10)) * 60)
 
 
 async def _clickup_sync_loop() -> None:
@@ -1557,6 +1574,13 @@ async def _local_llm_watch_loop() -> None:
     """WhatsApp Ian when the local Ollama tunnel stops answering (2026-10-19) — the router falls
     back to the cloud silently, and a 3½-day outage went unnoticed. See vula/local_llm_watch.py."""
     from vula.local_llm_watch import run_forever
+    await run_forever()
+
+
+async def _local_models_loop() -> None:
+    """Download any model in LOCAL_MODELS_ENSURE that the local box doesn't have (12 Nov 2026),
+    through the same tunnel every local call uses. See vula/local_models.py."""
+    from vula.local_models import run_forever
     await run_forever()
 
 
@@ -1700,6 +1724,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_client_memory_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_advisor_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_private_moves_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))
@@ -1723,6 +1748,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
+    # Missing local models (LOCAL_MODELS_ENSURE) → Ollama downloads them (2026-11-12).
+    _scheduled_job_tasks.append(_asyncio.create_task(_local_models_loop()))
     # Weekly: customers see only public documents, or the operator hears about it (2026-10-20).
     _scheduled_job_tasks.append(_asyncio.create_task(_kb_customer_view_weekly_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
@@ -2138,6 +2165,10 @@ app.include_router(manufacturing_router, prefix="/v1/commerce")   # /{tenant}/ad
 app.include_router(woo_webhook_router, prefix="/v1/woocommerce")   # WooCommerce's calls — HMAC-verified
 from vula.api.business_profile import router as business_profile_router  # noqa: E402
 app.include_router(business_profile_router, prefix="/v1/commerce")
+from vula.api.listings import router as listings_router  # noqa: E402
+app.include_router(listings_router, prefix="/v1/commerce")          # real-estate listings; /{tenant}/admin/* tenant-guarded
+from vula.api.pipeline import router as pipeline_router  # noqa: E402
+app.include_router(pipeline_router, prefix="/v1/commerce")          # deals pipeline; /{tenant}/admin/* tenant-guarded, `pipeline` module
 app.include_router(command_centre_router, prefix="/v1/commerce")  # /{tenant}/admin/activity|home|today — tenant-guarded
 app.include_router(bookings_router, prefix="/v1/bookings")
 app.include_router(subscriptions_router, prefix="/v1/subscriptions")

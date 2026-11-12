@@ -5,7 +5,7 @@ being echoed back as if fresh). So a client who came back after a month was a st
 of what they asked, were told, or were promised. The messages were all still stored; the model
 just never saw them.
 
-This keeps one short, dated summary per client (commerce_client_summaries, migration 258). It is
+This keeps one short, dated summary per client (commerce_client_summaries, migration 263). It is
 written when a conversation has gone quiet — one model call per conversation, never per message —
 and folded into the next one: the previous summary plus the new messages become the new summary.
 On the client's next message it is shown to the assistant, labelled as earlier and possibly out
@@ -89,7 +89,7 @@ def get(tenant_id: str, phone: Any) -> Optional[Dict[str, Any]]:
         rows = (_client().table(TABLE).select("summary,covers_until,updated_at")
                 .eq("tenant_id", tenant_id).eq("client_key", key).limit(1).execute().data or [])
     except Exception as exc:  # noqa: BLE001 — a missing note must never cost a reply
-        logger.debug("client summary read skipped (run migration 258?): %s", exc)
+        logger.debug("client summary read skipped (run migration 263?): %s", exc)
         return None
     return rows[0] if rows and isinstance(rows[0], dict) and rows[0].get("summary") else None
 

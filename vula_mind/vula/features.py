@@ -3,7 +3,7 @@
 12 Nov 2026. The new behaviour (the composed voice, client memory, private notes, stricter
 grounding…) shipped behind global env settings, so trying one meant trying it on every business
 at once. Each switch is now on for a business when EITHER the global setting is on (everyone) OR
-that business's own `vula_tenant_config.features[name]` is true (migration 261) — so Off the Hook
+that business's own `vula_tenant_config.features[name]` is true (migration 266) — so Off the Hook
 or DIGG can pilot it for a week first. The operator sets the per-business switches in Master ›
 a tenant › Overview › Features (PATCH /v1/master/tenants/{id}/features).
 

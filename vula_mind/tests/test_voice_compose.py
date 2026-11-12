@@ -223,7 +223,7 @@ async def test_no_login_is_refused_and_an_unlinked_login_has_nowhere_to_save():
 
 
 def test_team_read_still_works_before_the_migration_is_applied():
-    """vula_team_members.prefs is new (257). Without it the read must fall back, not fail — a
+    """vula_team_members.prefs is new (262). Without it the read must fall back, not fail — a
     failed read makes every staff member look like a customer."""
     from vula import team_index
     from vula.commerce import service

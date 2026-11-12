@@ -49,8 +49,30 @@ _FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning", "page_co
 
 # Health-probe cache: base_url -> (checked_at_monotonic, is_up)
 _HEALTH_TTL_S = 30.0
-_PROBE_TIMEOUT_S = 1.5
+# 12 Nov 2026: was 1.5 s. Railway runs in us-west2 and the box is in South Africa behind Cloudflare
+# Access, so /api/tags often takes 2-3 s on a healthy box. In one hour on 11 Nov, 72 calls went to
+# the cloud as "local_unreachable" (48 stayed local), while local_llm_watch's 8 s probe found the
+# box up all day. Tenant data left SA for no reason. 4 s still fails fast in a real outage, and a
+# failed probe is cached for _HEALTH_TTL_S, so a dead box costs one 4 s wait per 30 s at most.
+_PROBE_TIMEOUT_S = 4.0
 _cache: dict[str, tuple[float, bool]] = {}
+
+
+# Local models that reason before answering unless told not to. Vula's local work is short
+# classification, extraction and summaries: a reply that opens with "<think>Okay, the user…" breaks
+# callers that read the first few tokens (the skill classifier asks for 10), and the reasoning costs
+# seconds per call. Families only (the name before ":"); others are sent nothing, as before.
+_THINK_OFF_FAMILIES = {"qwen3"}
+
+
+def _model_family(model: str) -> str:
+    return str(model or "").split("/")[-1].split(":")[0].lower()
+
+
+def think_off(model: str) -> dict:
+    """Extra fields for a raw Ollama /api/generate or /api/chat body: {"think": False} for a
+    reasoning-capable local model, else {}."""
+    return {"think": False} if _model_family(model) in _THINK_OFF_FAMILIES else {}
 
 
 def _host(url: str) -> str:
@@ -111,6 +133,13 @@ def install_ollama_auth() -> None:
         if is_ollama and "num_ctx" not in kwargs:
             kwargs["num_ctx"] = 8192
         model = kwargs.get("model") or (args[0] if args else "")
+        # litellm's Ollama providers (ollama_chat/ and ollama/) send think=false for any
+        # reasoning_effort other than low/medium/high. generation_kwargs() already sends think=False
+        # for its callers; this covers the rest (the expense classifier, the decision benchmark…).
+        # A caller that sets think or reasoning_effort itself is left alone.
+        if (is_ollama and str(model).startswith(("ollama_chat/", "ollama/")) and think_off(model)
+                and "reasoning_effort" not in kwargs and "think" not in kwargs):
+            kwargs["reasoning_effort"] = "none"
         if not str(model).startswith("openrouter/") or args:
             return await _orig(*args, **kwargs)
         return await _with_cloud_fallback(_orig, kwargs)

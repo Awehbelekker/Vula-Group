@@ -55,6 +55,9 @@ _EXTRA: Dict[str, List[Dict[str, str]]] = {
     "health": [{"key": "bookings", "public": True, "q": "How do patients book, and what's your cancellation / no-show policy? Which medical aids do you work with?"}],
     "rep": [{"key": "principal", "q": "Which brands or principals do you represent, and who are your distributors?"},
             {"key": "territory", "q": "Which areas and customer types (architects, contractors, retailers) do you cover?"}],
+    "real_estate": [{"key": "areas", "public": True, "q": "Which suburbs and towns do you sell or let in, and do you do sales, rentals or both?"},
+                    {"key": "viewings", "public": True, "q": "How do viewings work — by appointment only, show days, and how much notice do you need?"},
+                    {"key": "rental_terms", "public": True, "q": "For rentals: what do tenants need to apply (payslips, ID, credit check), and what deposit do you ask for?"}],
 }
 
 PROFILE_FILENAME = "Business profile (from the owner).md"

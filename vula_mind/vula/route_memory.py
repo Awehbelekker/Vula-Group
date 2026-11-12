@@ -12,7 +12,7 @@ This keeps, per (tenant, phone), for 30 minutes:
 
 Both live in memory. With settings.follow_up_routing_enabled the latest skill is also written to
 the conversation's session row (commerce_conversation_sessions.last_skill / last_skill_at,
-migration 260) and read from there on a miss, so it survives a restart and is shared between
+migration 265) and read from there on a miss, so it survives a restart and is shared between
 workers. Only the skill NAME is stored — never the question.
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ def _write(tenant_id: str, phone: str, skill: str) -> None:
          .update({"last_skill": skill, "last_skill_at": datetime.now(timezone.utc).isoformat()})
          .eq("tenant_id", tenant_id).in_("session_key", _session_keys(phone)).execute())
     except Exception as exc:  # noqa: BLE001 — routing memory is a convenience, never a failure
-        logger.debug("route memory not saved (run migration 260?): %s", exc)
+        logger.debug("route memory not saved (run migration 265?): %s", exc)
 
 
 def _read(tenant_id: str, phone: str) -> Optional[str]:
@@ -63,7 +63,7 @@ def _read(tenant_id: str, phone: str) -> Optional[str]:
                 .select("last_skill,last_skill_at").eq("tenant_id", tenant_id)
                 .in_("session_key", _session_keys(phone)).execute().data or [])
     except Exception as exc:  # noqa: BLE001
-        logger.debug("route memory not read (run migration 260?): %s", exc)
+        logger.debug("route memory not read (run migration 265?): %s", exc)
         return None
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=TTL_SECONDS)).isoformat()
     fresh = [r for r in rows if isinstance(r, dict) and r.get("last_skill")

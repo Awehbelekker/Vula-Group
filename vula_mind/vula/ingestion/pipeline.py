@@ -122,7 +122,8 @@ def get_tracker() -> IngestionTracker:
 # ─── Config (from settings / .env) ───────────────────────────────────────────
 OLLAMA_BASE = settings.ollama_base
 QDRANT_BASE = settings.qdrant_base
-GLM_OCR_MODEL = settings.model_ocr
+GLM_OCR_MODEL = settings.model_ocr          # fallback page reader (general vision)
+DOC_OCR_MODEL = settings.model_doc_ocr      # preferred page reader (document OCR)
 EMBED_MODEL = settings.model_embed
 CHUNK_SIZE = settings.chunk_size
 CHUNK_OVERLAP = settings.chunk_overlap
@@ -222,48 +223,79 @@ class OCRProcessor:
     def __init__(self, ollama_base: str = OLLAMA_BASE):
         self.ollama_base = ollama_base
         self._local_ocr_failures = 0
+        self.last_local_model: Optional[str] = None     # the reader of the last clean local read
 
     def _local_ocr_disabled(self) -> bool:
         return self._local_ocr_failures >= self._LOCAL_OCR_FAILURE_LIMIT
 
-    async def process_image(self, image_path: Path) -> str:
-        """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
-        failure, timeout, OR a hallucinated-looking response, then to local pytesseract as the
-        last resort."""
-        import base64
-        with open(image_path, "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode()
+    async def _local_reader(self) -> Optional[str]:
+        """The local model to read this page with, or None to skip local.
 
-        prompt = "Parse this document to Markdown. Extract all text, tables, and structure accurately."
-        payload = {
-            "model": GLM_OCR_MODEL,
-            "prompt": prompt,
-            "images": [image_b64],
-            "stream": False,
-            # 2026-10-25: this call bypasses litellm entirely (raw httpx to Ollama's own API), so
-            # it was NOT covered by core/llm_router.py's install_ollama_auth num_ctx cap — it
-            # silently inherited whatever OLLAMA_CONTEXT_LENGTH the Ollama app's own settings had
-            # (observed at 262144 in the 2026-10-24 eviction incident). Set it explicitly here too.
-            "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
-        }
+        12 Nov 2026: three pages of a scanned DIGG form each waited the full 90 s for the general
+        vision model (MODEL_OCR) and got nothing back. The document reader (MODEL_DOC_OCR,
+        GLM-OCR) is used when the box has it; otherwise MODEL_OCR, as before. The probe checks the
+        model is installed, so a missing one is skipped at once instead of costing 90 s."""
+        try:
+            from core.llm_router import ollama_available as _oa
+        except Exception:
+            return GLM_OCR_MODEL
+        try:
+            if not await _oa():
+                return None
+            for model in dict.fromkeys(m for m in (DOC_OCR_MODEL, GLM_OCR_MODEL) if m):
+                if await _oa(model=model):
+                    return model
+            return None
+        except Exception:
+            return GLM_OCR_MODEL
 
+    @staticmethod
+    def _local_prompt(model: str, general_prompt: str) -> str:
+        """GLM-OCR reads with its own task prompts ("Text Recognition:"); given a free-form
+        instruction it may not stop, which on a busy card runs past the 90 s limit."""
+        if (model or "").split(":")[0].lower() == "glm-ocr":
+            return "Text Recognition:"
+        return general_prompt
+
+    async def read_local(self, image_b64: str, prompt: str, doc_reader_only: bool = False) -> tuple:
+        """Read one page image on the local box only: (text, clean). clean is False when local was
+        skipped or failed, or the text looks invented (then text may still hold what came back).
+        doc_reader_only: only the document reader (MODEL_DOC_OCR), never the general vision model
+        — the Smart Scanner's text path, which has its own vision fallback."""
+        self.last_local_model = None
         local_text = ""
         # Skip the local model entirely when the shared health probe already knows the tunnel
         # is unreachable (its result is cached ~30s, so this is nearly free and shared across
         # every pipeline stage / document). 2026-09-10: with the SA GPU box 503-ing, every
         # OCR call was still trying local first, failing, and escalating — one payment PDF hit
         # that path ~6 times across its ingest/bank-check/scanner stages.
-        try:
-            from core.llm_router import ollama_available as _oa
-            _local_up = await _oa()
-        except Exception:
-            _local_up = True
+        local_model = None
+        if not self._local_ocr_disabled():
+            local_model = await self._local_reader()
+            if doc_reader_only and local_model != DOC_OCR_MODEL:
+                return "", False
         if self._local_ocr_disabled():
             logger.info("local OCR skipped — %d consecutive failures this run",
                         self._local_ocr_failures)
-        elif not _local_up:
-            logger.info("local OCR skipped — Ollama tunnel unreachable (health probe)")
+        elif not local_model:
+            logger.info("local OCR skipped — Ollama tunnel unreachable or no reader installed "
+                        "(health probe)")
         else:
+            payload = {
+                "model": local_model,
+                "prompt": self._local_prompt(local_model, prompt),
+                "images": [image_b64],
+                "stream": False,
+                # Pages of one document arrive back to back: keep the reader loaded between them
+                # (Ollama still unloads it if the card needs the room for another model).
+                "keep_alive": "10m",
+                # 2026-10-25: this call bypasses litellm entirely (raw httpx to Ollama's own API),
+                # so it was NOT covered by core/llm_router.py's install_ollama_auth num_ctx cap —
+                # it silently inherited whatever OLLAMA_CONTEXT_LENGTH the Ollama app's own
+                # settings had (observed at 262144 in the 2026-10-24 eviction incident). Set it
+                # explicitly here too.
+                "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
+            }
             try:
                 # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
                 # (same ones llm_router uses) or this call is blocked at the edge with a redirect
@@ -278,15 +310,31 @@ class OCRProcessor:
                     local_text = resp.json().get("response", "").strip()
                     if local_text and not self._looks_hallucinated(local_text):
                         self._local_ocr_failures = 0     # healthy again
-                        return local_text
+                        self.last_local_model = local_model
+                        return local_text, True
                     if local_text:
                         self._local_ocr_failures += 1
-                        logger.warning(f"GLM-OCR output looks hallucinated (bracket placeholders) — "
+                        logger.warning(f"Local OCR ({local_model}) output looks hallucinated (bracket placeholders) — "
                                        f"escalating to cloud vision instead of trusting it: {local_text[:200]!r}")
             except Exception as e:
                 self._local_ocr_failures += 1
-                logger.warning(f"GLM-OCR failed ({self._local_ocr_failures} in a row), "
-                               f"escalating to cloud vision: {e}")
+                logger.warning(f"Local OCR ({local_model}) failed ({self._local_ocr_failures} in a row), "
+                               f"escalating to cloud vision: {type(e).__name__}: {e}")
+        return local_text, False
+
+    async def process_image(self, image_path: Path) -> str:
+        """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
+        failure, timeout, OR a hallucinated-looking response, then to local pytesseract as the
+        last resort."""
+        import base64
+        with open(image_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+
+        prompt = "Parse this document to Markdown. Extract all text, tables, and structure accurately."
+
+        local_text, clean = await self.read_local(image_b64, prompt)
+        if clean:
+            return local_text
 
         # 2026-08-17: cloud vision isn't immune either — reproduced live, the SAME image
         # hallucinated on 2 of 3 consecutive cloud vision calls (identical bracket-placeholder
@@ -1152,16 +1200,42 @@ def default_audience(source_type: Optional[str], audience: Optional[str] = None)
     return "public" if source_type in _PUBLIC_SOURCE_TYPES else "staff"
 
 
+# One person's private documents (12 Nov 2026, Ian: Richard's own bank account "is his data and only
+# visible to him"). A chunk stored with `private_to` = a team member's id is used only while answering
+# that member (kb_viewer, set where a turn knows who is asking). Everyone else, every customer, and
+# every search that doesn't say who is asking never sees it: private by default.
+_KB_VIEWER: ContextVar[Optional[str]] = ContextVar("kb_viewer", default=None)
+
+
+@contextmanager
+def kb_viewer(member_id: Optional[str]):
+    token = _KB_VIEWER.set(str(member_id) if member_id else None)
+    try:
+        yield
+    finally:
+        _KB_VIEWER.reset(token)
+
+
+def _private_clause() -> dict:
+    me = _KB_VIEWER.get()
+    if not me:
+        return {"is_empty": {"key": "private_to"}}
+    return {"should": [{"is_empty": {"key": "private_to"}}, {"key": "private_to", "match": {"value": me}}]}
+
+
 def audience_filter(audience: Optional[str]) -> Dict[str, list]:
     """Qdrant filter clauses for someone asking as `audience`. Only "public" (a customer) is
-    restricted. Points stored before this field existed carry no audience: while
+    restricted by audience. Points stored before this field existed carry no audience: while
     kb_customer_audience_strict is off they stay visible (only explicitly staff/owner chunks are
-    hidden); once the backfill has run and it is on, a customer sees public chunks only."""
+    hidden); once the backfill has run and it is on, a customer sees public chunks only.
+    Every search also leaves out other people's private chunks (_private_clause) — always non-empty,
+    so a search that has its filter refused fails closed instead of retrying unfiltered."""
+    private = [_private_clause()]
     if audience != "public":
-        return {}
+        return {"must": private}
     if getattr(settings, "kb_customer_audience_strict", False):
-        return {"must": [{"key": "audience", "match": {"value": "public"}}]}
-    return {"must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
+        return {"must": [{"key": "audience", "match": {"value": "public"}}] + private}
+    return {"must": private, "must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
 
 
 # 2026-10-17 (KB retrieval 1b): who the CURRENT turn is answering, for every KB query made while
@@ -1220,6 +1294,9 @@ def effective_audience(audience: Optional[str]) -> Optional[str]:
 
 def _audience_allows(audience: Optional[str], payload: dict) -> bool:
     """The same rule as audience_filter, for payloads matched locally (substring fallback)."""
+    owner = payload.get("private_to")
+    if owner and str(owner) != (_KB_VIEWER.get() or ""):
+        return False
     if audience != "public":
         return True
     got = payload.get("audience")
@@ -1301,8 +1378,8 @@ class QdrantStore:
                 if resp.status_code not in (200, 201) and "already exists" not in resp.text:
                     raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
                 logger.info("Created Qdrant collection: %s", name)
-            # Idempotent: ensure the keyword indexes used by authority and audience filtering.
-            for field_name in ("source_type", "audience"):
+            # Idempotent: ensure the keyword indexes used by authority, audience and private filtering.
+            for field_name in ("source_type", "audience", "private_to"):
                 try:
                     await client.put(
                         f"{self.base}/collections/{name}/index",
@@ -1435,9 +1512,15 @@ class QdrantStore:
             # index and retry once with the full filter, else return nothing (fail closed).
             if resp.status_code == 400 and aud:
                 logger.warning("Audience filter refused for %s — creating index and retrying", name)
-                await client.put(f"{self.base}/collections/{name}/index",
-                                 json={"field_name": "audience", "field_schema": "keyword"})
+                for field_name in ("audience", "private_to"):
+                    await client.put(f"{self.base}/collections/{name}/index",
+                                     json={"field_name": field_name, "field_schema": "keyword"})
                 resp = await client.post(f"{self.base}/collections/{name}/points/search", json=body)
+                if not resp.is_success and audience != "public":
+                    # Staff: drop the other filters (legacy collections without an index on them),
+                    # never the audience / private-to-one-person part.
+                    body["filter"] = {k: v for k, v in aud.items() if v}
+                    resp = await client.post(f"{self.base}/collections/{name}/points/search", json=body)
                 if not resp.is_success:
                     return []
             # If filtering is unavailable (e.g. missing index on a legacy collection),
@@ -1543,6 +1626,8 @@ class QdrantStore:
                             f"{self.base}/collections/{name}/index",
                             json={"field_name": "text", "field_schema": "text"},
                         )
+                        await client.put(f"{self.base}/collections/{name}/index",
+                                         json={"field_name": "private_to", "field_schema": "keyword"})
                         logger.info("created full-text index on %s.text", name)
                     except Exception as exc:
                         logger.debug("text index creation failed for %s: %s", name, exc)
@@ -1589,6 +1674,27 @@ class QdrantStore:
         except Exception as exc:
             logger.debug("substring fallback failed for %s: %s", name, exc)
         return found
+
+    async def set_private(self, tenant_id: str, doc_id: str, member_id: str) -> bool:
+        """Every chunk of `doc_id` becomes private to one team member (used only when answering them).
+        Verified: True only when no chunk of the document is left without it."""
+        name = self._collection_name(tenant_id)
+        flt = {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}
+        async with httpx.AsyncClient(timeout=20.0, headers=self._headers()) as client:
+            for field_name in ("doc_id", "private_to"):
+                await client.put(f"{self.base}/collections/{name}/index",
+                                 json={"field_name": field_name, "field_schema": "keyword"})
+            resp = await client.post(f"{self.base}/collections/{name}/points/payload", params={"wait": "true"},
+                                     json={"payload": {"private_to": str(member_id), "audience": "owner"},
+                                           "filter": flt})
+            if resp.status_code == 404:
+                return True                       # no collection: nothing to hide
+            if not resp.is_success:
+                logger.warning("set_private failed for %s/%s: %s", name, doc_id, resp.text[:200])
+                return False
+            left = await client.post(f"{self.base}/collections/{name}/points/count", json={
+                "exact": True, "filter": {"must": flt["must"] + [{"is_empty": {"key": "private_to"}}]}})
+            return left.is_success and int(left.json().get("result", {}).get("count", 1)) == 0
 
     async def delete_document(self, tenant_id: str, doc_id: str) -> int:
         """Remove all chunks for a specific document. Returns how many points went.
@@ -1691,7 +1797,8 @@ class QdrantStore:
         async with httpx.AsyncClient(timeout=30.0, headers=self._headers()) as client:
             while True:
                 body: dict = {"limit": 256, "with_vector": False,
-                              "with_payload": ["doc_id", "filename", "audience", "audience_by", "source_type"]}
+                              "with_payload": ["doc_id", "filename", "audience", "audience_by", "source_type",
+                                               "private_to"]}
                 if offset is not None:
                     body["offset"] = offset
                 resp = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
@@ -1702,7 +1809,7 @@ class QdrantStore:
                 for p in result.get("points", []):
                     pl = p.get("payload") or {}
                     did = str(pl.get("doc_id") or "")
-                    if not did:
+                    if not did or not _audience_allows(None, pl):    # someone else's private document
                         continue
                     d = docs.setdefault(did, {"doc_id": did, "filename": pl.get("filename"), "chunks": 0,
                                               "audiences": set(), "owner_set": False,
@@ -1782,7 +1889,7 @@ class VulaIngestionPipeline:
         self.store = QdrantStore()
 
     async def ingest_file(self, file_path: Path, source_type: str = "document",
-                          audience: Optional[str] = None) -> IngestionResult:
+                          audience: Optional[str] = None, private_to: Optional[str] = None) -> IngestionResult:
         """
         Full pipeline for a single file.
         Returns IngestionResult with stats.
@@ -1831,6 +1938,7 @@ class VulaIngestionPipeline:
                             "source_type": source_type,
                             "audience": default_audience(source_type, audience),
                             **owner_set,
+                            **({"private_to": str(private_to), "audience": "owner"} if private_to else {}),
                         },
                     )
                     all_chunks.append(chunk)
@@ -2123,11 +2231,12 @@ class VulaIngestionPipeline:
         except Exception:
             # Fallback to direct Ollama HTTP if litellm fails — bypasses install_ollama_auth's
             # num_ctx cap same as the other raw-httpx Ollama calls in this file, so set it here too.
+            from core.llm_router import think_off
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
                     f"{OLLAMA_BASE}/api/generate",
                     json={"model": settings.model_worker, "prompt": f"{system_msg}\n\n{user_msg}",
-                          "stream": False,
+                          "stream": False, **think_off(settings.model_worker),
                           "options": {"temperature": 0.3, "num_predict": 1024, "num_ctx": 8192}},
                 )
                 r.raise_for_status()

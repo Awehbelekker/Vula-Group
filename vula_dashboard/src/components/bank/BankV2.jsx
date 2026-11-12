@@ -35,7 +35,7 @@ export default function BankV2({ tenantId }) {
             <Upload size={16} aria-hidden="true" />{b.busy ? "Working…" : "Upload statement"}
             <input type="file" accept="application/pdf" className="vbr-file" disabled={b.busy} onChange={e => { b.upload(e.target.files[0]); e.target.value = ""; }} />
           </label>
-          <Button variant="secondary" Icon={Settings2} onClick={() => setTools(true)}>Tools</Button>
+          <Button variant="secondary" Icon={Settings2} onClick={() => { setTools(true); b.loadBankAccounts(); }}>Tools</Button>
         </>} />
       {b.msg && <p className="vbr-msg" role="status">{plain(b.msg)}</p>}
 
@@ -96,10 +96,34 @@ export default function BankV2({ tenantId }) {
           <Button variant="secondary" Icon={RefreshCw} disabled={b.busy} onClick={() => { b.recategorize(); setTools(false); }}>Re-run the AI on unallocated lines</Button>
           <Button variant="secondary" Icon={MessageCircle} onClick={() => { b.reviewOnWhatsApp(); setTools(false); }}>Review on WhatsApp</Button>
           <p className="vbr-sub">Vula asks you about each unallocated line on WhatsApp — reply to allocate it.</p>
+          {b.hasProjects && <BankAccounts b={b} />}
           {b.msg && <p className="vbr-msg" role="status">{plain(b.msg)}</p>}
         </div>
       </Sheet>
     </div>
+  );
+}
+
+// An account kept for one project (DIGG's Porterfield account): every line from it is that project's.
+// Every other account is the whole business's — its lines go on projects one by one.
+function BankAccounts({ b }) {
+  return (
+    <section className="vbr-accounts" aria-label="Bank accounts">
+      <h3 className="vbr-h">Bank accounts</h3>
+      <p className="vbr-sub">A statement is the whole business's. If an account is kept for one project, choose it here and every line from that account goes on that project.</p>
+      {b.bankAccounts.length === 0
+        ? <p className="vbr-sub">No accounts yet — they appear as Vula reads your statements.</p>
+        : <ul className="vbr-acct-list">{b.bankAccounts.map(a => (
+            <li key={a.id} className="vbr-acct">
+              <span className="vbr-acct-name"><b>{[a.bank, a.account].filter(Boolean).join(" ")}</b>
+                {a.lines != null && <span className="vbr-sub"> · {a.lines} line{a.lines === 1 ? "" : "s"}</span>}</span>
+              <Select aria-label={`Project for account ${a.account}`} value={a.project || ""}
+                onChange={e => b.setAccountProject(a.id, e.target.value)}>
+                <option value="">Whole business</option>
+                {b.projectNames.map(p => <option key={p} value={p}>{p}</option>)}
+              </Select>
+            </li>))}</ul>}
+    </section>
   );
 }
 

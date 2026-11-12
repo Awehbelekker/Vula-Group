@@ -32,7 +32,14 @@ class Settings(BaseSettings):
     model_worker: str = "deepseek-r1:8b"
     model_reasoner: str = "deepseek-r1:14b"
     model_embed: str = "bge-m3"
-    model_ocr: str = "llava:7b"
+    model_ocr: str = "llava:7b"            # local vision: Smart Scanner fields, drawing reader
+    # Local reader for scanned document pages (vula/ingestion/pipeline.py OCRProcessor): a
+    # document-OCR model, not a general vision model. GLM-OCR (0.9B, ~2.2 GB, MIT) fits next to
+    # the 8B text model on an 8 GB card. Not installed on the box -> model_ocr, as before.
+    model_doc_ocr: str = "glm-ocr"
+    # Models the local box should hold; any missing is downloaded through the tunnel after boot
+    # (vula/local_models.py). Comma-separated Ollama names; blank = never pull. Never deletes.
+    local_models_ensure: str = ""
     model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
     model_image: str = "google/gemini-2.5-flash-image"  # OpenRouter image GENERATION (AI product photos)
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
@@ -103,6 +110,9 @@ class Settings(BaseSettings):
     # POPIA (2026-10-31): uploaded plans and their takeoff jobs are deleted this many days after
     # upload (vula/takeoff/api.purge_expired, run daily). 0 keeps them forever — not recommended.
     takeoff_retention_days: int = 90
+    # How often connected mailboxes are checked for new mail (vula/api/server.py::_email_sync_loop).
+    # A check with nothing new is one IMAP login; AI cost is per email read, not per check.
+    email_sync_minutes: int = 10
     # POPIA s14 retention, in days (0 keeps it). Agreed 9 Nov 2026: technical data briefly,
     # conversations and unconverted leads for a year. vula/retention.py; docs/security-model.md.
     wa_dedup_retention_days: int = 30          # vula_wa_msg_dedup (inbound dedupe, once-only send keys)
@@ -242,6 +252,14 @@ class Settings(BaseSettings):
     # recorded, nothing is silently substituted.
     whatsapp_notify_template: str = ""
     whatsapp_notify_template_lang: str = "en"
+    # Approved Meta UTILITY template that thanks someone who left their WhatsApp number on a
+    # business's website enquiry form (2026-11-10, vula/listings/service.py). They asked to be
+    # contacted, but haven't messaged the business, so free-form text can't reach them; this
+    # template can, and their reply opens the 24-hour window for the agent. Body parameters, in
+    # order: first name, business name, what they asked about. Wording to submit to Meta:
+    # docs/whatsapp-enquiry-template.md. Empty (the default) sends nothing — today's behaviour.
+    whatsapp_enquiry_template: str = ""
+    whatsapp_enquiry_template_lang: str = "en"
     # Approved Meta template for payment reminders outside the 24-hour window. Body parameters,
     # in order: customer name, invoice number, amount owed, pay-page link. Unset → a reminder
     # that can't go as free text is logged as an error (vula/api/commerce._send_reminder).

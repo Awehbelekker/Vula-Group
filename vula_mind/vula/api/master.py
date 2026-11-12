@@ -180,7 +180,7 @@ async def master_update_tenant(tenant_id: str, body: dict,
     return res.data[0]
 
 
-# ── Per-business switches (vula/features.py, migration 261) ────────────────────
+# ── Per-business switches (vula/features.py, migration 266) ────────────────────
 # New behaviour piloted on one business before it is switched on for everyone.
 
 @router.get("/tenants/{tenant_id}/features")
@@ -210,7 +210,7 @@ async def master_set_tenant_features(tenant_id: str, body: dict,
         (_client().table("vula_tenant_config").update({"features": merged})
          .eq("tenant_id", tenant_id).execute())
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Couldn't save ({exc}). Run migration 261?")
+        raise HTTPException(status_code=503, detail=f"Couldn't save ({exc}). Run migration 266?")
     _tenants.invalidate(tenant_id)
     back = (_client().table("vula_tenant_config").select("features")
             .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0].get("features") or {}
@@ -1671,8 +1671,22 @@ async def decision_bench_start(body: Optional[dict] = None):
     run_id = "bench-" + uuid.uuid4().hex[:10]
     decisions = [d for d in (body.get("decisions") or []) if d in ("skill", "escalation", "expense_purpose")] or None
     limit = int(body["limit"]) if str(body.get("limit") or "").isdigit() else None
-    _BENCH_TASKS[run_id] = asyncio.create_task(decision_bench.run(run_id, decisions=decisions, limit=limit))
-    return {"run_id": run_id, "started": True}
+    # 12 Nov 2026: compare models on the local box too ("qwen3:8b", "llama3.1:8b"): each is asked
+    # today's prompt with no cloud fallback, next to today's classifier ("current").
+    local = [str(m).strip() for m in (body.get("local_models") or []) if str(m).strip()]
+    providers = None
+    if local:
+        if len(local) > 3:
+            raise HTTPException(status_code=422, detail="Compare up to 3 local models at a time.")
+        bad = [m for m in local if not decision_bench.LOCAL_MODEL_RE.match(m)]
+        if bad:
+            raise HTTPException(status_code=422, detail=f"Not an Ollama model name: {', '.join(bad)}")
+        providers = ["current"] + [decision_bench.LOCAL_PREFIX + m for m in local]
+        if body.get("include_jev"):
+            providers.insert(0, "jev")
+    _BENCH_TASKS[run_id] = asyncio.create_task(decision_bench.run(run_id, decisions=decisions, limit=limit,
+                                                                  providers=providers))
+    return {"run_id": run_id, "started": True, "providers": providers or list(decision_bench.PROVIDERS)}
 
 
 @router.get("/decision-bench")
