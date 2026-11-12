@@ -363,10 +363,13 @@ export function useBusinessProfile(tenantId) {
   const [publicKeys, setPublicKeys] = useState([])
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState(false)
+  // The profile as the server has it. Also called with the response when a found answer is
+  // kept or dismissed (ProfileDrafts), so the boxes below fill in without a reload.
+  const apply = d => { setData(d); setDraft(d.answers || {}); setPublicKeys(d.public_keys || []) }
   useEffect(() => {
     if (!tenantId) return
     fetch(`${API}/v1/commerce/${tenantId}/admin/business-profile`)
-      .then(r => r.json()).then(d => { setData(d); setDraft(d.answers || {}); setPublicKeys(d.public_keys || []) })
+      .then(r => r.json()).then(apply)
       .catch(() => setMsg('Couldn’t load the profile.'))
   }, [tenantId])
   const save = async () => {
@@ -383,5 +386,5 @@ export function useBusinessProfile(tenantId) {
     } catch (e) { setMsg(e.message) } finally { setSaving(false) }
   }
   const togglePublic = (key, on) => setPublicKeys(on ? [...publicKeys, key] : publicKeys.filter(k => k !== key))
-  return { data, draft, setDraft, publicKeys, togglePublic, msg, saving, save }
+  return { data, draft, setDraft, publicKeys, togglePublic, msg, saving, save, apply }
 }

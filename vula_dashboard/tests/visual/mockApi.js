@@ -29,6 +29,8 @@ function routes(role, modules = []) {
   const C = `^/v1/commerce/${T}`;
   const A = `${C}/admin`;
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
+  let docsRun = { running: false };
+  const profile = { ...F.businessProfile, answers: { ...F.businessProfile.answers }, drafts: {} };
   // A copy per page, so adding or forgetting a note in one test never leaks into the next.
   const myNotes = F.myNotes.map((n) => ({ ...n }));
   return [
@@ -226,7 +228,7 @@ function routes(role, modules = []) {
     // ── Settings ──
     r("GET", `${A}/order-settings`, () => ({ settings: F.orderSettings })),
     r("GET", `${A}/learned-summary`, () => F.learnedSummary),
-    r("GET", `${A}/business-profile`, () => F.businessProfile),
+    r("GET", `${A}/business-profile`, () => ({ ...profile, answered: Object.keys(profile.answers).length })),
     r("PUT", `${A}/business-profile`, (m, url, req) => {        // the real endpoint echoes the saved profile
       const { answers = {}, public_keys = [] } = req.postDataJSON() || {};
       const answered = Object.values(answers).filter((v) => (v || "").trim()).length;
@@ -354,6 +356,10 @@ function routes(role, modules = []) {
     r("POST", `${A}/assistant`, (m, url, req) => ({ answer: `Today: 4 orders, R 1 842.50 paid. (${req.postDataJSON()?.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}` })),
     r("GET", `${A}/agent-activity`, () => ({ events: F.agentEvents })),
     r("GET", `${A}/quality`, () => F.quality),
+    // setting up from documents: an upload starts a "reading" that the next poll reports as done
+    r("POST", `${A}/setup-from-documents`, () => { docsRun = { running: true, files: [{ name: "Terms of trade.pdf", status: "reading", drafts: 0 }] }; return { status: "queued", files: ["Terms of trade.pdf"], skipped: [] }; }),
+    r("GET", `${A}/setup-from-documents`, () => { const now = docsRun; if (docsRun.running) { docsRun = { running: false, step: "done", drafts: 2, files: [{ name: "Terms of trade.pdf", status: "done", drafts: 2 }] }; profile.drafts = { ...F.profileDrafts }; } return { status: now }; }),
+    r("POST", `${A}/business-profile/drafts`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const k of b.accept || []) { if (profile.drafts[k]) { profile.answers[k] = profile.drafts[k].answer; delete profile.drafts[k]; } } for (const k of b.dismiss || []) delete profile.drafts[k]; return { ...profile, answered: Object.keys(profile.answers).length, accepted: b.accept || [], dismissed: (b.dismiss || []).length }; }),
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
     r("POST", `${A}/conversations/${T}/feedback`, () => ({ ok: true })),

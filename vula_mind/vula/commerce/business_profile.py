@@ -175,7 +175,9 @@ def status(tenant_id: str) -> Dict[str, Any]:
     return {"questions": qs, "answers": answers, "missing": [q["key"] for q in missing],
             "answered": len(qs) - len(missing), "total": len(qs),
             "public_keys": get_public_keys(tenant_id),
-            "drafts": {k: d for k, d in drafts.items() if k in {q["key"] for q in missing}}}
+            # each draft with where it was found, so the owner can judge it before keeping it
+            "drafts": {k: {**d, "source": draft_source(d)} for k, d in drafts.items()
+                       if k in {q["key"] for q in missing}}}
 
 
 def next_question(tenant_id: str, skipped: Optional[set] = None) -> Optional[Dict[str, str]]:
@@ -288,12 +290,59 @@ _STOP_RE = _re.compile(r"^\s*(?:stop|cancel|done|finish|that'?s all|enough)\s*[.
 
 _YES_RE = _re.compile(r"^\s*(?:y|yes|yep|yebo|ja|correct|that'?s (?:right|correct)|keep(?: it)?|"
                      r"still (?:right|true|correct)|👍|✅)\s*[.!]?\s*$", _re.I)
+DOCUMENT_PREFIX = "document: "      # a draft's "url" when it came from an uploaded document
+
+
+def draft_source(draft: Dict[str, Any]) -> Dict[str, str]:
+    """Where a draft was found, for showing to the owner: {"kind": "document"|"website",
+    "label": the file name or the page address}."""
+    where = str((draft or {}).get("url") or "")
+    if where.startswith(DOCUMENT_PREFIX):
+        return {"kind": "document", "label": where[len(DOCUMENT_PREFIX):]}
+    return {"kind": "website", "label": where}
+
+
+def _draft_lead(draft: Dict[str, Any]) -> str:
+    src = draft_source(draft)
+    return f"Your document “{src['label']}” says" if src["kind"] == "document" else "Your website says"
+
+
+async def accept_drafts(tenant_id: str, keys: List[str], by: str = "") -> Dict[str, Any]:
+    """Turn drafts into answers — the owner said they are right. Only keys that still have a
+    draft are saved; the result is save_answers' (with the fresh status), plus what was kept."""
+    drafts = get_drafts(tenant_id)
+    updates = {k: drafts[k]["answer"] for k in (keys or []) if k in drafts}
+    if not updates:
+        return {"saved": True, "accepted": [], **status(tenant_id)}
+    res = await save_answers(tenant_id, updates, by=by)
+    return {**res, "accepted": sorted(updates) if res.get("saved") else []}
+
+
+def discard_drafts(tenant_id: str, keys: List[str]) -> int:
+    """Throw drafts away — the owner said they are wrong or not wanted. Returns how many went."""
+    try:
+        rows = (_client().table("vula_business_profile").select("drafts")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        current = dict((rows[0].get("drafts") if rows else None) or {})
+        gone = [k for k in (keys or []) if k in current]
+        if not gone:
+            return 0
+        for k in gone:
+            current.pop(k)
+        _client().table("vula_business_profile").update({"drafts": current}).eq("tenant_id", tenant_id).execute()
+        return len(gone)
+    except Exception as exc:
+        log.warning("business profile drafts not discarded for %s: %s", tenant_id, exc)
+        return 0
+
+
 def _ask(q: Dict[str, str], st: Dict[str, Any]) -> str:
     draft = (st.get("drafts") or {}).get(q["key"])
     head = f"Question {st['answered'] + 1} of {st['total']}: {q['q']}"
     if draft:
-        # From the business's own website, quoted — confirmed by the owner before anyone is told it.
-        return (f"{head}\n\nYour website says: “{draft['answer']}”\n\n"
+        # From the business's own website or document, quoted — confirmed by the owner before
+        # anyone is told it.
+        return (f"{head}\n\n{_draft_lead(draft)}: “{draft['answer']}”\n\n"
                 "Reply *yes* to keep that, or send the right answer (or *skip*, or *stop* to finish later).")
     return f"{head}\n\n(Reply with the answer — or *skip*, or *stop* to finish later.)"
 
@@ -318,8 +367,10 @@ async def handle_interview(tenant_id: str, phone: str, text: str) -> Optional[st
         lead = ("Let's set up your business profile, so I answer customers and your team from what "
                 "YOU tell me, not guesses.")
         if st.get("drafts"):
-            lead += (f" I read your website and drafted {len(st['drafts'])} of the answers — "
-                     "just check them.")
+            kinds = {draft_source(d)["kind"] for d in st["drafts"].values()}
+            read = ("your website and your documents" if len(kinds) > 1
+                    else ("your documents" if kinds == {"document"} else "your website"))
+            lead += f" I read {read} and drafted {len(st['drafts'])} of the answers — just check them."
         return lead + "\n\n" + _ask(q, st)
     asked, _, skipped = active
     if _STOP_RE.search(text or ""):

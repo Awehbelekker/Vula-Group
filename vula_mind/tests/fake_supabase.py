@@ -34,7 +34,9 @@ class _Query:
 
     def upsert(self, payload, on_conflict: str = "", **_k):
         self._op, self._payload = "upsert", payload
-        self._conflict = [c.strip() for c in on_conflict.split(",") if c.strip()]
+        # with no on_conflict, Postgres upserts on the table's primary key (db.primary_keys)
+        self._conflict = ([c.strip() for c in on_conflict.split(",") if c.strip()]
+                          or list(self._db.primary_keys.get(self._table, [])))
         return self
 
     def update(self, payload):
@@ -134,6 +136,7 @@ class FakeSupabase:
     def __init__(self, rows: Dict[str, List[dict]] | None = None):
         self.rows: Dict[str, List[dict]] = {k: [dict(r) for r in v] for k, v in (rows or {}).items()}
         self.fail: set = set()      # table names whose queries raise
+        self.primary_keys: Dict[str, List[str]] = {}   # table -> key columns, for a bare upsert
 
     def table(self, name: str) -> _Query:
         return _Query(self, name)

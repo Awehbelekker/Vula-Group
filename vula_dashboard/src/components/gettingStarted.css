@@ -21,3 +21,17 @@
 .vgs-opt { margin-left: var(--space-2); padding: 1px 6px; border: 1px solid var(--line); border-radius: var(--radius-md); font-size: var(--fs-caption); color: var(--muted); }
 .vgs-plan { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); color: var(--ink); }
 .vgs-plan-text { flex: 1 1 220px; margin: 0; min-width: 0; font-size: var(--fs-body); }
+
+/* "Vula found these — check them" (ProfileDrafts.jsx) */
+.vpd { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.vpd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vpd-item { display: flex; flex-direction: column; gap: 4px; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); min-width: 0; overflow-wrap: anywhere; }
+.vpd-answer { font-size: var(--fs-body); color: var(--ink); line-height: 1.45; }
+.vpd-source { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-caption); color: var(--muted); min-width: 0; }
+.vpd-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
+
+/* "Let Vula fill it in" — upload company documents (GettingStarted.jsx) */
+.vgs-fill { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); min-width: 0; }
+.vgs-fill-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.vgs-fill-text { flex: 1 1 240px; margin: 0; min-width: 0; font-size: var(--fs-body); color: var(--ink); }
+.vgs-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; }

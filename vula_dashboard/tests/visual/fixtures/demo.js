@@ -1089,6 +1089,13 @@ export const agentEvents = [
   { kind: "route", task: "document_extract", escalated: true, reason: "local GPU unreachable", at: "2026-10-16T15:20:00Z" },
 ];
 export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name.", team_voice_prompt: "Relaxed and direct. We're a small team." };
+// What Vula drafts from an uploaded document, for the owner to keep or dismiss (ProfileDrafts.jsx).
+// Both are profile questions the demo business has not answered yet.
+const fromTerms = { url: "document: Terms of trade.pdf", source: { kind: "document", label: "Terms of trade.pdf" } };
+export const profileDrafts = {
+  cancellations: { answer: "Cancel up to 24 hours before delivery for a full refund.", quote: "You may cancel up to 24 hours before delivery for a full refund.", ...fromTerms },
+  faq: { answer: "Do you cater for events? Yes, with three days' notice.", quote: "We cater for events with three days' notice.", ...fromTerms },
+};
 // Home's "Finish setting up" card and the plan under it (GettingStarted.jsx).
 export const ownerSetup = { done: 4, total: 6, complete: false, next: "profile", whatsapp_connected: false, steps: [
   { id: "branding", label: "Add your logo and colour", why: "Your invoices and your dashboard carry your brand.", optional: false, done: true, tab: "settings" },
