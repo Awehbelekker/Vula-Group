@@ -32,7 +32,11 @@ class Settings(BaseSettings):
     model_worker: str = "deepseek-r1:8b"
     model_reasoner: str = "deepseek-r1:14b"
     model_embed: str = "bge-m3"
-    model_ocr: str = "llava:7b"
+    model_ocr: str = "llava:7b"            # local vision: Smart Scanner fields, drawing reader
+    # Local reader for scanned document pages (vula/ingestion/pipeline.py OCRProcessor): a
+    # document-OCR model, not a general vision model. GLM-OCR (0.9B, ~2.2 GB, MIT) fits next to
+    # the 8B text model on an 8 GB card. Not installed on the box -> model_ocr, as before.
+    model_doc_ocr: str = "glm-ocr"
     model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
     model_image: str = "google/gemini-2.5-flash-image"  # OpenRouter image GENERATION (AI product photos)
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
