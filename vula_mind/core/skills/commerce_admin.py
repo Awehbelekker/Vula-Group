@@ -1053,12 +1053,16 @@ MEETING_TOOLS = [
             "'meeting with Acme Builders Thursday 10am at 12 Main Road', 'remind me an hour before "
             "the Acme meeting', 'what meetings do I have this week?', 'move the Acme meeting to "
             "11', 'add the address: 5 Dock Rd', 'cancel tomorrow's meeting', and checking in on arrival: "
-            "'arrived', 'I'm at Acme', 'check in' (action=check_in, `with` = where if they said). "
-            "action=book / list / update / cancel / check_in. NOT a customer booking a service (create_booking) and NOT notes "
+            "'arrived', 'I'm at Acme', 'check in' (action=check_in, `with` = where if they said), and a "
+            "brief on who they're meeting — last WhatsApp messages, emails, open quotes and invoices, "
+            "past meeting notes: 'brief me on the Acme meeting' (action=brief), or with_brief=true when "
+            "they ask for one on the reminder ('remind me an hour before with a brief'). "
+            "action=book / list / update / cancel / check_in / brief. NOT a customer booking a service (create_booking) and NOT notes "
             "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
             "them — never work out a date or time yourself. No reminder unless they ask for one."),
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in"]},
+            "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in", "brief"]},
+            "with_brief": {"type": "boolean", "description": "Only when they asked for a brief on the reminder."},
             "with": {"type": "string", "description": "Who or which company the meeting is with "
                                                       "(for update/cancel: which meeting)."},
             "when": {"type": "string", "description": "The person's own words, e.g. 'Thursday at 10'."},
@@ -6394,7 +6398,10 @@ class CommerceAdminSkill(BaseSkill):
                 out.append(f"📝 {m['notes']}")
             if m.get("remind_minutes"):
                 at = mt._at(m) - timedelta(minutes=int(m["remind_minutes"]))
-                out.append(f"⏰ I'll remind you {mt.lead_text(int(m['remind_minutes']))} ({at.strftime('%H:%M')}).")
+                out.append(f"⏰ I'll remind you {mt.lead_text(int(m['remind_minutes']))} ({at.strftime('%H:%M')})"
+                           + (", with a brief on them." if m.get("with_brief") else "."))
+            elif m.get("with_brief"):
+                out.append("🗂️ Brief noted — say e.g. *remind me 1 hour before* and it comes with the reminder.")
             elif not asked_remind:
                 out.append("Want a reminder before it? Say e.g. *remind me 1 hour before*.")
             other = mt.clashes(tid, phone, mt._at(m), skip_id=m.get("id"))
@@ -6419,7 +6426,8 @@ class CommerceAdminSkill(BaseSkill):
                 logger.debug("meeting contact lookup skipped: %s", exc)
             try:
                 m = mt.create(tid, created_by=phone, with_name=who, starts_at=at, address=address or None,
-                              contact_phone=contact_phone, notes=args.get("notes"), remind_minutes=lead or None)
+                              contact_phone=contact_phone, notes=args.get("notes"), remind_minutes=lead or None,
+                              with_brief=bool(args.get("with_brief")))
             except Exception as exc:
                 logger.warning("meeting booking failed for %s: %s", tid, exc)
                 m = None
@@ -6463,6 +6471,9 @@ class CommerceAdminSkill(BaseSkill):
             listing = "\n".join(f"• {mt.line(r)}" for r in found[:5])
             return {"status": "need_info", "message": f"Which one?\n{listing}"}
         m = found[0]
+        if action == "brief":
+            from vula import meeting_brief
+            return {"reply_verbatim": f"{mt.line(m)}\n\n" + meeting_brief.build(tid, m, phone)}
         if action == "cancel":
             back = mt.update(tid, m["id"], {"status": "cancelled"})
             if not back or back.get("status") != "cancelled":
@@ -6480,6 +6491,8 @@ class CommerceAdminSkill(BaseSkill):
             patch["notes"] = str(args["notes"]).strip()[:1000]
         if remind_words:
             patch["remind_minutes"] = lead or None
+        if "with_brief" in args and args["with_brief"] is not None:
+            patch["with_brief"] = bool(args["with_brief"])
         if not patch:
             return {"status": "need_info", "message": "What should I change — the time, the address, or a reminder?"}
         back = mt.update(tid, m["id"], patch)

@@ -28,7 +28,16 @@ from vula.when import SAST, now_sast, say
 log = logging.getLogger(__name__)
 
 TABLE = "vula_meetings"
-_COLS = "id,tenant_id,created_by,with_name,contact_phone,address,notes,starts_at,remind_minutes,reminded_at,status"
+_COLS_BASE = "id,tenant_id,created_by,with_name,contact_phone,address,notes,starts_at,remind_minutes,reminded_at,status"
+_COLS = _COLS_BASE + ",with_brief"          # migration 263
+
+
+def _select(build):
+    """Run a select with the brief flag, or without it before migration 263 is applied."""
+    try:
+        return build(_COLS).execute().data or []
+    except Exception:
+        return build(_COLS_BASE).execute().data or []
 
 
 def _client():
@@ -88,20 +97,27 @@ def lead_text(minutes: int) -> str:
 # ── storage ──────────────────────────────────────────────────────────────────────────────
 
 def get(tenant_id: str, meeting_id: str) -> Optional[Dict[str, Any]]:
-    rows = (_client().table(TABLE).select(_COLS).eq("tenant_id", tenant_id).eq("id", meeting_id)
-            .limit(1).execute().data or [])
+    rows = _select(lambda c: _client().table(TABLE).select(c).eq("tenant_id", tenant_id).eq("id", meeting_id).limit(1))
     return rows[0] if rows else None
 
 
 def create(tenant_id: str, *, created_by: str, with_name: str, starts_at: datetime,
            address: Optional[str] = None, contact_phone: Optional[str] = None,
-           notes: Optional[str] = None, remind_minutes: Optional[int] = None) -> Optional[Dict[str, Any]]:
+           notes: Optional[str] = None, remind_minutes: Optional[int] = None,
+           with_brief: bool = False) -> Optional[Dict[str, Any]]:
     """Insert and read the row back; None if it didn't land."""
     row = {"tenant_id": tenant_id, "created_by": digits(created_by), "with_name": with_name.strip()[:200],
            "contact_phone": contact_phone, "address": (address or "").strip()[:300] or None,
            "notes": (notes or "").strip()[:1000] or None, "starts_at": starts_at.isoformat(),
            "remind_minutes": remind_minutes or None}
-    res = _client().table(TABLE).insert(row).execute()
+    if with_brief:
+        row["with_brief"] = True                       # migration 263
+    try:
+        res = _client().table(TABLE).insert(row).execute()
+    except Exception:
+        if not row.pop("with_brief", None):
+            raise
+        res = _client().table(TABLE).insert(row).execute()
     new_id = (res.data or [{}])[0].get("id")
     return get(tenant_id, new_id) if new_id else None
 
@@ -120,11 +136,11 @@ def update(tenant_id: str, meeting_id: str, patch: Dict[str, Any]) -> Optional[D
 def upcoming(tenant_id: str, phone: str, *, days: int = 14, limit: int = 15,
              now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     now = now or now_sast()
-    return (_client().table(TABLE).select(_COLS).eq("tenant_id", tenant_id)
-            .eq("created_by", digits(phone)).eq("status", "scheduled")
-            .gte("starts_at", (now - timedelta(minutes=30)).isoformat())
-            .lte("starts_at", (now + timedelta(days=days)).isoformat())
-            .order("starts_at").limit(limit).execute().data or [])
+    return _select(lambda c: _client().table(TABLE).select(c).eq("tenant_id", tenant_id)
+                   .eq("created_by", digits(phone)).eq("status", "scheduled")
+                   .gte("starts_at", (now - timedelta(minutes=30)).isoformat())
+                   .lte("starts_at", (now + timedelta(days=days)).isoformat())
+                   .order("starts_at").limit(limit))
 
 
 def find(tenant_id: str, phone: str, hint: str = "", now: Optional[datetime] = None) -> List[Dict[str, Any]]:
@@ -141,7 +157,7 @@ def find(tenant_id: str, phone: str, hint: str = "", now: Optional[datetime] = N
 def clashes(tenant_id: str, phone: str, at: datetime, skip_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Other meetings of this person within an hour either side."""
     try:
-        rows = (_client().table(TABLE).select(_COLS).eq("tenant_id", tenant_id)
+        rows = (_client().table(TABLE).select(_COLS_BASE).eq("tenant_id", tenant_id)
                 .eq("created_by", digits(phone)).eq("status", "scheduled")
                 .gte("starts_at", (at - timedelta(minutes=59)).isoformat())
                 .lte("starts_at", (at + timedelta(minutes=59)).isoformat()).execute().data or [])
@@ -151,7 +167,7 @@ def clashes(tenant_id: str, phone: str, at: datetime, skip_id: Optional[str] = N
 
 
 def on_day(tenant_id: str, day_start: datetime, day_end: datetime, phone: Optional[str] = None) -> List[Dict[str, Any]]:
-    q = (_client().table(TABLE).select(_COLS).eq("tenant_id", tenant_id).eq("status", "scheduled")
+    q = (_client().table(TABLE).select(_COLS_BASE).eq("tenant_id", tenant_id).eq("status", "scheduled")
          .gte("starts_at", day_start.isoformat()).lt("starts_at", day_end.isoformat()))
     if phone:
         q = q.eq("created_by", digits(phone))
@@ -193,11 +209,11 @@ async def send_due_reminders(now: Optional[datetime] = None) -> int:
     from vula.api.whatsapp import _send_reply
     now = now or now_sast()
     try:
-        rows = (_client().table(TABLE).select(_COLS).eq("status", "scheduled")
-                .not_.is_("remind_minutes", "null").is_("reminded_at", "null")
-                .gt("starts_at", now.isoformat())
-                .lte("starts_at", (now + timedelta(minutes=2880)).isoformat())
-                .limit(500).execute().data or [])
+        rows = _select(lambda c: _client().table(TABLE).select(c).eq("status", "scheduled")
+                       .not_.is_("remind_minutes", "null").is_("reminded_at", "null")
+                       .gt("starts_at", now.isoformat())
+                       .lte("starts_at", (now + timedelta(minutes=2880)).isoformat())
+                       .limit(500))
     except Exception as exc:
         log.debug("meeting reminders skipped (run migration 258?): %s", exc)
         return 0
@@ -210,7 +226,14 @@ async def send_due_reminders(now: Optional[datetime] = None) -> int:
                        .eq("id", m["id"]).is_("reminded_at", "null").execute().data)
             if not claimed:
                 continue
-            if await _send_reply(m["created_by"], reminder_text(m, now), m["tenant_id"],
+            text = reminder_text(m, now)
+            if m.get("with_brief"):                     # only when they asked (vula/meeting_brief.py)
+                try:
+                    from vula import meeting_brief
+                    text += "\n\n" + meeting_brief.build(m["tenant_id"], m, m["created_by"])
+                except Exception as exc:
+                    log.debug("meeting brief skipped: %s", exc)
+            if await _send_reply(m["created_by"], text, m["tenant_id"],
                                  idem_key=f"meeting:{m['id']}:{m['starts_at']}"):
                 sent += 1
         except Exception as exc:
