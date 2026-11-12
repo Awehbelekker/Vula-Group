@@ -3273,7 +3273,8 @@ async def _handle_document_ingest_one(
     # Tell them what happens next — but ONCE per burst (per phone, 8s), so a batch of 7 docs
     # or a client re-sending one file 7× both get a single "Got it", then a result per
     # distinct document.
-    if _local_media_claim(tenant_id, f"ack:{phone}", 8.0):
+    from vula.api import doc_batch as _doc_batch
+    if _local_media_claim(tenant_id, f"ack:{phone}", 8.0) and not _doc_batch.continuing(phone):
         if kind == "image":
             ack = ("📸 Got it — reading that now. If it's a receipt or invoice I'll book it "
                    "straight into your books; anything else gets filed. Give me a minute…")
