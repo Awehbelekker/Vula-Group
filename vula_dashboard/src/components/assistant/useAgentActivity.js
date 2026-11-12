@@ -15,6 +15,8 @@ export function useAgentActivity(tenantId) {
 
   const [persona, setPersona] = useState("");
   const [suggested, setSuggested] = useState("");
+  const [teamVoice, setTeamVoice] = useState("");
+  const [teamMsg, setTeamMsg] = useState("");
   const [voiceMsg, setVoiceMsg] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
 
@@ -30,6 +32,7 @@ export function useAgentActivity(tenantId) {
       .then(r => r.json()).catch(() => ({}));
     setPersona(d.persona_prompt || "");
     setSuggested(d.persona_prompt_suggested || "");
+    setTeamVoice(d.team_voice_prompt || "");
   }, [tenantId]);
   useEffect(() => { loadPersona(); }, [loadPersona]);
 
@@ -42,6 +45,19 @@ export function useAgentActivity(tenantId) {
     if (r.error) setVoiceMsg(r.error);
     else { setPersona(text); setSuggested(""); setVoiceMsg("Saved ✓"); }
     setTimeout(() => setVoiceMsg(""), 4000);
+  };
+
+  // How Vula talks to the business's own people — separate from the customer voice above.
+  const saveTeamVoice = async (text) => {
+    setTeamMsg("Saving…");
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/persona`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team_voice_prompt: text }),
+    }).then(async r => (r.ok ? r.json() : { error: (await r.json().catch(() => ({}))).detail || "Couldn't save that." }))
+      .catch(() => ({ error: "Couldn't reach Vula. Please try again." }));
+    if (r.error) setTeamMsg(r.error);
+    else { setTeamVoice(r.team_voice_prompt ?? text); setTeamMsg("Saved ✓"); }
+    setTimeout(() => setTeamMsg(""), 4000);
   };
 
   const analyzeVoice = async () => {
@@ -66,5 +82,5 @@ export function useAgentActivity(tenantId) {
     setTimeout(() => setMsg(""), 4000);
   };
 
-  return { events, q, setQ, a, setA, msg, persona, setPersona, suggested, voiceMsg, analyzing, load, savePersona, analyzeVoice, teach }
+  return { events, q, setQ, a, setA, msg, persona, setPersona, suggested, voiceMsg, analyzing, load, savePersona, analyzeVoice, teach, teamVoice, setTeamVoice, teamMsg, saveTeamVoice }
 }

@@ -2334,12 +2334,18 @@ class CommerceAdminSkill(BaseSkill):
         # log_meeting's due_phrase + deterministic dateutil resolution) — this line only gives it
         # enough grounding to phrase a sensible tool call/question, not to compute a final date.
         today_line = f"Today's date is {datetime.now(timezone.utc).strftime('%A, %d %B %Y')}.\n\n"
+        # The voice for the business's OWN people. It used to be the whole persona_prompt, which
+        # for a shop is the voice learned from its customer messages ("Chat replies: …
+        # Promotions: …") — so the owner's assistant was told how to write promotions to
+        # customers. core/voice.py picks the team voice; when the composed voice is in force it
+        # arrives through behaviour_preamble instead and isn't repeated here.
         persona_block = ""
         try:
-            from vula.api.tenants import get_config
-            persona = (get_config(tenant_id) or {}).get("persona_prompt")
-            if persona:
-                persona_block = f"\n\nHow you should sound: {persona}"
+            from core import voice
+            if not voice.active():
+                persona = voice.company_voice(tenant_id, "team")
+                if persona:
+                    persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
             pass
 
@@ -2441,7 +2447,10 @@ class CommerceAdminSkill(BaseSkill):
             # despite computing it — only the sales_rep branch above did. A non-English-speaking
             # owner got the generic "mirror their language" fallback instead of the explicit
             # per-language block, letting the loop drift to English mid-multi-turn.
-            + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
+            # The owner/staff branch never said WHO it was talking to (only the rep branch
+            # above did) — name and role go through the shared caller block.
+            + behaviour_preamble(agentic=True, preferred_language=lang,
+                                 caller_name=name or "", caller_role=role or "") + persona_block
                 + self._rules_block(tenant_id)
         )
 

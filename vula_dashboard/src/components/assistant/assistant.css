@@ -60,3 +60,10 @@
 @media (max-width: 767px) {
   .vas-chat { height: calc(100vh - 300px); }
 }
+
+/* "How Vula talks to you" — the person's own style, under the chat (MyVula.jsx) */
+.vas-mine { max-width: 820px; margin-top: var(--space-3); border-top: 1px solid var(--line); padding-top: var(--space-3); min-width: 0; }
+.vas-mine-sum { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+.vas-mine[open] .vas-mine-sum { margin-bottom: var(--space-2); }
+.vas-mine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin-top: var(--space-3); min-width: 0; }
+.vas-mine-grid .vas-row { grid-column: 1 / -1; }

@@ -1847,11 +1847,13 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
     except Exception as exc:
         log.debug("Assistant session/history load failed (non-fatal): %s", exc)
 
+    from core import voice
     skill = get_skill("commerce_admin")
-    out = await skill(SkillInput(
-        question=body.message, tenant_id=tenant_id,
-        conversation_history=history, metadata=metadata,
-    ))
+    with voice.use(tenant_id, "team", "dashboard", person.prefs if person is not None else None):
+        out = await skill(SkillInput(
+            question=body.message, tenant_id=tenant_id,
+            conversation_history=history, metadata=metadata,
+        ))
     answer = out.answer if (out.success and out.answer) else (out.error or "Sorry, I couldn't process that just now.")
 
     if sid:
@@ -2426,29 +2428,43 @@ async def admin_get_persona(tenant_id: str):
         "persona_prompt": cfg.get("persona_prompt") or "",
         "persona_prompt_suggested": cfg.get("persona_prompt_suggested") or "",
         "persona_prompt_suggested_at": cfg.get("persona_prompt_suggested_at"),
+        # How Vula talks to the business's own people (migration 257) — separate from the
+        # customer voice above, which is often learned from messages sent to customers.
+        "team_voice_prompt": cfg.get("team_voice_prompt") or "",
     }
 
 
 class PersonaPatch(BaseModel):
-    persona_prompt: str
+    persona_prompt: Optional[str] = None
+    team_voice_prompt: Optional[str] = None
 
 
 @router.patch("/{tenant_id}/admin/persona")
 async def admin_set_persona(tenant_id: str, body: PersonaPatch):
-    """Owner sets/edits how Vula should sound — read by commerce_admin/commerce_assistant's
-    persona_block. Accepting a suggestion is just a PATCH with the suggested text as the value;
-    also clears the pending suggestion either way so old suggestions don't linger stale."""
+    """Owner sets/edits how Vula should sound (core/voice.py reads both). `persona_prompt` is
+    the voice for customers; accepting a suggestion is just a PATCH with the suggested text, and
+    saving it clears the pending suggestion so an old one doesn't linger. `team_voice_prompt` is
+    how Vula talks to the business's own people. Either can be sent alone."""
     from vula.api import tenants as _tenants
+    patch: Dict[str, Any] = {}
+    if body.persona_prompt is not None:
+        patch.update({"persona_prompt": body.persona_prompt.strip(),
+                      "persona_prompt_suggested": None, "persona_prompt_suggested_at": None})
+    if body.team_voice_prompt is not None:
+        patch["team_voice_prompt"] = body.team_voice_prompt.strip()[:2000]
+    if not patch:
+        raise HTTPException(status_code=400, detail="Nothing to save.")
     try:
-        service._client().table("vula_tenant_config").update({
-            "persona_prompt": body.persona_prompt.strip(),
-            "persona_prompt_suggested": None,
-            "persona_prompt_suggested_at": None,
-        }).eq("tenant_id", tenant_id).execute()
+        service._client().table("vula_tenant_config").update(patch).eq("tenant_id", tenant_id).execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 116/119?)"}
+        return {"error": f"{exc} (run migration 116/119/257?)"}
     _tenants.invalidate(tenant_id)
-    return {"ok": True, "persona_prompt": body.persona_prompt.strip()}
+    out: Dict[str, Any] = {"ok": True}
+    if "persona_prompt" in patch:
+        out["persona_prompt"] = patch["persona_prompt"]
+    if "team_voice_prompt" in patch:
+        out["team_voice_prompt"] = patch["team_voice_prompt"]
+    return out
 
 
 @router.post("/{tenant_id}/admin/persona/analyze")

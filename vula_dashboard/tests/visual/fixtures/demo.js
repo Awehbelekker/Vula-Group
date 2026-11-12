@@ -1088,7 +1088,16 @@ export const agentEvents = [
   { kind: "route", task: "customer_reply", escalated: false, at: "2026-10-17T06:55:00Z" },
   { kind: "route", task: "document_extract", escalated: true, reason: "local GPU unreachable", at: "2026-10-16T15:20:00Z" },
 ];
-export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name." };
+export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name.", team_voice_prompt: "Relaxed and direct. We're a small team." };
+// "How Vula talks to you" — the signed-in person's own style (assistant/MyVula.jsx).
+export const myVula = {
+  known: true, name: "Demo Owner", prefs: { style: "friendly", reply_length: "short" },
+  options: {
+    style: [{ id: "friendly", label: "Friendly" }, { id: "fun", label: "Fun" }, { id: "formal", label: "Formal" }, { id: "direct", label: "Straight to the point" }],
+    reply_length: [{ id: "short", label: "Short" }, { id: "detailed", label: "Detailed" }],
+    language: [{ id: "en", label: "English" }, { id: "af", label: "Afrikaans" }, { id: "zu", label: "isiZulu" }, { id: "xh", label: "isiXhosa" }],
+  },
+};
 export const automations = [
   { id: "au-1", name: "On its way", trigger_type: "order_status", trigger_config: { to_status: "dispatched" }, action_type: "whatsapp_customer", enabled: true, fire_count: 14, created_from: "form" },
   { id: "au-2", name: "Cheddar running low", trigger_type: "low_stock", trigger_config: {}, action_type: "whatsapp_team", enabled: false, fire_count: 0, created_from: "conversation" },

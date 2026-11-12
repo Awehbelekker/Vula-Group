@@ -476,6 +476,13 @@ class Settings(BaseSettings):
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
 
+    # ── Voice (core/voice.py) ────────────────────────────────────────────────
+    # One composed voice for every skill: the company voice (team or customer), the staff
+    # member's own style, and the channel. Off = replies sound exactly as before (the company
+    # voice in the two commerce skills only). Turn on per environment once the weekly benchmark
+    # has been compared before/after — it changes every prompt at once.
+    voice_compose_enabled: bool = False
+
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every
     # keyword silently falls through to the generic "reasoning" skill (the exact mechanism

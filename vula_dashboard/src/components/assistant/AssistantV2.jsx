@@ -7,11 +7,13 @@
 import { Send, Sparkles } from 'lucide-react'
 import { Button, Input } from '../ui/index.jsx'
 import { SUGGESTIONS, useAssistantChat } from './useAssistantChat'
+import MyVula from './MyVula'
 import './assistant.css'
 
 export default function AssistantV2({ tenantId, inSheet = false }) {
   const x = useAssistantChat(tenantId)
   return (
+    <>
     <section className={`vas-chat${inSheet ? ' vas-chat--sheet' : ''}`} aria-label="Chat to Vula">
       {!inSheet && <p className="vas-sub">Your AI assistant runs the shop with you: ask about sales, orders, stock, invoices or expenses, or tell it to update something. Also on WhatsApp.</p>}
       <ol className="vas-thread" aria-live="polite" aria-label="Conversation">
@@ -32,5 +34,9 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
         <Button type="submit" Icon={Send} disabled={x.sending || !x.input.trim()}>Send</Button>
       </form>
     </section>
+    {/* Below the chat, not inside it: the chat is a fixed-height column, and on a phone anything
+        opened inside it ended up under the bottom bar. */}
+    {!inSheet && <MyVula tenantId={tenantId} />}
+    </>
   )
 }

@@ -1298,13 +1298,15 @@ class CommerceAssistantSkill(BaseSkill):
                        "Turn a day the customer names (\"Thursday\", \"tomorrow\") into its "
                        "YYYY-MM-DD date yourself when calling a tool — don't ask them for it.")
 
+        # The customer voice (the "chat" part of the business's voice). When the composed voice
+        # is in force it arrives through behaviour_preamble instead (core/voice.py).
         persona_block = ""
         try:
-            from vula.api.tenants import get_config
-            from vula.commerce.voice_profile import persona_part
-            persona = persona_part((get_config(tenant_id) or {}).get("persona_prompt") or "", "chat")
-            if persona:
-                persona_block = f"\n\nHow you should sound: {persona}"
+            from core import voice
+            if not voice.active():
+                persona = voice.company_voice(tenant_id, "customer")
+                if persona:
+                    persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
             pass
 

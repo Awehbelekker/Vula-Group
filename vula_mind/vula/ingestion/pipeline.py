@@ -1181,6 +1181,18 @@ def kb_audience(audience: Optional[str]):
         _KB_AUDIENCE.reset(token)
 
 
+def _shared_rules() -> str:
+    """The rules every answering skill gets (honesty, language, untrusted content, and the voice
+    for this turn). This fallback answer path wrote its own prompt with only the untrusted-content
+    rule, so a reply that came through here ignored the person's language and the company voice."""
+    try:
+        from core.skills.base import behaviour_preamble
+        return behaviour_preamble()
+    except Exception:  # noqa: BLE001 — never lose the answer over the wording of the rules
+        from core.prompt_safety import UNTRUSTED_CONTENT_RULE
+        return UNTRUSTED_CONTENT_RULE
+
+
 # 1 Nov 2026 (document search, phase A — measure before changing anything): the retrieval
 # comparison (evals/retrieval.py::run_compare) runs the live cases under several settings side by
 # side. The settings are set here, per task, so a comparison run can never change what a real
@@ -2061,7 +2073,7 @@ class VulaIngestionPipeline:
         if not chunks:
             return "I don't have enough information about that in your business documents yet. Try uploading more documents or rephrase the question."
 
-        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+        from core.prompt_safety import fence
         context = fence(context_label.upper().replace(" ", "_"), "\n\n---\n\n".join(
             f"[From: {c['filename']}, page {c['page_num']}]\n{c['text']}"
             for c in chunks
@@ -2078,7 +2090,7 @@ class VulaIngestionPipeline:
             f"You are Vula, an AI assistant specialising in South African construction and business. "
             f"Answer questions using the {context_label} provided. "
             f"If the answer isn't in the {context_label}, say so clearly. "
-            f"Be concise and practical.\n\n" + UNTRUSTED_CONTENT_RULE
+            f"Be concise and practical.\n\n" + _shared_rules()
         )
         user_msg = (
             f"{context_label.title()}:{context}\n\n"

@@ -30,7 +30,7 @@ export default function AgentActivityV2({ tenantId }) {
       <Card className="vas-card" role="group" aria-labelledby="vas-voice">
         <h2 className="vas-h" id="vas-voice"><MessageSquareText size={18} aria-hidden="true" />How Vula sounds</h2>
         <p className="vas-muted">Set it yourself, or let Vula learn it from your own words: WhatsApp replies you've sent, meeting notes and emails.</p>
-        <Field label="Voice"><Textarea rows={3} value={x.persona} onChange={e => x.setPersona(e.target.value)}
+        <Field label="With your customers"><Textarea rows={3} value={x.persona} onChange={e => x.setPersona(e.target.value)}
           placeholder="e.g. Warm, casual, quick replies. Small family shop, not corporate." /></Field>
         <div className="vas-row">
           <Button Icon={Check} onClick={() => x.savePersona(x.persona)}>Save</Button>
@@ -46,6 +46,13 @@ export default function AgentActivityV2({ tenantId }) {
               <Button size="sm" variant="secondary" Icon={X} onClick={() => x.savePersona(x.persona)}>Dismiss</Button>
             </div>
           </div>)}
+        <Field label="With your team" hint="How Vula talks to you and your staff. Each person can also set their own style under Chat.">
+          <Textarea rows={2} value={x.teamVoice} onChange={e => x.setTeamVoice(e.target.value)}
+            placeholder="e.g. Relaxed and direct. We're a small team and don't stand on ceremony." /></Field>
+        <div className="vas-row">
+          <Button Icon={Check} onClick={() => x.saveTeamVoice(x.teamVoice)}>Save team voice</Button>
+          {x.teamMsg && <span className={x.teamMsg.startsWith('Saved') || x.teamMsg === 'Saving…' ? 'vas-ok' : 'vas-warn'} role="status">{plain(x.teamMsg)}</span>}
+        </div>
       </Card>
 
       <Card className="vas-card" role="group" aria-labelledby="vas-teach">

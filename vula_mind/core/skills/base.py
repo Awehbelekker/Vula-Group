@@ -179,9 +179,10 @@ def caller_block(caller_name: str = "", caller_role: str = "") -> str:
 
 def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_language: str = "",
                        caller_name: str = "", caller_role: str = "") -> str:
-    """Assemble the shared behaviour policy. `persona` (optional, per-tenant) sets the
-    voice/style; the rest enforces integrity, honesty, reasoning, conversation, and
-    untrusted-content rules. `agentic=True` also appends AGENTIC_RULES — pass this for any
+    """Assemble the shared behaviour policy: integrity, honesty, reasoning, conversation and
+    untrusted-content rules, then the voice for this turn (core/voice.py — company voice, the
+    person's own style, the channel) when the entry point has set one. `persona` is an explicit
+    extra header that no caller passes today; the voice comes from core/voice.py. `agentic=True` also appends AGENTIC_RULES — pass this for any
     skill with its own tool-calling loop (TOOL_SPECS + tool_choice='auto').
 
     `caller_name`/`caller_role` (optional) — who is on the other end, when they're the tenant's
@@ -198,8 +199,24 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
     RULES' generic instruction still applies as the fallback, unchanged from before this existed."""
     from core.prompt_safety import UNTRUSTED_CONTENT_RULE
     head = (persona.strip() + "\n\n") if persona else ""
+    # The voice for this turn — company voice, the person's own style, the channel — is set once
+    # at the entry point and read here, so every skill gets it (core/voice.py). A language the
+    # person chose for themselves outranks one detected from a single message.
+    voice_block = ""
+    chosen_language = ""
+    try:
+        from core import voice
+        voice_block = voice.current_block()
+        chosen_language = voice.preferred_language()
+        preferred_language = chosen_language or preferred_language
+    except Exception:  # noqa: BLE001 — a voice must never cost a reply
+        pass
     lang_block = ""
-    if preferred_language:
+    if chosen_language == "en":
+        # They picked English for themselves: say so, or the generic "mirror their language"
+        # rule would follow a stray Afrikaans or isiZulu word.
+        lang_block = "This person has asked for replies in English, whatever language they write in.\n"
+    elif preferred_language:
         try:
             from core.lang import language_name
             name = language_name(preferred_language)
@@ -219,6 +236,9 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
         parts.append(who_block)
     if agentic:
         parts.append(AGENTIC_RULES)
+    if voice_block:
+        # Last, after every rule: style is the lowest priority and says so itself.
+        parts.append(voice_block)
     return head + "\n".join(parts)
 
 

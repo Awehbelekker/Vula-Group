@@ -2102,6 +2102,9 @@ app.include_router(google_router, prefix="/v1/google")
 app.include_router(microsoft_router, prefix="/v1/microsoft")
 app.include_router(dynamics365_router, prefix="/v1/dynamics365")
 app.include_router(email_connect_router, prefix="/v1/email")
+from vula.api.me import router as me_router  # noqa: E402
+# The signed-in person's own settings — /v1/commerce/{tenant}/admin/me/… (same tenant guard).
+app.include_router(me_router, prefix="/v1/commerce")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded

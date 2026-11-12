@@ -108,11 +108,27 @@ async def person_for_login(authorization: str, tenant_id: str) -> Optional[Perso
     access = None if scope.get("full") else list(scope.get("access") or [])
     member = scope.get("member")
     if member:
-        return _from_member(tenant_id, member, user_id=user_id, access=access)
+        return _from_member(tenant_id, {**member, "prefs": prefs_for(tenant_id, member.get("id"))},
+                            user_id=user_id, access=access)
     if not user_id:
         return None
     return Person(tenant_id=tenant_id, user_id=str(user_id), role=scope.get("role") or "",
                   access=access, email=(scope.get("email") or "").strip().lower())
+
+
+def prefs_for(tenant_id: str, member_id: Any) -> Dict[str, Any]:
+    """A member's own style choices (vula_team_members.prefs), or {}."""
+    if not member_id:
+        return {}
+    try:
+        from vula import team_index
+        row = next((r for r in team_index.active_members(tenant_id)
+                    if str(r.get("id")) == str(member_id)), None)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("prefs lookup skipped: %s", exc)
+        return {}
+    prefs = (row or {}).get("prefs")
+    return dict(prefs) if isinstance(prefs, dict) else {}
 
 
 # ── a staff member's own thread with Vula ────────────────────────────────────────────────────

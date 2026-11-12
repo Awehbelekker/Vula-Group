@@ -7723,10 +7723,27 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — see _rag_reply_inner. Every KB search made while answering an outsider
     is limited to customer-visible documents (vula/ingestion/pipeline.py::kb_audience)."""
+    from core import voice
     from vula.ingestion.pipeline import kb_audience
-    with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)):
+    # Who this reply is for decides its voice: the business's own people get the team voice and
+    # their own style; anyone else gets the customer voice (core/voice.py).
+    insider = (not phone) or _is_insider(caller_role) or _is_tenant_owner(tenant_id, phone)
+    with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)), \
+            voice.use(tenant_id, "team" if insider else "customer", "whatsapp" if phone else "dashboard",
+                      _voice_prefs(tenant_id, phone) if insider else None):
         return await _rag_reply_inner(tenant_id, question, conversation_history, phone,
                                       caller_name=caller_name, caller_role=caller_role)
+
+
+def _voice_prefs(tenant_id: str, phone: str) -> Optional[dict]:
+    """The staff member's own style choices (how they like Vula to talk to them), or None."""
+    try:
+        from vula.identity import person_for_phone
+        person = person_for_phone(tenant_id, phone)
+        return dict(person.prefs) if person else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("voice prefs skipped: %s", exc)
+        return None
 
 
 async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
@@ -9886,18 +9903,20 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     # turns this used to be silent-but-fast for — same reasoning as commerce_assistant's call
     # below (_run_with_holding_message), so an owner isn't left wondering if anything is
     # happening during a real live-IMAP round trip.
-    output = await _run_with_holding_message(
-        phone, tenant_id,
-        skill(
-            SkillInput(
-                question=text, tenant_id=tenant_id,
-                conversation_history=history + link_context,
-                metadata={"session_id": admin_session_key, "customer_phone": phone,
-                          "caller_name": caller_name, "caller_role": caller_role,
-                          "preferred_language": preferred_language},
-            )
-        ),
-    )
+    from core import voice
+    with voice.use(tenant_id, "team", "whatsapp", _voice_prefs(tenant_id, phone)):
+        output = await _run_with_holding_message(
+            phone, tenant_id,
+            skill(
+                SkillInput(
+                    question=text, tenant_id=tenant_id,
+                    conversation_history=history + link_context,
+                    metadata={"session_id": admin_session_key, "customer_phone": phone,
+                              "caller_name": caller_name, "caller_role": caller_role,
+                              "preferred_language": preferred_language},
+                )
+            ),
+        )
     if not output.success or not output.answer:
         logger.warning("commerce_admin returned no answer: %s", output.error)
         return False
@@ -10248,19 +10267,21 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
         logger.debug("language preference update skipped: %s", exc)
 
     skill = get_skill("commerce_assistant")
-    output = await _run_with_holding_message(
-        phone, tenant_id,
-        skill(
-            SkillInput(
-                question=text,
-                tenant_id=tenant_id,
-                conversation_history=history,
-                metadata={"session_id": phone, "customer_phone": phone,
-                          "preferred_language": preferred_language,
-                          "forwarded": _FORWARDED.get()},
-            )
-        ),
-    )
+    from core import voice
+    with voice.use(tenant_id, "customer", "whatsapp"):
+        output = await _run_with_holding_message(
+            phone, tenant_id,
+            skill(
+                SkillInput(
+                    question=text,
+                    tenant_id=tenant_id,
+                    conversation_history=history,
+                    metadata={"session_id": phone, "customer_phone": phone,
+                              "preferred_language": preferred_language,
+                              "forwarded": _FORWARDED.get()},
+                )
+            ),
+        )
 
     if not output.success:
         logger.warning("commerce_assistant returned no answer: %s", output.error)
