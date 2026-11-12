@@ -1,6 +1,6 @@
 """11 Nov 2026 (DIGG): HPC's payment certificates 1 and 5-13 were in Judy's mailbox but never reached
 Vula. The sync read INBOX and Sent only, and it dropped any emailed attachment whose FILENAME it had
-seen before. Each test is the case that went wrong before the fix (migration 257)."""
+seen before. Each test is the case that went wrong before the fix (migration 260)."""
 import inspect
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -232,7 +232,7 @@ def test_old_mail_never_asks_on_whatsapp_when_a_bill_is_booked():
 
 def test_every_tenants_mailboxes_get_all_folders():
     from pathlib import Path
-    sql = (Path(__file__).resolve().parents[1] / "migrations" / "257_email_all_folders.sql").read_text()
+    sql = (Path(__file__).resolve().parents[1] / "migrations" / "260_email_all_folders.sql").read_text()
     assert "sync_all_folders boolean not null default true" in sql
 
 

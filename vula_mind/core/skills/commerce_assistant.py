@@ -1073,6 +1073,11 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
 # again (see _TOOL_NAMES comment at the top of the module).
 _TOOL_NAMES.update(s["function"]["name"] for s in TOOL_SPECS + BOOKING_TOOL_SPECS)
 
+# Real-estate businesses (the `listings` module, core/skills/listing_tools.py): listing search,
+# details, viewing and call-back requests instead of the shop tools. Other tenants never see them.
+from core.skills import listing_tools as _lt  # noqa: E402
+_TOOL_NAMES.update(_lt.CUSTOMER_TOOL_NAMES)
+
 # Booking-focused tenants (see _is_booking_focused) get this instead of the full storefront
 # TOOL_SPECS — ask_team (the one universal, non-storefront tool) plus the booking tools.
 _ASK_TEAM_ONLY = [t for t in TOOL_SPECS if t["function"]["name"] == "ask_team"]
@@ -1100,7 +1105,9 @@ class CommerceAssistantSkill(BaseSkill):
 
     # ── Entry point ──────────────────────────────────────────────────────────
     async def run(self, inp: SkillInput) -> SkillOutput:
-        if _HOW_TO_ORDER_RE.search(inp.question or "") and not _is_booking_focused(inp.tenant_id):
+        listings = _lt.tenant_has_listings(inp.tenant_id)
+        if (_HOW_TO_ORDER_RE.search(inp.question or "") and not listings
+                and not _is_booking_focused(inp.tenant_id)):
             return SkillOutput(answer=HOW_TO_ORDER_REPLY, skill_name=self.name, confidence=0.95)
         ctx = {
             "tenant_id": inp.tenant_id,
@@ -1112,6 +1119,7 @@ class CommerceAssistantSkill(BaseSkill):
             "customer_phone": inp.metadata.get("customer_phone"),
             "bookings": _tenant_has_bookings(inp.tenant_id),
             "booking_focused": _is_booking_focused(inp.tenant_id),
+            "listings": listings,
             "current_message": inp.question,
             "language": _expected_language(inp.metadata.get("preferred_language"), inp.question),
             "forwarded": bool(inp.metadata.get("forwarded")),
@@ -1134,14 +1142,14 @@ class CommerceAssistantSkill(BaseSkill):
         # What we already know about this customer, so a repeat buyer isn't asked for their name
         # and address all over again (2026-09-01). Best-effort — never block a live order on it.
         profile = None
-        if ctx["customer_phone"] and not ctx["booking_focused"]:
+        if ctx["customer_phone"] and not ctx["booking_focused"] and not listings:
             try:
                 profile = await service.get_customer_profile(inp.tenant_id, ctx["customer_phone"])
             except Exception as exc:
                 logger.debug("customer profile lookup skipped: %s", exc)
         system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"),
                                          booking_focused=ctx["booking_focused"],
-                                         customer_profile=profile)
+                                         customer_profile=profile, listings=listings)
         if ctx["forwarded"]:
             # 2026-10-23 (Off the Hook): a forwarded post put 2 × Hake Fillets in a cart.
             system_msg += FORWARDED_NOTE
@@ -1156,7 +1164,8 @@ class CommerceAssistantSkill(BaseSkill):
                 raise RuntimeError("empty answer from agent loop")
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
             answer = substitute_if_leaked(answer, skill=self.name, customer=True, tenant_id=inp.tenant_id,
-                                          tool_names=[t["function"]["name"] for t in TOOL_SPECS])
+                                          tool_names=[t["function"]["name"] for t in TOOL_SPECS]
+                                          + sorted(_lt.CUSTOMER_TOOL_NAMES))
             if _repeats_last_reply(answer, inp.conversation_history or ""):
                 answer = REPEAT_REPLY
             built_from_data = False
@@ -1177,7 +1186,7 @@ class CommerceAssistantSkill(BaseSkill):
             # 2026-10-22: strict — a price stated with NO lookup this turn used to pass unchecked.
             # Trusted besides the tools: the business's own money facts, the customer's words,
             # and what Vula already told this customer earlier in the chat.
-            grounding = {"kb"} | {t["function"]["name"] for t in TOOL_SPECS}
+            grounding = {"kb"} | {t["function"]["name"] for t in TOOL_SPECS} | _lt.CUSTOMER_TOOL_NAMES
             trusted = " ".join([_price_facts_text(inp.tenant_id), inp.question or "",
                                 inp.conversation_history or ""])
             bad_prices = ([] if built_from_data else
@@ -1206,6 +1215,7 @@ class CommerceAssistantSkill(BaseSkill):
                 confidence=confidence,
                 sources=sources,
                 media_url=ctx.get("media_url"),
+                cards=ctx.get("cards"),
             )
         except Exception as exc:
             logger.warning("commerce_assistant tool loop failed (%s) — falling back", exc)
@@ -1251,7 +1261,8 @@ class CommerceAssistantSkill(BaseSkill):
 
     def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None,
                        booking_focused: bool = False,
-                       customer_profile: Optional[Dict[str, Any]] = None) -> str:
+                       customer_profile: Optional[Dict[str, Any]] = None,
+                       listings: bool = False) -> str:
         # 2026-08-08: this skill never called the platform's shared behaviour_preamble() at
         # all (confirmed while auditing every tool-calling skill for the same gap fixed in
         # commerce_admin.py earlier the same day) — it hand-rolled just an UNTRUSTED_CONTENT_RULE
@@ -1307,6 +1318,11 @@ class CommerceAssistantSkill(BaseSkill):
                 persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
             pass
+
+        # Real-estate businesses: listings-first prompt (core/skills/listing_tools.py).
+        if listings:
+            return (_lt.customer_prompt(lang_block, persona_block)
+                    + "\n\n" + behaviour_preamble(agentic=True) + kb_block)
 
         # health/services tenants (see _is_booking_focused) get a bookings-first prompt instead
         # of the storefront one below — they have no products, cart, or orders, so the fish-shop
@@ -1526,7 +1542,9 @@ class CommerceAssistantSkill(BaseSkill):
         model, api_key, api_base = await resolve_generation_route(
             task_type="commerce_chat", messages=messages, run_id=run_id)
 
-        if ctx.get("booking_focused"):
+        if ctx.get("listings"):
+            tools = _ASK_TEAM_ONLY + _lt.CUSTOMER_TOOL_SPECS
+        elif ctx.get("booking_focused"):
             tools = _ASK_TEAM_ONLY + BOOKING_TOOL_SPECS
         elif ctx.get("bookings"):
             tools = TOOL_SPECS + BOOKING_TOOL_SPECS
@@ -1696,6 +1714,10 @@ class CommerceAssistantSkill(BaseSkill):
             log_tool_call(tid, "customer", name, args)
         except Exception:
             pass
+        if name in _lt.CUSTOMER_TOOL_NAMES:
+            if not ctx.get("listings"):
+                return {"error": f"unknown tool {name}"}
+            return await _lt.run_customer_tool(name, args, ctx)
         if name == "list_products":
             return await self._exec_list_products(tid, args)
         if name == "add_to_cart":
@@ -3035,6 +3057,11 @@ class CommerceAssistantSkill(BaseSkill):
         self, inp: SkillInput, ctx: Dict[str, Any], kb_context: str, sources: List[Dict[str, Any]]
     ) -> SkillOutput:
         import litellm
+
+        if ctx.get("listings"):
+            # No listing data on this path, so a model here could only invent properties.
+            return SkillOutput(answer=_lt.FALLBACK_REPLY, skill_name=self.name, confidence=0.3,
+                               sources=sources)
 
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route(task_type="commerce_assistant")

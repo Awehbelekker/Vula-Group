@@ -178,7 +178,12 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("252", "commerce_order_settings", "delivery_enabled"),
     ("254", "vula_project_final_accounts", None),
     ("255", "vula_project_terms", "fee_cents"),
-    ("257", "vula_email_accounts", "folder_cursors"),
+    # real-estate listings: the newest column of its three tables (enquiry source/preferred times)
+    ("257", "vula_property_enquiries", "preferred_times"),
+    ("258", "vula_deals", None),                      # deals pipeline
+    # listings sent, clients' wish lists; external_ref is the last thing 259 adds
+    ("259", "vula_property_enquiries", "external_ref"),
+    ("260", "vula_email_accounts", "folder_cursors"),
 ]
 
 

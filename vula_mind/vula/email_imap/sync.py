@@ -353,7 +353,7 @@ def _read_messages(m, batch: list) -> tuple:
     return out, oversized
 
 
-# ── Every other folder (11 Nov 2026, migration 257) ───────────────────────────────────────────
+# ── Every other folder (11 Nov 2026, migration 260) ───────────────────────────────────────────
 # HPC's payment certificates 1 and 5-13 sat in Judy's mailbox but never reached Vula: the sync read
 # INBOX and Sent only, and anything a mail rule (or Judy) moved into a folder was never seen. Now
 # every other selectable folder is read too, each with its own cursor, for every connected mailbox
@@ -487,7 +487,7 @@ def _save_folder_cursors(db, account_id: str, cursors: dict) -> None:
     try:
         db.table("vula_email_accounts").update({"folder_cursors": cursors}).eq("id", account_id).execute()
     except Exception as exc:
-        logger.debug("folder cursor save skipped (run migration 257?): %s", exc)
+        logger.debug("folder cursor save skipped (run migration 260?): %s", exc)
 
 
 def _upsert_contact(db, tenant_id: str, addr: str, name: str, kind: str, when: str) -> None:
@@ -776,7 +776,7 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
             em["is_sent"] = True
             em["historic"] = _is_historic(em)
 
-    # Every other folder (migration 257: on for every mailbox unless switched off). Read separately
+    # Every other folder (migration 260: on for every mailbox unless switched off). Read separately
     # so a database without the migration syncs Inbox and Sent exactly as before.
     other = {"emails": [], "cursors": None, "oversized": []}
     try:
@@ -857,6 +857,15 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
             reason = _needs_reply(em, own_domain)
             if reason:
                 await _track_followup(db, tenant_id, account_id, em, reason)
+            if from_uid is None:
+                # Property24 / Private Property enquiry emails → listings enquiries (real-estate
+                # add-on; a no-op unless the business has `listings`). Not on backfill, nor old mail
+                # read by the catch-up or found in a folder: old leads.
+                try:
+                    from vula.listings import portal_leads
+                    await portal_leads.maybe_take(tenant_id, em)
+                except Exception as exc:
+                    logger.warning("portal lead check failed for %s: %s", tenant_id, exc)
     if folder_cursors is not None:
         _save_folder_cursors(db, account_id, folder_cursors)
 
@@ -1111,7 +1120,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
 # "We should have a once-off on onboarding to sync so Vula can be filled in on all comms." The
 # 15-minute sync reads 20 emails a folder per run, so a 10,000-email mailbox took about five days to
 # be read. Connecting a mailbox (and the Backfill button, and every mailbox whose history hasn't been
-# read since migration 257) now starts a catch-up in the background: bigger batches, back to back,
+# read since migration 260) now starts a catch-up in the background: bigger batches, back to back,
 # until Inbox, Sent and every folder are read to the newest email. Old mail asks nobody anything.
 
 CATCH_UP_BATCH = 50
@@ -1142,7 +1151,7 @@ async def catch_up(tenant_id: str, account_id: str, batch: int = CATCH_UP_BATCH,
             _client().table("vula_email_accounts").update({"history_read_at": "now()"}) \
                 .eq("id", account_id).execute()
         except Exception as exc:
-            logger.debug("history_read_at not saved (run migration 257?): %s", exc)
+            logger.debug("history_read_at not saved (run migration 260?): %s", exc)
     logger.info("email catch-up for %s/%s: %s emails, %s", tenant_id, account_id, total,
                 "finished" if done else "will carry on")
     return {"synced": total, "finished": done}
@@ -1172,11 +1181,11 @@ def reset_history(account_id: str) -> None:
         db.table("vula_email_accounts").update({"folder_cursors": {}, "history_read_at": None}) \
             .eq("id", account_id).execute()
     except Exception as exc:
-        logger.debug("folder cursors not reset (run migration 257?): %s", exc)
+        logger.debug("folder cursors not reset (run migration 260?): %s", exc)
 
 
 def _history_unread(account_id: str) -> bool:
-    """This mailbox's history (every folder) hasn't been read yet. False before migration 257."""
+    """This mailbox's history (every folder) hasn't been read yet. False before migration 260."""
     try:
         row = (_client().table("vula_email_accounts").select("sync_all_folders,history_read_at")
                .eq("id", account_id).limit(1).execute().data or [{}])[0]

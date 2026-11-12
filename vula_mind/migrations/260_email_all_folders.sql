@@ -1,4 +1,4 @@
--- 257_email_all_folders.sql — every connected mailbox is read in all its folders, not only Inbox and Sent.
+-- 260_email_all_folders.sql — every connected mailbox is read in all its folders, not only Inbox and Sent.
 --
 -- 11 Nov 2026 (Ian, DIGG): HPC's payment certificates 1 and 5-13 never reached Vula, though the
 -- thread was in Judy's mailbox. The sync only ever read INBOX and the Sent folder, so anything a
