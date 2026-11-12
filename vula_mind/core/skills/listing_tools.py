@@ -187,6 +187,24 @@ async def _resolve_public(tenant_id: str, ref: str) -> Tuple[Optional[Dict[str, 
     return found[0], None
 
 
+async def _remember_wish(tid: str, ctx: Dict[str, Any], args: Dict[str, Any], kind: Optional[str],
+                         max_cents: Optional[int]) -> None:
+    """Save what this person searched for as their wish list, so the agent is shown them when a
+    matching listing comes on the market. Their own words only; best-effort."""
+    phone = ctx.get("customer_phone")
+    if not phone:
+        return
+    try:
+        from vula.listings import sharing
+        await sharing.save_wish(
+            tid, phone, listing_type=kind, max_price_cents=max_cents,
+            min_bedrooms=args.get("min_bedrooms"),
+            suburbs=[args["suburb"]] if args.get("suburb") else None,
+            property_types=[args["property_type"]] if args.get("property_type") else None)
+    except Exception as exc:
+        log.debug("wish list not saved (%s): %s", tid, exc)
+
+
 async def run_customer_tool(name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
     tid = ctx["tenant_id"]
     try:
@@ -202,12 +220,24 @@ async def run_customer_tool(name: str, args: Dict[str, Any], ctx: Dict[str, Any]
                 tid, statuses=ls.PUBLIC_STATUSES, listing_type=kind,
                 property_type=args.get("property_type") or None, max_price_cents=max_cents,
                 min_bedrooms=args.get("min_bedrooms"), suburb=args.get("suburb") or None, limit=50)
+            await _remember_wish(tid, ctx, args, kind, max_cents)
             if not rows:
                 return {"results": [], "message": "Nothing on the market matches that right now.",
                         "hint": "Offer to widen the search, or request_agent_callback so an agent "
-                                "lets them know when something comes up."}
-            return {"results": [_summary(p) for p in rows[:MAX_RESULTS]],
-                    "total_matches": len(rows)}
+                                "lets them know when something comes up. What they asked for is "
+                                "saved, so the agent sees them when something matching is listed."}
+            from vula.listings import sharing
+            cards = sharing.cards_for(rows)
+            out: Dict[str, Any] = {"results": [_summary(p) for p in rows[:MAX_RESULTS]],
+                                   "total_matches": len(rows)}
+            if cards:
+                ctx["cards"] = cards
+                out["shown_as_photo_cards"] = (f"The first {len(cards)} are sent as swipeable photo cards "
+                                               "with a View details button — keep your reply to a short "
+                                               "intro, don't repeat every listing.")
+            elif len(rows) == 1 and rows[0].get("images"):
+                ctx["media_url"] = rows[0]["images"][0]
+            return out
 
         if name == "listing_details":
             prop, problem = await _resolve_public(tid, args.get("listing") or "")
@@ -354,6 +384,43 @@ ADMIN_TOOL_SPECS: List[Dict[str, Any]] = [
         }, "required": ["listing"]},
     }},
     {"type": "function", "function": {
+        "name": "share_listings",
+        "description": (
+            "Send one or more listings to a client on WhatsApp as photo cards with a 'Book a viewing' "
+            "button — e.g. 'send Thandi the Durbanville and Bellville houses'. Shows a preview first; "
+            "sent only when the agent confirms. WhatsApp only allows it within 24 hours of the client's "
+            "last message to the business."),
+        "parameters": {"type": "object", "properties": {
+            "to": {"type": "string", "description": "The client's name or WhatsApp number."},
+            "listings": {"type": "array", "items": {"type": "string"},
+                         "description": "Each listing's ref or the words used for it (1–10)."},
+            "note": {"type": "string", "description": "A short message to go with them, if the agent gave one."},
+            "confirm": {"type": "boolean", "description": "Only true after the agent confirmed the preview."},
+        }, "required": ["to", "listings"]},
+    }},
+    {"type": "function", "function": {
+        "name": "listing_matches",
+        "description": ("Which clients are looking for something like this listing (from what they "
+                        "told us: budget, area, bedrooms, sale or rent), and haven't been sent it yet."),
+        "parameters": {"type": "object", "properties": {
+            "listing": {"type": "string"}}, "required": ["listing"]},
+    }},
+    {"type": "function", "function": {
+        "name": "save_buyer_wish",
+        "description": ("Record what a client is looking for, as the agent says it — 'Thandi wants a "
+                        "3 bed in Durbanville under R3m'. Used to show the agent matching clients when "
+                        "a listing comes on the market."),
+        "parameters": {"type": "object", "properties": {
+            "client": {"type": "string", "description": "Client's name or WhatsApp number."},
+            "listing_type": {"type": "string", "enum": ["sale", "rent"]},
+            "max_price": {"type": "string", "description": "Budget as said, e.g. 'R3m'."},
+            "min_bedrooms": {"type": "number"},
+            "areas": {"type": "array", "items": {"type": "string"}},
+            "property_types": {"type": "array", "items": {"type": "string",
+                               "enum": ["house", "apartment", "townhouse", "land", "commercial", "farm"]}},
+        }, "required": ["client"]},
+    }},
+    {"type": "function", "function": {
         "name": "property_enquiries",
         "description": "Recent enquiries and viewing requests from buyers/tenants (website and WhatsApp).",
         "parameters": {"type": "object", "properties": {
@@ -371,7 +438,7 @@ ADMIN_TOOL_SPECS: List[Dict[str, Any]] = [
 ]
 ADMIN_TOOL_NAMES = {t["function"]["name"] for t in ADMIN_TOOL_SPECS}
 # Need the agent's preview + confirm (see commerce_admin._PREVIEW_FIRST).
-ADMIN_PREVIEW_FIRST = frozenset({"create_listing", "update_listing", "remove_listing_photo"})
+ADMIN_PREVIEW_FIRST = frozenset({"create_listing", "update_listing", "remove_listing_photo", "share_listings"})
 ADMIN_KEYWORDS = {"listing", "listings", "property", "properties", "house", "flat", "apartment",
                   "townhouse", "under offer", "sold", "for sale", "to let", "rental", "rent ",
                   "viewing", "enquir", "mandate", "bedroom", "erf"}
@@ -461,9 +528,10 @@ async def run_admin_tool(name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -
                 prev["on_website"] = "yes" if row.get("status") == "active" else "no (draft)"
                 return {"preview": True, **prev}
             saved = await ls.upsert_property(tid, body)      # reads the row back
-            return _readback(tid, "create_listing", saved, row,
-                             f"✅ Listed *{saved['title']}* — {ls.format_price(saved)}"
-                             + (" — live on the website." if saved.get("status") == "active" else " (draft, not on the website yet)."))
+            out = _readback(tid, "create_listing", saved, row,
+                            f"✅ Listed *{saved['title']}* — {ls.format_price(saved)}"
+                            + (" — live on the website." if saved.get("status") == "active" else " (draft, not on the website yet)."))
+            return await _with_matches(tid, saved, out)
 
         if name == "update_listing":
             rows = await ls.list_properties(tid, limit=500)
@@ -490,9 +558,12 @@ async def run_admin_tool(name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -
                     diff["agent"] = args["agent"]
                 return {"preview": True, "listing": current.get("title"), **diff}
             saved = await ls.upsert_property(tid, {**body, "id": current["id"]})   # reads back
-            return _readback(tid, "update_listing", saved, changes,
-                             f"✅ *{saved['title']}* updated — {ls.format_price(saved)}, "
-                             f"{(saved.get('status') or '').replace('_', ' ')}.")
+            out = _readback(tid, "update_listing", saved, changes,
+                            f"✅ *{saved['title']}* updated — {ls.format_price(saved)}, "
+                            f"{(saved.get('status') or '').replace('_', ' ')}.")
+            if current.get("status") not in ls.PUBLIC_STATUSES or "price_cents" in changes:
+                out = await _with_matches(tid, saved, out)      # newly listed, or price changed
+            return out
 
         if name == "remove_listing_photo":
             rows = await ls.list_properties(tid, limit=500)
@@ -518,6 +589,48 @@ async def run_admin_tool(name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -
             if not ok:
                 return {"error": "The photo wasn't removed.", "reply_verbatim": "⚠️ The photo wasn't removed — please try again."}
             return {"verified": True, "reply_verbatim": f"🗑️ Removed photo {n} from *{prop['title']}* — {len(images)} left."}
+
+        if name == "share_listings":
+            return await _share(tid, args, ctx)
+
+        if name == "listing_matches":
+            from vula.listings import sharing
+            rows = await ls.list_properties(tid, limit=500)
+            found = match_listings(rows, args.get("listing") or "")
+            if len(found) != 1:
+                return ({"which_one": [_summary(p) for p in found[:MAX_RESULTS]], "hint": "Ask which listing."}
+                        if found else {"error": "No listing matches that."})
+            prop = found[0]
+            if prop.get("status") not in ls.PUBLIC_STATUSES:
+                return {"listing": prop["title"], "matches": [],
+                        "message": "It isn't on the market, so it isn't matched to anyone."}
+            people = await sharing.matches_for(tid, prop)
+            return {"listing": prop["title"], "matches": [
+                {"name": w.get("name") or "(no name)", "whatsapp": w["phone"],
+                 "looking_for": sharing.describe_wish(w)} for w in people[:20]],
+                "hint": "Offer share_listings to send it to the ones the agent picks." if people else ""}
+
+        if name == "save_buyer_wish":
+            from vula.listings import sharing
+            person, candidates = await sharing.resolve_recipient(tid, args.get("client") or "")
+            if not person:
+                return ({"which_one": candidates, "hint": "Ask which client, or for their WhatsApp number."}
+                        if candidates else {"error": "I don't know that client — give their WhatsApp number."})
+            max_cents = None
+            if args.get("max_price") not in (None, ""):
+                max_cents = ls.parse_rands_to_cents(args["max_price"])
+                if max_cents is None:
+                    return {"error": f"Couldn't read the budget '{args['max_price']}' — try e.g. R3m."}
+            wish = await sharing.save_wish(
+                tid, person["phone"], name=person.get("name"), listing_type=args.get("listing_type"),
+                max_price_cents=max_cents, min_bedrooms=args.get("min_bedrooms"),
+                suburbs=args.get("areas"), property_types=args.get("property_types"), source="agent")
+            if not wish:
+                return {"error": "Nothing to save — say what they're looking for (area, budget, bedrooms)."}
+            who = person.get("name") or person["phone"]
+            return {"verified": True, "reply_verbatim":
+                    f"✅ Saved: {who} is looking for {sharing.describe_wish(wish)}. "
+                    "I'll show them to you when a listing like that goes on the market."}
 
         if name == "property_enquiries":
             rows = await ls.list_enquiries(tid, status=args.get("status"), limit=20)
@@ -582,6 +695,74 @@ async def add_listing_photo(tenant_id: str, ref: str, image_url: str) -> Dict[st
     live = " It's on the website now." if saved.get("status") in ls.PUBLIC_STATUSES else ""
     return {"ok": True, "reply": f"📸 Added to *{saved['title']}* — photo {n}{' (the cover)' if n == 1 else ''}.{live}"
                                  " To take one off, say e.g. \"remove photo 2 from " + saved["title"] + "\"."}
+
+
+async def _with_matches(tid: str, prop: Dict[str, Any], out: Dict[str, Any]) -> Dict[str, Any]:
+    """Add 'who is looking for this' to a confirmed listing change — the agent decides who
+    gets it (share_listings); nothing is sent from here."""
+    if not out.get("verified"):
+        return out
+    try:
+        from vula.listings import sharing
+        people = await sharing.matches_for(tid, prop)
+    except Exception:
+        return out
+    if people:
+        names = ", ".join((w.get("name") or w["phone"]) for w in people[:5])
+        more = f" and {len(people) - 5} more" if len(people) > 5 else ""
+        out["reply_verbatim"] += (f"\n\n🔔 {len(people)} client{'s are' if len(people) > 1 else ' is'} looking for "
+                                  f"something like this: {names}{more}. Say e.g. \"send it to "
+                                  f"{(people[0].get('name') or people[0]['phone']).split()[0]}\" to share it.")
+        out["matching_clients"] = [w.get("name") or w["phone"] for w in people]
+    return out
+
+
+async def _share(tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+    from vula.listings import sharing
+    refs = [r for r in (args.get("listings") or []) if isinstance(r, str) and r.strip()]
+    if not refs:
+        return {"error": "Which listings? Name them or give their refs."}
+    if len(refs) > sharing.MAX_CARDS:
+        return {"error": f"WhatsApp shows at most {sharing.MAX_CARDS} at a time — pick up to {sharing.MAX_CARDS}."}
+    person, candidates = await sharing.resolve_recipient(tid, args.get("to") or "")
+    if not person:
+        return ({"which_one": candidates, "hint": "Ask which client, or for their WhatsApp number."}
+                if candidates else {"error": "I don't know that client — give their WhatsApp number."})
+    public = await ls.list_properties(tid, statuses=ls.PUBLIC_STATUSES, limit=500)
+    props: List[Dict[str, Any]] = []
+    for ref in refs:
+        found = match_listings(public, ref)
+        if not found:
+            return {"error": f"No listing on the market matches '{ref}'.",
+                    "hint": "Only listings on the market (active / under offer) can be sent."}
+        if len(found) > 1:
+            return {"which_one": [_summary(p) for p in found[:MAX_RESULTS]], "hint": f"'{ref}' matches more than one — ask which."}
+        if found[0]["id"] not in {p["id"] for p in props}:
+            props.append(found[0])
+    who = f"{person['name']} ({person['phone']})" if person.get("name") else person["phone"]
+    if not args.get("confirm"):
+        before = await sharing.shared_before(tid, person["phone"])
+        again = [f"{p['title']} ({before[p['id']][:10] or 'before'})" for p in props if p["id"] in before]
+        prev = {"preview": True, "send_to": who,
+                "listings": "; ".join(f"{p['title']} — {ls.format_price(p)}" for p in props)}
+        if args.get("note"):
+            prev["message"] = args["note"][:300]
+        if again:
+            prev["already_sent_before"] = "; ".join(again)
+        return prev
+    result = await sharing.send_listings(tid, person["phone"], props, intro=(args.get("note") or "")[:300],
+                                         shared_by=ctx.get("caller_name") or ctx.get("phone"))
+    _gate(tid, "share_listings", result["ok"], {"listings": len(props)}, {"sent": len(result["sent"])})
+    if not result["ok"]:
+        reason = result.get("reason") or (
+            f"WhatsApp didn't accept it. Most often that's because {person.get('name') or 'they'} "
+            "hasn't messaged you in the last 24 hours — WhatsApp only lets a business start a chat "
+            "with an approved template. Ask them to send you a message, then try again.")
+        return {"error": reason, "reply_verbatim": f"⚠️ {reason}"}
+    n = len(result["sent"])
+    return {"verified": True, "reply_verbatim":
+            f"✅ Sent {n} listing{'s' if n != 1 else ''} to {person.get('name') or person['phone']}. "
+            "If they tap Book a viewing, you'll get the enquiry."}
 
 
 def _gate(tid: str, tool: str, ok: bool, expected: Dict[str, Any], observed: Dict[str, Any]) -> None:

@@ -212,3 +212,62 @@ async def admin_enquiry_status(tenant_id: str, enquiry_id: str, body: EnquirySta
         raise HTTPException(status_code=422, detail=str(exc))
     except LookupError:
         raise HTTPException(status_code=404, detail="Enquiry not found")
+
+
+# ── Sharing and wish lists (migration 259, vula/listings/sharing.py) ─────────
+
+@router.get("/{tenant_id}/admin/properties/{property_id}/matches")
+async def admin_matches(tenant_id: str, property_id: str) -> Dict[str, Any]:
+    from vula.listings import sharing
+    prop = await ls.get_property(tenant_id, property_id=property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    people = await sharing.matches_for(tenant_id, prop)
+    return {"matches": [{"id": w["id"], "name": w.get("name"), "phone": w["phone"],
+                         "looking_for": sharing.describe_wish(w)} for w in people]}
+
+
+class ShareIn(BaseModel):
+    phones: list
+    note: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/properties/{property_id}/share")
+async def admin_share(tenant_id: str, property_id: str, body: ShareIn) -> Dict[str, Any]:
+    """Send one listing to the people the agent ticked, on WhatsApp. Each send is recorded; a
+    person WhatsApp refused (usually: no message from them in the last 24 hours) is reported
+    back by name, never counted as sent."""
+    from vula.listings import sharing
+    prop = await ls.get_property(tenant_id, property_id=property_id)
+    if not prop or prop.get("status") not in ls.PUBLIC_STATUSES:
+        raise HTTPException(status_code=422, detail="Only a listing on the market can be sent.")
+    phones = [p for p in dict.fromkeys(sharing._digits(str(x)) for x in (body.phones or [])) if p][:50]
+    if not phones:
+        raise HTTPException(status_code=422, detail="Pick at least one client.")
+    sent, failed = [], []
+    for phone in phones:
+        res = await sharing.send_listings(tenant_id, phone, [prop], intro=_clean(body.note, 300),
+                                          shared_by="dashboard", source="match")
+        (sent if res["ok"] else failed).append(phone)
+    return {"sent": sent, "failed": failed}
+
+
+@router.get("/{tenant_id}/admin/buyer-wishes")
+async def admin_wishes(tenant_id: str) -> Dict[str, Any]:
+    from vula.listings import sharing
+    try:
+        rows = (ls._client().table(sharing.WISHES).select("*").eq("tenant_id", tenant_id)
+                .eq("active", True).order("updated_at", desc=True).limit(500).execute().data or [])
+    except Exception:
+        rows = []
+    return {"wishes": [{**w, "looking_for": sharing.describe_wish(w)} for w in rows]}
+
+
+@router.post("/{tenant_id}/admin/buyer-wishes/{wish_id}/close")
+async def admin_close_wish(tenant_id: str, wish_id: str) -> Dict[str, Any]:
+    from vula.listings import sharing
+    res = (ls._client().table(sharing.WISHES).update({"active": False})
+           .eq("tenant_id", tenant_id).eq("id", wish_id).execute())
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}

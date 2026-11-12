@@ -79,6 +79,22 @@ export function useListings(tenantId) {
     return r;
   };
 
+  // Clients' wish lists and sending a listing to the ones it matches (migration 259).
+  const [wishes, setWishes] = useState(null);
+  const loadWishes = useCallback(async () => {
+    const r = await call(`${base(tenantId)}/buyer-wishes`);
+    setWishes(r.wishes || []);
+  }, [tenantId]);
+  useEffect(() => { loadWishes(); }, [loadWishes]);
+  const closeWish = async (id) => {
+    const r = await call(`${base(tenantId)}/buyer-wishes/${id}/close`, { method: "POST" });
+    if (!r.error) setWishes((rows) => (rows || []).filter((w) => w.id !== id));
+    return r;
+  };
+  const matchesFor = (propertyId) => call(`${base(tenantId)}/properties/${propertyId}/matches`);
+  const shareListing = (propertyId, phones, note) =>
+    call(`${base(tenantId)}/properties/${propertyId}/share`, { method: "POST", body: JSON.stringify({ phones, note }) });
+
   const toPipeline = async (enquiryId) => {
     const { dealFromEnquiry } = await import("../pipeline/usePipeline");
     const r = await dealFromEnquiry(tenantId, enquiryId);
@@ -86,6 +102,7 @@ export function useListings(tenantId) {
     return r;
   };
 
-  return { view, setView, listings, enquiries, agents, msg, setMsg, load, modules, toPipeline, saveListing, deleteListing,
+  return { view, setView, listings, enquiries, agents, msg, setMsg, load, modules, toPipeline,
+           wishes, closeWish, matchesFor, shareListing, saveListing, deleteListing,
            saveAgent, deleteAgent, setEnquiryStatus };
 }

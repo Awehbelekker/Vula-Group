@@ -78,6 +78,21 @@ New optional features plug in the same way: one tools module registered in
    once Meta approves it, set `WHATSAPP_ENQUIRY_TEMPLATE` on Railway and `railway up`. Until
    then the agent is alerted but the enquirer isn't messaged.
 
+### Added 12 Nov (migration 259)
+- **Listings as WhatsApp photo cards.** A client's search shows a swipeable carousel (View details →
+  photo, facts, Book a viewing / Ask a question). Taps are handled by exact ids, no model.
+- **Agents share chosen listings.** "Send Thandi the Durbanville and Bellville houses" → preview →
+  confirm → carousel. Recorded, so a repeat send is flagged. Only within WhatsApp's 24-hour window
+  (outside it, a Meta-approved carousel template would be needed — marketing category).
+- **Clients' wish lists + matching.** A client's own search (or an agent's "Thandi wants…") is kept;
+  when a listing goes on the market or drops in price, the agent is told who matches and picks who
+  gets it — nothing is sent automatically. Dashboard: Listings › Clients, and "N clients are looking
+  for something like this" in the listing form.
+- **Portal enquiry emails.** Property24 / Private Property emails in the connected mailbox become
+  enquiries (source "portal") and alert the agent. Reads only clearly labelled fields; layouts were
+  not verified against real portal emails — forward one sample of each to check. HTML-only emails
+  are filed with a "check your inbox" note.
+
 ### Next, when needed
 - Listings import from the agency's existing CRM/portal feed (avoid double capture).
 - ~~A map view of listings~~ — done: Listings › Map, a pin picker in the listing form, and an

@@ -10314,7 +10314,18 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     # commerce_assistant.py's SkillOutput.media_url) before the text confirmation — reuses the
     # image-send path already proven for the greeting menu header (_send_wa_image). Best-effort:
     # a failed/missing image must never block the actual order confirmation text.
-    if output.media_url:
+    # 2026-11-12: listings as swipeable photo cards (real-estate add-on), before the text.
+    cards_sent = False
+    if getattr(output, "cards", None):
+        try:
+            creds = await _resolve_wa(tenant_id)
+            if creds:
+                cards_sent = await _send_wa_carousel(creds, _wa_number(phone),
+                                                     "Swipe to see them, tap View details for more.",
+                                                     output.cards)
+        except Exception as exc:
+            logger.debug("listing cards send skipped: %s", exc)
+    if output.media_url and not cards_sent:
         try:
             creds = await _resolve_wa(tenant_id)
             if creds:
@@ -10336,10 +10347,61 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     return True
 
 
+async def _handle_listing_tap(phone: str, tenant_id: str, reply_id: str) -> bool:
+    """A tap on a listing card or button. View details → the listing's photo, facts and
+    'Book a viewing'; Book a viewing → an enquiry that alerts the agent; Ask a question →
+    an invitation to type it. False when the id isn't a listing of this business."""
+    from vula.listings import service as ls, sharing
+    kind, slug = reply_id[:6], reply_id[6:]
+    try:
+        prop = await ls.public_property(tenant_id, slug)
+    except Exception as exc:
+        logger.warning("listing tap %s failed for %s: %s", reply_id[:40], tenant_id, exc)
+        return False
+    if not prop:
+        await _send_reply(phone, "Sorry, that property is no longer on the market. Tell me what "
+                                 "you're looking for and I'll show you what's available.", tenant_id)
+        return True
+    agent_name = (prop.get("agent") or {}).get("name")
+    if kind == sharing.VIEW:
+        creds = await _resolve_wa(tenant_id)
+        body = sharing.details_text(prop, prop.get("agent"))
+        ok = creds and await _send_wa_buttons(
+            creds, _wa_number(phone), body,
+            [{"id": f"{sharing.BOOK}{slug}", "title": "Book a viewing"},
+             {"id": f"{sharing.ASK}{slug}", "title": "Ask a question"}],
+            image_url=(prop.get("images") or [None])[0])
+        if not ok:
+            await _send_reply(phone, body + "\n\nReply *viewing* to arrange to see it.", tenant_id)
+        return True
+    if kind == sharing.BOOK:
+        try:
+            await ls.create_enquiry(tenant_id, {"name": "WhatsApp contact", "whatsapp": _wa_number(phone),
+                                                "property_slug": slug, "wants_viewing": True,
+                                                "source": "whatsapp", "message": "Tapped Book a viewing"})
+        except Exception as exc:
+            logger.warning("viewing request from tap not stored (%s): %s", tenant_id, exc)
+            await _send_reply(phone, "Sorry, I couldn't pass that on just now — please try again.", tenant_id)
+            return True
+        # No "when suits you?" here: an answer would reach the assistant and could be filed as a
+        # second viewing request. The agent arranges the time.
+        await _send_reply(phone, f"Thanks! {agent_name or 'An agent'} has your request and will contact "
+                                 f"you on this number to arrange a time to view *{prop['title']}*.", tenant_id)
+        return True
+    if kind == sharing.ASK:
+        await _send_reply(phone, f"Sure — what would you like to know about *{prop['title']}*?", tenant_id)
+        return True
+    return False
+
+
 async def _handle_commerce_interactive(
     phone: str, reply_id: str, reply_title: str, msg_id: str, tenant_id: str
 ) -> None:
     """Handle interactive list/button replies from the WhatsApp product catalog."""
+    if reply_id.startswith("lst_"):
+        # Listing cards (real-estate add-on, vula/listings/sharing.py): exact ids, no model.
+        if await _handle_listing_tap(phone, tenant_id, reply_id):
+            return
     if reply_id.startswith("chk_"):
         # Checkout steps (vula/commerce/button_checkout.py): exact ids, no model.
         from vula.commerce import button_checkout

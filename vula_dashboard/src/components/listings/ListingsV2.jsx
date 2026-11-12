@@ -4,8 +4,8 @@
  * agents. Shown only to businesses with the `listings` module (navConfig: tab id = module id).
  * Look follows docs/real-estate-workspace-brief.md — scoped to .vls so no other screen changes.
  */
-import { useMemo, useState } from "react";
-import { Building2, Inbox, KanbanSquare, MessageCircle, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { BellRing, Building2, Inbox, KanbanSquare, MessageCircle, Pencil, Plus, Send, Trash2, Users } from "lucide-react";
 import { formatMoney } from "../../lib/money";
 import VulaImageUpload from "../VulaImageUpload";
 import { Button, EmptyState, Field, Input, PageHeader, PillTabs, Select, Sheet, Skeleton, StatusChip, Textarea, confirmDialog, toast } from "../ui/index.jsx";
@@ -36,11 +36,13 @@ export default function ListingsV2({ tenantId }) {
         <PillTabs label="Listings view" active={x.view} onChange={x.setView} tabs={[
           { id: "listings", label: "Listings" },
           { id: "enquiries", label: fresh ? `Enquiries (${fresh} new)` : "Enquiries" },
+          { id: "clients", label: "Clients" },
           { id: "agents", label: "Agents" },
         ]} />
       </div>
       {x.view === "listings" && <ListingsView x={x} tenantId={tenantId} />}
       {x.view === "enquiries" && <EnquiriesView x={x} />}
+      {x.view === "clients" && <ClientsView x={x} />}
       {x.view === "agents" && <AgentsView x={x} />}
     </div>
   );
@@ -157,6 +159,12 @@ function ListingSheet({ x, tenantId, listing, onClose }) {
     if (r.error) { setErr(r.error); return; }
     toast(isNew ? "Listing added" : "Listing saved");
     onClose();
+    const saved = r.property;
+    if (saved && (saved.status === "active" || saved.status === "under_offer")) {
+      const m = await x.matchesFor(saved.id);
+      const n = (m.matches || []).length;
+      if (n) toast(`${n} client${n === 1 ? " is" : "s are"} looking for something like "${saved.title}" — open it to send it to them.`, "info");
+    }
   };
   const remove = async () => {
     if (!(await confirmDialog(`Delete "${listing.title}"? Enquiries about it are kept.`, { danger: true, confirmLabel: "Delete" }))) return;
@@ -176,6 +184,7 @@ function ListingSheet({ x, tenantId, listing, onClose }) {
       </div>}>
       <div className="vls-form">
         {err && <p className="vls-err" role="alert">{err}</p>}
+        {!isNew && (listing.status === "active" || listing.status === "under_offer") && <ListingMatches x={x} listing={listing} />}
         <Field label="Title"><Input value={f.title} onChange={set("title")} placeholder="3 bedroom family home with pool" autoFocus /></Field>
         <div className="vls-2">
           <Field label="For"><Select value={f.listing_type} onChange={set("listing_type")}><option value="sale">Sale</option><option value="rent">Rent</option></Select></Field>
@@ -292,6 +301,76 @@ function EnquiriesView({ x }) {
         </div>
       )}
     </>
+  );
+}
+
+// ── Clients looking for something (wish lists) ───────────────────────────────
+function ListingMatches({ x, listing }) {
+  const [rows, setRows] = useState(null);
+  const [picked, setPicked] = useState([]);
+  const [sending, setSending] = useState(false);
+  useEffect(() => {
+    let live = true;
+    x.matchesFor(listing.id).then((r) => { if (live) { setRows(r.matches || []); setPicked((r.matches || []).map((m) => m.phone)); } });
+    return () => { live = false; };
+  }, [listing.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  if (!rows || rows.length === 0) return null;
+  const send = async () => {
+    if (!picked.length) return;
+    if (!(await confirmDialog(`Send "${listing.title}" to ${picked.length} client${picked.length === 1 ? "" : "s"} on WhatsApp?`, { confirmLabel: "Send" }))) return;
+    setSending(true);
+    const r = await x.shareListing(listing.id, picked);
+    setSending(false);
+    if (r.error) { toast(r.error, "danger"); return; }
+    const sent = new Set(r.sent || []);
+    setRows((all) => all.filter((m) => !sent.has(m.phone)));
+    setPicked((p) => p.filter((ph) => !sent.has(ph)));
+    if ((r.failed || []).length) toast(`Sent to ${sent.size}. WhatsApp refused ${r.failed.length} — usually because they haven't messaged in the last 24 hours.`, "warn");
+    else toast(`Sent to ${sent.size} client${sent.size === 1 ? "" : "s"}`);
+  };
+  return (
+    <div className="vls-matches" role="region" aria-label="Clients looking for this">
+      <div className="vls-row"><BellRing size={16} aria-hidden /><span className="vls-strong">{rows.length} client{rows.length === 1 ? " is" : "s are"} looking for something like this</span></div>
+      {rows.map((m) => (
+        <label key={m.phone} className="vls-check vls-match">
+          <input type="checkbox" checked={picked.includes(m.phone)} onChange={(e) => setPicked((p) => e.target.checked ? [...p, m.phone] : p.filter((ph) => ph !== m.phone))} />
+          <span><span className="vls-strong">{m.name || m.phone}</span><span className="vls-muted"> · {m.looking_for}</span></span>
+        </label>
+      ))}
+      <Button size="sm" Icon={Send} onClick={send} disabled={sending || !picked.length}>{sending ? "Sending…" : `Send on WhatsApp (${picked.length})`}</Button>
+    </div>
+  );
+}
+
+function ClientsView({ x }) {
+  if (x.wishes === null) return <Skeleton lines={3} />;
+  if (x.wishes.length === 0) {
+    return (
+      <EmptyState Icon={Users} title="No clients' wish lists yet">
+        When someone searches your listings on WhatsApp — or an agent tells Vula "Thandi wants a 3 bed in Durbanville under R3m" — it's kept here, and you're shown them when a matching listing goes on the market.
+      </EmptyState>
+    );
+  }
+  return (
+    <div className="vls-list" role="list">
+      {x.wishes.map((w) => (
+        <div key={w.id} role="listitem" className="vls-enq">
+          <span className="vls-avatar" aria-hidden>{(w.name || "?").slice(0, 2).toUpperCase()}</span>
+          <span className="vls-enq-main">
+            <span className="vls-row"><span className="vls-strong">{w.name || w.phone}</span><StatusChip tone="info">{w.source === "agent" ? "Added by an agent" : "From their search"}</StatusChip></span>
+            <span className="vls-quote">Looking for {w.looking_for}</span>
+            <span className="vls-actions">
+              <a className="vls-wa" href={`https://wa.me/${w.phone}`} target="_blank" rel="noreferrer"><MessageCircle size={14} aria-hidden /> WhatsApp</a>
+              <button type="button" className="vls-wa" onClick={async () => {
+                if (!(await confirmDialog(`Stop matching listings to ${w.name || w.phone}?`, { confirmLabel: "Stop" }))) return;
+                const r = await x.closeWish(w.id);
+                if (r.error) toast(r.error, "danger");
+              }}>Stop matching</button>
+            </span>
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

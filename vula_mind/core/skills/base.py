@@ -1097,6 +1097,9 @@ class SkillOutput:
     # carries a real image_url. Optional and unused by most skills; None means text-only, same
     # as before this field existed.
     media_url: Optional[str] = None
+    # 2026-11-12: swipeable photo cards to send before `answer` on WhatsApp (2–10 of
+    # {image, text, id, button}) — set by the real-estate listing search. None = none.
+    cards: Optional[List[Dict[str, Any]]] = None
     # 2026-08-25: a pending confirmation an owner needs to approve/reject via real WhatsApp
     # reply buttons rather than free text — {"id", "summary", "confirm_label", "cancel_label"}.
     # Set when a skill's tool call returned {"preview": True, ...} (see core.skills.commerce_
