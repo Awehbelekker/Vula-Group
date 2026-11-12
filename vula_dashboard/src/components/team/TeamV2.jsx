@@ -13,7 +13,7 @@ import EmployeesV2 from "./EmployeesV2";
 import NoticesV2 from "./NoticesV2";
 import ActivityV2 from "./ActivityV2";
 import { VULA_API } from "../../lib/authFetch";
-import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, toggle, useTeam } from "./useTeam";
+import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, TEAMS, TEAM_LABELS, toggle, useTeam } from "./useTeam";
 import "./team.css";
 
 /** MODULES grouped as the redesigned menu shows them; anything not in a section goes last. */
@@ -182,6 +182,12 @@ function People({ tenantId }) {
               {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
             </Select>
           </Field>
+          <Field label="Team" hint="Gives them the tabs that job needs">
+            <Select value={t.form.team || ""} onChange={(e) => t.setForm({ ...t.form, team: e.target.value })}>
+              <option value="">No team</option>
+              {TEAMS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </Select>
+          </Field>
           <div className="vtm-go"><Button Icon={Plus} onClick={t.add}>Add member</Button></div>
         </div>
       </Card>
@@ -204,6 +210,16 @@ function People({ tenantId }) {
               {!m.active && <StatusChip>Disabled</StatusChip>}
               <Select value={m.role} onChange={(e) => t.patch(m.id, { role: e.target.value })} aria-label={`Role for ${m.name || m.whatsapp}`} className="vtm-role">
                 {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
+              </Select>
+              <Select value={m.team || ""} aria-label={`Team for ${m.name || m.whatsapp}`} className="vtm-role"
+                onChange={(e) => {
+                  const team = e.target.value;
+                  const who = m.name || m.whatsapp;
+                  const give = team && window.confirm(`Give ${who} the ${TEAM_LABELS[team]} team's tabs? Their current tabs are replaced (you can still change them after).`);
+                  t.patch(m.id, { team, apply_team_access: !!give });
+                }}>
+                <option value="">No team</option>
+                {TEAMS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
               </Select>
               <span className="vtm-actions">
                 <Button size="sm" variant="secondary" onClick={() => t.patch(m.id, { active: !m.active })}>{m.active ? "Disable" : "Enable"}</Button>

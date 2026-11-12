@@ -45,14 +45,14 @@ async def activity_available(tenant: str) -> dict:
 
 @router.get("/{tenant}/activity")
 async def activity(tenant: str, period: str = Query("this_week"), member_id: Optional[str] = None,
-                   identity: dict = Depends(require_tenant_admin)) -> dict:
+                   team: Optional[str] = None, identity: dict = Depends(require_tenant_admin)) -> dict:
     if period not in PERIODS:
         raise HTTPException(status_code=400, detail="period must be one of " + ", ".join(PERIODS))
     since, until, label = ta.period(PERIODS[period])
     out = {"period": period, "label": label, "since": since.date().isoformat(),
            "until": until.date().isoformat()}
     if not member_id:
-        return {**out, "people": ta.team_summary(tenant, since, until)}
+        return {**out, "people": ta.team_summary(tenant, since, until, team=team or None)}
     member = next((m for m in ta.members(tenant) if str(m.get("id")) == member_id), None)
     if not member:
         raise HTTPException(status_code=404, detail="Not on the team list.")

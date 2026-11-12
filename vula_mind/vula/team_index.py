@@ -40,8 +40,12 @@ def active_members(tenant_id: str) -> List[Dict[str, Any]]:
         if hit and now - hit[0] < TTL_SECONDS:
             return [dict(r) for r in hit[1]]
     from vula.commerce import service
-    rows = (service._client().table("vula_team_members").select(_COLUMNS)
-            .eq("tenant_id", tenant_id).eq("active", True).execute().data)
+    try:
+        rows = (service._client().table("vula_team_members").select(_COLUMNS + ",team")
+                .eq("tenant_id", tenant_id).eq("active", True).execute().data)
+    except Exception:                       # migration 262 (team) not applied yet
+        rows = (service._client().table("vula_team_members").select(_COLUMNS)
+                .eq("tenant_id", tenant_id).eq("active", True).execute().data)
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     with _LOCK:
         _CACHE[tenant_id] = (now, rows)

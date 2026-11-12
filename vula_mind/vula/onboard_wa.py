@@ -110,8 +110,9 @@ STEPS: List[Dict[str, str]] = [
      "q": "Send any price list, menu, brochure or document customers ask about, one at a time, so I can "
           "answer from them. Reply *done* when that's all (or *skip*)."},
     {"key": "team", "kind": "team", "label": "Team",
-     "q": "Who else in the team should use Vula? Send each person as *name, WhatsApp number, role* "
-          "(role: manager or staff), e.g. *Thandi, 082 123 4567, manager*. Reply *done* when that's everyone."},
+     "q": "Who else in the team should use Vula? Send each person as *name, WhatsApp number, role or team* "
+          "(manager, staff, or a team: sales, admin, bookkeeping, operations, marketing, field), e.g. "
+          "*Thandi, 082 123 4567, manager* or *Sipho, 083 765 4321, sales*. Reply *done* when that's everyone."},
     # 12 Nov 2026 (Ian): the team's scheduled messages start off; the owner picks which (the
     # question lists only the ones that fit this business — _alerts_question). Skipped when none fit.
     {"key": "alerts", "kind": "alerts", "label": "Team messages", "q": ""},
@@ -527,12 +528,23 @@ def parse_member(text: str) -> Optional[Dict[str, str]]:
     rest = (text[:m.start()] + " " + text[m.end():])
     role = "manager" if re.search(r"\bmanager\b", rest, re.I) else \
         "bookkeeper" if re.search(r"\b(?:bookkeeper|accounts?)\b", rest, re.I) else "staff"
+    # 12 Nov 2026: a team instead of a role ("Sipho, 082…, sales") puts them in that preset team
+    # with its tabs (vula/team_presets.py); a role word still works as before.
+    from vula import team_presets
+    parts = [p.strip() for p in re.split(r"[,;\n]", rest) if p.strip()]
+    team = team_presets.find(parts[-1]) if len(parts) >= 2 else None
+    if team and team != "bookkeeping":
+        rest = ", ".join(parts[:-1])
     name = re.sub(r"\b(?:manager|staff|bookkeeper|accounts?|role)\b", " ", rest, flags=re.I)
     name = re.sub(r"[,;:\n]+", " ", name)
     name = re.sub(r"\s+", " ", name).strip(" -.")
     if not name:
         return None
-    return {"name": name[:80], "whatsapp": phone, "role": role}
+    out = {"name": name[:80], "whatsapp": phone, "role": role}
+    if team:
+        out["team"] = team
+        out["access"] = team_presets.access_for(team, role, [])
+    return out
 
 
 async def _save(row: Dict[str, Any], step: Dict[str, str], text: str) -> Tuple[Optional[str], Optional[str]]:
@@ -728,14 +740,27 @@ async def _add_member(row: Dict[str, Any], text: str) -> Tuple[Optional[str], Op
         return None, ("Send each person as *name, WhatsApp number, role*, e.g. *Thandi, 082 123 4567, "
                       "manager*, or reply *done*.")
     tid = row["tenant_id"]
-    _db().table("vula_team_members").upsert({**m, "tenant_id": tid, "active": True},
-                                            on_conflict="tenant_id,whatsapp").execute()
+    try:
+        _db().table("vula_team_members").upsert({**m, "tenant_id": tid, "active": True},
+                                                on_conflict="tenant_id,whatsapp").execute()
+    except Exception:
+        if "team" not in m:
+            raise
+        m = {k: v for k, v in m.items() if k != "team"}       # migration 262 not applied yet
+        _db().table("vula_team_members").upsert({**m, "tenant_id": tid, "active": True},
+                                                on_conflict="tenant_id,whatsapp").execute()
     from vula import team_index
     team_index.invalidate(tid)
     back = team_index.member_for_phone(tid, m["whatsapp"])
     if not back:
         return None, "I couldn't add them just now — send it again?"
-    return f"{back.get('name')} ({back.get('whatsapp')}, {back.get('role')})", None
+    team = team_presets_label(back.get("team"))
+    return f"{back.get('name')} ({back.get('whatsapp')}, {team or back.get('role')})", None
+
+
+def team_presets_label(team: Optional[str]) -> Optional[str]:
+    from vula import team_presets
+    return (team_presets.TEAMS.get(team or "") or {}).get("label")
 
 
 # ── The conversation ───────────────────────────────────────────────────────────────────────────

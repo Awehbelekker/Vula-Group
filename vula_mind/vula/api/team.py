@@ -44,6 +44,7 @@ class MemberIn(BaseModel):
     access: list = []
     notify: list = []
     active: bool = True
+    team: Optional[str] = None              # a preset team (vula/team_presets.py) — gives its tabs
     birthday: Optional[str] = None          # "MM-DD" (migration 218) — day and month only
     birthday_share: Optional[bool] = None
     notices_opt_out: Optional[bool] = None
@@ -84,6 +85,15 @@ class MemberPatch(BaseModel):
     birthday_share: Optional[bool] = None
     notices_opt_out: Optional[bool] = None
     start_date: Optional[str] = None
+    team: Optional[str] = None              # a preset team id (vula/team_presets.py); "" = none
+    apply_team_access: Optional[bool] = None  # also give them that team's tabs
+
+
+@router.get("/{tenant}/teams")
+async def list_teams(tenant: str) -> dict:
+    """The preset teams and the tabs each gives (vula/team_presets.py)."""
+    from vula import team_presets
+    return {"teams": team_presets.presets()}
 
 
 @router.get("/{tenant}")
@@ -104,6 +114,16 @@ async def add_member(tenant: str, body: MemberIn,
     row["tenant_id"] = tenant
     if row.get("whatsapp"):
         row["whatsapp"] = _digits(row["whatsapp"])
+    team = (row.get("team") or "").strip().lower()
+    if team:
+        from vula import team_presets
+        if team not in team_presets.TEAMS:
+            raise HTTPException(status_code=400, detail="Unknown team. Teams: " + ", ".join(team_presets.TEAMS))
+        row["team"] = team
+        if not row.get("access"):              # the team's tabs, unless tabs were chosen
+            row["access"] = team_presets.access_for(team, row.get("role"), [])
+    else:
+        row.pop("team", None)                  # works before migration 262 too
     try:
         res = _client().table("vula_team_members").upsert(
             row, on_conflict="tenant_id,whatsapp").execute()
@@ -157,6 +177,17 @@ async def update_member(tenant: str, member_id: str, body: MemberPatch,
     patch = _clean_birthday({k: v for k, v in body.model_dump().items() if v is not None})
     if patch.get("whatsapp"):
         patch["whatsapp"] = _digits(patch["whatsapp"])
+    apply_access = bool(patch.pop("apply_team_access", False))
+    if "team" in patch:
+        from vula import team_presets
+        team = (patch["team"] or "").strip().lower()
+        if team and team not in team_presets.TEAMS:
+            raise HTTPException(status_code=400, detail="Unknown team. Teams: " + ", ".join(team_presets.TEAMS))
+        patch["team"] = team or None
+        if team and apply_access and "access" not in patch:
+            cur = (_client().table("vula_team_members").select("role,access").eq("id", member_id)
+                   .eq("tenant_id", tenant).limit(1).execute().data or [{}])[0]
+            patch["access"] = team_presets.access_for(team, patch.get("role") or cur.get("role"), cur.get("access"))
     patch["updated_at"] = "now()"
     try:
         _client().table("vula_team_members").update(patch).eq("id", member_id).eq("tenant_id", tenant).execute()

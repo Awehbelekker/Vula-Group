@@ -501,6 +501,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "title": {"type": "string", "description": "A short heading, if the owner gave one."},
             "roles": {"type": "array", "items": {"type": "string"},
                       "description": "Only these roles (e.g. ['staff','sales_rep']); omit for everyone."},
+            "teams": {"type": "array", "items": {"type": "string"},
+                      "description": "Only these teams as said ('the sales team' → ['sales']); omit for everyone."},
             "must_read": {"type": "boolean",
                           "description": "True when they must confirm they've read it."},
             "confirm": {"type": "boolean"}},
@@ -1040,6 +1042,8 @@ MEETING_TOOLS = [
             "action": {"type": "string", "enum": ["person", "team"]},
             "who": {"type": "string", "description": "A name or number as said, or 'me'."},
             "role": {"type": "string", "enum": ["sales_rep", "staff", "manager", "bookkeeper"]},
+            "team": {"type": "string", "description": "A team as said: sales, admin, bookkeeping, operations, "
+                                                      "marketing, field ('what did the sales team do?')."},
             "period": {"type": "string"}},
             "required": ["action"]}}},
     {"type": "function", "function": {
@@ -2832,7 +2836,9 @@ class CommerceAdminSkill(BaseSkill):
             return {"status": "need_info", "message": "What should I tell the staff?"}
         title = str(args.get("title") or "").strip() or " ".join(body.split()[:6]).rstrip(".,!?:;")
         roles = [str(r).lower() for r in (args.get("roles") or []) if r]
-        spec = {"roles": roles} if roles else {"all": True}
+        from vula import team_presets
+        teams = [t for t in (team_presets.find(str(x)) for x in (args.get("teams") or [])) if t]
+        spec = {"teams": teams} if teams else {"roles": roles} if roles else {"all": True}
         must_read = bool(args.get("must_read"))
         me = re.sub(r"\D", "", str(ctx.get("phone") or ""))
         people = [m for m in sn.audience(tid, spec)
@@ -6331,7 +6337,13 @@ class CommerceAdminSkill(BaseSkill):
             if not sees_all:
                 return {"reply_verbatim": "Only the owner or a manager can see the whole team. "
                                           "Ask *how does my week look?* for your own."}
-            return {"reply_verbatim": ta.team_text(ta.team_summary(tid, since, until, args.get("role") or None), label)}
+            from vula import team_presets
+            team = team_presets.find(str(args.get("team") or ""))
+            if args.get("team") and not team:
+                return {"status": "need_info", "message": "Which team? " + ", ".join(
+                    t["label"] for t in team_presets.presets()) + "."}
+            rows = ta.team_summary(tid, since, until, args.get("role") or None, team=team)
+            return {"reply_verbatim": ta.team_text(rows, label, team_presets.TEAMS[team]["label"] + " team" if team else None)}
         if not who or who.lower() in ("me", "my", "mine", "myself", "i"):
             if not phone:
                 return {"error": "I can only show the diary of someone messaging me on WhatsApp."}

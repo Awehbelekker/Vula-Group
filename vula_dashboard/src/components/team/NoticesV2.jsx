@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { BellRing, Cake, CalendarClock, Lock, Megaphone, Plus, Send, TestTube2, Trash2, Vote, XCircle } from "lucide-react";
 import { VULA_API } from "../../lib/authFetch";
 import { Button, Card, EmptyState, Field, Input, Select, StatusChip, Textarea, toast } from "../ui/index.jsx";
-import { ROLE_LABELS, ROLES } from "./useTeam";
+import { ROLE_LABELS, ROLES, TEAMS } from "./useTeam";
 import OwnerBriefs from "./OwnerBriefs";
 
 const KIND_LABEL = { notice: "Notice", newsletter: "Newsletter", birthday: "Birthday", holiday: "Public holiday",
@@ -21,7 +21,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const EMPTY_POLL = { question: "", options: ["", ""], anonymous: false, closes_at: "" };
 const fmtMD = (md) => (md ? `${Number(md.slice(3))} ${MONTHS[Number(md.slice(0, 2)) - 1]}` : "");
 const STATUS_TONE = { sent: "ok", scheduled: "info", sending: "info", draft: "muted", cancelled: "muted" };
-const EMPTY = { title: "", body: "", image_url: "", must_read: false, who: "all", roles: [], send_at: "" };
+const EMPTY = { title: "", body: "", image_url: "", must_read: false, who: "all", roles: [], teams: [], send_at: "" };
 
 async function call(path, opts = {}) {
   const r = await fetch(`${VULA_API}${path}`, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -55,7 +55,8 @@ export default function NoticesV2({ tenantId }) {
   }, [tenantId, base]);
   useEffect(() => { load(); }, [load]);
 
-  const audience = form.who === "roles" && form.roles.length ? { roles: form.roles } : { all: true };
+  const audience = form.who === "roles" && form.roles.length ? { roles: form.roles }
+    : form.who === "teams" && (form.teams || []).length ? { teams: form.teams } : { all: true };
   const body = () => ({ title: form.title, body: form.body, image_url: form.image_url || null,
     must_read: form.must_read, audience });
 
@@ -168,6 +169,7 @@ export default function NoticesV2({ tenantId }) {
             <Select value={form.who} onChange={(e) => setForm({ ...form, who: e.target.value })}>
               <option value="all">Everyone on the team</option>
               <option value="roles">Only some roles…</option>
+              <option value="teams">Only some teams…</option>
             </Select>
           </Field>
           <Field label="Picture link (optional)" hint="A poster or this month's newsletter page"><Input type="url" value={form.image_url} placeholder="https://…" onChange={(e) => setForm({ ...form, image_url: e.target.value })} /></Field>
@@ -178,6 +180,16 @@ export default function NoticesV2({ tenantId }) {
               <button key={r} type="button" className="vui-chip vtm-chip" aria-pressed={form.roles.includes(r)}
                 onClick={() => setForm({ ...form, roles: form.roles.includes(r) ? form.roles.filter((x) => x !== r) : [...form.roles, r] })}>
                 {ROLE_LABELS[r] || r}
+              </button>
+            ))}
+          </div>
+        )}
+        {form.who === "teams" && (
+          <div className="vtm-chips" role="group" aria-label="Teams">
+            {TEAMS.map(([id, label]) => (
+              <button key={id} type="button" className="vui-chip vtm-chip" aria-pressed={(form.teams || []).includes(id)}
+                onClick={() => setForm({ ...form, teams: (form.teams || []).includes(id) ? form.teams.filter((x) => x !== id) : [...(form.teams || []), id] })}>
+                {label}
               </button>
             ))}
           </div>

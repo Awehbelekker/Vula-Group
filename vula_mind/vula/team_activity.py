@@ -60,11 +60,13 @@ def phone_variants(phone: Optional[str]) -> List[str]:
     return sorted(out)
 
 
-def members(tenant_id: str, role: Optional[str] = None) -> List[Dict[str, Any]]:
+def members(tenant_id: str, role: Optional[str] = None, team: Optional[str] = None) -> List[Dict[str, Any]]:
     from vula.team_index import active_members
     rows = [m for m in active_members(tenant_id) if m.get("whatsapp")]
     if role:
         rows = [m for m in rows if (m.get("role") or "").lower() == role.lower()]
+    if team:
+        rows = [m for m in rows if (m.get("team") or "") == team]
     return sorted(rows, key=lambda m: (m.get("name") or m.get("whatsapp") or "").lower())
 
 
@@ -213,10 +215,10 @@ def _rands(cents: int) -> str:
 
 
 def team_summary(tenant_id: str, since: datetime, until: datetime, role: Optional[str] = None,
-                 now: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """One row of counts per active team member, listed by name."""
+                 now: Optional[datetime] = None, team: Optional[str] = None) -> List[Dict[str, Any]]:
+    """One row of counts per active team member (of one team when given), listed by name."""
     now = now or now_sast()
-    people = members(tenant_id, role)
+    people = members(tenant_id, role, team)
     data = collect(tenant_id, since, until)
     rows = []
     for m in people:
@@ -314,10 +316,11 @@ def person_text(p: Dict[str, Any], label: str, now: Optional[datetime] = None) -
     return "\n".join(out)
 
 
-def team_text(rows: List[Dict[str, Any]], label: str) -> str:
+def team_text(rows: List[Dict[str, Any]], label: str, team_label: Optional[str] = None) -> str:
     if not rows:
-        return "There's nobody on the team list with a WhatsApp number yet."
-    out = [f"👥 *Team* — {label}"]
+        return (f"There's nobody in {team_label} with a WhatsApp number yet." if team_label
+                else "There's nobody on the team list with a WhatsApp number yet.")
+    out = [f"👥 *{team_label or 'Team'}* — {label}"]
     for r in rows:
         bits = [(r["meetings_held"], "meeting held", "meetings held"),
                 (r["meetings_coming"], "coming up", "coming up"),

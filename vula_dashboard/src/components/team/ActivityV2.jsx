@@ -14,6 +14,7 @@ import { VULA_API } from "../../lib/authFetch";
 import { downloadCsv } from "../../lib/csv";
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, Field, Select, Table, toast } from "../ui/index.jsx";
+import { TEAMS } from "./useTeam";
 
 const PERIODS = [["this_week", "This week"], ["last_week", "Last week"], ["next_week", "Next week"],
   ["this_month", "This month"], ["last_month", "Last month"]];
@@ -49,14 +50,15 @@ async function call(path) {
 
 export default function ActivityV2({ tenantId }) {
   const [period, setPeriod] = useState("this_week");
+  const [team, setTeam] = useState("");
   const [data, setData] = useState(null);
   const [person, setPerson] = useState(null);
   const base = `/v1/team/${tenantId}/activity`;
 
   const load = useCallback(async () => {
     setData(null);
-    try { setData(await call(`${base}?period=${period}`)); } catch (e) { toast(e.message, "danger"); setData({ people: [] }); }
-  }, [base, period]);
+    try { setData(await call(`${base}?period=${period}${team ? `&team=${team}` : ""}`)); } catch (e) { toast(e.message, "danger"); setData({ people: [] }); }
+  }, [base, period, team]);
   useEffect(() => { load(); }, [load]);
 
   const open = async (row) => {
@@ -73,6 +75,12 @@ export default function ActivityV2({ tenantId }) {
         <Field label="Period">
           <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
             {PERIODS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </Select>
+        </Field>
+        <Field label="Team">
+          <Select value={team} onChange={(e) => setTeam(e.target.value)}>
+            <option value="">Everyone</option>
+            {TEAMS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </Select>
         </Field>
         <Button size="sm" variant="secondary" Icon={Download} disabled={!rows.length}

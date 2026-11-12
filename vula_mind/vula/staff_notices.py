@@ -144,8 +144,8 @@ def members(tenant_id: str) -> List[Dict[str, Any]]:
 
 def audience(tenant_id: str, spec: Optional[Dict[str, Any]], kind: str = "notice",
              team: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-    """Active members with a WhatsApp number that the spec picks: {"all": true}, {"roles": [...]}
-    or {"ids": [...]}. Birthday and holiday messages skip anyone who opted out; work notices
+    """Active members with a WhatsApp number that the spec picks: {"all": true}, {"roles": [...]},
+    {"teams": [...]} or {"ids": [...]}. Birthday and holiday messages skip anyone who opted out; work notices
     reach everyone."""
     spec = spec or {"all": True}
     rows = [m for m in (team if team is not None else members(tenant_id)) if m.get("whatsapp")]
@@ -155,6 +155,15 @@ def audience(tenant_id: str, spec: Optional[Dict[str, Any]], kind: str = "notice
     elif spec.get("roles"):
         roles = {str(r).lower() for r in spec["roles"]}
         rows = [m for m in rows if (m.get("role") or "staff").lower() in roles]
+    elif spec.get("teams"):                       # preset teams (migration 262, vula/team_presets.py)
+        from vula import team_index
+        teams = {str(t).lower() for t in spec["teams"]}
+        try:
+            in_team = {str(m.get("id")) for m in team_index.active_members(tenant_id)
+                       if (m.get("team") or "") in teams}
+        except Exception:
+            in_team = set()
+        rows = [m for m in rows if str(m.get("id")) in in_team]
     if kind in DAY_KINDS:
         rows = [m for m in rows if not m.get("notices_opt_out")]
     return rows
