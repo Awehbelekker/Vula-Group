@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 _GRAPH = "https://graph.microsoft.com/v1.0"
 
-SCOPES = ["offline_access", "User.Read", "Files.Read", "Mail.Read", "Mail.ReadWrite", "Mail.Send"]
+SCOPES = ["offline_access", "User.Read", "Files.Read", "Mail.Read", "Mail.ReadWrite", "Mail.Send",
+          "Calendars.Read"]      # 12 Nov 2026: Outlook calendar → meeting reminders (vula/outlook_calendar.py)
 
 
 class MicrosoftNotConnected(Exception):

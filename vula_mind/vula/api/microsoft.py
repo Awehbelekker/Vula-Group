@@ -82,11 +82,14 @@ async def status(tenant_id: str) -> dict:
     try:
         rows = (_client().table("vula_microsoft_accounts")
                 .select("tenant_id,email,status,connected_at,"
-                        "last_synced_at,last_sync_status,last_sync_error")
+                        "last_synced_at,last_sync_status,last_sync_error,scopes")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
     except Exception:
         rows = []
     from vula import connections
     out = rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
     out["one_tap"] = connections.one_tap("microsoft")   # its Connect button can work
+    # 12 Nov 2026: a connection made before the calendar permission needs a reconnect for it.
+    from vula.outlook_calendar import has_calendar
+    out["has_calendar"] = has_calendar(out.pop("scopes", None))
     return out

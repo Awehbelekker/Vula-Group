@@ -1067,11 +1067,14 @@ MEETING_TOOLS = [
             "past meeting notes: 'brief me on the Acme meeting' (action=brief), or with_brief=true when "
             "they ask for one on the reminder ('remind me an hour before with a brief'); 'meeting "
             "brief' on its own (the reply to a meeting reminder) = action=brief for their next meeting. "
-            "action=book / list / update / cancel / check_in / brief. NOT a customer booking a service (create_booking) and NOT notes "
+            "Meetings in their Outlook calendar come in by themselves; 'remind me 30 minutes before my "
+            "Outlook meetings' / 'stop calendar reminders' / 'with a brief' set that once for all of "
+            "them (action=calendar, `remind`, with_brief). "
+            "action=book / list / update / cancel / check_in / brief / calendar. NOT a customer booking a service (create_booking) and NOT notes "
             "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
             "them — never work out a date or time yourself. No reminder unless they ask for one."),
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in", "brief"]},
+            "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in", "brief", "calendar"]},
             "with_brief": {"type": "boolean", "description": "Only when they asked for a brief on the reminder."},
             "with": {"type": "string", "description": "Who or which company the meeting is with "
                                                       "(for update/cancel: which meeting)."},
@@ -6495,6 +6498,41 @@ class CommerceAdminSkill(BaseSkill):
             head = (f"📍 Checking in for {mt.line(m)}." if m else
                     f"📍 Checking in{' at *' + who + '*' if who else ''}.")
             return {"reply_verbatim": f"{head}\n{checkins.ASK_PIN}"}
+
+        if action == "calendar":
+            from vula import outlook_calendar as oc
+            try:
+                acct = (service._client().table("vula_microsoft_accounts").select("email,scopes,status")
+                        .eq("tenant_id", tid).limit(1).execute().data or [{}])[0]
+            except Exception:
+                acct = {}
+            if acct.get("status") != "connected":
+                return {"reply_verbatim": "No Outlook calendar is connected. Connect Microsoft in Settings › "
+                                          "Connections and your meetings will come in by themselves."}
+            if not oc.has_calendar(acct.get("scopes")):
+                return {"reply_verbatim": f"Microsoft is connected ({acct.get('email')}) but without the calendar. "
+                                          "Reconnect it in Settings › Connections to let me read your meetings."}
+            if not remind_words and args.get("with_brief") is None:
+                return {"status": "need_info", "message": "How long before each Outlook meeting should I remind you? "
+                                                          "e.g. *30 minutes before*, *1 hour*, or *no reminders*."}
+            minutes = lead if remind_words else None
+            try:
+                back = oc.set_reminders(tid, phone, minutes if remind_words else None,
+                                        args.get("with_brief") if args.get("with_brief") is not None else None)
+            except Exception as exc:
+                logger.warning("calendar reminder setting failed for %s: %s", tid, exc)
+                back = None
+            if back is None:
+                return {"error": "I couldn't save that — are you on the team list with this WhatsApp number?"}
+            got = back.get("calendar_remind_minutes")
+            if remind_words and (got or None) != (minutes or None):
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+            if not got:
+                return {"reply_verbatim": f"⏸️ No reminders for your Outlook meetings ({acct.get('email')}). "
+                                          "They still show in your diary and brief."}
+            brief = " with a brief on who you're meeting" if back.get("calendar_brief") else ""
+            return {"reply_verbatim": f"✅ I'll remind you {mt.lead_text(int(got))} each meeting in your Outlook "
+                                      f"calendar ({acct.get('email')}){brief}, with the address and a map link."}
 
         if action == "list":
             rows = mt.upcoming(tid, phone)

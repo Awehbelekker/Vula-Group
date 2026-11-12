@@ -959,6 +959,23 @@ async def _owner_digest_loop() -> None:
         await _asyncio.sleep(300)
 
 
+async def _outlook_calendar_loop() -> None:
+    """Every 15 minutes: the next 7 days of each connected Outlook calendar into the meetings
+    diary (vula/outlook_calendar.py). Reminders only for people who asked for them."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(360)
+    while True:
+        try:
+            from vula import outlook_calendar as _oc
+            res = await _oc.sync_all()
+            moved = {t: r for t, r in res.items() if any(r.get(k) for k in ("added", "updated", "cancelled"))}
+            if moved:
+                log.info("Outlook calendars synced: %s", moved)
+        except Exception as exc:
+            log.warning("Outlook calendar loop error: %s", exc)
+        await _asyncio.sleep(900)
+
+
 async def _staff_notices_loop() -> None:
     """Every minute: a business's staff notices that are due, the day's birthdays and tomorrow's
     public holiday at its send hour, and the next-day reminder on must-read notices
@@ -1679,6 +1696,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_benchmark_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_digest_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_outlook_calendar_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_staff_notices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
