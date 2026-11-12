@@ -49,7 +49,12 @@ _FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning", "page_co
 
 # Health-probe cache: base_url -> (checked_at_monotonic, is_up)
 _HEALTH_TTL_S = 30.0
-_PROBE_TIMEOUT_S = 1.5
+# 12 Nov 2026: was 1.5 s. Railway runs in us-west2 and the box is in South Africa behind Cloudflare
+# Access, so /api/tags often takes 2-3 s on a healthy box. In one hour on 11 Nov, 72 calls went to
+# the cloud as "local_unreachable" (48 stayed local), while local_llm_watch's 8 s probe found the
+# box up all day. Tenant data left SA for no reason. 4 s still fails fast in a real outage, and a
+# failed probe is cached for _HEALTH_TTL_S, so a dead box costs one 4 s wait per 30 s at most.
+_PROBE_TIMEOUT_S = 4.0
 _cache: dict[str, tuple[float, bool]] = {}
 
 

@@ -237,6 +237,21 @@ async def test_probe_result_is_cached():
 
 
 @pytest.mark.asyncio
+async def test_probe_waits_long_enough_for_the_sa_box():
+    """The round trip from Railway (US) to the SA box through Cloudflare is 2-3 s when healthy;
+    a 1.5 s limit sent most calls to the cloud as 'local_unreachable' (11 Nov). The limit stays
+    under the outage watcher's, so the router never waits longer than an outage check does."""
+    from vula import local_llm_watch
+    resp = MagicMock()
+    resp.status_code = 200
+    client = _http_client(AsyncMock(return_value=resp))
+    with patch("core.llm_router.httpx.AsyncClient", return_value=client) as ctor:
+        assert await llm_router.ollama_available("http://localhost:11434") is True
+    timeout = ctor.call_args.kwargs["timeout"]
+    assert 3.0 <= timeout <= local_llm_watch._PROBE_TIMEOUT_S
+
+
+@pytest.mark.asyncio
 async def test_probe_requires_the_specific_model_when_given():
     """Model-presence probe: /api/tags up but the requested model absent → not available.
 
