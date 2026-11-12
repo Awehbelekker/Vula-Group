@@ -8,8 +8,9 @@ commerce_allocation_rules: hits:int4, id:uuid, project:text, signal:text, signal
 commerce_automation_firings: action_config:jsonb, action_type:text, automation_id:uuid, created_at:timestamptz, decided_at:timestamptz, id:uuid, message:text, status:text, tenant_id:text, trigger_context:jsonb
 commerce_automation_log: automation_id:uuid, entity_key:text, fired_at:timestamptz, id:uuid
 commerce_automations: action_config:jsonb, action_type:text, created_at:timestamptz, created_from:text, enabled:bool, fire_count:int4, id:uuid, last_fired_at:timestamptz, name:text, tenant_id:text, trigger_config:jsonb, trigger_type:text
+commerce_bank_accounts: account_number:text, bank:text, created_at:timestamptz, first_seen:date, holder:text, id:uuid, last_seen:date, name:text, private_to:text, project:text, tenant_id:text, updated_at:timestamptz
 commerce_bank_splits: account_code:text, amount_cents:int8, created_at:timestamptz, created_by:text, id:uuid, note:text, project:text, status:text, tenant_id:text, txn_id:uuid
-commerce_bank_transactions: account_code:text, amount_cents:int8, asked_at:timestamptz, balance_cents:int8, categorized_by:text, created_at:timestamptz, description:text, direction:text, id:uuid, match_status:text, matched_expense_id:uuid, matched_invoice_id:uuid, matched_order_id:uuid, payee:text, project:text, proposed_match_id:uuid, proposed_match_type:text, reference:text, source_file:text, tenant_id:text, trade:text, txn_date:date, vat_cents:int8, vat_treatment:text, worker_id:uuid
+commerce_bank_transactions: account_code:text, amount_cents:int8, asked_at:timestamptz, balance_cents:int8, bank_account:text, categorized_by:text, created_at:timestamptz, description:text, direction:text, id:uuid, match_status:text, matched_expense_id:uuid, matched_invoice_id:uuid, matched_order_id:uuid, payee:text, project:text, project_source:text, proposed_match_id:uuid, proposed_match_type:text, reference:text, source_file:text, tenant_id:text, trade:text, txn_date:date, vat_cents:int8, vat_treatment:text, worker_id:uuid
 commerce_bom_lines: bom_id:uuid, id:uuid, material_id:uuid, position:int4, qty:numeric, qty_base:numeric, tenant_id:text, unit:text, waste_pct:numeric
 commerce_boms: batch_yield:numeric, created_at:timestamptz, created_by:text, id:uuid, labour_hours:numeric, material_id:uuid, notes:text, product_id:uuid, status:text, tenant_id:text, version:int4
 commerce_booking_settings: buffer_min:int4, close_time:text, horizon_days:int4, lead_hours:int4, open_time:text, slot_minutes:int4, tenant_id:text, timezone:text, updated_at:timestamptz, workdays:_int4
@@ -155,6 +156,8 @@ vula_payment_providers: active:bool, created_at:timestamptz, credentials:jsonb, 
 vula_platform_feedback: created_at:timestamptz, id:uuid, message:text, phone:text, sender_name:text, status:text, tenant_id:text
 vula_platform_state: key:text, updated_at:timestamptz, value:text
 vula_price_observations: created_at:timestamptz, description:text, doc_id:text, id:uuid, kind:text, norm_key:text, observed_on:date, project:text, quantity:numeric, section:text, source_kind:text, supplier:text, tenant_id:text, unit:text, unit_price_cents:int8
+vula_private_documents: category:text, content_hash:text, created_at:timestamptz, doc_id:text, fields:jsonb, file_url:text, filename:text, id:uuid, member_id:text, source:text, summary:text, tenant_id:text
+vula_private_moves: created_at:timestamptz, done_at:timestamptz, error:text, filed_document_id:uuid, id:uuid, member_id:text, tenant_id:text
 vula_project_boq: baseline_doc_id:text, baseline_locked:bool, baseline_set_at:timestamptz, created_at:timestamptz, id:uuid, project:text, sections:jsonb, source_job:text, tenant_id:text, title:text, total_cents:int8, updated_at:timestamptz
 vula_project_briefs: brief:text, project:text, tenant_id:text, updated_at:timestamptz
 vula_project_budgets: budget:numeric, project:text, tenant_id:text, updated_at:timestamptz

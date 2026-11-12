@@ -1152,16 +1152,42 @@ def default_audience(source_type: Optional[str], audience: Optional[str] = None)
     return "public" if source_type in _PUBLIC_SOURCE_TYPES else "staff"
 
 
+# One person's private documents (12 Nov 2026, Ian: Richard's own bank account "is his data and only
+# visible to him"). A chunk stored with `private_to` = a team member's id is used only while answering
+# that member (kb_viewer, set where a turn knows who is asking). Everyone else, every customer, and
+# every search that doesn't say who is asking never sees it: private by default.
+_KB_VIEWER: ContextVar[Optional[str]] = ContextVar("kb_viewer", default=None)
+
+
+@contextmanager
+def kb_viewer(member_id: Optional[str]):
+    token = _KB_VIEWER.set(str(member_id) if member_id else None)
+    try:
+        yield
+    finally:
+        _KB_VIEWER.reset(token)
+
+
+def _private_clause() -> dict:
+    me = _KB_VIEWER.get()
+    if not me:
+        return {"is_empty": {"key": "private_to"}}
+    return {"should": [{"is_empty": {"key": "private_to"}}, {"key": "private_to", "match": {"value": me}}]}
+
+
 def audience_filter(audience: Optional[str]) -> Dict[str, list]:
     """Qdrant filter clauses for someone asking as `audience`. Only "public" (a customer) is
-    restricted. Points stored before this field existed carry no audience: while
+    restricted by audience. Points stored before this field existed carry no audience: while
     kb_customer_audience_strict is off they stay visible (only explicitly staff/owner chunks are
-    hidden); once the backfill has run and it is on, a customer sees public chunks only."""
+    hidden); once the backfill has run and it is on, a customer sees public chunks only.
+    Every search also leaves out other people's private chunks (_private_clause) — always non-empty,
+    so a search that has its filter refused fails closed instead of retrying unfiltered."""
+    private = [_private_clause()]
     if audience != "public":
-        return {}
+        return {"must": private}
     if getattr(settings, "kb_customer_audience_strict", False):
-        return {"must": [{"key": "audience", "match": {"value": "public"}}]}
-    return {"must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
+        return {"must": [{"key": "audience", "match": {"value": "public"}}] + private}
+    return {"must": private, "must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
 
 
 # 2026-10-17 (KB retrieval 1b): who the CURRENT turn is answering, for every KB query made while
@@ -1208,6 +1234,9 @@ def effective_audience(audience: Optional[str]) -> Optional[str]:
 
 def _audience_allows(audience: Optional[str], payload: dict) -> bool:
     """The same rule as audience_filter, for payloads matched locally (substring fallback)."""
+    owner = payload.get("private_to")
+    if owner and str(owner) != (_KB_VIEWER.get() or ""):
+        return False
     if audience != "public":
         return True
     got = payload.get("audience")
@@ -1289,8 +1318,8 @@ class QdrantStore:
                 if resp.status_code not in (200, 201) and "already exists" not in resp.text:
                     raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
                 logger.info("Created Qdrant collection: %s", name)
-            # Idempotent: ensure the keyword indexes used by authority and audience filtering.
-            for field_name in ("source_type", "audience"):
+            # Idempotent: ensure the keyword indexes used by authority, audience and private filtering.
+            for field_name in ("source_type", "audience", "private_to"):
                 try:
                     await client.put(
                         f"{self.base}/collections/{name}/index",
@@ -1423,9 +1452,15 @@ class QdrantStore:
             # index and retry once with the full filter, else return nothing (fail closed).
             if resp.status_code == 400 and aud:
                 logger.warning("Audience filter refused for %s — creating index and retrying", name)
-                await client.put(f"{self.base}/collections/{name}/index",
-                                 json={"field_name": "audience", "field_schema": "keyword"})
+                for field_name in ("audience", "private_to"):
+                    await client.put(f"{self.base}/collections/{name}/index",
+                                     json={"field_name": field_name, "field_schema": "keyword"})
                 resp = await client.post(f"{self.base}/collections/{name}/points/search", json=body)
+                if not resp.is_success and audience != "public":
+                    # Staff: drop the other filters (legacy collections without an index on them),
+                    # never the audience / private-to-one-person part.
+                    body["filter"] = {k: v for k, v in aud.items() if v}
+                    resp = await client.post(f"{self.base}/collections/{name}/points/search", json=body)
                 if not resp.is_success:
                     return []
             # If filtering is unavailable (e.g. missing index on a legacy collection),
@@ -1531,6 +1566,8 @@ class QdrantStore:
                             f"{self.base}/collections/{name}/index",
                             json={"field_name": "text", "field_schema": "text"},
                         )
+                        await client.put(f"{self.base}/collections/{name}/index",
+                                         json={"field_name": "private_to", "field_schema": "keyword"})
                         logger.info("created full-text index on %s.text", name)
                     except Exception as exc:
                         logger.debug("text index creation failed for %s: %s", name, exc)
@@ -1577,6 +1614,27 @@ class QdrantStore:
         except Exception as exc:
             logger.debug("substring fallback failed for %s: %s", name, exc)
         return found
+
+    async def set_private(self, tenant_id: str, doc_id: str, member_id: str) -> bool:
+        """Every chunk of `doc_id` becomes private to one team member (used only when answering them).
+        Verified: True only when no chunk of the document is left without it."""
+        name = self._collection_name(tenant_id)
+        flt = {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}
+        async with httpx.AsyncClient(timeout=20.0, headers=self._headers()) as client:
+            for field_name in ("doc_id", "private_to"):
+                await client.put(f"{self.base}/collections/{name}/index",
+                                 json={"field_name": field_name, "field_schema": "keyword"})
+            resp = await client.post(f"{self.base}/collections/{name}/points/payload", params={"wait": "true"},
+                                     json={"payload": {"private_to": str(member_id), "audience": "owner"},
+                                           "filter": flt})
+            if resp.status_code == 404:
+                return True                       # no collection: nothing to hide
+            if not resp.is_success:
+                logger.warning("set_private failed for %s/%s: %s", name, doc_id, resp.text[:200])
+                return False
+            left = await client.post(f"{self.base}/collections/{name}/points/count", json={
+                "exact": True, "filter": {"must": flt["must"] + [{"is_empty": {"key": "private_to"}}]}})
+            return left.is_success and int(left.json().get("result", {}).get("count", 1)) == 0
 
     async def delete_document(self, tenant_id: str, doc_id: str) -> int:
         """Remove all chunks for a specific document. Returns how many points went.
@@ -1679,7 +1737,8 @@ class QdrantStore:
         async with httpx.AsyncClient(timeout=30.0, headers=self._headers()) as client:
             while True:
                 body: dict = {"limit": 256, "with_vector": False,
-                              "with_payload": ["doc_id", "filename", "audience", "audience_by", "source_type"]}
+                              "with_payload": ["doc_id", "filename", "audience", "audience_by", "source_type",
+                                               "private_to"]}
                 if offset is not None:
                     body["offset"] = offset
                 resp = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
@@ -1690,7 +1749,7 @@ class QdrantStore:
                 for p in result.get("points", []):
                     pl = p.get("payload") or {}
                     did = str(pl.get("doc_id") or "")
-                    if not did:
+                    if not did or not _audience_allows(None, pl):    # someone else's private document
                         continue
                     d = docs.setdefault(did, {"doc_id": did, "filename": pl.get("filename"), "chunks": 0,
                                               "audiences": set(), "owner_set": False,
@@ -1770,7 +1829,7 @@ class VulaIngestionPipeline:
         self.store = QdrantStore()
 
     async def ingest_file(self, file_path: Path, source_type: str = "document",
-                          audience: Optional[str] = None) -> IngestionResult:
+                          audience: Optional[str] = None, private_to: Optional[str] = None) -> IngestionResult:
         """
         Full pipeline for a single file.
         Returns IngestionResult with stats.
@@ -1819,6 +1878,7 @@ class VulaIngestionPipeline:
                             "source_type": source_type,
                             "audience": default_audience(source_type, audience),
                             **owner_set,
+                            **({"private_to": str(private_to), "audience": "owner"} if private_to else {}),
                         },
                     )
                     all_chunks.append(chunk)

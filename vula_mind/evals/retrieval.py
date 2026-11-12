@@ -204,6 +204,11 @@ class MemoryQdrant:
         return (0, pid, "") if isinstance(pid, int) else (1, 0, pid)
 
     def _cond(self, col: Dict[str, Any], c: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+        if "is_empty" in c:                  # Qdrant: the key is missing, null or []
+            v = payload.get(c["is_empty"].get("key"))
+            return v is None or v == []
+        if any(k in c for k in ("must", "should", "must_not")):
+            return self._ok(col, c, payload)  # a nested filter
         key, m = c.get("key"), c.get("match") or {}
         if "text" in m:
             if col["indexes"].get(key) != "text":
