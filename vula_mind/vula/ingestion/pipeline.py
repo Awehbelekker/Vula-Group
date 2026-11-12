@@ -2204,11 +2204,12 @@ class VulaIngestionPipeline:
         except Exception:
             # Fallback to direct Ollama HTTP if litellm fails — bypasses install_ollama_auth's
             # num_ctx cap same as the other raw-httpx Ollama calls in this file, so set it here too.
+            from core.llm_router import think_off
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
                     f"{OLLAMA_BASE}/api/generate",
                     json={"model": settings.model_worker, "prompt": f"{system_msg}\n\n{user_msg}",
-                          "stream": False,
+                          "stream": False, **think_off(settings.model_worker),
                           "options": {"temperature": 0.3, "num_predict": 1024, "num_ctx": 8192}},
                 )
                 r.raise_for_status()

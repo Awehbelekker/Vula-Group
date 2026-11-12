@@ -232,6 +232,7 @@ class HRMOrchestrator:
     def _llm_complexity(self, prompt: str) -> int:
         """Ask local LLM to score complexity 1–3. Falls back to keyword heuristic."""
         try:
+            from core.llm_router import think_off
             resp = httpx.post(
                 f"{self.ollama_url}/api/generate",
                 json={
@@ -241,6 +242,7 @@ class HRMOrchestrator:
                         f"Reply with only the number.\nTask: {prompt}"
                     ),
                     "stream": False,
+                    **think_off(self.model),
                     "options": {"num_predict": 5},
                 },
                 timeout=10,
@@ -392,29 +394,36 @@ class HRMOrchestrator:
         became `reasoning` for as long as the box was down."""
         t0 = time.perf_counter()
         try:
-            from core.llm_router import _ollama_headers
-            # CF-Access headers: the Ollama tunnel rejects requests without the service token,
-            # and this call never sent it — so in production the fallback silently never ran.
-            resp = httpx.post(
-                f"{self.ollama_url}/api/generate",
-                headers=_ollama_headers(),
-                json={
-                    "model": self.model,
-                    "prompt": self._classifier_prompt(prompt),
-                    "stream": False,
-                    "options": {"num_predict": 10},
-                },
-                timeout=8,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            skill, data = self._local_classify_skill(prompt)
             _meter_classifier_call(self.model, t0, True, {"prompt_tokens": data.get("prompt_eval_count"),
                                                           "completion_tokens": data.get("eval_count")}, "local")
-            return self._skill_in(data.get("response") or "")
+            return skill
         except Exception as exc:
             _meter_classifier_call(self.model, t0, False, None, "local")
             log.debug("local skill classification unavailable (%s) — trying cloud", exc)
         return self._cloud_classify_skill(prompt)
+
+    def _local_classify_skill(self, prompt: str, timeout: float = 8) -> tuple:
+        """The local model's pick (skill name or None) and Ollama's reply. Raises when the box
+        can't answer. Also used by vula/decision_bench.py to compare local models."""
+        from core.llm_router import _ollama_headers, think_off
+        # CF-Access headers: the Ollama tunnel rejects requests without the service token,
+        # and this call never sent it — so in production the fallback silently never ran.
+        resp = httpx.post(
+            f"{self.ollama_url}/api/generate",
+            headers=_ollama_headers(),
+            json={
+                "model": self.model,
+                "prompt": self._classifier_prompt(prompt),
+                "stream": False,
+                **think_off(self.model),
+                "options": {"num_predict": 10},
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return self._skill_in(data.get("response") or ""), data
 
     @staticmethod
     def _cloud_classifier_models() -> list[str]:
