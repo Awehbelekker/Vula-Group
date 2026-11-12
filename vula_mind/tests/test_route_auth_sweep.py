@@ -102,6 +102,13 @@ PUBLIC = {
     ("GET", "/v1/commerce/{tenant_id}/products"): "storefront",
     ("GET", "/v1/commerce/{tenant_id}/products/{slug}"): "storefront",
     ("GET", "/v1/commerce/{tenant_id}/products/{slug}/related"): "storefront",
+    # Real-estate listings (vula/api/listings.py): the business's public website. Drafts,
+    # archived listings and hidden addresses never leave the service (public_view); enquiries
+    # are rate-limited per address with a honeypot, like the website lead form.
+    ("GET", "/v1/commerce/{tenant_id}/properties"): "storefront: property listings",
+    ("GET", "/v1/commerce/{tenant_id}/properties/{slug}"): "storefront: one listing",
+    ("GET", "/v1/commerce/{tenant_id}/property-agents"): "storefront: the agents' public cards",
+    ("POST", "/v1/commerce/{tenant_id}/property-enquiries"): "storefront: enquiry form (rate-limited, honeypot)",
     ("GET", "/v1/commerce/{tenant_id}/pages"): "storefront",
     ("GET", "/v1/commerce/{tenant_id}/pages/{slug}"): "storefront",
     ("GET", "/v1/commerce/{tenant_id}/robots.txt"): "storefront SEO",

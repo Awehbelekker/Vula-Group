@@ -238,6 +238,14 @@ class Settings(BaseSettings):
     # recorded, nothing is silently substituted.
     whatsapp_notify_template: str = ""
     whatsapp_notify_template_lang: str = "en"
+    # Approved Meta UTILITY template that thanks someone who left their WhatsApp number on a
+    # business's website enquiry form (2026-11-10, vula/listings/service.py). They asked to be
+    # contacted, but haven't messaged the business, so free-form text can't reach them; this
+    # template can, and their reply opens the 24-hour window for the agent. Body parameters, in
+    # order: first name, business name, what they asked about. Wording to submit to Meta:
+    # docs/whatsapp-enquiry-template.md. Empty (the default) sends nothing — today's behaviour.
+    whatsapp_enquiry_template: str = ""
+    whatsapp_enquiry_template_lang: str = "en"
     # Approved Meta template for payment reminders outside the 24-hour window. Body parameters,
     # in order: customer name, invoice number, amount owed, pay-page link. Unset → a reminder
     # that can't go as free text is logged as an error (vula/api/commerce._send_reminder).

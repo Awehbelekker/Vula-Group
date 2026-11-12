@@ -26,13 +26,15 @@ EVENTS = (
     "project_margin",     # weekly: a project below its fee or at a loss (vula/commerce/job_costing.py)
     "bank_details_changed",  # an invoice asks for payment into a different account (supplier_details)
     "customer_unanswered",   # the shop assistant couldn't answer a customer: a person must reply
+    "property_enquiry",      # someone asked about / wants to view a listing (vula/listings/)
 )
 
 # Alerts that must reach SOMEONE (2026-10-26). An ordinary event nobody subscribed to goes to no
 # one, which is right for a digest — but none of the three live businesses had subscribed to the
 # bank-details fraud warning, so it would have reached nobody. These go to the business's owner(s)
 # when no one has subscribed; a member who did subscribe is still the one who gets it.
-URGENT_EVENTS = {"bank_details_changed", "customer_unanswered"}
+# 2026-11-10: a property enquiry too — a lead nobody hears about is a lost sale.
+URGENT_EVENTS = {"bank_details_changed", "customer_unanswered", "property_enquiry"}
 
 
 def _client():
