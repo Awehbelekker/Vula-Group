@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # document-OCR model, not a general vision model. GLM-OCR (0.9B, ~2.2 GB, MIT) fits next to
     # the 8B text model on an 8 GB card. Not installed on the box -> model_ocr, as before.
     model_doc_ocr: str = "glm-ocr"
+    # Models the local box should hold; any missing is downloaded through the tunnel after boot
+    # (vula/local_models.py). Comma-separated Ollama names; blank = never pull. Never deletes.
+    local_models_ensure: str = ""
     model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
     model_image: str = "google/gemini-2.5-flash-image"  # OpenRouter image GENERATION (AI product photos)
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
