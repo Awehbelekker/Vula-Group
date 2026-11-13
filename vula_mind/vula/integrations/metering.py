@@ -97,6 +97,15 @@ _PRICES = {
     "google/gemini-2.5-pro": (1.25, 5.0),
 }
 _DEFAULT = (0.15, 0.45)
+# 13 Nov 2026: a Claude call (CLOUD_MODEL_BY_TASK can name one) fell to _DEFAULT and was costed
+# at a fraction of its price. By family, at the list prices last known — only a fallback: the
+# cost litellm itself reports for the call (record_llm's cost_usd) is used whenever it gives one.
+_FAMILY_PRICES = (
+    ("anthropic/claude-opus", (15.0, 75.0)),
+    ("anthropic/claude-sonnet", (3.0, 15.0)),
+    ("anthropic/claude-haiku", (1.0, 5.0)),
+    ("anthropic/", (3.0, 15.0)),
+)
 
 
 def _price(model: str):
@@ -105,14 +114,24 @@ def _price(model: str):
         return (0.0, 0.0)
     if m.startswith("openrouter/"):
         m = m[len("openrouter/"):]
-    return _PRICES.get(m, _DEFAULT)
+    if m in _PRICES:
+        return _PRICES[m]
+    return next((p for prefix, p in _FAMILY_PRICES if m.startswith(prefix)), _DEFAULT)
 
 
-def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens: int) -> None:
+def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens: int,
+               cost_usd: Optional[float] = None) -> None:
+    """One call's tokens and cost into today's row. `cost_usd` is the provider's own figure
+    (litellm's response_cost) when known; else the estimate from the price map. Local is free."""
     if not tenant_id:
         return
     pin, pout = _price(model)
-    cost = round((prompt_tokens / 1e6) * pin + (completion_tokens / 1e6) * pout, 6)
+    if pin == 0 and pout == 0:
+        cost = 0.0
+    elif cost_usd is not None and cost_usd > 0:
+        cost = round(float(cost_usd), 6)
+    else:
+        cost = round((prompt_tokens / 1e6) * pin + (completion_tokens / 1e6) * pout, 6)
     short = re.sub(r"^(openrouter|ollama_chat|ollama)/", "", model or "")
     day = datetime.now(timezone.utc).date().isoformat()
     try:
@@ -210,7 +229,11 @@ def install_metering() -> None:
                     u = getattr(response_obj, "usage", None)
                     pt = getattr(u, "prompt_tokens", 0) or 0
                     ct = getattr(u, "completion_tokens", 0) or 0
-                    record_llm(tid, _callback_model(kwargs), int(pt), int(ct))
+                    try:
+                        rc = float(kwargs.get("response_cost") or 0) or None
+                    except (TypeError, ValueError):
+                        rc = None
+                    record_llm(tid, _callback_model(kwargs), int(pt), int(ct), rc)
                     log_call(call_record(kwargs, response_obj, start_time, end_time), _current_tenant.get())
                 except Exception:
                     pass
@@ -233,6 +256,21 @@ def install_metering() -> None:
 # Opt-in, per-tenant daily cap. Fail-open throughout: any read error returns "not capped" /
 # "no spend" rather than blocking generation over a metering hiccup — cost control must never
 # become an availability bug.
+
+def month_spend(tenant_id: str) -> float:
+    """This calendar month's est_cost_usd for this tenant (UTC), across all models. 0.0 on any
+    read error."""
+    if not tenant_id:
+        return 0.0
+    first = datetime.now(timezone.utc).date().replace(day=1).isoformat()
+    try:
+        rows = (_client().table("vula_ai_usage").select("est_cost_usd").eq("tenant_id", tenant_id)
+                .gte("day", first).execute().data or [])
+        return round(sum(float(r.get("est_cost_usd") or 0) for r in rows), 6)
+    except Exception as exc:
+        logger.debug("month_spend read skipped: %s", exc)
+        return 0.0
+
 
 def today_spend(tenant_id: str) -> float:
     """Sum of today's est_cost_usd across all models for this tenant."""

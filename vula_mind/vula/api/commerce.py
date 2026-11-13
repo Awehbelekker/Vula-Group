@@ -1820,6 +1820,8 @@ async def admin_link_barcode(tenant_id: str, product_id: str, body: dict):
 class AssistantRequest(BaseModel):
     message: str
     session_id: Optional[str] = None     # web chat session key (per browser/user)
+    # "open" = Ask anything (vula/open_chat.py), when the business has it switched on
+    mode: Optional[str] = "business"
 
 
 async def _assistant_session(tenant_id: str, request: Request, fallback_id: Optional[str]):
@@ -1866,7 +1868,23 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
             return {"answer": note_reply, "ok": True, "private": True}
         notes_block = await personal_memory.load(person)
 
+    # Ask anything (vula/open_chat.py): a general question goes to Vula's own AI (the reasoning
+    # skill, local first); one about the business's records still goes to the business assistant.
+    answered_by = "business"
+    if (body.mode or "business").strip().lower() == "open":
+        from config import settings as _settings
+        from vula import features, open_chat
+        if not features.on(tenant_id, "open_chat"):
+            raise HTTPException(status_code=403, detail="Ask anything isn't switched on for this business.")
+        if not open_chat.allow(session_key, _settings.open_chat_per_hour):
+            raise HTTPException(status_code=429, detail="That's a lot of questions for one hour — "
+                                                        "give it a little while and ask again.")
+        if not open_chat.needs_records(body.message):
+            answered_by = "open"
+
     metadata: Dict[str, Any] = {"session_id": session_key, "channel": "dashboard"}
+    if answered_by == "open":
+        metadata["open"] = True
     user_label = "Customer"
     if person is not None:
         metadata["access"] = person.access
@@ -1894,7 +1912,7 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
         log.debug("Assistant session/history load failed (non-fatal): %s", exc)
 
     from core import voice
-    skill = get_skill("commerce_admin")
+    skill = get_skill("reasoning" if answered_by == "open" else "commerce_admin")
     with voice.use(tenant_id, "team", "dashboard", person.prefs if person is not None else None), \
             personal_memory.use(notes_block):
         out = await skill(SkillInput(
@@ -1902,6 +1920,19 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
             conversation_history=history, metadata=metadata,
         ))
     answer = out.answer if (out.success and out.answer) else (out.error or "Sorry, I couldn't process that just now.")
+
+    # An action the business assistant wants confirmed first (a preview: stock change, refund,
+    # broadcast…). It used to be dropped here, so the dashboard could never confirm one. The
+    # pending action is tied to this person's own thread: only they can confirm it.
+    confirm = None
+    cr = getattr(out, "confirm_request", None)
+    if isinstance(cr, dict) and cr.get("id"):
+        try:
+            (service._client().table("commerce_pending_confirmations").update({"phone": session_key})
+             .eq("id", cr["id"]).eq("tenant_id", tenant_id).execute())
+            confirm = {k: cr.get(k) for k in ("id", "summary", "confirm_label", "cancel_label")}
+        except Exception as exc:
+            log.warning("assistant confirmation not kept: %s", exc)
 
     message_id = None
     if sid:
@@ -1913,7 +1944,70 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
 
     # session_id + message_id let the person rate this reply (👍/👎), like a reply in the Inbox.
     return {"answer": answer, "ok": bool(out.success and out.answer),
-            "session_id": sid, "message_id": message_id if isinstance(message_id, str) else None}
+            "session_id": sid, "message_id": message_id if isinstance(message_id, str) else None,
+            "answered_by": answered_by, **({"confirm_request": confirm} if confirm else {})}
+
+
+class AssistantConfirm(BaseModel):
+    id: str
+    action: str = "confirm"               # confirm | cancel
+
+
+@router.post("/{tenant_id}/admin/assistant/confirm")
+async def admin_assistant_confirm(tenant_id: str, body: AssistantConfirm, request: Request):
+    """Confirm or cancel an action the dashboard assistant previewed. Runs the ORIGINAL tool call
+    with confirm=True — as WhatsApp's Confirm button does (whatsapp._handle_admin_confirm_reply) —
+    and only for the person whose thread it was asked in."""
+    from datetime import datetime, timezone
+    person, session_key = await _assistant_session(tenant_id, request, None)
+    if person is None:
+        raise HTTPException(status_code=401, detail="Sign in to confirm.")
+    db = service._client()
+    now = datetime.now(timezone.utc).isoformat()
+    cancel = (body.action or "").strip().lower() == "cancel"
+    try:
+        upd = (db.table("commerce_pending_confirmations")
+               .update({"status": "cancelled" if cancel else "confirmed", "resolved_at": now})
+               .eq("id", body.id).eq("tenant_id", tenant_id).eq("status", "pending")
+               .eq("phone", session_key).gt("expires_at", now).execute())
+        row = (upd.data or [None])[0]
+    except Exception as exc:
+        log.warning("assistant confirm claim failed: %s", exc)
+        row = None
+    if not row:
+        answer = ("That's already been handled or has expired — ask again if you still want to do it.")
+    elif cancel:
+        answer = "Cancelled — nothing was changed."
+    else:
+        from core.skills.commerce_admin import CommerceAdminSkill, checked_reply
+        args = dict(row.get("tool_args") or {})
+        caller = args.pop("_caller", None) or {}
+        args["confirm"] = True
+        ctx = {"tenant_id": tenant_id, "phone": person.phone if person.role == "sales_rep" else None,
+               "caller_name": caller.get("name"), "caller_role": caller.get("role"), "channel": "dashboard"}
+        try:
+            result = await CommerceAdminSkill()._dispatch_tool(row["tool_name"], args, ctx)
+            answer = checked_reply(result) or _plain_result(result)
+        except Exception as exc:
+            log.warning("assistant confirm re-dispatch failed: %s", exc)
+            answer = "Something went wrong applying that — please try again."
+    try:
+        session = await service.get_or_create_session(tenant_id, session_key=session_key, channel="web")
+        await service.append_message(tenant_id, session["id"], "assistant", answer)
+    except Exception:
+        pass
+    return {"answer": answer, "ok": bool(row) and not cancel}
+
+
+def _plain_result(result: Any) -> str:
+    """A confirmed tool's result in a sentence, without a model: its own message, else 'Done.'"""
+    if isinstance(result, dict):
+        if result.get("error"):
+            return f"That didn't go through: {result['error']}"
+        for k in ("message", "summary", "status"):
+            if isinstance(result.get(k), str) and result[k].strip():
+                return result[k].strip()
+    return "Done."
 
 
 @router.get("/{tenant_id}/admin/assistant/history")
@@ -1922,18 +2016,20 @@ async def admin_assistant_history(tenant_id: str, request: Request,
     """The signed-in member's own earlier chat with Vula, oldest first, so the dashboard chat
     opens where they left off. Only ever the caller's own thread."""
     person, session_key = await _assistant_session(tenant_id, request, None)
+    from vula import features
+    open_on = features.on(tenant_id, "open_chat")       # the dashboard shows "Ask anything"
     if person is None:
-        return {"messages": []}
+        return {"messages": [], "open_chat": open_on}
     try:
         rows = (service._client().table("commerce_conversation_sessions").select("id")
                 .eq("tenant_id", tenant_id).eq("session_key", session_key).limit(1).execute().data or [])
         if not rows:
-            return {"messages": []}
+            return {"messages": [], "open_chat": open_on}
         msgs = await service.get_recent_messages(tenant_id, rows[0]["id"], limit=limit, max_age_hours=None)
     except Exception as exc:
         log.debug("assistant history load failed: %s", exc)
-        return {"messages": []}
-    return {"session_id": rows[0]["id"],
+        return {"messages": [], "open_chat": open_on}
+    return {"session_id": rows[0]["id"], "open_chat": open_on,
             "messages": [{"id": m.get("id"), "role": m.get("role"), "content": m.get("content"),
                           "created_at": m.get("created_at")}
                          for m in msgs if m.get("role") in ("user", "assistant")]}

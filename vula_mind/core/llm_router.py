@@ -672,6 +672,11 @@ async def resolve_generation_route(
                       backend=f"{_local_prefix()}/{local_model}", reason=reason)
         return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
 
+    if capped and task_type in CAP_HARD_TASKS:
+        _log_decision(run_id=run_id, task=task, outcome="blocked", escalated=False,
+                      backend="none", reason="spend_cap_hard_stop")
+        raise SpendCapReached(tenant_id or "")
+
     # (a) local unreachable → cloud, logged with the reason a regulator would ask about.
     if settings.openrouter_api_key:
         logger.info("Cloud fallback: local unreachable — run=%s task=%s", run_id, task)
@@ -683,6 +688,18 @@ async def resolve_generation_route(
     _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
                   backend=f"{_local_prefix()}/{local_model}", reason="local_unreachable_no_cloud_key")
     return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
+
+
+# Task types whose cloud use is never forced by an outage: once the business's daily spend cap
+# is reached they stay local, and with local down too they stop (SpendCapReached) instead of
+# falling back to cloud. The dashboard's open chat (13 Nov 2026) is optional extra thinking,
+# not a business operation, so a cap holds for it absolutely.
+CAP_HARD_TASKS = frozenset({"open_chat"})
+
+
+class SpendCapReached(RuntimeError):
+    """The business's daily AI spend cap is reached and the local model is unreachable, for a
+    task in CAP_HARD_TASKS: no generation route is allowed."""
 
 
 def _spend_capped(tenant_id: Optional[str]) -> bool:
@@ -731,6 +748,15 @@ def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,
     caller then keeps the local answer)."""
     if not settings.openrouter_api_key:
         return None
+    if task_type in CAP_HARD_TASKS:          # a capped open chat keeps its local answer
+        try:
+            from vula.integrations.metering import get_request_tenant
+            if _spend_capped(get_request_tenant()):
+                _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type, outcome="local",
+                              escalated=False, backend="none", reason="spend_cap_hard_stop")
+                return None
+        except Exception:  # noqa: BLE001 — fail open, as _spend_capped does
+            pass
     cloud_model = cloud_model_for(task_type)
     _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type or "unspecified",
                   outcome="cloud", escalated=True, backend=f"openrouter/{cloud_model}", reason=reason)

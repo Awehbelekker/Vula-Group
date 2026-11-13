@@ -363,7 +363,15 @@ function routes(role, modules = []) {
     r("GET", `^/v1/recurring-bills/${T}`, () => ({ bills: F.recurringBills })),
     r("POST", `^/v1/recurring-bills/${T}`, () => ({ id: "rb-new" })),
     r("POST", `^/v1/recurring-bills/${T}/${T}/status`, () => ({ ok: true })),
-    r("POST", `${A}/assistant`, (m, url, req) => ({ answer: `Today: 4 orders, R 1 842.50 paid. (${req.postDataJSON()?.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}` })),
+    r("POST", `${A}/assistant`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      if (/stock/i.test(b.message || "")) return { answer: "Set the 9ft bag's stock to 4?", session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business",
+        confirm_request: { id: "pc-1", summary: "Set the 9ft bag's stock to 4?", confirm_label: "Confirm", cancel_label: "Cancel" } };
+      if (b.mode === "open" && !/owe|invoice|order/i.test(b.message || "")) return { answer: `Five ideas for you: (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "open" };
+      return { answer: `Today: 4 orders, R 1 842.50 paid. (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business" };
+    }),
+    r("POST", `${A}/assistant/confirm`, (m, url, req) => (req.postDataJSON()?.action === "cancel"
+      ? { answer: "Cancelled — nothing was changed.", ok: false } : { answer: "Stock for the 9ft bag is now 4.", ok: true })),
     r("GET", `${A}/agent-activity`, () => ({ events: F.agentEvents })),
     r("GET", `${A}/quality`, () => F.quality),
     // setting up from documents: an upload starts a "reading" that the next poll reports as done
@@ -383,7 +391,7 @@ function routes(role, modules = []) {
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
     r("POST", `${A}/conversations/${T}/feedback`, () => ({ ok: true })),
-    r("GET", `${A}/assistant/history`, () => ({ messages: [] })),
+    r("GET", `${A}/assistant/history`, () => ({ messages: [], open_chat: !!F.assistantChat.openChat })),
     r("GET", `${A}/me/memory`, () => ({ enabled: true, limit: 30, notes: myNotes })),
     r("POST", `${A}/me/memory`, (m, url, req) => { myNotes.push({ id: `n${Date.now()}`, text: req.postDataJSON()?.text }); return { ok: true }; }),
     r("DELETE", `${A}/me/memory/${T}`, (m) => { const i = myNotes.findIndex((n) => n.id === m[m.length - 1]); if (i >= 0) myNotes.splice(i, 1); return { ok: true }; }),

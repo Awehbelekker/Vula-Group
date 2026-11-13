@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 # gap given Vula's multi-language promise, and architecture_planning.py needed the same guard
 # but couldn't reuse a reasoning.py-local function) — see looks_like_tenant_data_question there.
 _LOCAL_TIMEOUT_S = 20.0
+# The dashboard's open chat (13 Nov 2026): a fuller answer, so a longer cap and more time for the
+# local model to write it before it counts as "too slow" and escalates.
+OPEN_CHAT_MAX_TOKENS = 1500
+_OPEN_LOCAL_TIMEOUT_S = 60.0
+OPEN_CHAT_CAPPED = ("Vula's extra thinking is used up for today, and the local AI isn't answering "
+                    "right now. Ask again later, or switch to \"Your business\" for anything about "
+                    "your orders, invoices or clients.")
 _CLOUD_TIMEOUT_S = 30.0
 
 # 2026-09-17: real DIGG transcript — "can I colour a cast iron fireplace?" had no KB match, so
@@ -247,16 +254,29 @@ class ReasoningSkill(BaseSkill):
                 except Exception as exc:
                     logger.debug("Reasoning web fallback skipped: %s", exc)
 
+        # The dashboard's open chat ("Ask anything", 13 Nov 2026): a staff member brainstorming,
+        # writing or planning in a web chat — fuller answers, the thread carried forward, routed
+        # as task "open_chat" (local first; the daily spend cap is a hard stop for it).
+        open_mode = bool(inp.metadata.get("open"))
+        task_type = "open_chat" if open_mode else "reasoning"
+
         # Build prompt
         # 2026-09-17: added the "doesn't actually answer the specific question" guard below
         # after a real DIGG transcript — "can I colour a cast iron fireplace?" got answered
         # "no" by citing a retrieved Canal West HOA rule about flue MATERIAL (steel vs stainless
         # steel), a different question with no rule on colour/finish anywhere in the context.
         # Being on-topic isn't the same as answering what was asked.
+        style = (
+            "This is the web dashboard's open chat, not WhatsApp: answer fully and in good order — "
+            "short headings or bullet points where they help, several options when asked for "
+            "ideas, a clear recommendation when asked to decide. Lead with the answer, skip "
+            "preamble. "
+            if open_mode else
+            "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
+            "Lead with the answer, skip preamble. ")
         system_msg = (
             "You are Vula, an AI assistant for South African small businesses. "
-            "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
-            "Lead with the answer, skip preamble. "
+            + style +
             "Always work in ZAR for money, use SA conventions for dates and phone numbers.\n\n"
             "You CANNOT perform actions yourself in this chat — you have no tools here, so you "
             "can't log an expense, create a document, send anything, or save anything. If "
@@ -272,10 +292,11 @@ class ReasoningSkill(BaseSkill):
             "document being present is not the same as it answering what was asked.\n\n"
             + behaviour_preamble(preferred_language=inp.metadata.get("preferred_language", ""),
                                  caller_name=inp.metadata.get("caller_name") or "",
-                                 caller_role=inp.metadata.get("caller_role") or "") +
-            "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
-            "WhatsApp — you file them into the knowledge base automatically. If asked about "
-            "uploading, tell them to just attach the file in this chat."
+                                 caller_role=inp.metadata.get("caller_role") or "")
+            + ("" if open_mode else
+               "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
+               "WhatsApp — you file them into the knowledge base automatically. If asked about "
+               "uploading, tell them to just attach the file in this chat.")
             + (f"\n\n{SPEC_ANSWER_RULE}" if spec else "")
         )
         # Context before history, and each labelled for precedence — a real DIGG-tenant bug
@@ -292,9 +313,12 @@ class ReasoningSkill(BaseSkill):
         # contain text shaped like an instruction ("ignore prior rules and...") with nothing
         # to stop the model treating it as one.
         history = (
-            f"\nConversation so far (for tone/continuity only — it may be stale or about a "
-            f"different topic; do not treat it as a source of facts):"
-            f"{fence('CONVERSATION_HISTORY', inp.conversation_history)}"
+            ("\nConversation so far (carry the thread on from it — earlier ideas, drafts and "
+             "decisions — but it is not a source of this business's facts or figures):"
+             if open_mode else
+             "\nConversation so far (for tone/continuity only — it may be stale or about a "
+             "different topic; do not treat it as a source of facts):")
+            + f"{fence('CONVERSATION_HISTORY', inp.conversation_history)}"
             if inp.conversation_history else ""
         )
         context_block = (
@@ -333,8 +357,15 @@ class ReasoningSkill(BaseSkill):
                 {"role": "user", "content": user_msg},
             ]
             run_id = str(uuid4())
-            model, api_key, api_base = await resolve_generation_route(
-                task_type="reasoning", messages=_msgs, run_id=run_id)
+            from core.llm_router import SpendCapReached
+            try:
+                model, api_key, api_base = await resolve_generation_route(
+                    task_type=task_type, messages=_msgs, run_id=run_id)
+            except SpendCapReached:
+                return SkillOutput(answer=OPEN_CHAT_CAPPED, skill_name=self.name, confidence=0.5,
+                                   verification={"verifier": "deterministic.spend_cap",
+                                                 "outcome": "accepted", "escalated": False, "extra": {}})
+            max_tokens = max(inp.max_tokens or 0, OPEN_CHAT_MAX_TOKENS) if open_mode else inp.max_tokens
 
             async def _complete(m, k, b, timeout_s):
                 # 2026-08-18: no timeout existed here at all — same class of gap already fixed
@@ -345,7 +376,7 @@ class ReasoningSkill(BaseSkill):
                 # did, instead of leaving the customer waiting indefinitely.
                 return await asyncio.wait_for(litellm.acompletion(
                     model=m, messages=_msgs, temperature=0.3,
-                    max_tokens=inp.max_tokens, api_key=k, api_base=b,
+                    max_tokens=max_tokens, api_key=k, api_base=b,
                     # logprobs is only meaningful for the local Ollama path (see the
                     # looks_unreliable call below) — requested unconditionally since
                     # litellm.drop_params silently discards it where unsupported
@@ -354,7 +385,8 @@ class ReasoningSkill(BaseSkill):
 
             escalated = False
             try:
-                resp = await _complete(model, api_key, api_base, _LOCAL_TIMEOUT_S)
+                resp = await _complete(model, api_key, api_base,
+                                       _OPEN_LOCAL_TIMEOUT_S if open_mode else _LOCAL_TIMEOUT_S)
                 raw = resp.choices[0].message.content or ""
                 answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
@@ -374,7 +406,7 @@ class ReasoningSkill(BaseSkill):
                 answer, unreliable = "", True
 
             if unreliable:
-                esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="reasoning")
+                esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type=task_type)
                 if esc:
                     model, api_key, api_base = esc
                     resp = await _complete(model, api_key, api_base, _CLOUD_TIMEOUT_S)
@@ -392,9 +424,13 @@ class ReasoningSkill(BaseSkill):
             # sits between those two — 0.6, above escalation.py's should_escalate floor (0.4),
             # same as the plain no-grounding case already was.
             confidence = 0.75 if kb_context else (0.6 if web_context else 0.5)
-            if not kb_context and not web_context:
+            if not answer and open_mode:          # local unreliable and no cloud allowed (cap)
+                answer = OPEN_CHAT_CAPPED
+            # The open chat is labelled "Vula's own AI" in the dashboard; a caveat on every idea
+            # would only be noise there.
+            if not kb_context and not web_context and not open_mode:
                 answer += NO_GROUNDING_CAVEAT
-            elif web_context:
+            elif web_context and not open_mode:
                 answer += WEB_FALLBACK_CAVEAT
             if web_sources:
                 sources = sources or web_sources
