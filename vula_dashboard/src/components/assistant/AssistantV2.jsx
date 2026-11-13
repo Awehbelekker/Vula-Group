@@ -31,7 +31,10 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
           {x.mode === 'open' && (
             <Button size="sm" variant={x.research ? 'primary' : 'secondary'} Icon={Globe} aria-pressed={x.research}
               onClick={() => x.setResearch(!x.research)}>Research the web</Button>)}
-          {x.mode === 'open' && x.research && <p className="vas-hint">Vula searches the web, reads a few pages and your own documents, and lists its sources. Only the topic is searched, never names or numbers from your records. Takes about half a minute.</p>}
+          {x.mode === 'open' && x.research && <p className="vas-hint">Vula searches the web, reads a few pages and your own documents, and lists its sources. Only the topic is searched, never names or numbers from your records. Takes about half a minute. What it finds is kept for your team, so the same question is answered straight away next time.</p>}
+          {x.mode === 'open' && x.research && (
+            <label className="vas-check"><input type="checkbox" checked={x.keepPrivate}
+              onChange={e => x.setKeepPrivate(e.target.checked)} /> Keep this research private</label>)}
         </div>)}
       <ol className="vas-thread" aria-live="polite" aria-label="Conversation" tabIndex={0}>
         {x.messages.map((m, i) => (
@@ -39,7 +42,8 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
             <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.text}
             {m.files?.length > 0 && <span className="vas-by">📎 {m.files.join(', ')}</span>}
             {m.answeredBy && x.openAvailable && (
-              <span className="vas-by">{m.answeredBy === 'research' ? `Researched · ${m.research?.read || 0} pages read`
+              <span className="vas-by">{m.answeredBy === 'research'
+                ? (m.research?.reused ? `From research on ${m.research.reused.date}` : `Researched · ${m.research?.read || 0} pages read`)
                 : m.answeredBy === 'open' ? "Vula's own AI" : 'Answered with your business records'}</span>)}
             {(m.research?.sources?.length > 0 || m.research?.documents?.length > 0) && (
               <span className="vas-sources" role="group" aria-label="Sources">
@@ -53,6 +57,20 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
                   {(m.research.documents || []).map(d => (
                     <li key={d.n} className="vas-doc">[{d.n}] {d.title} <span className="vas-host">(your documents)</span></li>))}
                 </ol>
+              </span>)}
+            {m.answeredBy === 'research' && m.research && (m.research.reused || m.research.note_id) && (
+              <span className="vas-research-acts" role="group" aria-label="This research">
+                {m.research.reused && <Button size="sm" variant="secondary" disabled={x.sending}
+                  onClick={() => x.researchAgain(m)}>Research again</Button>}
+                {(m.research.note_id || m.research.reused?.mine) && (() => {
+                  const shared = m.research.shared ?? m.research.reused?.shared
+                  return <>
+                    <span className="vas-hint">{shared ? 'Shared with your team' : 'Only you'}</span>
+                    <Button size="sm" variant="secondary" onClick={() => x.shareResearch(m, !shared)}>
+                      {shared ? 'Keep private' : 'Share with my team'}</Button>
+                  </>
+                })()}
+                {m.research.shareError && <span className="vas-warn" role="alert">Couldn't change that.</span>}
               </span>)}
             {m.confirm && (
               <span className="vas-confirm" role="group" aria-label="Confirm this action">

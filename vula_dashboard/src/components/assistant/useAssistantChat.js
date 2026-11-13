@@ -34,6 +34,8 @@ export function useAssistantChat(tenantId) {
   const [fileError, setFileError] = useState('')
   // Research mode (13 Nov 2026): in Ask anything, search the web and read pages, with sources.
   const [research, setResearch] = useState(false)
+  // Research findings are kept for the team (13 Nov 2026) unless this is ticked.
+  const [keepPrivate, setKeepPrivate] = useState(false)
   const [mode, setModeState] = useState(readMode)
   const setMode = (m) => { setModeState(m); try { localStorage.setItem(MODE_KEY, m) } catch { /* private window */ } }
   const sessionId = useRef(`${tenantId}-${Math.random().toString(36).slice(2, 9)}`)
@@ -87,7 +89,7 @@ export function useAssistantChat(tenantId) {
     } catch { setFileError("Couldn't add that to your documents.") }
   }
 
-  async function send(text) {
+  async function send(text, { fresh = false } = {}) {
     const ready = files.filter(f => f.id)
     const msg = ((text ?? input).trim()) || (ready.length ? 'What does this file say? Give me the main points.' : '')
     if (!msg || sending || files.some(f => f.reading)) return
@@ -99,13 +101,14 @@ export function useAssistantChat(tenantId) {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg, session_id: sessionId.current,
-          mode: !openAvailable ? 'business' : (mode === 'open' && research ? 'research' : mode),
+          mode: !openAvailable ? 'business' : (mode === 'open' && (research || fresh) ? 'research' : mode),
+          ...(mode === 'open' && (research || fresh) ? { fresh, private: keepPrivate } : {}),
           ...(ready.length ? { attachments: ready.map(f => f.id) } : {}) }),
       })
       const d = await r.json()
       const text = d.answer || (typeof d.detail === 'string' ? d.detail : "Sorry, I couldn't process that.")
       setMessages(m => [...m, { role: 'assistant', text, id: d.message_id || null, sessionId: d.session_id || null,
-        answeredBy: d.answered_by || null, confirm: d.confirm_request || null, research: d.research || null }])
+        answeredBy: d.answered_by || null, confirm: d.confirm_request || null, research: d.research || null, asked: msg }])
     } catch {
       setMessages(m => [...m, { role: 'assistant', text: 'Connection error — please try again.' }])
     } finally {
@@ -149,7 +152,27 @@ export function useAssistantChat(tenantId) {
     setMessages(m => [...m.map(x => (same(x) ? { ...x, confirm: null } : x)), { role: 'assistant', text }])
   }
 
+  // "Research again": the same question, searched afresh; the new finding replaces the old one.
+  const researchAgain = (message) => { if (message.asked) send(message.asked, { fresh: true }) }
+
+  // Share a finding with the team, or keep it private. Only the person who asked can.
+  async function shareResearch(message, shared) {
+    const id = message.research?.note_id || message.research?.reused?.id
+    if (!id) return
+    const same = (x) => x === message
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant/research/${id}/share`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shared }),
+      })
+      if (!r.ok) throw new Error('not changed')
+      setMessages(m => m.map(x => (same(x) ? { ...x, research: { ...x.research, shared, shareError: false } } : x)))
+    } catch {
+      setMessages(m => m.map(x => (same(x) ? { ...x, research: { ...x.research, shareError: true } } : x)))
+    }
+  }
+
   const researching = sending && openAvailable && mode === 'open' && research
   return { messages, input, setInput, sending, endRef, send, rate, decide, mode, setMode, openAvailable,
-    files, fileError, attach, removeFile, keepFile, research, setResearch, researching }
+    files, fileError, attach, removeFile, keepFile, research, setResearch, researching,
+    keepPrivate, setKeepPrivate, researchAgain, shareResearch }
 }

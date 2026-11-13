@@ -367,6 +367,14 @@ function routes(role, modules = []) {
       const b = req.postDataJSON() || {};
       if (/stock/i.test(b.message || "")) return { answer: "Set the 9ft bag's stock to 4?", session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business",
         confirm_request: { id: "pc-1", summary: "Set the 9ft bag's stock to 4?", confirm_label: "Confirm", cancel_label: "Cancel" } };
+      if (b.mode === "research" && /deck/i.test(b.message || "") && !b.fresh) return { answer: "Oil a timber deck once a year [1].",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "research",
+        research: { read: 1, searched: ["deck sealing"], sources: [{ n: 1, title: "Deck care", url: "https://decks.example/care" }],
+          documents: [], reused: { id: "rn-old", date: "3 Nov 2026", kind: "general", shared: true, mine: true } } };
+      if (b.mode === "research" && /deck/i.test(b.message || "")) return { answer: "Oil it every 9–12 months [1].",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "research",
+        research: { read: 4, searched: ["deck sealing"], sources: [{ n: 1, title: "Deck care", url: "https://decks.example/care" }],
+          documents: [], note_id: "rn-new", shared: !b.private } };
       if (b.mode === "research") return { answer: "Two suppliers list it: R 1 450 at one [1], R 1 390 at the other [2]. Your price list has R 1 500 [D1].",
         session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "research",
         research: { read: 3, searched: ["board bag prices South Africa"], sources: [
@@ -376,6 +384,7 @@ function routes(role, modules = []) {
       if (b.mode === "open" && !/owe|invoice|order/i.test(b.message || "")) return { answer: `Five ideas for you: (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "open" };
       return { answer: `Today: 4 orders, R 1 842.50 paid. (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business" };
     }),
+    r("POST", `${A}/assistant/research/${T}/share`, (m, url, req) => ({ note: { id: m[2], shared: !!req.postDataJSON()?.shared } })),
     r("POST", `${A}/assistant/attach$`, (m, url, req) => {
       const names = [...String(req.postData() || "").matchAll(/filename="([^"]+)"/g)].map((x) => x[1]);
       return { attachments: names.map((name, i) => ({ id: `${"a".repeat(31)}${i}`, name, pages: 1, chars: 1200, truncated: false, filed: false })), problems: [] };

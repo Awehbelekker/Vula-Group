@@ -13,6 +13,7 @@ Nothing here has run against live data yet: go one step at a time.
    | 264 | `vula_personal_memory` (staff private notes, encrypted) |
    | 265 | `commerce_conversation_sessions.last_skill_at` |
    | 266 | `vula_tenant_config.features` (per-business switches) |
+| 269 | `vula_research_notes` (research findings kept for reuse, 13 Nov) |
 2. Deploy the backend (`railway up`) and the dashboard (Vercel).
 3. Open `/ready`: no migration should be listed as missing.
 

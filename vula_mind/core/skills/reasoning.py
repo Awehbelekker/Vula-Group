@@ -147,7 +147,9 @@ class ReasoningSkill(BaseSkill):
         # The person's own earlier chats about this (vula/chat_recall.py, switch chat_recall):
         # like a file, it's what they asked to be answered from.
         past = inp.metadata.get("past_chats_block") or ""
-        given = attached or past
+        # What the team researched earlier on this (vula/research_memory.py), dated.
+        researched = inp.metadata.get("past_research_block") or ""
+        given = attached or past or researched
         if spec and not kb_context and not given:
             from core.skills.base import SPEC_NOT_FOUND
             _record("no_doc")
@@ -316,6 +318,11 @@ class ReasoningSkill(BaseSkill):
                "their earlier chats. A figure in an old reply was true on that date: present it as "
                "what was said then, never as the current amount, price or stock."
                if past else "")
+            + ("\n\nYour team researched this earlier (marked EARLIER_RESEARCH below). Answer from it: "
+               "say when it was researched (\"From research on 3 Nov…\"), name its sources, and if it "
+               "may have changed since (prices, stock, suppliers), say so and suggest pressing "
+               "Research again. Don't present an old price as today's."
+               if researched else "")
         )
         # Context before history, and each labelled for precedence — a real DIGG-tenant bug
         # (2026-07-27) showed the model answering from a stale, topically-unrelated exchange
@@ -362,6 +369,8 @@ class ReasoningSkill(BaseSkill):
         attached_block = f"\nThe attached file(s):{attached}" if attached else ""
         if past:
             attached_block += f"\nTheir earlier conversations with you:{past}"
+        if researched:
+            attached_block += f"\nEarlier research by the team:{researched}"
         user_msg = f"{attached_block}{context_block}{web_block}{history}\nQuestion: {inp.question}\n\nAnswer:"
 
         started = time.monotonic()
