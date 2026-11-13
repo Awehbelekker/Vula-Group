@@ -1,7 +1,12 @@
 /**
  * useAssistantChat.js — "Chat to Vula", shared by VulaAssistant (current look) and assistant/AssistantV2
  * (the redesign, 2026-10-20). Moved verbatim: the same commerce_admin agent the owner uses on
- * WhatsApp, one session per mount, with the starter suggestions.
+ * WhatsApp, with the starter suggestions.
+ *
+ * The thread belongs to the signed-in person: the server keys it on who they are, and the earlier
+ * messages are loaded when the chat opens. (It used to start a new, anonymous session on every
+ * page load, so the chat forgot everything on refresh.) session_id is only a fallback for a
+ * caller the server can't identify.
  */
 import { useState, useRef, useEffect } from 'react'
 import { VULA_API } from '../../lib/authFetch'
@@ -24,6 +29,22 @@ export function useAssistantChat(tenantId) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, sending])
 
+  useEffect(() => {
+    if (!tenantId) return
+    let cancelled = false
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant/history`)
+      .then(r => (r.ok ? r.json() : { messages: [] }))
+      .then(d => {
+        const earlier = (d.messages || []).filter(m => m.content)
+          .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.content,
+            id: m.role === 'user' ? null : m.id, sessionId: d.session_id }))
+        // Only fill an untouched chat: never overwrite something typed while this loaded.
+        if (!cancelled && earlier.length) setMessages(m => (m.length === 1 ? [...m, ...earlier] : m))
+      })
+      .catch(() => { /* the chat still works without its history */ })
+    return () => { cancelled = true }
+  }, [tenantId])
+
   async function send(text) {
     const msg = (text ?? input).trim()
     if (!msg || sending) return
@@ -36,7 +57,8 @@ export function useAssistantChat(tenantId) {
         body: JSON.stringify({ message: msg, session_id: sessionId.current }),
       })
       const d = await r.json()
-      setMessages(m => [...m, { role: 'assistant', text: d.answer || "Sorry, I couldn't process that." }])
+      setMessages(m => [...m, { role: 'assistant', text: d.answer || "Sorry, I couldn't process that.",
+        id: d.message_id || null, sessionId: d.session_id || null }])
     } catch {
       setMessages(m => [...m, { role: 'assistant', text: 'Connection error — please try again.' }])
     } finally {
@@ -44,5 +66,22 @@ export function useAssistantChat(tenantId) {
     }
   }
 
-  return { messages, input, setInput, sending, endRef, send }
+  // 👍/👎 on a reply — the same record a rating in the Inbox makes. Only the rating is sent: this
+  // is the person's own thread, so what was asked and answered is not copied anywhere.
+  async function rate(message, rating) {
+    if (!message.id || !message.sessionId) return
+    const before = message.rating
+    setMessages(m => m.map(x => (x.id === message.id ? { ...x, rating, rateError: false } : x)))
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${message.sessionId}/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: message.id, rating }),
+      })
+      if (!r.ok) throw new Error('not saved')
+    } catch {
+      setMessages(m => m.map(x => (x.id === message.id ? { ...x, rating: before, rateError: true } : x)))
+    }
+  }
+
+  return { messages, input, setInput, sending, endRef, send, rate }
 }

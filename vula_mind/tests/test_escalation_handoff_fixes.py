@@ -25,6 +25,7 @@ async def test_inbox_reply_reports_undelivered_send():
     with patch.object(commerce.service, "get_conversation_thread",
                       AsyncMock(return_value={"phone": "27821112222", "paused": True})), \
          patch("vula.api.whatsapp._send_reply", AsyncMock(return_value=False)), \
+         patch.object(commerce, "_guard_staff_thread", AsyncMock()), \
          patch.object(commerce.service, "append_message", AsyncMock()) as append:
         with pytest.raises(HTTPException) as exc:
             await commerce.admin_reply("t1", "s1", commerce.AgentReplyRequest(message="hi"), MagicMock())

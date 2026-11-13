@@ -276,6 +276,177 @@ async def test_without_any_json_the_product_pages_own_schema_gives_the_price(sit
     assert row["images"] == ["https://cdn.shopify.com/round.jpg", "https://cdn.shopify.com/round-top.jpg"]
 
 
+# 2026-11-13: Kelp Board Bags' site builder writes no JSON-LD; each of its 51 product pages marks
+# the product up in microdata instead, so the import found none of them.
+
+KELP_PAGE = ('<html><head><title>KELP Boardbags</title></head><body>'
+             '<div itemtype="https://schema.org/Product" itemscope>'
+             '<meta itemprop="name" content="6ft Boardbag" />'
+             '<meta itemprop="description" content="Add your product description that will be useful for your '
+             'customers. Add the exclusive properties of your product that will make customers want to buy it." />'
+             '<link itemprop="image" href="https://kelpboardbags.co.za/gallery_gen/6ft_a.jpg" />'
+             '<link itemprop="image" href="https://kelpboardbags.co.za/gallery_gen/6ft_b.jpg" />'
+             '<meta itemprop="category" content="Surf" />'
+             '<div itemprop="offers" itemtype="https://schema.org/Offer" itemscope>'
+             '<meta itemprop="priceCurrency" content="ZAR" /><meta itemprop="price" content="1299" />'
+             '<link itemprop="availability" href="https://schema.org/InStock" /></div>'
+             '</div><p>R 1299.00</p></body></html>')
+
+
+def test_a_product_marked_up_in_microdata_is_priced_from_its_own_offer():
+    p = site_import.product_from_page(KELP_PAGE, "https://kelpboardbags.co.za/Shop/6ft-Boardbag/")
+    assert p["name"] == "6ft Boardbag" and p["slug"] == "6ft-Boardbag" and p["price_cents"] == 129_900
+    assert p["images"] == ["https://kelpboardbags.co.za/gallery_gen/6ft_a.jpg",
+                           "https://kelpboardbags.co.za/gallery_gen/6ft_b.jpg"]
+    assert p["image_url"] == p["images"][0] and p["category_label"] == "Surf" and p["in_stock"] is True
+
+
+def test_the_site_builders_placeholder_description_is_not_imported():
+    p = site_import.product_from_page(KELP_PAGE, "https://kelpboardbags.co.za/Shop/6ft-Boardbag/")
+    assert p["description"] == ""
+    real = KELP_PAGE.replace('content="Add your product description', 'content="Padded 10mm bag. Add your product description')
+    assert site_import.product_from_page(real, "https://x.co.za/Shop/a/")["description"].startswith("Padded 10mm")
+
+
+def test_microdata_read_from_text_nested_offers_and_out_of_stock():
+    page = ('<div itemscope itemtype="http://schema.org/Product"><h1 itemprop="name">Fin <b>Bag</b></h1>'
+            '<span itemprop="description">Holds &amp; protects fins.</span>'
+            '<img itemprop="image" src="//cdn.example.com/fin.jpg">'
+            '<div itemprop="offers" itemscope itemtype="http://schema.org/AggregateOffer">'
+            '<div itemprop="offers" itemscope itemtype="http://schema.org/Offer"><span itemprop="price">450.00</span>'
+            '<link itemprop="availability" href="http://schema.org/OutOfStock"></div>'
+            '<div itemprop="offers" itemscope itemtype="http://schema.org/Offer"><span itemprop="price">399.50</span>'
+            '<link itemprop="availability" href="http://schema.org/OutOfStock"></div></div></div>')
+    p = site_import.product_from_page(page, "https://x.co.za/shop/fin-bag")
+    assert p["name"] == "Fin Bag" and p["description"] == "Holds & protects fins."
+    assert p["price_cents"] == 39_950 and p["images"] == ["https://cdn.example.com/fin.jpg"]
+    assert p["in_stock"] is False
+
+
+def test_a_price_in_the_text_alone_is_never_used():
+    assert site_import.product_from_page('<h1>6ft Boardbag</h1><p>R 1299.00</p>', "https://x.co.za/Shop/a/") is None
+    page = '<div itemscope itemtype="https://schema.org/Product"><meta itemprop="name" content="Wax"></div><p>R 80</p>'
+    assert site_import.product_from_page(page, "https://x.co.za/Shop/wax/")["price_cents"] == 0   # "on request"
+    assert site_import.product_from_page('<div itemscope itemtype="https://schema.org/Organization">'
+                                         '<meta itemprop="name" content="Kelp"></div>', "https://x/") is None
+
+
+def test_json_ld_still_comes_first():
+    both = ROUND_PAGE.decode().replace("<body>x</body>", "<body>" + KELP_PAGE + "</body>")
+    p = site_import.product_from_page(both, f"{ROOT}/products/round-vessel-basin")
+    assert p["name"] == "Round Vessel Basin" and p["price_cents"] == 285_000
+
+
+@pytest.mark.asyncio
+async def test_without_json_ld_the_product_pages_microdata_gives_the_price(site, monkeypatch):
+    for k in [k for k in SITE if "products.json" in k]:
+        monkeypatch.delitem(SITE, k)
+    monkeypatch.setitem(SITE, f"{ROOT}/products/round-vessel-basin", KELP_PAGE.encode())
+    st = await site_import.import_site("seedleme", ROOT)
+    row = site["imported"][0][0]
+    assert st["platform"] == "website" and row["price_cents"] == 129_900 and row["name"] == "6ft Boardbag"
+    assert row["description"] == "" and row["image_url"] == "https://kelpboardbags.co.za/gallery_gen/6ft_a.jpg"
+
+
+# 2026-11-13: Kelp Gear's Wix shop (kelpgearshop.com). Its JSON-LD gives one price, the lowest,
+# and its photos as contentUrl; every size's price is in Wix's own data on the same page.
+
+WIX_IMG = "https://static.wixstatic.com/media/446dec_1579~mv2.jpg"
+
+
+def _wix_page(items=None, extra_products=()):
+    rich = json.dumps({"nodes": [
+        {"type": "PARAGRAPH", "nodes": [{"type": "TEXT", "textData": {"text": "Our go to board bag. "}}]},
+        {"type": "BULLETED_LIST", "nodes": [
+            {"type": "LIST_ITEM", "nodes": [{"type": "PARAGRAPH", "nodes": [
+                {"type": "TEXT", "textData": {"text": "Premium Ripstop Canvas"}}]}]},
+            {"type": "LIST_ITEM", "nodes": [{"type": "PARAGRAPH", "nodes": [
+                {"type": "TEXT", "textData": {"text": "12mm Padding"}}]}]}]}]})
+    product = {
+        "name": "Kelp Classic Day Bag", "urlPart": "kelpclassicdaybag", "price": 1200, "isInStock": True,
+        "description": rich, "breadcrumbs": [{"name": "Surfboard Bags"}],
+        "options": [
+            {"title": "Board Size", "optionType": "DROP_DOWN", "selections": [
+                {"id": 1, "value": "5'", "description": "5'"}, {"id": 2, "value": "6'", "description": "6'"},
+                {"id": 3, "value": "9'6\"", "description": "9'6\""}]},
+            {"title": "Primary Colour", "optionType": "COLOR", "selections": [
+                {"id": 16, "value": "#149039", "description": "Olive Green"},
+                {"id": 19, "value": "#000000", "description": "Black"}]}],
+        "productItems": items if items is not None else [
+            {"optionsSelections": [1], "price": 1200, "inventory": {"status": "in_stock"}, "isVisible": True},
+            {"optionsSelections": [2], "price": 1300, "inventory": {"status": "in_stock"}, "isVisible": True},
+            {"optionsSelections": [3], "price": 2000, "inventory": {"status": "out_of_stock"}, "isVisible": True}],
+        "media": [{"mediaType": "PHOTO", "url": "446dec_1579~mv2.jpg",
+                   "fullUrl": WIX_IMG + "/v1/fit/w_500,h_500,q_90/file.jpg"},
+                  {"mediaType": "PHOTO", "url": "446dec_482b~mv2.jpeg"},
+                  {"mediaType": "VIDEO", "url": "clip.mp4"}]}
+    warm = {"appsWarmupData": {"stores": {"productPage_ZAR_kelpclassicdaybag": {"catalog": {"product": product}},
+                                          **{f"other{i}": {"catalog": {"product": p}} for i, p in enumerate(extra_products)}}}}
+    ld = {"@context": "https://schema.org/", "@type": "Product", "name": "Kelp Classic Day Bag",
+          "image": [{"@type": "ImageObject", "contentUrl": WIX_IMG + "/v1/fit/w_500,h_500,q_90/file.jpg"}],
+          "offers": {"@type": "Offer", "price": "1200", "priceCurrency": "ZAR",
+                     "availability": "https://schema.org/InStock"}}
+    return (f'<html><head><script type="application/ld+json">{json.dumps(ld)}</script></head><body>'
+            f'<script type="application/json" id="wix-warmup-data">{json.dumps(warm)}</script></body></html>')
+
+
+WIX_URL = "https://www.kelpgearshop.com/product-page/kelpclassicdaybag"
+
+
+def test_a_wix_product_gets_every_sizes_own_price():
+    p = site_import.product_from_page(_wix_page(), WIX_URL)
+    assert p["name"] == "Kelp Classic Day Bag" and p["slug"] == "kelpclassicdaybag"
+    assert [(v["option_values"], v["price_cents"], v["in_stock"]) for v in p["variants"]] == [
+        ({"Board Size": "5'"}, 120_000, True), ({"Board Size": "6'"}, 130_000, True),
+        ({"Board Size": "9'6\""}, 200_000, False)]
+    assert p["price_cents"] == 120_000 and p["in_stock"] is True and p["category_label"] == "Surfboard Bags"
+
+
+def test_wix_photos_are_the_full_size_originals_and_videos_are_left_out():
+    p = site_import.product_from_page(_wix_page(), WIX_URL)
+    assert p["images"] == [WIX_IMG, "https://static.wixstatic.com/media/446dec_482b~mv2.jpeg"]
+    assert p["image_url"] == WIX_IMG
+
+
+def test_wix_choices_that_dont_change_the_price_are_named_in_the_description():
+    d = site_import.product_from_page(_wix_page(), WIX_URL)["description"]
+    assert d.startswith("Our go to board bag.\n• Premium Ripstop Canvas\n• 12mm Padding")
+    assert d.endswith("Choices: Primary Colour: Olive Green, Black")          # names, not "#149039"
+    assert "nodes" not in d and "#149039" not in d
+
+
+def test_a_hidden_wix_combination_is_not_offered():
+    items = [{"optionsSelections": [1], "price": 1200, "isVisible": True},
+             {"optionsSelections": [2], "price": 1300, "isVisible": False},
+             {"optionsSelections": [3], "price": 2000, "isVisible": True}]
+    p = site_import.product_from_page(_wix_page(items), WIX_URL)
+    assert [v["option_values"]["Board Size"] for v in p["variants"]] == ["5'", "9'6\""]
+
+
+def test_the_wix_product_is_the_one_this_page_is_for():
+    other = {"name": "Trucker Hat", "urlPart": "kelp-boardbag-trucker-hats", "options": [], "productItems": []}
+    p = site_import.product_from_page(_wix_page(extra_products=[other]), WIX_URL)
+    assert p["name"] == "Kelp Classic Day Bag" and len(p["variants"]) == 3
+
+
+def test_json_ld_photos_given_as_content_url_are_read():
+    page = _wix_page().split('<script type="application/json"')[0]          # no Wix data: JSON-LD only
+    p = site_import.product_from_page(page, WIX_URL)
+    assert p["images"] == [WIX_IMG] and p["price_cents"] == 120_000
+
+
+@pytest.mark.asyncio
+async def test_a_wix_shop_imports_each_size_as_an_option(site, monkeypatch):
+    for k in [k for k in SITE if "products.json" in k]:
+        monkeypatch.delitem(SITE, k)
+    monkeypatch.setitem(SITE, f"{ROOT}/products/round-vessel-basin",
+                        _wix_page().replace("kelpclassicdaybag", "round-vessel-basin").encode())
+    st = await site_import.import_site("seedleme", ROOT)
+    row = site["imported"][0][0]
+    assert row["name"] == "Kelp Classic Day Bag" and row["price_cents"] == 120_000
+    assert st["variants"] == 3 and row["image_url"] == WIX_IMG
+
+
 def test_page_titles_are_plain_text_and_html_sitemaps_are_not_read():
     title, _ = site_import.page_text(b"<html><head><title>About us &ndash; Seedleme</title></head></html>")
     assert title == "About us \u2013 Seedleme"

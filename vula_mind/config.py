@@ -120,6 +120,10 @@ class Settings(BaseSettings):
     app_error_retention_days: int = 90         # vula_app_errors (by last_seen)
     lead_retention_days: int = 365             # vula_website_leads not won
     turn_retention_days: int = 365             # vula_turns, vula_kb_turns
+    # Conversations and the per-client note (vula/client_memory.py), counted from the LAST message
+    # in the conversation — an active client keeps their history. 12 Nov 2026, owner's decision:
+    # 24 months. 0 keeps them indefinitely.
+    conversation_retention_days: int = 730     # commerce_conversation_*, commerce_client_summaries
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
@@ -493,6 +497,54 @@ class Settings(BaseSettings):
     usd_zar_rate: float = 18.0
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
+
+    # ── Voice (core/voice.py) ────────────────────────────────────────────────
+    # One composed voice for every skill: the company voice (team or customer), the staff
+    # member's own style, and the channel. Off = replies sound exactly as before (the company
+    # voice in the two commerce skills only). Turn on per environment once the weekly benchmark
+    # has been compared before/after — it changes every prompt at once.
+    voice_compose_enabled: bool = False
+
+    # ── Client memory (vula/client_memory.py) ────────────────────────────────
+    # A short dated note per client, written when a conversation goes quiet and shown to the
+    # assistant on their next message, so a client who returns after a month isn't a stranger.
+    # One local model call per conversation. Off = nothing is written or shown.
+    client_memory_enabled: bool = False
+
+    # ── Private notes (vula/personal_memory.py) ──────────────────────────────
+    # A staff member can ask Vula to remember something about them ("remember that I…"). It is
+    # kept for that person only, encrypted, and shown to the assistant only when they are the
+    # one talking. Nothing is saved unless they ask. Off = the phrases are not recognised and
+    # nothing is stored or shown.
+    personal_memory_enabled: bool = False
+    # A staff member's own thread with Vula also gets a few of their own messages from earlier in
+    # the week, cut short and marked as old (vula/commerce/service.py::earlier_topics), so
+    # planning that spans days isn't lost at the 24-hour history window. No model call.
+    history_earlier_topics_enabled: bool = False
+
+    # ── Accuracy (12 Nov 2026) ───────────────────────────────────────────────
+    # A question about this business's own facts (hours, delivery, address, policies) with no
+    # document of its own behind it is declined instead of answered from general knowledge or a
+    # web search (core/skills/reasoning.py). Expect more "I don't have that" and more hand-offs
+    # to a person until the business profile is filled in.
+    strict_tenant_grounding: bool = False
+    # Short replies with no figures ("Yes, we deliver to Paarl") are checked by the second-opinion
+    # pass when the business's documents were retrieved for them (core/verification.py).
+    verify_short_assertions: bool = False
+    # A follow-up ("and for next week?") is routed with the previous message and the skill that
+    # answered it in view, and the last skill survives a restart (vula/route_memory.py).
+    follow_up_routing_enabled: bool = False
+
+    # ── Advisor (employees/advisor) ───────────────────────────────────────────
+    # The AI advisor — a thinking partner for staff (ideas, options, planning), read-only, with
+    # facts and ideas kept apart. Off = each business switches it on for itself under Team ›
+    # AI employees. On = it is on for every business unless they switch it off.
+    advisor_mode_enabled: bool = False
+
+    # Website import (vula/commerce/site_import.py): copy each product's photos into the
+    # business's own storage, so they survive the old site changing. Off = keep the shop's CDN
+    # addresses, as before.
+    site_import_copy_images: bool = True
 
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every

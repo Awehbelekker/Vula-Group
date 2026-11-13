@@ -128,3 +128,32 @@ export function useTenantErrors({ tenantId, onError }) {
   }, [tenantId])  // eslint-disable-line
   return { d }
 }
+
+
+/** New behaviour switched on for this one business before everyone (vula/features.py). Each
+ * change is saved, read back by the server, and the list reloaded from what was saved. */
+export function useTenantFeatures({ tenantId }) {
+  const [list, setList] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState('')
+  const load = async () => {
+    try { setList((await authFetch(`/v1/master/tenants/${tenantId}/features`)).features || []) }
+    catch (e) { setMsg(e.message); setList([]) }
+  }
+  useEffect(() => { load() }, [tenantId])  // eslint-disable-line
+  const toggle = async (name, on) => {
+    const before = list
+    // Shown at once; replaced by what the server saved, or put back if it didn't save.
+    setList((l) => (l || []).map((f) => (f.name === name ? { ...f, here: on } : f)))
+    setBusy(name); setMsg('')
+    try {
+      const d = await authFetch(`/v1/master/tenants/${tenantId}/features`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [name]: on }),
+      })
+      if (d.detail) { setMsg(d.detail); setList(before) }
+      else setList(d.features || [])
+    } catch (e) { setMsg(e.message); setList(before) }
+    setBusy('')
+  }
+  return { list, busy, msg, toggle }
+}

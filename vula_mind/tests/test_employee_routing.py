@@ -129,7 +129,10 @@ def fake_db(monkeypatch):
 
 
 def test_settings_default_on_save_and_read_back_per_business(fake_db):
-    assert all(v == {"enabled": True, "instructions": ""} for v in em.settings_for("tenant-a").values())
+    defaults = em.settings_for("tenant-a")
+    # every employee starts on — except the ones a business switches on for itself (the advisor)
+    assert all(v == {"enabled": k not in em.OPT_IN, "instructions": ""} for k, v in defaults.items())
+    assert em.OPT_IN == {"advisor"}
     em.save("tenant-a", "marketing", enabled=False, by="Owner")
     em.save("tenant-a", "sales", instructions="Always quote on   30-day terms.")
     s = em.settings_for("tenant-a")
@@ -220,7 +223,7 @@ TASK_CASES = [(e.id, t.id, c) for e in em.TEAM for t in e.tasks
 
 def test_the_team_loads_from_the_file_tree():
     team, shared = em.load()
-    assert [e.id for e in team] == ["bookkeeper", "sales", "office_admin", "marketing", "operations"]
+    assert [e.id for e in team] == ["bookkeeper", "sales", "office_admin", "marketing", "operations", "advisor"]
     assert "hand_over" in shared and all(e.job and e.tools and e.keywords for e in team)
     assert {t.id for t in em.BY_ID["bookkeeper"].tasks} == {
         "project-bill", "payment-chase", "slips-and-expenses", "month-end", "bank-and-payments", "fix-a-record",

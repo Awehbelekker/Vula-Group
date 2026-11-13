@@ -26,6 +26,7 @@ import ConnectionsHealth from './connect/ConnectionsHealth'
 import BuyingV2 from './connect/BuyingV2'
 import XeroMoveV2 from './connect/XeroMoveV2'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
+import ProfileDrafts from '../ProfileDrafts.jsx'
 import './settings.css'
 
 const GROUPS = [
@@ -312,6 +313,7 @@ function BusinessProfile({ tenantId }) {
         <StatusChip tone={p.data.answered === p.data.total ? 'ok' : 'warn'}>{p.data.answered} of {p.data.total} answered</StatusChip>{' '}
         Ticked answers can be used when Vula replies to customers; the rest are only for you and your team.
       </p>
+      <ProfileDrafts tenantId={tenantId} onChanged={p.apply} />
       {p.data.questions.map(q => (
         <div key={q.key} className="vst-q">
           <label htmlFor={`bp-${q.key}`} className="vst-q-label">{q.q}</label>

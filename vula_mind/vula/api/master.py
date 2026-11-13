@@ -180,6 +180,46 @@ async def master_update_tenant(tenant_id: str, body: dict,
     return res.data[0]
 
 
+# ── Per-business switches (vula/features.py, migration 266) ────────────────────
+# New behaviour piloted on one business before it is switched on for everyone.
+
+@router.get("/tenants/{tenant_id}/features")
+async def master_tenant_features(tenant_id: str) -> dict:
+    """Every switch: on for this business, and whether it is already on for everyone."""
+    from vula import features
+    return {"tenant_id": tenant_id, "features": features.listing(tenant_id)}
+
+
+@router.patch("/tenants/{tenant_id}/features")
+async def master_set_tenant_features(tenant_id: str, body: dict,
+                                     identity: dict = Depends(require_master)) -> dict:
+    """Switch features on or off for this one business: {"voice_compose": true, …}. Read back
+    and audited."""
+    from vula import features
+    from vula.api import tenants as _tenants
+    try:
+        patch = features.validate(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    rows = (_client().table("vula_tenant_config").select("features")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
+    merged = {**(rows[0].get("features") or {}), **patch}
+    try:
+        (_client().table("vula_tenant_config").update({"features": merged})
+         .eq("tenant_id", tenant_id).execute())
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't save ({exc}). Run migration 266?")
+    _tenants.invalidate(tenant_id)
+    back = (_client().table("vula_tenant_config").select("features")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0].get("features") or {}
+    if any(bool(back.get(k)) != v for k, v in patch.items()):
+        raise HTTPException(status_code=500, detail="The switches didn't save. Nothing changed.")
+    audit(identity, "tenant_features", tenant_id, patch=patch)
+    return {"tenant_id": tenant_id, "features": features.listing(tenant_id)}
+
+
 # ── Billing lifecycle (vula_tenants: signup/payment state) ─────────────────────
 # The Tenants tab's existing Suspend/Activate toggles vula_tenant_config.active — operational,
 # any reason. These four are specifically about the *subscription*, reading/writing
@@ -460,6 +500,17 @@ def setup_checklist(tenant_id: str) -> dict:
             "progress_pct": round(100 * done / len(steps))}
 
 
+def _staff_digits_or_refuse(tenant_id: str) -> set:
+    """The business's own people's numbers, for keeping their threads out of operator views. If
+    the team can't be read the request fails (503) — showing every thread would be the unsafe
+    way to fail."""
+    try:
+        from vula.identity import staff_phone_digits
+        return staff_phone_digits(tenant_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't check whose conversations these are: {exc}")
+
+
 @router.get("/tenants/{tenant_id}/conversations")
 async def master_tenant_conversations(tenant_id: str, limit: int = 30) -> dict:
     """Recent conversation threads for a tenant (Master Build Brief section 6a item 2) — support
@@ -468,7 +519,12 @@ async def master_tenant_conversations(tenant_id: str, limit: int = 30) -> dict:
     (vula/chat/history.py's vula_chat_messages) — this is the thread picker; see the sibling
     /conversations/{phone} endpoint below for one thread's actual messages."""
     from vula.chat.history import get_db
-    threads = get_db().list_threads(tenant_id, limit=min(limit, 100))
+    staff = _staff_digits_or_refuse(tenant_id)
+    from vula.identity import is_staff_thread
+    # Over-read, then drop the business's own people: what a staff member asks Vula is private
+    # to them, including from the platform operator.
+    threads = [t for t in get_db().list_threads(tenant_id, limit=min(limit, 100) + 50)
+               if not is_staff_thread(t.get("phone"), staff)][:min(limit, 100)]
     return {"tenant_id": tenant_id, "threads": threads}
 
 
@@ -479,6 +535,9 @@ async def master_tenant_conversation_messages(tenant_id: str, phone: str, limit:
     a conversation from days ago, unlike the AI's own prompt-context read which only wants
     recent turns."""
     from vula.chat.history import get_db
+    from vula.identity import is_staff_thread
+    if is_staff_thread(phone, _staff_digits_or_refuse(tenant_id)):
+        raise HTTPException(status_code=404, detail="Conversation not found")
     msgs = get_db().get(tenant_id, phone=phone, limit=min(limit, 200), max_age_hours=None)
     return {"tenant_id": tenant_id, "phone": phone,
             "messages": [{"role": m.role, "text": m.text, "created_at": m.created_at}
@@ -1556,7 +1615,39 @@ async def master_turns(tenant_id: Optional[str] = None, phone: Optional[str] = N
         rows = q.limit(max(1, min(int(limit), 200))).execute().data or []
     except Exception as exc:
         return {"turns": [], "error": f"turn record unavailable (run migration 195?): {exc}"}
-    return {"turns": rows}
+    return {"turns": _without_staff_words(rows)}
+
+
+_STEP_KEYS_KEPT = ("step", "ms", "name", "skill", "route", "outcome", "error", "model", "verified")
+
+
+def _without_staff_words(rows: list) -> list:
+    """What a business's own people write to Vula is private to them, including from the
+    operator (owner's decision, 12 Nov 2026). Their turns still show here — that something was
+    asked, which skill and tools ran, how long it took, and any error — but not the message,
+    the replies, or step details that could quote either. If it can't be told whose a turn is,
+    it is treated as a staff member's."""
+    from vula.identity import is_staff_thread, staff_phone_digits
+    staff_by_tenant: dict = {}
+    out = []
+    for r in rows:
+        tid = r.get("tenant_id")
+        if tid not in staff_by_tenant:
+            try:
+                staff_by_tenant[tid] = staff_phone_digits(tid) if tid else None
+            except Exception as exc:
+                log.warning("turns: staff lookup failed for %s (%s) — hiding the words", tid, exc)
+                staff_by_tenant[tid] = None
+        staff = staff_by_tenant[tid]
+        if staff is not None and not is_staff_thread(r.get("phone"), staff):
+            out.append(r)
+            continue
+        out.append({**r, "text": None, "private": True,
+                    "replies": [{"kind": x.get("kind"), "ms": x.get("ms")} for x in (r.get("replies") or [])
+                                if isinstance(x, dict)],
+                    "steps": [{k: st[k] for k in _STEP_KEYS_KEPT if k in st} for st in (r.get("steps") or [])
+                              if isinstance(st, dict)]})
+    return out
 
 
 # ── Decision benchmark (31 Oct 2026): Jev against today's classifiers ───────────────────────

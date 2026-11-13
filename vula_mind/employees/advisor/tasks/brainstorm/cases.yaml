@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Can we brainstorm ways to get more weekday customers?", expect: brainstorm, tool: recent_orders}
+- {prompt: "Any ideas for a slow winter?", expect: brainstorm, tool: sales_summary}

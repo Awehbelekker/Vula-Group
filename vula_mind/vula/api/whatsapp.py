@@ -2572,6 +2572,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # can't name them, and the generic label stays.
     caller_name, caller_role = _caller_identity(tenant_id, phone)
 
+    # Their own private notes ("remember that I…") — before anything is saved to the history.
+    if await _private_note_reply(tenant_id, phone, text):
+        _note_handler("private_note")
+        return
+
     # Only a known team member teaches Vula corrections. On a dedicated line every sender gets
     # role "admin" (the number identifies the tenant), so before 2026-09-29 a member of the
     # public's reply could be captured as an "owner correction" and learned.
@@ -6632,24 +6637,36 @@ async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
     except Exception as exc:
         logger.warning("tenant_phones removal failed for %s: %s", phone, exc)
 
-    # Clear chat history
-    try:
-        from vula.chat.history import get_db
-        chat_db = get_db()
-        if tenant_id:
-            chat_db.clear(tenant_id, phone)
-            removed.append("message history")
-    except Exception as exc:
-        logger.warning("chat history removal failed for %s: %s", phone, exc)
+    # Every store that holds what this person said (vula/privacy_data.py), deleted now — not one
+    # table with a promise about the rest.
+    failed: list = []
+    if tenant_id:
+        try:
+            from vula import privacy_data
+            result = privacy_data.erase(tenant_id, phone)
+            failed = result["failed"]
+            if sum(result["removed"].values()):
+                removed.append("conversations with us")
+        except Exception as exc:
+            logger.error("data erase failed for %s: %s", phone, exc)
+            failed = ["conversations"]
 
-    await _send_reply(
-        phone,
-        "✅ Your data deletion request has been received. "
-        f"We've removed your {', '.join(removed) if removed else 'records'} from Vula. "
-        "Any remaining data will be deleted within 30 days per POPIA. "
-        "For a full deletion or questions, email hello@vula.co.za.",
-        tenant_id,
-    )
+    await _send_reply(phone, _deletion_reply(removed, failed), tenant_id)
+
+
+def _deletion_reply(removed: list, failed: list) -> str:
+    """What to tell someone who asked for their data to be deleted — only what was really done.
+    The old reply promised "any remaining data will be deleted within 30 days"; nothing did
+    that."""
+    if failed:
+        return ("Your data deletion request has been received, but I couldn't remove everything "
+                "just now. Please email hello@vula.co.za and we'll finish it by hand and confirm "
+                "to you when it's done.")
+    done = f"We've deleted your {' and '.join(removed)}." if removed else \
+        "We had no conversation history on file for this number."
+    return ("✅ Your data deletion request has been received. " + done + " "
+            "Orders and invoices are kept, because a business must keep its financial records by "
+            "law. You won't be sent any more messages. Questions: hello@vula.co.za.")
 
 
 _EXPORT_FAILURE_REPLY = (
@@ -7670,9 +7687,16 @@ _STICKY_SKILLS = {"email_admin", "commerce_admin", "finance_admin", "calculation
 _LAST_SKILL: dict = {}
 
 
-def _remember_skill(tenant_id: str, phone: str, skill: Optional[str]) -> None:
+def _remember_skill(tenant_id: str, phone: str, skill: Optional[str], question: str = "") -> None:
     if tenant_id and phone and skill in _STICKY_SKILLS:
         _LAST_SKILL[(tenant_id, phone)] = (skill, time.time())
+    # Also kept where a restart and the other worker can find it, and with the question it
+    # answered, so the classifier can tell a follow-up from a new subject (vula/route_memory.py).
+    try:
+        from vula import route_memory
+        route_memory.remember(tenant_id, phone, skill, question, sticky=skill in _STICKY_SKILLS)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("route memory skipped: %s", exc)
 
 
 # The last real request from this person (not a bare "proceed"), for 30 minutes — so "Proceed" /
@@ -7710,7 +7734,13 @@ def _last_skill(tenant_id: str, phone: str) -> Optional[str]:
     hit = _LAST_SKILL.get((tenant_id, phone))
     if hit and time.time() - hit[1] < _STICKY_TTL:
         return hit[0]
-    return None
+    # Not in this process's memory (a restart, or the other worker answered last time).
+    try:
+        from vula import route_memory
+        return route_memory.sticky(tenant_id, phone, allowed=_STICKY_SKILLS)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("route memory skipped: %s", exc)
+        return None
 
 
 def _kb_audience_for(tenant_id: str, phone: str, caller_role: Optional[str]) -> Optional[str]:
@@ -7763,14 +7793,92 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — see _rag_reply_inner. Every KB search made while answering an outsider
     is limited to customer-visible documents (vula/ingestion/pipeline.py::kb_audience)."""
+    from core import voice
     from vula.ingestion.pipeline import kb_audience, kb_viewer
     from vula.private_docs import member_id_for_phone
     import contextlib as _ctx
+    # Who this reply is for decides its voice: the business's own people get the team voice and
+    # their own style; anyone else gets the customer voice (core/voice.py).
+    insider = (not phone) or _is_insider(caller_role) or _is_tenant_owner(tenant_id, phone)
+    from vula import personal_memory
+    notes = await _private_notes_block(tenant_id, phone) if (insider and phone) else ""
     # Their own private documents too; with no phone (the staff app's chat) the caller already said who.
     with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)), \
-            (kb_viewer(member_id_for_phone(tenant_id, phone)) if phone else _ctx.nullcontext()):
+            (kb_viewer(member_id_for_phone(tenant_id, phone)) if phone else _ctx.nullcontext()), \
+            voice.use(tenant_id, "team" if insider else "customer", "whatsapp" if phone else "dashboard",
+                      _voice_prefs(tenant_id, phone) if insider else None), \
+            personal_memory.use(notes):
         return await _rag_reply_inner(tenant_id, question, conversation_history, phone,
                                       caller_name=caller_name, caller_role=caller_role)
+
+
+def _wants_advisor(tenant_id: str, question: str) -> bool:
+    """True when the front desk would hand this message to the AI advisor and this business has
+    the advisor switched on."""
+    try:
+        from core.skills import employees
+        settings_ = employees.settings_for(tenant_id)
+        if not (settings_.get("advisor") or {}).get("enabled"):
+            return False
+        enabled = {k for k, v in settings_.items() if v["enabled"]}
+        return employees.is_advisor(employees.pick(question, enabled))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("advisor check skipped: %s", exc)
+        return False
+
+
+def _staff_person(tenant_id: str, phone: str):
+    """The team member writing from this number (vula/identity.py), or None."""
+    try:
+        from vula.identity import person_for_phone
+        return person_for_phone(tenant_id, phone) if phone else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("staff person lookup skipped: %s", exc)
+        return None
+
+
+def _voice_prefs(tenant_id: str, phone: str) -> Optional[dict]:
+    """The staff member's own style choices (how they like Vula to talk to them), or None."""
+    person = _staff_person(tenant_id, phone)
+    return dict(person.prefs) if person else None
+
+
+async def _private_notes_block(tenant_id: str, phone: str) -> str:
+    """What this staff member asked Vula to remember about them, for the assistant that is
+    about to answer THEM (vula/personal_memory.py). "" for anyone else."""
+    try:
+        from vula import personal_memory
+        return await personal_memory.load(_staff_person(tenant_id, phone))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("private notes skipped: %s", exc)
+        return ""
+
+
+async def _private_note_reply(tenant_id: str, phone: str, text: str) -> bool:
+    """A staff member's "remember that I…", "what do you remember about me" or "forget note 2":
+    handled in code, replied to, and kept out of the chat history and the turn record — the
+    note itself is the only thing stored, encrypted. True when this message was one of those."""
+    try:
+        from vula import personal_memory
+        if not personal_memory.enabled(tenant_id):
+            return False
+        person = _staff_person(tenant_id, phone)
+        if person is None:
+            return False
+        import asyncio as _asyncio
+        reply = await _asyncio.to_thread(personal_memory.handle, person, text, "whatsapp")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("private note handling skipped: %s", exc)
+        return False
+    if not reply:
+        return False
+    try:
+        from vula import turns as _turns
+        _turns.mark_private()
+    except Exception:  # noqa: BLE001
+        pass
+    await _send_reply(phone, reply, tenant_id)
+    return True
 
 
 async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
@@ -7915,7 +8023,10 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
         from core.skills.base import looks_like_owner_admin_question
-        if looks_like_owner_admin_question(question):
+        # …and thinking something through ("should we…", "brainstorm…", "pros and cons…") goes
+        # to the AI advisor there, when this business has it on, instead of the general skill,
+        # which has no tools to check the numbers with (employees/advisor).
+        if looks_like_owner_admin_question(question) or _wants_advisor(tenant_id, question):
             try:
                 from core.skills.base import SkillInput
                 from core.skills.loader import get_skill
@@ -7975,18 +8086,23 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
         # commerce_admin/commerce_assistant's calls into this helper. Safe when phone is empty
         # (the dashboard-chat caller, vula/api/chat.py) — _run_with_holding_message's own
         # try/except swallows a failed send with no effect on the real result.
-        result = await _run_with_holding_message(
-            phone, tenant_id,
-            runner.run(
-                question=question,
-                tenant_id=tenant_id,
-                conversation_history=conversation_history,
-                metadata=metadata,
-                max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
-                max_tokens=700,    # room to hold working facts + show code calcs
-                top_k=5,           # retrieve enough to surface the right clause/doc
-            ),
-        )
+        # The router sees one message at a time; give it what this person asked last and which
+        # skill answered, so "and for next week?" isn't routed as a brand-new subject.
+        from core.hrm.orchestrator import route_context
+        from vula import route_memory
+        with route_context(route_memory.latest(tenant_id, phone) if phone else None, tenant_id):
+            result = await _run_with_holding_message(
+                phone, tenant_id,
+                runner.run(
+                    question=question,
+                    tenant_id=tenant_id,
+                    conversation_history=conversation_history,
+                    metadata=metadata,
+                    max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
+                    max_tokens=700,    # room to hold working facts + show code calcs
+                    top_k=5,           # retrieve enough to surface the right clause/doc
+                ),
+            )
         if result.final_answer and result.final_answer.strip():
             logger.info(
                 "Agent answered tenant=%s skill=%s confidence=%.2f",
@@ -7994,7 +8110,7 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
             )
             _note_route("agent", skill=result.skill_used)
             if _is_insider(caller_role):
-                _remember_skill(tenant_id, phone, result.skill_used)
+                _remember_skill(tenant_id, phone, result.skill_used, question)
             try:
                 _LAST_CONF.set(float(result.confidence or 0.0))
             except Exception:
@@ -9858,6 +9974,10 @@ async def _run_commerce_admin_inner(phone: str, text: str, tenant_id: str,
             await _send_reply(phone, costing_reply, tenant_id)
             return True
 
+    # Their own private notes ("remember that I…") — before the session or history is touched.
+    if await _private_note_reply(tenant_id, phone, text):
+        return True
+
     admin_session_key = f"admin:{phone}"
     history = ""
     session_id: Optional[str] = None
@@ -9868,9 +9988,14 @@ async def _run_commerce_admin_inner(phone: str, text: str, tenant_id: str,
         )
         session_id = session["id"]
         preferred_language = session.get("preferred_language")
+        # This is the owner's / a staff member's own thread: label their turns with who they
+        # are, not "Customer" (the admin agent used to read its colleague back as a customer).
+        _who, _who_role = _caller_identity(tenant_id, phone)
         history = commerce_service.format_history(
-            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT)
+            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT),
+            user_label=(f"{_who} ({_who_role})" if _who and _who_role else (_who or "Owner")),
         )
+        history += await commerce_service.earlier_topics(tenant_id, session_id)
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)
 
@@ -9945,18 +10070,22 @@ async def _run_commerce_admin_inner(phone: str, text: str, tenant_id: str,
     # turns this used to be silent-but-fast for — same reasoning as commerce_assistant's call
     # below (_run_with_holding_message), so an owner isn't left wondering if anything is
     # happening during a real live-IMAP round trip.
-    output = await _run_with_holding_message(
-        phone, tenant_id,
-        skill(
-            SkillInput(
-                question=text, tenant_id=tenant_id,
-                conversation_history=history + link_context,
-                metadata={"session_id": admin_session_key, "customer_phone": phone,
-                          "caller_name": caller_name, "caller_role": caller_role,
-                          "preferred_language": preferred_language},
-            )
-        ),
-    )
+    from core import voice
+    from vula import personal_memory
+    _notes = await _private_notes_block(tenant_id, phone)
+    with voice.use(tenant_id, "team", "whatsapp", _voice_prefs(tenant_id, phone)), personal_memory.use(_notes):
+        output = await _run_with_holding_message(
+            phone, tenant_id,
+            skill(
+                SkillInput(
+                    question=text, tenant_id=tenant_id,
+                    conversation_history=history + link_context,
+                    metadata={"session_id": admin_session_key, "customer_phone": phone,
+                              "caller_name": caller_name, "caller_role": caller_role,
+                              "preferred_language": preferred_language},
+                )
+            ),
+        )
     if not output.success or not output.answer:
         logger.warning("commerce_admin returned no answer: %s", output.error)
         return False
@@ -10307,19 +10436,21 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
         logger.debug("language preference update skipped: %s", exc)
 
     skill = get_skill("commerce_assistant")
-    output = await _run_with_holding_message(
-        phone, tenant_id,
-        skill(
-            SkillInput(
-                question=text,
-                tenant_id=tenant_id,
-                conversation_history=history,
-                metadata={"session_id": phone, "customer_phone": phone,
-                          "preferred_language": preferred_language,
-                          "forwarded": _FORWARDED.get()},
-            )
-        ),
-    )
+    from core import voice
+    with voice.use(tenant_id, "customer", "whatsapp"):
+        output = await _run_with_holding_message(
+            phone, tenant_id,
+            skill(
+                SkillInput(
+                    question=text,
+                    tenant_id=tenant_id,
+                    conversation_history=history,
+                    metadata={"session_id": phone, "customer_phone": phone,
+                              "preferred_language": preferred_language,
+                              "forwarded": _FORWARDED.get()},
+                )
+            ),
+        )
 
     if not output.success:
         logger.warning("commerce_assistant returned no answer: %s", output.error)

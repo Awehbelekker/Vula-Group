@@ -1512,11 +1512,13 @@ async def set_session_language(tenant_id: str, session_key: str, language: str) 
         logger.debug("set_session_language skipped (run migration 052?): %s", exc)
 
 
-async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> None:
-    """Persist a single conversation turn and update the session snapshot."""
+async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> str:
+    """Persist a single conversation turn and update the session snapshot. Returns the new
+    message's id (so a reply can be rated — the dashboard chat had no way to say "that's wrong")."""
+    message_id = str(uuid.uuid4())
     _client().table("commerce_conversation_messages").insert(
         {
-            "id": str(uuid.uuid4()),
+            "id": message_id,
             "tenant_id": tenant_id,
             "session_id": session_id,
             "role": role,
@@ -1535,6 +1537,7 @@ async def append_message(tenant_id: str, session_id: str, role: str, content: st
         }).eq("id", session_id).execute()
     except Exception:
         pass
+    return message_id
 
 
 async def set_session_paused(tenant_id: str, session_id: str, paused: bool,
@@ -1582,21 +1585,29 @@ async def find_stale_paused_sessions(tenant_id: str, hours: float = 2.0) -> list
 
 
 async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
-    """Return recent conversation sessions for the shared inbox list view."""
+    """Return recent conversation sessions for the shared inbox list view.
+
+    A staff member's own thread with Vula (session keys admin:{phone} / webadmin:{…}) is never
+    listed: the shared inbox is for customer conversations, and what a member asks Vula is
+    private to them (vula/identity.py). They were listed to every member of the business before.
+    """
+    from vula.identity import is_staff_session_key
     base = "id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at"
+    # Over-read so the staff threads that are dropped don't shorten the list.
+    fetch = limit + 50
     try:
         result = (
             _client().table("commerce_conversation_sessions")
             .select(base + ",assigned_to,agent_note,tags,paused_by")
-            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
         )
     except Exception:
         # team-inbox columns not present yet (migration 048 not run) — fall back gracefully.
         result = (
             _client().table("commerce_conversation_sessions").select(base)
-            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
         )
-    rows = result.data or []
+    rows = [r for r in (result.data or []) if not is_staff_session_key(r.get("session_key"))][:limit]
     # Expose session id as session_id for the frontend.
     for r in rows:
         r["session_id"] = r["id"]
@@ -1623,6 +1634,7 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
     messages = await get_recent_messages(tenant_id, session_id, limit=200, max_age_hours=None)
     return {
         "session_id": session["id"],
+        "session_key": session.get("session_key"),
         "customer": session.get("customer_name") or session.get("customer_phone") or session.get("session_key"),
         "phone": session.get("customer_phone") or session.get("session_key"),
         "paused": bool(session.get("paused")),
@@ -1665,6 +1677,45 @@ async def get_recent_messages(tenant_id: str, session_id: str, limit: int = DEFA
     return list(reversed(rows))
 
 
+EARLIER_TOPICS_DAYS = 7
+EARLIER_TOPICS_LIMIT = 5
+_EARLIER_TOPIC_CHARS = 120
+
+
+async def earlier_topics(tenant_id: str, session_id: str) -> str:
+    """What this person raised earlier in the week, for THEIR OWN thread with Vula — a few of
+    their own older messages, cut short and clearly marked as old.
+
+    The 24-hour window above exists because older lines were being answered as if they were new.
+    But it also means a staff member who was planning something on Monday is starting from
+    nothing on Wednesday. This gives the model the gist of what came up, with no model call and
+    without the old replies (which is where stale figures live). "" when the feature is off
+    (settings.history_earlier_topics_enabled) or there is nothing older."""
+    from vula import features
+    if not features.on(tenant_id, "history_earlier_topics"):
+        return ""
+    from core.time_fmt import cutoff_iso, relative_age_label
+    rows = (_client().table("commerce_conversation_messages").select("role,content,created_at")
+            .eq("tenant_id", tenant_id).eq("session_id", session_id).eq("role", "user")
+            .gte("created_at", cutoff_iso(EARLIER_TOPICS_DAYS * 24))
+            .lt("created_at", cutoff_iso(HISTORY_MAX_AGE_HOURS))
+            .order("created_at", desc=True).limit(EARLIER_TOPICS_LIMIT).execute().data or [])
+    lines = []
+    for m in reversed(rows):
+        text = " ".join((m.get("content") or "").split())
+        if not text:
+            continue
+        if len(text) > _EARLIER_TOPIC_CHARS:
+            text = text[:_EARLIER_TOPIC_CHARS].rstrip() + "…"
+        age = relative_age_label(m.get("created_at") or "") or "earlier"
+        lines.append(f"- {age}: {text}")
+    if not lines:
+        return ""
+    return ("\n\nEarlier this week they also raised (more than a day old — background on what "
+            "they've been working on, NOT a request to act on now, and not a source of figures):\n"
+            + "\n".join(lines))
+
+
 # Caveat suffixes appended to a reply AFTER the skill produces it (core/verification.py's
 # adversarial-review warning) — meant for a human reading the message/transcript, never for the
 # model itself. Confirmed live 2026-08-26: a customer-facing session that had one of these
@@ -1687,13 +1738,17 @@ def _strip_caveats_for_history(content: str) -> str:
     return content.strip()
 
 
-def format_history(messages: List[dict]) -> str:
+def format_history(messages: List[dict], user_label: str = "Customer") -> str:
     """Render messages into a compact transcript for the skill's conversation_history. Each
     line is tagged with its actual age (2026-08-27) — previously role+content only, giving the
     model no way to tell a 7-hour-old line apart from one said seconds ago (see
-    HISTORY_MAX_AGE_HOURS above for the full incident)."""
+    HISTORY_MAX_AGE_HOURS above for the full incident).
+
+    `user_label` names whoever wrote the "user" turns. It defaulted to "Customer" for every
+    thread, including an owner's or staff member's own thread with Vula — so the admin agent read
+    its own colleague's messages back as a customer's. Staff callers pass the member's name."""
     from core.time_fmt import relative_age_label
-    label = {"user": "Customer", "assistant": "Assistant"}
+    label = {"user": (user_label or "Customer").strip() or "Customer", "assistant": "Assistant"}
     lines = []
     for m in messages:
         if m.get("role") not in ("user", "assistant") or not m.get("content"):
