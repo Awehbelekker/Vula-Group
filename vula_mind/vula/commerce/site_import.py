@@ -830,6 +830,18 @@ async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dic
                 st["errors"].append(f"{p['slug']} option {v['option_values']}: {exc}")
 
 
+def _preview(p: Dict[str, Any]) -> Dict[str, Any]:
+    """One product, short: what a prospect report shows (no text beyond the name)."""
+    prices = [v["price_cents"] for v in p.get("variants") or [] if v.get("price_cents")] or \
+        ([p["price_cents"]] if p.get("price_cents") else [])
+    return {"name": p.get("name"), "url": p.get("url"),
+            "price_min_cents": min(prices) if prices else 0, "price_max_cents": max(prices) if prices else 0,
+            "options": len(p.get("variants") or []), "photos": len(p.get("images") or []),
+            "has_description": bool((p.get("description") or "").strip()),
+            "choices": [c["name"] for c in p.get("choices") or [] if isinstance(c, dict)],
+            "in_stock": bool(p.get("in_stock", True))}
+
+
 def catalogue_text(business: str, root: str, products: List[Dict[str, Any]]) -> str:
     """The whole range as one readable document for the knowledge base."""
     lines = [f"# {business} — products (from {root})", ""]
@@ -1079,6 +1091,8 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
         if products:
             await store_text(catalogue_text(business or urlparse(root).netloc, root, products),
                              f"Website — product catalogue ({urlparse(root).netloc})", "catalogue")
+        if dry_run:                    # what was found, for a prospect report (vula/prospects.py)
+            st["products_preview"] = [_preview(p) for p in products[:200]]
 
         urls = (await sitemap_urls(root, platform, pages=found))[:max_pages]
         st["pages_found"] = len(urls)
@@ -1153,6 +1167,8 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
 
         st["facts"] = {k: v["value"] for k, v in facts.items()}
         st["coverage"] = _coverage(products, read, facts, st, how, pdfs)
+        if dry_run:
+            st["pages_preview"] = [{"url": u, "title": t, "words": len(x.split())} for u, t, x in read[:80]]
         st["step"] = "done"
         clean = True
         if not dry_run:

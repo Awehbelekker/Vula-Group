@@ -1268,3 +1268,23 @@ export const appErrors = [
   { id: "ae-2", tenant_id: null, build: "a1b2c3d4e5f6", page: "", message: "unhandled: Session expired — please sign in again.",
     frames: null, browser: "Safari 18 · iPhone", count: 2, first_seen: "2026-10-27T07:01:00Z", last_seen: "2026-10-27T07:05:00Z", resolved_at: null },
 ];
+
+// Master › Prospects (13 Nov 2026): one scanned, one still scanning.
+export const prospects = [
+  { id: "pr-kelp", name: "Kelp Gear", url: "https://www.kelpgearshop.com", status: "done", created_at: "2026-11-13T07:00:00Z",
+    updated_at: "2026-11-13T07:02:00Z", report: {
+      name: "Kelp Gear", site: "www.kelpgearshop.com", kind: "shop",
+      found: ["15 pages with content (of 24 found, from the sitemap)", "6 products, 6 with a price",
+              "6 sold in sizes or options, 4 at different prices (e.g. Diving Fin Bags: R850–R2 200)",
+              "Their terms and conditions, privacy policy, returns or refund policy"],
+      gaps: ["No delivery or shipping policy on the website", "Not on the website: opening hours"],
+      offer: ["A WhatsApp shop: customers browse product cards and a catalogue, and order in the chat",
+              "Payment links and invoices from the order; the owner sees every order in one dashboard"],
+      pitch: "Kelp Gear: what Vula found on www.kelpgearshop.com\n• 6 products, 6 with a price\n\nWhat we'd fix:\n• No delivery or shipping policy on the website",
+      socials: ["https://instagram.com/kelp_boardbags_ct_sa"],
+      products: [{ name: "Kelp Classic Day Bag", price_min_cents: 120000, price_max_cents: 240000, options: 15, photos: 9 },
+                 { name: "Kelp Boardbag Trucker Hats", price_min_cents: 50000, price_max_cents: 50000, options: 3, photos: 2 }],
+      counts: { pages: 15, products: 6, policies: 3, contact: 4 } } },
+  { id: "pr-shopeazy", name: "ShopEazy", url: "https://shopeazy.co", status: "scanning", created_at: "2026-11-13T06:00:00Z",
+    updated_at: "2026-11-13T06:00:00Z", report: null },
+];
