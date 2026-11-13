@@ -32,6 +32,8 @@ export function useAssistantChat(tenantId) {
   // Files attached to the next message (13 Nov 2026): read by Vula, not filed, kept 24 h.
   const [files, setFiles] = useState([])
   const [fileError, setFileError] = useState('')
+  // Research mode (13 Nov 2026): in Ask anything, search the web and read pages, with sources.
+  const [research, setResearch] = useState(false)
   const [mode, setModeState] = useState(readMode)
   const setMode = (m) => { setModeState(m); try { localStorage.setItem(MODE_KEY, m) } catch { /* private window */ } }
   const sessionId = useRef(`${tenantId}-${Math.random().toString(36).slice(2, 9)}`)
@@ -96,13 +98,14 @@ export function useAssistantChat(tenantId) {
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, session_id: sessionId.current, mode: openAvailable ? mode : 'business',
+        body: JSON.stringify({ message: msg, session_id: sessionId.current,
+          mode: !openAvailable ? 'business' : (mode === 'open' && research ? 'research' : mode),
           ...(ready.length ? { attachments: ready.map(f => f.id) } : {}) }),
       })
       const d = await r.json()
       const text = d.answer || (typeof d.detail === 'string' ? d.detail : "Sorry, I couldn't process that.")
       setMessages(m => [...m, { role: 'assistant', text, id: d.message_id || null, sessionId: d.session_id || null,
-        answeredBy: d.answered_by || null, confirm: d.confirm_request || null }])
+        answeredBy: d.answered_by || null, confirm: d.confirm_request || null, research: d.research || null }])
     } catch {
       setMessages(m => [...m, { role: 'assistant', text: 'Connection error — please try again.' }])
     } finally {
@@ -146,6 +149,7 @@ export function useAssistantChat(tenantId) {
     setMessages(m => [...m.map(x => (same(x) ? { ...x, confirm: null } : x)), { role: 'assistant', text }])
   }
 
+  const researching = sending && openAvailable && mode === 'open' && research
   return { messages, input, setInput, sending, endRef, send, rate, decide, mode, setMode, openAvailable,
-    files, fileError, attach, removeFile, keepFile }
+    files, fileError, attach, removeFile, keepFile, research, setResearch, researching }
 }

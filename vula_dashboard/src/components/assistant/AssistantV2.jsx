@@ -5,13 +5,15 @@
  * inside the Quick Launcher's sheet (inSheet).
  */
 import { useRef } from 'react'
-import { FileText, Paperclip, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { FileText, Globe, Paperclip, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { Button, IconButton, Input, PillTabs } from '../ui/index.jsx'
 import { SUGGESTIONS, useAssistantChat } from './useAssistantChat'
 import MyVula from './MyVula'
 import './assistant.css'
 
 const MODES = [{ id: 'business', label: 'Your business' }, { id: 'open', label: 'Ask anything' }]
+
+const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' } }
 
 const ACCEPT = '.pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.png,.jpg,.jpeg,.webp,.gif'
 
@@ -26,6 +28,10 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
         <div className="vas-mode">
           <PillTabs label="Chat mode" tabs={MODES} active={x.mode} onChange={x.setMode} />
           {x.mode === 'open' && <p className="vas-hint">Ask anything: ideas, writing, planning. Answered on Vula's own AI; questions about your records still use them.</p>}
+          {x.mode === 'open' && (
+            <Button size="sm" variant={x.research ? 'primary' : 'secondary'} Icon={Globe} aria-pressed={x.research}
+              onClick={() => x.setResearch(!x.research)}>Research the web</Button>)}
+          {x.mode === 'open' && x.research && <p className="vas-hint">Vula searches the web, reads a few pages and your own documents, and lists its sources. Only the topic is searched, never names or numbers from your records. Takes about half a minute.</p>}
         </div>)}
       <ol className="vas-thread" aria-live="polite" aria-label="Conversation" tabIndex={0}>
         {x.messages.map((m, i) => (
@@ -33,7 +39,21 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
             <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.text}
             {m.files?.length > 0 && <span className="vas-by">📎 {m.files.join(', ')}</span>}
             {m.answeredBy && x.openAvailable && (
-              <span className="vas-by">{m.answeredBy === 'open' ? "Vula's own AI" : 'Answered with your business records'}</span>)}
+              <span className="vas-by">{m.answeredBy === 'research' ? `Researched · ${m.research?.read || 0} pages read`
+                : m.answeredBy === 'open' ? "Vula's own AI" : 'Answered with your business records'}</span>)}
+            {(m.research?.sources?.length > 0 || m.research?.documents?.length > 0) && (
+              <span className="vas-sources" role="group" aria-label="Sources">
+                <span className="vas-by">Sources</span>
+                <ol>
+                  {m.research.sources.map(src => (
+                    <li key={src.n} value={src.n}>
+                      <a href={src.url} target="_blank" rel="noopener noreferrer">{src.title}</a>
+                      <span className="vas-host"> — {hostOf(src.url)}</span>
+                    </li>))}
+                  {(m.research.documents || []).map(d => (
+                    <li key={d.n} className="vas-doc">[{d.n}] {d.title} <span className="vas-host">(your documents)</span></li>))}
+                </ol>
+              </span>)}
             {m.confirm && (
               <span className="vas-confirm" role="group" aria-label="Confirm this action">
                 <Button size="sm" disabled={m.confirm.busy} onClick={() => x.decide(m, 'confirm')}>{m.confirm.confirm_label || 'Confirm'}</Button>
@@ -48,7 +68,8 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
                 {m.rateError && <span className="vas-warn" role="alert">Couldn't save that rating.</span>}
               </span>)}
           </li>))}
-        {x.sending && <li className="vas-msg vas-msg--vula vas-typing" aria-label="Vula is typing"><span /><span /><span /></li>}
+        {x.researching && <li className="vas-msg vas-msg--vula vas-hint" role="status">Researching — searching the web and reading pages…</li>}
+        {x.sending && !x.researching && <li className="vas-msg vas-msg--vula vas-typing" aria-label="Vula is typing"><span /><span /><span /></li>}
         <li ref={x.endRef} aria-hidden="true" className="vas-end" />
       </ol>
       {x.messages.length <= 1 && (

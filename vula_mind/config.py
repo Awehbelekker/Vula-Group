@@ -557,6 +557,7 @@ class Settings(BaseSettings):
     # business: Master › tenant › Features to pilot (vula/features.py "open_chat").
     open_chat_enabled: bool = False
     open_chat_per_hour: int = 60          # messages per person per hour in the open chat
+    research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
 
     # Website import (vula/commerce/site_import.py): copy each product's photos into the
     # business's own storage, so they survive the old site changing. Off = keep the shop's CDN

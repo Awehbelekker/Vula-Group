@@ -1880,7 +1880,8 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
     # Ask anything (vula/open_chat.py): a general question goes to Vula's own AI (the reasoning
     # skill, local first); one about the business's records still goes to the business assistant.
     answered_by = "business"
-    if (body.mode or "business").strip().lower() == "open":
+    asked_mode = (body.mode or "business").strip().lower()
+    if asked_mode in ("open", "research"):
         from config import settings as _settings
         from vula import features, open_chat
         if not features.on(tenant_id, "open_chat"):
@@ -1888,11 +1889,18 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
         if not open_chat.allow(session_key, _settings.open_chat_per_hour):
             raise HTTPException(status_code=429, detail="That's a lot of questions for one hour — "
                                                         "give it a little while and ask again.")
-        if not open_chat.needs_records(body.message):
+        if asked_mode == "research":    # asked for: web research with sources (vula/research.py)
+            if not open_chat.allow(f"{session_key}:research", _settings.research_per_hour):
+                raise HTTPException(status_code=429, detail="That's a lot of research for one hour — "
+                                                            "ask without research, or try again a little later.")
+            answered_by = "research"
+        elif not open_chat.needs_records(body.message):
             answered_by = "open"
 
     metadata: Dict[str, Any] = {"session_id": session_key, "channel": "dashboard"}
     question = body.message
+    if answered_by == "research" and attached:
+        metadata["attachments_block"] = chat_attachments.block(attached, chat_attachments.BUSINESS_CHARS)
     if answered_by == "open":
         metadata["open"] = True
         if attached:
@@ -1939,13 +1947,24 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
         log.debug("Assistant session/history load failed (non-fatal): %s", exc)
 
     from core import voice
-    skill = get_skill("reasoning" if answered_by == "open" else "commerce_admin")
+    research = None
     with voice.use(tenant_id, "team", "dashboard", person.prefs if person is not None else None), \
             personal_memory.use(notes_block):
-        out = await skill(SkillInput(
-            question=question, tenant_id=tenant_id,
-            conversation_history=history, metadata=metadata,
-        ))
+        if answered_by == "research":
+            from vula import research as _research
+            from core.skills.base import SkillOutput as _Out
+            try:
+                research = await _research.run(tenant_id, body.message, history, metadata)
+                out = _Out(answer=research["answer"], skill_name="research", confidence=0.7)
+            except Exception as exc:  # noqa: BLE001 — said plainly, never a crash
+                log.warning("research failed (tenant=%s): %s", tenant_id, exc)
+                out = _Out(answer="", skill_name="research", error="Research didn't work just now — please try again.")
+        else:
+            skill = get_skill("reasoning" if answered_by == "open" else "commerce_admin")
+            out = await skill(SkillInput(
+                question=question, tenant_id=tenant_id,
+                conversation_history=history, metadata=metadata,
+            ))
     answer = out.answer if (out.success and out.answer) else (out.error or "Sorry, I couldn't process that just now.")
 
     # An action the business assistant wants confirmed first (a preview: stock change, refund,
@@ -1966,14 +1985,17 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
         try:
             # the file names, never their text
             await service.append_message(tenant_id, sid, "user", chat_attachments.note(body.message, attached))
-            message_id = await service.append_message(tenant_id, sid, "assistant", strip_caveat(answer))
+            kept = strip_caveat(answer) + (_research.sources_note(research) if research else "")
+            message_id = await service.append_message(tenant_id, sid, "assistant", kept)
         except Exception:
             pass
 
     # session_id + message_id let the person rate this reply (👍/👎), like a reply in the Inbox.
     return {"answer": answer, "ok": bool(out.success and out.answer),
             "session_id": sid, "message_id": message_id if isinstance(message_id, str) else None,
-            "answered_by": answered_by, **({"confirm_request": confirm} if confirm else {})}
+            "answered_by": answered_by, **({"confirm_request": confirm} if confirm else {}),
+            **({"research": {k: research.get(k) for k in ("sources", "documents", "searched", "read")}}
+               if research else {})}
 
 
 @router.post("/{tenant_id}/admin/assistant/attach")

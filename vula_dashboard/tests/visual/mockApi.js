@@ -367,6 +367,12 @@ function routes(role, modules = []) {
       const b = req.postDataJSON() || {};
       if (/stock/i.test(b.message || "")) return { answer: "Set the 9ft bag's stock to 4?", session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business",
         confirm_request: { id: "pc-1", summary: "Set the 9ft bag's stock to 4?", confirm_label: "Confirm", cancel_label: "Cancel" } };
+      if (b.mode === "research") return { answer: "Two suppliers list it: R 1 450 at one [1], R 1 390 at the other [2]. Your price list has R 1 500 [D1].",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "research",
+        research: { read: 3, searched: ["board bag prices South Africa"], sources: [
+          { n: 1, title: "Board bags — Surf Shop", url: "https://www.surfshop.example/board-bags" },
+          { n: 2, title: "Travel bags price list", url: "https://bags.example/prices" }],
+          documents: [{ n: "D1", title: "price-list.pdf" }] } };
       if (b.mode === "open" && !/owe|invoice|order/i.test(b.message || "")) return { answer: `Five ideas for you: (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "open" };
       return { answer: `Today: 4 orders, R 1 842.50 paid. (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business" };
     }),
