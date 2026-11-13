@@ -101,7 +101,7 @@ def test_with_no_citations_every_page_read_is_listed():
 async def test_a_full_run_writes_from_the_pages_and_documents_fenced():
     seen = {}
 
-    async def complete(task, msgs, max_tokens, timeout_s):
+    async def complete(task, msgs, max_tokens, timeout_s, accept=None):
         if task == "research_plan":
             return '["board bag prices South Africa"]'
         seen["system"], seen["user"] = msgs[0]["content"], msgs[1]["content"]
@@ -175,3 +175,63 @@ async def test_research_needs_ask_anything_and_has_its_own_hourly_limit():
             await _ask("second")
     assert e.value.status_code == 429 and "research" in e.value.detail
     open_chat.clear()
+
+
+# ── local first, Gemini Flash when it has to go to the cloud ─────────────────────────────────
+
+def test_research_uses_gemini_flash_in_the_cloud_unless_the_map_names_another():
+    from config import settings
+    from core.llm_router import cloud_model_for
+    with patch.object(settings, "cloud_model_by_task", ""):
+        assert cloud_model_for("research") == "google/gemini-2.5-flash"
+        assert cloud_model_for("research_plan") == "google/gemini-2.5-flash"
+        assert cloud_model_for("reasoning") == settings.model_worker_cloud
+    with patch.object(settings, "cloud_model_by_task", '{"research": "x/other"}'):
+        assert cloud_model_for("research") == "x/other"
+
+
+def test_the_prompt_is_cut_to_fit_the_local_window():
+    from core.llm_router import assess_complexity, local_prompt_cap_tokens
+    big = [{"title": f"P{i}", "url": f"https://p{i}.example/", "text": "word " * 2000} for i in range(6)]
+    docs = [{"title": "d.pdf", "text": "doc " * 1000}] * 3
+    room = local_prompt_cap_tokens() * 4 - 7000
+    pages, dd, hist = research.fit(big, docs, "h" * 9000, room)
+    total = sum(len(p["text"]) for p in pages) + sum(len(d["text"]) for d in dd) + len(hist)
+    assert total <= room and len(pages) == 6 and len(hist) <= 1200
+    assert big[0]["text"] == "word " * 2000                                 # originals untouched
+    assert assess_complexity([{"role": "user", "content": "s" * 7000 + "x" * total}]) is None
+
+
+def test_cites_something():
+    assert research.cites_something("It is R 1 450 [2].", pages=2, docs=0)
+    assert research.cites_something("Ours is [D1].", pages=0, docs=1)
+    assert not research.cites_something("No sources [5].", pages=2, docs=0)
+
+
+@pytest.mark.asyncio
+async def test_a_local_answer_that_cites_nothing_goes_to_the_cloud_logged():
+    calls = []
+
+    async def acompletion(**kw):
+        calls.append(kw["model"])
+        text = "Prices vary a lot." if kw["model"].startswith("ollama") else "R 1 450 at the Surf Shop [1]."
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+    esc = MagicMock(return_value=("openrouter/google/gemini-2.5-flash", "k", "b"))
+    with patch("core.llm_router.resolve_generation_route", AsyncMock(return_value=("ollama_chat/llama3.1:8b", None, "b"))), \
+         patch("core.llm_router.escalate_to_cloud", esc), \
+         patch("core.llm_router.looks_unreliable", return_value=False), \
+         patch("litellm.acompletion", acompletion):
+        out = await research._complete("research", [{"role": "user", "content": "q"}], 100, 5,
+                                       accept=lambda a: research.cites_something(a, 1, 0))
+        assert out == "R 1 450 at the Surf Shop [1]."
+        assert esc.call_args.args[0] == "research_check_failed"
+        calls.clear()
+        esc.reset_mock()
+
+        async def good(**kw):
+            calls.append(kw["model"])
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Cited [1]."))])
+        with patch("litellm.acompletion", good):
+            assert await research._complete("research", [{"role": "user", "content": "q"}], 100, 5,
+                                             accept=lambda a: research.cites_something(a, 1, 0)) == "Cited [1]."
+        assert calls == ["ollama_chat/llama3.1:8b"] and not esc.called

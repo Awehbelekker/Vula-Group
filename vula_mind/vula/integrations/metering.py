@@ -92,9 +92,10 @@ def _client():
 # USD per 1M tokens (input, output). ollama/* and ollama_chat/* (local) are free.
 _PRICES = {
     "meta-llama/llama-3.3-70b-instruct": (0.10, 0.32),  # OpenRouter list price, 2026-09
-    "google/gemini-2.5-flash": (0.075, 0.30),
-    "google/gemini-2.5-flash-lite": (0.04, 0.15),
-    "google/gemini-2.5-pro": (1.25, 5.0),
+    # 13 Nov 2026: the Gemini 2.5 rows held older (1.5-era) prices and under-counted every call.
+    "google/gemini-2.5-flash": (0.30, 2.50),
+    "google/gemini-2.5-flash-lite": (0.10, 0.40),
+    "google/gemini-2.5-pro": (1.25, 10.0),
 }
 _DEFAULT = (0.15, 0.45)
 # 13 Nov 2026: a Claude call (CLOUD_MODEL_BY_TASK can name one) fell to _DEFAULT and was costed

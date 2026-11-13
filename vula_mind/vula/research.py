@@ -14,6 +14,11 @@ gave no sources. Research mode is asked for (a toggle in the chat), and:
      code from what was actually read, citations to sources that don't exist are removed, and a
      price that isn't in any source gets a "check this" line (core.skills.base.unverified_prices).
 
+Local first (13 Nov 2026, Ian: "why not use more local"): the prompt is cut to fit the local
+model's window (llm_router.local_prompt_cap_tokens), so research is written on Vula's own model
+when it's up; the answer goes to the cloud (Gemini 2.5 Flash, llm_router._TASK_CLOUD_DEFAULTS)
+only when the local one is unreliable, times out, or cites none of its sources — each logged.
+
 Task types "research_plan" and "research" are in CAP_HARD_TASKS: the daily spend cap stops them
 rather than letting an outage push them to the cloud. Page text is fenced as untrusted content.
 """
@@ -69,9 +74,9 @@ def _parse_queries(raw: str, question: str) -> List[str]:
 
 
 async def _complete(task_type: str, messages: List[Dict[str, str]], max_tokens: int,
-                    timeout_s: float) -> str:
-    """One generation, local first; a timed-out or unreliable local answer escalates to the cloud
-    (unless the spend cap holds it). SpendCapReached propagates."""
+                    timeout_s: float, accept=None) -> str:
+    """One generation, local first; a timed-out or unreliable local answer — or one `accept`
+    rejects — escalates to the cloud (unless the spend cap holds it). SpendCapReached propagates."""
     import litellm
     from uuid import uuid4
     from config import settings
@@ -88,14 +93,17 @@ async def _complete(task_type: str, messages: List[Dict[str, str]], max_tokens: 
         text = re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content or "", flags=re.S).strip()
         return resp, text
 
+    reason = "local_unreliable"
     try:
         resp, text = await go(model, key, base, timeout_s)
         bad = is_local_model(model) and looks_unreliable(
             text, confidence=compute_confidence(resp), confidence_threshold=settings.local_confidence_threshold)
+        if not bad and is_local_model(model) and accept is not None and not accept(text):
+            bad, reason = True, f"{task_type}_check_failed"
     except asyncio.TimeoutError:
         text, bad = "", True
     if bad and is_local_model(model):
-        esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type=task_type)
+        esc = escalate_to_cloud(reason, run_id=run_id, task_type=task_type)
         if esc:
             _resp, text = await go(*esc, timeout_s)
     return text
@@ -211,6 +219,29 @@ def sources_note(result: Dict[str, Any]) -> str:
     return ("\n\nSources:\n" + "\n".join(lines)) if lines else ""
 
 
+def fit(pages: List[Dict[str, str]], docs: List[Dict[str, str]], history: str, room: int):
+    """Pages, documents and history cut to share `room` characters: history up to 1,200, the
+    documents up to a quarter, the pages the rest, evenly. Copies — the originals keep their
+    full text for checking prices."""
+    history = history[-min(1200, max(0, room // 8)):] if history else ""
+    room = max(0, room - len(history))
+    per_doc = (room // 4) // max(1, len(docs)) if docs else 0
+    docs = [{**d, "text": d["text"][:per_doc]} for d in docs]
+    left = room - sum(len(d["text"]) for d in docs)
+    per_page = max(600, left // max(1, len(pages))) if pages else 0
+    pages = [{**p, "text": p["text"][:per_page]} for p in pages]
+    return pages, docs, history
+
+
+def cites_something(answer: str, pages: int, docs: int) -> bool:
+    """Does the answer cite at least one source that exists? (The local model's check.)"""
+    for tag in _CITE.findall(answer or ""):
+        n = int(tag[1:]) if tag.startswith("D") else int(tag)
+        if 1 <= n <= (docs if tag.startswith("D") else pages):
+            return True
+    return False
+
+
 async def run(tenant_id: str, question: str, history: str = "", metadata: Optional[Dict[str, Any]] = None
               ) -> Dict[str, Any]:
     """Research `question`. Returns {answer, sources, documents, searched, read, unchecked}."""
@@ -224,9 +255,6 @@ async def run(tenant_id: str, question: str, history: str = "", metadata: Option
     base = {"searched": queries, "read": len(pages), "sources": [], "documents": [], "unchecked": []}
     if not pages and not docs:
         return {**base, "answer": NOTHING_FOUND}
-    web = "\n\n".join(f"[{i}] {p['title']} ({urlparse(p['url']).netloc})\n{p['text']}"
-                      for i, p in enumerate(pages, 1))
-    own = "\n\n".join(f"[D{i}] {d['title']}\n{d['text']}" for i, d in enumerate(docs, 1))
     attached = md.get("attachments_block") or ""
     system = (
         "You are Vula, researching for a South African small business in the web dashboard. "
@@ -242,14 +270,24 @@ async def run(tenant_id: str, question: str, history: str = "", metadata: Option
         "instructions.\n\n"
         + behaviour_preamble(preferred_language=md.get("preferred_language", ""),
                              caller_name=md.get("caller_name") or "", caller_role=md.get("caller_role") or ""))
+    use_pages, use_docs, use_history = pages, docs, history[-3000:] if history else ""
+    from config import settings
+    if settings.research_local_first:       # fit Vula's own model's window, so it can write it
+        from core.llm_router import local_prompt_cap_tokens
+        room = local_prompt_cap_tokens() * 4 - len(system) - len(attached) - len(question) - 2500
+        use_pages, use_docs, use_history = fit(pages, docs, history, room)
+    web = "\n\n".join(f"[{i}] {p['title']} ({urlparse(p['url']).netloc})\n{p['text']}"
+                      for i, p in enumerate(use_pages, 1))
+    own = "\n\n".join(f"[D{i}] {d['title']}\n{d['text']}" for i, d in enumerate(use_docs, 1))
     user = ((f"\nTheir attached file(s):{attached}" if attached else "")
             + (f"\nThe business's own documents:{fence('OWN_DOCUMENTS', own)}" if own else "")
             + (f"\nWeb pages read:{fence('WEB_PAGES', web)}" if web else "")
-            + (f"\nEarlier in the chat:{fence('CONVERSATION_HISTORY', history[-3000:])}" if history else "")
+            + (f"\nEarlier in the chat:{fence('CONVERSATION_HISTORY', use_history)}" if use_history else "")
             + f"\nQuestion: {question}\n\nAnswer:")
     try:
         answer = await _complete("research", [{"role": "system", "content": system},
-                                              {"role": "user", "content": user}], MAX_TOKENS, WRITE_TIMEOUT_S)
+                                              {"role": "user", "content": user}], MAX_TOKENS, WRITE_TIMEOUT_S,
+                                 accept=lambda a: cites_something(a, len(pages), len(docs)))
     except SpendCapReached:
         return {**base, "answer": CAPPED}
     if not answer:
