@@ -103,7 +103,8 @@ async def test_history_endpoint_returns_only_the_callers_own_thread():
     assert [m["content"] for m in out["messages"]] == ["mine", "Done."]
     with patch.object(service, "_client", return_value=db), \
          patch("vula.identity.person_for_login", AsyncMock(return_value=None)):
-        assert (await commerce.admin_assistant_history(T, _req(), limit=50)) == {"messages": []}
+        # no login: no messages — only whether "Ask anything" is on for the business (13 Nov)
+        assert (await commerce.admin_assistant_history(T, _req(), limit=50)) == {"messages": [], "open_chat": False}
 
 
 # ── the agent honours that access ───────────────────────────────────────────────────────────
