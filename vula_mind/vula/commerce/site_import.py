@@ -259,6 +259,8 @@ def _from_shopify(p: Dict[str, Any], root: str) -> Dict[str, Any]:
         "images": [i.get("src") for i in images if isinstance(i, dict) and i.get("src")],
         "in_stock": any(v["in_stock"] for v in variants) if variants else True,
         "variants": [v for v in variants if v["option_values"]] if len(variants) > 1 else [],
+        "options": [n for n in options[:3] if any(n in v["option_values"] for v in variants)]
+        if len(variants) > 1 else [],
         "url": f"{root}/products/{p.get('handle')}" if p.get("handle") else root,
         "tags": p.get("tags") if isinstance(p.get("tags"), list) else
                 [t.strip() for t in str(p.get("tags") or "").split(",") if t.strip()],
@@ -562,6 +564,10 @@ def _from_wix(page: str, url: str) -> Optional[Dict[str, Any]]:
         "description": description, "image_url": gallery[0] if gallery else None, "images": gallery,
         "in_stock": (any(v["in_stock"] for v in variants) if variants else bool(w.get("isInStock", True))),
         "variants": variants if len(variants) > 1 else [],
+        "options": priced_titles if len(variants) > 1 else [],
+        "choices": [{"name": o["title"], "values": [label(o, s) for s in o.get("selections") or []
+                                                    if isinstance(s, dict) and label(o, s)]}
+                    for o in opts if o["title"] not in priced_titles],
         "url": url, "tags": [],
     }
 
@@ -784,7 +790,11 @@ async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dic
              "category": _category_key(p["category_label"] or "general"),
              "description": p["description"][:4000], "image_url": p["image_url"] or "",
              "images": p.get("images") or [],
-             "in_stock": "yes" if p["in_stock"] else "no", "status": p.get("status") or "active"}
+             "in_stock": "yes" if p["in_stock"] else "no", "status": p.get("status") or "active",
+             # which options change the price, and the choices on the same price (267) —
+             # only when there are any, so a shop without them writes nothing new
+             **({"options": p["options"]} if p.get("options") and p.get("variants") else {}),
+             **({"choices": p["choices"]} if p.get("choices") else {})}
             for p in products if p["name"] and p["price_cents"] > 0]
     st["products_on_request"] = sum(1 for p in products if p["name"] and p["price_cents"] <= 0)
     if not rows:
@@ -818,6 +828,18 @@ async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dic
                 st["variants"] += 1
             except Exception as exc:
                 st["errors"].append(f"{p['slug']} option {v['option_values']}: {exc}")
+
+
+def _preview(p: Dict[str, Any]) -> Dict[str, Any]:
+    """One product, short: what a prospect report shows (no text beyond the name)."""
+    prices = [v["price_cents"] for v in p.get("variants") or [] if v.get("price_cents")] or \
+        ([p["price_cents"]] if p.get("price_cents") else [])
+    return {"name": p.get("name"), "url": p.get("url"),
+            "price_min_cents": min(prices) if prices else 0, "price_max_cents": max(prices) if prices else 0,
+            "options": len(p.get("variants") or []), "photos": len(p.get("images") or []),
+            "has_description": bool((p.get("description") or "").strip()),
+            "choices": [c["name"] for c in p.get("choices") or [] if isinstance(c, dict)],
+            "in_stock": bool(p.get("in_stock", True))}
 
 
 def catalogue_text(business: str, root: str, products: List[Dict[str, Any]]) -> str:
@@ -1069,6 +1091,8 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
         if products:
             await store_text(catalogue_text(business or urlparse(root).netloc, root, products),
                              f"Website — product catalogue ({urlparse(root).netloc})", "catalogue")
+        if dry_run:                    # what was found, for a prospect report (vula/prospects.py)
+            st["products_preview"] = [_preview(p) for p in products[:200]]
 
         urls = (await sitemap_urls(root, platform, pages=found))[:max_pages]
         st["pages_found"] = len(urls)
@@ -1143,6 +1167,8 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
 
         st["facts"] = {k: v["value"] for k, v in facts.items()}
         st["coverage"] = _coverage(products, read, facts, st, how, pdfs)
+        if dry_run:
+            st["pages_preview"] = [{"url": u, "title": t, "words": len(x.split())} for u, t, x in read[:80]]
         st["step"] = "done"
         clean = True
         if not dry_run:

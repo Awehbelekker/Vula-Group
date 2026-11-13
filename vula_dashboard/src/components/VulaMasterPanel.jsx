@@ -6,19 +6,22 @@
  * (vula/api/master.py + master_auth.py), the first real auth boundary in the platform.
  */
 import { useEffect, useState, useCallback } from 'react'
-import { Brain, Building2, Coins, FlaskConical, HeartPulse, MessagesSquare, Rocket, ScrollText, Target, UserRound } from 'lucide-react'
+import { Brain, Building2, Coins, FlaskConical, HeartPulse, MessagesSquare, Rocket, ScrollText, Search, Target, UserRound } from 'lucide-react'
 import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import TenantsV2 from './master/TenantsV2'
 import { HealthV2, UsageV2, UsersV2 } from './master/OpsV2'
 import { AuditV2, BenchmarkV2, ConversationsCheckV2, KnowledgeV2, ModelsV2, OnboardV2 } from './master/ToolsV2'
 import TenantDetailV2 from './master/TenantDetailV2'
+import ProspectsV2 from './master/ProspectsV2'
+import { authFetch } from '../lib/authFetch'
 import { useManageTenant } from './master/useMasterTenants'
 
 const C = { surface: 'var(--surface)', border: 'var(--border)', green: 'var(--accent)', red: 'var(--danger)', amber: 'var(--warn)', text: 'var(--text)', muted: 'var(--muted)', alt: 'var(--surface-alt)' }
 
 const SUBTABS = [
   { id: 'tenants', label: 'Tenants', Icon: Building2 },
+  { id: 'prospects', label: 'Prospects', Icon: Search },
   { id: 'onboard', label: 'Onboard', Icon: Rocket },
   { id: 'health', label: 'Health', Icon: HeartPulse },
   { id: 'usage', label: 'Usage', Icon: Coins },
@@ -51,6 +54,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   const [err, setErr] = useState('')
   const [notice, setNotice] = useState('')   // e.g. "Created. Reading their website…"
   const [prefill, setPrefill] = useState(null)   // signup → pre-filled "+ New tenant" form (P1.4)
+  const [fromProspect, setFromProspect] = useState(null)   // Prospects › Make them a tenant: link it once created
   // Go-live readiness pass (Phase 3.4): create_tenant only sets core config — WhatsApp
   // connection, KB seeding, and branding remain separate manual steps a master admin has to
   // remember to do afterward. The existing Onboard tab's 9-step checklist already covers all
@@ -96,7 +100,14 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
       {notice && <div role="status" style={{ fontSize: 13, color: 'var(--ok-text)', marginBottom: 10 }}>{notice}</div>}
       {tab === 'tenants' && <Tenants onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
-        onCreated={(tenantId, note) => { setOnboardSelect(tenantId); setNotice(note || ''); setTab('onboard') }} />}
+        onCreated={(tenantId, note) => {
+          if (fromProspect) {
+            authFetch(`/v1/master/prospects/${fromProspect}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tenant_id: tenantId }) }).catch(() => {})
+            setFromProspect(null)
+          }
+          setOnboardSelect(tenantId); setNotice(note || ''); setTab('onboard')
+        }} />}
+      {tab === 'prospects' && <ProspectsV2 onError={setErr} onMakeTenant={(p) => { setPrefill(p); setFromProspect(p.prospect_id); setTab('tenants') }} />}
       {tab === 'onboard' && <Onboard onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
         selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} onViewDetail={openDetail}
         onAddLogin={(tenantId) => { setLoginPrefill({ tenant_id: tenantId, role: 'owner' }); setTab('users') }} />}

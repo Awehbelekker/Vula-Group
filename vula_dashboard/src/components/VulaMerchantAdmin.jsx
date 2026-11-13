@@ -1292,6 +1292,8 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         />
       </div>
 
+      <ChoicesEditor choices={p.choices} onSave={(choices) => patch(p.id, { choices })} />
+
       <div>
         <SectionLabel>🔍 SEO <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, improves search/social sharing</span></SectionLabel>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1346,6 +1348,49 @@ function AIPhotoButton({ tenantId, product, onDone }) {
       <p style={{ fontSize: 11, color: 'var(--muted)', margin: '4px 0 0' }}>
         Generates a professional photo in your house style. Click again for another angle — each one is added to the gallery.
       </p>
+    </div>
+  )
+}
+
+// ── Choices on the same price (migration 267): colour, trim, nose and tail style… ────────────
+// Vula asks the customer for each one before adding the product, and keeps it with the order line.
+
+function ChoicesEditor({ choices, onSave }) {
+  const toRows = (c) => (Array.isArray(c) ? c : []).map(x => ({ name: x.name || '', values: (x.values || []).join(', ') }))
+  const [rows, setRows] = useState(() => toRows(choices))
+  useEffect(() => { setRows(toRows(choices)) }, [JSON.stringify(choices || [])])
+  const clean = rows
+    .map(r => ({ name: r.name.trim(), values: r.values.split(',').map(v => v.trim()).filter(Boolean) }))
+    .filter(r => r.name && r.values.length)
+  const changed = JSON.stringify(clean) !== JSON.stringify(toRows(choices).map(r => ({ name: r.name, values: r.values.split(', ').filter(Boolean) })))
+  const setRow = (i, k, v) => setRows(rs => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)))
+  const field = { padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--ink)', boxSizing: 'border-box', minWidth: 0 }
+  return (
+    <div role="group" aria-label="Choices">
+      <SectionLabel>Choices <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— same price, e.g. colour or style</span></SectionLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <input aria-label="Choice name" value={r.name} onChange={e => setRow(i, 'name', e.target.value)}
+                   placeholder="e.g. Colour" style={{ ...field, flex: '1 1 120px' }} />
+            <input aria-label="Values, separated by commas" value={r.values} onChange={e => setRow(i, 'values', e.target.value)}
+                   placeholder="e.g. Olive Green, Navy Blue, Black" style={{ ...field, flex: '3 1 200px' }} />
+            <button type="button" aria-label={`Remove ${r.name || 'choice'}`}
+                    onClick={() => setRows(rs => rs.filter((_, j) => j !== i))}
+                    style={{ ...field, background: 'transparent', cursor: 'pointer' }}>✕</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+        <button type="button" onClick={() => setRows(rs => [...rs, { name: '', values: '' }])}
+                style={{ ...field, background: 'transparent', cursor: 'pointer' }}>+ Add a choice</button>
+        {changed && (
+          <button type="button" onClick={() => onSave(clean)}
+                  style={{ ...field, background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', fontWeight: 600, cursor: 'pointer' }}>
+            Save choices
+          </button>
+        )}
+      </div>
     </div>
   )
 }

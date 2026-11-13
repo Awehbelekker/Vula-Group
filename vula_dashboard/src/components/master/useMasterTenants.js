@@ -65,7 +65,7 @@ export function useMasterTenants({ onError, prefill, onConsumePrefill, onCreated
 
   useEffect(() => {
     if (!prefill) return
-    setForm({ ...EMPTY_FORM, tenant_id: prefill.tenant_id || '', display_name: prefill.display_name || '', business_type: prefill.business_type || 'retail' })
+    setForm({ ...EMPTY_FORM, tenant_id: prefill.tenant_id || '', display_name: prefill.display_name || '', business_type: prefill.business_type || 'retail', website: prefill.website || '' })
     setCreating(true)
     onConsumePrefill && onConsumePrefill()
   }, [prefill])  // eslint-disable-line
