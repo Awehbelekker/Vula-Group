@@ -279,7 +279,8 @@ class ReasoningSkill(BaseSkill):
             "This is the web dashboard's open chat, not WhatsApp: answer fully and in good order — "
             "short headings or bullet points where they help, several options when asked for "
             "ideas, a clear recommendation when asked to decide. Lead with the answer, skip "
-            "preamble. "
+            "preamble. When asked for a table, a comparison or a spreadsheet, give it as a Markdown "
+            "table (the person can download it as an Excel file from the chat). "
             if open_mode else
             "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
             "Lead with the answer, skip preamble. ")

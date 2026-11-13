@@ -2014,7 +2014,48 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
             "answered_by": answered_by, **({"confirm_request": confirm} if confirm else {}),
             **({"research": {k: research.get(k) for k in ("sources", "documents", "searched", "read",
                                                           "reused", "note_id", "shared")}}
-               if research else {})}
+               if research else {}),
+            # files made this turn (a spreadsheet from custom_sheet): signed links, for a Download button
+            **({"files": [f for f in metadata.get("files_out") or [] if isinstance(f, dict) and f.get("url")]}
+               if metadata.get("files_out") else {})}
+
+
+class AnswerSheet(BaseModel):
+    message_id: str
+    session_id: Optional[str] = None     # web chat session key fallback (no login), as AssistantRequest
+
+
+@router.post("/{tenant_id}/admin/assistant/sheet")
+async def admin_assistant_sheet(tenant_id: str, body: AnswerSheet, request: Request):
+    """One of Vula's replies in the caller's OWN chat, its tables as an Excel file
+    (vula/answer_sheet.py) — cells exactly as the answer showed them, read back before it's sent.
+    Anyone else's message, or another business's, is 404: staff threads are private."""
+    import asyncio
+    from fastapi.responses import Response
+    from vula import answer_sheet
+    from vula.api.tenants import display_name
+    _person, session_key = await _assistant_session(tenant_id, request, body.session_id)
+    db = service._client()
+    msg = (db.table("commerce_conversation_messages").select("id,session_id,role,content,created_at")
+           .eq("tenant_id", tenant_id).eq("id", body.message_id).limit(1).execute().data or [])
+    sess = (db.table("commerce_conversation_sessions").select("id,session_key")
+            .eq("tenant_id", tenant_id).eq("id", msg[0]["session_id"]).limit(1).execute().data or []) if msg else []
+    if not msg or msg[0].get("role") != "assistant" or not sess or sess[0].get("session_key") != session_key:
+        raise HTTPException(status_code=404, detail="That reply isn't in your chat.")
+    text = msg[0].get("content") or ""
+    title = answer_sheet.title_of(text)
+    try:
+        data, want = await asyncio.to_thread(answer_sheet.workbook, display_name(tenant_id), title, text,
+                                             await service._brand_accent(tenant_id))
+    except answer_sheet.NoTable as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    wrong = answer_sheet.read_back(data, want)
+    if wrong:
+        log.error("answer sheet read-back failed for %s: %s", tenant_id, wrong)
+        raise HTTPException(status_code=500, detail="The spreadsheet didn't match the answer, so it wasn't made.")
+    return Response(content=data,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{answer_sheet.filename(title)}"'})
 
 
 class ResearchShare(BaseModel):

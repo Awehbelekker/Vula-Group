@@ -1899,6 +1899,8 @@ app.add_middleware(
     ),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    # A downloaded file's name (the dashboard chat's "Download as spreadsheet", 13 Nov 2026).
+    expose_headers=["Content-Disposition"],
     allow_credentials=True,
 )
 

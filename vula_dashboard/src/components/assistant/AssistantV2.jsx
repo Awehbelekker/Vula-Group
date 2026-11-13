@@ -5,7 +5,7 @@
  * inside the Quick Launcher's sheet (inSheet).
  */
 import { useRef } from 'react'
-import { FileText, Globe, Paperclip, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { Download, FileSpreadsheet, FileText, Globe, Paperclip, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { Button, IconButton, Input, PillTabs } from '../ui/index.jsx'
 import { SUGGESTIONS, useAssistantChat } from './useAssistantChat'
 import MyVula from './MyVula'
@@ -14,6 +14,17 @@ import './assistant.css'
 const MODES = [{ id: 'business', label: 'Your business' }, { id: 'open', label: 'Ask anything' }]
 
 const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' } }
+
+// A reply's web addresses as links (http/https only; React elements, never HTML).
+const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g
+function Linked({ text }) {
+  const parts = String(text || '').split(URL_RE)
+  return parts.map((p, i) => (i % 2 === 1
+    ? <a key={i} href={p} target="_blank" rel="noopener noreferrer">{hostOf(p) || 'link'}</a>
+    : p))
+}
+// A reply with a Markdown table, or a researched reply with sources, can be downloaded as Excel.
+const hasTable = (text) => /^\s*\|.*\|\s*$/m.test(text || '') && /^\s*\|?\s*:?-{2,}/m.test(text || '')
 
 const ACCEPT = '.pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.png,.jpg,.jpeg,.webp,.gif'
 
@@ -39,7 +50,19 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
       <ol className="vas-thread" aria-live="polite" aria-label="Conversation" tabIndex={0}>
         {x.messages.map((m, i) => (
           <li key={i} className={`vas-msg vas-msg--${m.role === 'user' ? 'me' : 'vula'}`}>
-            <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.text}
+            <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.role === 'user' ? m.text : <Linked text={m.text} />}
+            {m.files?.length > 0 && (
+              <span className="vas-downloads" role="group" aria-label="Files from Vula">
+                {m.files.map(f => (
+                  <a key={f.url} className="vas-dl" href={f.url} download={f.name}
+                    target="_blank" rel="noopener noreferrer"><Download size={14} aria-hidden="true" /> Download {f.name}</a>))}
+              </span>)}
+            {m.role !== 'user' && m.id && (hasTable(m.text) || m.research?.sources?.length > 0) && (
+              <span className="vas-downloads">
+                <Button size="sm" variant="secondary" Icon={FileSpreadsheet} disabled={m.sheet === 'making'}
+                  onClick={() => x.downloadSheet(m)}>{m.sheet === 'making' ? 'Making the spreadsheet…' : 'Download as spreadsheet'}</Button>
+                {m.sheet === 'failed' && <span className="vas-warn" role="alert">{m.sheetNote || "Couldn't make the spreadsheet — try again."}</span>}
+              </span>)}
             {m.files?.length > 0 && <span className="vas-by">📎 {m.files.join(', ')}</span>}
             {m.answeredBy && x.openAvailable && (
               <span className="vas-by">{m.answeredBy === 'research'
