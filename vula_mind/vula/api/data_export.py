@@ -106,8 +106,10 @@ async def assemble_export(tenant_id: str, phone: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.debug("data export: property records skipped: %s", exc)
         property_data = {}
+    # What a team member had Vula research (vula/research_memory.py).
+    research = privacy_data.research_notes(tenant_id, phone)
     return {"messages": messages, "orders": orders, "invoices": invoices, "email": email, "note": note,
-            "property": property_data}
+            "property": property_data, "research": research}
 
 
 def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
@@ -129,6 +131,12 @@ def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
     if data.get("note"):
         lines.append("## What we remember from earlier conversations")
         lines.append(data["note"])
+        lines.append("")
+
+    if data.get("research"):
+        lines.append(f"## What you had Vula research ({len(data['research'])})")
+        for r in data["research"]:
+            lines.append(f"- *{r.get('date', '')}* — {r.get('question', '')}")
         lines.append("")
 
     lines.append(f"## Orders ({len(orders)})")

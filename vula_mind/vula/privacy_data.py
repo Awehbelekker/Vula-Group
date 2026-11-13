@@ -121,6 +121,18 @@ def _erase_client_note(tenant_id: str, variants: List[str]) -> int:
     return client_memory.erase(tenant_id, variants)
 
 
+def _member_key(tenant_id: str, variants: List[str]) -> str:
+    """The team member's person key (m:<id>) for this number, or "" when it isn't theirs."""
+    thread = _member_thread(tenant_id, variants)
+    return thread[0][len("webadmin:"):] if thread else ""
+
+
+def _erase_research_notes(tenant_id: str, variants: List[str]) -> int:
+    """What a team member had Vula research (vula/research_memory.py, migration 269)."""
+    from vula import research_memory
+    return research_memory.erase_for(tenant_id, _member_key(tenant_id, variants))
+
+
 def _erase_private_notes(tenant_id: str, variants: List[str]) -> int:
     from vula import personal_memory
     return personal_memory.erase_for_phone(tenant_id, variants)
@@ -184,6 +196,7 @@ ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("escalations", _erase_escalations),
     ("client_note", _erase_client_note),
     ("private_notes", _erase_private_notes),
+    ("research_notes", _erase_research_notes),
     ("property_enquiries", _erase_property_enquiries),
     ("buyer_wish", _erase_buyer_wish),
     ("listings_sent", _erase_listings_sent),
@@ -239,6 +252,19 @@ def conversation_messages(tenant_id: str, phone: str, limit: int = 500) -> List[
                            text=r.get("content") or "", created_at=r.get("created_at") or "")
            for r in rows if isinstance(r, dict) and r.get("content")]
     return list(reversed(out))
+
+
+def research_notes(tenant_id: str, phone: str) -> List[Dict[str, Any]]:
+    """What this team member had Vula research: each question and when (for an export)."""
+    variants = phone_variants(phone)
+    if not tenant_id or not variants:
+        return []
+    try:
+        from vula import research_memory
+        return research_memory.export_for(tenant_id, _member_key(tenant_id, variants))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: research notes skipped: %s", exc)
+        return []
 
 
 def merge_messages(*groups: List[Any]) -> List[Any]:

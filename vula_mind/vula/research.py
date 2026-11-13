@@ -242,13 +242,29 @@ def cites_something(answer: str, pages: int, docs: int) -> bool:
     return False
 
 
-async def run(tenant_id: str, question: str, history: str = "", metadata: Optional[Dict[str, Any]] = None
-              ) -> Dict[str, Any]:
-    """Research `question`. Returns {answer, sources, documents, searched, read, unchecked}."""
+async def run(tenant_id: str, question: str, history: str = "", metadata: Optional[Dict[str, Any]] = None,
+              person_key: str = "", fresh: bool = False, private: bool = False) -> Dict[str, Any]:
+    """Research `question`. Returns {answer, sources, documents, searched, read, unchecked}, plus
+    `reused` (an earlier finding answered it: no search, no model call) or `note_id` (this
+    finding was kept for next time — vula/research_memory.py)."""
     from core.llm_router import SpendCapReached
     from core.prompt_safety import fence
     from core.skills.base import behaviour_preamble
+    from vula import research_memory
     md = metadata or {}
+    with_file = bool(md.get("attachments_block"))   # about their own file: never reused or kept
+    earlier = None
+    if not with_file:
+        try:
+            earlier = await research_memory.find(tenant_id, person_key, question, count=not fresh)
+        except Exception as exc:  # noqa: BLE001 — research as if nothing was kept
+            logger.debug("research memory lookup skipped: %s", exc)
+    if earlier and not fresh:
+        _emit(tenant_id, "research_reused", {"kind": earlier.get("kind")})
+        return {"answer": earlier.get("answer") or "", "sources": earlier.get("sources") or [],
+                "documents": earlier.get("documents") or [], "searched": earlier.get("searched") or [],
+                "read": len(earlier.get("sources") or []), "unchecked": [],
+                "reused": research_memory.describe(earlier, person_key)}
     queries = await plan_queries(question, history)
     hits = await _search(queries)
     pages, docs = await asyncio.gather(read_pages(hits), own_documents(tenant_id, question))
@@ -293,11 +309,20 @@ async def run(tenant_id: str, question: str, history: str = "", metadata: Option
     if not answer:
         return {**base, "answer": CAPPED}
     out = {**base, **finish(answer, pages, docs)}
+    if not with_file:
+        out["note_id"] = await research_memory.save(tenant_id, person_key, question, out, shared=not private,
+                                                    replaces=(earlier or {}).get("id"))
+        out["shared"] = bool(out["note_id"]) and not private
+    _emit(tenant_id, "research_reply", {"queries": len(queries), "pages": len(pages), "docs": len(docs),
+                                        "cited": len(out["sources"]), "unchecked": len(out["unchecked"]),
+                                        "kept": bool(out.get("note_id")), "fresh": bool(fresh)})
+    return out
+
+
+def _emit(tenant_id: str, task: str, extra: Dict[str, Any]) -> None:
+    """Counts only — never the question or the answer."""
     try:
         from core.reasoning_telemetry import emit
-        emit(system="vula-research", task="research_reply", tenant_id=tenant_id, outcome="ok", escalated=False,
-             extra={"queries": len(queries), "pages": len(pages), "docs": len(docs),
-                    "cited": len(out["sources"]), "unchecked": len(out["unchecked"])})
+        emit(system="vula-research", task=task, tenant_id=tenant_id, outcome="ok", escalated=False, extra=extra)
     except Exception:  # noqa: BLE001
         pass
-    return out
