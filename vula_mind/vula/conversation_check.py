@@ -14,6 +14,7 @@ the next client sees the same thing:
 
 The report goes to TEAM_EMAIL once a day (07:00–10:59 SAST, marker in vula_admin_audit) and
 is available in Master › Conversations. Excerpts are short and only go to the Vula team.
+A staff member's own thread with Vula is counted but never quoted (vula/identity.py).
 """
 from __future__ import annotations
 
@@ -117,6 +118,25 @@ def _messages(day: date) -> List[Dict[str, Any]]:
         page += 1
 
 
+def _staff_session_ids(session_ids: set) -> Optional[set]:
+    """Which of these sessions are a staff member's own thread with Vula (admin:… /
+    webadmin:…). Those are private to the member: they are still COUNTED here, so a problem
+    shows up, but nothing they wrote is quoted. None when it can't be told — the caller then
+    quotes nothing at all rather than risk quoting a private thread."""
+    from vula.identity import is_staff_session_key
+    ids = [i for i in session_ids if i]
+    out: set = set()
+    try:
+        for i in range(0, len(ids), 200):
+            rows = (_client().table("commerce_conversation_sessions").select("id,session_key")
+                    .in_("id", ids[i:i + 200]).execute().data or [])
+            out |= {r["id"] for r in rows if is_staff_session_key(r.get("session_key"))}
+    except Exception as exc:
+        log.warning("conversation check: session lookup failed (%s) — no excerpts", exc)
+        return None
+    return out
+
+
 def _escalations(day: date) -> Dict[str, int]:
     lo, hi = _day_bounds(day)
     try:
@@ -139,8 +159,10 @@ def build(day: Optional[date] = None) -> Dict[str, Any]:
     by_session: Dict[tuple, List[Dict[str, Any]]] = {}
     for m in msgs:
         by_session.setdefault((m.get("tenant_id"), m.get("session_id")), []).append(m)
+    staff = _staff_session_ids({sid for (_t, sid) in by_session})
     tenants: Dict[str, Dict[str, Any]] = {}
     for (tid, _sid), rows in by_session.items():
+        private = staff is None or _sid in staff
         t = tenants.setdefault(tid, {"tenant_id": tid, "replies": 0, "flagged": 0,
                                      "counts": {k: 0 for k in KINDS}, "examples": {}})
         last_user, prev_reply = None, None
@@ -158,7 +180,7 @@ def build(day: Optional[date] = None) -> Dict[str, Any]:
             for k in kinds:
                 t["counts"][k] += 1
                 ex = t["examples"].setdefault(k, [])
-                if len(ex) < 3:
+                if len(ex) < 3 and not private:
                     ex.append({"question": _excerpt(last_user or ""), "reply": _excerpt(m.get("content") or ""),
                                "next": _excerpt(nxt or "") if k == "pushback" else None,
                                "at": m.get("created_at")})

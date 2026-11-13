@@ -78,7 +78,13 @@ async def assemble_export(tenant_id: str, phone: str) -> Dict[str, Any]:
     """Everything this phone number's own for this tenant: chat history + their own orders/
     invoices. Never the tenant's full filed-document library or other customers' data."""
     from vula.chat.history import get_db
-    messages = get_db().get(tenant_id, phone, limit=_MAX_MESSAGES, max_age_hours=None)
+    from vula import privacy_data
+    # Both stores: on a shop's WhatsApp line the conversation is in the commerce tables, which
+    # this export used to leave out entirely.
+    messages = privacy_data.merge_messages(
+        get_db().get(tenant_id, phone, limit=_MAX_MESSAGES, max_age_hours=None),
+        privacy_data.conversation_messages(tenant_id, phone, limit=_MAX_MESSAGES),
+    )[-_MAX_MESSAGES:]
     orders = await _own_orders(tenant_id, phone)
     invoices = await _own_invoices(tenant_id, phone)
     email = None
@@ -87,7 +93,21 @@ async def assemble_export(tenant_id: str, phone: str) -> Dict[str, Any]:
         if candidate:
             email = candidate
             break
-    return {"messages": messages, "orders": orders, "invoices": invoices, "email": email}
+    # The note Vula keeps of earlier conversations (vula/client_memory.py) is theirs too.
+    try:
+        from vula import client_memory
+        note = client_memory.summary_for(tenant_id, phone)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: client note skipped: %s", exc)
+        note = ""
+    # Property enquiries, what they're looking for, listings sent to them (vula/listings).
+    try:
+        property_data = privacy_data.property_records(tenant_id, phone)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: property records skipped: %s", exc)
+        property_data = {}
+    return {"messages": messages, "orders": orders, "invoices": invoices, "email": email, "note": note,
+            "property": property_data}
 
 
 def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
@@ -105,6 +125,11 @@ def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
     else:
         lines.append("_No conversation history on file._")
     lines.append("")
+
+    if data.get("note"):
+        lines.append("## What we remember from earlier conversations")
+        lines.append(data["note"])
+        lines.append("")
 
     lines.append(f"## Orders ({len(orders)})")
     if orders:
@@ -124,6 +149,24 @@ def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
                          f"R{total:.2f} — {i.get('status', '')} — {(i.get('created_at') or '')[:10]}")
     else:
         lines.append("_No invoices or quotes on file._")
+
+    prop = data.get("property") or {}
+    if prop.get("enquiries"):
+        lines.append("")
+        lines.append(f"## Property enquiries ({len(prop['enquiries'])})")
+        for e in prop["enquiries"]:
+            about = f" about {e['property']}" if e.get("property") else ""
+            when = f" — preferred times: {e['preferred_times']}" if e.get("preferred_times") else ""
+            lines.append(f"- *{e.get('date', '')}*{about}: {e.get('message') or '(no message)'}{when}")
+    if prop.get("wish"):
+        lines.append("")
+        lines.append("## What you told us you're looking for")
+        lines.append(prop["wish"])
+    if prop.get("listings_sent"):
+        lines.append("")
+        lines.append(f"## Listings sent to you ({len(prop['listings_sent'])})")
+        for s in prop["listings_sent"]:
+            lines.append(f"- *{s.get('date', '')}* — {s.get('property') or 'a listing'}")
 
     return "\n".join(lines)
 

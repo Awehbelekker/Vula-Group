@@ -4,12 +4,12 @@
  * manage form, linking a WhatsApp number and pushing the catalogue; usage; audit; open
  * escalations; conversations (thread → messages); errors. Times in SAST.
  */
-import { ArrowLeft, ArrowRight, Building2, CircleAlert, Coins, MessageCircleQuestion, MessagesSquare, ScrollText, Send, Smartphone } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Building2, CircleAlert, Coins, FlaskConical, MessageCircleQuestion, MessagesSquare, ScrollText, Send, Smartphone } from 'lucide-react'
 import { useState } from 'react'
 import { SA_TZ } from '../../lib/dates'
 import { Button, Card, DataTable, EmptyState, Field, Input, PageHeader, PillTabs, Skeleton, StatCard, StatusChip } from '../ui/index.jsx'
 import { ManageTenantV2 } from './TenantsV2'
-import { useLinkWhatsAppNumber, useTenantAudit, useTenantConversations, useTenantErrors, useTenantEscalations, useTenantOverview,
+import { useLinkWhatsAppNumber, useTenantAudit, useTenantConversations, useTenantErrors, useTenantEscalations, useTenantFeatures, useTenantOverview,
   useTenantUsage, useWhatsAppCatalogue } from './useTenantDetail'
 import './master.css'
 
@@ -65,6 +65,7 @@ function Overview({ tenantId, onError, onOpenTenant }) {
         </div>
         <ManageTenantV2 key={t.tenant_id} tenant={t} registry={registry} onSave={save} />
       </Card>
+      <Features tenantId={tenantId} />
       <LinkNumber tenantId={tenantId} onOpenTenant={onOpenTenant} />
       <Catalogue tenantId={tenantId} />
     </>
@@ -94,6 +95,31 @@ function LinkNumber({ tenantId, onOpenTenant }) {
           Meta status {x.res.meta_status || '—'} · display name {x.res.name_status || '—'}
           {x.res.registered_now ? ' · registered for messaging now' : ''} · replies go out as {x.res.route_mode}.
         </p>)}
+    </Card>
+  )
+}
+
+// New behaviour, on for this business before everyone (vula/features.py, 12 Nov 2026): pilot
+// a switch here for a week, then turn it on for all with its env setting.
+function Features({ tenantId }) {
+  const x = useTenantFeatures({ tenantId })
+  return (
+    <Card className="vms-form">
+      <h3 className="vms-h"><FlaskConical size={16} aria-hidden="true" className="vms-ic" />Features to pilot</h3>
+      <p className="vms-muted">Switch new behaviour on for this business only. A feature already on for everyone is shown as such and can't be turned off here.</p>
+      {x.list === null ? <Skeleton lines={3} /> : (
+        <ul className="vms-features" aria-label="Features for this business">
+          {x.list.map((f) => (
+            <li key={f.name}>
+              <label className="vms-feature">
+                <input type="checkbox" checked={f.here || f.everywhere} disabled={f.everywhere || x.busy === f.name}
+                  onChange={(e) => x.toggle(f.name, e.target.checked)} />
+                <span><span className="vms-name">{f.label}</span>
+                  <span className="vms-muted"> {f.everywhere ? '· on for everyone' : f.here ? '· on for this business' : ''}</span></span>
+              </label>
+            </li>))}
+        </ul>)}
+      {x.msg && <p className="vms-error" role="alert">{x.msg}</p>}
     </Card>
   )
 }

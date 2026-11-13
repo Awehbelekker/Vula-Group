@@ -144,6 +144,8 @@ FIELDS: Tuple[Field, ...] = (
     Field("vula_woocommerce_accounts", "tenant_id", "webhook_secret", "WooCommerce webhook secret", ""),
     Field("kb_bills", "id", "customer_enc", "Tap to Pay customer number", "", many_rows=True),
     Field("kb_sessions", "id", "payer_enc", "Tap to Pay payer number", "", many_rows=True),
+    # a staff member's private notes (vula/personal_memory.py) — re-saved with the rest on a key change
+    Field("vula_personal_memory", "id", "content", "private note", "", many_rows=True),
 )
 
 _PAGE = 500

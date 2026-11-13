@@ -60,3 +60,28 @@
 @media (max-width: 767px) {
   .vas-chat { height: calc(100vh - 300px); }
 }
+
+/* "How Vula talks to you" — the person's own style, under the chat (MyVula.jsx) */
+.vas-mine { max-width: 820px; margin-top: var(--space-3); border-top: 1px solid var(--line); padding-top: var(--space-3); min-width: 0; }
+.vas-mine-sum { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+.vas-mine[open] .vas-mine-sum { margin-bottom: var(--space-2); }
+.vas-mine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin-top: var(--space-3); min-width: 0; }
+.vas-mine-grid .vas-row { grid-column: 1 / -1; }
+.vas-notes { list-style: none; margin: var(--space-2) 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.vas-note { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); min-width: 0; }
+.vas-note-input { flex: 1 1 220px; min-width: 0; }
+.vas-mine > .vas-row { margin-top: var(--space-2); }
+
+/* 👍/👎 under a reply in the chat */
+.vas-rate { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-1); }
+.vas-rate .vui-icon-btn { width: 32px; height: 32px; }
+.vas-rate .vui-icon-btn svg { width: 16px; height: 16px; }
+.vas-rate--on { color: var(--brand); background: var(--surface-2); }
+
+/* "How Vula answered this week" — four counts (AgentActivityV2) */
+.vas-quality { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-3); margin: 0; }
+.vas-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.vas-stat dt { font-size: var(--fs-caption); color: var(--muted); }
+.vas-stat dd { margin: 0; font-size: var(--fs-body); color: var(--ink); font-variant-numeric: tabular-nums; }
+.vas-stat-n { font-size: 1.5rem; font-weight: 600; line-height: 1.2; }
+.vas-stat-hint { display: block; margin-top: 2px; font-size: var(--fs-caption); line-height: 1.4; color: var(--muted); }

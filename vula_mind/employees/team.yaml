@@ -5,7 +5,7 @@
 #                              cases.yaml (example messages, checked in CI), data/ (reference files)
 # Loaded by core/skills/employees.py. A business can switch an employee or a task off and give it
 # instructions (Team › AI employees); these files are the defaults every business starts from.
-order: [bookkeeper, sales, office_admin, marketing, operations]
+order: [bookkeeper, sales, office_admin, marketing, operations, advisor]
 # Tools every employee keeps: the business's memory, exact arithmetic, reminders, a spreadsheet in
 # the owner's own layout (custom_sheet), forms for the team to fill in, the timesheets, and hand_over.
 shared_tools:

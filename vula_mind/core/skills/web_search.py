@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from core.skills.base import BaseSkill, SkillInput, SkillOutput
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class WebSearchSkill(BaseSkill):
         try:
             import litellm
             from core.llm_router import resolve_generation_route
-            from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+            from core.prompt_safety import fence
             litellm.drop_params = True
             model, api_key, api_base = await resolve_generation_route(task_type="web_search")
 
@@ -142,7 +142,7 @@ class WebSearchSkill(BaseSkill):
                     "- End with a 'Best value:' line and any caveats (stock, delivery, date).\n"
                     "Cite real figures only; if a price isn't in the results, say 'price not listed'. "
                     "ZAR for money, SA suppliers. Don't invent numbers.\n\n"
-                    + UNTRUSTED_CONTENT_RULE
+                    + behaviour_preamble()
                 )
                 cap = max(inp.max_tokens, 900)
             else:
@@ -150,7 +150,7 @@ class WebSearchSkill(BaseSkill):
                     "You are Vula. Answer the question using ONLY the web search results below. "
                     "Be specific and cite figures/dates where present. If the results don't "
                     "answer it, say so. South African context, ZAR for money. Concise.\n\n"
-                    + UNTRUSTED_CONTENT_RULE
+                    + behaviour_preamble()
                 )
                 cap = min(inp.max_tokens, 600)
             resp = await litellm.acompletion(

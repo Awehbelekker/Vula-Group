@@ -156,6 +156,27 @@ class ReasoningSkill(BaseSkill):
                 sources=sources,
             )
 
+        # A question about THIS business's own facts (hours, delivery, address, policies) with no
+        # document of its own to answer from. The shared KB, the web and model memory can't know
+        # them, so there is nothing to fall back on: say so. A customer's reply is marked low
+        # confidence, which hands the question to a person (vula/escalation.py); the team is
+        # told how to give Vula the answer. Behind the strict_tenant_grounding switch (vula/features.py).
+        if not kb_context:
+            from core.skills.base import (BUSINESS_FACT_NOT_ON_FILE_CUSTOMER, BUSINESS_FACT_NOT_ON_FILE_TEAM,
+                                          looks_like_business_specific_question)
+            # metadata "strict_grounding": one call asks for it regardless of the setting — the
+            # owner's "ask Vula like a customer would" preview (vula/commerce/first_run.py).
+            from vula import features as _features
+            if ((_features.on(inp.tenant_id, "strict_tenant_grounding") or inp.metadata.get("strict_grounding"))
+                    and looks_like_business_specific_question(inp.question)):
+                _record("no_doc")
+                insider = kb_learning.is_insider(role)
+                return SkillOutput(
+                    answer=BUSINESS_FACT_NOT_ON_FILE_TEAM if insider else BUSINESS_FACT_NOT_ON_FILE_CUSTOMER,
+                    skill_name=self.name, confidence=0.3, sources=sources,
+                    verification={"verifier": "deterministic.business_fact_not_on_file",
+                                  "outcome": "accepted", "escalated": False, "extra": {}})
+
         # 2026-09-17: before ever guessing OR spending a web search, check Vula's own curated
         # shared knowledge — general SA construction (vula_training) and general SA small-
         # business (business_basics) content, already proven safe and already consulted by
@@ -208,7 +229,8 @@ class ReasoningSkill(BaseSkill):
         web_sources: list = []
         if not kb_context:
             import os as _os
-            if _os.environ.get("REASONING_WEB_FALLBACK_DISABLED", "false").lower() != "true":
+            if (_os.environ.get("REASONING_WEB_FALLBACK_DISABLED", "false").lower() != "true"
+                    and not inp.metadata.get("strict_grounding")):
                 try:
                     import asyncio as _asyncio
                     from core.skills.loader import get_skill  # lazy: loader imports this module

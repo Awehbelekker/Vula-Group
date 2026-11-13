@@ -29,6 +29,13 @@ function routes(role, modules = []) {
   const C = `^/v1/commerce/${T}`;
   const A = `${C}/admin`;
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
+  let docsRun = { running: false };
+  const masterFeatures = F.masterFeatures.map((f) => ({ ...f }));
+  // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
+  let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
+  const profile = { ...F.businessProfile, answers: { ...F.businessProfile.answers }, drafts: {} };
+  // A copy per page, so adding or forgetting a note in one test never leaks into the next.
+  const myNotes = F.myNotes.map((n) => ({ ...n }));
   return [
     // ── tenant / member / brand ──
     r("GET", `^/v1/tenants/?`, () => F.tenantsList),
@@ -224,7 +231,7 @@ function routes(role, modules = []) {
     // ── Settings ──
     r("GET", `${A}/order-settings`, () => ({ settings: F.orderSettings })),
     r("GET", `${A}/learned-summary`, () => F.learnedSummary),
-    r("GET", `${A}/business-profile`, () => F.businessProfile),
+    r("GET", `${A}/business-profile`, () => ({ ...profile, answered: Object.keys(profile.answers).length })),
     r("PUT", `${A}/business-profile`, (m, url, req) => {        // the real endpoint echoes the saved profile
       const { answers = {}, public_keys = [] } = req.postDataJSON() || {};
       const answered = Object.values(answers).filter((v) => (v || "").trim()).length;
@@ -249,6 +256,8 @@ function routes(role, modules = []) {
     // ── Master ──
     r("GET", `^/status`, () => ({ status: "ok" })),   // server.py health check (master's Dashboard tab)
     r("GET", `^/v1/master/tenants`, () => (role === "master" ? { tenants: F.masterTenants } : { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Master access required."}' } })),
+    r("GET", `^/v1/master/tenants/${T}/features`, () => ({ features: masterFeatures })),
+    r("PATCH", `^/v1/master/tenants/${T}/features`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const f of masterFeatures) if (f.name in b) f.here = !!b[f.name]; return { features: masterFeatures }; }),
     r("GET", `^/v1/master/tenants/${T}/setup`, () => F.setup),
     r("POST", `${A}/scan`, () => F.scanResult),
     r("POST", `${A}/scan/commit`, (m, url, req) => (req.postDataJSON()?.auto_commit
@@ -349,10 +358,35 @@ function routes(role, modules = []) {
     r("GET", `^/v1/recurring-bills/${T}`, () => ({ bills: F.recurringBills })),
     r("POST", `^/v1/recurring-bills/${T}`, () => ({ id: "rb-new" })),
     r("POST", `^/v1/recurring-bills/${T}/${T}/status`, () => ({ ok: true })),
-    r("POST", `${A}/assistant`, (m, url, req) => ({ answer: `Today: 4 orders, R 1 842.50 paid. (${req.postDataJSON()?.message})` })),
+    r("POST", `${A}/assistant`, (m, url, req) => ({ answer: `Today: 4 orders, R 1 842.50 paid. (${req.postDataJSON()?.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}` })),
     r("GET", `${A}/agent-activity`, () => ({ events: F.agentEvents })),
+    r("GET", `${A}/quality`, () => F.quality),
+    // setting up from documents: an upload starts a "reading" that the next poll reports as done
+    r("POST", `${A}/setup-from-documents`, () => { docsRun = { running: true, files: [{ name: "Terms of trade.pdf", status: "reading", drafts: 0 }] }; return { status: "queued", files: ["Terms of trade.pdf"], skipped: [] }; }),
+    r("GET", `${A}/setup-from-documents`, () => { const now = docsRun; if (docsRun.running) { docsRun = { running: false, step: "done", drafts: 2, files: [{ name: "Terms of trade.pdf", status: "done", drafts: 2 }] }; profile.drafts = { ...F.profileDrafts }; } return { status: now }; }),
+    r("POST", `${A}/business-profile/drafts`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const k of b.accept || []) { if (profile.drafts[k]) { profile.answers[k] = profile.drafts[k].answer; delete profile.drafts[k]; } } for (const k of b.dismiss || []) delete profile.drafts[k]; return { ...profile, answered: Object.keys(profile.answers).length, accepted: b.accept || [], dismissed: (b.dismiss || []).length }; }),
+    r("POST", `${A}/setup-from-website`, (m, url, req) => { welcome.siteRunning = true; welcome.website = { running: true, url: req.postDataJSON()?.url, step: "reading 9 pages", pages_read: 3, products_found: 12 }; return { url: req.postDataJSON()?.url, brand: { applied: true }, import_started: true }; }),
+    r("GET", `${A}/setup/first-run`, () => {
+      if (welcome.siteRunning && welcome.website.running) { welcome.polls = (welcome.polls || 0) + 1; if (welcome.polls > 1) { welcome.website = { ...F.firstRun.website }; welcome.siteRunning = false; profile.drafts = { ...F.profileDrafts }; } }
+      const kept = Object.keys(profile.answers);
+      return { show: welcome.show, closed: welcome.closed, running: !!welcome.website.running || docsRun.running, website: welcome.website,
+        documents: docsRun.files ? docsRun : {}, brand: F.firstRun.brand, profile: { answered: kept.length, total: 9, drafts: Object.keys(profile.drafts).length },
+        try_asking: [{ key: "hours", question: "What are your opening hours?", ready: true }, { key: "cancellations", question: "Can I cancel my order?", ready: kept.includes("cancellations") }] };
+    }),
+    r("POST", `${A}/setup/first-run/close`, (m, url, req) => { welcome.show = false; welcome.closed = req.postDataJSON()?.reason; return { closed: welcome.closed }; }),
+    r("POST", `${A}/setup/preview-answer`, (m, url, req) => ({ answer: "We're open Mon–Fri 07:30–17:00 and Sat 08:00–14:00. Closed Sundays.", sources: "Business profile — for customers", grounded: true, q: req.postDataJSON()?.question })),
+    r("GET", `${A}/setup/owner`, () => F.ownerSetup),
+    r("GET", `${A}/plan`, () => F.myPlan),
+    r("POST", `${A}/conversations/${T}/feedback`, () => ({ ok: true })),
+    r("GET", `${A}/assistant/history`, () => ({ messages: [] })),
+    r("GET", `${A}/me/memory`, () => ({ enabled: true, limit: 30, notes: myNotes })),
+    r("POST", `${A}/me/memory`, (m, url, req) => { myNotes.push({ id: `n${Date.now()}`, text: req.postDataJSON()?.text }); return { ok: true }; }),
+    r("DELETE", `${A}/me/memory/${T}`, (m) => { const i = myNotes.findIndex((n) => n.id === m[m.length - 1]); if (i >= 0) myNotes.splice(i, 1); return { ok: true }; }),
+    r("DELETE", `${A}/me/memory`, () => { myNotes.length = 0; return { ok: true, removed: 1 }; }),
+    r("GET", `${A}/me/prefs`, () => F.myVula),
+    r("PATCH", `${A}/me/prefs`, (m, url, req) => ({ ok: true, prefs: req.postDataJSON() || {} })),
     r("GET", `${A}/persona`, () => F.persona),
-    r("PATCH", `${A}/persona`, () => ({ ok: true })),
+    r("PATCH", `${A}/persona`, (m, url, req) => ({ ok: true, ...(req.postDataJSON() || {}) })),
     r("POST", `${A}/persona/analyze`, () => ({ suggested: F.persona.persona_prompt_suggested, sample_count: 42 })),
     r("POST", `${A}/agent-teach`, () => ({ ok: true })),
     r("GET", `${A}/automations`, () => ({ automations: F.automations })),

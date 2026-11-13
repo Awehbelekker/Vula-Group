@@ -566,13 +566,19 @@ INVOICE_TOOLS = [
             "required": ["customer_name", "line_items"]}}},
     {"type": "function", "function": {
         "name": "send_invoice",
-        "description": "Send an existing invoice to the customer on WhatsApp, by its number "
-                       "(e.g. OTH-INV-00001). Without confirm=true, returns a preview of who it "
-                       "goes to instead of sending — only pass confirm=true after the owner has "
-                       "explicitly said to go ahead.",
-        "parameters": {"type": "object", "properties": {"invoice_number": {"type": "string"},
-                                                        "confirm": {"type": "boolean"}},
-                       "required": ["invoice_number"]}}},
+        "description": "Send an existing invoice to the customer, by its number (e.g. "
+                       "OTH-INV-00001) — on WhatsApp or by email. Leave `channel` out to use "
+                       "whichever the business and the customer's details allow (WhatsApp when "
+                       "the business has a number connected and the invoice has a phone number, "
+                       "otherwise email); set it when the owner says which. Without confirm=true "
+                       "it returns a preview of who it goes to and how, instead of sending — only "
+                       "pass confirm=true after the owner has explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_number": {"type": "string"},
+            "channel": {"type": "string", "enum": ["whatsapp", "email"],
+                        "description": "Only when the owner said how to send it."},
+            "confirm": {"type": "boolean"}},
+            "required": ["invoice_number"]}}},
     {"type": "function", "function": {
         "name": "payment_link",
         "description": "Send a customer a link to pay an amount — 'send Sam a payment link for "
@@ -1401,8 +1407,19 @@ SUBSCRIPTION_TOOLS = [
 CRM_TOOLS = [
     {"type": "function", "function": {
         "name": "customer_lookup",
-        "description": "Look up a customer by phone or name: lifetime value, orders, last seen, preferred language.",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+        "description": (
+            "Everything on file about ONE client, found by their name, phone number or email "
+            "address: contact details, their orders and lifetime value, their invoices and "
+            "quotes with what is still owed, what was said in earlier conversations (a dated "
+            "note plus the latest messages), open follow-ups, and how much email there has been. "
+            "Use it whenever the owner or staff ask about a client — 'what's the story with "
+            "Sarah', 'does Thabo owe us anything', 'when did we last hear from 082…', 'summarise "
+            "this client'. Every amount in the result is read from the books: quote it exactly, "
+            "never add or re-total. If the result says a part was not read, say so rather than "
+            "assume there is nothing. If it asks which client was meant, ask the user that."),
+        "parameters": {"type": "object", "properties": {"query": {
+            "type": "string", "description": "The client's name, phone number or email address."}},
+            "required": ["query"]}}},
     {"type": "function", "function": {
         "name": "dynamics_lookup",
         "description": "Search the connected Dynamics 365 CRM for an account (company), contact (person), "
@@ -1896,6 +1913,33 @@ for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
         _TOOL_SCOPE.setdefault(_t["function"]["name"], _scope)
 
 _FULL_ACCESS_ROLES = {"owner", "manager", "admin"}
+def _has_whatsapp(tenant_id: str) -> bool:
+    """True when this business has its own WhatsApp number connected. One that doesn't (it uses
+    Vula from the dashboard, e.g. for invoicing only) is sent email instead."""
+    try:
+        from vula import whatsapp_numbers
+        return bool(whatsapp_numbers.main_number(tenant_id))
+    except Exception as exc:  # noqa: BLE001 — can't tell: behave as before
+        logger.debug("whatsapp number check skipped: %s", exc)
+        return True
+
+
+def _dashboard_note(tenant_id: str) -> str:
+    """For a turn that came from the dashboard chat. The prompt above was written for WhatsApp
+    ("reachable on WhatsApp", "keep replies WhatsApp-friendly"), which is wrong on a web page and
+    misleading for a business with no WhatsApp number at all."""
+    note = ("\n\nTHIS CONVERSATION IS IN THE WEB DASHBOARD, not on WhatsApp. Don't call it "
+            "WhatsApp or say you'll message the person there; a file or link you produce is "
+            "shown here.")
+    if not _has_whatsapp(tenant_id):
+        note += (" This business has NOT connected a WhatsApp number, so nothing can be sent to "
+                 "its customers on WhatsApp: send by email, and if a tool can only use WhatsApp, "
+                 "say so and that a number can be connected under Settings › WhatsApp.")
+    return note
+
+
+# Access that lets a member see what a client was billed and owes (customer_lookup).
+_MONEY_SCOPES = {"invoices", "finances"}
 
 
 def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
@@ -1914,6 +1958,17 @@ def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
     except Exception as exc:
         logger.debug("member access lookup skipped: %s", exc)
     return None
+
+
+def _ctx_access(tenant_id: str, ctx: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """The caller's granted scopes for this turn. On WhatsApp that is looked up from their
+    number; a dashboard chat has no number, so the endpoint passes the signed-in member's access
+    in the context ("access": a list, or None for full). Without this a restricted login got
+    every tool in the dashboard chat, because "no phone" read as "full access"."""
+    ctx = ctx or {}
+    if "access" in ctx:
+        return list(ctx["access"]) if ctx["access"] else None
+    return _member_access(tenant_id, ctx.get("phone") or None)
 
 
 def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]) -> List[Dict[str, Any]]:
@@ -1995,12 +2050,13 @@ def _turn_note(step: str, **detail: Any) -> None:
         pass
 
 
-def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str]) -> List[Dict[str, Any]]:
+def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str],
+                ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The whole team's tools for this caller: today's set, minus what only a switched-off
     employee does."""
     from core.skills import employees
     tools = _restrict_to_access(_tools_for(tenant_id, role=role, message=message),
-                                _member_access(tenant_id, phone))
+                                _ctx_access(tenant_id, ctx if ctx is not None else {"phone": phone}))
     settings = employees.settings_for(tenant_id)
     return employees.without_switched_off(tools, {k for k, v in settings.items() if v["enabled"]})
 
@@ -2205,9 +2261,11 @@ class CommerceAdminSkill(BaseSkill):
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
                "message": inp.question}
+        if "access" in inp.metadata:     # dashboard chat: the signed-in member's own access
+            ctx["access"] = inp.metadata["access"]
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         if caller_role != "sales_rep":   # reps already get their own narrow set
-            tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
+            tools = _restrict_to_access(tools, _ctx_access(inp.tenant_id, ctx))
         lang = inp.metadata.get("preferred_language", "")
         # The team of AI employees (core/skills/employees.py): the front desk hands a clear
         # message to one employee with only its job's tools; anything unclear stays with the team.
@@ -2218,6 +2276,9 @@ class CommerceAdminSkill(BaseSkill):
                                          lang=lang, role_label=employee.title if employee else None)
         if caller_role != "sales_rep":
             system_msg += self._decisions_block(inp.tenant_id, inp.question or "") + emp_note
+        from_dashboard = inp.metadata.get("channel") == "dashboard"
+        if from_dashboard:
+            system_msg += _dashboard_note(inp.tenant_id)
         collected_sources: List[Dict[str, Any]] = []
         try:
             try:
@@ -2227,15 +2288,25 @@ class CommerceAdminSkill(BaseSkill):
                 # The employee was given someone else's job: the whole team takes the turn, once.
                 logger.info("commerce_admin: %s handed over (%s)", employee.id if employee else "-", ho.reason)
                 _turn_note("employee_hand_over", name=employee.id if employee else None)
-                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"])
+                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"], ctx)
                 system_msg = (self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
                                                   lang=lang)
-                              + self._decisions_block(inp.tenant_id, inp.question or ""))
+                              + self._decisions_block(inp.tenant_id, inp.question or "")
+                              + (_dashboard_note(inp.tenant_id) if from_dashboard else ""))
                 collected_sources.clear()
                 answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
                                                 tools, sources=collected_sources)
             if not answer:
                 raise RuntimeError("empty answer from admin agent loop")
+            advising = False
+            try:
+                from core.skills import employees as _employees
+                advising = _employees.is_advisor(employee)
+                if advising:
+                    # Thinking aloud that looked nothing up says so, in code (employees/advisor).
+                    answer = _employees.mark_ideas(answer, collected_sources)
+            except Exception:  # noqa: BLE001
+                pass
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
             # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
@@ -2253,7 +2324,9 @@ class CommerceAdminSkill(BaseSkill):
             # see the incident note on unverified_prices' definition.
             bad_prices = unverified_prices(answer, collected_sources,
                                            {"lookup_business_info", "competitor_check",
-                                            "find_document", "email_thread_summary"})
+                                            "find_document", "email_thread_summary",
+                                            # a client's invoices and order totals, read from the books
+                                            "customer_lookup"})
             if bad_prices:
                 logger.warning("commerce_admin unverified price(s) in answer, tenant=%s: %s",
                                inp.tenant_id, bad_prices)
@@ -2276,8 +2349,14 @@ class CommerceAdminSkill(BaseSkill):
                            f"these figures:\n{fixes}\n\nLet me redo the quote properly rather "
                            "than you working off a wrong total.")
                 confidence = 0.3
-            return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence,
-                               sources=collected_sources)
+            return SkillOutput(
+                answer=answer, skill_name=self.name, confidence=confidence, sources=collected_sources,
+                # The second-opinion pass looks for claims the records don't support — which is
+                # every idea an advisor offers, so it would caveat all of them. The advisor's
+                # reply is kept honest another way: figures still pass the supervisor's check
+                # against what the tools returned, and ideas are labelled as ideas.
+                verification=({"verifier": "advisor.ideas_labelled", "outcome": "skipped",
+                               "escalated": False, "defects": [], "extra": {}} if advising else None))
         except ConfirmationRequired as cr:
             summary = _preview_summary(cr.result)
             row = {
@@ -2338,12 +2417,18 @@ class CommerceAdminSkill(BaseSkill):
         # log_meeting's due_phrase + deterministic dateutil resolution) — this line only gives it
         # enough grounding to phrase a sensible tool call/question, not to compute a final date.
         today_line = f"Today's date is {datetime.now(timezone.utc).strftime('%A, %d %B %Y')}.\n\n"
+        # The voice for the business's OWN people. It used to be the whole persona_prompt, which
+        # for a shop is the voice learned from its customer messages ("Chat replies: …
+        # Promotions: …") — so the owner's assistant was told how to write promotions to
+        # customers. core/voice.py picks the team voice; when the composed voice is in force it
+        # arrives through behaviour_preamble instead and isn't repeated here.
         persona_block = ""
         try:
-            from vula.api.tenants import get_config
-            persona = (get_config(tenant_id) or {}).get("persona_prompt")
-            if persona:
-                persona_block = f"\n\nHow you should sound: {persona}"
+            from core import voice
+            if not voice.active():
+                persona = voice.company_voice(tenant_id, "team")
+                if persona:
+                    persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
             pass
 
@@ -2445,7 +2530,10 @@ class CommerceAdminSkill(BaseSkill):
             # despite computing it — only the sales_rep branch above did. A non-English-speaking
             # owner got the generic "mirror their language" fallback instead of the explicit
             # per-language block, letting the loop drift to English mid-multi-turn.
-            + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
+            # The owner/staff branch never said WHO it was talking to (only the rep branch
+            # above did) — name and role go through the shared caller block.
+            + behaviour_preamble(agentic=True, preferred_language=lang,
+                                 caller_name=name or "", caller_role=role or "") + persona_block
                 + self._rules_block(tenant_id)
         )
 
@@ -2904,7 +2992,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
-            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
+            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")), args.get("channel"))
             if name == "payment_link":       return await self._payment_link(tid, args)
             if name == "financial_report":   return await self._financial_report(tid, args)
             if name == "credit_note":        return await self._credit_note(tid, args)
@@ -2941,7 +3029,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "generate_marketing": return await self._generate_marketing(tid, args)
             if name == "create_subscription": return await self._create_subscription(tid, args)
             if name == "list_subscriptions": return await self._list_subscriptions(tid, args.get("status"))
-            if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""))
+            if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""), ctx)
             if name == "dynamics_lookup":    return await self._dynamics_lookup(tid, args.get("query", ""), args.get("kind", "contact"))
             if name == "send_broadcast":     return await self._send_broadcast(tid, args)
             if name == "list_storefront_pages": return await self._list_storefront_pages(tid)
@@ -3562,23 +3650,65 @@ class CommerceAdminSkill(BaseSkill):
                 "Say 'send it' to WhatsApp it to the customer."))
         return result
 
-    async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False) -> Dict[str, Any]:
+    async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False,
+                            channel: Optional[str] = None) -> Dict[str, Any]:
+        """Send an invoice on WhatsApp or by email. It was WhatsApp-only, and refused an invoice
+        with no phone number — so a business that invoices by email (or has no WhatsApp number at
+        all) could create an invoice in chat and then not send it."""
         num = (invoice_number or "").strip()
         rows = (service._client().table("commerce_invoices")
-                .select("id,invoice_number,customer_phone,customer_name,total_cents")
+                .select("id,invoice_number,customer_phone,customer_email,customer_name,total_cents")
                 .eq("tenant_id", tid).eq("invoice_number", num).limit(1).execute().data or [])
         if not rows:
             return {"error": f"No invoice {num} found."}
-        if not rows[0].get("customer_phone"):
-            return {"error": f"Invoice {num} has no customer phone on file to send to."}
+        inv = rows[0]
+        phone = (inv.get("customer_phone") or "").strip()
+        email = (inv.get("customer_email") or "").strip()
+        via = (channel or "").strip().lower()
+        if via not in ("whatsapp", "email"):
+            # Not said: WhatsApp when the business can send on it, otherwise email.
+            via = "whatsapp" if (phone and _has_whatsapp(tid)) else ("email" if email else
+                                                                    ("whatsapp" if phone else ""))
+        who = inv.get("customer_name") or "the customer"
+        if via == "whatsapp" and not phone:
+            return {"status": "need_info", "message": (
+                f"Invoice {num} has no phone number on it."
+                + (f" I can email it to {email} instead — shall I?" if email else
+                   f" What's {who}'s WhatsApp number or email address?"))}
+        if via == "email" and not email:
+            return {"status": "need_info",
+                    "message": f"Invoice {num} has no email address on it. What's {who}'s email address?"}
+        if not via:
+            return {"status": "need_info", "message": (
+                f"Invoice {num} has no phone number or email address on it. Where should I send it?")}
+        to = phone if via == "whatsapp" else email
         if not confirm:
             # Messages a customer — preview who it goes to first, like every other outbound tool.
-            return {"preview": True, "invoice_number": num, "customer": rows[0].get("customer_name"),
-                    "to": rows[0].get("customer_phone"), "total": self._rands(rows[0].get("total_cents")),
-                    "message": "Confirm to send this invoice on WhatsApp (call again with confirm=true)."}
-        from vula.api.commerce import admin_send_invoice_whatsapp
-        await admin_send_invoice_whatsapp(tid, rows[0]["id"], {})
-        return {"sent": True, "invoice_number": num}
+            return {"preview": True, "invoice_number": num, "customer": inv.get("customer_name"),
+                    "to": to, "via": "WhatsApp" if via == "whatsapp" else "email",
+                    "total": self._rands(inv.get("total_cents")),
+                    "message": ("Confirm to send this invoice "
+                                + ("on WhatsApp" if via == "whatsapp" else "by email")
+                                + " (call again with confirm=true).")}
+        if via == "whatsapp":
+            from vula.api.commerce import admin_send_invoice_whatsapp
+            await admin_send_invoice_whatsapp(tid, inv["id"], {})
+            return {"sent": True, "invoice_number": num}
+        from fastapi import HTTPException
+        from vula.api.commerce import admin_send_invoice_email
+        try:
+            out = await admin_send_invoice_email(tid, inv["id"], {})
+        except HTTPException as exc:
+            return {"error": f"The invoice was not sent: {exc.detail}"}
+        if not (out or {}).get("sent"):
+            return {"error": "The invoice was not sent."}
+        # Read back, not reported: the invoice itself says it went by email.
+        back = (service._client().table("commerce_invoices").select("sent_channel,sent_at")
+                .eq("tenant_id", tid).eq("id", inv["id"]).limit(1).execute().data or [{}])[0]
+        result = {"sent": True, "invoice_number": num, "via": "email", "to": out.get("to") or email}
+        if (back or {}).get("sent_channel") != "email":
+            result["note"] = "Emailed, but the invoice record doesn't show it as sent yet."
+        return result
 
     async def _payment_link(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Invoice for exactly the amount asked + the tenant's pay page, sent on WhatsApp after
@@ -3893,7 +4023,7 @@ class CommerceAdminSkill(BaseSkill):
         if kind not in forms.TYPES:
             return {"status": "need_info", "message": "Which form — a quote / order form, a site checklist, a timesheet or a stock count?"}
         title, scope = forms.TYPES[kind]
-        access = _member_access(tid, phone or None)
+        access = _ctx_access(tid, {**(ctx or {}), "phone": phone or None})
         if scope and access is not None and scope not in access:
             return {"status": "need_info", "message": f"Your access doesn't include the {title.lower()} — ask the owner."}
         try:
@@ -3965,7 +4095,7 @@ class CommerceAdminSkill(BaseSkill):
         ctx = ctx or {}
         phone = ctx.get("phone") or ""
         by = phone or "dashboard"
-        access = _member_access(tid, phone or None)
+        access = _ctx_access(tid, {**(ctx or {}), "phone": phone or None})
         action = args.get("action") or "design"
 
         def refused(spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -4977,23 +5107,28 @@ class CommerceAdminSkill(BaseSkill):
         return await email_service.summarize_correspondence(
             creds, args.get("query") or "", since=args.get("since"))
 
-    async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
-        from vula.api.commerce import _aggregate_customers, _norm_phone
-        q = (query or "").strip().lower()
-        if not q:
-            return {"error": "Give a name or phone to look up."}
-        customers = await _aggregate_customers(tid)
-        qd = _norm_phone(q)
-        match = None
-        for c in customers.values():
-            if (qd and qd in _norm_phone(c.get("phone"))) or (q in (c.get("name") or "").lower()):
-                match = c
-                break
-        if not match:
-            return {"message": f"No customer found for '{query}'."}
-        return {"name": match.get("name"), "phone": match.get("phone"),
-                "orders": match.get("orders", 0), "lifetime_value": self._rands(match.get("total_spent_cents")),
-                "last_seen": match.get("last_order_at") or match.get("last_seen_at")}
+    async def _customer_lookup(self, tid: str, query: str,
+                               ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The client's whole record (vula/clients.py). This used to return five things — name,
+        phone, order count, lifetime value, last seen — so "what's the story with Sarah" had no
+        conversations, invoices or notes behind it. Amounts are left out for a member whose
+        access doesn't include Money."""
+        import asyncio
+        from vula import client_memory, clients
+        if not (query or "").strip():
+            return {"error": "Give a name, phone number or email address to look up."}
+        found = await asyncio.to_thread(clients.resolve, tid, query)
+        if found.get("ambiguous"):
+            return {"status": "need_info",
+                    "message": f"More than one client matches '{query}'. Which one? "
+                               + "; ".join(found["ambiguous"])}
+        client = found.get("client")
+        if not client:
+            return {"message": f"No client found for '{query}'."}
+        access = _ctx_access(tid, ctx)
+        money = access is None or bool(set(access) & _MONEY_SCOPES)
+        summary = await asyncio.to_thread(client_memory.summary_for, tid, client.phone)
+        return await asyncio.to_thread(clients.brief, tid, client, money=money, summary=summary or None)
 
     async def _dynamics_lookup(self, tid: str, query: str, kind: str) -> Dict[str, Any]:
         q = (query or "").strip()

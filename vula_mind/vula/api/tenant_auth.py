@@ -12,6 +12,7 @@ navigation doesn't hammer the auth server.
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 from fastapi import Header, HTTPException
@@ -122,6 +123,22 @@ _MAX_SCOPE_CACHE = 500
 
 _FULL_TEAM_ROLES = ("owner", "manager")
 
+# A member with no email on their team row who signs in by WhatsApp gets a login under
+# wa-<their number>@users.vula-ai.com (vula/api/wa_login.py::_login_for). That address is on no
+# team row, so the email match below found nobody and the login fell through to "a staff login
+# with no directory row → full": a restricted rep who signed in by WhatsApp saw everything.
+_WA_LOGIN_EMAIL = re.compile(r"^wa-(\d{6,15})@users\.vula-ai\.com$")
+
+
+def _member_for_wa_login(email: str, team_rows: list[dict]) -> dict | None:
+    """The team row a WhatsApp-login address belongs to, matched on the number in it."""
+    m = _WA_LOGIN_EMAIL.match(email or "")
+    if not m:
+        return None
+    from vula.team_index import digits_za
+    target = digits_za(m.group(1))
+    return next((r for r in team_rows if target and digits_za(r.get("whatsapp") or "") == target), None)
+
 
 def scope_from_rows(tenant_id: str, email: str, login_rows: list[dict],
                     team_rows: list[dict]) -> dict:
@@ -131,6 +148,8 @@ def scope_from_rows(tenant_id: str, email: str, login_rows: list[dict],
     login_role = next((r.get("role") for r in login_rows if r.get("tenant_id") == tenant_id), None)
     e = (email or "").strip().lower()
     member = next((m for m in team_rows if e and (m.get("email") or "").strip().lower() == e), None)
+    if member is None:
+        member = _member_for_wa_login(e, team_rows)
     if login_role == "owner":
         return {"full": True, "access": [], "role": "owner", "member": member}
     if member is None:
