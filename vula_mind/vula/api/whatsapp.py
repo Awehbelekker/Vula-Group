@@ -3909,12 +3909,32 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         return ""
 
 
+def may_confirm_payments(member: Optional[dict]) -> bool:
+    """A team member who may say a payment arrived: the owner or a manager, a member with full
+    access, or one whose access includes orders or a money section (13 Nov 2026, Ian: a customer's
+    proof of payment may dispatch an order "with approval by correct user"). A rep who can only
+    see the CRM can't approve one."""
+    if not member or member.get("active") is False:
+        return False
+    if (member.get("role") or "").lower() in ("owner", "manager"):
+        return True
+    access = set(member.get("access") or [])
+    if not access:
+        return True
+    from vula.api.server import _MONEY_TABS
+    return bool(access & (set(_MONEY_TABS) | {"orders"}))
+
+
 async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Optional[str]:
-    """If a bank-review question is outstanding AND the sender is on the tenant's team
-    (never a customer), treat the message as the answer. Returns the reply or None."""
+    """If a bank-review question is outstanding AND the sender is on the tenant's team with
+    payment rights (never a customer, never a CRM-only rep), treat the message as the answer.
+    Returns the reply or None."""
     try:
         from vula.integrations.notify import team_member_for_phone, _fallback_phone, _digits
-        is_team = bool(team_member_for_phone(tenant_id, phone))
+        member = team_member_for_phone(tenant_id, phone)
+        is_team = may_confirm_payments(member)
+        if member and not is_team:
+            return None                      # on the team, but not someone who confirms money
         if not is_team:
             fb = _fallback_phone(tenant_id)
             is_team = bool(fb and _digits(fb) == _digits(phone))

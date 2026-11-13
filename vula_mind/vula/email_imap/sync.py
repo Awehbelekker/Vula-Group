@@ -978,10 +978,21 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         elif att["name"].lower().endswith(".pdf") and (
                 any(d in blob for d in _BANK_DOMAINS) or any(w in blob for w in _POP_WORDS)):
             rec = await bank_rec.ingest_payment_confirmation(tenant_id, p, source_file=att["name"],
-                                                             settle=not quiet)
-            logger.info("payment confirmation processed (%s): %s", tenant_id, rec)
+                                                             settle=not quiet, stage=not quiet)
+            logger.info("payment confirmation processed (%s): %s", tenant_id, {
+                k: v for k, v in rec.items() if k != "proposals"})
             matched = int(rec.get("matched_invoices", 0)) + int(rec.get("matched_orders", 0))
-            if not rec.get("error") and matched > 0:
+            if not rec.get("error") and rec.get("staged"):
+                # Waiting for someone with payment rights to say yes (WhatsApp review question).
+                payment_matched = True
+                try:
+                    from vula.integrations.notify import notify_team
+                    await notify_team(tenant_id, "payment_received",
+                                      f"📧 A proof of payment came in by email from {em.get('from', '')} "
+                                      f"(*{att['name']}*).\n" + "\n".join(rec.get("proposals") or []))
+                except Exception as exc:
+                    logger.debug("payment proof notify skipped: %s", exc)
+            elif not rec.get("error") and matched > 0:
                 payment_matched = True  # suppress the generic "which project?" ask below
             elif not rec.get("error") and quiet:
                 payment_matched = True  # old mail: it waits on the Bank tab, nobody is messaged
