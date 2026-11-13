@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # ── Qdrant ──────────────────────────────────────────────────────────────
     qdrant_base: str = "http://localhost:6333"
     qdrant_api_key: str = ""            # set if Qdrant is running with auth
+    # Copy every collection to a new cluster (vula/integrations/qdrant_migrate.py), e.g. moving the
+    # knowledge base to the EU. Blank = never. Switch over by pointing QDRANT_BASE/KEY at it.
+    qdrant_migrate_to_base: str = ""
+    qdrant_migrate_to_api_key: str = ""
 
     # ── API Server ──────────────────────────────────────────────────────────
     api_host: str = "0.0.0.0"

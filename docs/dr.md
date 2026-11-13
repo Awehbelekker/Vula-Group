@@ -32,6 +32,12 @@ the organization is on the **Pro** plan.
 codebase. `vula/integrations/metering.py`'s `snapshot_infra()` only records a **vector count**
 for cost-metering purposes — it does not back up any actual vector data.
 
+**Correction, 13 Nov 2026:** production's Qdrant is **Qdrant Cloud on AWS `sa-east-1`
+(São Paulo)**, seen in Railway's DNS log, not the SA GPU box. It is being moved to an EU cluster
+with `vula/integrations/qdrant_migrate.py` (set `QDRANT_MIGRATE_TO_BASE`/`_API_KEY`, check the
+`qdrant-migrate` telemetry rows, then point `QDRANT_BASE`/`QDRANT_API_KEY` at the new cluster).
+The paragraph below was written on the wrong assumption.
+
 Per CLAUDE.md, Qdrant is **self-hosted** on the SA GPU box, reached via a Cloudflare-Access-
 secured tunnel — not a managed service with its own backup story the way Supabase is.
 
