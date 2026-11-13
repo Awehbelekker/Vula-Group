@@ -1233,8 +1233,8 @@ async def extract_payment_confirmation(text: str) -> List[Dict[str, Any]]:
     return out
 
 
-async def ingest_payment_confirmation(tenant_id: str, pdf_path: Path,
-                                      source_file: str = "", settle: bool = True) -> Dict[str, Any]:
+async def ingest_payment_confirmation(tenant_id: str, pdf_path: Path, source_file: str = "",
+                                      settle: bool = True, stage: bool = False) -> Dict[str, Any]:
     """Single-document pipeline for a POP/payment-confirmation email attachment: read (usually
     unencrypted, unlike a full statement) → extract the one payment → reconcile against
     outstanding invoices AND pending-EFT orders."""
@@ -1257,6 +1257,15 @@ async def ingest_payment_confirmation(tenant_id: str, pdf_path: Path,
     txns = await extract_payment_confirmation(text)
     if not txns:
         return {"error": "not recognised as a payment confirmation"}
+    if stage and settle:
+        # 13 Nov 2026 (Ian): a proof of payment alone is the customer's word, not the bank's. It
+        # may mark an order paid and dispatch it, but only once someone with payment rights says
+        # yes — the same review a WhatsApp proof of payment already gets (stage_pop_for_review).
+        proposals = [stage_pop_for_review(tenant_id, int(t["amount_cents"]), t.get("date"),
+                                          t.get("reference"), t.get("description"))
+                     for t in txns if int(t.get("amount_cents") or 0) > 0]
+        log.info("payment confirmation staged for approval (%s): %d", tenant_id, len(proposals))
+        return {"staged": len(proposals), "proposals": proposals, "matched_invoices": 0, "matched_orders": 0}
     result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
                              auto_settle=settle)
     log.info("payment confirmation reconciled for %s: %s", tenant_id, result)
