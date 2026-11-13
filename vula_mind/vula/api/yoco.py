@@ -460,6 +460,9 @@ async def _order_for(tenant_id: str, order_id: str) -> Optional[dict]:
         return None
 
 
+_WEBHOOK_TOLERANCE_S = 300
+
+
 def _yoco_signature_ok(secret: str, raw_body: bytes, legacy_sig: str, headers) -> bool:
     """Accept Yoco's signed webhooks in either form: the legacy hex HMAC-SHA256 of the body in
     `yoco-signature`, or the standard-webhooks form (`webhook-id`, `webhook-timestamp`,
@@ -474,6 +477,15 @@ def _yoco_signature_ok(secret: str, raw_body: bytes, legacy_sig: str, headers) -
     wts = headers.get("webhook-timestamp") or ""
     wsig = headers.get("webhook-signature") or ""
     if not (wid and wts and wsig):
+        return False
+    # 13 Nov 2026 audit: the timestamp was signed but never checked, so a captured event could be
+    # sent again later. Standard Webhooks: refuse one more than 5 minutes from now either way.
+    import time as _time
+    try:
+        if abs(_time.time() - int(wts)) > _WEBHOOK_TOLERANCE_S:
+            log.warning("Yoco webhook refused: timestamp outside the %ss window", _WEBHOOK_TOLERANCE_S)
+            return False
+    except ValueError:
         return False
     try:
         key = base64.b64decode(secret.split("_", 1)[1] if secret.startswith("whsec_") else secret)
