@@ -276,6 +276,78 @@ async def test_without_any_json_the_product_pages_own_schema_gives_the_price(sit
     assert row["images"] == ["https://cdn.shopify.com/round.jpg", "https://cdn.shopify.com/round-top.jpg"]
 
 
+# 2026-11-13: Kelp Board Bags' site builder writes no JSON-LD; each of its 51 product pages marks
+# the product up in microdata instead, so the import found none of them.
+
+KELP_PAGE = ('<html><head><title>KELP Boardbags</title></head><body>'
+             '<div itemtype="https://schema.org/Product" itemscope>'
+             '<meta itemprop="name" content="6ft Boardbag" />'
+             '<meta itemprop="description" content="Add your product description that will be useful for your '
+             'customers. Add the exclusive properties of your product that will make customers want to buy it." />'
+             '<link itemprop="image" href="https://kelpboardbags.co.za/gallery_gen/6ft_a.jpg" />'
+             '<link itemprop="image" href="https://kelpboardbags.co.za/gallery_gen/6ft_b.jpg" />'
+             '<meta itemprop="category" content="Surf" />'
+             '<div itemprop="offers" itemtype="https://schema.org/Offer" itemscope>'
+             '<meta itemprop="priceCurrency" content="ZAR" /><meta itemprop="price" content="1299" />'
+             '<link itemprop="availability" href="https://schema.org/InStock" /></div>'
+             '</div><p>R 1299.00</p></body></html>')
+
+
+def test_a_product_marked_up_in_microdata_is_priced_from_its_own_offer():
+    p = site_import.product_from_page(KELP_PAGE, "https://kelpboardbags.co.za/Shop/6ft-Boardbag/")
+    assert p["name"] == "6ft Boardbag" and p["slug"] == "6ft-Boardbag" and p["price_cents"] == 129_900
+    assert p["images"] == ["https://kelpboardbags.co.za/gallery_gen/6ft_a.jpg",
+                           "https://kelpboardbags.co.za/gallery_gen/6ft_b.jpg"]
+    assert p["image_url"] == p["images"][0] and p["category_label"] == "Surf" and p["in_stock"] is True
+
+
+def test_the_site_builders_placeholder_description_is_not_imported():
+    p = site_import.product_from_page(KELP_PAGE, "https://kelpboardbags.co.za/Shop/6ft-Boardbag/")
+    assert p["description"] == ""
+    real = KELP_PAGE.replace('content="Add your product description', 'content="Padded 10mm bag. Add your product description')
+    assert site_import.product_from_page(real, "https://x.co.za/Shop/a/")["description"].startswith("Padded 10mm")
+
+
+def test_microdata_read_from_text_nested_offers_and_out_of_stock():
+    page = ('<div itemscope itemtype="http://schema.org/Product"><h1 itemprop="name">Fin <b>Bag</b></h1>'
+            '<span itemprop="description">Holds &amp; protects fins.</span>'
+            '<img itemprop="image" src="//cdn.example.com/fin.jpg">'
+            '<div itemprop="offers" itemscope itemtype="http://schema.org/AggregateOffer">'
+            '<div itemprop="offers" itemscope itemtype="http://schema.org/Offer"><span itemprop="price">450.00</span>'
+            '<link itemprop="availability" href="http://schema.org/OutOfStock"></div>'
+            '<div itemprop="offers" itemscope itemtype="http://schema.org/Offer"><span itemprop="price">399.50</span>'
+            '<link itemprop="availability" href="http://schema.org/OutOfStock"></div></div></div>')
+    p = site_import.product_from_page(page, "https://x.co.za/shop/fin-bag")
+    assert p["name"] == "Fin Bag" and p["description"] == "Holds & protects fins."
+    assert p["price_cents"] == 39_950 and p["images"] == ["https://cdn.example.com/fin.jpg"]
+    assert p["in_stock"] is False
+
+
+def test_a_price_in_the_text_alone_is_never_used():
+    assert site_import.product_from_page('<h1>6ft Boardbag</h1><p>R 1299.00</p>', "https://x.co.za/Shop/a/") is None
+    page = '<div itemscope itemtype="https://schema.org/Product"><meta itemprop="name" content="Wax"></div><p>R 80</p>'
+    assert site_import.product_from_page(page, "https://x.co.za/Shop/wax/")["price_cents"] == 0   # "on request"
+    assert site_import.product_from_page('<div itemscope itemtype="https://schema.org/Organization">'
+                                         '<meta itemprop="name" content="Kelp"></div>', "https://x/") is None
+
+
+def test_json_ld_still_comes_first():
+    both = ROUND_PAGE.decode().replace("<body>x</body>", "<body>" + KELP_PAGE + "</body>")
+    p = site_import.product_from_page(both, f"{ROOT}/products/round-vessel-basin")
+    assert p["name"] == "Round Vessel Basin" and p["price_cents"] == 285_000
+
+
+@pytest.mark.asyncio
+async def test_without_json_ld_the_product_pages_microdata_gives_the_price(site, monkeypatch):
+    for k in [k for k in SITE if "products.json" in k]:
+        monkeypatch.delitem(SITE, k)
+    monkeypatch.setitem(SITE, f"{ROOT}/products/round-vessel-basin", KELP_PAGE.encode())
+    st = await site_import.import_site("seedleme", ROOT)
+    row = site["imported"][0][0]
+    assert st["platform"] == "website" and row["price_cents"] == 129_900 and row["name"] == "6ft Boardbag"
+    assert row["description"] == "" and row["image_url"] == "https://kelpboardbags.co.za/gallery_gen/6ft_a.jpg"
+
+
 def test_page_titles_are_plain_text_and_html_sitemaps_are_not_read():
     title, _ = site_import.page_text(b"<html><head><title>About us &ndash; Seedleme</title></head></html>")
     assert title == "About us \u2013 Seedleme"
