@@ -1174,7 +1174,9 @@ SHEET_TOOLS = [
                        "status; expenses: date, supplier, description, amount, vat, account, project, "
                        "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
                        "date, due, project, excl_vat, vat, total, paid, owed, status; orders: number, date, "
-                       "customer, channel, status, subtotal, delivery, total. Maths the owner asks for ('total minus "
+                       "customer, channel, status, subtotal, delivery, total; products (the catalogue, one row per "
+                       "variant, no period): name, variant, sku, category, choices, price, cost, stock, status. "
+                       "Maths the owner asks for ('total minus "
                        "VAT', 'margin %', 'quantity times price') goes in computed; 'running balance' in running; "
                        "'average/count/highest' in summary; 'totals per supplier only' is detail false with "
                        "group_by; 'with a chart' is chart (needs a grouping). The reply is sent exactly as returned.",
@@ -1184,7 +1186,7 @@ SHEET_TOOLS = [
             "name": {"type": "string", "description": "For save/use: the sheet's name, e.g. 'Tile Co monthly'."},
             "spec": {"type": "object", "properties": {
                 "source": {"type": "string", "enum": ["supplier_invoices", "supplier_lines", "bank", "expenses",
-                                                      "customer_invoices", "orders"]},
+                                                      "customer_invoices", "orders", "products"]},
                 "columns": {"type": "array", "items": {"type": "string"}},
                 "group_by": {"type": "string", "enum": ["none", "month", "project", "supplier", "customer",
                                                         "account", "status"]},
@@ -1918,7 +1920,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "custom_sheet": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances",
     # every document of a project, statements and proofs of payment included: owner and managers
     # only — no tab id grants it, so a restricted staff member never gets the tool.
     "project_file": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
@@ -2288,7 +2290,10 @@ class CommerceAdminSkill(BaseSkill):
             return SkillOutput(answer=refuse, skill_name=self.name, confidence=1.0)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
-               "message": inp.question, "session_id": inp.metadata.get("session_id")}
+               "message": inp.question, "session_id": inp.metadata.get("session_id"),
+               # files a tool made this turn (custom_sheet): shared with the caller's metadata so the
+               # dashboard chat can offer them as downloads, whichever way the turn ends
+               "files": inp.metadata.setdefault("files_out", [])}
         if "access" in inp.metadata:     # dashboard chat: the signed-in member's own access
             ctx["access"] = inp.metadata["access"]
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
@@ -4231,6 +4236,8 @@ class CommerceAdminSkill(BaseSkill):
                 if not (sent or link):
                     return {"error": "The sheet was made but couldn't be sent or stored just now — please try again."}
                 await asyncio.to_thread(sb.mark_built, tid, d)
+                if link:   # the dashboard chat shows it as a Download button (SkillOutput.files)
+                    ctx.setdefault("files", []).append({"name": fname, "url": link, "kind": "xlsx"})
                 fields = sb.fields_for(spec)
                 text = (f"📊 *{spec['title']}* — {len(rows):,} row(s), checked against the books."
                         + ("\nTotals: " + " · ".join(f"{fields[c].label} {sb._cell_text(fields[c], v)}" for c, v in tot.items()) if tot else "")

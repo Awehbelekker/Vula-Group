@@ -28,7 +28,8 @@ _ACTION = re.compile(
 _RECORDS = re.compile(
     r"\b(our|my|we|us|we've|we're)\b[^.?!\n]{0,30}\b(orders?|invoices?|quotes?|sales|stock|customers?|"
     r"clients?|suppliers?|expenses?|payments?|bookings?|outstanding|overdue|revenue|turnover|profit|"
-    r"debtors?|creditors?|cash\s*flow|projects?|timesheets?|budgets?)\b|"
+    r"debtors?|creditors?|cash\s*flow|projects?|timesheets?|budgets?|products?|catalogue|"
+    r"price\s*list|bank)\b|"
     r"\bwho\s+(still\s+)?owes\b|\b(what|how\s+much)\s+(do|does|did)\s+[\w' ]{1,30}\s+owe\b|"
     r"\bowes?\s+us\b", re.I)
 

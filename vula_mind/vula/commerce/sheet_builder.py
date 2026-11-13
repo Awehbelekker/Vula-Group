@@ -117,6 +117,14 @@ SOURCES: Dict[str, Source] = {
            ("delivery", "Delivery", "money"), ("total", "Total", "money")),
         ("number", "date", "customer", "status", "total"),
         ("period", "customer", "status"), "_orders", party="customer"),
+    # 13 Nov 2026 (Ian: spreadsheets out of the chat): the catalogue, one row per variant.
+    "products": Source(
+        "products", "Products", "products",
+        _f(("name", "Product", "text"), ("variant", "Variant", "text"), ("sku", "SKU", "text"),
+           ("category", "Category", "text"), ("choices", "Choices", "text"), ("price", "Price", "money"),
+           ("cost", "Cost", "money"), ("stock", "Stock", "number"), ("status", "Status", "text")),
+        ("name", "variant", "price", "stock", "status"),
+        ("status",), "_products", party="name"),
 }
 
 _GROUP_FIELD = {"month": "date", "project": "project", "supplier": "supplier", "customer": "customer",
@@ -466,13 +474,80 @@ def _orders(tenant_id, since, until, labels):
             for r in _pages(make)]
 
 
+def _variant_label(values: Any) -> str:
+    """{"Size": "9'6", "Colour": "Black"} → "Size 9'6 / Colour Black"."""
+    if isinstance(values, dict):
+        return " / ".join(f"{k} {v}" for k, v in values.items() if v not in (None, ""))
+    if isinstance(values, list):
+        return " / ".join(str(v) for v in values if v not in (None, ""))
+    return str(values or "")
+
+
+def _choices_text(choices: Any) -> str:
+    """The choices a customer picks from (migration 267), e.g. "Size: 9'6, 12'; Colour: Black"."""
+    out = []
+    for c in choices if isinstance(choices, list) else []:
+        if isinstance(c, dict) and c.get("name"):
+            opts = [str(o.get("label") if isinstance(o, dict) else o) for o in (c.get("options") or [])]
+            out.append(f"{c['name']}: {', '.join(o for o in opts if o)}")
+    return "; ".join(out)
+
+
+def _products(tenant_id, since, until, labels):
+    """The catalogue (no dates: the period doesn't apply). A product with variants gives one row
+    per variant, with the variant's own price and stock; prices stay in cents."""
+    def products():
+        return (_db().table("commerce_products")
+                .select("id,name,sku,category,choices,price_cents,cost_cents,stock_quantity,status,archived,sort_order")
+                .eq("tenant_id", tenant_id).order("sort_order"))
+
+    def variants():
+        return (_db().table("commerce_product_variants")
+                .select("product_id,option_values,sku,price_cents,cost_cents,stock_quantity,archived,sort_order")
+                .eq("tenant_id", tenant_id).order("sort_order"))
+    try:
+        by_product: Dict[str, List[Dict[str, Any]]] = {}
+        for v in _pages(variants):
+            by_product.setdefault(str(v.get("product_id")), []).append(v)
+    except SpecError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — before migration 087 there are no variants
+        log.debug("product variants skipped: %s", exc)
+        by_product = {}
+
+    def num(v):
+        return None if v in (None, "") else (int(v) if float(v).is_integer() else float(v))
+    out = []
+    for p in _pages(products):
+        status = "archived" if p.get("archived") else (p.get("status") or "active")
+        base = {"name": p.get("name") or "", "category": p.get("category") or "",
+                "choices": _choices_text(p.get("choices"))}
+        vs = by_product.get(str(p.get("id")), [])
+        if not vs:
+            out.append({**base, "variant": "", "sku": p.get("sku") or "",
+                        "price": int(p["price_cents"]) if p.get("price_cents") is not None else None,
+                        "cost": int(p["cost_cents"]) if p.get("cost_cents") is not None else None,
+                        "stock": num(p.get("stock_quantity")), "status": status})
+            continue
+        for v in vs:
+            out.append({**base, "variant": _variant_label(v.get("option_values")), "sku": v.get("sku") or p.get("sku") or "",
+                        "price": int(v["price_cents"]) if v.get("price_cents") is not None
+                        else (int(p["price_cents"]) if p.get("price_cents") is not None else None),
+                        "cost": int(v["cost_cents"]) if v.get("cost_cents") is not None else None,
+                        "stock": num(v.get("stock_quantity")),
+                        "status": "archived" if v.get("archived") else status})
+    return out
+
+
 _LOADERS: Dict[str, Callable] = {"_supplier_invoices": _supplier_invoices, "_supplier_lines": _supplier_lines,
                                  "_bank": _bank, "_expenses": _expenses,
-                                 "_customer_invoices": _customer_invoices, "_orders": _orders}
+                                 "_customer_invoices": _customer_invoices, "_orders": _orders,
+                                 "_products": _products}
 # Left out unless the owner asks for that status: they're not real money.
 _NOT_COUNTED = {"expenses": {"cancelled", "void", "deleted"},
                 "customer_invoices": {"cancelled", "void", "draft"},
-                "orders": {"cancelled", "abandoned", "pending_payment"}}
+                "orders": {"cancelled", "abandoned", "pending_payment"},
+                "products": {"archived"}}
 
 
 # ── filters ────────────────────────────────────────────────────────────────

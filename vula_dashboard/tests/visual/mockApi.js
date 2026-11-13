@@ -365,6 +365,11 @@ function routes(role, modules = []) {
     r("POST", `^/v1/recurring-bills/${T}/${T}/status`, () => ({ ok: true })),
     r("POST", `${A}/assistant`, (m, url, req) => {
       const b = req.postDataJSON() || {};
+      if (/spreadsheet of (my|our) products/i.test(b.message || "")) return { answer: "📊 Price list — 3 row(s), checked against the books.\nDownload (for a week): https://files.vula.test/sheets/Price_list.xlsx",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business",
+        files: [{ name: "Price_list_2026-11-13.xlsx", url: "https://files.vula.test/sheets/Price_list.xlsx", kind: "xlsx" }] };
+      if (/as a table/i.test(b.message || "")) return { answer: "## Board bags\n| Supplier | Price |\n|---|---:|\n| Surf Shop | R 1 450 |\n| Bags Direct | R 1 390 |",
+        session_id: "sess-me", message_id: "msg-table", answered_by: "open" };
       if (/stock/i.test(b.message || "")) return { answer: "Set the 9ft bag's stock to 4?", session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business",
         confirm_request: { id: "pc-1", summary: "Set the 9ft bag's stock to 4?", confirm_label: "Confirm", cancel_label: "Cancel" } };
       if (b.mode === "research" && /deck/i.test(b.message || "") && !b.fresh) return { answer: "Oil a timber deck once a year [1].",
@@ -384,6 +389,10 @@ function routes(role, modules = []) {
       if (b.mode === "open" && !/owe|invoice|order/i.test(b.message || "")) return { answer: `Five ideas for you: (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "open" };
       return { answer: `Today: 4 orders, R 1 842.50 paid. (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business" };
     }),
+    r("POST", `${A}/assistant/sheet$`, (m, url, req) => (req.postDataJSON()?.message_id === "msg-table"
+      ? { __raw: { status: 200, contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          body: Buffer.from("PK-fake-xlsx"), headers: { "Content-Disposition": 'attachment; filename="Board_bags_2026-11-13.xlsx"', "Access-Control-Expose-Headers": "Content-Disposition" } } }
+      : { __raw: { status: 400, contentType: "application/json", body: '{"detail":"There\'s no table in that answer to put in a spreadsheet."}' } })),
     r("POST", `${A}/assistant/research/${T}/share`, (m, url, req) => ({ note: { id: m[2], shared: !!req.postDataJSON()?.shared } })),
     r("POST", `${A}/assistant/attach$`, (m, url, req) => {
       const names = [...String(req.postData() || "").matchAll(/filename="([^"]+)"/g)].map((x) => x[1]);
@@ -509,7 +518,7 @@ export async function installMockApi(page, { role = "owner", modules = [] } = {}
       const hit = url.pathname.match(re);
       if (!hit) continue;
       const out = fn(hit, url, req);
-      if (out && out.__raw) return route.fulfill({ ...out.__raw, headers: cors });
+      if (out && out.__raw) return route.fulfill({ ...out.__raw, headers: { ...cors, ...(out.__raw.headers || {}) } });
       return route.fulfill({ ...json(out), headers: cors });
     }
 

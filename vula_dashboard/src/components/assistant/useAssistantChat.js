@@ -108,7 +108,8 @@ export function useAssistantChat(tenantId) {
       const d = await r.json()
       const text = d.answer || (typeof d.detail === 'string' ? d.detail : "Sorry, I couldn't process that.")
       setMessages(m => [...m, { role: 'assistant', text, id: d.message_id || null, sessionId: d.session_id || null,
-        answeredBy: d.answered_by || null, confirm: d.confirm_request || null, research: d.research || null, asked: msg }])
+        answeredBy: d.answered_by || null, confirm: d.confirm_request || null, research: d.research || null, asked: msg,
+        files: Array.isArray(d.files) ? d.files : [] }])
     } catch {
       setMessages(m => [...m, { role: 'assistant', text: 'Connection error — please try again.' }])
     } finally {
@@ -171,8 +172,34 @@ export function useAssistantChat(tenantId) {
     }
   }
 
+  // "Download as spreadsheet" (13 Nov 2026): a reply's own tables as an Excel file, made by the
+  // server from the saved reply (vula/answer_sheet.py) — only for replies in this person's own chat.
+  async function downloadSheet(message) {
+    if (!message.id) return
+    const same = (x) => x.id === message.id
+    setMessages(m => m.map(x => (same(x) ? { ...x, sheet: 'making' } : x)))
+    let state = 'failed', note = ''
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant/sheet`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: message.id, session_id: sessionId.current }),
+      })
+      if (r.ok) {
+        const name = (/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'Vula_answer.xlsx'
+        const url = URL.createObjectURL(await r.blob())
+        Object.assign(document.createElement('a'), { href: url, download: name }).click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        state = 'done'
+      } else {
+        const d = await r.json().catch(() => ({}))
+        note = typeof d.detail === 'string' ? d.detail : ''
+      }
+    } catch { /* shown below */ }
+    setMessages(m => m.map(x => (same(x) ? { ...x, sheet: state, sheetNote: note } : x)))
+  }
+
   const researching = sending && openAvailable && mode === 'open' && research
   return { messages, input, setInput, sending, endRef, send, rate, decide, mode, setMode, openAvailable,
     files, fileError, attach, removeFile, keepFile, research, setResearch, researching,
-    keepPrivate, setKeepPrivate, researchAgain, shareResearch }
+    keepPrivate, setKeepPrivate, researchAgain, shareResearch, downloadSheet }
 }

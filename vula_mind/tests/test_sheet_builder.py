@@ -402,9 +402,12 @@ async def test_a_bad_column_comes_back_as_what_is_possible(tool):
     assert out["status"] == "need_info" and "Columns it can have" in out["message"]
 
 
-def test_the_tool_is_for_finance_access_and_not_for_reps():
+def test_the_tool_checks_each_sources_access_and_is_not_for_reps():
+    # 13 Nov 2026: the tool itself is general (a products sheet needs products access, not
+    # finances); each source's own scope is checked when the sheet is designed or built.
     from core.skills import commerce_admin as ca
-    assert ca._TOOL_SCOPE["custom_sheet"] == "finances"
+    assert "custom_sheet" not in ca._TOOL_SCOPE
+    assert sb.SOURCES["bank"].scope == "finances" and sb.SOURCES["products"].scope == "products"
     assert "custom_sheet" not in {t["function"]["name"] for t in ca._tools_for("t", role="sales_rep")}
 
 
@@ -584,3 +587,52 @@ async def test_design_and_build_with_calculations_and_a_chart(tool):
     assert "Margin % on the total" in out["reply_verbatim"]
     out = await tool(action="build")
     assert "checked against the books" in out["reply_verbatim"] and tool.sent
+
+
+# ── products (13 Nov 2026: spreadsheets out of the chat) ─────────────────────
+
+@pytest.fixture
+def catalogue(books):
+    t = books.tables
+    t["commerce_products"] = [
+        {"tenant_id": "tenant-a", "id": "p1", "name": "Day bag", "sku": "DB", "category": "Bags",
+         "choices": [{"name": "Colour", "options": ["Black", "Olive"]}], "price_cents": 145_000,
+         "cost_cents": 80_000, "stock_quantity": None, "status": "active", "archived": False, "sort_order": 1},
+        {"tenant_id": "tenant-a", "id": "p2", "name": "Wax", "sku": "WX", "category": "Care", "choices": [],
+         "price_cents": 6_500, "cost_cents": 3_000, "stock_quantity": 40, "status": "active", "archived": False,
+         "sort_order": 2},
+        {"tenant_id": "tenant-a", "id": "p3", "name": "Old leash", "sku": "OL", "category": "Care", "choices": [],
+         "price_cents": 9_900, "stock_quantity": 0, "status": "active", "archived": True, "sort_order": 3},
+        {"tenant_id": "tenant-b", "id": "p9", "name": "Someone else's", "price_cents": 1, "archived": False},
+    ]
+    t["commerce_product_variants"] = [
+        {"tenant_id": "tenant-a", "product_id": "p1", "option_values": {"Size": "9'6"}, "sku": "DB-96",
+         "price_cents": 145_000, "stock_quantity": 3, "archived": False, "sort_order": 1},
+        {"tenant_id": "tenant-a", "product_id": "p1", "option_values": {"Size": "12'"}, "sku": "DB-12",
+         "price_cents": 165_000, "stock_quantity": 2, "archived": False, "sort_order": 2},
+    ]
+    return books
+
+
+def test_products_are_one_row_per_variant_in_cents_and_archived_ones_are_left_out(catalogue):
+    spec = sb.validate({"source": "products", "title": "Price list"})
+    rows = sb.rows_for("tenant-a", spec, {}, TODAY)
+    assert [(r["name"], r["variant"], r["price"], r["stock"]) for r in rows] == [
+        ("Day bag", "Size 9'6", 145_000, 3), ("Day bag", "Size 12'", 165_000, 2), ("Wax", "", 6_500, 40)]
+    assert rows[0]["choices"] == "Colour: Black, Olive"
+    assert sb.totals(spec, rows) == {"price": 316_500}
+    archived = sb.rows_for("tenant-a", sb.validate({"source": "products", "filters": {"status": "archived"}}), {}, TODAY)
+    assert [r["name"] for r in archived] == ["Old leash"]
+
+
+@pytest.mark.asyncio
+async def test_a_products_only_login_gets_a_price_list_but_not_the_bank(catalogue, tool, monkeypatch):
+    from core.skills import commerce_admin as ca
+    monkeypatch.setattr(ca, "_member_access", lambda tid, phone: ["products"])
+    out = await tool(action="design", spec={"source": "products", "title": "Price list"})
+    assert "reply_verbatim" in out
+    out = await tool(action="build")
+    assert "checked against the books" in out["reply_verbatim"]
+    assert tool.ctx["files"][0]["name"].startswith("Price_list") and tool.ctx["files"][0]["url"].startswith("signed:")
+    no = await tool(action="design", spec={"source": "bank"})
+    assert no["status"] == "need_info" and "doesn't include bank lines" in no["message"]
