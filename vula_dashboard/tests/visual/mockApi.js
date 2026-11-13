@@ -370,6 +370,11 @@ function routes(role, modules = []) {
       if (b.mode === "open" && !/owe|invoice|order/i.test(b.message || "")) return { answer: `Five ideas for you: (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "open" };
       return { answer: `Today: 4 orders, R 1 842.50 paid. (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business" };
     }),
+    r("POST", `${A}/assistant/attach$`, (m, url, req) => {
+      const names = [...String(req.postData() || "").matchAll(/filename="([^"]+)"/g)].map((x) => x[1]);
+      return { attachments: names.map((name, i) => ({ id: `${"a".repeat(31)}${i}`, name, pages: 1, chars: 1200, truncated: false, filed: false })), problems: [] };
+    }),
+    r("POST", `${A}/assistant/attach/${T}/file$`, (m) => ({ attachment: { id: m[1], filed: true } })),
     r("POST", `${A}/assistant/confirm`, (m, url, req) => (req.postDataJSON()?.action === "cancel"
       ? { answer: "Cancelled — nothing was changed.", ok: false } : { answer: "Stock for the 9ft bag is now 4.", ok: true })),
     r("GET", `${A}/agent-activity`, () => ({ events: F.agentEvents })),

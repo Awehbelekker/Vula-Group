@@ -528,6 +528,10 @@ class Settings(BaseSettings):
     # the week, cut short and marked as old (vula/commerce/service.py::earlier_topics), so
     # planning that spans days isn't lost at the 24-hour history window. No model call.
     history_earlier_topics_enabled: bool = False
+    # "What did we decide about…": search a staff member's OWN earlier threads with Vula
+    # (vula/chat_recall.py), dated quotes, old figures re-checked. No model call to search.
+    chat_recall_enabled: bool = False
+    chat_recall_days: int = 180
 
     # ── Accuracy (12 Nov 2026) ───────────────────────────────────────────────
     # A question about this business's own facts (hours, delivery, address, policies) with no

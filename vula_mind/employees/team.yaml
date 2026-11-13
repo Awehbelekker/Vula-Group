@@ -7,7 +7,8 @@
 # instructions (Team › AI employees); these files are the defaults every business starts from.
 order: [bookkeeper, sales, office_admin, marketing, operations, advisor]
 # Tools every employee keeps: the business's memory, exact arithmetic, reminders, a spreadsheet in
-# the owner's own layout (custom_sheet), forms for the team to fill in, the timesheets, and hand_over.
+# the owner's own layout (custom_sheet), forms for the team to fill in, the timesheets, the
+# person's own earlier chats (search_past_chats, where chat_recall is on), and hand_over.
 shared_tools:
 - calculate
 - complete_reminder
@@ -25,4 +26,5 @@ shared_tools:
 - lookup_business_info
 - record_decision
 - remember_rule
+- search_past_chats
 - withdraw_decision

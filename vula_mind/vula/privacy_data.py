@@ -43,10 +43,24 @@ def phone_variants(phone: str) -> List[str]:
     return seen
 
 
+def _member_thread(tenant_id: str, variants: List[str]) -> List[str]:
+    """A team member's dashboard thread with Vula (webadmin:m:{id}), when this number is theirs.
+    13 Nov 2026: erase and export covered their WhatsApp thread only."""
+    try:
+        from vula import team_index
+        for v in variants:
+            row = team_index.member_for_phone(tenant_id, v)
+            if row and row.get("id"):
+                return [f"webadmin:m:{row['id']}"]
+    except Exception as exc:  # noqa: BLE001 — the number's own threads still count
+        logger.debug("data: member thread lookup skipped: %s", exc)
+    return []
+
+
 def _session_ids(tenant_id: str, variants: List[str]) -> List[str]:
     """This number's conversation sessions: as a customer ({phone}) and, for one of the
-    business's own people, their thread with Vula (admin:{phone})."""
-    keys = variants + [f"admin:{v}" for v in variants]
+    business's own people, their threads with Vula (admin:{phone} and their dashboard thread)."""
+    keys = variants + [f"admin:{v}" for v in variants] + _member_thread(tenant_id, variants)
     rows = (_client().table("commerce_conversation_sessions").select("id")
             .eq("tenant_id", tenant_id).in_("session_key", keys).execute().data or [])
     return [r["id"] for r in rows if isinstance(r, dict) and r.get("id")]

@@ -44,6 +44,9 @@ then turn it on for everyone with the env setting (and `railway up`).
 | 2 | Client notes | Off the Hook | Read a few rows of `commerce_client_summaries`: dated, no amounts, nothing invented | `CLIENT_MEMORY_ENABLED` |
 | 3 | "I don't have that" for business facts with nothing on file | A business whose profile is filled in | "Handed to a person" should rise a little, not a lot | `STRICT_TENANT_GROUNDING` |
 | 4 | Staff private notes, earlier-in-the-week topics, the AI advisor | Staff who ask for them | Staff feedback | `PERSONAL_MEMORY_ENABLED`, `HISTORY_EARLIER_TOPICS_ENABLED`, `ADVISOR_MODE_ENABLED` |
+| 5 | Searching your own earlier chats ("what did we decide about…") | DIGG | Ask it about something from a few weeks back: dated quotes, only that person's own threads, old figures not stated as current | `CHAT_RECALL_ENABLED` |
+
+Piloting since 13 Nov 2026: DIGG has client notes, private notes and earlier-in-the-week topics; Off the Hook has client notes.
 
 Before step 1, set each pilot business's voices: **Assistant › Activity › How Vula sounds**
 (customers and team).
