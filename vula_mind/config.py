@@ -558,6 +558,9 @@ class Settings(BaseSettings):
     open_chat_enabled: bool = False
     open_chat_per_hour: int = 60          # messages per person per hour in the open chat
     research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
+    # Cut the research prompt to fit the local model so Vula's own model writes it; off = the
+    # full pages, which goes to the cloud for size (vula/research.py).
+    research_local_first: bool = True
 
     # Website import (vula/commerce/site_import.py): copy each product's photos into the
     # business's own storage, so they survive the old site changing. Off = keep the shop's CDN

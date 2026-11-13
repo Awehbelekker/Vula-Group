@@ -317,6 +317,16 @@ def reset_health_cache() -> None:
     _cache.clear()
 
 
+def local_prompt_cap_tokens() -> int:
+    """The largest prompt (estimated tokens, chars/4) that stays local — assess_complexity's limit.
+    A caller that can shorten its prompt (vula/research.py) fits it under this to stay local."""
+    cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
+    ctx = int(getattr(settings, "local_context_tokens", 0) or 0)
+    if ctx:
+        cap = min(cap, max(ctx - 2048, 1024))
+    return cap
+
+
 def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] = None) -> Optional[str]:
     """Requirement (c): return a reason string if the task genuinely needs frontier (cloud)
     reasoning, else None. Explicit threshold: a frontier task_type, or an estimated prompt size
@@ -325,12 +335,9 @@ def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] 
     if task_type and task_type in _FRONTIER_TASK_TYPES:
         return f"complexity:{task_type}"
     if messages:
-        cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
         # A prompt that doesn't fit the local context window (leaving room for tool results
         # and the reply) can't be answered locally anyway — Ollama would silently drop its start.
-        ctx = int(getattr(settings, "local_context_tokens", 0) or 0)
-        if ctx:
-            cap = min(cap, max(ctx - 2048, 1024))
+        cap = local_prompt_cap_tokens()
         chars = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict))
         if chars // 4 >= cap:
             return f"complexity:tokens>={cap}"
@@ -589,10 +596,18 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
     return {**local_generation_kwargs(model), **cloud_generation_kwargs(model)}
 
 
+# Built-in cloud models for some task types, used when CLOUD_MODEL_BY_TASK has no entry for
+# them (an entry there still wins). 13 Nov 2026, Ian: research writes a long, cited answer from
+# several pages — Gemini 2.5 Flash, not the general fallback model.
+_TASK_CLOUD_DEFAULTS = {"research": "google/gemini-2.5-flash", "research_plan": "google/gemini-2.5-flash"}
+
+
 def cloud_model_for(task_type: Optional[str]) -> str:
-    """The OpenRouter model for this task: CLOUD_MODEL_BY_TASK's entry, else model_worker_cloud.
-    A malformed map is ignored (logged), never fatal."""
-    default = settings.model_worker_cloud or settings.model_worker
+    """The OpenRouter model for this task: CLOUD_MODEL_BY_TASK's entry, else the built-in
+    default for the task (_TASK_CLOUD_DEFAULTS), else model_worker_cloud. A malformed map is
+    ignored (logged), never fatal."""
+    default = (_TASK_CLOUD_DEFAULTS.get(task_type or "")
+               or settings.model_worker_cloud or settings.model_worker)
     raw = (settings.cloud_model_by_task or "").strip()
     if not raw or not task_type:
         return default
