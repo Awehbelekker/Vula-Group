@@ -53,6 +53,33 @@ def _db():
                                       {"tenant_id": T, "client_key": OTHER, "summary": "someone else"}],
         "commerce_orders": [{"tenant_id": T, "customer_phone": ME, "total_cents": 12000}],
         "commerce_invoices": [{"tenant_id": T, "customer_phone": ME, "total_cents": 12000}],
+        # vula/listings: the website keeps the number as it was typed
+        "vula_properties": [{"id": "p-1", "tenant_id": T, "title": "3 bed house, Durbanville"},
+                            {"id": "p-2", "tenant_id": T, "title": "Flat, Bellville"}],
+        "vula_property_enquiries": [
+            {"id": "e-1", "tenant_id": T, "property_id": "p-1", "name": "Me", "whatsapp": "082 111 2222",
+             "message": "Is it still available?", "preferred_times": "Saturday morning",
+             "created_at": "2026-10-03T08:00:00Z"},
+            {"id": "e-2", "tenant_id": T, "property_id": "p-2", "name": "Me", "whatsapp": "+27 82 111 2222",
+             "message": "Pets allowed?", "created_at": "2026-10-04T08:00:00Z"},
+            {"id": "e-3", "tenant_id": T, "property_id": "p-1", "name": "Other", "whatsapp": "082 000 0009",
+             "message": "not mine", "created_at": "2026-10-03T09:00:00Z"},
+            {"id": "e-4", "tenant_id": T, "property_id": "p-1", "name": "Email only", "whatsapp": None,
+             "message": "no number", "created_at": "2026-10-03T09:00:00Z"},
+            {"id": "e-5", "tenant_id": "other", "name": "Me", "whatsapp": "0821112222", "message": "elsewhere"},
+        ],
+        "vula_buyer_wishes": [
+            {"id": "w-1", "tenant_id": T, "phone": ME, "min_bedrooms": 3, "property_types": ["house"],
+             "listing_type": "sale", "suburbs": ["Durbanville"]},
+            {"id": "w-2", "tenant_id": T, "phone": OTHER, "property_types": ["flat"]},
+            {"id": "w-3", "tenant_id": "other", "phone": ME, "property_types": ["flat"]},
+        ],
+        "vula_listing_shares": [
+            {"id": "sh-1", "tenant_id": T, "phone": ME, "property_id": "p-1", "created_at": "2026-10-02T08:00:00Z"},
+            {"id": "sh-2", "tenant_id": T, "phone": OTHER, "property_id": "p-1"},
+            {"id": "sh-3", "tenant_id": "other", "phone": ME, "property_id": "p-9"},
+        ],
+        "vula_deals": [{"id": "d-1", "tenant_id": T, "title": "3 bed house", "contact_phone": ME}],
     })
 
 
@@ -69,7 +96,8 @@ def test_erase_removes_every_conversation_store_for_this_number_only():
     assert out["failed"] == []
     assert out["removed"] == {"chat_messages": 3, "conversations": 3, "turn_records": 1,
                               "question_log": 1, "open_questions": 1, "escalations": 1, "client_note": 1,
-                              "private_notes": 0}        # a customer: no staff notes to remove
+                              "private_notes": 0,        # a customer: no staff notes to remove
+                              "property_enquiries": 2, "buyer_wish": 1, "listings_sent": 1}
     assert [r["client_key"] for r in db.rows["commerce_client_summaries"]] == ["27820000009"]
     # nothing of theirs is left in this business
     assert [r["phone"] for r in db.rows["vula_chat_messages"]] == [OTHER, ME]       # other person; other business
@@ -87,6 +115,36 @@ def test_erase_keeps_financial_records():
     with patch.object(service, "_client", return_value=db):
         privacy_data.erase(T, ME)
     assert db.count("commerce_orders") == 1 and db.count("commerce_invoices") == 1
+    assert db.count("vula_deals") == 1          # the business's pipeline record, kept like orders
+
+
+def test_erase_removes_property_enquiries_typed_any_way_and_the_wish_that_would_keep_matching():
+    """Master's listings (migrations 257-259) keep a person's enquiry, what they're looking for
+    and the listings sent to them. Left behind, the wish would keep matching them to new
+    listings after they asked for their data to be deleted."""
+    db = _db()
+    with patch.object(service, "_client", return_value=db):
+        privacy_data.erase(T, "0821112222")
+    assert {r["id"] for r in db.rows["vula_property_enquiries"]} == {"e-3", "e-4", "e-5"}
+    assert {r["id"] for r in db.rows["vula_buyer_wishes"]} == {"w-2", "w-3"}
+    assert {r["id"] for r in db.rows["vula_listing_shares"]} == {"sh-2", "sh-3"}
+    assert db.count("vula_properties") == 2
+
+
+def test_same_number_matches_the_last_nine_digits_only_of_a_full_number():
+    v = privacy_data.phone_variants(ME)
+    assert privacy_data.same_number("082 111 2222", v) and privacy_data.same_number("+27 (82) 111-2222", v)
+    assert not privacy_data.same_number("082 000 0009", v)
+    assert not privacy_data.same_number("2222", v) and not privacy_data.same_number("", v)
+
+
+def test_a_missing_listings_table_is_reported_not_hidden():
+    db = _db()
+    db.fail.add("vula_property_enquiries")
+    with patch.object(service, "_client", return_value=db):
+        out = privacy_data.erase(T, ME)
+    assert out["failed"] == ["property_enquiries"]
+    assert out["removed"]["buyer_wish"] == 1 and out["removed"]["chat_messages"] == 3
 
 
 def test_a_store_that_fails_is_reported_and_the_rest_still_run():
@@ -156,3 +214,37 @@ async def test_assembled_export_includes_the_commerce_conversation():
         data = await data_export.assemble_export(T, ME)
     texts = [m.text for m in data["messages"]]
     assert texts == ["knowledge question", "order please", "sure", "sales today?"]
+
+
+def test_export_includes_their_property_records_and_nobody_elses():
+    with patch.object(service, "_client", return_value=_db()):
+        got = privacy_data.property_records(T, "+27821112222")
+    assert got["enquiries"] == [
+        {"date": "2026-10-03", "property": "3 bed house, Durbanville", "message": "Is it still available?",
+         "preferred_times": "Saturday morning"},
+        {"date": "2026-10-04", "property": "Flat, Bellville", "message": "Pets allowed?", "preferred_times": ""},
+    ]
+    assert got["wish"] == "3+ bed house to buy in Durbanville"
+    assert got["listings_sent"] == [{"date": "2026-10-02", "property": "3 bed house, Durbanville"}]
+
+
+def test_export_property_parts_fail_on_their_own():
+    db = _db()
+    db.fail.add("vula_property_enquiries")
+    with patch.object(service, "_client", return_value=db):
+        got = privacy_data.property_records(T, ME)
+    assert got["enquiries"] == [] and got["wish"] and len(got["listings_sent"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_export_document_has_the_property_sections():
+    from vula.api import data_export
+    chat = MagicMock()
+    chat.get.return_value = []
+    with patch.object(service, "_client", return_value=_db()), \
+         patch("vula.chat.history.get_db", return_value=chat):
+        data = await data_export.assemble_export(T, ME)
+    md = data_export._render_export_markdown(ME, data)
+    assert "## Property enquiries (2)" in md and "Pets allowed?" in md and "not mine" not in md
+    assert "## What you told us you're looking for" in md and "3+ bed house to buy in Durbanville" in md
+    assert "## Listings sent to you (1)" in md

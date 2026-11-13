@@ -100,7 +100,14 @@ async def assemble_export(tenant_id: str, phone: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.debug("data export: client note skipped: %s", exc)
         note = ""
-    return {"messages": messages, "orders": orders, "invoices": invoices, "email": email, "note": note}
+    # Property enquiries, what they're looking for, listings sent to them (vula/listings).
+    try:
+        property_data = privacy_data.property_records(tenant_id, phone)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: property records skipped: %s", exc)
+        property_data = {}
+    return {"messages": messages, "orders": orders, "invoices": invoices, "email": email, "note": note,
+            "property": property_data}
 
 
 def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
@@ -142,6 +149,24 @@ def _render_export_markdown(phone: str, data: Dict[str, Any]) -> str:
                          f"R{total:.2f} — {i.get('status', '')} — {(i.get('created_at') or '')[:10]}")
     else:
         lines.append("_No invoices or quotes on file._")
+
+    prop = data.get("property") or {}
+    if prop.get("enquiries"):
+        lines.append("")
+        lines.append(f"## Property enquiries ({len(prop['enquiries'])})")
+        for e in prop["enquiries"]:
+            about = f" about {e['property']}" if e.get("property") else ""
+            when = f" — preferred times: {e['preferred_times']}" if e.get("preferred_times") else ""
+            lines.append(f"- *{e.get('date', '')}*{about}: {e.get('message') or '(no message)'}{when}")
+    if prop.get("wish"):
+        lines.append("")
+        lines.append("## What you told us you're looking for")
+        lines.append(prop["wish"])
+    if prop.get("listings_sent"):
+        lines.append("")
+        lines.append(f"## Listings sent to you ({len(prop['listings_sent'])})")
+        for s in prop["listings_sent"]:
+            lines.append(f"- *{s.get('date', '')}* — {s.get('property') or 'a listing'}")
 
     return "\n".join(lines)
 

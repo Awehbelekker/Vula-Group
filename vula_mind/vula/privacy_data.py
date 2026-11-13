@@ -9,7 +9,8 @@ This is the one list of where conversation data lives. A new store that holds wh
 adds a step here, so delete and export can never fall behind again.
 
 Not erased, on purpose: orders, invoices and payments. A business must keep its financial
-records by law, and the reply to the person says so.
+records by law, and the reply to the person says so. Deals in the pipeline (vula_deals) are the
+business's own record too, and are kept like orders.
 """
 from __future__ import annotations
 
@@ -111,6 +112,42 @@ def _erase_private_notes(tenant_id: str, variants: List[str]) -> int:
     return personal_memory.erase_for_phone(tenant_id, variants)
 
 
+def same_number(stored: str, variants: List[str]) -> bool:
+    """A number typed into a form ("082 111 2222", "+27 82…") against this person's number:
+    the last nine digits, as data_export matches orders."""
+    got = "".join(c for c in (stored or "") if c.isdigit())
+    want = {("".join(c for c in v if c.isdigit()))[-9:] for v in variants}
+    return len(got) >= 9 and got[-9:] in want
+
+
+def _own_enquiries(tenant_id: str, variants: List[str], cols: str = "id,whatsapp") -> List[Dict[str, Any]]:
+    """This person's property enquiries. The website stores the number as typed, so it is matched
+    here rather than with in_()."""
+    rows = (_client().table("vula_property_enquiries").select(cols)
+            .eq("tenant_id", tenant_id).execute().data or [])
+    return [r for r in rows if isinstance(r, dict) and same_number(r.get("whatsapp") or "", variants)]
+
+
+def _erase_property_enquiries(tenant_id: str, variants: List[str]) -> int:
+    ids = [r["id"] for r in _own_enquiries(tenant_id, variants) if r.get("id")]
+    if not ids:
+        return 0
+    return _count(_client().table("vula_property_enquiries").delete()
+                  .eq("tenant_id", tenant_id).in_("id", ids).execute())
+
+
+def _erase_buyer_wish(tenant_id: str, variants: List[str]) -> int:
+    """What they said they're looking for. Left behind, it would keep matching them to new
+    listings."""
+    return _count(_client().table("vula_buyer_wishes").delete()
+                  .eq("tenant_id", tenant_id).in_("phone", variants).execute())
+
+
+def _erase_listings_sent(tenant_id: str, variants: List[str]) -> int:
+    return _count(_client().table("vula_listing_shares").delete()
+                  .eq("tenant_id", tenant_id).in_("phone", variants).execute())
+
+
 # (label, step). Order matters only for readability; each step stands alone.
 ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("chat_messages", _erase_chat_messages),
@@ -121,6 +158,9 @@ ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("escalations", _erase_escalations),
     ("client_note", _erase_client_note),
     ("private_notes", _erase_private_notes),
+    ("property_enquiries", _erase_property_enquiries),
+    ("buyer_wish", _erase_buyer_wish),
+    ("listings_sent", _erase_listings_sent),
 ]
 
 
@@ -181,3 +221,51 @@ def merge_messages(*groups: List[Any]) -> List[Any]:
         seen.add(key)
         merged.append(m)
     return merged
+
+
+def property_records(tenant_id: str, phone: str) -> Dict[str, Any]:
+    """Their property enquiries, what they said they're looking for, and the listings sent to
+    them (vula/listings). Each part reads on its own: one that fails or whose table isn't there
+    is empty, never the whole export."""
+    out: Dict[str, Any] = {"enquiries": [], "wish": "", "listings_sent": []}
+    variants = phone_variants(phone)
+    if not tenant_id or not variants:
+        return out
+    titles: Dict[str, str] = {}
+
+    def title(pid: Any) -> str:
+        if not pid:
+            return ""
+        if pid not in titles:
+            try:
+                rows = (_client().table("vula_properties").select("title").eq("tenant_id", tenant_id)
+                        .eq("id", pid).limit(1).execute().data or [])
+                titles[pid] = (rows[0].get("title") or "") if rows else ""
+            except Exception:  # noqa: BLE001
+                titles[pid] = ""
+        return titles[pid]
+
+    try:
+        rows = _own_enquiries(tenant_id, variants,
+                              "id,whatsapp,property_id,message,preferred_times,created_at")
+        out["enquiries"] = [{"date": str(r.get("created_at") or "")[:10], "property": title(r.get("property_id")),
+                             "message": r.get("message") or "", "preferred_times": r.get("preferred_times") or ""}
+                            for r in sorted(rows, key=lambda r: str(r.get("created_at") or ""))]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: enquiries skipped: %s", exc)
+    try:
+        rows = (_client().table("vula_buyer_wishes").select("*").eq("tenant_id", tenant_id)
+                .in_("phone", variants).limit(1).execute().data or [])
+        if rows:
+            from vula.listings.sharing import describe_wish
+            out["wish"] = describe_wish(rows[0])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: buyer wish skipped: %s", exc)
+    try:
+        rows = (_client().table("vula_listing_shares").select("property_id,created_at")
+                .eq("tenant_id", tenant_id).in_("phone", variants).execute().data or [])
+        out["listings_sent"] = [{"date": str(r.get("created_at") or "")[:10], "property": title(r.get("property_id"))}
+                                for r in sorted(rows, key=lambda r: str(r.get("created_at") or ""))]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("data export: listings sent skipped: %s", exc)
+    return out
