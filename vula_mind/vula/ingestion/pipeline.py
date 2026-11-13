@@ -787,7 +787,10 @@ class EmbeddingEngine:
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
                 # Never more than the model takes (8,191 tokens) — the chunker keeps every chunk
                 # well under MAX_CHUNK_CHARS; this is the backstop for any other caller.
-                json={"model": self.model, "input": text[:6 * MAX_CHUNK_CHARS]},
+                json={"model": self.model, "input": text[:6 * MAX_CHUNK_CHARS],
+                      # 13 Nov 2026 audit: providers that don't keep or train on it, as for chat.
+                      **({"provider": {"data_collection": "deny", "zdr": True}}
+                         if settings.openrouter_zdr else {})},
             )
             resp.raise_for_status()
             data = resp.json().get("data", [{}])

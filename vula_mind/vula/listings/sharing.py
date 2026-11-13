@@ -223,7 +223,9 @@ async def matches_for(tenant_id: str, prop: Dict[str, Any]) -> List[Dict[str, An
     except Exception as exc:
         log.debug("matches skipped (run migration 259?): %s", exc)
         return []
-    return [w for w in wishes if w["phone"] not in sent and wish_fits(w, prop)]
+    from vula.consent import opted_out
+    return [w for w in wishes if w["phone"] not in sent and wish_fits(w, prop)
+            and not opted_out(tenant_id, w["phone"])]
 
 
 # ── Who to send to ────────────────────────────────────────────────────────────
@@ -275,6 +277,9 @@ async def send_listings(tenant_id: str, phone: str, props: List[Dict[str, Any]],
     WhatsApp refuses a business-started message more than 24 hours after the person's last
     message (it then needs an approved template) — that comes back as ok=False."""
     from vula.api import whatsapp as wa
+    from vula.consent import opted_out
+    if opted_out(tenant_id, phone):
+        return {"ok": False, "sent": [], "reason": "they opted out of messages from this business"}
     creds = await wa._resolve_wa(tenant_id, to=phone)
     if not creds:
         return {"ok": False, "sent": [], "reason": "no WhatsApp number is connected for this business"}

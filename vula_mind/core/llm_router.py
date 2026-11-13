@@ -140,6 +140,8 @@ def install_ollama_auth() -> None:
         if (is_ollama and str(model).startswith(("ollama_chat/", "ollama/")) and think_off(model)
                 and "reasoning_effort" not in kwargs and "think" not in kwargs):
             kwargs["reasoning_effort"] = "none"
+        if str(model).startswith("openrouter/"):
+            _with_zdr(kwargs)
         if not str(model).startswith("openrouter/") or args:
             return await _orig(*args, **kwargs)
         return await _with_cloud_fallback(_orig, kwargs)
@@ -558,6 +560,22 @@ def local_generation_kwargs(model: str) -> Dict[str, Any]:
     return kw
 
 
+def _with_zdr(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Every OpenRouter call goes only to providers that don't train on or keep the prompt
+    (settings.openrouter_zdr). 13 Nov 2026 audit: cloud_generation_kwargs reached 9 of 93 call
+    sites; the litellm wrapper (install_ollama_auth) now adds it to all of them. A caller's own
+    provider preferences are kept; only these two keys are filled in when missing."""
+    if not settings.openrouter_zdr:
+        return kwargs
+    extra = dict(kwargs.get("extra_body") or {})
+    provider = dict(extra.get("provider") or {})
+    provider.setdefault("data_collection", "deny")
+    provider.setdefault("zdr", True)
+    extra["provider"] = provider
+    kwargs["extra_body"] = extra
+    return kwargs
+
+
 def cloud_generation_kwargs(model: str) -> Dict[str, Any]:
     """Extra litellm kwargs for an OpenRouter call: only route to providers that don't train
     on or retain prompts (settings.openrouter_zdr). Empty for anything else."""
@@ -750,7 +768,8 @@ async def complete_local_first(route: Tuple[str, Optional[str], str], *, task_ty
         return resp, esc
 
 
-async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optional[str], str]:
+async def resolve_cheap_route(model: Optional[str] = None,
+                              task_type: str = "cheap_tier") -> Tuple[str, Optional[str], str]:
     """Cheap tier for mechanical work (doc analysis, classification, extraction).
 
     Cloud cheap model (gemini-flash, ~1/15th of the 70B), then the 70B as a last resort.
@@ -758,9 +777,12 @@ async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optiona
     and is world-open); revisit once it's secured with a service token. Callers should
     validate the output and escalate to `resolve_cloud_route()` on failure/low confidence.
     """
-    if settings.openrouter_api_key:
-        return f"openrouter/{settings.model_worker_cheap}", settings.openrouter_api_key, OPENROUTER_BASE
-    return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
+    # 13 Nov 2026 audit: this always goes to the cloud and wasn't logged, so the "why did tenant
+    # data leave South Africa" audit missed every document analysis. Logged like every other route.
+    backend = settings.model_worker_cheap if settings.openrouter_api_key else settings.model_worker_cloud
+    _log_decision(run_id=uuid.uuid4().hex, task=task_type, outcome="cloud", escalated=True,
+                  backend=f"openrouter/{backend}", reason="cheap_tier")
+    return f"openrouter/{backend}", settings.openrouter_api_key, OPENROUTER_BASE
 
 
 def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
@@ -784,6 +806,8 @@ async def resolve_vision_route() -> Tuple[str, Optional[str], str]:
 
     if settings.openrouter_api_key:
         logger.info("Ollama unreachable — falling back to OpenRouter for vision")
+        _log_decision(run_id=uuid.uuid4().hex, task="vision", outcome="cloud", escalated=True,
+                      backend=f"openrouter/{settings.model_vision}", reason="local_unreachable")
         return f"openrouter/{settings.model_vision}", settings.openrouter_api_key, OPENROUTER_BASE
 
     logger.warning(
@@ -799,5 +823,7 @@ def resolve_cloud_vision_route() -> Optional[Tuple[str, Optional[str], str]]:
     cloud model (settings.model_vision). Returns None if no cloud key is set.
     """
     if settings.openrouter_api_key:
+        _log_decision(run_id=uuid.uuid4().hex, task="vision", outcome="cloud", escalated=True,
+                      backend=f"openrouter/{settings.model_vision}", reason="cloud_vision")
         return f"openrouter/{settings.model_vision}", settings.openrouter_api_key, OPENROUTER_BASE
     return None

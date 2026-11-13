@@ -1117,6 +1117,13 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
                  tenant_id, source_file)
         return {"error": "not a bank statement of this business (supplier statement/invoice?)",
                 "not_bank_statement": True}
+    # 13 Nov 2026 audit: a private account's statement went to the cloud model to be read before
+    # it was recognised as private. The account number is read from the text first, in code.
+    from vula.commerce import bank_accounts as _ba
+    early = _ba.account_number(text)
+    if _private_owner(tenant_id, early):
+        return {"private": True, "private_to": _private_owner(tenant_id, early), "bank_account": early,
+                "parsed": 0}
     txns = await extract_transactions(text)
     if not txns:
         return {"error": "no transactions found in the statement"}
