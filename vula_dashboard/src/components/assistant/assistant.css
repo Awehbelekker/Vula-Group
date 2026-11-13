@@ -96,3 +96,12 @@
 .vas-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
 .vas-file { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 100%;
   padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+
+/* Research mode (13 Nov 2026): the toggle, and the sources under a researched answer */
+.vas-mode > .vui-btn { justify-self: start; }
+.vas-sources { display: block; margin-top: 8px; }
+.vas-sources ol { margin: 4px 0 0; padding-left: 22px; font-size: 12px; line-height: 1.5; }
+.vas-sources li { overflow-wrap: anywhere; }
+.vas-sources li.vas-doc { list-style: none; margin-left: -22px; }
+.vas-sources a { color: var(--ink); text-decoration: underline; }
+.vas-host { color: var(--muted); }

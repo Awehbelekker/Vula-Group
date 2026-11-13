@@ -694,7 +694,8 @@ async def resolve_generation_route(
 # is reached they stay local, and with local down too they stop (SpendCapReached) instead of
 # falling back to cloud. The dashboard's open chat (13 Nov 2026) is optional extra thinking,
 # not a business operation, so a cap holds for it absolutely.
-CAP_HARD_TASKS = frozenset({"open_chat"})
+# Research mode (vula/research.py) is the same optional extra, so it holds too.
+CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research"})
 
 
 class SpendCapReached(RuntimeError):
