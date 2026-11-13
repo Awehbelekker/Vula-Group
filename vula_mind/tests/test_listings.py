@@ -76,6 +76,8 @@ def env(monkeypatch):
     db = SimpleNamespace(rows={})
     db.table = lambda name: _Q(db, name)
     monkeypatch.setattr(ls, "_client", lambda: db)
+    # Consent has its own tests (tests/test_privacy_audit_1113.py); nobody here opted out.
+    monkeypatch.setattr("vula.consent.opted_out", lambda tenant_id, phone: False)
     sent = []
 
     async def send(to, text, tenant_id="", **k):

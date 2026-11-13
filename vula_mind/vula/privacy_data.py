@@ -148,7 +148,19 @@ def _erase_listings_sent(tenant_id: str, variants: List[str]) -> int:
                   .eq("tenant_id", tenant_id).in_("phone", variants).execute())
 
 
+def _by_phone(table: str, column: str = "phone") -> Callable[[str, List[str]], int]:
+    """A step that deletes this business's rows for the number in `table`.`column`."""
+    def step(tenant_id: str, variants: List[str]) -> int:
+        return _count(_client().table(table).delete()
+                      .eq("tenant_id", tenant_id).in_(column, variants).execute())
+    step.__name__ = f"_erase_{table}"
+    return step
+
+
 # (label, step). Order matters only for readability; each step stands alone.
+# 13 Nov 2026 audit: six stores that hold what was sent to or about the person were missing.
+# Left out on purpose: bookings (the business's own appointment record) and vula_wa_prompt_state
+# (no tenant_id, so deleting by number would reach the person's state with other businesses).
 ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("chat_messages", _erase_chat_messages),
     ("conversations", _erase_sessions),
@@ -161,6 +173,12 @@ ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("property_enquiries", _erase_property_enquiries),
     ("buyer_wish", _erase_buyer_wish),
     ("listings_sent", _erase_listings_sent),
+    ("messages_sent", _by_phone("vula_wa_outbound", "to_phone")),
+    ("contact_record", _by_phone("commerce_contacts")),
+    ("broadcasts_received", _by_phone("commerce_broadcast_recipients")),
+    ("delivery_failures", _by_phone("vula_webhook_failures")),
+    ("flow_progress", _by_phone("commerce_flow_sessions")),
+    ("pending_confirmations", _by_phone("commerce_pending_confirmations")),
 ]
 
 

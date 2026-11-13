@@ -402,6 +402,9 @@ async def _acknowledge(tenant_id: str, enquiry: Dict[str, Any], prop: Optional[D
         business = (get_config(tenant_id) or {}).get("display_name") or "us"
     except Exception:
         business = "us"
+    from vula.consent import opted_out
+    if opted_out(tenant_id, enquiry["whatsapp"]):
+        return False
     first = (enquiry.get("name") or "").split()[0] if (enquiry.get("name") or "").strip() else "there"
     about = prop["title"] if prop else "your enquiry"
     try:

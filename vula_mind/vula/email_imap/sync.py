@@ -393,10 +393,17 @@ def _parse_list_item(item) -> Optional[tuple]:
     return (flags, name) if name else None
 
 
+# 13 Nov 2026 audit: reading every folder (#298) also read a staff member's "Personal" or "Medical"
+# folder into the business's knowledge. A folder whose own name says it's personal is never read.
+_PERSONAL_FOLDER_NAME = re.compile(
+    r"(^|[/. _-])(personal|private|privat|persoonlik|medical|health|doctor|family|familie|kids|"
+    r"children|home|house|wedding|holiday|vacation|bank personal|my documents)([/. _-]|$)", re.IGNORECASE)
+
+
 def _folder_skipped(flags: set, name: str, skip: set) -> bool:
     if flags & _SKIP_FOLDER_FLAGS or name.lower() in skip:
         return True
-    return bool(_SKIP_FOLDER_NAME.search(name))
+    return bool(_SKIP_FOLDER_NAME.search(name) or _PERSONAL_FOLDER_NAME.search(name))
 
 
 def _quote_mailbox(name: str) -> str:
