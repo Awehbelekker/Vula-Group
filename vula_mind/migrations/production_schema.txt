@@ -191,7 +191,7 @@ vula_reasoning_telemetry: created_at:timestamptz, escalated:bool, extra:jsonb, i
 vula_reflections: created_at:timestamptz, goal:text, graph_id:text, id:int8, merge_strategy:text, model_tiers_used:jsonb, outcome_score:float8, primary_skill:text, skills_used:jsonb, tenant_id:text, total_latency_ms:int4, what_to_try_next:text, what_worked:text, winning_tier:text
 vula_reminders: completed_at:timestamptz, created_at:timestamptz, created_by:text, due_at:timestamptz, id:uuid, linked_contact_phone:text, nudged_at:timestamptz, source:text, status:text, tenant_id:text, text:text
 vula_reply_feedback: answer:text, correction:text, created_at:timestamptz, id:uuid, message_id:text, question:text, rating:text, session_id:text, tenant_id:text
-vula_research_notes: answer:text, created_at:timestamptz, created_by:text, documents:jsonb, expires_at:timestamptz, id:uuid, kind:text, last_reused_at:timestamptz, question:text, reused_count:integer, searched:jsonb, shared:boolean, sources:jsonb, superseded_by:uuid, tenant_id:text
+vula_research_notes: answer:text, created_at:timestamptz, created_by:text, documents:jsonb, expires_at:timestamptz, id:uuid, kind:text, last_reused_at:timestamptz, question:text, reused_count:int4, searched:jsonb, shared:bool, sources:jsonb, superseded_by:uuid, tenant_id:text
 vula_scheduler_lock: expires_at:timestamptz, holder:text, lock_name:text
 vula_schema_migrations: applied_at:timestamptz, applied_by:text, baseline:bool, filename:text, number:int4, sha256:text
 vula_sheet_specs: created_at:timestamptz, created_by:text, id:uuid, last_built_at:timestamptz, name:text, request:text, spec:jsonb, status:text, template_id:uuid, tenant_id:text, updated_at:timestamptz, uses:int4
