@@ -424,15 +424,130 @@ async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
 
 
 def _order_item_name(cart_item: dict) -> str:
-    """Product name for an order/receipt line — appends the variant's option values
-    (e.g. "Hake Fillets — Size: L") when the cart item is for a specific variant."""
-    name = cart_item.get("commerce_products", {}).get("name", "")
-    variant = cart_item.get("commerce_product_variants")
-    options = (variant or {}).get("option_values") or {}
-    if options:
-        suffix = ", ".join(f"{k}: {v}" for k, v in options.items())
-        return f"{name} — {suffix}" if name else suffix
+    """Product name for an order/receipt line — appends the variant's option values and the
+    customer's choices (e.g. "Day Bag — Board Size: 9'6", Primary Colour: Olive Green"). The
+    name is what invoices, the PDF, delivery and the dashboard show, so a choice made here
+    reaches all of them."""
+    name = (cart_item.get("commerce_products") or {}).get("name", "")
+    label = line_label(cart_item)
+    if label:
+        return f"{name} — {label}" if name else label
     return name
+
+
+# ── Choices that don't change the price (migration 267) ──────────────────────
+# 13 Nov 2026 (Kelp Gear, bags made to order): size is a variant with its own price; colour,
+# trim, nose and tail style are choices on the same price, kept with the cart and order line.
+
+MAX_CHOICES = 8
+MAX_CHOICE_VALUES = 40
+
+
+def clean_product_choices(raw: Any) -> List[Dict[str, Any]]:
+    """A product's choices as [{"name", "values"}]: names and values trimmed, de-duplicated,
+    capped. Anything malformed is dropped. Raises nothing."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for c in raw if isinstance(raw, list) else []:
+        if not isinstance(c, dict):
+            continue
+        name = " ".join(str(c.get("name") or "").split())[:60]
+        values = list(dict.fromkeys(" ".join(str(v).split())[:80] for v in c.get("values") or []
+                                    if isinstance(v, (str, int, float)) and str(v).strip()))
+        if not name or not values or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        out.append({"name": name, "values": values[:MAX_CHOICE_VALUES]})
+    return out[:MAX_CHOICES]
+
+
+def product_choices(product: Optional[dict]) -> List[Dict[str, Any]]:
+    return clean_product_choices((product or {}).get("choices"))
+
+
+def resolve_choices(product: Optional[dict], given: Any) -> Tuple[Dict[str, str], List[str]]:
+    """What the customer chose, matched to the product's own choices: ({name: value}, missing
+    names). `given` is a dict ({"colour": "olive"}) or the customer's own words ("olive green,
+    fish tail"). A value is only taken when it matches one of the allowed values — exactly, or
+    as the one value the words contain or are contained in — never invented."""
+    choices = product_choices(product)
+    chosen: Dict[str, str] = {}
+    if not choices:
+        return chosen, []
+
+    def norm(s: Any) -> str:
+        return " ".join(re.sub(r"[^\w'\"]+", " ", str(s or "").lower()).split())
+
+    filler = {"a", "an", "the", "in", "with", "please", "and", "style", "colour", "color", "one"}
+
+    def pick(values: List[str], said: str, drop: frozenset = frozenset()) -> Optional[str]:
+        s = norm(said)
+        if not s:
+            return None
+        exact = [v for v in values if norm(v) == s]
+        if exact:
+            return exact[0]
+        inside = [v for v in values if norm(v) and f" {norm(v)} " in f" {s} "]
+        if inside:                                   # the longest value the words contain
+            best = max(len(norm(v)) for v in inside)
+            top = [v for v in inside if len(norm(v)) == best]
+            return top[0] if len(top) == 1 else None
+        words = set(s.split()) - filler - drop       # "a fish tail" → {"fish"} ⊂ "Wide Fish Tail"
+        if not words:
+            return None
+        part = [v for v in values if words <= set(norm(v).split())]
+        return part[0] if len(part) == 1 else None
+
+    def name_words(c: Dict[str, Any]) -> frozenset:
+        return frozenset(w for w in norm(c["name"]).split() if w not in filler)
+
+    def take(c: Dict[str, Any], said: Any) -> None:
+        val = pick(c["values"], said, name_words(c))
+        if val:
+            chosen[c["name"]] = val
+
+    def named(said_name: str) -> List[Dict[str, Any]]:
+        """The choices a name refers to: exact, else the ones it shares a word with."""
+        n = norm(said_name)
+        exact = [c for c in choices if norm(c["name"]) == n]
+        return exact or [c for c in choices if name_words(c) & set(n.split())] or \
+            [c for c in choices if n and n in norm(c["name"])]
+
+    if isinstance(given, dict):
+        pairs = list(given.items())
+        free: List[str] = []
+    else:
+        segs = [x.strip() for x in re.split(r"[,;\n/]|\band\b|\bwith\b|\bplus\b", str(given or "")) if x.strip()]
+        pairs = [tuple(x.split(":", 1)) for x in segs if ":" in x]
+        free = [x for x in segs if ":" not in x]
+    for k, v in pairs:                               # "Trim Colour: Beige", {"tail": "fish"}
+        hits = named(str(k))
+        if len(hits) == 1:
+            take(hits[0], v)
+        elif hits:                                   # "colour: olive" → the one whose values fit
+            fits = [c for c in hits if c["name"] not in chosen and pick(c["values"], v)]
+            if len(fits) == 1:
+                take(fits[0], v)
+    for seg in free:                                 # "olive green", "black trim", "fish tail"
+        open_ = [c for c in choices if c["name"] not in chosen]
+        hits = [c for c in open_ if pick(c["values"], seg, name_words(c))]
+        if len(hits) > 1:                            # "black" fits colour and trim: did they say which?
+            said = set(norm(seg).split())
+            hits = [c for c in hits if name_words(c) & said] or hits
+        if len(hits) == 1:
+            take(hits[0], seg)
+    missing = [c["name"] for c in choices if c["name"] not in chosen]
+    return chosen, missing
+
+
+def line_label(cart_item: dict) -> str:
+    """'Board Size: 9'6", Primary Colour: Olive Green' — a line's variant options, then its
+    choices; '' when it has neither."""
+    options = ((cart_item.get("commerce_product_variants") or {}).get("option_values") or {})
+    choices = cart_item.get("choices") if isinstance(cart_item.get("choices"), dict) else {}
+    parts = [f"{k}: {v}" for k, v in options.items()] + \
+        [f"{k}: {v}" for k, v in choices.items() if k not in options]
+    return ", ".join(parts)
 
 
 # ── Cart ─────────────────────────────────────────────────────────────────────
@@ -468,9 +583,12 @@ async def get_or_create_cart(tenant_id: str, session_id: str, customer_phone: Op
 
 
 async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: float,
-                      variant_id: Optional[str] = None) -> dict:
-    # Check existing — matched on (cart, product, variant) so different variants of the same
-    # product are separate lines, and non-variant items keep matching each other as before.
+                      variant_id: Optional[str] = None,
+                      choices: Optional[Dict[str, str]] = None) -> dict:
+    # Check existing — matched on (cart, product, variant, choices) so different variants of the
+    # same product are separate lines, two bags in different colours are two lines (267), and
+    # items without either keep matching each other as before.
+    choices = {str(k): str(v) for k, v in (choices or {}).items() if v}
     q = (
         _client()
         .table("commerce_cart_items")
@@ -479,10 +597,11 @@ async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: f
         .eq("product_id", product_id)
     )
     q = q.eq("variant_id", variant_id) if variant_id else q.is_("variant_id", "null")
-    existing = q.limit(1).execute()
+    same = [r for r in (q.execute().data or [])
+            if (r.get("choices") if isinstance(r.get("choices"), dict) else {}) == choices]
 
-    if existing.data:
-        row = existing.data[0]
+    if same:
+        row = same[0]
         result = (
             _client()
             .table("commerce_cart_items")
@@ -532,6 +651,7 @@ async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: f
         "unit_price_cents": unit_price,
         "created_at": _now(),
         "updated_at": _now(),
+        **({"choices": choices} if choices else {}),     # only when there are any: before 267
     }
     result = _client().table("commerce_cart_items").insert(item).execute()
     return result.data[0]
@@ -846,6 +966,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
             "quantity": i["quantity"],
             "unit_price_cents": i["unit_price_cents"],
             "total_cents": int(round(i["quantity"] * i["unit_price_cents"])),
+            **({"choices": i["choices"]} if isinstance(i.get("choices"), dict) and i["choices"] else {}),
         }
         for i in items
     ]

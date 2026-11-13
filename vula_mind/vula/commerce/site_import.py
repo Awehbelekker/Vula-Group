@@ -259,6 +259,8 @@ def _from_shopify(p: Dict[str, Any], root: str) -> Dict[str, Any]:
         "images": [i.get("src") for i in images if isinstance(i, dict) and i.get("src")],
         "in_stock": any(v["in_stock"] for v in variants) if variants else True,
         "variants": [v for v in variants if v["option_values"]] if len(variants) > 1 else [],
+        "options": [n for n in options[:3] if any(n in v["option_values"] for v in variants)]
+        if len(variants) > 1 else [],
         "url": f"{root}/products/{p.get('handle')}" if p.get("handle") else root,
         "tags": p.get("tags") if isinstance(p.get("tags"), list) else
                 [t.strip() for t in str(p.get("tags") or "").split(",") if t.strip()],
@@ -562,6 +564,10 @@ def _from_wix(page: str, url: str) -> Optional[Dict[str, Any]]:
         "description": description, "image_url": gallery[0] if gallery else None, "images": gallery,
         "in_stock": (any(v["in_stock"] for v in variants) if variants else bool(w.get("isInStock", True))),
         "variants": variants if len(variants) > 1 else [],
+        "options": priced_titles if len(variants) > 1 else [],
+        "choices": [{"name": o["title"], "values": [label(o, s) for s in o.get("selections") or []
+                                                    if isinstance(s, dict) and label(o, s)]}
+                    for o in opts if o["title"] not in priced_titles],
         "url": url, "tags": [],
     }
 
@@ -784,7 +790,11 @@ async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dic
              "category": _category_key(p["category_label"] or "general"),
              "description": p["description"][:4000], "image_url": p["image_url"] or "",
              "images": p.get("images") or [],
-             "in_stock": "yes" if p["in_stock"] else "no", "status": p.get("status") or "active"}
+             "in_stock": "yes" if p["in_stock"] else "no", "status": p.get("status") or "active",
+             # which options change the price, and the choices on the same price (267) —
+             # only when there are any, so a shop without them writes nothing new
+             **({"options": p["options"]} if p.get("options") and p.get("variants") else {}),
+             **({"choices": p["choices"]} if p.get("choices") else {})}
             for p in products if p["name"] and p["price_cents"] > 0]
     st["products_on_request"] = sum(1 for p in products if p["name"] and p["price_cents"] <= 0)
     if not rows:

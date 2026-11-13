@@ -458,7 +458,7 @@ def checkout_prompt(tenant_id: str, cart: Dict[str, Any]) -> Optional[str]:
         prod = it.get("commerce_products") or {}
         cents = _line_cents(it["quantity"], it["unit_price_cents"])
         subtotal += cents
-        lines.append(f"• {_fmt_qty(prod, it['quantity'])} × {prod.get('name', 'Item')} — R{cents / 100:,.2f}")
+        lines.append(f"• {_fmt_qty(prod, it['quantity'])} × {_line_name(it)} — R{cents / 100:,.2f}")
     fee = ("" if not service.delivery_fee_known(tenant_id)
            else f"\nDelivery: R{service.delivery_fee_cents(tenant_id, cart, subtotal) / 100:,.2f}")
     return ("🧾 *Checkout*\n" + "\n".join(lines) + f"\nSubtotal: R{subtotal / 100:,.2f}" + fee
@@ -544,6 +544,14 @@ def _line_cents(qty, unit_price_cents) -> int:
     return int(round(float(qty) * float(unit_price_cents or 0)))
 
 
+def _line_name(item: Dict[str, Any]) -> str:
+    """A cart line as the customer sees it: 'Day Bag (Board Size: 9'6", Primary Colour: Olive
+    Green)' — the variant's options and the choices made (migration 267)."""
+    name = (item.get("commerce_products") or {}).get("name", "Item")
+    label = service.line_label(item)
+    return f"{name} ({label})" if label else name
+
+
 def _match_variant(variants: List[Dict[str, Any]], option_names: List[str], text: str):
     """Resolve a customer's free-text option choice (e.g. 'large', 'size L red') to a single
     variant. Returns (variant, unresolved_option_names): variant is set only on an exact single
@@ -612,6 +620,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                     "product": {"type": "string", "description": "Product name or slug."},
                     "quantity": {"type": "number", "description": "Amount to add. For products priced per kg, this is the number of kilograms (decimals allowed, e.g. 1.5). For packs, the number of packs. Only pass the amount the customer actually said — omit it if they didn't say one, and you'll be told to ask."},
                     "variant": {"type": "string", "description": "The customer's chosen option(s) for a product that has variants, in their own words (e.g. 'large', 'red', 'size L red'). Omit for products with no options."},
+                    "choices": {"type": "string", "description": "For a product with choices (listed under `choices`, e.g. colour, nose or tail style): what the customer chose, in their own words (e.g. 'olive green, black trim, fish tail'). Omit when the product has none."},
                 },
                 "required": ["product"],
             },
@@ -2008,6 +2017,8 @@ class CommerceAssistantSkill(BaseSkill):
                 "sold_by": p.get("sold_by"),
                 "size": p.get("pack_size") or (f"{p['weight_grams']}g" if p.get("weight_grams") else None),
                 **({"options": p["options"]} if p.get("options") else {}),
+                **({"choices": {c["name"]: c["values"] for c in service.product_choices(p)}}
+                   if service.product_choices(p) else {}),
             }
 
         # 2026-10-13 (SeedleMe): a shop that lists each colour as its own product gets one entry
@@ -2079,6 +2090,22 @@ class CommerceAssistantSkill(BaseSkill):
             if not variant.get("in_stock", True):
                 return {"error": f"That option of '{product['name']}' is currently out of stock."}
 
+        # 13 Nov 2026 (Kelp Gear, bags made to order): choices that don't change the price
+        # (colour, trim, nose, tail) are asked for like an option, and kept with the line.
+        chosen: Dict[str, str] = {}
+        if service.product_choices(product):
+            said = " ".join(str(args.get(k) or "") for k in ("variant", "choices"))
+            chosen, missing = service.resolve_choices(product, said)
+            if missing:
+                allowed = {c["name"]: c["values"] for c in service.product_choices(product)
+                           if c["name"] in missing}
+                return {"needs_selection": True, "product": product["name"],
+                        **({"chosen_so_far": chosen} if chosen else {}),
+                        "choices": allowed,
+                        "message": "Nothing was added. Ask the customer which " + " and ".join(missing)
+                                   + " they'd like (from the values listed), then call add_to_cart again "
+                                     "with everything they've chosen in `choices`."}
+
         # 2026-10-05 (off-the-hook): "I'd like to order Hake Centre Cuts" — no amount — was added
         # as 1kg anyway, then "did you want 1kg, or a different amount?" got "Yes" and a bare 👍.
         # The prompt's CART DISCIPLINE rule (add only with a quantity) didn't hold, so it's code:
@@ -2094,10 +2121,11 @@ class CommerceAssistantSkill(BaseSkill):
         qty = _norm_qty(product, args.get("quantity", 1))
         cart = await service.get_or_create_cart(tenant_id, session_id, phone)
         await service.add_to_cart(tenant_id, cart["id"], product["id"], qty,
-                                  variant_id=variant["id"] if variant else None)
+                                  variant_id=variant["id"] if variant else None,
+                                  **({"choices": chosen} if chosen else {}))
         unit = "/kg" if _is_kg(product) else ""
-        variant_label = (", ".join(f"{k}: {v}" for k, v in (variant.get("option_values") or {}).items())
-                        if variant else None)
+        variant_label = service.line_label(
+            {"commerce_product_variants": variant, "choices": chosen}) or None
         # 2026-08-14: show the customer a real photo of what they just added — image_url is a
         # real, populated column that was never surfaced anywhere in the ordering conversation
         # before this. WhatsApp send-side already existed (_send_wa_image, used only for the
@@ -2146,13 +2174,10 @@ class CommerceAssistantSkill(BaseSkill):
         lines, subtotal = [], 0
         for it in items:
             prod = it.get("commerce_products") or {}
-            variant = it.get("commerce_product_variants")
-            options = (variant or {}).get("option_values") or {}
-            label = ", ".join(f"{k}: {v}" for k, v in options.items())
             line_total = _line_cents(it["quantity"], it["unit_price_cents"])
             subtotal += line_total
             lines.append(
-                {"name": f"{prod.get('name')} ({label})" if label else prod.get("name"),
+                {"name": _line_name(it),
                  "quantity": _fmt_qty(prod, it["quantity"]),
                  "line_total": f"R{line_total / 100:.2f}"}
             )
@@ -2742,7 +2767,7 @@ class CommerceAssistantSkill(BaseSkill):
 
         item_lines = "\n".join(
             f"• {_fmt_qty(it.get('commerce_products') or {}, it['quantity'])} "
-            f"{(it.get('commerce_products') or {}).get('name', 'Item')} — "
+            f"{_line_name(it)} — "
             f"R{_line_cents(it['quantity'], it['unit_price_cents']) / 100:.2f}" for it in items)
         addr = (args.get("delivery_address") or "").strip()
         pay = ow.PAYMENT_LABELS.get(method) if method in enabled else None
@@ -2972,7 +2997,7 @@ class CommerceAssistantSkill(BaseSkill):
         for it in items:
             prod = it.get("commerce_products") or {}
             qty, unit = it["quantity"], it["unit_price_cents"]
-            lines.append({"name": prod.get("name", "Item"), "quantity": _fmt_qty(prod, qty),
+            lines.append({"name": _line_name(it), "quantity": _fmt_qty(prod, qty),
                           "line_total": f"R{_line_cents(qty, unit) / 100:.2f}"})
 
         total = order["total_cents"]
