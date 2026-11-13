@@ -220,6 +220,77 @@ async def master_set_tenant_features(tenant_id: str, body: dict,
     return {"tenant_id": tenant_id, "features": features.listing(tenant_id)}
 
 
+# ── Prospects (vula/prospects.py, migration 268) ────────────────────────────────
+# A business scanned before it's a client: its website read without saving, and the pitch.
+
+@router.get("/prospects")
+async def master_prospects() -> dict:
+    from vula import prospects
+    try:
+        return {"prospects": prospects.listing()}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't read prospects ({exc}). Run migration 268?")
+
+
+@router.post("/prospects")
+async def master_scan_prospect(body: dict, identity: dict = Depends(require_master)) -> dict:
+    """Scan a prospect: {url, name?, socials?: [links]}. Runs in the background; nothing is
+    saved to any tenant."""
+    from vula import prospects
+    try:
+        row = prospects.create((body or {}).get("url") or "", (body or {}).get("name") or "",
+                               (body or {}).get("socials"), identity.get("email") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't save ({exc}). Run migration 268?")
+    prospects.start(row["id"])
+    audit(identity, "prospect_scanned", None, url=row["url"], prospect_id=row["id"])
+    return {"prospect": row}
+
+
+@router.get("/prospects/{prospect_id}")
+async def master_prospect(prospect_id: str) -> dict:
+    from vula import prospects
+    row = prospects.get(prospect_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    return {"prospect": row}
+
+
+@router.post("/prospects/{prospect_id}/rescan")
+async def master_rescan_prospect(prospect_id: str, identity: dict = Depends(require_master)) -> dict:
+    from vula import prospects
+    row = prospects.rescan(prospect_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    audit(identity, "prospect_rescanned", None, prospect_id=prospect_id)
+    return {"prospect": row}
+
+
+@router.patch("/prospects/{prospect_id}")
+async def master_link_prospect(prospect_id: str, body: dict, identity: dict = Depends(require_master)) -> dict:
+    """{tenant_id}: the tenant this prospect became (set after "Make them a tenant")."""
+    from vula import prospects
+    tid = str((body or {}).get("tenant_id") or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="Send {tenant_id}.")
+    row = prospects.link_tenant(prospect_id, tid)
+    if not row:
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    audit(identity, "prospect_became_tenant", tid, prospect_id=prospect_id)
+    return {"prospect": row}
+
+
+@router.delete("/prospects/{prospect_id}")
+async def master_delete_prospect(prospect_id: str, identity: dict = Depends(require_master)) -> dict:
+    from vula import prospects
+    if not prospects.delete(prospect_id):
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    audit(identity, "prospect_deleted", None, prospect_id=prospect_id)
+    return {"deleted": prospect_id}
+
+
 # ── Billing lifecycle (vula_tenants: signup/payment state) ─────────────────────
 # The Tenants tab's existing Suspend/Activate toggles vula_tenant_config.active — operational,
 # any reason. These four are specifically about the *subscription*, reading/writing

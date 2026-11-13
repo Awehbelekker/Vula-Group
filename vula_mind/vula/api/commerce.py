@@ -409,10 +409,28 @@ async def get_cart(tenant_id: str, session_id: str, phone: Optional[str] = Query
 @router.post("/{tenant_id}/cart/{session_id}/add")
 async def add_to_cart(tenant_id: str, session_id: str, body: AddToCartRequest):
     _require_public_session(session_id)
+    try:
+        chosen = await _web_choices(tenant_id, str(body.product_id), body.choices)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
     item = await service.add_to_cart(tenant_id, cart["id"], str(body.product_id), body.quantity,
-                                     variant_id=str(body.variant_id) if body.variant_id else None)
+                                     variant_id=str(body.variant_id) if body.variant_id else None,
+                                     **({"choices": chosen} if chosen else {}))
     return {"cart_id": cart["id"], "item": item}
+
+
+async def _web_choices(tenant_id: str, product_id: str, given: Optional[dict],
+                       require: bool = True) -> dict:
+    """A website cart line's choices (267), checked against the product's own: only allowed
+    values are kept, and adding a product with choices needs every one (ValueError says which)."""
+    product = await service.get_product(tenant_id, product_id)
+    if not service.product_choices(product):
+        return {}
+    chosen, missing = service.resolve_choices(product, given or {})
+    if missing and require:
+        raise ValueError(f"Choose {', '.join(missing)} for {(product or {}).get('name') or 'this product'}.")
+    return chosen
 
 
 @router.delete("/{tenant_id}/cart/{session_id}/{item_id}")
@@ -427,6 +445,7 @@ class CartSyncItem(BaseModel):
     product_id: str
     quantity: float
     variant_id: Optional[str] = None
+    choices: Optional[dict] = None
 
 
 class CartSyncRequest(BaseModel):
@@ -449,8 +468,11 @@ async def sync_cart(tenant_id: str, session_id: str, body: CartSyncRequest):
     for it in body.items:
         if it.quantity and it.quantity > 0:
             try:
+                # the cart already holds this line: keep what was chosen, never drop the item
+                chosen = await _web_choices(tenant_id, it.product_id, it.choices, require=False)
                 added.append(await service.add_to_cart(tenant_id, cart["id"], it.product_id, it.quantity,
-                                                        variant_id=it.variant_id))
+                                                        variant_id=it.variant_id,
+                                                        **({"choices": chosen} if chosen else {})))
             except Exception as exc:
                 log.warning("cart sync item skipped (%s): %s", it.product_id, exc)
     return {"cart_id": cart["id"], "items": len(added)}
@@ -903,10 +925,12 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict, requ
                "reorder_threshold", "reorder_qty", "default_supplier_id",
                "pricing_mode", "price_per_kg_cents", "min_weight_g", "max_weight_g",
                "reference_weight_g", "catch_source", "fisherman_name", "seo", "status", "options",
-               "product_type", "bundle_items", "cooking_tips", "related_ids"}
+               "product_type", "bundle_items", "cooking_tips", "related_ids", "choices"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    if "choices" in update:              # 267: [{"name", "values"}], cleaned; empty = none
+        update["choices"] = service.clean_product_choices(update["choices"]) or None
     # Keep the cover in sync: first gallery image becomes image_url unless explicitly set.
     if "images" in update and update["images"] and "image_url" not in update:
         update["image_url"] = update["images"][0]
@@ -1100,6 +1124,15 @@ async def admin_import_products(tenant_id: str, body: dict):
                 "fisherman_name": (row.get("fisherman_name") or "").strip() or None,
                 "status": row.get("status") if row.get("status") in ("active", "draft", "unlisted", "archived") else "active",
             }
+            # The website import (13 Nov 2026): which options change the price (the variants'
+            # option names — without them the shop chat sells every size at the lowest price)
+            # and the choices on the same price (267). Only when the row says so.
+            names = [str(n).strip() for n in row.get("options") or [] if str(n).strip()] \
+                if isinstance(row.get("options"), list) else []
+            if names:
+                payload["options"] = names[:3]
+            if isinstance(row.get("choices"), list):
+                payload["choices"] = service.clean_product_choices(row["choices"]) or None
             seo_title = (row.get("seo_title") or "").strip()
             seo_description = (row.get("seo_description") or "").strip()
             if seo_title or seo_description:

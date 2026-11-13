@@ -31,6 +31,7 @@ function routes(role, modules = []) {
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
   let docsRun = { running: false };
   const masterFeatures = F.masterFeatures.map((f) => ({ ...f }));
+  const prospects = F.prospects.map((x) => ({ ...x }));     // per page: a scan started here shows here only
   // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
   let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
   const profile = { ...F.businessProfile, answers: { ...F.businessProfile.answers }, drafts: {} };
@@ -259,6 +260,10 @@ function routes(role, modules = []) {
     r("GET", `^/v1/master/tenants/${T}/features`, () => ({ features: masterFeatures })),
     r("PATCH", `^/v1/master/tenants/${T}/features`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const f of masterFeatures) if (f.name in b) f.here = !!b[f.name]; return { features: masterFeatures }; }),
     r("GET", `^/v1/master/tenants/${T}/setup`, () => F.setup),
+    r("GET", `^/v1/master/prospects$`, () => ({ prospects: prospects.map(({ report, ...p }) => ({ ...p, kind: report?.kind, counts: report?.counts || {} })) })),
+    r("GET", `^/v1/master/prospects/${T}$`, (m) => ({ prospect: prospects.find((p) => p.id === m[1]) })),
+    r("POST", `^/v1/master/prospects$`, (m, url, req) => { const b = req.postDataJSON() || {}; const p = { id: `pr-${prospects.length + 1}`, name: b.name || b.url, url: `https://${String(b.url).replace(/^https?:\/\//, "")}`, socials: b.socials || [], status: "scanning", created_at: "2026-11-13T08:00:00Z", updated_at: "2026-11-13T08:00:00Z" }; prospects.unshift(p); return { prospect: p }; }),
+    r("PATCH", `^/v1/master/prospects/${T}$`, (m, url, req) => { const p = prospects.find((x) => x.id === m[1]); if (p) p.tenant_id = req.postDataJSON()?.tenant_id; return { prospect: p }; }),
     r("POST", `${A}/scan`, () => F.scanResult),
     r("POST", `${A}/scan/commit`, (m, url, req) => (req.postDataJSON()?.auto_commit
       ? { ok: true, message: "Booked R 1 842.50 from Atlantic Dairy Co-op as a bill, due 16 Nov.", record_type: "bill", kb_chunks_added: 0 }

@@ -415,6 +415,20 @@ def test_wix_choices_that_dont_change_the_price_are_named_in_the_description():
     assert "nodes" not in d and "#149039" not in d
 
 
+def test_a_wix_product_says_which_options_change_the_price_and_lists_the_choices():
+    """Without the priced option names the shop chat ignores the sizes and sells at the lowest
+    price; the choices are what Vula asks for before adding (migration 267)."""
+    p = site_import.product_from_page(_wix_page(), WIX_URL)
+    assert p["options"] == ["Board Size"]
+    assert p["choices"] == [{"name": "Primary Colour", "values": ["Olive Green", "Black"]}]
+
+
+def test_a_shopify_product_with_sizes_says_which_options_change_the_price():
+    p = site_import._from_shopify(PRODUCTS["products"][1], ROOT)
+    assert p["options"] == ["Colour", "Size"] and len(p["variants"]) == 2
+    assert site_import._from_shopify(PRODUCTS["products"][0], ROOT)["options"] == []
+
+
 def test_a_hidden_wix_combination_is_not_offered():
     items = [{"optionsSelections": [1], "price": 1200, "isVisible": True},
              {"optionsSelections": [2], "price": 1300, "isVisible": False},
@@ -445,6 +459,7 @@ async def test_a_wix_shop_imports_each_size_as_an_option(site, monkeypatch):
     row = site["imported"][0][0]
     assert row["name"] == "Kelp Classic Day Bag" and row["price_cents"] == 120_000
     assert st["variants"] == 3 and row["image_url"] == WIX_IMG
+    assert row["options"] == ["Board Size"] and row["choices"][0]["name"] == "Primary Colour"
 
 
 def test_page_titles_are_plain_text_and_html_sitemaps_are_not_read():

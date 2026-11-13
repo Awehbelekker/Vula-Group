@@ -22,6 +22,7 @@ class _Query:
         self._filters: List[Callable[[dict], bool]] = []
         self._op, self._payload = "select", None
         self._order, self._limit = None, None
+        self._single = False
 
     # ── operations ──
     def select(self, *_a, **_k):
@@ -56,6 +57,12 @@ class _Query:
         self._filters.append(lambda r: r.get(col) != val)
         return self
 
+    def is_(self, col, val):
+        """PostgREST `is.null` / `is.true` / `is.false`."""
+        want = {"null": None, "true": True, "false": False}.get(str(val).lower(), val)
+        self._filters.append(lambda r: r.get(col) is want if want is None else r.get(col) == want)
+        return self
+
     def in_(self, col, vals):
         vals = list(vals)
         self._filters.append(lambda r: r.get(col) in vals)
@@ -85,6 +92,11 @@ class _Query:
 
     def order(self, col, desc: bool = False):
         self._order = (col, desc)
+        return self
+
+    def single(self):
+        """PostgREST .single(): one row as a dict (None when there is none)."""
+        self._single = True
         return self
 
     def limit(self, n):
@@ -129,6 +141,8 @@ class _Query:
             hit = sorted(hit, key=lambda r: str(r.get(col) or ""), reverse=desc)
         if self._limit is not None:
             hit = hit[: self._limit]
+        if self._single:
+            return _Result(dict(hit[0]) if hit else None)
         return _Result([dict(r) for r in hit])
 
 
