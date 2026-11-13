@@ -532,8 +532,16 @@ def build_pack(tenant_id: str, project: str, audience: str = "internal", busines
         from vula.storage_links import fetch_sync as fetch
     name = canonical_project(tenant_id, project) or project
     sup = _Suppliers(_supplier_rows(tenant_id), business)
-    org = organise(_documents(tenant_id, name), sup)
+    docs = _documents(tenant_id, name)
+    org = organise(docs, sup)
     rows = [r for r in org["rows"] if audience == "internal" or r["client"]]
+    if audience == "client":
+        # 13 Nov 2026 audit: the client link's page hides a document that names another of the
+        # business's projects (#297), but its "Download all" zip didn't, so one client got another
+        # client's site names and amounts. The client copy now uses the page's own rule.
+        from vula.commerce.project_share_docs import other_projects_by_doc
+        named = other_projects_by_doc(tenant_id, name, docs)
+        rows = [r for r in rows if not named.get(str(r["id"]))]
     if not rows:
         raise LookupError(f"no documents are filed under {name}")
     as_of = datetime.now(timezone.utc).date().isoformat()

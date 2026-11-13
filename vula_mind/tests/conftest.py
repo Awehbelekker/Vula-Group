@@ -9,6 +9,9 @@ os.environ.setdefault("OLLAMA_BASE", "http://localhost:11434")
 os.environ.setdefault("QDRANT_BASE", "http://localhost:6333")
 os.environ.setdefault("API_KEY", "")
 os.environ.setdefault("DEBUG", "true")
+# Production defaults tenant auth ON (config.py, 13 Nov 2026). Most route tests call admin routes
+# without a login; the auth tests turn it on themselves.
+os.environ.setdefault("ENFORCE_TENANT_AUTH", "false")
 
 # Never a real database. 2026-10-31: production's vula_takeoff_jobs ("j1", "test-tenant") and
 # vula_material_rates ("Item 0", "OK Item", "Test Tile"…) held rows written by this suite — someone

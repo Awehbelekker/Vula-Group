@@ -135,17 +135,26 @@ async def _revoke_matching_login(tenant: str, member_id: str, identity: dict) ->
     Logins & passwords did (2026-07-24 admin-depth audit finding). If this member's email
     matches a real login, pull it too. Best-effort: a lookup miss just means no login existed."""
     try:
-        rows = (_client().table("vula_team_members").select("email")
+        rows = (_client().table("vula_team_members").select("email,whatsapp")
                 .eq("id", member_id).eq("tenant_id", tenant).limit(1).execute().data or [])
-        email = (rows[0].get("email") or "").strip() if rows else ""
-        if not email:
+        row = rows[0] if rows else {}
+        email = (row.get("email") or "").strip()
+        # 13 Nov 2026: a WhatsApp sign-in (wa-<number>@users.vula-ai.com) belongs to the member
+        # with that number, so it goes too.
+        digits = "".join(ch for ch in (row.get("whatsapp") or "") if ch.isdigit())
+        if digits.startswith("0"):
+            digits = "27" + digits[1:]
+        emails = [e for e in (email, f"wa-{digits}@users.vula-ai.com" if digits else "") if e]
+        if not emails:
             return False
         from vula.api.users import _find_user_id, remove_access
-        user_id = await _find_user_id(email)
-        if not user_id:
-            return False
-        await remove_access(tenant, user_id, identity=identity)
-        return True
+        revoked = False
+        for e in emails:
+            user_id = await _find_user_id(e)
+            if user_id:
+                await remove_access(tenant, user_id, identity=identity)
+                revoked = True
+        return revoked
     except Exception as exc:
         log.warning("login revoke on disable failed for member %s: %s", member_id, exc)
         return False
@@ -185,12 +194,19 @@ async def remove_member(tenant: str, member_id: str,
             personal_memory.erase_member(tenant, member_id)
         except Exception as exc:
             log.warning("private notes not removed for a removed member (tenant=%s): %s", tenant, exc)
+        # 13 Nov 2026 audit: deleting the team row left the login in place, and a staff login
+        # with no team row is given full access (tenant_auth.scope_from_rows), so "Remove"
+        # upgraded a rep who could only see orders to everything. Pull the login first, while
+        # the row still says which login is theirs.
+        login_revoked = await _revoke_matching_login(tenant, member_id, identity)
         _client().table("vula_team_members").delete().eq("id", member_id).eq("tenant_id", tenant).execute()
         _team_index.invalidate(tenant)
-        merchant_audit.audit(tenant, identity, "member_removed", member_id=member_id)
-    except Exception:
-        pass
-    return {"id": member_id, "removed": True}
+        merchant_audit.audit(tenant, identity, "member_removed", member_id=member_id,
+                             login_revoked=login_revoked)
+    except Exception as exc:
+        log.warning("member removal failed (tenant=%s): %s", tenant, exc)
+        raise HTTPException(status_code=500, detail="Couldn't remove this member. Try again.")
+    return {"id": member_id, "removed": True, "login_revoked": login_revoked}
 
 
 @router.get("/{tenant}/me")

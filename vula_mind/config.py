@@ -419,7 +419,10 @@ class Settings(BaseSettings):
     # /v1/team/{t}/* and /v1/users/{t}/* require a verified Supabase JWT belonging to that
     # tenant (or master). Shipped dark (false) so the dashboard's token-attach wrapper can be
     # verified first, then flipped via env — same env-flip rollout as the verification layer.
-    enforce_tenant_auth: bool = False
+    # 13 Nov 2026 audit: on by default — production has had it on since September, and a missing
+    # variable must not leave every business's admin routes unchecked. (Tests set it off in
+    # tests/conftest.py; the auth tests switch it on themselves.)
+    enforce_tenant_auth: bool = True
 
     # ── Google OAuth app (one app for all tenants — Drive + Gmail) ──────────
     # Create in Google Cloud Console; redirect URI = <api>/v1/google/oauth/callback
