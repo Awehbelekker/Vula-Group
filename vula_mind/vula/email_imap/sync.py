@@ -941,7 +941,9 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         blob = f"{em.get('subject','')} {em.get('from','')} {att['name']}".lower()
         from vula.commerce import bank_rec
         if att["name"].lower().endswith(".pdf") and ("statement" in blob or "capitec" in blob):
-            rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"])
+            # Old mail (quiet): the lines are saved and categorised, nothing is marked paid — a
+            # 2024 statement must not settle today's invoices (13 Nov 2026 audit).
+            rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"], settle=not quiet)
             bank_statement = not rec.get("not_bank_statement") and not rec.get("error")
             if rec.get("private"):
                 # One member's own account: filed for them alone, not the business (vula/private_docs.py).
@@ -968,7 +970,8 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
                     logger.debug("bank statement notify skipped: %s", exc)
         elif att["name"].lower().endswith(".pdf") and (
                 any(d in blob for d in _BANK_DOMAINS) or any(w in blob for w in _POP_WORDS)):
-            rec = await bank_rec.ingest_payment_confirmation(tenant_id, p, source_file=att["name"])
+            rec = await bank_rec.ingest_payment_confirmation(tenant_id, p, source_file=att["name"],
+                                                             settle=not quiet)
             logger.info("payment confirmation processed (%s): %s", tenant_id, rec)
             matched = int(rec.get("matched_invoices", 0)) + int(rec.get("matched_orders", 0))
             if not rec.get("error") and matched > 0:
@@ -1091,19 +1094,29 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         committed = None
         try:
             from vula.api.whatsapp import _FINANCIAL_DOC_CATEGORIES, _CATEGORY_TO_DOC_TYPE
-            if category in _FINANCIAL_DOC_CATEGORIES and not payment_matched:
+            # 13 Nov 2026 audit: the history catch-up (quiet) booked a whole mailbox as live drafts —
+            # old sent invoices took new numbers from the business's own series, long-settled
+            # supplier bills opened as overdue. Old mail is filed (Documents, knowledge, project
+            # ledger) and never booked; the owner books what's still open from Documents.
+            if category in _FINANCIAL_DOC_CATEGORIES and not payment_matched and not quiet:
                 from vula.commerce import service as commerce_service
                 # _analyze_document's fields never set doc_type (only the Smart Scanner's
                 # vision-scan schema does) — commit_inbound_document defaults a missing
                 # doc_type to "receipt", which would silently misfile every real inbound
                 # invoice/quote as an expense. Map the deep-analysis category across.
                 commit_fields = dict(fields or {})
+                # A figure that isn't anywhere in the document's text is never booked by itself —
+                # staged for the owner, as WhatsApp does (CLAUDE.md; the audit found email didn't).
+                unverified = commit_fields.pop("_unverified_figures", None)
                 commit_fields.setdefault("doc_type", _CATEGORY_TO_DOC_TYPE.get(category, "invoice"))
                 committed = await commerce_service.commit_inbound_document(
-                    tenant_id, commit_fields, auto_commit=True, source="email",
+                    tenant_id, commit_fields, auto_commit=not unverified, source="email",
                     filed_document_id=filed_row.get("id") if filed_row else None,
                     project=match["project"] if match else None, notify=not quiet,
                 )
+                if unverified and filed_row and filed_row.get("id"):
+                    _client().table("vula_filed_documents").update(
+                        {"needs_review": True}).eq("id", filed_row["id"]).eq("tenant_id", tenant_id).execute()
         except Exception as exc:
             logger.warning("commit_inbound_document failed for email attachment %s: %s",
                            att.get("name"), exc)

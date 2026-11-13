@@ -200,6 +200,18 @@ def _tok(s: str) -> set:
     return set(re.findall(r"[a-z0-9]{3,}", (s or "").lower()))
 
 
+def _raised_after(candidate: dict, paid_on: Any, slack_days: int = 1) -> bool:
+    """True when the invoice/order/bill was raised more than `slack_days` after the payment date.
+    Unknown dates never exclude anything (fail open: the amount and name rules still apply)."""
+    from datetime import date as _date, timedelta
+    raised = str(candidate.get("issue_date") or candidate.get("created_at") or "")[:10]
+    paid = str(paid_on or "")[:10]
+    try:
+        return _date.fromisoformat(raised) > _date.fromisoformat(paid) + timedelta(days=slack_days)
+    except ValueError:
+        return False
+
+
 def _match_by_amount(txn: Dict[str, Any], candidates: List[dict], amount_key: str,
                      name_fields: tuple, require_name: bool = False) -> Optional[dict]:
     """Confident match of a credit to an outstanding invoice/order by amount (+ name/reference
@@ -218,6 +230,9 @@ def _match_by_amount(txn: Dict[str, Any], candidates: List[dict], amount_key: st
     amt = txn["amount_cents"]
     tol = max(100, int(amt * 0.01))          # R1 or 1%
     blob = _tok(txn.get("description")) | _tok(txn.get("reference"))
+    # 13 Nov 2026 audit: a payment can't settle something raised after it. An old proof of payment
+    # found in a mailbox's history matched today's open order on amount alone and dispatched it.
+    candidates = [c for c in candidates if not _raised_after(c, txn.get("date"))]
     best, best_score = None, 0
     for c in candidates:
         if abs(int(c.get(amount_key) or 0) - amt) > tol:
@@ -516,7 +531,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # Outstanding invoices to match credits against.
     try:
         invoices = (db.table("commerce_invoices")
-                    .select("id,invoice_number,customer_name,total_cents,status,doc_type")
+                    .select("id,invoice_number,customer_name,total_cents,status,doc_type,issue_date,created_at")
                     .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"])
                     .limit(2000).execute().data or [])
         invoices = [i for i in invoices if (i.get("doc_type") or "invoice") == "invoice"]
@@ -531,7 +546,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     try:
         supplier_bills = (db.table("commerce_invoices")
                           .select("id,invoice_number,supplier,total_cents,status,doc_type,"
-                                  "direction,vat_cents,paid_at,project")
+                                  "direction,vat_cents,paid_at,project,issue_date,created_at")
                           .eq("tenant_id", tenant_id).eq("direction", "inbound")
                           .in_("status", ["draft", "sent", "overdue", "part_paid"])
                           .limit(2000).execute().data or [])
@@ -546,7 +561,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # THESE too, not just invoices.
     try:
         orders = (db.table("commerce_orders")
-                  .select("id,display_id,customer_name,customer_phone,total_cents,status")
+                  .select("id,display_id,customer_name,customer_phone,total_cents,status,created_at")
                   .eq("tenant_id", tenant_id).eq("status", "pending_payment")
                   .limit(2000).execute().data or [])
     except Exception as exc:
@@ -619,6 +634,20 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     except Exception:
         pass
 
+    # 13 Nov 2026 audit: a line that already settled something keeps that match. Reading the same
+    # line again (a 90-day statement overlapping a monthly one, or the same statement by WhatsApp
+    # and by email) gave the R1,500 that paid INV-10 to the next open R1,500 invoice as well.
+    settled: Dict[tuple, dict] = {}
+    try:
+        for r in (db.table("commerce_bank_transactions")
+                  .select("txn_date,amount_cents,description,matched_invoice_id,matched_order_id,matched_expense_id")
+                  .eq("tenant_id", tenant_id).eq("match_status", "matched")
+                  .limit(5000).execute().data or []):
+            settled[(str(r.get("txn_date")), int(r.get("amount_cents") or 0),
+                     (r.get("description") or ""))] = r
+    except Exception:
+        pass
+
     # Owner allocations learned from earlier statements (project + trade per counterparty).
     from vula.commerce import allocation
     alloc_rules = allocation.load_rules(tenant_id)
@@ -638,7 +667,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     for idx, t in enumerate(txns):
         status, inv_id, order_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None, None
         bill_project = None
-        if not auto_settle:
+        already = settled.get((str(t.get("date")), int(t["amount_cents"]), (t.get("description") or "")))
+        if already:
+            # Seen and settled before: keep that match, settle nothing new.
+            status = "matched"
+            inv_id = already.get("matched_invoice_id")
+            order_id = already.get("matched_order_id")
+            exp_id = already.get("matched_expense_id")
+        elif not auto_settle:
             if t["direction"] == "in":
                 unmatched_in += 1
             else:
@@ -1040,7 +1076,8 @@ def _statement_account(tenant_id: str, text: str, txns: List[Dict[str, Any]]) ->
 
 
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,
-                           source_file: str = "", trusted: bool = False) -> Dict[str, Any]:
+                           source_file: str = "", trusted: bool = False,
+                           settle: bool = True) -> Dict[str, Any]:
     """Full pipeline: decrypt (stored ID password if not given) → parse → reconcile.
     `trusted`: the owner uploaded it as their bank statement (dashboard) — skip the check that
     an automatically-detected PDF (email/WhatsApp) really is their own bank statement.
@@ -1062,7 +1099,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         if private:
             return {"private": True, "private_to": private, "bank_account": acct, "parsed": len(txns)}
         result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
-                                 auto_settle=True, bank_account=acct)
+                                 auto_settle=settle, bank_account=acct)
         result["bank_account"] = acct
         result.update(supersede_misread(tenant_id, txns))
         result["extraction_reconciled"] = True
@@ -1096,7 +1133,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     # save and categorise it for review, but don't let it settle invoices/orders or message
     # customers "your payment was received" on the strength of a possibly-wrong figure.
     result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
-                             auto_settle=reconciled, bank_account=acct)
+                             auto_settle=reconciled and settle, bank_account=acct)
     result["extraction_reconciled"] = reconciled
     result["bank_account"] = acct
     log.info("bank statement reconciled for %s: %s", tenant_id, result)
@@ -1190,7 +1227,7 @@ async def extract_payment_confirmation(text: str) -> List[Dict[str, Any]]:
 
 
 async def ingest_payment_confirmation(tenant_id: str, pdf_path: Path,
-                                      source_file: str = "") -> Dict[str, Any]:
+                                      source_file: str = "", settle: bool = True) -> Dict[str, Any]:
     """Single-document pipeline for a POP/payment-confirmation email attachment: read (usually
     unencrypted, unlike a full statement) → extract the one payment → reconcile against
     outstanding invoices AND pending-EFT orders."""
@@ -1213,6 +1250,7 @@ async def ingest_payment_confirmation(tenant_id: str, pdf_path: Path,
     txns = await extract_payment_confirmation(text)
     if not txns:
         return {"error": "not recognised as a payment confirmation"}
-    result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name)
+    result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
+                             auto_settle=settle)
     log.info("payment confirmation reconciled for %s: %s", tenant_id, result)
     return result
