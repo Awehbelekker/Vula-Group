@@ -348,6 +348,105 @@ async def test_without_json_ld_the_product_pages_microdata_gives_the_price(site,
     assert row["description"] == "" and row["image_url"] == "https://kelpboardbags.co.za/gallery_gen/6ft_a.jpg"
 
 
+# 2026-11-13: Kelp Gear's Wix shop (kelpgearshop.com). Its JSON-LD gives one price, the lowest,
+# and its photos as contentUrl; every size's price is in Wix's own data on the same page.
+
+WIX_IMG = "https://static.wixstatic.com/media/446dec_1579~mv2.jpg"
+
+
+def _wix_page(items=None, extra_products=()):
+    rich = json.dumps({"nodes": [
+        {"type": "PARAGRAPH", "nodes": [{"type": "TEXT", "textData": {"text": "Our go to board bag. "}}]},
+        {"type": "BULLETED_LIST", "nodes": [
+            {"type": "LIST_ITEM", "nodes": [{"type": "PARAGRAPH", "nodes": [
+                {"type": "TEXT", "textData": {"text": "Premium Ripstop Canvas"}}]}]},
+            {"type": "LIST_ITEM", "nodes": [{"type": "PARAGRAPH", "nodes": [
+                {"type": "TEXT", "textData": {"text": "12mm Padding"}}]}]}]}]})
+    product = {
+        "name": "Kelp Classic Day Bag", "urlPart": "kelpclassicdaybag", "price": 1200, "isInStock": True,
+        "description": rich, "breadcrumbs": [{"name": "Surfboard Bags"}],
+        "options": [
+            {"title": "Board Size", "optionType": "DROP_DOWN", "selections": [
+                {"id": 1, "value": "5'", "description": "5'"}, {"id": 2, "value": "6'", "description": "6'"},
+                {"id": 3, "value": "9'6\"", "description": "9'6\""}]},
+            {"title": "Primary Colour", "optionType": "COLOR", "selections": [
+                {"id": 16, "value": "#149039", "description": "Olive Green"},
+                {"id": 19, "value": "#000000", "description": "Black"}]}],
+        "productItems": items if items is not None else [
+            {"optionsSelections": [1], "price": 1200, "inventory": {"status": "in_stock"}, "isVisible": True},
+            {"optionsSelections": [2], "price": 1300, "inventory": {"status": "in_stock"}, "isVisible": True},
+            {"optionsSelections": [3], "price": 2000, "inventory": {"status": "out_of_stock"}, "isVisible": True}],
+        "media": [{"mediaType": "PHOTO", "url": "446dec_1579~mv2.jpg",
+                   "fullUrl": WIX_IMG + "/v1/fit/w_500,h_500,q_90/file.jpg"},
+                  {"mediaType": "PHOTO", "url": "446dec_482b~mv2.jpeg"},
+                  {"mediaType": "VIDEO", "url": "clip.mp4"}]}
+    warm = {"appsWarmupData": {"stores": {"productPage_ZAR_kelpclassicdaybag": {"catalog": {"product": product}},
+                                          **{f"other{i}": {"catalog": {"product": p}} for i, p in enumerate(extra_products)}}}}
+    ld = {"@context": "https://schema.org/", "@type": "Product", "name": "Kelp Classic Day Bag",
+          "image": [{"@type": "ImageObject", "contentUrl": WIX_IMG + "/v1/fit/w_500,h_500,q_90/file.jpg"}],
+          "offers": {"@type": "Offer", "price": "1200", "priceCurrency": "ZAR",
+                     "availability": "https://schema.org/InStock"}}
+    return (f'<html><head><script type="application/ld+json">{json.dumps(ld)}</script></head><body>'
+            f'<script type="application/json" id="wix-warmup-data">{json.dumps(warm)}</script></body></html>')
+
+
+WIX_URL = "https://www.kelpgearshop.com/product-page/kelpclassicdaybag"
+
+
+def test_a_wix_product_gets_every_sizes_own_price():
+    p = site_import.product_from_page(_wix_page(), WIX_URL)
+    assert p["name"] == "Kelp Classic Day Bag" and p["slug"] == "kelpclassicdaybag"
+    assert [(v["option_values"], v["price_cents"], v["in_stock"]) for v in p["variants"]] == [
+        ({"Board Size": "5'"}, 120_000, True), ({"Board Size": "6'"}, 130_000, True),
+        ({"Board Size": "9'6\""}, 200_000, False)]
+    assert p["price_cents"] == 120_000 and p["in_stock"] is True and p["category_label"] == "Surfboard Bags"
+
+
+def test_wix_photos_are_the_full_size_originals_and_videos_are_left_out():
+    p = site_import.product_from_page(_wix_page(), WIX_URL)
+    assert p["images"] == [WIX_IMG, "https://static.wixstatic.com/media/446dec_482b~mv2.jpeg"]
+    assert p["image_url"] == WIX_IMG
+
+
+def test_wix_choices_that_dont_change_the_price_are_named_in_the_description():
+    d = site_import.product_from_page(_wix_page(), WIX_URL)["description"]
+    assert d.startswith("Our go to board bag.\n• Premium Ripstop Canvas\n• 12mm Padding")
+    assert d.endswith("Choices: Primary Colour: Olive Green, Black")          # names, not "#149039"
+    assert "nodes" not in d and "#149039" not in d
+
+
+def test_a_hidden_wix_combination_is_not_offered():
+    items = [{"optionsSelections": [1], "price": 1200, "isVisible": True},
+             {"optionsSelections": [2], "price": 1300, "isVisible": False},
+             {"optionsSelections": [3], "price": 2000, "isVisible": True}]
+    p = site_import.product_from_page(_wix_page(items), WIX_URL)
+    assert [v["option_values"]["Board Size"] for v in p["variants"]] == ["5'", "9'6\""]
+
+
+def test_the_wix_product_is_the_one_this_page_is_for():
+    other = {"name": "Trucker Hat", "urlPart": "kelp-boardbag-trucker-hats", "options": [], "productItems": []}
+    p = site_import.product_from_page(_wix_page(extra_products=[other]), WIX_URL)
+    assert p["name"] == "Kelp Classic Day Bag" and len(p["variants"]) == 3
+
+
+def test_json_ld_photos_given_as_content_url_are_read():
+    page = _wix_page().split('<script type="application/json"')[0]          # no Wix data: JSON-LD only
+    p = site_import.product_from_page(page, WIX_URL)
+    assert p["images"] == [WIX_IMG] and p["price_cents"] == 120_000
+
+
+@pytest.mark.asyncio
+async def test_a_wix_shop_imports_each_size_as_an_option(site, monkeypatch):
+    for k in [k for k in SITE if "products.json" in k]:
+        monkeypatch.delitem(SITE, k)
+    monkeypatch.setitem(SITE, f"{ROOT}/products/round-vessel-basin",
+                        _wix_page().replace("kelpclassicdaybag", "round-vessel-basin").encode())
+    st = await site_import.import_site("seedleme", ROOT)
+    row = site["imported"][0][0]
+    assert row["name"] == "Kelp Classic Day Bag" and row["price_cents"] == 120_000
+    assert st["variants"] == 3 and row["image_url"] == WIX_IMG
+
+
 def test_page_titles_are_plain_text_and_html_sitemaps_are_not_read():
     title, _ = site_import.page_text(b"<html><head><title>About us &ndash; Seedleme</title></head></html>")
     assert title == "About us \u2013 Seedleme"
