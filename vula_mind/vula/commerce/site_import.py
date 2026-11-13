@@ -321,6 +321,128 @@ def _from_jsonld(page: str, url: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# What a site builder puts in a product's description until the owner writes one. Kept out of
+# the catalogue: an empty description is better than an instruction to the shop owner.
+_PLACEHOLDER = re.compile(
+    r"(?i)^\s*(add your (own )?product description|write (your|a) (product )?description|"
+    r"this is (a|your) product description|lorem ipsum|product description goes here)")
+
+
+def _real_description(text: str) -> str:
+    return "" if _PLACEHOLDER.search(text or "") else (text or "")
+
+
+class _Microdata:
+    """The schema.org items marked up in a page with itemscope/itemprop (microdata), as nested
+    dicts: {"type": ".../Product", "props": {"name": ["…"], "offers": [{"type": …, "props": …}]}}.
+    Values come from content/href/src, else the element's own text."""
+    _VOID = {"meta", "link", "img", "br", "hr", "input", "source", "area", "base", "col", "wbr"}
+
+    def __init__(self, page: str):
+        from html.parser import HTMLParser
+        items: List[Dict[str, Any]] = []
+        stack: List[Tuple[int, Optional[str], Dict[str, Any]]] = []   # (depth, itemprop, item)
+        texts: List[Tuple[int, str, List[str]]] = []                   # (depth, itemprop, chunks)
+        depth = [0]
+
+        def add(prop: str, value: Any) -> None:
+            if stack and prop:
+                for name in prop.split():
+                    stack[-1][2]["props"].setdefault(name, []).append(value)
+
+        class P(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                a = {k: (v or "") for k, v in attrs}
+                prop = a.get("itemprop")
+                void = tag in _Microdata._VOID
+                if "itemscope" in a:
+                    stack.append((depth[0], prop, {"type": a.get("itemtype", ""), "props": {}}))
+                    if void:          # an empty scope on a void tag closes at once
+                        self._close()
+                elif prop:
+                    val = a.get("content") or a.get("href") or a.get("src")
+                    if val or void:
+                        add(prop, val)
+                    else:
+                        texts.append((depth[0], prop, []))
+                if not void:
+                    depth[0] += 1
+
+            def _close(self):
+                d, prop, item = stack.pop()
+                if prop and stack:
+                    add(prop, item)
+                elif not prop:
+                    items.append(item)
+
+            def handle_endtag(self, tag):
+                if tag in _Microdata._VOID:
+                    return
+                depth[0] -= 1
+                while texts and texts[-1][0] >= depth[0]:
+                    _d, prop, chunks = texts.pop()
+                    add(prop, " ".join("".join(chunks).split()))
+                while stack and stack[-1][0] >= depth[0]:
+                    self._close()
+
+            def handle_data(self, data):
+                if texts:
+                    texts[-1][2].append(data)
+
+        try:
+            P(convert_charrefs=True).feed(page or "")
+        except Exception:  # noqa: BLE001 — a page we can't parse simply has no microdata
+            pass
+        while stack:
+            d, prop, item = stack.pop()
+            (stack[-1][2]["props"].setdefault(prop, []).append(item) if prop and stack else items.append(item))
+        self.items = items
+
+
+def _from_microdata(page: str, url: str) -> Optional[Dict[str, Any]]:
+    """A product page's schema.org Product in microdata (itemprop="price" content="1299") → a
+    product, priced from its own Offer. Site builders that write no JSON-LD (Kelp Board Bags' does
+    this) still mark the product up this way. Never a price read off the visible text."""
+    def first(props: Dict[str, Any], name: str) -> Any:
+        v = props.get(name) or []
+        return v[0] if v else None
+
+    for item in _Microdata(page).items:
+        if "Product" not in str(item.get("type")):
+            continue
+        props = item["props"]
+        name = _html.unescape(str(first(props, "name") or "")).strip()
+        if not name or isinstance(first(props, "name"), dict):
+            continue
+        offers = [o for o in props.get("offers") or [] if isinstance(o, dict)]
+        inner = [x for o in offers for x in (o["props"].get("offers") or []) if isinstance(x, dict)]
+        offers = inner or offers                                      # AggregateOffer → its Offers
+        prices = [_cents(first(o["props"], "price") or first(o["props"], "lowPrice")) for o in offers]
+        prices = [c for c in prices if c > 0]
+        gallery = [("https:" + i if i.startswith("//") else i)
+                   for i in props.get("image") or [] if isinstance(i, str) and i]
+        category = next((c for c in props.get("category") or [] if isinstance(c, str) and c.strip()), None)
+        slug = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+        return {
+            "name": name, "slug": slug, "price_cents": min(prices) if prices else 0,
+            "category_label": category,
+            "description": _real_description(html_to_text(_html.unescape(str(first(props, "description") or "")))),
+            "image_url": gallery[0] if gallery else None, "images": gallery,
+            "in_stock": not any("OutOfStock" in str(first(o["props"], "availability")) for o in offers)
+            if offers else True,
+            "variants": [], "url": url, "tags": [],
+        }
+    return None
+
+
+def product_from_page(page: str, url: str) -> Optional[Dict[str, Any]]:
+    """A product page's own schema.org Product: JSON-LD first, else microdata."""
+    p = _from_jsonld(page, url) or _from_microdata(page, url)
+    if p:
+        p["description"] = _real_description(p.get("description") or "")
+    return p
+
+
 async def _sitemap_starts(root: str) -> List[str]:
     """The sitemaps to read: what robots.txt names, then the usual addresses."""
     out: List[str] = []
@@ -429,7 +551,7 @@ async def _products_from_pages(root: str, notes: List[str], skip_slugs: frozense
                                ) -> Tuple[str, List[Dict[str, Any]]]:
     """No readable feed (or one that stopped part-way): each product page not already in
     `skip_slugs` — Shopify's own per-product JSON first ("/products/<handle>.json", the feed's
-    shape), else the page's JSON-LD Product. Product pages are recognised on Shopify,
+    shape), else the page's schema.org Product (JSON-LD, or microdata). Product pages are recognised on Shopify,
     WooCommerce, Wix (/product-page/), Squarespace (/shop/p/) and custom stores."""
     pages = pages if pages is not None else await _sitemap_locs(root)
     urls = [u for u in pages if _PRODUCT_PATH.search(urlparse(u).path)
@@ -461,7 +583,7 @@ async def _products_from_pages(root: str, notes: List[str], skip_slugs: frozense
             except Exception:
                 pass
         try:
-            p = _from_jsonld((await _page(u, cache)).decode("utf-8", errors="replace"), u)
+            p = product_from_page((await _page(u, cache)).decode("utf-8", errors="replace"), u)
         except Exception as exc:
             failed.append(f"{u}: {_why(exc)}")
             return
