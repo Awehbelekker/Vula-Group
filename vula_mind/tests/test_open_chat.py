@@ -36,6 +36,8 @@ def _fresh():
     "How should I price a custom build compared to a standard bag?",
     "Help me plan the stall for the surf expo",
     "What's a good way to write an invoice reminder email?",
+    "Help me plan a project kickoff meeting",
+    "Explain how VLOOKUP works in a spreadsheet",
 ])
 def test_a_general_question_goes_to_the_open_chat(text):
     assert open_chat.needs_records(text) is False
@@ -48,6 +50,7 @@ def test_a_general_question_goes_to_the_open_chat(text):
     "Create a quote for 3 day bags",
     "How were our sales this week?",
     "Change the stock for the 9ft bag to 4",
+    "How is our Seaview project doing against budget?",
 ])
 def test_a_question_about_the_records_goes_to_the_business_assistant(text):
     assert open_chat.needs_records(text) is True
