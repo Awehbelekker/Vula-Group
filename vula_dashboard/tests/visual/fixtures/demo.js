@@ -1288,3 +1288,6 @@ export const prospects = [
   { id: "pr-shopeazy", name: "ShopEazy", url: "https://shopeazy.co", status: "scanning", created_at: "2026-11-13T06:00:00Z",
     updated_at: "2026-11-13T06:00:00Z", report: null },
 ];
+
+// The dashboard chat's "Ask anything" (13 Nov 2026): off unless a spec file turns it on.
+export const assistantChat = { openChat: false };

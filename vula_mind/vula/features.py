@@ -34,6 +34,8 @@ FEATURES: Dict[str, tuple] = {
                                "Staff threads carry their own messages from earlier in the week"),
     "advisor_mode": ("advisor_mode_enabled",
                      "The AI advisor for brainstorming and planning"),
+    "open_chat": ("open_chat_enabled",
+                  "Ask anything: an open chat in the dashboard on Vula's own AI (local first)"),
 }
 
 

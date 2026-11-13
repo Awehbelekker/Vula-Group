@@ -547,6 +547,12 @@ class Settings(BaseSettings):
     # facts and ideas kept apart. Off = each business switches it on for itself under Team ›
     # AI employees. On = it is on for every business unless they switch it off.
     advisor_mode_enabled: bool = False
+    # The dashboard's open chat, "Ask anything" (13 Nov 2026): a staff member's general question
+    # (ideas, writing, planning) answered by the reasoning skill on Vula's own AI, local first;
+    # a question about the business's records still goes to the business assistant. For one
+    # business: Master › tenant › Features to pilot (vula/features.py "open_chat").
+    open_chat_enabled: bool = False
+    open_chat_per_hour: int = 60          # messages per person per hour in the open chat
 
     # Website import (vula/commerce/site_import.py): copy each product's photos into the
     # business's own storage, so they survive the old site changing. Off = keep the shop's CDN
