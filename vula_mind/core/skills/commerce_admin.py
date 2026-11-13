@@ -1107,6 +1107,22 @@ REMINDER_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
 ]
+# 13 Nov 2026 (switch chat_recall, vula/chat_recall.py): "what did we decide about…" searches the
+# caller's OWN earlier threads with Vula (WhatsApp and dashboard), never a customer's or a
+# colleague's. Offered only where the switch is on.
+RECALL_TOOLS = [
+    {"type": "function", "function": {
+        "name": "search_past_chats",
+        "description": "Search the person's OWN earlier conversations with you (older than today, "
+                       "up to about 6 months) — for 'what did we say/decide about…', 'last time', "
+                       "'remember when…'. Returns dated exchanges. Quote them with the date; any "
+                       "amount, price or stock in an old reply must be re-checked with the right "
+                       "tool before you state it as current. Not for customers' chats.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "The topic, in a few key words (e.g. 'church layout')."},
+            "days": {"type": "integer", "description": "How far back, in days (default 180)."}},
+            "required": ["query"]}}},
+]
 # 5 Nov 2026: Vula buys for the business (vula/commerce/buying.py, migration 246). Offered only when
 # the owner has switched buying on in Settings › Buying; only the shops on its list are searched,
 # every price shown is printed on the shop's page, limits and approvers are checked in code.
@@ -1589,7 +1605,8 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
                    + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS
-                   + FORM_TOOLS + BUYING_TOOLS + [t for a in _ADDONS for t in a.ADMIN_TOOL_SPECS])
+                   + FORM_TOOLS + BUYING_TOOLS + RECALL_TOOLS
+                   + [t for a in _ADDONS for t in a.ADMIN_TOOL_SPECS])
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1815,14 +1832,24 @@ def _product_tools_for(tenant_id: str) -> List[Dict[str, Any]]:
     return trimmed
 
 
+def _recall_tools(tenant_id: str) -> List[Dict[str, Any]]:
+    """search_past_chats, where the chat_recall switch is on for this business."""
+    try:
+        from vula import features
+        return list(RECALL_TOOLS) if features.on(tenant_id, "chat_recall") else []
+    except Exception:  # noqa: BLE001 — can't tell: off
+        return []
+
+
 def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") -> List[Dict[str, Any]]:
     """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
     role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
     which modules the tenant has enabled — a rep never gets shop-wide stock/invoice/broadcast
     tools just because the tenant (e.g. their employer) has those modules on. `message`
     (optional) narrows the gated groups further by keyword match — see _match_groups."""
+    recall = _recall_tools(tenant_id)
     if role == "sales_rep":
-        return list(_REP_TOOL_SPECS)
+        return list(_REP_TOOL_SPECS) + recall
     try:
         from vula.api.tenants import enabled_modules
         mods = set(enabled_modules(tenant_id) or [])
@@ -1831,7 +1858,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_DOC_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS + SHEET_TOOLS + FORM_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS + SHEET_TOOLS + FORM_TOOLS
+             + recall)  # always on (recall: where chat_recall is switched on)
     try:
         from vula.api.tenants import tenant_profile
         profile = tenant_profile(tenant_id)
@@ -2260,7 +2288,7 @@ class CommerceAdminSkill(BaseSkill):
             return SkillOutput(answer=refuse, skill_name=self.name, confidence=1.0)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
-               "message": inp.question}
+               "message": inp.question, "session_id": inp.metadata.get("session_id")}
         if "access" in inp.metadata:     # dashboard chat: the signed-in member's own access
             ctx["access"] = inp.metadata["access"]
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
@@ -3113,6 +3141,7 @@ class CommerceAdminSkill(BaseSkill):
                                     args.get("unit") or None, args.get("project") or None)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
             if name == "list_reminders":     return await self._list_reminders(tid, args, ctx)
+            if name == "search_past_chats":  return self._search_past_chats(tid, args, ctx)
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
@@ -6325,6 +6354,22 @@ class CommerceAdminSkill(BaseSkill):
         if not (res.data and res.data[0].get("id")):
             return {"error": "Couldn't save the reminder — please try again."}
         return {"created": True, "text": text, "due_at": row["due_at"]}
+
+    def _search_past_chats(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """The caller's own earlier threads with Vula (vula/chat_recall.py). The session key comes
+        from the entry point, never from the model, so it can't be pointed at someone else's."""
+        from vula import chat_recall, features
+        if not features.on(tid, "chat_recall"):
+            return {"error": "Searching earlier chats isn't switched on for this business."}
+        query = (args.get("query") or ctx.get("message") or "").strip()
+        try:
+            hits = chat_recall.search(tid, ctx.get("session_id") or "", query, days=args.get("days"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("search_past_chats failed (tenant=%s): %s", tid, exc)
+            return {"error": "Couldn't search earlier chats just now."}
+        if not hits:
+            return {"found": 0, "message": chat_recall.NOTHING}
+        return {"found": len(hits), "past_chats": chat_recall.block(hits)}
 
     async def _list_reminders(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         status = (args.get("status") or "open").strip()
