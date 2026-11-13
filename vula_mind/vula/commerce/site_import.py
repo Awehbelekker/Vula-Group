@@ -301,9 +301,10 @@ def _from_jsonld(page: str, url: str) -> Optional[Dict[str, Any]]:
             prices = [_cents(o.get("price") or o.get("lowPrice")) for o in offers if isinstance(o, dict)]
             prices = [c for c in prices if c > 0]
             raw = d.get("image")
-            gallery = [i.get("url") if isinstance(i, dict) else i
+            gallery = [(i.get("url") or i.get("contentUrl")) if isinstance(i, dict) else i    # Wix: contentUrl
                        for i in (raw if isinstance(raw, list) else [raw] if raw else [])]
-            gallery = [("https:" + i if i.startswith("//") else i) for i in gallery if isinstance(i, str) and i]
+            gallery = [_full_size(("https:" + i if i.startswith("//") else i))
+                       for i in gallery if isinstance(i, str) and i]
             image = gallery[0] if gallery else None
             name = _html.unescape(str(d.get("name") or "")).strip()
             if not name:
@@ -435,9 +436,142 @@ def _from_microdata(page: str, url: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _full_size(src: str) -> str:
+    """Wix serves every photo through a resize path (…~mv2.jpg/v1/fit/w_500,h_500,q_90/file.jpg);
+    the original is the same address without it."""
+    return re.sub(r"^(https://static\.wixstatic\.com/media/[^/]+)/v1/.*$", r"\1", src or "")
+
+
+def _wix_rich_text(raw: str) -> str:
+    """Wix's rich-content description ({"nodes": [{"type": "PARAGRAPH", …}]}) → plain text with
+    paragraph and list breaks; anything else is treated as HTML."""
+    try:
+        doc = json.loads(raw) if (raw or "").lstrip().startswith("{") else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict) or not isinstance(doc.get("nodes"), list):
+        return html_to_text(raw or "")
+    lines: List[str] = []
+
+    def text_of(n: Dict[str, Any]) -> str:
+        own = ((n.get("textData") or {}).get("text") or "") if isinstance(n, dict) else ""
+        return own + "".join(text_of(c) for c in n.get("nodes") or [] if isinstance(c, dict))
+
+    def walk(nodes: List[Any], bullet: bool = False) -> None:
+        for n in nodes:
+            if not isinstance(n, dict):
+                continue
+            kind = str(n.get("type") or "").upper()
+            if kind in ("BULLETED_LIST", "ORDERED_LIST", "LIST_ITEM"):
+                walk(n.get("nodes") or [], bullet=True)
+            elif kind in ("PARAGRAPH", "HEADING", "BLOCKQUOTE", "CODE_BLOCK"):
+                t = " ".join(text_of(n).split())
+                if t:
+                    lines.append(("• " if bullet else "") + t)
+            else:
+                walk(n.get("nodes") or [], bullet)
+    walk(doc["nodes"])
+    return "\n".join(lines)
+
+
+def _wix_product(page: str, slug: str) -> Optional[Dict[str, Any]]:
+    """The product object in a Wix product page's own data (<script id="wix-warmup-data">)."""
+    m = re.search(r'(?is)<script[^>]*id="wix-warmup-data"[^>]*>(.*?)</script>', page or "")
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+    except ValueError:
+        return None
+    found: List[Dict[str, Any]] = []
+
+    def walk(x: Any, depth: int = 0) -> None:
+        if depth > 12:
+            return
+        if isinstance(x, dict):
+            if isinstance(x.get("productItems"), list) and isinstance(x.get("options"), list) and x.get("name"):
+                found.append(x)
+                return
+            for v in x.values():
+                walk(v, depth + 1)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v, depth + 1)
+    walk(data)
+    return next((p for p in found if str(p.get("urlPart") or "").lower() == slug.lower()), None) or \
+        (found[0] if len(found) == 1 else None)
+
+
+def _from_wix(page: str, url: str) -> Optional[Dict[str, Any]]:
+    """A Wix Stores product → a product with every priced combination as a variant.
+
+    13 Nov 2026 (Kelp Gear, kelpgearshop.com): the page's JSON-LD gives one price, the lowest
+    ("Kelp Classic Day Bag" R1 200) though the 12' bag is R2 400, and its photos as contentUrl,
+    which wasn't read. Wix's own data on the same page has each option, each priced combination
+    (productItems: the selections, price, stock) and the photos. Options that don't change the
+    price (colours, nose and tail styles) are listed in the description, by name."""
+    slug = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+    w = _wix_product(page, slug)
+    if not w:
+        return None
+    opts = [o for o in w.get("options") or [] if isinstance(o, dict) and o.get("title")]
+
+    def label(o: Dict[str, Any], s: Dict[str, Any]) -> str:
+        # a COLOR option's value is a hex code; its name is the description
+        v = s.get("description") if str(o.get("optionType")).upper() == "COLOR" else s.get("value")
+        return str(v or s.get("value") or s.get("description") or "").strip()
+
+    by_id = {s.get("id"): (o["title"], label(o, s)) for o in opts
+             for s in o.get("selections") or [] if isinstance(s, dict)}
+    priced_titles: List[str] = []
+    variants = []
+    for it in w.get("productItems") or []:
+        if not isinstance(it, dict) or it.get("isVisible") is False:
+            continue
+        values = {}
+        for sid in it.get("optionsSelections") or []:
+            if sid in by_id:
+                title, val = by_id[sid]
+                values[title] = val
+                if title not in priced_titles:
+                    priced_titles.append(title)
+        status = str((it.get("inventory") or {}).get("status") or "in_stock").lower()
+        variants.append({"option_values": values, "sku": (str(it.get("sku") or "")).strip() or None,
+                         "price_cents": _cents(it.get("price")), "in_stock": status != "out_of_stock",
+                         "title": " / ".join(values.values()) or None})
+    variants = [v for v in variants if v["option_values"]]
+    prices = [v["price_cents"] for v in variants if v["price_cents"] > 0] or \
+        [c for c in [_cents(w.get("discountedPrice") or w.get("price"))] if c > 0]
+    choices = [f"{o['title']}: " + ", ".join(label(o, s) for s in o.get("selections") or [] if isinstance(s, dict))
+               for o in opts if o["title"] not in priced_titles]
+    ld = _from_jsonld(page, url) or {}
+    description = _real_description(ld.get("description") or _wix_rich_text(str(w.get("description") or "")))
+    if choices:
+        description = (description + "\n" if description else "") + "Choices: " + "; ".join(choices)
+    gallery = []
+    for m in w.get("media") or []:
+        if isinstance(m, dict) and str(m.get("mediaType") or "PHOTO").upper() == "PHOTO":
+            src = m.get("fullUrl") or (f"https://static.wixstatic.com/media/{m['url']}" if m.get("url") else "")
+            if src and _full_size(src) not in gallery:
+                gallery.append(_full_size(src))
+    crumbs = [c.get("name") for c in w.get("breadcrumbs") or [] if isinstance(c, dict) and c.get("name")]
+    return {
+        "name": _html.unescape(str(w.get("name") or "")).strip(), "slug": str(w.get("urlPart") or slug),
+        "price_cents": min(prices) if prices else 0,
+        "category_label": crumbs[0] if crumbs else None,
+        "description": description, "image_url": gallery[0] if gallery else None, "images": gallery,
+        "in_stock": (any(v["in_stock"] for v in variants) if variants else bool(w.get("isInStock", True))),
+        "variants": variants if len(variants) > 1 else [],
+        "url": url, "tags": [],
+    }
+
+
 def product_from_page(page: str, url: str) -> Optional[Dict[str, Any]]:
-    """A product page's own schema.org Product: JSON-LD first, else microdata."""
-    p = _from_jsonld(page, url) or _from_microdata(page, url)
+    """A product page's own product: Wix's own product data first (every priced option), then
+    schema.org JSON-LD, then microdata."""
+    p = _from_wix(page, url) or _from_jsonld(page, url) or _from_microdata(page, url)
+    if p and not p.get("name"):
+        return None
     if p:
         p["description"] = _real_description(p.get("description") or "")
     return p
