@@ -2551,28 +2551,34 @@ async def custom_scrape(request: Request, body: ScrapeRequest):
 
 @app.get("/status")
 async def health_check():
-    """Public health check — no auth required."""
+    """Public health check — no auth required.
+
+    13 Nov 2026 audit: it returned the local model names, the knowledge-base collection count (the
+    number of businesses) and raw exception text to anyone. Now each check is ok or error only;
+    the detail goes to the log, and /ready (operator only) has the full picture."""
     checks: dict = {}
 
     async with httpx.AsyncClient(timeout=3.0) as client:
         try:
             resp = await client.get(f"{settings.ollama_base}/api/tags")
-            models = [m["name"] for m in resp.json().get("models", [])]
-            checks["ollama"] = {"status": "ok", "models": models}
+            resp.json().get("models", [])
+            checks["ollama"] = {"status": "ok"}
         except Exception as exc:
-            checks["ollama"] = {"status": "error", "detail": str(exc)}
+            log.debug("status: local AI check failed: %s", type(exc).__name__)
+            checks["ollama"] = {"status": "error"}
 
         try:
             qdrant_headers = {"api-key": settings.qdrant_api_key} if settings.qdrant_api_key else {}
             resp = await client.get(f"{settings.qdrant_base}/collections", headers=qdrant_headers)
-            n = len(resp.json().get("result", {}).get("collections", []))
-            checks["qdrant"] = {"status": "ok", "collections": n}
+            resp.json().get("result", {}).get("collections", [])
+            checks["qdrant"] = {"status": "ok"}
         except Exception as exc:
-            checks["qdrant"] = {"status": "error", "detail": str(exc)}
+            log.debug("status: knowledge base check failed: %s", type(exc).__name__)
+            checks["qdrant"] = {"status": "error"}
 
         # Ollama on Railway routes to OpenRouter — check accordingly
         if checks.get("ollama", {}).get("status") == "error" and settings.openrouter_api_key:
-            checks["ollama"] = {"status": "ok", "models": ["openrouter/cloud"], "note": "via OpenRouter"}
+            checks["ollama"] = {"status": "ok"}
 
     # Supabase/Postgres reachability — previously unchecked here entirely, so a DB outage never
     # showed as "degraded" even though every tenant request depends on it more than Ollama/Qdrant
@@ -2588,7 +2594,8 @@ async def health_check():
         await _asyncio.wait_for(_asyncio.to_thread(_db_ping), timeout=3.0)
         checks["supabase"] = {"status": "ok"}
     except Exception as exc:
-        checks["supabase"] = {"status": "error", "detail": str(exc)}
+        log.warning("status: database check failed: %s", type(exc).__name__)
+        checks["supabase"] = {"status": "error"}
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {

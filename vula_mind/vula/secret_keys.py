@@ -139,6 +139,11 @@ FIELDS: Tuple[Field, ...] = (
           label_col="email"),
     Field("vula_dynamics365_accounts", "id", "access_token", "Dynamics 365 sign-in", "", label_col="email"),
     Field("vula_shopify_accounts", "tenant_id", "access_token", "Shopify token", "Settings › Shopify: connect again"),
+    # 13 Nov 2026 audit: encrypted but missing here, so a key change never re-saved them and they
+    # would stop working once the old key was dropped, without showing on /ready.
+    Field("vula_shopify_accounts", "tenant_id", "client_secret", "Shopify app secret", "Settings › Shopify: connect again"),
+    Field("vula_xero_accounts", "tenant_id", "access_token", "Xero sign-in", ""),
+    Field("vula_xero_accounts", "tenant_id", "refresh_token", "Xero sign-in", "Settings › Xero: connect again"),
     Field("vula_woocommerce_accounts", "tenant_id", "consumer_key", "WooCommerce keys", "Settings › WooCommerce: connect again"),
     Field("vula_woocommerce_accounts", "tenant_id", "consumer_secret", "WooCommerce keys", "Settings › WooCommerce: connect again"),
     Field("vula_woocommerce_accounts", "tenant_id", "webhook_secret", "WooCommerce webhook secret", ""),

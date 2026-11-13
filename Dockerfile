@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     libgdk-pixbuf-2.0-0 \
     shared-mime-info \
+    libgl1 \
+    libglib2.0-0 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first — cached layer, only rebuilds when requirements.txt changes
@@ -43,6 +46,10 @@ RUN python -c "from docling.utils.model_downloader import download_models; \
 download_models(with_layout=True, with_tableformer=True, with_code_formula=False, \
 with_picture_classifier=False, with_rapidocr=False)"
 ENV DOCLING_ARTIFACTS_PATH=/root/.cache/docling/models
+# Fail the build, not the document (same as vula_mind/Dockerfile; this copy had drifted, 13 Nov
+# 2026 audit): Docling's OpenCV needs libGL/glib from apt above.
+RUN python -c "import importlib.util as u; u.find_spec('cv2') and __import__('cv2'); \
+from docling.document_converter import DocumentConverter"
 
 COPY vula_mind/ .
 

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -110,13 +111,31 @@ async def test_standard_webhooks_signature_accepted():
     raw = json.dumps(payload).encode()
     key = b"k3y"
     secret = "whsec_" + base64.b64encode(key).decode()
-    sig = base64.b64encode(hmac.new(key, b"msg_1.1700000000." + raw, hashlib.sha256).digest()).decode()
-    req = _Req(payload, {"webhook-id": "msg_1", "webhook-timestamp": "1700000000",
+    ts = str(int(time.time()))           # 13 Nov 2026: a timestamp outside 5 minutes is refused
+    sig = base64.b64encode(hmac.new(key, f"msg_1.{ts}.".encode() + raw, hashlib.sha256).digest()).decode()
+    req = _Req(payload, {"webhook-id": "msg_1", "webhook-timestamp": ts,
                          "webhook-signature": f"v1,{sig}"})
     db = _DB({"commerce_orders": [{"id": "o1", "tenant_id": "t1", "status": "pending_payment", "total_cents": 100}]})
     upd, _, notify, _ = await _call(req, db, secret=secret)
     upd.assert_awaited_once_with("o1", "paid")
     notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_correctly_signed_old_event_is_refused_as_a_replay():
+    """13 Nov 2026 audit: the signed timestamp was never checked, so a captured event could be
+    sent again later."""
+    payload = {"type": "payment.succeeded",
+               "payload": {"amount": 100, "metadata": {"order_id": "o1", "tenant_id": "t1"}}}
+    raw = json.dumps(payload).encode()
+    key = b"k3y"
+    secret = "whsec_" + base64.b64encode(key).decode()
+    old = str(int(time.time()) - 3600)
+    sig = base64.b64encode(hmac.new(key, f"msg_1.{old}.".encode() + raw, hashlib.sha256).digest()).decode()
+    req = _Req(payload, {"webhook-id": "msg_1", "webhook-timestamp": old, "webhook-signature": f"v1,{sig}"})
+    db = _DB({"commerce_orders": [{"id": "o1", "tenant_id": "t1", "status": "pending_payment", "total_cents": 100}]})
+    with pytest.raises(HTTPException):
+        await _call(req, db, secret=secret)
 
 
 @pytest.mark.asyncio

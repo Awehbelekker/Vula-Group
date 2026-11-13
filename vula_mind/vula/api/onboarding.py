@@ -171,13 +171,21 @@ async def payfast_notify(request: Request) -> dict:
     PayFast sends application/x-www-form-urlencoded POST data.
     Validates source IP, confirms with PayFast, marks tenant paid, sends receipt.
     """
-    client_ip = request.client.host if request.client else ""
+    # 13 Nov 2026 audit: open while PayFast is switched off for Vula's own billing, the IP was read
+    # from the proxy (every real ITN would have been refused), and the merchant wasn't checked.
+    if not settings.payfast_merchant_id:
+        raise HTTPException(status_code=404, detail="Not found")
+    from vula.payfast_source import caller_ip
+    client_ip = caller_ip(dict(request.headers), request.client.host if request.client else "")
     if not settings.debug and client_ip not in _PAYFAST_VALID_IPS:
         logger.warning("PayFast ITN from unexpected IP: %s", client_ip)
         raise HTTPException(status_code=403, detail="Forbidden")
 
     form = await request.form()
     data = dict(form)
+    if str(data.get("merchant_id") or "") != str(settings.payfast_merchant_id):
+        logger.warning("PayFast ITN for another merchant refused")
+        return {"status": "ignored"}
 
     tenant_id = data.get("m_payment_id", "")
     payment_status = data.get("payment_status", "")
