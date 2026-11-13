@@ -29,6 +29,9 @@ export function useAssistantChat(tenantId) {
   const [sending, setSending] = useState(false)
   // "Ask anything" (13 Nov 2026): a general question on Vula's own AI, when the business has it on.
   const [openAvailable, setOpenAvailable] = useState(false)
+  // Files attached to the next message (13 Nov 2026): read by Vula, not filed, kept 24 h.
+  const [files, setFiles] = useState([])
+  const [fileError, setFileError] = useState('')
   const [mode, setModeState] = useState(readMode)
   const setMode = (m) => { setModeState(m); try { localStorage.setItem(MODE_KEY, m) } catch { /* private window */ } }
   const sessionId = useRef(`${tenantId}-${Math.random().toString(36).slice(2, 9)}`)
@@ -53,16 +56,48 @@ export function useAssistantChat(tenantId) {
     return () => { cancelled = true }
   }, [tenantId])
 
+  async function attach(list) {
+    const picked = Array.from(list || []).slice(0, Math.max(0, 3 - files.length))
+    if (!picked.length) return
+    setFileError('')
+    const temp = picked.map((f, i) => ({ tempId: `t${Date.now()}${i}`, name: f.name, reading: true }))
+    setFiles(fs => [...fs, ...temp])
+    const body = new FormData()
+    picked.forEach(f => body.append('files', f))
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant/attach`, { method: 'POST', body })
+      const d = await r.json()
+      if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : "Couldn't attach that.")
+      setFiles(fs => [...fs.filter(f => !temp.some(t => t.tempId === f.tempId)), ...(d.attachments || [])])
+      if (d.problems?.length) setFileError(d.problems.join(' '))
+    } catch (e) {
+      setFiles(fs => fs.filter(f => !temp.some(t => t.tempId === f.tempId)))
+      setFileError(e.message || "Couldn't attach that.")
+    }
+  }
+  const removeFile = (id) => setFiles(fs => fs.filter(f => f.id !== id))
+
+  async function keepFile(id) {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant/attach/${id}/file`, { method: 'POST' })
+      if (!r.ok) throw new Error('not kept')
+      setFiles(fs => fs.map(f => (f.id === id ? { ...f, filed: true } : f)))
+    } catch { setFileError("Couldn't add that to your documents.") }
+  }
+
   async function send(text) {
-    const msg = (text ?? input).trim()
-    if (!msg || sending) return
+    const ready = files.filter(f => f.id)
+    const msg = ((text ?? input).trim()) || (ready.length ? 'What does this file say? Give me the main points.' : '')
+    if (!msg || sending || files.some(f => f.reading)) return
     setInput('')
-    setMessages(m => [...m, { role: 'user', text: msg }])
+    setFiles([])
+    setMessages(m => [...m, { role: 'user', text: msg, files: ready.map(f => f.name) }])
     setSending(true)
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/assistant`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, session_id: sessionId.current, mode: openAvailable ? mode : 'business' }),
+        body: JSON.stringify({ message: msg, session_id: sessionId.current, mode: openAvailable ? mode : 'business',
+          ...(ready.length ? { attachments: ready.map(f => f.id) } : {}) }),
       })
       const d = await r.json()
       const text = d.answer || (typeof d.detail === 'string' ? d.detail : "Sorry, I couldn't process that.")
@@ -111,5 +146,6 @@ export function useAssistantChat(tenantId) {
     setMessages(m => [...m.map(x => (same(x) ? { ...x, confirm: null } : x)), { role: 'assistant', text }])
   }
 
-  return { messages, input, setInput, sending, endRef, send, rate, decide, mode, setMode, openAvailable }
+  return { messages, input, setInput, sending, endRef, send, rate, decide, mode, setMode, openAvailable,
+    files, fileError, attach, removeFile, keepFile }
 }

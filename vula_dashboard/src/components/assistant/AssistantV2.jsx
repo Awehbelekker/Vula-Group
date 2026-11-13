@@ -4,7 +4,8 @@
  * and the agent takes real actions through the admin tools. Works full-page (Assistant tab) and
  * inside the Quick Launcher's sheet (inSheet).
  */
-import { Send, Sparkles, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { useRef } from 'react'
+import { FileText, Paperclip, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { Button, IconButton, Input, PillTabs } from '../ui/index.jsx'
 import { SUGGESTIONS, useAssistantChat } from './useAssistantChat'
 import MyVula from './MyVula'
@@ -12,8 +13,11 @@ import './assistant.css'
 
 const MODES = [{ id: 'business', label: 'Your business' }, { id: 'open', label: 'Ask anything' }]
 
+const ACCEPT = '.pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.png,.jpg,.jpeg,.webp,.gif'
+
 export default function AssistantV2({ tenantId, inSheet = false }) {
   const x = useAssistantChat(tenantId)
+  const picker = useRef(null)
   return (
     <>
     <section className={`vas-chat${inSheet ? ' vas-chat--sheet' : ''}`} aria-label="Chat to Vula">
@@ -23,10 +27,11 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
           <PillTabs label="Chat mode" tabs={MODES} active={x.mode} onChange={x.setMode} />
           {x.mode === 'open' && <p className="vas-hint">Ask anything: ideas, writing, planning. Answered on Vula's own AI; questions about your records still use them.</p>}
         </div>)}
-      <ol className="vas-thread" aria-live="polite" aria-label="Conversation">
+      <ol className="vas-thread" aria-live="polite" aria-label="Conversation" tabIndex={0}>
         {x.messages.map((m, i) => (
           <li key={i} className={`vas-msg vas-msg--${m.role === 'user' ? 'me' : 'vula'}`}>
             <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.text}
+            {m.files?.length > 0 && <span className="vas-by">📎 {m.files.join(', ')}</span>}
             {m.answeredBy && x.openAvailable && (
               <span className="vas-by">{m.answeredBy === 'open' ? "Vula's own AI" : 'Answered with your business records'}</span>)}
             {m.confirm && (
@@ -50,10 +55,26 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
         <div className="vas-suggest" role="group" aria-label="Try asking">
           {SUGGESTIONS.map(q => <Button key={q} size="sm" variant="secondary" Icon={Sparkles} onClick={() => x.send(q)}>{q}</Button>)}
         </div>)}
+      {(x.files.length > 0 || x.fileError) && (
+        <div className="vas-files" role="group" aria-label="Attached files">
+          {x.files.map(f => (
+            <span key={f.id || f.tempId} className="vas-file">
+              <FileText size={14} aria-hidden="true" />
+              <span>{f.name}{f.reading ? ' — reading…' : f.truncated ? ' — long file, the start is read' : ''}</span>
+              {f.id && !f.filed && <Button size="sm" variant="secondary" onClick={() => x.keepFile(f.id)}>Keep in our documents</Button>}
+              {f.filed && <span className="vas-hint">In your documents</span>}
+              {f.id && <IconButton Icon={X} label={`Remove ${f.name}`} quiet onClick={() => x.removeFile(f.id)} />}
+            </span>))}
+          {x.fileError && <p className="vas-warn" role="alert">{x.fileError}</p>}
+        </div>)}
       <form className="vas-compose" onSubmit={e => { e.preventDefault(); x.send() }}>
+        <input ref={picker} type="file" multiple accept={ACCEPT} hidden aria-hidden="true" tabIndex={-1}
+          onChange={e => { x.attach(e.target.files); e.target.value = '' }} />
+        <IconButton Icon={Paperclip} label="Attach a file" quiet disabled={x.sending || x.files.length >= 3}
+          onClick={() => picker.current?.click()} />
         <Input value={x.input} onChange={e => x.setInput(e.target.value)} disabled={x.sending}
           aria-label="Message Vula" placeholder={x.openAvailable && x.mode === 'open' ? 'Ask anything — ideas, a draft, a plan…' : 'Ask, or tell Vula to do something…'} />
-        <Button type="submit" Icon={Send} disabled={x.sending || !x.input.trim()}>Send</Button>
+        <Button type="submit" Icon={Send} disabled={x.sending || (!x.input.trim() && !x.files.some(f => f.id)) || x.files.some(f => f.reading)}>Send</Button>
       </form>
     </section>
     {/* Below the chat, not inside it: the chat is a fixed-height column, and on a phone anything
