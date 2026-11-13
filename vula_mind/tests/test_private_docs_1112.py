@@ -161,4 +161,6 @@ def test_the_admin_agent_and_staff_chat_say_who_is_asking():
     import inspect
     from vula.api import chat, whatsapp
     assert "kb_viewer(member_id_for_phone(tenant_id, phone))" in inspect.getsource(whatsapp._run_commerce_admin)
-    assert "kb_viewer(member_id_for_phone(tenant_id, phone))" in inspect.getsource(chat.send_message)
+    # The staff chat now works out who is asking from the login, not the request body (13 Nov
+    # 2026); its behaviour is tested in tests/test_chat_caller_1113.py.
+    assert "_thread_for(request" in inspect.getsource(chat.send_message)
