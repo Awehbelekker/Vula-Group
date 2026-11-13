@@ -53,14 +53,14 @@ def _token_url() -> str:
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
-async def exchange_code(code: str, redirect_uri: str) -> dict:
+async def exchange_code(code: str, redirect_uri: str, scopes: Optional[List[str]] = None) -> dict:
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_token_url(), data={
             "client_id": settings.microsoft_client_id,
             "client_secret": settings.microsoft_client_secret,
             "code": code, "grant_type": "authorization_code",
             "redirect_uri": redirect_uri,
-            "scope": " ".join(SCOPES)})
+            "scope": " ".join(scopes or SCOPES)})
         r.raise_for_status()
         tok = r.json()
         email = ""

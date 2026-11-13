@@ -149,6 +149,8 @@ def test_calendar_action_on_whatsapp(world, monkeypatch):
     from core.skills.commerce_admin import CommerceAdminSkill
     s = CommerceAdminSkill()
     out = s._meeting("t1", {"action": "calendar"}, {"phone": "27820000001"})
+    assert "I'm reading the business's Outlook calendar (ian@biz.co.za)" in out["reply_verbatim"]
+    out = s._meeting("t1", {"action": "calendar", "calendar_op": "remind"}, {"phone": "27820000001"})
     assert out["status"] == "need_info" and "How long before" in out["message"]
     out = s._meeting("t1", {"action": "calendar", "remind": "30 minutes before"}, {"phone": "27820000001"})
     assert "I'll remind you 30 minutes before each meeting in your Outlook calendar (ian@biz.co.za)" in out["reply_verbatim"]

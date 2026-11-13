@@ -92,6 +92,8 @@ PUBLIC = {
     ("GET", "/v1/clickup/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
     ("GET", "/v1/google/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
     ("GET", "/v1/microsoft/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
+    ("GET", "/v1/microsoft/my-calendar/start"): "a person's own calendar-connect link from WhatsApp — HMAC-signed "
+                                                "token naming them, 15 min (vula/microsoft/member_credentials.py)",
     ("GET", "/v1/xero/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min)",
     ("GET", "/v1/dynamics365/oauth/callback"): "OAuth callback (HMAC-signed state, 15 min: vula/oauth_state.py)",
     ("GET", "/v1/bookings/{tenant_id}/services"): "storefront booking widget",

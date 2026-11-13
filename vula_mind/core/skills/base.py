@@ -709,6 +709,7 @@ _OWNER_ADMIN_RE = re.compile(
     r"\bremind me\b.{0,40}\bbefore (?:the|my) (?:meeting|appointment|visit)\b|"
     r"\bbrief me (?:on|about|before)\b|\b(?:meeting|visit) brief\b|"
     r"\b(?:outlook|calendar) (?:meetings?|reminders?|appointments?)\b|\bmy (?:outlook|calendar)\b|"
+    r"\b(?:connect|disconnect|link|unlink) (?:my |our )?(?:outlook |microsoft )?(?:calendar|diary|outlook)\b|"
     # The replies the proactive templates ask for (vula/proactive.py, wa_templates.PROACTIVE_TEMPLATES).
     r"^\s*(?:brief|my brief|the brief|weekly check|my weekly check)\s*[.!]?\s*$|"
     r"\b(?:in|from|to|on) (?:my|the) (?:morning )?brief\b|"

@@ -12,6 +12,7 @@ import { Button, Card, EmptyState, Field, Input, PageHeader, SectionTabs, Select
 import EmployeesV2 from "./EmployeesV2";
 import NoticesV2 from "./NoticesV2";
 import ActivityV2 from "./ActivityV2";
+import MyCalendar from "./MyCalendar";
 import { VULA_API } from "../../lib/authFetch";
 import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, TEAMS, TEAM_LABELS, toggle, useTeam } from "./useTeam";
 import "./team.css";
@@ -111,7 +112,7 @@ export default function TeamV2({ tenantId }) {
       <SectionTabs label="Team" active={tab} onChange={setTab} tabs={tabs} />
       {tab === "notices" ? <NoticesV2 tenantId={tenantId} />
         : tab === "activity" && activity ? <ActivityV2 tenantId={tenantId} />
-        : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <People tenantId={tenantId} />}
+        : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <><MyCalendar tenantId={tenantId} /><People tenantId={tenantId} /></>}
     </div>
   );
 }
@@ -208,6 +209,7 @@ function People({ tenantId }) {
                 <span className="vtm-sub">{m.whatsapp || "No WhatsApp number yet"}</span>
               </span>
               {!m.active && <StatusChip>Disabled</StatusChip>}
+              {m.calendar_connected && <StatusChip tone="ok">Calendar connected</StatusChip>}
               <Select value={m.role} onChange={(e) => t.patch(m.id, { role: e.target.value })} aria-label={`Role for ${m.name || m.whatsapp}`} className="vtm-role">
                 {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
               </Select>

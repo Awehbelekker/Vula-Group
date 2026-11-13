@@ -6,6 +6,7 @@
 import { BookOpen, CalendarDays, ChevronRight, Contact, Link2, Receipt } from "lucide-react";
 import { Card, ListRow, PageHeader, StatCard } from "../ui/index.jsx";
 import RepTodayV2 from "./RepTodayV2";
+import MyCalendar from "../team/MyCalendar";
 import { useRepHome } from "./useRepHome";
 import "./rep.css";
 
@@ -42,6 +43,7 @@ export default function RepHomeV2({ tenantId, repPhone, onNavigate }) {
             {x.list.slice(0, 3).map((r) => <ListRow key={r.id} title={r.text} trailing={<ChevronRight size={16} aria-hidden="true" />} onClick={go("rep-reminders")} />)}
           </Card>
         </>)}
+      <MyCalendar tenantId={tenantId} />
       <h2 className="vrp-overline">More of your work</h2>
       <Card pad={4} className="vrp-links">
         {LINKS.map(([id, title, detail, Icon]) => (

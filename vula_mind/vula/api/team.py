@@ -104,6 +104,13 @@ async def list_members(tenant: str) -> dict:
     except Exception as exc:
         log.debug("team list skipped (run migration 029?): %s", exc)
         rows = []
+    try:                                  # who reads their own calendar (migration 265) — a flag only
+        from vula.microsoft import member_credentials as mc
+        connected = {str(c["member_id"]): c.get("email") for c in mc.connections(tenant)}
+    except Exception:
+        connected = {}
+    for r in rows:
+        r["calendar_connected"] = str(r.get("id")) in connected
     return {"tenant_id": tenant, "members": rows, "count": len(rows)}
 
 

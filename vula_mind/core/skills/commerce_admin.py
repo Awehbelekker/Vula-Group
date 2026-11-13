@@ -1069,13 +1069,18 @@ MEETING_TOOLS = [
             "brief' on its own (the reply to a meeting reminder) = action=brief for their next meeting. "
             "Meetings in their Outlook calendar come in by themselves; 'remind me 30 minutes before my "
             "Outlook meetings' / 'stop calendar reminders' / 'with a brief' set that once for all of "
-            "them (action=calendar, `remind`, with_brief). "
+            "them (action=calendar, `remind`, with_brief). Each person can connect THEIR OWN Outlook "
+            "calendar: 'connect my calendar' (action=calendar, calendar_op=connect — sends them a link), "
+            "'disconnect my calendar' (calendar_op=disconnect), 'is my calendar connected?' (status). "
             "action=book / list / update / cancel / check_in / brief / calendar. NOT a customer booking a service (create_booking) and NOT notes "
             "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
             "them — never work out a date or time yourself. No reminder unless they ask for one."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in", "brief", "calendar"]},
             "with_brief": {"type": "boolean", "description": "Only when they asked for a brief on the reminder."},
+            "calendar_op": {"type": "string", "enum": ["connect", "disconnect", "status", "remind"],
+                            "description": "For action=calendar: connect/disconnect their own calendar, "
+                                           "say what's connected, or set reminders (the default)."},
             "with": {"type": "string", "description": "Who or which company the meeting is with "
                                                       "(for update/cancel: which meeting)."},
             "when": {"type": "string", "description": "The person's own words, e.g. 'Thursday at 10'."},
@@ -6501,14 +6506,53 @@ class CommerceAdminSkill(BaseSkill):
 
         if action == "calendar":
             from vula import outlook_calendar as oc
-            try:
-                acct = (service._client().table("vula_microsoft_accounts").select("email,scopes,status")
-                        .eq("tenant_id", tid).limit(1).execute().data or [{}])[0]
-            except Exception:
-                acct = {}
+            from vula import team_index
+            from vula.microsoft import member_credentials as mc
+            me = team_index.member_for_phone(tid, phone)
+            op = str(args.get("calendar_op") or ("remind" if remind_words or args.get("with_brief") is not None
+                                                  else "status")).lower()
+            if op in ("connect", "disconnect") and not me:
+                return {"error": "I can only connect the calendar of someone on the team list with this WhatsApp number."}
+            if op == "connect":
+                try:
+                    url = mc.link_for(tid, me["id"])
+                except Exception as exc:
+                    logger.warning("calendar link failed for %s: %s", tid, exc)
+                    return {"error": "I couldn't make the link just now — try again in a minute."}
+                return {"reply_verbatim": "📅 Open this on your phone to let me read your Outlook calendar "
+                                          f"(calendar only — not your email):\n{url}\nThe link works for 15 minutes. "
+                                          "Then tell me how long before each meeting to remind you, e.g. "
+                                          "*30 minutes before*, or *no reminders*."}
+            if op == "disconnect":
+                try:
+                    gone = oc.disconnect_member(tid, me["id"])
+                except Exception as exc:
+                    logger.warning("calendar disconnect failed for %s: %s", tid, exc)
+                    gone = False
+                if not gone:
+                    return {"error": "I couldn't disconnect it just now — it's still connected."}
+                return {"reply_verbatim": "✅ Your calendar is disconnected. Its upcoming meetings are out of "
+                                          "your Vula diary; the ones you booked with me stay."}
+            personal = (mc.get_row(tid, me["id"]) if me else None) or {}
+            if personal.get("status") == "connected":
+                acct = {"status": "connected", "email": personal.get("email"), "scopes": personal.get("scopes")}
+            else:
+                try:
+                    acct = (service._client().table("vula_microsoft_accounts").select("email,scopes,status")
+                            .eq("tenant_id", tid).limit(1).execute().data or [{}])[0]
+                except Exception:
+                    acct = {}
+            if op == "status":
+                if acct.get("status") == "connected" and oc.has_calendar(acct.get("scopes")):
+                    whose = "your own" if personal else "the business's"
+                    return {"reply_verbatim": f"📅 I'm reading {whose} Outlook calendar ({acct.get('email')}). "
+                                              "Say *connect my calendar* to use your own instead." if not personal else
+                                              f"📅 I'm reading your own Outlook calendar ({acct.get('email')})."}
+                return {"reply_verbatim": "No calendar is connected for you. Say *connect my calendar* and I'll "
+                                          "send you a link."}
             if acct.get("status") != "connected":
-                return {"reply_verbatim": "No Outlook calendar is connected. Connect Microsoft in Settings › "
-                                          "Connections and your meetings will come in by themselves."}
+                return {"reply_verbatim": "No Outlook calendar is connected. Say *connect my calendar* and I'll "
+                                          "send you a link — your meetings then come in by themselves."}
             if not oc.has_calendar(acct.get("scopes")):
                 return {"reply_verbatim": f"Microsoft is connected ({acct.get('email')}) but without the calendar. "
                                           "Reconnect it in Settings › Connections to let me read your meetings."}

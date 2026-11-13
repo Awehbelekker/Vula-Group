@@ -14,9 +14,10 @@ notification and the address to open in maps?" Step 4 of meeting prep, Outlook f
     who asked: "remind me 30 minutes before my Outlook meetings" (calendar_remind_minutes /
     calendar_brief on their team row). Nothing is sent otherwise.
 
-The Microsoft connection is one account per business, so its meetings belong to the team member
-with that email (else the owner). Each person connecting their own calendar is a later step, as
-is Google (its calendar permission needs Google's own review). A connection made before the
+The business's Microsoft account's meetings belong to the team member with that email (else the
+owner). Since 13 Nov 2026 each person can also connect their own calendar (sync_member,
+vula/microsoft/member_credentials.py); the business calendar then skips them, so no meeting comes
+in twice. Google is a later step (its calendar permission needs Google's own review). A connection made before the
 calendar permission existed keeps working for mail and gets the calendar when it reconnects.
 """
 from __future__ import annotations
@@ -101,7 +102,8 @@ async def fetch(access_token: str, start: datetime, end: datetime) -> List[Dict[
 
 
 async def sync(tenant_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
-    """Bring the next 7 days of the connected calendar into vula_meetings. Never raises."""
+    """The business's connected calendar into the diary of the member it belongs to. Never raises.
+    Skipped for someone who connected their own calendar (sync_member) — no meeting twice."""
     from vula.microsoft.credentials import get_access_token
     now = now or now_sast()
     try:
@@ -113,8 +115,41 @@ async def sync(tenant_id: str, now: Optional[datetime] = None) -> Dict[str, Any]
     member = owner_of(tenant_id, creds.get("email"))
     if not member:
         return {"skipped": "nobody on the team with WhatsApp to give the meetings to"}
+    if str(member.get("id")) in _personally_connected(tenant_id):
+        return {"skipped": f"{member.get('name')} reads their own calendar"}
+    return await _sync_into(tenant_id, creds["access_token"], member, now)
+
+
+async def sync_member(tenant_id: str, member_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """One person's own connected calendar into their own diary (vula/microsoft/member_credentials)."""
+    from vula import team_index
+    from vula.microsoft import member_credentials as mc
+    now = now or now_sast()
+    member = next((m for m in team_index.active_members(tenant_id) if str(m.get("id")) == str(member_id)), None)
+    if not member or not member.get("whatsapp"):
+        return {"skipped": "not an active team member with WhatsApp"}
+    creds = await mc.get_token(tenant_id, member_id)
+    if not creds:
+        mc.mark(tenant_id, member_id, "Couldn't sign in to the calendar — connect it again")
+        return {"skipped": "no token"}
+    out = await _sync_into(tenant_id, creds["access_token"], member, now)
+    mc.mark(tenant_id, member_id, out.get("error"))
+    return out
+
+
+def _personally_connected(tenant_id: str) -> set:
     try:
-        events = await fetch(creds["access_token"], now, now + WINDOW)
+        from vula.microsoft import member_credentials as mc
+        return {str(c["member_id"]) for c in mc.connections(tenant_id)}
+    except Exception:
+        return set()
+
+
+async def _sync_into(tenant_id: str, access_token: str, member: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+    """The next 7 days of one calendar into one person's diary: add, update, cancel what's gone.
+    Only this person's Outlook meetings are compared, so one calendar never touches another's."""
+    try:
+        events = await fetch(access_token, now, now + WINDOW)
     except Exception as exc:
         log.warning("Outlook calendar read failed for %s: %s", tenant_id, exc)
         return {"error": str(exc)[:200]}
@@ -127,7 +162,7 @@ async def sync(tenant_id: str, now: Optional[datetime] = None) -> Dict[str, Any]
         prefs = {}
     existing = {r["external_id"]: r for r in (db.table("vula_meetings")
                 .select("id,external_id,with_name,address,starts_at,status")
-                .eq("tenant_id", tenant_id).eq("source", "outlook")
+                .eq("tenant_id", tenant_id).eq("source", "outlook").eq("created_by", person)
                 .gte("starts_at", now.isoformat()).lte("starts_at", (now + WINDOW).isoformat())
                 .execute().data or []) if r.get("external_id")}
     added = updated = cancelled = 0
@@ -165,17 +200,42 @@ async def sync(tenant_id: str, now: Optional[datetime] = None) -> Dict[str, Any]
 
 
 async def sync_all() -> Dict[str, Any]:
+    """Every business calendar, then every person's own one."""
+    out: Dict[str, Any] = {}
     try:
         rows = (_client().table("vula_microsoft_accounts").select("tenant_id,scopes")
                 .eq("status", "connected").execute().data or [])
     except Exception as exc:
         log.debug("calendar sync skipped: %s", exc)
-        return {}
-    out = {}
+        rows = []
     for r in rows:
         if r.get("tenant_id") and has_calendar(r.get("scopes")):
             out[r["tenant_id"]] = await sync(r["tenant_id"])
+    try:
+        from vula.microsoft import member_credentials as mc
+        people = mc.connections()
+    except Exception as exc:
+        log.debug("personal calendars skipped (run migration 265?): %s", exc)
+        people = []
+    for c in people:
+        if has_calendar(c.get("scopes")):
+            out[f"{c['tenant_id']}/{c['member_id']}"] = await sync_member(c["tenant_id"], c["member_id"])
     return out
+
+
+def disconnect_member(tenant_id: str, member_id: str, now: Optional[datetime] = None) -> bool:
+    """Forget this person's calendar connection; their future meetings from it are cancelled
+    (past ones stay, for their activity history). True when it's gone, as read back."""
+    from vula import team_index
+    from vula.microsoft import member_credentials as mc
+    now = now or now_sast()
+    member = next((m for m in team_index.active_members(tenant_id) if str(m.get("id")) == str(member_id)), None)
+    gone = mc.disconnect(tenant_id, member_id)
+    if gone and member and member.get("whatsapp"):
+        _client().table("vula_meetings").update({"status": "cancelled"}).eq("tenant_id", tenant_id) \
+            .eq("source", "outlook").eq("created_by", digits(member["whatsapp"])) \
+            .gte("starts_at", now.isoformat()).execute()
+    return gone
 
 
 def set_reminders(tenant_id: str, phone: str, minutes: Optional[int], brief: Optional[bool] = None,
