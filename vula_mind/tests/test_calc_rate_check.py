@@ -70,3 +70,26 @@ def test_plain_tool_words():
     # an ordinary word that happens to be a tool name is left alone
     assert plain_tool_words("Let me calculate that.", {"calculate"}) == "Let me calculate that."
     assert plain_tool_words("", {"x_y"}) == ""
+
+
+def test_where_a_rate_came_from_in_words():
+    from core.skills.calculations import where_from
+    assert where_from({"description": "x", "rate": 1}) == "your rate library"
+    assert where_from({"learned": True, "source": "Learned from 1 boq, last 2026-10-26",
+                       "projects": ["HPC Bokaap"], "latest_on": "2026-10-26",
+                       "observations": 1}) == "your HPC Bokaap BOQ, 26 Oct 2026"
+    assert where_from({"learned": True, "source": "Learned from 2 quotes, 2 invoices, last 2026-10-12",
+                       "projects": ["Belladonna"], "latest_on": "2026-10-12", "observations": 4}) == \
+        "4 of your documents (2 quotes, 2 invoices; Belladonna), latest 12 Oct 2026"
+
+
+@pytest.mark.asyncio
+async def test_the_model_is_given_the_source_with_each_rate():
+    skill = CalculationsSkill()
+    learned = [{"description": "One brick walls", "unit": "m2", "rate": 554.56, "learned": True,
+                "source": "Learned from 1 boq, last 2026-10-26", "projects": ["HPC Bokaap"],
+                "latest_on": "2026-10-26", "observations": 1}]
+    with patch("vula.api.qs.search_rates", return_value=learned):
+        out = skill._dispatch("lookup_rate", {"description": "brick wall"}, "digg-demo")
+    assert out["rates"][0]["where"] == "your HPC Bokaap BOQ, 26 Oct 2026"
+    assert "never present a line total" in skill._system_prompt()

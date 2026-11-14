@@ -30,6 +30,35 @@ logger = logging.getLogger(__name__)
 RATE_CHECK_NOTE = ("I've left out a figure I couldn't match to your rate library or a "
                    "calculation — ask me and I'll look it up again.")
 
+_MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+_DOC_WORDS = {"boq": "BOQ", "boqs": "BOQs"}
+
+
+def _sa_date(iso: Any) -> str:
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(iso or ""))
+    return f"{int(m.group(3))} {_MONTHS[int(m.group(2)) - 1]} {m.group(1)}" if m else ""
+
+
+def where_from(row: Dict[str, Any]) -> str:
+    """Where a rate came from, in words, built in code (14 Nov 2026, DIGG asked "where did you get
+    the data?"): "your rate library", or e.g. "your HPC Bokaap BOQ, 26 Oct 2026" for one learned
+    from a single document, "4 of your documents (2 quotes, 2 invoices; Belladonna), latest
+    12 Oct 2026" for several."""
+    if not row.get("learned"):
+        return "your rate library"
+    m = re.match(r"Learned from (.+?)(?:, last \S+)?$", str(row.get("source") or ""))
+    docs = " ".join(_DOC_WORDS.get(w, w) for w in (m.group(1) if m else "").split())
+    projects = ", ".join(row.get("projects") or [])
+    date = _sa_date(row.get("latest_on"))
+    n = int(row.get("observations") or 0)
+    if n <= 1 and docs:
+        kind = re.sub(r"^\d+\s+", "", docs)
+        text = f"your {projects + ' ' if projects else ''}{kind}"
+    else:
+        detail = "; ".join(p for p in (docs, projects) if p)
+        text = f"{n} of your documents" + (f" ({detail})" if detail else "")
+    return text + (f", {'latest ' if n > 1 else ''}{date}" if date else "")
+
 MAX_TOOL_ITERATIONS = 5
 
 # ── Safe arithmetic evaluator (no eval) ───────────────────────────────────────
@@ -246,7 +275,10 @@ class CalculationsSkill(BaseSkill):
             "multiply by the quantity with calculate. The rate library is the authoritative rate "
             "— prefer it over any figure in a document, and if a document shows a different rate, "
             "note the discrepancy. If lookup_rate finds nothing, ask for the rate or say it isn't "
-            "on file — never assume a market rate."
+            "on file — never assume a market rate.\n"
+            "- When you state a rate, say where it came from with that rate's `where` text, e.g. "
+            "'R554.56 per m² (your HPC Bokaap BOQ, 26 Oct 2026)'. A rate is per its unit: never "
+            "present a line total (rate × quantity) as a rate."
         )
 
     async def _agent_loop(self, history: str, question: str, context: str, tenant_id: str) -> str:
@@ -312,6 +344,7 @@ class CalculationsSkill(BaseSkill):
             try:
                 from vula.api.qs import search_rates
                 rows = search_rates(tenant_id, str(args.get("description", "")), limit=10)
+                rows = [{**r, "where": where_from(r)} for r in rows]
                 result = {"rates": rows} if rows else {"message": "No matching rate on file for this tenant."}
                 if rows and isinstance(getattr(self, "_rate_sources", None), list):
                     self._rate_sources.append(tool_source("lookup_rate", result))
