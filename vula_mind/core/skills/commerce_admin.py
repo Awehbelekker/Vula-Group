@@ -2459,7 +2459,7 @@ class CommerceAdminSkill(BaseSkill):
         try:
             from core import voice
             if not voice.active():
-                persona = voice.company_voice(tenant_id, "team")
+                persona = voice.chat_voice(tenant_id, "team")
                 if persona:
                     persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
