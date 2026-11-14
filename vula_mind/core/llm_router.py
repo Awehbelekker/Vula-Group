@@ -665,6 +665,10 @@ async def resolve_generation_route(
     capped = _spend_capped(tenant_id)
     if capped:
         _alert_spend_cap_breach(tenant_id)
+    # 14 Nov 2026 (vula/ai_allowance.py): the month's AI allowance and top-ups used up pauses the
+    # extras only — Ask anything and research stay local (or stop). Nothing else is affected.
+    allowance_used = (not capped and task_type in CAP_HARD_TASKS and _allowance_used(tenant_id))
+    capped = capped or allowance_used
 
     # Explicit operator override — accuracy-first, but no longer the default and always logged so
     # even this path is auditable for "why did data leave SA".
@@ -682,14 +686,15 @@ async def resolve_generation_route(
             _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
                           backend=f"openrouter/{cloud_model}", reason=complex_reason)
             return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
-        reason = "spend_cap_soft_degrade" if (complex_reason and capped) else "local_first"
+        reason = (("ai_allowance_used" if allowance_used else "spend_cap_soft_degrade")
+                  if (complex_reason and capped) else "local_first")
         _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
                       backend=f"{_local_prefix()}/{local_model}", reason=reason)
         return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
 
     if capped and task_type in CAP_HARD_TASKS:
         _log_decision(run_id=run_id, task=task, outcome="blocked", escalated=False,
-                      backend="none", reason="spend_cap_hard_stop")
+                      backend="none", reason="ai_allowance_used" if allowance_used else "spend_cap_hard_stop")
         raise SpendCapReached(tenant_id or "")
 
     # (a) local unreachable → cloud, logged with the reason a regulator would ask about.
@@ -716,6 +721,18 @@ CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research"})
 class SpendCapReached(RuntimeError):
     """The business's daily AI spend cap is reached and the local model is unreachable, for a
     task in CAP_HARD_TASKS: no generation route is allowed."""
+
+
+def _allowance_used(tenant_id: Optional[str]) -> bool:
+    """This business's monthly AI allowance and top-ups are used up (vula/ai_allowance.py).
+    Fail-open, like the spend cap."""
+    if not tenant_id:
+        return False
+    try:
+        from vula import ai_allowance
+        return ai_allowance.extras_paused(tenant_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _spend_capped(tenant_id: Optional[str]) -> bool:
@@ -767,9 +784,12 @@ def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,
     if task_type in CAP_HARD_TASKS:          # a capped open chat keeps its local answer
         try:
             from vula.integrations.metering import get_request_tenant
-            if _spend_capped(get_request_tenant()):
+            tid = get_request_tenant()
+            capped = _spend_capped(tid)
+            if capped or _allowance_used(tid):
                 _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type, outcome="local",
-                              escalated=False, backend="none", reason="spend_cap_hard_stop")
+                              escalated=False, backend="none",
+                              reason="spend_cap_hard_stop" if capped else "ai_allowance_used")
                 return None
         except Exception:  # noqa: BLE001 — fail open, as _spend_capped does
             pass

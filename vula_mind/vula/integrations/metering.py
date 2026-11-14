@@ -154,6 +154,24 @@ def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens
                 "est_cost_usd": cost}).execute()
     except Exception as exc:
         logger.debug("meter skipped (run migration 031?): %s", exc)
+        return
+    if cost > 0:
+        _after_spend(tenant_id)
+
+
+def _after_spend(tenant_id: str) -> None:
+    """A cloud call was metered: tell the owner if the AI allowance is nearly or fully used
+    (vula/ai_allowance.py), without holding up the call. Only when an event loop is running."""
+    if not tenant_id or tenant_id.startswith("_"):
+        return
+    try:
+        import asyncio
+        from vula import ai_allowance
+        asyncio.get_running_loop().create_task(ai_allowance.after_spend(tenant_id))
+    except RuntimeError:
+        pass                       # no loop (a script or a sync worker): the next call will tell
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ai allowance check skipped: %s", exc)
 
 
 IMAGE_COST_USD = 0.04  # gemini-2.5-flash-image via OpenRouter, per generated image

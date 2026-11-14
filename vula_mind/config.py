@@ -502,6 +502,9 @@ class Settings(BaseSettings):
     # Rand per US dollar for showing AI/infra costs in R on Master › Usage (display only — billing
     # and spend caps stay in USD, which is what the providers charge). Env: USD_ZAR_RATE.
     usd_zar_rate: float = 18.0
+    # Vula's price for cloud AI over its cost (vula/ai_allowance.py): a business's allowance, usage
+    # and top-ups are all rand at cost × usd_zar_rate × this. 14 Nov 2026 (Ian): cost plus 30%.
+    ai_markup: float = 1.30
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
 

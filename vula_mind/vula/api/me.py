@@ -200,6 +200,56 @@ async def my_plan(tenant_id: str, request: Request) -> dict:
     return await asyncio.to_thread(lambda: plan_view(tenant_id, with_pay_link=can_pay))
 
 
+# ── the AI allowance and top-ups (vula/ai_allowance.py, 14 Nov 2026) ─────────────────────────
+
+@router.get("/{tenant_id}/admin/ai/usage")
+async def my_ai_usage(tenant_id: str, request: Request) -> dict:
+    """This month's AI allowance, what's used, top-ups left and this month's use by day. Open
+    top-up requests and the packs are shown to the owner or a manager only."""
+    import asyncio
+    from vula import ai_allowance
+    from vula.api.tenant_auth import member_scope, scope_allows
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    lead = scope is not None and scope_allows(scope, frozenset())
+    st = await asyncio.to_thread(ai_allowance.status, tenant_id)
+    days = await asyncio.to_thread(ai_allowance.daily_used, tenant_id, st["month"])
+    out = {k: v for k, v in st.items() if k != "requested"}
+    out["days"] = days
+    out["can_top_up"] = lead
+    if lead:
+        out["requested"] = st["requested"]
+        out["packs"] = list(ai_allowance.TOPUP_PACKS_CENTS)
+    return out
+
+
+class TopUpIn(BaseModel):
+    amount_cents: int
+
+
+@router.post("/{tenant_id}/admin/ai/topup")
+async def request_ai_topup(tenant_id: str, body: TopUpIn, request: Request) -> dict:
+    """An owner or manager asks for a top-up (R100, R250 or R500). Vula invoices it; it counts
+    once Master marks it paid."""
+    from vula import ai_allowance
+    from vula.api.tenant_auth import member_scope, scope_allows
+    from vula.identity import person_for_login
+    auth = request.headers.get("authorization", "")
+    scope = await member_scope(auth, tenant_id)
+    person = await person_for_login(auth, tenant_id)
+    try:
+        row = await ai_allowance.request_topup(tenant_id, person.key if person is not None else "",
+                                               scope is not None and scope_allows(scope, frozenset()),
+                                               body.amount_cents)
+    except ai_allowance.AllowanceError as exc:
+        raise HTTPException(status_code=403 if "owner or manager" in str(exc) else 400, detail=str(exc))
+    return {"request": {"id": row["id"], "amount": int(row["amount_cents"]), "requested_at": row.get("requested_at")},
+            "already": bool(row.get("already")),
+            "message": ("That top-up is already requested — we'll invoice you; it's added once paid."
+                        if row.get("already") else
+                        f"Top-up of {ai_allowance.rand(int(row['amount_cents']))} requested. We'll send an invoice; "
+                        "it's added as soon as it's paid.")}
+
+
 # ── the first-run welcome (vula/commerce/first_run.py) ───────────────────────────────────────
 
 async def _lead_only(tenant_id: str, request: Request) -> None:

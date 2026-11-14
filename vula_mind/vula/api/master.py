@@ -157,10 +157,16 @@ async def master_update_tenant(tenant_id: str, body: dict,
     Audited."""
     allowed = {"display_name", "business_type", "modules", "theme", "active", "plan",
                "store_url", "default_payment_provider", "share_knowledge_with_network",
-               "spend_cap_usd", "ui_v2"}
+               "spend_cap_usd", "ui_v2", "ai_allowance_cents"}
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if "ui_v2" in patch:   # the redesigned dashboard on/off for this one business (215 / 217)
         patch["ui_v2"] = bool(patch["ui_v2"])
+    if "ai_allowance_cents" in patch:   # a per-business AI allowance (270); null = the plan's
+        v = patch["ai_allowance_cents"]
+        try:
+            patch["ai_allowance_cents"] = None if v in (None, "") else max(0, int(v))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ai_allowance_cents must be a whole number of cents")
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
     from vula.api import tenants as _t
@@ -176,8 +182,64 @@ async def master_update_tenant(tenant_id: str, body: dict,
         raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
     from vula.api import tenants as _tenants
     _tenants.invalidate(tenant_id)
+    if "ai_allowance_cents" in patch or "plan" in patch:
+        from vula import ai_allowance
+        ai_allowance.forget(tenant_id)
     audit(identity, "tenant_updated", tenant_id, patch=patch)
     return res.data[0]
+
+
+# ── AI allowance and top-ups (vula/ai_allowance.py, migration 270) ─────────────
+
+@router.get("/ai-credits")
+async def master_ai_credits(tenant_id: Optional[str] = None) -> dict:
+    """Top-ups waiting to be invoiced and marked paid (every business), or one business's
+    allowance, usage and credits."""
+    import asyncio
+    from vula import ai_allowance
+    if tenant_id:
+        st = await asyncio.to_thread(ai_allowance.status, tenant_id, True)
+        rows = await asyncio.to_thread(ai_allowance.credits, tenant_id, ("requested", "paid", "cancelled"))
+        return {"tenant_id": tenant_id, "status": st, "credits": rows}
+    return {"waiting": await asyncio.to_thread(ai_allowance.waiting)}
+
+
+@router.post("/ai-credits/{credit_id}/paid")
+async def master_ai_credit_paid(credit_id: str, body: dict, identity: dict = Depends(require_master)) -> dict:
+    """The top-up's invoice was paid: it counts from now. Read back."""
+    import asyncio
+    from vula import ai_allowance
+    row = await asyncio.to_thread(ai_allowance.mark_paid, credit_id, identity.get("email") or "master",
+                                  str((body or {}).get("reference") or ""))
+    if not row:
+        raise HTTPException(status_code=404, detail="That isn't a top-up waiting to be paid.")
+    audit(identity, "ai_topup_paid", row["tenant_id"], credit_id=credit_id, amount_cents=row["amount_cents"])
+    return {"credit": row}
+
+
+@router.post("/ai-credits/{credit_id}/cancel")
+async def master_ai_credit_cancel(credit_id: str, identity: dict = Depends(require_master)) -> dict:
+    import asyncio
+    from vula import ai_allowance
+    row = await asyncio.to_thread(ai_allowance.cancel, credit_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="That isn't a top-up waiting to be paid.")
+    audit(identity, "ai_topup_cancelled", row["tenant_id"], credit_id=credit_id)
+    return {"credit": row}
+
+
+@router.post("/tenants/{tenant_id}/ai-credit")
+async def master_ai_credit_grant(tenant_id: str, body: dict, identity: dict = Depends(require_master)) -> dict:
+    """Add AI credit to a business by hand (counts at once). Read back."""
+    import asyncio
+    from vula import ai_allowance
+    try:
+        row = await asyncio.to_thread(ai_allowance.grant, tenant_id, int((body or {}).get("amount_cents") or 0),
+                                      identity.get("email") or "master", str((body or {}).get("note") or ""))
+    except (ai_allowance.AllowanceError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "Give an amount in cents.")
+    audit(identity, "ai_credit_granted", tenant_id, amount_cents=row["amount_cents"])
+    return {"credit": row}
 
 
 # ── Per-business switches (vula/features.py, migration 266) ────────────────────

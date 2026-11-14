@@ -22,6 +22,7 @@ import { VULA_API } from "../lib/authFetch";
 import { useAuthStore } from "../store/auth";
 import { Button, Card } from "./ui/index.jsx";
 import ProfileDrafts from "./ProfileDrafts.jsx";
+import { rand } from "./settings/AiUsage.jsx";
 import { DOC_ACCEPT, fileLine, useDocumentSetup } from "./useDocumentSetup.js";
 import "./gettingStarted.css";
 
@@ -82,6 +83,14 @@ function PlanLine({ plan }) {
         {trial ? <span className={plan.trial_over ? "vgs-warn" : undefined}> · {trial}</span> : null}
         {[users, docs].filter(Boolean).length > 0 && <span className="vgs-muted"> · {[users, docs].filter(Boolean).join(", ")}</span>}
       </p>
+      {plan.ai && (
+        <p className="vgs-plan-text">
+          <span className={plan.ai.paused ? "vgs-warn" : undefined}>
+            AI this month: {rand(plan.ai.used)} of {rand(plan.ai.allowance + plan.ai.topups_left)}
+            {plan.ai.paused ? " — used up; Ask anything uses Vula's own AI until a top-up" : ""}
+          </span>
+          {(plan.ai.paused || plan.ai.pct >= 80) && <span className="vgs-muted"> · Top up in Settings › AI usage</span>}
+        </p>)}
       {plan.pay_url && (
         <Button size="sm" Icon={CreditCard} onClick={() => window.open(plan.pay_url, "_blank", "noopener,noreferrer")}>
           Choose how to pay
