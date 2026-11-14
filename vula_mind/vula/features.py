@@ -38,6 +38,8 @@ FEATURES: Dict[str, tuple] = {
                      "The AI advisor for brainstorming and planning"),
     "open_chat": ("open_chat_enabled",
                   "Ask anything: an open chat in the dashboard on Vula's own AI (local first)"),
+    "trade_costing": ("trade_costing_enabled",
+                      "Costing by trade: build-ups researched once, confirmed by an owner or manager, then looked up"),
 }
 
 

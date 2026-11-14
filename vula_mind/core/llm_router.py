@@ -601,7 +601,9 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
 # several pages — Gemini 2.5 Flash, not the general fallback model.
 _TASK_CLOUD_DEFAULTS = {"research": "google/gemini-2.5-flash", "research_plan": "google/gemini-2.5-flash",
                         # reading prices off a supplier page (vula/takeoff, 14 Nov 2026)
-                        "rates_extract": "google/gemini-2.5-flash"}
+                        "rates_extract": "google/gemini-2.5-flash",
+                        # a trade build-up from cited pages (vula/commerce/buildups.py, 14 Nov 2026)
+                        "buildup_research": "google/gemini-2.5-flash"}
 
 
 def cloud_model_for(task_type: Optional[str]) -> str:
