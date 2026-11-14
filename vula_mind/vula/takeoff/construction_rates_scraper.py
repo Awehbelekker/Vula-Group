@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -51,6 +51,20 @@ LLM_MODEL   = settings.model_worker
 # timing out — 5 of 7 sources produced nothing that week.
 EXTRACT_TIMEOUT_S = 180.0
 SCRAPE_CONCURRENCY = 1
+DEFAULT_REFRESH_DAYS = 7       # a source read successfully isn't read again for a week
+RETRY_AFTER_DAYS = 1           # nor is one tried in the last day, whatever the outcome
+
+
+def _when(value: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _age_days(at: datetime) -> float:
+    now = datetime.now(at.tzinfo) if at.tzinfo else datetime.now()
+    return (now - at).total_seconds() / 86400
 DB_PATH     = settings.data_dir / "construction_rates.db"  # persistent volume, not ~/.vula
 QDRANT_BASE = settings.qdrant_base
 COLLECTION  = "vula_digg_rates"
@@ -69,6 +83,9 @@ class MaterialRate:
     scraped_at: str = ""        # ISO timestamp
     change_pct: float = 0.0    # vs previous scrape
     notes: str = ""
+    url: str = ""               # the page it was read from
+    family: str = ""            # market_checks family ("brick", "cement"…), "" when none matched
+    checked: bool = False       # its figures are on that page and inside the family's band
 
     def __post_init__(self):
         if not self.mid:
@@ -216,8 +233,31 @@ def _parse_json_array(raw: str) -> Optional[list]:
         try:
             obj, _end = json.JSONDecoder().raw_decode(fixed)
         except json.JSONDecodeError:
-            return None
+            # 14 Nov 2026: a long list cut off by the token limit ("Porcelanosa Porcelanosa…")
+            # threw away every complete row before the cut. Keep the complete objects.
+            salvaged = _salvage_objects(fixed)
+            return salvaged or None
     return obj if isinstance(obj, list) else None
+
+
+def _salvage_objects(text: str) -> list:
+    """The complete JSON objects at the start of a cut-off array: '[{..}, {..}, {"lab' → 2 rows."""
+    decoder = json.JSONDecoder()
+    out = []
+    i = text.find("[") + 1
+    while i > 0:
+        while i < len(text) and text[i] in " \t\r\n,":
+            i += 1
+        if i >= len(text) or text[i] != "{":
+            break
+        try:
+            obj, end = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            break
+        if isinstance(obj, dict):
+            out.append(obj)
+        i = end
+    return out
 
 
 # A bare number with thousands commas as an object value: `"low": 12,500,` (group 2 = "12,500").
@@ -257,38 +297,42 @@ class RateExtractor:
         return last or ScrapedCatalogue(source_name=source_name, source_url=url, status="no_data")
 
     async def _extract_one(self, url: str, source_name: str, prompt: str, content: str) -> ScrapedCatalogue:
-        extraction_prompt = (
-            f"{prompt}\n\n"
-            f"Page content:\n{content[:8000]}\n\n"
-            f"Extract ONLY construction material costs. Return valid JSON array:\n"
-            f'[{{"label": "...", "unit": "m²|m³|kg|no|m run|tonne", "low": 000, "high": 000, "notes": "..."}}]\n'
-            f"Include only items with actual ZAR prices. Return [] if no prices found.\n"
-            f"JSON only, no other text:"
-        )
+        """One page → checked rates. 14 Nov 2026: this posted straight to the local model with no
+        cloud fallback and kept whatever came back (Cashbuild bricks at R0.35–R0.55 each, a
+        different figure every run). It now goes through the router — Vula's own model first, the
+        cloud when the answer doesn't parse or none of its prices check out — and a rate is kept
+        only when its figures are printed on the page and sit in a plausible band
+        (vula/takeoff/market_checks.py)."""
+        from vula.takeoff import market_checks
+        page = content[:8000]
+        messages = [{"role": "user", "content": (
+            f"{prompt}\n\nPage content:\n{page}\n\n"
+            "Extract ONLY construction material prices that are printed on this page. Copy each "
+            "price exactly as printed, in rand, as a number. Return a JSON array like:\n"
+            '[{"label": "Cement 50kg bag", "unit": "bag", "low": 109.99, "high": 109.99, '
+            '"notes": "PPC Surebuild"}]\n'
+            "unit is how it is sold: each, bag, m2, m3, m, kg, t, l, tin, roll, sheet, box. "
+            "Use the same figure for low and high when there is one price. Return [] if no prices "
+            "are printed. JSON only, no other text."
+        )}]
+
+        def parsed(text: str) -> Optional[list]:
+            return _parse_json_array(re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip())
+
+        def checks_out(text: str) -> bool:
+            items = parsed(text)
+            if items is None:
+                return False
+            if not items:
+                return True                     # an honest "no prices here"
+            kept, _dropped = market_checks.check_rates(_rates_from_items(items, source_name), page)
+            return bool(kept)
 
         try:
-            # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
-            # (same ones llm_router uses) or this direct call is blocked at the edge.
-            from core.llm_router import _ollama_headers, think_off
-            async with httpx.AsyncClient(timeout=EXTRACT_TIMEOUT_S) as client:
-                resp = await client.post(
-                    f"{OLLAMA_BASE}/api/generate",
-                    headers=_ollama_headers() or None,
-                    json={
-                        "model": LLM_MODEL,
-                        "prompt": extraction_prompt,
-                        "stream": False,
-                        **think_off(LLM_MODEL),
-                        # 2026-10-25: raw httpx to Ollama bypasses install_ollama_auth's num_ctx
-                        # cap (core/llm_router.py) — set it explicitly here too.
-                        "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 8192},
-                    },
-                )
-                resp.raise_for_status()
-                raw = resp.json().get("response", "")
-
-            # Strip think tags
-            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            from vula.research import _complete
+            raw = await _complete("rates_extract", messages, max_tokens=2048,
+                                  timeout_s=EXTRACT_TIMEOUT_S, accept=checks_out)
+            raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL).strip()
 
             # Extract JSON array — see _parse_json_array for why this isn't a plain json.loads.
             items = _parse_json_array(raw)
@@ -299,8 +343,19 @@ class RateExtractor:
                                         status="parse_failed",
                                         error=f"unparseable JSON in response: {raw[:200]!r}")
 
-            return ScrapedCatalogue(source_name=source_name, source_url=url,
-                                    rates=_rates_from_items(items, source_name))
+            kept, dropped = market_checks.check_rates(_rates_from_items(items, source_name), page)
+            for r in kept:
+                r.url = url
+            if dropped:
+                reasons: Dict[str, int] = {}
+                for _r, why in dropped:
+                    reasons[why] = reasons.get(why, 0) + 1
+                logger.info("rates %s: kept %d, dropped %s", source_name, len(kept),
+                            ", ".join(f"{n} {why}" for why, n in reasons.items()))
+            if items and not kept:
+                return ScrapedCatalogue(source_name=source_name, source_url=url, status="unchecked",
+                                        error=f"{len(dropped)} price(s) read, none checked out on the page")
+            return ScrapedCatalogue(source_name=source_name, source_url=url, rates=kept)
 
         except (json.JSONDecodeError, Exception) as e:
             # type name too: a timeout's str() is empty, which logged "failed for X: " and nothing else.
@@ -356,7 +411,20 @@ def _rates_from_items(items: list, source_name: str) -> List["MaterialRate"]:
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 _RATE_COLS = ("key", "label", "unit", "low", "high", "mid", "source", "scraped_at", "prev_mid",
-              "change_pct", "notes")
+              "change_pct", "notes", "url", "family", "checked")
+# Added 14 Nov 2026 (migration 271 on the Supabase copy): where a price was read and whether it
+# checked out. A row from before has checked = 0 and is never used to price anything.
+_NEW_COLS = (("url", "TEXT"), ("family", "TEXT"), ("checked", "INTEGER DEFAULT 0"))
+
+
+def _sqlite_value(col: str, value: Any) -> Any:
+    return (1 if value else 0) if col == "checked" else value
+
+
+def _row(values: tuple) -> Dict[str, Any]:
+    out = dict(zip(_RATE_COLS, values))
+    out["checked"] = bool(out.get("checked"))
+    return out
 
 
 class RatesDatabase:
@@ -401,6 +469,11 @@ class RatesDatabase:
             conn.execute("ALTER TABLE scrape_log ADD COLUMN error TEXT")
         except sqlite3.OperationalError:
             pass
+        for col, typ in _NEW_COLS:
+            try:
+                conn.execute(f"ALTER TABLE material_rates ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
         # 2026-09-27: the file is wiped on every Railway deploy (no volume attached), so rates
         # scraped weekly vanished until the next scrape. Rates are written through to Supabase
@@ -408,62 +481,66 @@ class RatesDatabase:
         if not conn.execute("SELECT 1 FROM material_rates LIMIT 1").fetchone():
             from vula import durable
             for r in durable.select("vula_material_rates") or []:
-                conn.execute("INSERT OR REPLACE INTO material_rates VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                             tuple(r.get(c) for c in _RATE_COLS))
+                conn.execute(f"INSERT OR REPLACE INTO material_rates ({','.join(_RATE_COLS)}) "
+                             f"VALUES ({','.join('?' * len(_RATE_COLS))})",
+                             tuple(_sqlite_value(c, r.get(c)) for c in _RATE_COLS))
             conn.commit()
         conn.close()
 
     def upsert(self, rate: MaterialRate) -> str:
-        """Insert or update a rate. Returns 'new' | 'updated' | 'unchanged'."""
+        """Insert or update a rate. Returns 'new' | 'updated' | 'unchanged'. A rate that now checks
+        out replaces an unchecked one even at the same price (14 Nov 2026)."""
         conn = sqlite3.connect(self.db_path)
-        existing = conn.execute("SELECT mid FROM material_rates WHERE key=?", (rate.key,)).fetchone()
+        existing = conn.execute("SELECT mid, checked FROM material_rates WHERE key=?", (rate.key,)).fetchone()
         status = "unchanged"
+        values = {"key": rate.key, "label": rate.label, "unit": rate.unit, "low": rate.low,
+                  "high": rate.high, "mid": rate.mid, "source": rate.source,
+                  "scraped_at": rate.scraped_at, "notes": rate.notes, "url": rate.url,
+                  "family": rate.family, "checked": 1 if rate.checked else 0}
 
         if not existing:
-            conn.execute(
-                "INSERT INTO material_rates VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (rate.key, rate.label, rate.unit, rate.low, rate.high, rate.mid,
-                 rate.source, rate.scraped_at, None, 0.0, rate.notes)
-            )
+            values.update(prev_mid=None, change_pct=0.0)
+            conn.execute(f"INSERT INTO material_rates ({','.join(values)}) VALUES ({','.join('?' * len(values))})",
+                         tuple(values.values()))
             status = "new"
         else:
-            prev_mid = existing[0]
+            prev_mid, was_checked = existing[0], bool(existing[1])
             change = ((rate.mid - prev_mid) / prev_mid * 100) if prev_mid else 0
-            if abs(change) > 0.5:
-                conn.execute("""
-                    UPDATE material_rates
-                    SET low=?, high=?, mid=?, source=?, scraped_at=?, prev_mid=?, change_pct=?, notes=?
-                    WHERE key=?
-                """, (rate.low, rate.high, rate.mid, rate.source, rate.scraped_at, prev_mid, change, rate.notes, rate.key))
+            if abs(change) > 0.5 or (rate.checked and not was_checked):
+                values.update(prev_mid=prev_mid, change_pct=change)
+                key = values.pop("key")
+                conn.execute(f"UPDATE material_rates SET {', '.join(f'{c}=?' for c in values)} WHERE key=?",
+                             (*values.values(), key))
                 rate.change_pct = change
                 status = "updated"
 
         conn.commit()
         if status != "unchanged":
-            row = conn.execute("SELECT * FROM material_rates WHERE key=?", (rate.key,)).fetchone()
+            cur = conn.execute(f"SELECT {','.join(_RATE_COLS)} FROM material_rates WHERE key=?", (rate.key,))
+            row = cur.fetchone()
             if row:
                 from vula import durable
-                durable.upsert("vula_material_rates", dict(zip(_RATE_COLS, row)), on_conflict="key")
+                out = dict(zip(_RATE_COLS, row))
+                out["checked"] = bool(out.get("checked"))
+                durable.upsert("vula_material_rates", out, on_conflict="key")
         conn.close()
         return status
 
     def get_all(self) -> List[Dict]:
         conn = sqlite3.connect(self.db_path)
-        rows = conn.execute("SELECT * FROM material_rates ORDER BY label").fetchall()
-        cols = ["key","label","unit","low","high","mid","source","scraped_at","prev_mid","change_pct","notes"]
+        rows = conn.execute(f"SELECT {','.join(_RATE_COLS)} FROM material_rates ORDER BY label").fetchall()
         conn.close()
-        return [dict(zip(cols, row)) for row in rows]
+        return [_row(r) for r in rows]
 
     def get_changes(self, threshold_pct: float = 5.0) -> List[Dict]:
         """Rates that moved significantly since last scrape."""
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute(
-            "SELECT * FROM material_rates WHERE ABS(change_pct) > ? ORDER BY ABS(change_pct) DESC",
-            (threshold_pct,)
+            f"SELECT {','.join(_RATE_COLS)} FROM material_rates WHERE ABS(change_pct) > ? "
+            "ORDER BY ABS(change_pct) DESC", (threshold_pct,)
         ).fetchall()
-        cols = ["key","label","unit","low","high","mid","source","scraped_at","prev_mid","change_pct","notes"]
         conn.close()
-        return [dict(zip(cols, row)) for row in rows]
+        return [_row(r) for r in rows]
 
     def log_scrape(self, catalogue: ScrapedCatalogue):
         conn = sqlite3.connect(self.db_path)
@@ -649,24 +726,24 @@ class ConstructionRatesScraper:
         )
 
     def _fresh(self, source: dict) -> bool:
-        """A periodic source (the yearly AECOM guide) that was read successfully, with rates, from
-        the same link within its refresh_days isn't downloaded again. The run log is kept in
-        Supabase (vula_material_rate_log): the local SQLite copy is wiped on every deploy."""
-        days = source.get("refresh_days")
-        if not days:
-            return False
+        """A source read successfully, with rates, from the same link within its refresh_days
+        (default 7; the AECOM guide 30) isn't read again; nor is one tried in the last day,
+        whatever happened. 14 Nov 2026: only AECOM had refresh_days, and the loop starts on every
+        boot, so every deploy re-read six sources — about ten times a day. The run log is kept
+        in Supabase (vula_material_rate_log) so it survives a deploy."""
+        days = source.get("refresh_days") or DEFAULT_REFRESH_DAYS
         from vula import durable
-        rows = durable.select("vula_material_rate_log", "url,scraped_at,rates_extracted", order="scraped_at",
-                              desc=True, limit=5, source=source["name"], status="ok") or []
-        for r in rows:
-            if r.get("url") != source["url"] or not r.get("rates_extracted"):
+        rows = durable.select("vula_material_rate_log", "url,scraped_at,rates_extracted,status",
+                              order="scraped_at", desc=True, limit=10, source=source["name"]) or []
+        for i, r in enumerate(rows):
+            at = _when(r.get("scraped_at"))
+            if at is None:
                 continue
-            try:
-                at = datetime.fromisoformat(str(r.get("scraped_at")).replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            now = datetime.now(at.tzinfo) if at.tzinfo else datetime.now()
-            return (now - at).days < days
+            age = _age_days(at)
+            if i == 0 and r.get("url") == source["url"] and age < RETRY_AFTER_DAYS:
+                return True                              # tried in the last day — leave it
+            if r.get("status") == "ok" and r.get("url") == source["url"] and r.get("rates_extracted"):
+                return age < days
         return False
 
     async def get_live_rate(self, material_description: str) -> Optional[Dict]:

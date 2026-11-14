@@ -599,7 +599,9 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
 # Built-in cloud models for some task types, used when CLOUD_MODEL_BY_TASK has no entry for
 # them (an entry there still wins). 13 Nov 2026, Ian: research writes a long, cited answer from
 # several pages — Gemini 2.5 Flash, not the general fallback model.
-_TASK_CLOUD_DEFAULTS = {"research": "google/gemini-2.5-flash", "research_plan": "google/gemini-2.5-flash"}
+_TASK_CLOUD_DEFAULTS = {"research": "google/gemini-2.5-flash", "research_plan": "google/gemini-2.5-flash",
+                        # reading prices off a supplier page (vula/takeoff, 14 Nov 2026)
+                        "rates_extract": "google/gemini-2.5-flash"}
 
 
 def cloud_model_for(task_type: Optional[str]) -> str:
