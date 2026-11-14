@@ -559,6 +559,8 @@ class Settings(BaseSettings):
     # a question about the business's records still goes to the business assistant. For one
     # business: Master › tenant › Features to pilot (vula/features.py "open_chat").
     open_chat_enabled: bool = False
+    # Trade costing (vula/commerce/buildups.py): build-ups researched once, confirmed once, looked up.
+    trade_costing_enabled: bool = False
     open_chat_per_hour: int = 60          # messages per person per hour in the open chat
     research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
     # Cut the research prompt to fit the local model so Vula's own model writes it; off = the

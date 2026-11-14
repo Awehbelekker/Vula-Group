@@ -1221,6 +1221,43 @@ SHEET_TOOLS = [
 
 # 31 Oct 2026 (item 2): forms the team fills in (vula/commerce/forms.py). A returned form is read
 # in the WhatsApp document path and booked only on the owner's Confirm (form_book, dispatch only).
+# Trade costing, phase 2 (14 Nov 2026): what goes into one unit of building work — researched once
+# from cited sources, confirmed by an owner or manager, then looked up (vula/commerce/buildups.py).
+BUILDUP_TOOLS = [
+    {"type": "function", "function": {
+        "name": "trade_buildup",
+        "description": "Show what goes into ONE unit of an item of building work — its build-up: the "
+                       "materials, labour and plant per m2 (or per unit), with the waste on each "
+                       "line. Gives the business's own confirmed build-up, else one another Vula "
+                       "business confirmed and shared, else one waiting for confirmation. With "
+                       "research=true and none on file, research one from cited sources (a minute) "
+                       "and save it for an owner or manager to confirm. Use for 'what goes into a m2 "
+                       "of brick wall', 'how much cement and sand per m2 of plaster'. Quantities "
+                       "only — never prices.",
+        "parameters": {"type": "object", "properties": {
+            "item": {"type": "string", "description": "the work, e.g. 'one-brick wall' or 'plaster to brick walls'"},
+            "spec": {"type": "object", "additionalProperties": {"type": "string"},
+                     "description": "what changes the quantities, e.g. {\"thickness\": \"220 mm\", \"sides\": \"both\"}"},
+            "unit": {"type": "string", "description": "per what: m2 (default), m, m3, each"},
+            "research": {"type": "boolean", "description": "research one if none is on file"},
+        }, "required": ["item"]}}},
+    {"type": "function", "function": {
+        "name": "confirm_buildup",
+        "description": "An owner or manager confirms a build-up so Vula uses it for every estimate of "
+                       "that item — optionally changing lines first (a quantity, unit or waste %, "
+                       "adding or removing a component). Show the build-up and the changes first; "
+                       "call with confirm=true only after they say yes.",
+        "parameters": {"type": "object", "properties": {
+            "buildup_id": {"type": "string"},
+            "changes": {"type": "array", "items": {"type": "object", "properties": {
+                "component": {"type": "string"}, "qty_per_unit": {"type": "number"},
+                "unit": {"type": "string"}, "waste_pct": {"type": "number"},
+                "label": {"type": "string"}, "kind": {"type": "string", "enum": ["material", "labour", "plant"]},
+                "remove": {"type": "boolean"}}, "required": ["component"]}},
+            "confirm": {"type": "boolean"},
+        }, "required": ["buildup_id"]}}},
+]
+
 FORM_TOOLS = [
     {"type": "function", "function": {
         "name": "fill_in_form",
@@ -1882,6 +1919,12 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         with_projects = uses_projects(tenant_id)
     except Exception:
         with_projects = True
+    try:
+        from vula import features
+        if features.on(tenant_id, "trade_costing"):
+            tools += BUILDUP_TOOLS
+    except Exception:  # noqa: BLE001 — off when the switch can't be read
+        pass
     tools += [t for t in PROJECT_TOOLS
               if with_projects or t["function"]["name"] not in ("project_profit", "boq_template", "share_project",
                                                                    "client_paid_direct", "project_bill_file",
@@ -1923,7 +1966,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances",
     # every document of a project, statements and proofs of payment included: owner and managers
     # only — no tab id grants it, so a restricted staff member never gets the tool.
-    "project_file": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_file": "owner_only", "confirm_buildup": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -3024,6 +3067,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
+            if name in ("trade_buildup", "confirm_buildup"): return await self._buildup(name, tid, args, ctx)
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")), args.get("channel"))
             if name == "payment_link":       return await self._payment_link(tid, args)
@@ -3596,6 +3640,43 @@ class CommerceAdminSkill(BaseSkill):
         return {"suggested_persona": result["suggested"], "sample_count": result["sample_count"],
                 "note": "Show this to the owner and ask if they'd like Vula to sound like this — "
                        "only call apply_voice_persona if they say yes."}
+
+    async def _buildup(self, name: str, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """trade_buildup / confirm_buildup (vula/commerce/buildups.py). Confirming needs full access
+        (owner or manager) — checked here as well as by the tool's owner_only scope, because an
+        unrestricted member also has no scope list."""
+        from vula.commerce import buildups
+        person = str(ctx.get("phone") or ctx.get("person_key") or "")
+        try:
+            if name == "trade_buildup":
+                item, spec = str(args.get("item") or ""), args.get("spec") or {}
+                b = buildups.find(tid, item, spec)
+                if not b and args.get("research"):
+                    b = await buildups.research(tid, item, spec, unit=str(args.get("unit") or "m2"), created_by=person)
+                if not b:
+                    return {"found": False, "message": "No build-up on file for that yet. I can research one "
+                                                       "from cited sources for an owner or manager to confirm."}
+                out = {"found": True, "buildup_id": b["id"], "status": b["origin"], "text": buildups.describe(b)}
+                if b["origin"] in ("proposed", "shared"):
+                    out["next"] = ("Show it and ask an owner or manager to confirm or change it — it's only "
+                                   "relied on once confirmed.")
+                return out
+            buildup_id = str(args.get("buildup_id") or "")
+            if not args.get("confirm"):
+                b = buildups.get(tid, buildup_id)
+                if not b:
+                    return {"error": "I can't find that build-up."}
+                return {"preview": True, "text": buildups.describe(b), "changes": args.get("changes") or [],
+                        "message": "Confirm to make this the build-up Vula uses for every estimate of this "
+                                   "item (call again with confirm=true)."}
+            b = buildups.confirm(tid, buildup_id, person=person, full_access=_ctx_access(tid, ctx) is None,
+                                 changes=args.get("changes") or [])
+            return _checked({"confirmed": True, "buildup_id": b["id"], "version": b.get("version"),
+                             "text": buildups.describe(b)},
+                            "✅ Confirmed — Vula will use this build-up for every estimate of this item:\n"
+                            + buildups.describe(b))
+        except buildups.BuildupError as exc:
+            return {"error": str(exc)}
 
     async def _apply_voice_persona(self, tid: str, persona_prompt: str,
                                    confirm: bool = False) -> Dict[str, Any]:
