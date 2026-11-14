@@ -21,10 +21,14 @@ from typing import Any, Dict, List, Optional
 from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, begin_turn, behaviour_preamble, turn_local,
+    BaseSkill, SkillInput, SkillOutput, begin_turn, behaviour_preamble,
+    drop_unverified_price_sentences, tool_source, turn_local, unverified_prices,
 )
 
 logger = logging.getLogger(__name__)
+
+RATE_CHECK_NOTE = ("I've left out a figure I couldn't match to your rate library or a "
+                   "calculation — ask me and I'll look it up again.")
 
 MAX_TOOL_ITERATIONS = 5
 
@@ -140,10 +144,13 @@ class CalculationsSkill(BaseSkill):
     name = "calculations"
     description = "Deterministic SA construction/QS calculations — occupancy, escape widths, areas, parking."
     verification_policy = "deterministic"   # self-verifies via safe_eval anchoring below
+    # How BaseSkill.__call__ (plain_tool_words) names the tools if the model mentions them.
+    tool_labels = {"lookup_rate": "your rate library", "calculate": "a calculation"}
 
     # Per-turn bookkeeping — task-local, not shared across concurrent requests (see turn_local).
     _verified = turn_local()
     _calc_errors = turn_local()
+    _rate_sources = turn_local()
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         begin_turn()
@@ -165,6 +172,7 @@ class CalculationsSkill(BaseSkill):
             logger.debug("calculations KB retrieval skipped: %s", exc)
         self._verified: List[Any] = []      # deterministic safe_eval results seen this run
         self._calc_errors = 0
+        self._rate_sources: List[Dict[str, Any]] = []   # what lookup_rate actually returned
         try:
             answer = await self._agent_loop(inp.conversation_history, inp.question, context, inp.tenant_id)
             if not answer:
@@ -181,8 +189,20 @@ class CalculationsSkill(BaseSkill):
         # (safe_eval) computation. If the model states a headline number that matches NO verified
         # calculation, don't present it as fact — flag it and drop confidence. This catches the
         # model computing correctly with the tool but then misreporting a different number.
+        # 14 Nov 2026 (DIGG): brick rates of R2,760.48 / R47,692.16 / R10,166.85 were given, then
+        # R345.06 / R554.56 / R677.79 — and nothing checked a quoted rate when no calculate() ran.
+        # Every rand figure must now be a rate the library returned, a calculate() result, or a
+        # figure from the question or the business's own documents; any other sentence is dropped.
+        trusted = " ".join([inp.question or "", context] + [str(v) for v in self._verified])
+        bad_figures = unverified_prices(answer, self._rate_sources, {"lookup_rate"},
+                                        strict=True, also_trusted=trusted)
+        if bad_figures:
+            answer = drop_unverified_price_sentences(answer, bad_figures, note=RATE_CHECK_NOTE)
+            logger.info("calc rate-check dropped %d unmatched figure(s) tenant=%s",
+                        len(bad_figures), inp.tenant_id)
+
         anchored, matched = self._verify_answer(answer, self._verified)
-        confidence = 0.85
+        confidence = 0.85 if not bad_figures else 0.5
         if anchored is False:
             confidence = 0.45
             answer += ("\n\n⚠️ Please confirm these figures — the final number couldn't be matched "
@@ -292,7 +312,10 @@ class CalculationsSkill(BaseSkill):
             try:
                 from vula.api.qs import search_rates
                 rows = search_rates(tenant_id, str(args.get("description", "")), limit=10)
-                return {"rates": rows} if rows else {"message": "No matching rate on file for this tenant."}
+                result = {"rates": rows} if rows else {"message": "No matching rate on file for this tenant."}
+                if rows and isinstance(getattr(self, "_rate_sources", None), list):
+                    self._rate_sources.append(tool_source("lookup_rate", result))
+                return result
             except Exception as exc:
                 return {"error": str(exc)}
         return self._calc(args)

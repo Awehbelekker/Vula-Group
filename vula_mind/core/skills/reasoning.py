@@ -247,13 +247,15 @@ class ReasoningSkill(BaseSkill):
         if not kb_context and not given:
             import os as _os
             if (_os.environ.get("REASONING_WEB_FALLBACK_DISABLED", "false").lower() != "true"
-                    and not inp.metadata.get("strict_grounding")):
+                    and not inp.metadata.get("strict_grounding")
+                    and not inp.metadata.get("web_tried")):   # web search already came up empty
                 try:
                     import asyncio as _asyncio
                     from core.skills.loader import get_skill  # lazy: loader imports this module
                     web_result = await _asyncio.wait_for(
                         get_skill("web_search")(
-                            SkillInput(question=inp.question, tenant_id=inp.tenant_id)),
+                            SkillInput(question=inp.question, tenant_id=inp.tenant_id,
+                                       metadata={"from_reasoning": True})),
                         timeout=_WEB_FALLBACK_TIMEOUT_S)
                     if web_result.success and web_result.confidence >= _WEB_FALLBACK_MIN_CONFIDENCE:
                         web_context = web_result.answer
