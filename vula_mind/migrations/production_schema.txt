@@ -126,6 +126,7 @@ vula_email_voice_samples: created_at:timestamptz, excerpt:text, id:uuid, tenant_
 vula_employee_tasks: employee:text, enabled:bool, id:uuid, instructions:text, task:text, tenant_id:text, updated_at:timestamptz, updated_by:text
 vula_employees: employee:text, enabled:bool, id:uuid, instructions:text, tenant_id:text, updated_at:timestamptz, updated_by:text
 vula_escalations: answer:text, answered_at:timestamptz, channel:text, created_at:timestamptz, customer_notified_at:timestamptz, customer_phone:text, helper_name:text, helper_phone:text, id:uuid, question:text, stale_notified_at:timestamptz, status:text, tenant_id:text
+vula_estimates: created_at:timestamptz, created_by:text, id:uuid, items:jsonb, tenant_id:text, title:text, total_cents:int8, totals:jsonb
 vula_eval_reports: created_at:timestamptz, created_by:text, error:text, finished_at:timestamptz, id:uuid, model:text, passed:int4, report:jsonb, skill:text, status:text, total:int4
 vula_field_assignments: assigned_at:text, contractor_id:text, id:text, project_id:text, role:text, tenant_id:text
 vula_field_clickup_map: clickup_task_id:text, created_at:timestamptz, field_task_id:text, id:uuid, tenant_id:text

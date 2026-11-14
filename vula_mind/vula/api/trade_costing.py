@@ -10,6 +10,8 @@ membership guard as the rest of the tenant admin API. Switched on per business w
   POST  /{tenant_id}/admin/buildups/research           research one from cited sources (proposed)
   POST  /{tenant_id}/admin/buildups/{id}/confirm       owner or manager: confirm, optionally changed
   POST  /{tenant_id}/admin/buildups/{id}/retire        owner or manager: stop using it
+  POST  /{tenant_id}/admin/estimates                   cost work from its build-ups (phase 3)
+  GET   /{tenant_id}/admin/estimates[/{id}.xlsx]       kept estimates, and one as Excel
 """
 from __future__ import annotations
 
@@ -131,3 +133,68 @@ async def retire_buildup(tenant_id: str, buildup_id: str, request: Request) -> d
     except buildups.BuildupError as exc:
         raise _err(exc)
     return {"retired": ok}
+
+
+# ── estimates (phase 3) ──────────────────────────────────────────────────────
+
+class EstimateItem(BaseModel):
+    item: str
+    spec: Dict[str, str] = {}
+    quantity: Optional[float] = None
+    quantity_expr: Optional[str] = None
+    unit: str = "m2"
+
+
+class EstimateIn(BaseModel):
+    items: List[EstimateItem]
+    exclusions: List[str] = []
+    title: str = ""
+    research: bool = True
+
+
+@router.post("/{tenant_id}/admin/estimates")
+async def make_estimate(tenant_id: str, body: EstimateIn, request: Request) -> dict:
+    """Cost the work from each item's build-up (vula/commerce/estimate.py) and keep it."""
+    _on(tenant_id)
+    from vula.commerce import estimate
+    person, _lead = await _caller(tenant_id, request)
+    try:
+        est = await estimate.estimate(tenant_id, [i.model_dump(exclude_none=True) for i in body.items],
+                                      exclusions=body.exclusions, research=body.research,
+                                      created_by=person, title=body.title)
+    except estimate.EstimateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"estimate": est, "text": estimate.summary(est)}
+
+
+@router.get("/{tenant_id}/admin/estimates")
+async def list_estimates(tenant_id: str, limit: int = 20) -> dict:
+    _on(tenant_id)
+    from vula.commerce import service
+    rows = await asyncio.to_thread(
+        lambda: service._client().table("vula_estimates").select("id,title,total_cents,created_at")
+        .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
+    return {"estimates": rows}
+
+
+@router.get("/{tenant_id}/admin/estimates/{estimate_id}.xlsx")
+async def estimate_xlsx(tenant_id: str, estimate_id: str):
+    """A kept estimate as its Excel breakdown, re-read against the estimate before it is sent."""
+    _on(tenant_id)
+    from fastapi.responses import Response
+    from vula.api.tenants import display_name
+    from vula.commerce import estimate_sheet, service, xlsx_check
+    rows = await asyncio.to_thread(
+        lambda: service._client().table("vula_estimates").select("*").eq("id", estimate_id)
+        .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="Estimate not found.")
+    r = rows[0]
+    t = r.get("totals") or {}
+    est = {"title": r["title"], "items": r.get("items") or [], "total_cents": int(r.get("total_cents") or 0),
+           "exclusions": t.get("exclusions") or [], "hours_per_day": 8}
+    data, want = await asyncio.to_thread(estimate_sheet.workbook, display_name(tenant_id), est)
+    if xlsx_check.mismatches(data, want):
+        raise HTTPException(status_code=500, detail="The spreadsheet didn't add up, so it wasn't sent.")
+    return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="Estimate_{str(r.get("created_at") or "")[:10] or estimate_id[:8]}.xlsx"'})

@@ -206,6 +206,33 @@ CHECKLISTS: Dict[str, List[Component]] = {
 }
 
 
+# The words a component's price is found by — in the business's invoices, quotes and BOQs, and in
+# checked market prices. Tried in order; the first that finds a price in the right unit is used.
+# A component not listed is searched by the words of its label.
+SEARCH: Dict[str, List[str]] = {
+    "units": ["brick", "block"],
+    "mortar_cement": ["cement"], "cement": ["cement"],
+    "mortar_sand": ["building sand", "sand"], "plaster_sand": ["plaster sand", "sand"],
+    "sand": ["concrete sand", "sand"], "bedding_sand": ["bedding sand", "sand"],
+    "stone": ["stone", "aggregate"], "ready_mix": ["ready mix", "readymix"],
+    "lime_plasticiser": ["lime", "plasticiser"], "lime_additive": ["lime", "plaster additive"],
+    "brickforce": ["brickforce", "brick force"], "wall_ties": ["wall tie"], "dpc": ["dpc", "damp proof"],
+    "lintels": ["lintel"], "reinforcement": ["rebar", "reinforc", "mesh"],
+    "bonding_liquid": ["bonding liquid", "bonding"], "skim": ["skim", "rhinolite"], "beads": ["bead"],
+    "tiles": ["tile"], "adhesive": ["adhesive"], "grout": ["grout"], "primer": ["primer"],
+    "paint": ["paint"], "scaffolding": ["scaffold"], "labour": ["labour", "general worker"],
+    "supervision": ["foreman", "supervision"],
+}
+
+
+def search_terms(component: str, label: str = "") -> List[str]:
+    if component in SEARCH:
+        return SEARCH[component]
+    words = [w for w in (label or component).lower().replace("/", " ").split()
+             if len(w) > 2 and w not in {"and", "the", "for", "with", "or"}]
+    return [" ".join(words)] if words else [component]
+
+
 def trades() -> List[str]:
     return list(CHECKLISTS)
 
