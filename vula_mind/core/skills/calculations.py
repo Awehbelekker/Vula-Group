@@ -21,10 +21,43 @@ from typing import Any, Dict, List, Optional
 from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, begin_turn, behaviour_preamble, turn_local,
+    BaseSkill, SkillInput, SkillOutput, begin_turn, behaviour_preamble,
+    drop_unverified_price_sentences, tool_source, turn_local, unverified_prices,
 )
 
 logger = logging.getLogger(__name__)
+
+RATE_CHECK_NOTE = ("I've left out a figure I couldn't match to your rate library or a "
+                   "calculation — ask me and I'll look it up again.")
+
+_MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+_DOC_WORDS = {"boq": "BOQ", "boqs": "BOQs"}
+
+
+def _sa_date(iso: Any) -> str:
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(iso or ""))
+    return f"{int(m.group(3))} {_MONTHS[int(m.group(2)) - 1]} {m.group(1)}" if m else ""
+
+
+def where_from(row: Dict[str, Any]) -> str:
+    """Where a rate came from, in words, built in code (14 Nov 2026, DIGG asked "where did you get
+    the data?"): "your rate library", or e.g. "your HPC Bokaap BOQ, 26 Oct 2026" for one learned
+    from a single document, "4 of your documents (2 quotes, 2 invoices; Belladonna), latest
+    12 Oct 2026" for several."""
+    if not row.get("learned"):
+        return "your rate library"
+    m = re.match(r"Learned from (.+?)(?:, last \S+)?$", str(row.get("source") or ""))
+    docs = " ".join(_DOC_WORDS.get(w, w) for w in (m.group(1) if m else "").split())
+    projects = ", ".join(row.get("projects") or [])
+    date = _sa_date(row.get("latest_on"))
+    n = int(row.get("observations") or 0)
+    if n <= 1 and docs:
+        kind = re.sub(r"^\d+\s+", "", docs)
+        text = f"your {projects + ' ' if projects else ''}{kind}"
+    else:
+        detail = "; ".join(p for p in (docs, projects) if p)
+        text = f"{n} of your documents" + (f" ({detail})" if detail else "")
+    return text + (f", {'latest ' if n > 1 else ''}{date}" if date else "")
 
 MAX_TOOL_ITERATIONS = 5
 
@@ -140,10 +173,13 @@ class CalculationsSkill(BaseSkill):
     name = "calculations"
     description = "Deterministic SA construction/QS calculations — occupancy, escape widths, areas, parking."
     verification_policy = "deterministic"   # self-verifies via safe_eval anchoring below
+    # How BaseSkill.__call__ (plain_tool_words) names the tools if the model mentions them.
+    tool_labels = {"lookup_rate": "your rate library", "calculate": "a calculation"}
 
     # Per-turn bookkeeping — task-local, not shared across concurrent requests (see turn_local).
     _verified = turn_local()
     _calc_errors = turn_local()
+    _rate_sources = turn_local()
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         begin_turn()
@@ -165,6 +201,7 @@ class CalculationsSkill(BaseSkill):
             logger.debug("calculations KB retrieval skipped: %s", exc)
         self._verified: List[Any] = []      # deterministic safe_eval results seen this run
         self._calc_errors = 0
+        self._rate_sources: List[Dict[str, Any]] = []   # what lookup_rate actually returned
         try:
             answer = await self._agent_loop(inp.conversation_history, inp.question, context, inp.tenant_id)
             if not answer:
@@ -181,8 +218,20 @@ class CalculationsSkill(BaseSkill):
         # (safe_eval) computation. If the model states a headline number that matches NO verified
         # calculation, don't present it as fact — flag it and drop confidence. This catches the
         # model computing correctly with the tool but then misreporting a different number.
+        # 14 Nov 2026 (DIGG): brick rates of R2,760.48 / R47,692.16 / R10,166.85 were given, then
+        # R345.06 / R554.56 / R677.79 — and nothing checked a quoted rate when no calculate() ran.
+        # Every rand figure must now be a rate the library returned, a calculate() result, or a
+        # figure from the question or the business's own documents; any other sentence is dropped.
+        trusted = " ".join([inp.question or "", context] + [str(v) for v in self._verified])
+        bad_figures = unverified_prices(answer, self._rate_sources, {"lookup_rate"},
+                                        strict=True, also_trusted=trusted)
+        if bad_figures:
+            answer = drop_unverified_price_sentences(answer, bad_figures, note=RATE_CHECK_NOTE)
+            logger.info("calc rate-check dropped %d unmatched figure(s) tenant=%s",
+                        len(bad_figures), inp.tenant_id)
+
         anchored, matched = self._verify_answer(answer, self._verified)
-        confidence = 0.85
+        confidence = 0.85 if not bad_figures else 0.5
         if anchored is False:
             confidence = 0.45
             answer += ("\n\n⚠️ Please confirm these figures — the final number couldn't be matched "
@@ -226,7 +275,10 @@ class CalculationsSkill(BaseSkill):
             "multiply by the quantity with calculate. The rate library is the authoritative rate "
             "— prefer it over any figure in a document, and if a document shows a different rate, "
             "note the discrepancy. If lookup_rate finds nothing, ask for the rate or say it isn't "
-            "on file — never assume a market rate."
+            "on file — never assume a market rate.\n"
+            "- When you state a rate, say where it came from with that rate's `where` text, e.g. "
+            "'R554.56 per m² (your HPC Bokaap BOQ, 26 Oct 2026)'. A rate is per its unit: never "
+            "present a line total (rate × quantity) as a rate."
         )
 
     async def _agent_loop(self, history: str, question: str, context: str, tenant_id: str) -> str:
@@ -292,7 +344,11 @@ class CalculationsSkill(BaseSkill):
             try:
                 from vula.api.qs import search_rates
                 rows = search_rates(tenant_id, str(args.get("description", "")), limit=10)
-                return {"rates": rows} if rows else {"message": "No matching rate on file for this tenant."}
+                rows = [{**r, "where": where_from(r)} for r in rows]
+                result = {"rates": rows} if rows else {"message": "No matching rate on file for this tenant."}
+                if rows and isinstance(getattr(self, "_rate_sources", None), list):
+                    self._rate_sources.append(tool_source("lookup_rate", result))
+                return result
             except Exception as exc:
                 return {"error": str(exc)}
         return self._calc(args)

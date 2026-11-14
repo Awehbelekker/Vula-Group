@@ -86,3 +86,35 @@ async def test_research_system_prompt_also_carries_untrusted_content_rule():
     system_msg = captured["messages"][0]["content"]
     assert "PRICE BREAKDOWN" in system_msg  # confirms the research branch was taken
     assert ">>> <<<" in system_msg
+
+
+# ── 14 Nov 2026 (DIGG): an empty search answered "Try rephrasing" ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_no_results_answers_from_general_knowledge_and_says_so():
+    from core.skills.base import SkillOutput
+    from core.skills.web_search import NOT_LIVE_NOTE
+    seen = {}
+
+    async def _reasoning(inp):
+        seen["metadata"] = inp.metadata
+        return SkillOutput(answer="It does work in your appliances and leaves as heat.",
+                           skill_name="reasoning", confidence=0.8)
+
+    with (patch("core.skills.web_search._ddg_search", new=AsyncMock(return_value=[])),
+          patch("core.skills.loader.get_skill", return_value=_reasoning)):
+        out = await WebSearchSkill().run(SkillInput(question="Where does electricity go when used?",
+                                                    tenant_id="digg-demo"))
+    assert out.answer.startswith(NOT_LIVE_NOTE) and "leaves as heat" in out.answer
+    assert "Try rephrasing" not in out.answer and out.confidence <= 0.5
+    assert seen["metadata"]["web_tried"] is True      # reasoning won't search the web again
+
+
+@pytest.mark.asyncio
+async def test_no_fallback_when_reasoning_itself_asked():
+    get_skill = AsyncMock()
+    with (patch("core.skills.web_search._ddg_search", new=AsyncMock(return_value=[])),
+          patch("core.skills.loader.get_skill", get_skill)):
+        out = await WebSearchSkill().run(SkillInput(question="q", tenant_id="t",
+                                                    metadata={"from_reasoning": True}))
+    assert out.confidence == 0.2 and not get_skill.called

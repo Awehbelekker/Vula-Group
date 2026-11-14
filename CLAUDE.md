@@ -76,7 +76,7 @@ Vula is **one multi-tenant AI backend** serving many SME businesses. Every busin
 ### The agent runner / HRM
 `AgentRunner.run()` → `HRMOrchestrator.plan()` (`core/hrm/orchestrator.py`) picks:
 - **complexity** (1–3) from keyword heuristics (or a local-LLM score),
-- **skill** from `SKILL_KEYWORDS` — an *ordered* dict of substring matches. Order matters and is heavily commented (e.g. `finance_admin` before `calculations`). A keyword miss triggers one cheap local-LLM classification pass (`skill_llm_fallback_enabled`), then falls back to `reasoning`.
+- **skill** from `SKILL_KEYWORDS` — an *ordered* dict of substring matches. Order matters and is heavily commented (e.g. `finance_admin` before `calculations`). A keyword miss triggers one cheap local-LLM classification pass (`skill_llm_fallback_enabled`), then falls back to `reasoning`. The classifier sees `SKILL_DESCRIPTIONS` (general knowledge → `reasoning`, `web_search` only for live information); its local call sends `num_ctx` like every other local call, and a cloud fallback is logged `local_unreachable` only when the box couldn't be reached (`local_error:<status>` otherwise). `web_search` with no results answers from general knowledge via `reasoning` (labelled not live; `web_tried`/`from_reasoning` stop the loop).
 - **model tier**, **branch count**, **merge strategy**.
 
 Branches run in parallel; `core/thinkmesh/merger.py` merges; `core/memory/` (SQLite `reflection.db`) logs the outcome for future routing hints. WhatsApp calls cap at `max_branches=1` for cost.
@@ -86,7 +86,7 @@ Branches run in parallel; `core/thinkmesh/merger.py` merges; `core/memory/` (SQL
 ### Skills (`core/skills/`)
 Every skill subclasses `BaseSkill` (`core/skills/base.py`): `async def run(inp: SkillInput) -> SkillOutput`. `BaseSkill.__call__` times it, catches exceptions into `SkillOutput.error`, then runs the verification hook.
 
-Shared behaviour policy ("the Soul") lives in `base.py`: `behaviour_preamble(persona, agentic, preferred_language)` composes ethics/honesty/reasoning/conversation/untrusted-content rules that are prepended to every answering skill. Pass `agentic=True` for skills with a tool-calling loop. `base.py` also holds deterministic backstops every tool-calling skill should use: `tool_source()`, `unverified_prices()`, `wrong_arithmetic()`, `looks_like_tenant_data_question()`, `need_info_message()`.
+Shared behaviour policy ("the Soul") lives in `base.py`: `behaviour_preamble(persona, agentic, preferred_language)` composes ethics/honesty/reasoning/conversation/untrusted-content rules that are prepended to every answering skill. Pass `agentic=True` for skills with a tool-calling loop. `base.py` also holds deterministic backstops every tool-calling skill should use: `tool_source()`, `unverified_prices()`, `wrong_arithmetic()`, `looks_like_tenant_data_question()`, `need_info_message()`. `BaseSkill.__call__` puts internal tool names in plain words (`plain_tool_words`, names from the module's `*TOOL_SPECS`, a skill's `tool_labels`). `calculations` drops any rand figure that isn't a rate `lookup_rate` returned, a `calculate()` result, or in the question/documents.
 
 Implemented skills: `reasoning` (fallback), `commerce_admin` (~3.2k lines, 22-tool admin + sales-rep agent), `commerce_assistant`, `finance_admin`, `architecture_planning`, `calculations` (deterministic, self-verifies), `standards_lookup`, `email_admin`, `draft_admin`, `clickup_admin`, `google_admin`, `microsoft_admin`, `file_parse`, `memory_recall`, `web_search`.
 

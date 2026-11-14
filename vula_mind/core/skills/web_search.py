@@ -77,9 +77,31 @@ async def _fetch_text(url: str, max_chars: int = 2500) -> str:
         return ""
 
 
+NOT_LIVE_NOTE = "I couldn't reach live sources just now, so this is from general knowledge."
+
+
 class WebSearchSkill(BaseSkill):
     name = "web_search"
     description = "Searches the live web (SA tenders, prices, companies, news) and synthesises a grounded answer"
+
+    async def _general_knowledge(self, inp: SkillInput):
+        """The reasoning skill's answer, labelled as not live, or None when it has none.
+        `web_tried` stops reasoning from searching the web again."""
+        try:
+            from core.skills.loader import get_skill   # lazy: loader imports this module
+            out = await get_skill("reasoning")(SkillInput(
+                question=inp.question, tenant_id=inp.tenant_id,
+                conversation_history=inp.conversation_history,
+                metadata={**(inp.metadata or {}), "web_tried": True},
+                max_tokens=inp.max_tokens))
+        except Exception as exc:
+            logger.debug("web search general-knowledge fallback skipped: %s", exc)
+            return None
+        answer = (out.answer or "").strip()
+        if not out.success or not answer:
+            return None
+        return SkillOutput(answer=f"{NOT_LIVE_NOTE}\n\n{answer}", skill_name="reasoning",
+                           confidence=min(out.confidence or 0.5, 0.5), sources=out.sources)
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         q = inp.question.strip()
@@ -93,6 +115,14 @@ class WebSearchSkill(BaseSkill):
         # 1. Real search
         hits = await _ddg_search(search_q, limit=5)
         if not hits:
+            # 14 Nov 2026 (DIGG): "Where does electricity go when used?" was routed here, the
+            # search came back empty, and the whole reply was "Try rephrasing". A question the
+            # web couldn't answer just now is answered from general knowledge instead, and says
+            # so. Not when reasoning itself asked (it falls back to its own answer).
+            if not inp.metadata.get("from_reasoning"):
+                fallback = await self._general_knowledge(inp)
+                if fallback is not None:
+                    return fallback
             return SkillOutput(
                 answer="I couldn't find live web results for that right now. Try rephrasing.",
                 skill_name=self.name, confidence=0.2,
