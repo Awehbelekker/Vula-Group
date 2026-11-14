@@ -31,7 +31,8 @@ function routes(role, modules = []) {
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
   let docsRun = { running: false };
   const masterFeatures = F.masterFeatures.map((f) => ({ ...f }));
-  const prospects = F.prospects.map((x) => ({ ...x }));     // per page: a scan started here shows here only
+  const prospects = F.prospects.map((x) => ({ ...x }));
+  let aiUsage = { ...F.aiUsage, requested: [] };          // per page: a top-up requested here shows here only     // per page: a scan started here shows here only
   // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
   let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
   const profile = { ...F.businessProfile, answers: { ...F.businessProfile.answers }, drafts: {} };
@@ -419,6 +420,12 @@ function routes(role, modules = []) {
     r("POST", `${A}/setup/preview-answer`, (m, url, req) => ({ answer: "We're open Mon–Fri 07:30–17:00 and Sat 08:00–14:00. Closed Sundays.", sources: "Business profile — for customers", grounded: true, q: req.postDataJSON()?.question })),
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
+    r("GET", `${A}/ai/usage`, () => aiUsage),
+    r("POST", `${A}/ai/topup`, (m, url, req) => {
+      const c = req.postDataJSON()?.amount_cents;
+      aiUsage = { ...aiUsage, requested: [...aiUsage.requested, { id: `tu-${c}`, amount: c, requested_at: "2026-11-14T09:00:00Z" }] };
+      return { request: { id: `tu-${c}`, amount: c }, already: false, message: `Top-up of R${c / 100} requested. We'll send an invoice; it's added as soon as it's paid.` };
+    }),
     r("POST", `${A}/conversations/${T}/feedback`, () => ({ ok: true })),
     r("GET", `${A}/assistant/history`, () => ({ messages: [], open_chat: !!F.assistantChat.openChat })),
     r("GET", `${A}/me/memory`, () => ({ enabled: true, limit: 30, notes: myNotes })),

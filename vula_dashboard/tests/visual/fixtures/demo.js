@@ -1125,7 +1125,12 @@ export const ownerSetup = { done: 4, total: 6, complete: false, next: "profile",
   { id: "whatsapp", label: "Connect a WhatsApp number", why: "Lets customers and staff talk to Vula on WhatsApp. You can run everything from this dashboard without one.", optional: true, done: false, tab: "settings" },
 ] };
 export const myPlan = { plan: "starter", label: "Starter — R1,500/mo", paid: false, on_trial: true, trial_over: false, trial_days_left: 9,
-  users: { used: 2, limit: 2 }, documents: { used: 7, limit: 25 }, pay_url: "https://pay.vula.test/checkout" };
+  users: { used: 2, limit: 2 }, documents: { used: 7, limit: 25 }, pay_url: "https://pay.vula.test/checkout",
+  ai: { used: 8_500, allowance: 10_000, topups_left: 0, remaining: 1_500, pct: 85, paused: false } };
+// Settings › AI usage (settings/AiUsage.jsx, vula/ai_allowance.py): rand cents at Vula's price.
+export const aiUsage = { month: "2026-11", allowance: 10_000, used: 8_500, topups_left: 0, remaining: 1_500, pct: 85,
+  paused: false, can_top_up: true, packs: [10_000, 25_000, 50_000], requested: [],
+  days: [{ day: "2026-11-03", cents: 2_340 }, { day: "2026-11-07", cents: 4_680 }, { day: "2026-11-12", cents: 1_480 }] };
 // "How Vula answered this week" — counts only (assistant/AgentActivityV2.jsx).
 export const quality = { days: 7, answers: 212, backed: { count: 151, of: 180, pct: 84 }, unsure: { count: 17, pct: 8 },
   corrected: { count: 4, pct: 2 }, handed_on: { count: 9 } };

@@ -122,6 +122,13 @@ def plan_view(tenant_id: str, *, with_pay_link: bool = False, now: Optional[date
         "documents": {"used": _count("vula_filed_documents", tenant_id), "limit": doc_limit},
         "pay_url": None,
     }
+    # This month's AI allowance (vula/ai_allowance.py): rand at Vula's price.
+    try:
+        from vula import ai_allowance
+        st = ai_allowance.status(tenant_id)
+        out["ai"] = {k: st[k] for k in ("used", "allowance", "topups_left", "remaining", "pct", "paused")}
+    except Exception as exc:  # noqa: BLE001 — the plan still shows
+        logger.debug("plan view: ai allowance skipped: %s", exc)
     if with_pay_link and not paid and billing.get("email"):
         try:
             from vula.api.onboarding import _payfast_url

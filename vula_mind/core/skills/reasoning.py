@@ -37,9 +37,10 @@ _LOCAL_TIMEOUT_S = 20.0
 # local model to write it before it counts as "too slow" and escalates.
 OPEN_CHAT_MAX_TOKENS = 1500
 _OPEN_LOCAL_TIMEOUT_S = 60.0
-OPEN_CHAT_CAPPED = ("Vula's extra thinking is used up for today, and the local AI isn't answering "
-                    "right now. Ask again later, or switch to \"Your business\" for anything about "
-                    "your orders, invoices or clients.")
+OPEN_CHAT_CAPPED = ("Vula's extra thinking is used up for now (this month's AI allowance or today's "
+                    "spend limit), and Vula's own AI isn't answering right now. Ask again later, or "
+                    "switch to \"Your business\" for anything about your orders, invoices or clients. "
+                    "An owner can add a top-up in Settings › AI usage.")
 _CLOUD_TIMEOUT_S = 30.0
 
 # 2026-09-17: real DIGG transcript — "can I colour a cast iron fireplace?" had no KB match, so

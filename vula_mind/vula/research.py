@@ -44,8 +44,9 @@ PLAN_TIMEOUT_S = 20.0
 WRITE_TIMEOUT_S = 90.0
 MAX_TOKENS = 1800
 
-CAPPED = ("Research is paused for today: the business has reached its daily AI spend limit and "
-          "Vula's own model isn't reachable just now. Try again later, or ask without research.")
+CAPPED = ("Research is paused for now: this month's AI allowance (or today's spend limit) is used "
+          "up, and Vula's own model isn't reachable just now. Try again later, or ask without "
+          "research. An owner can add a top-up in Settings › AI usage.")
 NOTHING_FOUND = ("I couldn't find anything useful on the web for that just now. Try different "
                  "words, or ask without research.")
 
