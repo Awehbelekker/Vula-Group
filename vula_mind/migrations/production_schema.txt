@@ -146,7 +146,7 @@ vula_learned_answers: answer:text, approved_at:timestamptz, approved_by:text, cr
 vula_listing_shares: created_at:timestamptz, id:uuid, phone:text, property_id:uuid, shared_by:text, source:text, tenant_id:text
 vula_mass_mind_patterns: avg_score:float8, business_type:text, id:int8, model_tier:text, sample_count:int4, skill:text, updated_at:timestamptz, win_rate:float8
 vula_material_rate_log: error:text, id:int8, rates_extracted:int4, scraped_at:text, source:text, status:text, url:text
-vula_material_rates: change_pct:float8, high:float8, key:text, label:text, low:float8, mid:float8, notes:text, prev_mid:float8, scraped_at:text, source:text, unit:text
+vula_material_rates: change_pct:float8, checked:bool, family:text, high:float8, key:text, label:text, low:float8, mid:float8, notes:text, prev_mid:float8, scraped_at:text, source:text, unit:text, url:text
 vula_media_dedup: claimed_by:text, content_sha:text, created_at:timestamptz, kind:text, tenant_id:text
 vula_merchant_audit: action:text, actor_email:text, actor_id:text, created_at:timestamptz, detail:jsonb, id:int8, tenant_id:text
 vula_microsoft_accounts: access_token:text, connected_at:timestamptz, connected_by:text, created_at:timestamptz, email:text, id:uuid, last_sync_error:text, last_sync_status:text, last_synced_at:timestamptz, refresh_token:text, scopes:text, status:text, tenant_id:text, token_expiry:timestamptz, updated_at:timestamptz

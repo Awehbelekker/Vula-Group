@@ -224,19 +224,23 @@ async def _seed_training_on_boot() -> None:
 
 
 async def _weekly_rates_loop() -> None:
-    """Run construction rates scrape weekly. Starts 10 min after boot."""
+    """Construction market prices, read about weekly. Checks every 12 hours, starting 10 min after
+    boot; each source is read only when its last good read is over a week old and it wasn't
+    tried in the last day (ConstructionRatesScraper._fresh, persisted in Supabase). 14 Nov 2026:
+    this ran a full scrape on every boot — about ten a day with frequent deploys."""
     import asyncio as _asyncio
     await _asyncio.sleep(600)  # Let the server settle first
     while True:
         try:
             from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper
             scraper = ConstructionRatesScraper()
-            result = await scraper.run_full_update()
-            log.info("Weekly rates update: %d new, %d updated in %.1fs",
-                     result.new, result.updated, result.duration_s)
+            if any(not scraper._fresh(s) for s in scraper.SOURCES):
+                result = await scraper.run_full_update()
+                log.info("Weekly rates update: %d new, %d updated in %.1fs",
+                         result.new, result.updated, result.duration_s)
         except Exception as exc:
             log.warning("Weekly rates update failed: %s", exc)
-        await _asyncio.sleep(7 * 24 * 3600)  # sleep one week
+        await _asyncio.sleep(12 * 3600)
 
 
 async def _retention_loop() -> None:

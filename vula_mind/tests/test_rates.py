@@ -188,7 +188,8 @@ async def test_extract_timeout_is_named_in_the_error(monkeypatch):
     async def timed_out(*a, **k):
         raise httpx.ReadTimeout("")
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", timed_out)
+    # 14 Nov 2026: extraction goes through the router (vula.research._complete), local first.
+    monkeypatch.setattr("vula.research._complete", timed_out)
     cat = await extractor.extract_rates("https://example.test", "Cashbuild", "prices")
     assert cat.status == "parse_failed" and cat.error.startswith("ReadTimeout")
 
@@ -396,7 +397,8 @@ async def test_the_yearly_guide_is_not_downloaded_again_within_the_month(tmp_pat
     scraper.db = RatesDatabase(db_path=tmp_path / "rates.db")
     aecom = next(s for s in scraper.SOURCES if s.get("kind") == "pdf")
     assert aecom["url"].endswith(".pdf") and "estimationqs" not in aecom["url"]
-    log = [{"url": aecom["url"], "scraped_at": (datetime.now() - timedelta(days=3)).isoformat(), "rates_extracted": 40}]
+    log = [{"url": aecom["url"], "scraped_at": (datetime.now() - timedelta(days=3)).isoformat(),
+            "rates_extracted": 40, "status": "ok"}]
     monkeypatch.setattr(durable, "select", lambda *a, **k: log)
     called = []
 
