@@ -1,0 +1,33 @@
+/* tradecosting.css — Estimating › Costing by trade (15 Nov 2026). Tokens only; every flex child
+   holding text gets min-width: 0 so nothing pushes the page sideways on a phone. */
+.vtc-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4, 16px); min-width: 0; }
+.vtc-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3, 12px); min-width: 0; }
+.vtc-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.7fr) auto;
+  gap: var(--space-3, 12px); align-items: end; min-width: 0; }
+.vtc-actions { display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); align-items: center; min-width: 0; }
+.vtc-muted { color: var(--muted); font-size: var(--fs-caption, 12px); min-width: 0; }
+.vtc-h2 { font-size: var(--fs-h3, 17px); margin: 0 0 var(--space-2, 8px); min-width: 0; overflow-wrap: anywhere; }
+.vtc-h3 { font-size: var(--fs-body, 14px); margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.vtc-trade { margin-top: var(--space-4, 16px); }
+.vtc-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-3, 12px);
+  align-items: flex-start; margin-bottom: var(--space-3, 12px); min-width: 0; }
+.vtc-total { font-size: var(--fs-h2, 22px); margin: var(--space-1, 4px) 0; }
+.vtc-item { border-top: 1px solid var(--border, var(--surface-2)); padding-top: var(--space-3, 12px);
+  margin-top: var(--space-3, 12px); min-width: 0; }
+.vtc-item-head { display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); align-items: center;
+  margin-bottom: var(--space-2, 8px); min-width: 0; }
+.vtc-item-total { margin-left: auto; }
+.vtc-note { margin: var(--space-2, 8px) 0 0; font-size: var(--fs-body, 14px); min-width: 0; overflow-wrap: anywhere; }
+.vtc-from { min-width: 0; overflow-wrap: anywhere; }
+.vtc-lines { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2, 8px); min-width: 0; }
+.vtc-line { display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); justify-content: space-between; min-width: 0;
+  border-bottom: 1px solid var(--surface-2); padding-bottom: var(--space-2, 8px); }
+.vtc-line-label { font-weight: 600; min-width: 0; }
+.vtc-line a { color: var(--brand-text, var(--ink)); }
+.vtc-edit { display: inline-flex; flex-wrap: wrap; gap: var(--space-2, 8px); align-items: center; min-width: 0; }
+.vtc-edit .vula-input { width: 7rem; }
+
+@media (max-width: 767px) {
+  .vtc-row { grid-template-columns: minmax(0, 1fr); }
+  .vtc-item-total { margin-left: 0; }
+}

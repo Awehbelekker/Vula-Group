@@ -152,6 +152,7 @@ export default function App() {
   const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
+  const [tenantFeatures, setTenantFeatures] = useState([]); // piloted screens switched on for this business
   const [tenantProfile, setTenantProfile] = useState(null); // what kind of business (tenants.tenant_profile)
   const [tenantLabels, setTenantLabels] = useState(null); // the tenant's own section names (ui_labels)
   const [navRequest, setNavRequest] = useState(null);   // open a section's sub-tab (redesigned shell)
@@ -274,8 +275,8 @@ export default function App() {
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
-      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); })
-      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); });
+      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); setTenantFeatures(d.features || []); })
+      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); setTenantFeatures([]); });
     return () => { alive = false; };
   }, [user, role, tenantId, setMember]);
 
@@ -397,7 +398,7 @@ export default function App() {
   if (role === "owner" || role === "staff") {
     const tenantName = brand?.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
     const visibleGroups = applyLabels(filterGroups(MERCHANT_GROUPS,
-      merchantVisible({ full, access, modules: tenantModules, profile: tenantProfile })), tenantLabels);
+      merchantVisible({ full, access, modules: tenantModules, profile: tenantProfile, features: tenantFeatures })), tenantLabels);
     const isRep = teamRole === "sales_rep" && !full;
     const groups = withInboxBadge(withV2Pages(withV2Moves(visibleGroups), { activity: !isRep }), openEscalations);
     return (

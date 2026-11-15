@@ -26,6 +26,7 @@ import VulaHomeV2 from './VulaHomeV2'
 import VulaToday from './VulaToday'
 import VulaActivity from './VulaActivity'
 const VulaCosting = lazyScreen(() => import('./VulaCosting'))
+const TradeCosting = lazyScreen(() => import('./tradecosting/TradeCosting'))
 const VulaInvoices = lazyScreen(() => import('./VulaInvoices'))
 const VulaBookings = lazyScreen(() => import('./VulaBookings'))
 const VulaListings = lazyScreen(() => import('./VulaListings'))
@@ -395,6 +396,7 @@ function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingN
       {active === 'qspro' && <VulaQSPro tenantId={tenantId} />}
       {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} />}
       {active === 'draft' && <VulaDraft tenantId={tenantId} />}
+      {active === 'tradecosting' && <TradeCosting tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )

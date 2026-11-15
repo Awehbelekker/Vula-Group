@@ -24,7 +24,7 @@ const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="16
 const json = (body, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 /** [method | "*", RegExp on pathname, (match, url, request) => body | {__raw}] — first hit wins. */
-function routes(role, modules = []) {
+function routes(role, modules = [], features = []) {
   const T = "([^/]+)";
   const C = `^/v1/commerce/${T}`;
   const A = `${C}/admin`;
@@ -32,6 +32,12 @@ function routes(role, modules = []) {
   let docsRun = { running: false };
   const masterFeatures = F.masterFeatures.map((f) => ({ ...f }));
   const prospects = F.prospects.map((x) => ({ ...x }));
+  // Costing by trade: a copy per page, so a confirm in one test never shows in the next.
+  let tradeBuildups = F.tradeBuildups.map((b) => ({ ...b, lines: b.lines.map((l) => ({ ...l })) }));
+  const tradeEstimates = [];
+  const tradeOn = features.includes("trade_costing");
+  const tradeOff = { __raw: { status: 403, contentType: "application/json",
+    body: '{"detail":"Costing by trade isn\'t switched on for this business."}' } };
   let aiUsage = { ...F.aiUsage, requested: [] };          // per page: a top-up requested here shows here only     // per page: a scan started here shows here only
   // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
   let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
@@ -43,7 +49,7 @@ function routes(role, modules = []) {
     r("GET", `^/v1/tenants/?`, () => F.tenantsList),
     r("GET", `^/v1/tenants/registry`, () => F.registry),
     r("GET", `^/v1/tenants/${T}/home`, () => F.homeLayout),
-    r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? (modules.length ? { ...F.tenant, modules: [...F.tenant.modules, ...modules] } : F.tenant) : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
+    r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? (modules.length || features.length ? { ...F.tenant, modules: [...F.tenant.modules, ...modules], features } : F.tenant) : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
     r("GET", `^/v1/team/${T}/me`, () => F.teamMeFor(role)),
     r("GET", `^/v1/team/${T}/audit`, () => ({ events: F.teamAudit })),
     r("GET", `^/v1/team/${T}/notices/settings`, () => ({ settings: { birthdays: true, holidays: true, send_hour: 8 }, observances: [] })),
@@ -420,6 +426,38 @@ function routes(role, modules = []) {
     r("POST", `${A}/setup/preview-answer`, (m, url, req) => ({ answer: "We're open Mon–Fri 07:30–17:00 and Sat 08:00–14:00. Closed Sundays.", sources: "Business profile — for customers", grounded: true, q: req.postDataJSON()?.question })),
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
+    // ── Estimating › Costing by trade ──
+    r("GET", `${A}/buildups`, () => (tradeOn ? { buildups: tradeBuildups, can_confirm: role === "owner" } : tradeOff)),
+    r("POST", `${A}/buildups/research`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      const made = { id: `bu-${tradeBuildups.length + 1}`, trade: "Tiling", item: b.item, unit: b.unit || "m2", spec: b.spec || {},
+        status: "proposed", version: 1, origin: "proposed", sources: [{ n: 1, title: "Tiling guide", url: "https://tiles.example" }],
+        unknown: [{ key: "grout", label: "Grout" }],
+        lines: [{ component: "adhesive", label: "Tile adhesive", kind: "material", qty_per_unit: "0.2500", unit: "bag", waste_pct: "0.00", source_ref: "1" }] };
+      tradeBuildups = [...tradeBuildups, made];
+      return { buildup: made, researched: true };
+    }),
+    r("POST", `${A}/buildups/${T}/confirm`, (m, url, req) => {
+      if (role !== "owner") return { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Only an owner or manager can confirm a build-up."}' } };
+      const changes = (req.postDataJSON() || {}).changes || [];
+      tradeBuildups = tradeBuildups.map((b) => (b.id !== m[2] ? b : { ...b, status: "confirmed", origin: "own",
+        version: changes.length ? b.version + 1 : b.version, last_changes: changes,
+        lines: b.lines.map((l) => { const c = changes.find((x) => x.component === l.component) || {};
+          return { ...l, ...(c.qty_per_unit !== undefined ? { qty_per_unit: String(c.qty_per_unit) } : {}),
+            ...(c.waste_pct !== undefined ? { waste_pct: String(c.waste_pct) } : {}) }; }) }));
+      return { buildup: tradeBuildups.find((b) => b.id === m[2]) };
+    }),
+    r("POST", `${A}/buildups/${T}/retire`, (m) => { tradeBuildups = tradeBuildups.filter((b) => b.id !== m[2]); return { retired: true }; }),
+    r("GET", `${A}/estimates/${T}\\.xlsx`, () => ({ __raw: { status: 200,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", body: "PK-demo",
+      headers: { "content-disposition": 'attachment; filename="Estimate_2026-11-15.xlsx"', "access-control-expose-headers": "Content-Disposition" } } })),
+    r("POST", `${A}/estimates`, (m, url, req) => {
+      if (!tradeOn) return tradeOff;
+      tradeEstimates.unshift({ id: F.tradeEstimate.id, title: F.tradeEstimate.title, total_cents: F.tradeEstimate.total_cents,
+        created_at: "2026-11-15T07:00:00Z", request: req.postDataJSON() });
+      return { estimate: F.tradeEstimate, text: "Estimate: …" };
+    }),
+    r("GET", `${A}/estimates`, () => (tradeOn ? { estimates: tradeEstimates } : tradeOff)),
     r("GET", `${A}/ai/usage`, () => aiUsage),
     r("POST", `${A}/ai/topup`, (m, url, req) => {
       const c = req.postDataJSON()?.amount_cents;
@@ -493,10 +531,10 @@ function routes(role, modules = []) {
 
 const seenUnmatched = new Set();
 
-export async function installMockApi(page, { role = "owner", modules = [] } = {}) {
+export async function installMockApi(page, { role = "owner", modules = [], features = [] } = {}) {
   // modules: extra tenant modules for one test (e.g. "followups"), so the shared fixture — and the
   // flag-off baseline screenshots — stay as they are
-  const table = routes(role, modules);
+  const table = routes(role, modules, features);
   const debug = process.env.MOCK_DEBUG === "1";
 
   // Offline: anything that isn't the dev server or the fake hosts is aborted (fonts, map tiles…).
