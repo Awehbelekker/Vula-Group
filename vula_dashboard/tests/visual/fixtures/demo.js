@@ -1296,3 +1296,47 @@ export const prospects = [
 
 // The dashboard chat's "Ask anything" (13 Nov 2026): off unless a spec file turns it on.
 export const assistantChat = { openChat: false };
+
+// ── Estimating › Costing by trade (15 Nov 2026; vula/api/trade_costing.py) ──────────────────
+export const tradeBuildups = [
+  { id: "bu-wall", trade: "Masonry", item: "one-brick wall", unit: "m2", spec: { thickness: "220 mm" }, status: "confirmed",
+    version: 2, origin: "own", sources: [{ n: 1, title: "Brickwork quantities guide", url: "https://bricks.example/guide" }],
+    unknown: [{ key: "wall_ties", label: "Wall ties" }],
+    lines: [
+      { component: "units", label: "Bricks or blocks", kind: "material", qty_per_unit: "104.0000", unit: "each", waste_pct: "5.00", source_ref: "1" },
+      { component: "mortar_cement", label: "Mortar cement", kind: "material", qty_per_unit: "0.5000", unit: "bag", waste_pct: "0.00", source_ref: "1" },
+      { component: "labour", label: "Labour", kind: "labour", qty_per_unit: "1.5000", unit: "hour", waste_pct: "0.00", source_ref: "confirmed by owner" },
+    ] },
+  { id: "bu-plaster", trade: "Plastering", item: "plaster to brick walls", unit: "m2", spec: {}, status: "proposed",
+    version: 1, origin: "proposed", sources: [{ n: 1, title: "Plastering guide", url: "https://plaster.example/guide" }], unknown: [],
+    lines: [
+      { component: "cement", label: "Plaster cement", kind: "material", qty_per_unit: "0.1200", unit: "bag", waste_pct: "0.00", source_ref: "1" },
+      { component: "plaster_sand", label: "Plaster sand", kind: "material", qty_per_unit: "0.0200", unit: "m3", waste_pct: "0.00", source_ref: "1" },
+    ] },
+];
+
+export const tradeEstimate = {
+  id: "est-1", title: "one-brick wall 24.000 m2; plaster to brick walls 48.000 m2",
+  totals_cents: { material: 1122001, labour: 300000, plant: 0 }, total_cents: 1422001,
+  unpriced: ["Plaster sand"], exclusions: ["painting"],
+  items: [
+    { item: "one-brick wall", quantity: "24.000", unit: "m2", status: "priced", buildup_origin: "own", total_cents: 1043619,
+      needs_figure: ["Wall ties"], not_in_buildup: ["Brickforce", "Damp-proof course"],
+      compare: { rate_cents: 55456, total_cents: 1330944, where: "your HPC Bokaap BOQ, 26 Oct 2026" },
+      lines: [
+        { component: "units", label: "Bricks or blocks", kind: "material", quantity: "2620.8", unit: "each", priced: true,
+          unit_price_cents: 299, cost_cents: 783619, source: "paid", date: "2026-11-09" },
+        { component: "mortar_cement", label: "Mortar cement", kind: "material", quantity: "12", unit: "bag", priced: true,
+          unit_price_cents: 9999, cost_cents: 119988, source: "paid", date: "2026-09-15", market_now_cents: 11499 },
+        { component: "labour", label: "Labour", kind: "labour", quantity: "36", unit: "hour", priced: true,
+          unit_price_cents: 5000, cost_cents: 180000, source: "paid", date: "2026-11-01" },
+      ] },
+    { item: "plaster to brick walls", quantity: "48.000", unit: "m2", status: "priced", buildup_origin: "proposed", total_cents: 378382,
+      needs_figure: [], not_in_buildup: ["Corner and stop beads"], compare: null,
+      lines: [
+        { component: "cement", label: "Plaster cement", kind: "material", quantity: "5.76", unit: "bag", priced: true,
+          unit_price_cents: 11499, cost_cents: 66234, source: "market", date: "2026-11-12" },
+        { component: "plaster_sand", label: "Plaster sand", kind: "material", quantity: "0.96", unit: "m3", priced: false },
+      ] },
+  ],
+};

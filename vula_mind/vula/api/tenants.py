@@ -309,7 +309,20 @@ def _public(cfg: dict) -> dict:
         # the redesigned dashboard, opt-in per tenant, and its own labels (migration 215)
         "ui_v2": bool(cfg.get("ui_v2")),
         "ui_labels": cfg.get("ui_labels") or None,
+        # the switches that are on for this business (names only) — the dashboard shows a
+        # piloted screen such as Costing by trade only where it's on (15 Nov 2026)
+        "features": _features_on(cfg.get("tenant_id")),
     }
+
+
+def _features_on(tenant_id: Optional[str]) -> list:
+    if not tenant_id:
+        return []
+    try:
+        from vula import features
+        return [name for name in features.FEATURES if features.on(tenant_id, name)]
+    except Exception:  # noqa: BLE001 — no switches shown rather than a broken tenant read
+        return []
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
