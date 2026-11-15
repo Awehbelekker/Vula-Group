@@ -1256,6 +1256,29 @@ BUILDUP_TOOLS = [
                 "remove": {"type": "boolean"}}, "required": ["component"]}},
             "confirm": {"type": "boolean"},
         }, "required": ["buildup_id"]}}},
+    {"type": "function", "function": {
+        "name": "estimate_cost",
+        "description": "Estimate what building work will cost, built up from each item's trade "
+                       "build-up and priced from what the business paid, then its quotes/BOQs, "
+                       "then checked market prices — every line with where its price came from "
+                       "and its date, plus anything not priced or not covered. Sends an Excel "
+                       "breakdown. Split the work into items by trade: 'a 6 x 4 m wall, plastered "
+                       "both sides, not painted' is two items — walling (quantity_expr '6*4', m2) and "
+                       "plaster (quantity_expr '6*4*2', m2) — with 'painting' in exclusions. Give "
+                       "quantities as the person's own figures in quantity_expr; never work them out. "
+                       "If the wall thickness or which sides are plastered isn't said, ask first.",
+        "parameters": {"type": "object", "properties": {
+            "items": {"type": "array", "items": {"type": "object", "properties": {
+                "item": {"type": "string", "description": "e.g. 'one-brick wall', 'plaster to brick walls'"},
+                "spec": {"type": "object", "additionalProperties": {"type": "string"},
+                         "description": "e.g. {\"thickness\": \"220 mm\"}"},
+                "quantity_expr": {"type": "string", "description": "the person's figures, e.g. '6*4' or '6*4*2'"},
+                "unit": {"type": "string", "description": "m2 (default), m, m3, each"}},
+                "required": ["item", "quantity_expr"]}},
+            "exclusions": {"type": "array", "items": {"type": "string"},
+                           "description": "what the person said is not included, e.g. ['painting']"},
+            "title": {"type": "string"},
+        }, "required": ["items"]}}},
 ]
 
 FORM_TOOLS = [
@@ -3068,6 +3091,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name in ("trade_buildup", "confirm_buildup"): return await self._buildup(name, tid, args, ctx)
+            if name == "estimate_cost":       return await self._estimate_cost(tid, args, ctx)
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")), args.get("channel"))
             if name == "payment_link":       return await self._payment_link(tid, args)
@@ -3640,6 +3664,50 @@ class CommerceAdminSkill(BaseSkill):
         return {"suggested_persona": result["suggested"], "sample_count": result["sample_count"],
                 "note": "Show this to the owner and ask if they'd like Vula to sound like this — "
                        "only call apply_voice_persona if they say yes."}
+
+    async def _estimate_cost(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """estimate_cost (vula/commerce/estimate.py): the reply is built in code from the estimate,
+        and the Excel breakdown is re-read against it before it is sent."""
+        import asyncio
+        from vula.api.tenants import display_name
+        from vula.commerce import estimate as est_mod, estimate_sheet, xlsx_check
+        phone = str(ctx.get("phone") or "")
+        try:
+            est = await est_mod.estimate(tid, list(args.get("items") or []),
+                                         exclusions=list(args.get("exclusions") or []), research=True,
+                                         created_by=phone or str(ctx.get("person_key") or ""),
+                                         title=str(args.get("title") or ""))
+        except est_mod.EstimateError as exc:
+            return {"status": "need_info", "message": str(exc)}
+        text = est_mod.summary(est)
+        if any(it.get("status") == "priced" for it in est["items"]):
+            try:
+                data, want = await asyncio.to_thread(estimate_sheet.workbook, display_name(tid), est)
+                wrong = xlsx_check.mismatches(data, want)
+                if wrong:
+                    logger.error("estimate sheet read-back failed for %s: %s", tid, wrong)
+                    text += "\n\n(The spreadsheet didn't add up, so I haven't sent it.)"
+                else:
+                    from vula.api.whatsapp import _send_invoice_document, _upload_to_storage
+                    from vula.storage_links import SHARE_TTL, signed
+                    fname = f"Estimate_{datetime.now(timezone.utc).date().isoformat()}.xlsx"
+                    ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    url = await asyncio.to_thread(_upload_to_storage, "documents",
+                                                  f"{tid}/estimates/{est.get('id') or 'draft'}/{fname}", data, ctype)
+                    link = signed(url, SHARE_TTL) if url else None
+                    sent = False
+                    if phone:
+                        try:
+                            sent = await _send_invoice_document(phone, data, fname, "Estimate", tid, content_type=ctype)
+                        except Exception as exc:  # noqa: BLE001 — the link still works
+                            logger.warning("estimate send failed for %s: %s", tid, exc)
+                    if link:
+                        ctx.setdefault("files", []).append({"name": fname, "url": link, "kind": "xlsx"})
+                    text += ("\n\nThe full breakdown is in the spreadsheet" + (" above." if sent else ".")
+                             + (f"\nDownload (for a week): {link}" if link else ""))
+            except Exception as exc:  # noqa: BLE001 — the estimate itself still stands
+                logger.warning("estimate sheet skipped for %s: %s", tid, exc)
+        return {"reply_verbatim": text, "estimate_id": est.get("id"), "total_cents": est["total_cents"]}
 
     async def _buildup(self, name: str, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         """trade_buildup / confirm_buildup (vula/commerce/buildups.py). Confirming needs full access
