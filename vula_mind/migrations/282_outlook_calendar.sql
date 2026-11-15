@@ -1,4 +1,4 @@
--- 281_outlook_calendar.sql — meetings from the connected Outlook calendar (12 Nov 2026).
+-- 282_outlook_calendar.sql — meetings from the connected Outlook calendar (12 Nov 2026).
 --
 -- vula/outlook_calendar.py reads the next 7 days of the business's connected Microsoft account
 -- (Calendars.Read) into vula_meetings, so they show in "what meetings do I have?", the Today

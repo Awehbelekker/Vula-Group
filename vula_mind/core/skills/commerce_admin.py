@@ -3283,7 +3283,7 @@ class CommerceAdminSkill(BaseSkill):
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         """Every tool call runs as the person who sent the message, so a quote, invoice or order it
-        creates records who made it (vula/acting.py, migration 277)."""
+        creates records who made it (vula/acting.py, migration 278)."""
         from vula import acting
         with acting.acting_as(ctx.get("phone")):
             return await self._dispatch_tool_as(name, args, ctx)

@@ -1,4 +1,4 @@
--- 279_member_team.sql — which team a person is in: sales, admin, bookkeeping… (12 Nov 2026).
+-- 280_member_team.sql — which team a person is in: sales, admin, bookkeeping… (12 Nov 2026).
 --
 -- A preset (vula/team_presets.py) gives a new person the dashboard tabs that team's job needs,
 -- so each person sees only what they use; the owner can still change any tab after. The team

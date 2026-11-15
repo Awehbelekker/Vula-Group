@@ -6,7 +6,7 @@ notification and the address to open in maps?" Step 4 of meeting prep, Outlook f
 
   • every 15 minutes, the next 7 days of the business's connected Microsoft account
     (Calendars.Read, added to vula/microsoft/service.SCOPES) are read into vula_meetings
-    (source 'outlook', external_id = the event id, migration 281) — new events added, moved or
+    (source 'outlook', external_id = the event id, migration 282) — new events added, moved or
     renamed ones updated, cancelled or deleted ones marked cancelled;
   • they then work like any meeting: "what meetings do I have?", the Today list, the morning brief,
     team activity, check-ins on arrival, "brief me on…";
@@ -157,7 +157,7 @@ async def _sync_into(tenant_id: str, access_token: str, member: Dict[str, Any], 
         return {"error": str(exc)[:200]}
     db = _client()
     person = digits(member["whatsapp"])
-    try:                                                 # their own reminder choice (migration 281)
+    try:                                                 # their own reminder choice (migration 282)
         prefs = (db.table("vula_team_members").select("calendar_remind_minutes,calendar_brief")
                  .eq("tenant_id", tenant_id).eq("id", member["id"]).limit(1).execute().data or [{}])[0]
     except Exception:
@@ -217,7 +217,7 @@ async def sync_all() -> Dict[str, Any]:
         from vula.microsoft import member_credentials as mc
         people = mc.connections()
     except Exception as exc:
-        log.debug("personal calendars skipped (run migration 282?): %s", exc)
+        log.debug("personal calendars skipped (run migration 283?): %s", exc)
         people = []
     for c in people:
         if has_calendar(c.get("scopes")):

@@ -746,7 +746,7 @@ async def _add_member(row: Dict[str, Any], text: str) -> Tuple[Optional[str], Op
     except Exception:
         if "team" not in m:
             raise
-        m = {k: v for k, v in m.items() if k != "team"}       # migration 279 not applied yet
+        m = {k: v for k, v in m.items() if k != "team"}       # migration 280 not applied yet
         _db().table("vula_team_members").upsert({**m, "tenant_id": tid, "active": True},
                                                 on_conflict="tenant_id,whatsapp").execute()
     from vula import team_index

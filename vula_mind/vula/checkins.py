@@ -113,7 +113,7 @@ async def from_pin(tenant_id: str, phone: str, lat: float, lng: float, place: st
                    .gte("created_at", (now - PENDING_FOR).isoformat())
                    .order("created_at", desc=True).limit(1).execute().data or [])
     except Exception as exc:
-        log.debug("check-in lookup skipped (run migration 276?): %s", exc)
+        log.debug("check-in lookup skipped (run migration 277?): %s", exc)
         return None
     meeting = None
     if pending:

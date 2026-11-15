@@ -104,7 +104,7 @@ async def list_members(tenant: str) -> dict:
     except Exception as exc:
         log.debug("team list skipped (run migration 029?): %s", exc)
         rows = []
-    try:                                  # who reads their own calendar (migration 282) — a flag only
+    try:                                  # who reads their own calendar (migration 283) — a flag only
         from vula.microsoft import member_credentials as mc
         connected = {str(c["member_id"]): c.get("email") for c in mc.connections(tenant)}
     except Exception:
@@ -130,7 +130,7 @@ async def add_member(tenant: str, body: MemberIn,
         if not row.get("access"):              # the team's tabs, unless tabs were chosen
             row["access"] = team_presets.access_for(team, row.get("role"), [])
     else:
-        row.pop("team", None)                  # works before migration 279 too
+        row.pop("team", None)                  # works before migration 280 too
     try:
         res = _client().table("vula_team_members").upsert(
             row, on_conflict="tenant_id,whatsapp").execute()

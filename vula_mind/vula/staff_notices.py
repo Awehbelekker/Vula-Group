@@ -155,7 +155,7 @@ def audience(tenant_id: str, spec: Optional[Dict[str, Any]], kind: str = "notice
     elif spec.get("roles"):
         roles = {str(r).lower() for r in spec["roles"]}
         rows = [m for m in rows if (m.get("role") or "staff").lower() in roles]
-    elif spec.get("teams"):                       # preset teams (migration 279, vula/team_presets.py)
+    elif spec.get("teams"):                       # preset teams (migration 280, vula/team_presets.py)
         from vula import team_index
         teams = {str(t).lower() for t in spec["teams"]}
         try:

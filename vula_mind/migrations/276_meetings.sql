@@ -1,4 +1,4 @@
--- 275_meetings.sql — a team member's own meetings, booked on WhatsApp (12 Nov 2026).
+-- 276_meetings.sql — a team member's own meetings, booked on WhatsApp (12 Nov 2026).
 --
 -- "Meeting with Acme Builders Thursday 10am at 12 Main Road" → one row. Before it, the person who
 -- booked it gets a WhatsApp reminder ONLY if they asked for one ("remind me 1 hour before"), with

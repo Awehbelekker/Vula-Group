@@ -1,4 +1,4 @@
--- 274_owner_briefs.sql — the owner's own WhatsApp briefs: off unless asked for, at the owner's time
+-- 275_owner_briefs.sql — the owner's own WhatsApp briefs: off unless asked for, at the owner's time
 -- (11–12 Nov 2026).
 --
 --   vula_tenant_config.owner_briefs

@@ -1,4 +1,4 @@
--- 276_checkins.sql — a team member checking in at a meeting or site visit (12 Nov 2026).
+-- 277_checkins.sql — a team member checking in at a meeting or site visit (12 Nov 2026).
 --
 -- "Arrived" (or "I'm at Acme") → a row waiting for the location pin; the pin they then share →
 -- checked in, with WhatsApp's own time for the message, the place, and how far it is from the

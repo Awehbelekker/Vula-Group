@@ -73,7 +73,7 @@ async def sync_all() -> Dict[str, Any]:
     try:
         people = gc.connections()
     except Exception as exc:
-        log.debug("Google calendars skipped (run migration 282?): %s", exc)
+        log.debug("Google calendars skipped (run migration 283?): %s", exc)
         return out
     for c in people:
         if gc.has_calendar(c.get("scopes")):

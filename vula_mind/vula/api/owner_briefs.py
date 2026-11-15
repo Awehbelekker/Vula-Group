@@ -45,7 +45,7 @@ async def put_briefs(tenant: str, body: BriefsIn, identity: dict = Depends(requi
     try:
         saved = owner_briefs.save(tenant, patch)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Couldn't save ({exc}). Run migration 274?")
+        raise HTTPException(status_code=400, detail=f"Couldn't save ({exc}). Run migration 275?")
     merchant_audit.audit(tenant, identity, "owner_brief_settings", changed=patch)
     return {"settings": saved}
 

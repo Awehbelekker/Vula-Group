@@ -1,4 +1,4 @@
--- 282_member_calendars.sql — each team member's own Outlook calendar (13 Nov 2026).
+-- 283_member_calendars.sql — each team member's own Outlook calendar (13 Nov 2026).
 --
 -- The business's Microsoft account (vula_microsoft_accounts) is one per business; a rep's own
 -- meetings live in their own calendar. A person connects theirs from WhatsApp ("connect my

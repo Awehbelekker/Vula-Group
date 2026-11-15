@@ -1,4 +1,4 @@
--- 277_created_by.sql — who made each quote, invoice and order (12 Nov 2026).
+-- 278_created_by.sql — who made each quote, invoice and order (12 Nov 2026).
 --
 -- So sales can be counted per person ("what did Thabo do this week?", Team › Activity, custom
 -- sheets). Set from the request (vula/acting.py): the WhatsApp sender's number, or the signed-in

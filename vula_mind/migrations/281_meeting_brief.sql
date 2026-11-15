@@ -1,4 +1,4 @@
--- 280_meeting_brief.sql — put a brief on a meeting's reminder, only when the person asks (12 Nov 2026).
+-- 281_meeting_brief.sql — put a brief on a meeting's reminder, only when the person asks (12 Nov 2026).
 --
 -- "Remind me an hour before with a brief" → the reminder also carries a few lines on who they're
 -- meeting: last WhatsApp messages, emails waiting, open quotes and unpaid invoices (if they may see

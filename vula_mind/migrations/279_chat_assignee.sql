@@ -1,4 +1,4 @@
--- 278_chat_assignee.sql — a customer chat assigned to a real team member (12 Nov 2026).
+-- 279_chat_assignee.sql — a customer chat assigned to a real team member (12 Nov 2026).
 --
 -- assigned_to was free text ("Thandi"), so nobody could filter by person or see "my chats".
 -- assigned_member_id is the vula_team_members.id; assigned_to keeps the name for display.

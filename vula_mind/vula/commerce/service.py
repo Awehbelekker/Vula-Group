@@ -910,7 +910,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
     from vula import acting
     who = checkout_data.get("created_by") or acting.current()
     if who:
-        order["created_by"] = who                          # a team member's order (migration 277)
+        order["created_by"] = who                          # a team member's order (migration 278)
 
     try:
         try:
@@ -1713,7 +1713,7 @@ async def find_stale_paused_sessions(tenant_id: str, hours: float = 2.0) -> list
 async def list_conversations(tenant_id: str, limit: int = 50,
                              assigned_member_id: Optional[str] = None) -> List[dict]:
     """Return recent conversation sessions for the shared inbox list view — only the ones
-    assigned to one team member when assigned_member_id is given (migration 278).
+    assigned to one team member when assigned_member_id is given (migration 279).
 
     A staff member's own thread with Vula (session keys admin:{phone} / webadmin:{…}) is never
     listed: the shared inbox is for customer conversations, and what a member asks Vula is
@@ -1739,7 +1739,7 @@ async def list_conversations(tenant_id: str, limit: int = 50,
                     .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
                 )
             except Exception:
-                result = (                               # migration 278 not run yet
+                result = (                               # migration 279 not run yet
                     _client().table("commerce_conversation_sessions")
                     .select(base + ",assigned_to,agent_note,tags,paused_by")
                     .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
@@ -2050,12 +2050,12 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     from vula import acting
     who = data.get("created_by") or acting.current()
     if who:
-        invoice["created_by"] = who                        # migration 277
+        invoice["created_by"] = who                        # migration 278
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
         # discount_cents/deposit_cents (053), project (055), requires_approval (136) or
-        # created_by (277) columns may not exist yet — drop them and retry so invoicing never
+        # created_by (278) columns may not exist yet — drop them and retry so invoicing never
         # breaks on a missing column.
         invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)
@@ -2410,11 +2410,11 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
         "updated_at": _now(),
     }
     if quote.get("created_by"):
-        invoice["created_by"] = quote["created_by"]      # the person who quoted keeps the sale (277)
+        invoice["created_by"] = quote["created_by"]      # the person who quoted keeps the sale (278)
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
-        # discount_cents/deposit_cents (053), project (055) or created_by (277) columns may not
+        # discount_cents/deposit_cents (053), project (055) or created_by (278) columns may not
         # exist yet in this environment — same graceful-degrade retry create_invoice() uses.
         invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)

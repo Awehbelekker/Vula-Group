@@ -14,7 +14,7 @@ custom sheets (vula/commerce/sheet_builder.py meetings/bookings/follow_ups/meeti
   call sheet      vula_call_sheets        rep_whatsapp   entries[].created_at
   check-ins       vula_checkins           person         at           (vula/checkins.py)
 
-Quotes, invoices and orders count for the person who made them (created_by, migration 277);
+Quotes, invoices and orders count for the person who made them (created_by, migration 278);
 a customer's own checkout, and anything from before, belongs to no one.
 Counts are listed by name, never ranked. Every read is scoped to the tenant and a table that
 isn't there counts as nothing (it never fails the answer). Times are SAST (vula/when.py).
@@ -177,7 +177,7 @@ def collect(tenant_id: str, since: datetime, until: datetime,
     out["calls"] = calls
     from vula import checkins
     out["checkins"] = checkins.for_period(tenant_id, since, until, phones)
-    # Quotes, invoices and orders a team member made (created_by, migration 277 — set from the
+    # Quotes, invoices and orders a team member made (created_by, migration 278 — set from the
     # WhatsApp sender or the signed-in dashboard member; a customer's own checkout has none).
     docs = _rows(lambda: q("commerce_invoices", "id,created_by,doc_type,direction,total_cents,status,issue_date",
                            "created_by", "issue_date").limit(2000).execute().data)

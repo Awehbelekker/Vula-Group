@@ -2,7 +2,7 @@
 vula/microsoft/member_credentials.py — one team member's own Outlook calendar connection.
 
 13 Nov 2026. The business's Microsoft account (vula/microsoft/credentials.py) is one per business;
-each person can also connect their own calendar (vula_member_calendars, migration 282) so their
+each person can also connect their own calendar (vula_member_calendars, migration 283) so their
 meetings come into their own Vula diary (vula/outlook_calendar.py). Calendar only: the token asks
 for offline_access, User.Read and Calendars.Read — never mail or files. Tokens are encrypted like
 the business account's; refresh asks for the personal scopes, then (if refused) what this person

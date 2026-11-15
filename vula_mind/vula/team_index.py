@@ -45,7 +45,7 @@ def active_members(tenant_id: str) -> List[Dict[str, Any]]:
         return (service._client().table("vula_team_members").select(columns)
                 .eq("tenant_id", tenant_id).eq("active", True).execute().data)
 
-    # `prefs` (migration 262) is each member's own style choices; `team` (migration 279) the
+    # `prefs` (migration 262) is each member's own style choices; `team` (migration 280) the
     # preset team. Either may not be applied yet — drop what's missing rather than fail the read
     # and have every staff member treated as a customer.
     rows = None
