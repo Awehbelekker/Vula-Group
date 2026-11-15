@@ -8919,7 +8919,7 @@ async def _guard_staff_thread(tenant_id: str, session_id: str, request: Optional
 
 
 @router.get("/{tenant_id}/admin/conversations")
-async def admin_list_conversations(tenant_id: str, request: Request, limit: int = Query(50, ge=1, le=200)):
+async def admin_list_conversations(tenant_id: str, request: Request = None, limit: int = Query(50, ge=1, le=200)):
     """Return recent WhatsApp conversation sessions for the shared inbox. Someone without Inbox
     access gets only the chats assigned to them (their "My chats")."""
     sees_all, member_id = await _inbox_access(request, tenant_id)
@@ -8931,25 +8931,36 @@ async def admin_list_conversations(tenant_id: str, request: Request, limit: int 
     return {"tenant_id": tenant_id, "conversations": conversations, "mine_only": False}
 
 
-async def _inbox_access(request: Request, tenant_id: str) -> tuple:
+async def _inbox_access(request: Optional[Request], tenant_id: str) -> tuple:
     """(sees every chat, the caller's team member id). Every chat: a full member (owner, manager)
     or one given the Inbox tab. Anyone else: only chats assigned to them (12 Nov 2026 — before
     this, any member could read every chat through the API whatever their dashboard showed).
     No auth header (API key / internal callers): every chat, as before."""
-    auth = request.headers.get("authorization", "")
+    auth = request.headers.get("authorization", "") if request is not None else ""
     if not isinstance(auth, str) or not auth.removeprefix("Bearer ").strip():
         return True, None
     try:
-        from vula.api.tenant_auth import member_scope
-        scope = await member_scope(auth, tenant_id) or {}
+        from vula.identity import person_for_login
+        person = await person_for_login(auth, tenant_id)
     except Exception:
         return False, None
-    member_id = str((scope.get("member") or {}).get("id") or "") or None
-    return bool(scope.get("full") or "inbox" in (scope.get("access") or [])), member_id
+    if person is None:
+        return False, None
+    member_id = str(person.member_id or "") or None
+    return bool(person.access is None or "inbox" in person.access), member_id
 
 
-async def _require_chat(request: Request, tenant_id: str, session_id: str) -> None:
-    """403 unless the caller sees every chat or this one is assigned to them."""
+async def _require_chat(request: Optional[Request], tenant_id: str, session_id: str) -> None:
+    """403 unless the caller sees every chat or this one is assigned to them. A staff member's
+    own thread with Vula is decided by _guard_staff_thread (only its owner gets this far)."""
+    from vula.identity import is_staff_session_key
+    try:
+        keys = (service._client().table("commerce_conversation_sessions").select("session_key")
+                .eq("tenant_id", tenant_id).eq("id", session_id).limit(1).execute().data or [])
+    except Exception:
+        keys = []
+    if keys and isinstance(keys[0], dict) and is_staff_session_key(keys[0].get("session_key")):
+        return
     sees_all, member_id = await _inbox_access(request, tenant_id)
     if sees_all:
         return
