@@ -2,7 +2,7 @@
   "name": "vula-dashboard",
   "version": "1.0.0",
   "private": true,
-  "description": "Vula AI \u2014 Business Intelligence Dashboard",
+  "description": "Vula AI — Business Intelligence Dashboard",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -21,7 +21,7 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-rnd": "^10.5.3",
-    "react-router-dom": "^6.23.0",
+    "react-router-dom": "^6.30.6",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

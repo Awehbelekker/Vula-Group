@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Every search leaves out other people's private chunks (12 Nov 2026, vula/private_docs.py).
+PRIVATE = {"is_empty": {"key": "private_to"}}
+
 from vula.ingestion.pipeline import QdrantStore, VulaIngestionPipeline
 
 
@@ -81,7 +84,7 @@ async def test_search_adds_category_filter_when_given():
     with patch("httpx.AsyncClient", return_value=_FakeClient()):
         await store.search("test-tenant", [0.1, 0.2], category="Booking Policy")
 
-    assert captured["body"]["filter"]["must"] == [{"key": "category", "match": {"value": "Booking Policy"}}]
+    assert captured["body"]["filter"]["must"] == [{"key": "category", "match": {"value": "Booking Policy"}}, PRIVATE]
 
 
 @pytest.mark.asyncio
@@ -110,7 +113,7 @@ async def test_search_combines_category_and_exclude_source_types_filters():
                            category="Booking Policy")
 
     f = captured["body"]["filter"]
-    assert f["must"] == [{"key": "category", "match": {"value": "Booking Policy"}}]
+    assert f["must"] == [{"key": "category", "match": {"value": "Booking Policy"}}, PRIVATE]
     assert f["must_not"] == [{"key": "source_type", "match": {"value": "learned"}}]
 
 
@@ -140,7 +143,7 @@ async def test_search_no_filter_key_when_neither_given():
     with patch("httpx.AsyncClient", return_value=_FakeClient()):
         await store.search("test-tenant", [0.1, 0.2])
 
-    assert "filter" not in captured["body"]
+    assert captured["body"]["filter"] == {"must": [PRIVATE]}     # only other people's private chunks left out
 
 
 @pytest.mark.asyncio
@@ -189,7 +192,7 @@ async def test_search_adds_source_type_filter_when_given():
         await store.search("test-tenant", [0.1, 0.2], source_type="learned_answer_approved")
 
     assert captured["body"]["filter"]["must"] == [
-        {"key": "source_type", "match": {"value": "learned_answer_approved"}}]
+        {"key": "source_type", "match": {"value": "learned_answer_approved"}}, PRIVATE]
 
 
 @pytest.mark.asyncio
@@ -220,4 +223,5 @@ async def test_search_combines_source_type_and_category_in_must():
     assert captured["body"]["filter"]["must"] == [
         {"key": "category", "match": {"value": "Menu"}},
         {"key": "source_type", "match": {"value": "learned_answer_approved"}},
+        PRIVATE,
     ]

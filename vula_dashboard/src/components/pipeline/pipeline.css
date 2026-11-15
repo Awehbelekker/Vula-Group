@@ -1,0 +1,71 @@
+/* pipeline.css — the deals Pipeline board (pipeline/PipelineV2.jsx). Tokens only, scoped to .vpl.
+   Same look as the Listings screen (listings.css): soft big-radius cards with long shadows,
+   pill controls, photo-led cards. Columns scroll sideways on a narrow screen. */
+.vpl { --vpl-r: 20px; --vpl-shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 18px 40px -28px rgba(20, 30, 60, .35); }
+/* the shared tab strip carries its own bottom margin: none inside a bar, so tabs and the button line up */
+.vpl-bar > .vula-tabs { margin-bottom: 0 !important; }
+.vpl-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
+.vpl-err { margin: 0; padding: var(--space-2) var(--space-3); border-radius: 12px; background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger-text); font-size: var(--fs-caption); }
+
+.vpl-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: var(--space-2); margin-bottom: var(--space-4); }
+.vpl-kpi { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: var(--space-3) var(--space-4); border-radius: var(--vpl-r); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--vpl-shadow); }
+.vpl-kpi-v { font: 700 24px/1.15 var(--font-sans); color: var(--ink); letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vpl-kpi-l { font-size: var(--fs-caption); color: var(--muted); }
+
+/* the board */
+.vpl-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, 1fr); gap: var(--space-3);
+  overflow-x: auto; padding-bottom: var(--space-2); scroll-snap-type: x proximity; overscroll-behavior-x: contain; }
+.vpl-col { display: flex; flex-direction: column; min-width: 0; scroll-snap-align: start; padding: var(--space-3);
+  border-radius: var(--vpl-r); background: color-mix(in srgb, var(--surface) 55%, transparent); border: 1px solid var(--line);
+  transition: background .15s ease, border-color .15s ease; }
+.vpl-col--over { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, var(--surface)); }
+.vpl-col-head { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-bottom: var(--space-3); }
+.vpl-col-title { font-weight: 600; color: var(--ink); }
+.vpl-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px; padding: 0 6px; margin-left: 4px;
+  border-radius: 999px; background: var(--surface-alt); font-size: 12px; color: var(--muted); }
+.vpl-col-sum { grid-column: 1 / -1; font-size: var(--fs-caption); color: var(--muted); }
+.vpl-rule { grid-column: 1 / -1; height: 3px; margin-top: 6px; border-radius: 3px; background: var(--muted); }
+.vpl-tone-muted { background: var(--muted); } .vpl-tone-warn { background: var(--warn); } .vpl-tone-brand { background: var(--brand); }
+.vpl-tone-ink { background: var(--ink); } .vpl-tone-info { background: var(--info); } .vpl-tone-highlight { background: var(--highlight, var(--warn)); }
+.vpl-tone-ok { background: var(--ok); } .vpl-tone-danger { background: var(--danger); }
+.vpl-cards { display: flex; flex-direction: column; gap: var(--space-2); min-height: 80px; }
+.vpl-drop { margin: 0; padding: var(--space-4) var(--space-2); border: 1.5px dashed var(--line); border-radius: 14px; text-align: center; font-size: var(--fs-caption); color: var(--muted); }
+
+/* cards */
+.vpl-card { position: relative; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: var(--surface);
+  border: 1px solid var(--line); box-shadow: var(--vpl-shadow); transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease; cursor: grab; }
+.vpl-card:hover { transform: translateY(-2px); }
+.vpl-card--drag { opacity: .45; }
+.vpl-card-open { all: unset; box-sizing: border-box; display: flex; flex-direction: column; cursor: pointer; }
+.vpl-card-open:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 16px; }
+.vpl-photo { position: relative; aspect-ratio: 16 / 8; background: var(--surface-alt) center / cover no-repeat; }
+.vpl-tag { position: absolute; top: 8px; left: 8px; padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,.92); color: #121722; font: 700 10.5px/1.5 var(--font-sans); letter-spacing: .04em; }
+.vpl-stamp { position: absolute; right: 10px; bottom: 10px; padding: 2px 10px; border: 2px solid #1f8a5b; border-radius: 6px; color: #1f8a5b;
+  background: rgba(255,255,255,.9); font: 800 12px/1.4 var(--font-sans); letter-spacing: .12em; transform: rotate(-8deg); }
+.vpl-card-body { display: flex; flex-direction: column; gap: 4px; padding: var(--space-3); }
+.vpl-card-title { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.vpl-meta { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-caption); color: var(--muted); }
+.vpl-value-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+.vpl-value { font: 700 16px/1.2 var(--font-sans); color: var(--ink); }
+.vpl-novalue { font-size: var(--fs-caption); color: var(--muted); font-style: italic; }
+.vpl-pct { padding: 1px 7px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+.vpl-pct--ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok-text); }
+.vpl-pct--low { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
+.vpl-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; font-size: var(--fs-caption); color: var(--muted); }
+.vpl-foot > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
+.vpl-late { color: var(--danger-text); font-weight: 600; }
+.vpl-owner { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--brand-text, var(--accent)); font: 700 11px/1 var(--font-sans); }
+.vpl-next { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 7px var(--space-3);
+  border-top: 1px solid var(--line); font-size: var(--fs-caption); font-weight: 600; color: var(--muted); cursor: pointer; }
+.vpl-next:hover { color: var(--ink); background: var(--surface-alt); }
+.vpl-next:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* sheet */
+.vpl-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.vpl-2 { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); }
+.vpl-sheet-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; }
+.vpl-wa { align-self: flex-start; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: var(--fs-caption); font-weight: 600; }
+.vpl-wa:hover { border-color: var(--brand); }
+
+@media (prefers-reduced-motion: reduce) { .vpl-card, .vpl-col { transition: none; } .vpl-card:hover { transform: none; } }

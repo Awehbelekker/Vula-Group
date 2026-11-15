@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -93,7 +94,62 @@ async def _jev(decision: str, case: Dict[str, Any]) -> Dict[str, Any]:
             "cost_usd": res.cost_usd, "latency_ms": res.latency_ms}
 
 
+LOCAL_PREFIX = "local:"
+LOCAL_MODEL_RE = re.compile(r"^[a-z0-9][\w.\-]*(:[\w.\-]+)?$", re.I)
+
+
+async def _local(model: str, decision: str, case: Dict[str, Any]) -> Dict[str, Any]:
+    """Today's prompt for the decision, asked of one model on the local box only (12 Nov 2026:
+    choosing the 11 GB card's text model). No cloud fallback, so a miss is the model's own."""
+    t0 = time.perf_counter()
+    answers: Dict[str, str] = {}
+    ok, error = True, None
+    try:
+        if decision == "skill":
+            from core.hrm.orchestrator import HRMOrchestrator
+            got, _ = await asyncio.to_thread(HRMOrchestrator(model=model)._local_classify_skill,
+                                             case["text"], BENCH_TIMEOUT_S)
+            answers = {"skill": got or "none"}
+        elif decision == "escalation":
+            from vula.escalation import escalation_prompt, parse_escalation
+            got = parse_escalation(await _ask_local(model, escalation_prompt(case["text"]), 60))
+            answers = {"wants_person": "yes" if got["wants_person"] else "no",
+                       "upset": "yes" if got["upset"] else "no"}
+        else:
+            from vula.commerce import expenses
+            det = expenses.classify_purpose_category_deterministic(case["vendor"])
+            answers = {"category": det or expenses.parse_purpose(await _ask_local(
+                model, expenses.purpose_prompt(case["vendor"], case["amount_cents"]), 200))}
+    except Exception as exc:  # noqa: BLE001
+        ok, error = False, type(exc).__name__
+    return {"answers": answers, "ok": ok, "error": error, "confidence": None, "cost_usd": 0.0,
+            "latency_ms": int((time.perf_counter() - t0) * 1000)}
+
+
+async def _ask_local(model: str, prompt: str, max_tokens: int) -> str:
+    import litellm
+    from core.llm_router import _local_prefix, local_generation_kwargs
+    route = f"{_local_prefix()}/{model}"
+    resp = await litellm.acompletion(
+        model=route, api_base=settings.ollama_base, **{**local_generation_kwargs(route), "timeout": BENCH_TIMEOUT_S},
+        messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=max_tokens)
+    return resp.choices[0].message.content or ""
+
+
 SIDES = {"jev": _jev, "current": _current}
+
+
+def _side_fn(provider: str):
+    if provider.startswith(LOCAL_PREFIX):
+        model = provider[len(LOCAL_PREFIX):]
+        return lambda decision, case: _local(model, decision, case)
+    return SIDES[provider]
+
+
+def valid_provider(provider: str) -> bool:
+    if provider.startswith(LOCAL_PREFIX):
+        return bool(LOCAL_MODEL_RE.match(provider[len(LOCAL_PREFIX):]))
+    return provider in SIDES
 
 
 # ── running ──────────────────────────────────────────────────────────────────
@@ -116,23 +172,40 @@ async def run(run_id: Optional[str] = None, decisions: Optional[List[str]] = Non
     set_request_tenant(BENCH_TENANT)          # the model calls' spend is filed under the benchmark
     run_id = run_id or "bench-" + uuid.uuid4().hex[:10]
     decisions = [d for d in (decisions or ["skill", "escalation", "expense_purpose"]) if (CASES / f"{d}.yaml").exists()]
-    providers = [p for p in (providers or list(PROVIDERS)) if p in SIDES]
+    providers = list(dict.fromkeys(p for p in (providers or list(PROVIDERS)) if valid_provider(p)))
     sem = asyncio.Semaphore(max(1, concurrency))
     rows: List[Dict[str, Any]] = []
 
     async def one(decision: str, provider: str, case: Dict[str, Any]) -> None:
-        async with sem:
-            got = await SIDES[provider](decision, case)
+        got = await _side_fn(provider)(decision, case)
         row = _row(decision, provider, case, got)
         rows.append(row)
         reasoning_telemetry.emit(system=SYSTEM, run_id=run_id, task=decision, outcome=provider,
                                  extra={k: v for k, v in row.items() if k not in ("decision", "provider")})
 
-    jobs = [one(d, p, c) for d in decisions for c in load_cases(d)[: limit or None] for p in providers]
+    async def limited(decision: str, provider: str, case: Dict[str, Any]) -> None:
+        async with sem:
+            await one(decision, provider, case)
+
+    cases = [(d, c) for d in decisions for c in load_cases(d)[: limit or None]]
+    local = [p for p in providers if p.startswith(LOCAL_PREFIX)]
+
+    async def local_models() -> None:
+        # One model at a time, one case at a time: the box holds one text model, so interleaving
+        # two would reload a model on every case and time the reloads instead of the answers.
+        # The first answer of each model is a warm-up (load time), not counted.
+        for p in local:
+            if cases:
+                await _side_fn(p)(*cases[0])
+            for d, c in cases:
+                await one(d, p, c)
+
     started = time.time()
-    await asyncio.gather(*jobs)
+    await asyncio.gather(*[limited(d, p, c) for d, c in cases for p in providers if p not in local],
+                         local_models())
     summary = {"run_id": run_id, "seconds": round(time.time() - started, 1),
-               "decision_model": settings.decision_model, "results": summarise(rows)}
+               "decision_model": settings.decision_model, "providers": providers,
+               "results": summarise(rows)}
     reasoning_telemetry.emit(system=SYSTEM, run_id=run_id, task="all", outcome="summary", extra=summary)
     log.info("decision benchmark %s done: %s", run_id, {d: {p: v.get("accuracy") for p, v in r.items() if p != "verdict"}
                                                          for d, r in summary["results"].items()})
@@ -177,7 +250,9 @@ def _side(rows: List[Dict[str, Any]], provider: str) -> Dict[str, Any]:
 def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for d in sorted({r["decision"] for r in rows}):
-        sides = {p: _side([r for r in rows if r["decision"] == d and r["provider"] == p], p) for p in PROVIDERS}
+        present = list(dict.fromkeys(r["provider"] for r in rows if r["decision"] == d))
+        names = [p for p in PROVIDERS] + [p for p in present if p not in PROVIDERS]
+        sides = {p: _side([r for r in rows if r["decision"] == d and r["provider"] == p], p) for p in names}
         j, c = sides.get("jev") or {}, sides.get("current") or {}
         verdict = "not enough data"
         if j.get("n") and c.get("n") and j.get("accuracy") is not None and c.get("accuracy") is not None:
@@ -189,6 +264,20 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             if lagging:
                 sides["jev"]["lagging_languages"] = lagging
         out[d] = {**sides, "verdict": verdict}
+        # A local model is ready for a decision on the same bar as Jev: within FLIP_POINTS of
+        # today's accuracy, failing (no answer, error, timeout) on under MAX_FALLBACK of cases.
+        local_verdicts = {}
+        for p in names:
+            s_ = sides.get(p) or {}
+            if not p.startswith(LOCAL_PREFIX) or not s_.get("n"):
+                continue
+            if c.get("accuracy") is None or s_.get("accuracy") is None:
+                local_verdicts[p] = "not enough data"
+            else:
+                close = s_["accuracy"] >= c["accuracy"] - FLIP_POINTS
+                local_verdicts[p] = "ready" if close and s_["fallback_rate"] < MAX_FALLBACK else "keep current"
+        if local_verdicts:
+            out[d]["local_verdicts"] = local_verdicts
     return out
 
 

@@ -153,7 +153,7 @@ async def test_remove_member_writes_audit_row():
     ):
         result = await remove_member("off-the-hook", "m1",
                                      identity={"user_id": "u1", "email": "owner@shop.com"})
-    assert result == {"id": "m1", "removed": True}
+    assert result["id"] == "m1" and result["removed"] is True   # + login_revoked (13 Nov 2026)
     mock_audit.assert_called_once()
     assert mock_audit.call_args[0][2] == "member_removed"
 

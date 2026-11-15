@@ -62,25 +62,35 @@ MODULES: dict[str, str] = {
     "wa_shop":    "WhatsApp shop (photo cards, tap to order, web basket)",
     # 2026-10-14: materials, recipes, batches and the true cost per unit — vula/commerce/costing.py.
     "manufacturing": "Manufacturing & costing (recipes, batches, cost per unit, margin)",
+    # 2026-11-10: properties for sale / to rent, agents, website enquiries — vula/listings/.
+    "listings":   "Property listings (real estate)",
+    # 2026-11-10: deals board for any business type (stages per business type) — vula/pipeline/.
+    "pipeline":   "Deals pipeline",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
+# 12 Nov 2026: every type gets "documents". A food, retail or health business had no Documents
+# tab, so no way to give Vula its price list, policies or menu — and Vula can only answer a
+# business's own facts from what the business has given it.
 BUSINESS_TYPES: dict[str, dict] = {
     "food":     {"label": "Food / Restaurant / Takeaway",
                  "modules": ["products", "orders", "payments", "invoices", "delivery", "wa_shop",
-                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations",
+                             "documents"]},
     "retail":   {"label": "Retail / E-commerce",
                  "modules": ["products", "orders", "payments", "invoices", "pages", "wa_shop",
-                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations",
+                             "documents"]},
     "services": {"label": "Professional services (architecture, agency, consulting)",
                  "modules": ["invoices", "bookings", "projects", "documents", "finances", "fieldops",
                              "followups", "reports", "team", "estimating", "ai_draft", "training", "workspace"]},
     "trades":   {"label": "Trades / Construction / Field work",
                  "modules": ["invoices", "fieldops", "projects", "budget", "scanner",
-                             "finances", "followups", "team", "estimating", "ai_draft", "training", "workspace"]},
+                             "finances", "followups", "team", "estimating", "ai_draft", "training", "workspace",
+                             "documents"]},
     "health":   {"label": "Health / Wellness / Bookings",
                  "modules": ["bookings", "invoices", "crm", "followups", "broadcasts", "marketing",
-                             "inbox", "reports", "pages", "team"]},
+                             "inbox", "reports", "pages", "team", "documents"]},
     # 2026-09-29: a sales-rep business (Gerflor Western Cape): no products or orders of its own,
     # no projects — contacts, follow-ups, product knowledge and expense slips.
     "rep":      {"label": "Sales rep / Agency (represents a brand)",
@@ -89,8 +99,13 @@ BUSINESS_TYPES: dict[str, dict] = {
     # side — quotes, invoices, payment links, expenses, books. Nothing else switched on.
     "solo":     {"label": "Solo operator (invoices & money only)",
                  "modules": ["invoices", "payments", "finances", "documents", "crm", "reports"]},
+    # 2026-11-10: estate agencies and letting agents — listings, agents, enquiries, viewings
+    # (bookings), a website to show the listings on, and follow-ups on every lead.
+    "real_estate": {"label": "Real estate / Estate agency / Rentals",
+                    "modules": ["listings", "pipeline", "bookings", "crm", "followups", "pages", "inbox",
+                                "broadcasts", "marketing", "documents", "team", "reports", "invoices"]},
     "other":    {"label": "Other / General",
-                 "modules": ["invoices", "crm", "reports", "marketing", "followups", "team"]},
+                 "modules": ["invoices", "crm", "reports", "marketing", "followups", "team", "documents"]},
 }
 
 
@@ -271,6 +286,8 @@ def what_i_do(tenant_id: str) -> str:
     name = p["display_name"]
     if p["description"]:
         return f"{name} — {p['description']}"
+    if p["business_type"] == "real_estate":
+        return f"{name}: properties for sale and to rent, viewings and enquiries."
     if p["is_rep_business"]:
         return f"{name}: product information, samples, pricing questions and follow-ups."
     if p["uses_projects"]:
@@ -292,7 +309,20 @@ def _public(cfg: dict) -> dict:
         # the redesigned dashboard, opt-in per tenant, and its own labels (migration 215)
         "ui_v2": bool(cfg.get("ui_v2")),
         "ui_labels": cfg.get("ui_labels") or None,
+        # the switches that are on for this business (names only) — the dashboard shows a
+        # piloted screen such as Costing by trade only where it's on (15 Nov 2026)
+        "features": _features_on(cfg.get("tenant_id")),
     }
+
+
+def _features_on(tenant_id: Optional[str]) -> list:
+    if not tenant_id:
+        return []
+    try:
+        from vula import features
+        return [name for name in features.FEATURES if features.on(tenant_id, name)]
+    except Exception:  # noqa: BLE001 — no switches shown rather than a broken tenant read
+        return []
 
 
 # ── API ───────────────────────────────────────────────────────────────────────

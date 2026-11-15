@@ -5,7 +5,7 @@
  * timeline of what the AI did: the tools it called (consequential ones marked) and whether it ran
  * on the local GPU or escalated to the cloud.
  */
-import { AlertTriangle, BookOpenCheck, Check, Cloud, Cpu, MessageSquareText, RefreshCw, Sparkles, Wrench, X } from 'lucide-react'
+import { AlertTriangle, BookOpenCheck, Check, Cloud, Cpu, Gauge, MessageSquareText, RefreshCw, Sparkles, Wrench, X } from 'lucide-react'
 import { SA_TZ } from '../../lib/dates'
 import { Button, Card, EmptyState, Field, Input, Skeleton, Textarea } from '../ui/index.jsx'
 import { useAgentActivity } from './useAgentActivity'
@@ -21,16 +21,40 @@ const ago = (ts) => {
   return d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', timeZone: SA_TZ })
 }
 
+// One figure: a percentage where there is one, else the count; "–" when it couldn't be read.
+function Stat({ label, value, hint }) {
+  const shown = !value ? '–' : (value.pct != null ? `${value.pct}%` : String(value.count ?? '–'))
+  const detail = value && value.pct != null && value.count != null ? ` (${value.count})` : ''
+  return (
+    <div className="vas-stat">
+      <dt>{label}</dt>
+      <dd><span className="vas-stat-n">{shown}</span>{detail}<span className="vas-stat-hint">{hint}</span></dd>
+    </div>
+  )
+}
+
 export default function AgentActivityV2({ tenantId }) {
   const x = useAgentActivity(tenantId)
   return (
     <section className="vas" aria-label="Agent activity">
       <p className="vas-sub">See what Vula's AI did: the tools it used, and whether it ran on your local GPU or escalated to the cloud.</p>
 
+      {x.quality && x.quality.answers != null && (
+        <Card className="vas-card" role="group" aria-labelledby="vas-quality">
+          <h2 className="vas-h" id="vas-quality"><Gauge size={18} aria-hidden="true" />How Vula answered this week</h2>
+          <p className="vas-muted">{x.quality.answers} answers in the last {x.quality.days} days. These are counts only; nothing anyone wrote is shown here.</p>
+          <dl className="vas-quality">
+            <Stat label="Backed by your records" value={x.quality.backed} hint="Answered from your documents, a tool or the books" />
+            <Stat label="Vula wasn't sure" value={x.quality.unsure} hint="Said it didn't have the answer, or had low confidence" />
+            <Stat label="Marked wrong" value={x.quality.corrected} hint="A thumbs-down, or someone said it was wrong" />
+            <Stat label="Handed to a person" value={x.quality.handed_on} hint="Passed to your team to answer" />
+          </dl>
+        </Card>)}
+
       <Card className="vas-card" role="group" aria-labelledby="vas-voice">
         <h2 className="vas-h" id="vas-voice"><MessageSquareText size={18} aria-hidden="true" />How Vula sounds</h2>
         <p className="vas-muted">Set it yourself, or let Vula learn it from your own words: WhatsApp replies you've sent, meeting notes and emails.</p>
-        <Field label="Voice"><Textarea rows={3} value={x.persona} onChange={e => x.setPersona(e.target.value)}
+        <Field label="With your customers"><Textarea rows={3} value={x.persona} onChange={e => x.setPersona(e.target.value)}
           placeholder="e.g. Warm, casual, quick replies. Small family shop, not corporate." /></Field>
         <div className="vas-row">
           <Button Icon={Check} onClick={() => x.savePersona(x.persona)}>Save</Button>
@@ -46,6 +70,13 @@ export default function AgentActivityV2({ tenantId }) {
               <Button size="sm" variant="secondary" Icon={X} onClick={() => x.savePersona(x.persona)}>Dismiss</Button>
             </div>
           </div>)}
+        <Field label="With your team" hint="How Vula talks to you and your staff. Each person can also set their own style under Chat.">
+          <Textarea rows={2} value={x.teamVoice} onChange={e => x.setTeamVoice(e.target.value)}
+            placeholder="e.g. Relaxed and direct. We're a small team and don't stand on ceremony." /></Field>
+        <div className="vas-row">
+          <Button Icon={Check} onClick={() => x.saveTeamVoice(x.teamVoice)}>Save team voice</Button>
+          {x.teamMsg && <span className={x.teamMsg.startsWith('Saved') || x.teamMsg === 'Saving…' ? 'vas-ok' : 'vas-warn'} role="status">{plain(x.teamMsg)}</span>}
+        </div>
       </Card>
 
       <Card className="vas-card" role="group" aria-labelledby="vas-teach">

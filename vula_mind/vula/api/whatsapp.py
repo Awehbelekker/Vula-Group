@@ -26,6 +26,7 @@ import hmac
 import logging
 import json
 import time
+import threading
 import re
 from typing import Any, Dict, Optional
 
@@ -446,6 +447,31 @@ async def _offer_product_photos(tenant_id: str, phone: str, photos: list) -> Non
 _PRODUCT_PHOTO_RE = re.compile(
     r"^\s*(?:(?:website|product|shop)\s+)?(?:photo|picture|pic|image)\s+(?:for\s+|of\s+)?(?P<name>.{3,80}?)\s*$",
     re.IGNORECASE)
+
+
+async def _maybe_listing_photo(tenant_id: str, phone: str, media_id: str, caption: str,
+                               mime: Optional[str]) -> bool:
+    """A team member's captioned photo for a property listing. False (fall through to the other
+    photo handlers) unless the tenant has listings, the sender is team, and the caption is a
+    photo caption naming a listing."""
+    from core.skills import listing_tools as lt
+    m = lt.LISTING_PHOTO_RE.match(caption or "")
+    if not m or not lt.tenant_has_listings(tenant_id) or not _is_team(tenant_id, phone):
+        return False
+    ref = m.group("name").strip().rstrip(".!")
+    rows = await lt.ls.list_properties(tenant_id, limit=500)
+    if not lt.match_listings(rows, ref):
+        await _send_reply(phone, f"I couldn't find a listing called *{ref}*. Send the photo again "
+                                 "captioned with the listing's name or area, e.g. *photos Bellville house*.",
+                          tenant_id)
+        return True
+    url, _ = await _keep_post_picture(tenant_id, media_id, mime)
+    if not url:
+        await _send_reply(phone, "I couldn't fetch that photo — please send it again.", tenant_id)
+        return True
+    res = await lt.add_listing_photo(tenant_id, ref, url)
+    await _send_reply(phone, res.get("reply") or "⚠️ That photo didn't save — please send it again.", tenant_id)
+    return True
 
 
 async def _maybe_product_photo(tenant_id: str, phone: str, media_id: str, caption: str,
@@ -2543,6 +2569,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # can't name them, and the generic label stays.
     caller_name, caller_role = _caller_identity(tenant_id, phone)
 
+    # Their own private notes ("remember that I…") — before anything is saved to the history.
+    if await _private_note_reply(tenant_id, phone, text):
+        _note_handler("private_note")
+        return
+
     # Only a known team member teaches Vula corrections. On a dedicated line every sender gets
     # role "admin" (the number identifies the tenant), so before 2026-09-29 a member of the
     # public's reply could be captured as an "owner correction" and learned.
@@ -2930,6 +2961,11 @@ async def _handle_image_or_video(
             and (_is_tenant_owner(route_tenant, phone) or await _sender_is_sales_rep(phone, route_tenant))):
         await _handle_signature_capture(phone, media_id, route_tenant)
         return
+    # "photos Bellville house" from the team of a real-estate business → added to that listing
+    # (core/skills/listing_tools.py). Only for tenants with the `listings` module.
+    if (msg_type == "image" and route_tenant and caption.strip()
+            and await _maybe_listing_photo(route_tenant, phone, media_id, caption, mime_type)):
+        return
     # "photo Hake Fillets" from the team on a shop line → offered as that product's website picture.
     if (msg_type == "image" and route_mode == "commerce" and route_tenant and caption.strip()
             and await _maybe_product_photo(route_tenant, phone, media_id, caption, mime_type)):
@@ -3066,6 +3102,24 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
     rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
     if rec.get("not_bank_statement"):
         return False                  # a supplier's statement of account → filed as a document
+    if rec.get("private"):
+        # One member's own account (12 Nov 2026, Richard's): not the business's books — filed for
+        # them alone, and only they can ask Vula about it (vula/private_docs.py).
+        from vula import private_docs
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        owner = rec["private_to"]
+        res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(local_path, audience="owner",
+                                                                           private_to=owner)
+        await private_docs.store(tenant_id, owner, filename=local_path.name,
+                                 doc_id=getattr(res, "doc_id", None), category="Bank Statement",
+                                 summary=f"Private bank statement, account ending {str(rec.get('bank_account'))[-4:]}",
+                                 source="whatsapp")
+        mine = private_docs.member_id_for_phone(tenant_id, phone) == owner
+        await _send_reply(phone, ("🔒 Filed privately for you — it isn't in the business's books, and only "
+                                  "you can ask me about it." if mine else
+                                  "🔒 That statement is for a private account, so it's filed privately for "
+                                  "its owner and isn't in the business's books."), tenant_id)
+        return True
     if rec.get("error"):
         await _send_reply(phone, f"🏦 That looks like a bank statement, but I couldn't "
                                  f"process it: {rec['error']}", tenant_id)
@@ -3221,7 +3275,8 @@ async def _handle_document_ingest_one(
     # Tell them what happens next — but ONCE per burst (per phone, 8s), so a batch of 7 docs
     # or a client re-sending one file 7× both get a single "Got it", then a result per
     # distinct document.
-    if _local_media_claim(tenant_id, f"ack:{phone}", 8.0):
+    from vula.api import doc_batch as _doc_batch
+    if _local_media_claim(tenant_id, f"ack:{phone}", 8.0) and not _doc_batch.continuing(phone):
         if kind == "image":
             ack = ("📸 Got it — reading that now. If it's a receipt or invoice I'll book it "
                    "straight into your books; anything else gets filed. Give me a minute…")
@@ -3851,12 +3906,32 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         return ""
 
 
+def may_confirm_payments(member: Optional[dict]) -> bool:
+    """A team member who may say a payment arrived: the owner or a manager, a member with full
+    access, or one whose access includes orders or a money section (13 Nov 2026, Ian: a customer's
+    proof of payment may dispatch an order "with approval by correct user"). A rep who can only
+    see the CRM can't approve one."""
+    if not member or member.get("active") is False:
+        return False
+    if (member.get("role") or "").lower() in ("owner", "manager"):
+        return True
+    access = set(member.get("access") or [])
+    if not access:
+        return True
+    from vula.api.server import _MONEY_TABS
+    return bool(access & (set(_MONEY_TABS) | {"orders"}))
+
+
 async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Optional[str]:
-    """If a bank-review question is outstanding AND the sender is on the tenant's team
-    (never a customer), treat the message as the answer. Returns the reply or None."""
+    """If a bank-review question is outstanding AND the sender is on the tenant's team with
+    payment rights (never a customer, never a CRM-only rep), treat the message as the answer.
+    Returns the reply or None."""
     try:
         from vula.integrations.notify import team_member_for_phone, _fallback_phone, _digits
-        is_team = bool(team_member_for_phone(tenant_id, phone))
+        member = team_member_for_phone(tenant_id, phone)
+        is_team = may_confirm_payments(member)
+        if member and not is_team:
+            return None                      # on the team, but not someone who confirms money
         if not is_team:
             fb = _fallback_phone(tenant_id)
             is_team = bool(fb and _digits(fb) == _digits(phone))
@@ -5222,8 +5297,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                     match = {"project": None, "ambiguous": True, "candidates": [resolved["project"]]}
             except Exception as exc:
                 logger.debug("project resolver skipped: %s", exc)
-        if not uses_projects(tenant_id):
-            # A commerce business (Off the Hook): no projects — file it, never ask.
+        from vula.integrations.doc_filing import is_bank_statement
+        if not uses_projects(tenant_id) or is_bank_statement(category, summary, result.filename):
+            # A commerce business (Off the Hook): no projects — file it, never ask. Nor a bank
+            # statement: the whole business's, whatever project a line on it names (11 Nov 2026).
             row = await file_document(
                 tenant_id, filename=result.filename, data=data, content_type=ctype,
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,
@@ -6577,24 +6654,36 @@ async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
     except Exception as exc:
         logger.warning("tenant_phones removal failed for %s: %s", phone, exc)
 
-    # Clear chat history
-    try:
-        from vula.chat.history import get_db
-        chat_db = get_db()
-        if tenant_id:
-            chat_db.clear(tenant_id, phone)
-            removed.append("message history")
-    except Exception as exc:
-        logger.warning("chat history removal failed for %s: %s", phone, exc)
+    # Every store that holds what this person said (vula/privacy_data.py), deleted now — not one
+    # table with a promise about the rest.
+    failed: list = []
+    if tenant_id:
+        try:
+            from vula import privacy_data
+            result = privacy_data.erase(tenant_id, phone)
+            failed = result["failed"]
+            if sum(result["removed"].values()):
+                removed.append("conversations with us")
+        except Exception as exc:
+            logger.error("data erase failed for %s: %s", phone, exc)
+            failed = ["conversations"]
 
-    await _send_reply(
-        phone,
-        "✅ Your data deletion request has been received. "
-        f"We've removed your {', '.join(removed) if removed else 'records'} from Vula. "
-        "Any remaining data will be deleted within 30 days per POPIA. "
-        "For a full deletion or questions, email hello@vula.co.za.",
-        tenant_id,
-    )
+    await _send_reply(phone, _deletion_reply(removed, failed), tenant_id)
+
+
+def _deletion_reply(removed: list, failed: list) -> str:
+    """What to tell someone who asked for their data to be deleted — only what was really done.
+    The old reply promised "any remaining data will be deleted within 30 days"; nothing did
+    that."""
+    if failed:
+        return ("Your data deletion request has been received, but I couldn't remove everything "
+                "just now. Please email hello@vula.co.za and we'll finish it by hand and confirm "
+                "to you when it's done.")
+    done = f"We've deleted your {' and '.join(removed)}." if removed else \
+        "We had no conversation history on file for this number."
+    return ("✅ Your data deletion request has been received. " + done + " "
+            "Orders and invoices are kept, because a business must keep its financial records by "
+            "law. You won't be sent any more messages. Questions: hello@vula.co.za.")
 
 
 _EXPORT_FAILURE_REPLY = (
@@ -7615,9 +7704,16 @@ _STICKY_SKILLS = {"email_admin", "commerce_admin", "finance_admin", "calculation
 _LAST_SKILL: dict = {}
 
 
-def _remember_skill(tenant_id: str, phone: str, skill: Optional[str]) -> None:
+def _remember_skill(tenant_id: str, phone: str, skill: Optional[str], question: str = "") -> None:
     if tenant_id and phone and skill in _STICKY_SKILLS:
         _LAST_SKILL[(tenant_id, phone)] = (skill, time.time())
+    # Also kept where a restart and the other worker can find it, and with the question it
+    # answered, so the classifier can tell a follow-up from a new subject (vula/route_memory.py).
+    try:
+        from vula import route_memory
+        route_memory.remember(tenant_id, phone, skill, question, sticky=skill in _STICKY_SKILLS)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("route memory skipped: %s", exc)
 
 
 # The last real request from this person (not a bare "proceed"), for 30 minutes — so "Proceed" /
@@ -7655,7 +7751,13 @@ def _last_skill(tenant_id: str, phone: str) -> Optional[str]:
     hit = _LAST_SKILL.get((tenant_id, phone))
     if hit and time.time() - hit[1] < _STICKY_TTL:
         return hit[0]
-    return None
+    # Not in this process's memory (a restart, or the other worker answered last time).
+    try:
+        from vula import route_memory
+        return route_memory.sticky(tenant_id, phone, allowed=_STICKY_SKILLS)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("route memory skipped: %s", exc)
+        return None
 
 
 def _kb_audience_for(tenant_id: str, phone: str, caller_role: Optional[str]) -> Optional[str]:
@@ -7708,10 +7810,92 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — see _rag_reply_inner. Every KB search made while answering an outsider
     is limited to customer-visible documents (vula/ingestion/pipeline.py::kb_audience)."""
-    from vula.ingestion.pipeline import kb_audience
-    with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)):
+    from core import voice
+    from vula.ingestion.pipeline import kb_audience, kb_viewer
+    from vula.private_docs import member_id_for_phone
+    import contextlib as _ctx
+    # Who this reply is for decides its voice: the business's own people get the team voice and
+    # their own style; anyone else gets the customer voice (core/voice.py).
+    insider = (not phone) or _is_insider(caller_role) or _is_tenant_owner(tenant_id, phone)
+    from vula import personal_memory
+    notes = await _private_notes_block(tenant_id, phone) if (insider and phone) else ""
+    # Their own private documents too; with no phone (the staff app's chat) the caller already said who.
+    with kb_audience(_kb_audience_for(tenant_id, phone, caller_role)), \
+            (kb_viewer(member_id_for_phone(tenant_id, phone)) if phone else _ctx.nullcontext()), \
+            voice.use(tenant_id, "team" if insider else "customer", "whatsapp" if phone else "dashboard",
+                      _voice_prefs(tenant_id, phone) if insider else None), \
+            personal_memory.use(notes):
         return await _rag_reply_inner(tenant_id, question, conversation_history, phone,
                                       caller_name=caller_name, caller_role=caller_role)
+
+
+def _wants_advisor(tenant_id: str, question: str) -> bool:
+    """True when the front desk would hand this message to the AI advisor and this business has
+    the advisor switched on."""
+    try:
+        from core.skills import employees
+        settings_ = employees.settings_for(tenant_id)
+        if not (settings_.get("advisor") or {}).get("enabled"):
+            return False
+        enabled = {k for k, v in settings_.items() if v["enabled"]}
+        return employees.is_advisor(employees.pick(question, enabled))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("advisor check skipped: %s", exc)
+        return False
+
+
+def _staff_person(tenant_id: str, phone: str):
+    """The team member writing from this number (vula/identity.py), or None."""
+    try:
+        from vula.identity import person_for_phone
+        return person_for_phone(tenant_id, phone) if phone else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("staff person lookup skipped: %s", exc)
+        return None
+
+
+def _voice_prefs(tenant_id: str, phone: str) -> Optional[dict]:
+    """The staff member's own style choices (how they like Vula to talk to them), or None."""
+    person = _staff_person(tenant_id, phone)
+    return dict(person.prefs) if person else None
+
+
+async def _private_notes_block(tenant_id: str, phone: str) -> str:
+    """What this staff member asked Vula to remember about them, for the assistant that is
+    about to answer THEM (vula/personal_memory.py). "" for anyone else."""
+    try:
+        from vula import personal_memory
+        return await personal_memory.load(_staff_person(tenant_id, phone))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("private notes skipped: %s", exc)
+        return ""
+
+
+async def _private_note_reply(tenant_id: str, phone: str, text: str) -> bool:
+    """A staff member's "remember that I…", "what do you remember about me" or "forget note 2":
+    handled in code, replied to, and kept out of the chat history and the turn record — the
+    note itself is the only thing stored, encrypted. True when this message was one of those."""
+    try:
+        from vula import personal_memory
+        if not personal_memory.enabled(tenant_id):
+            return False
+        person = _staff_person(tenant_id, phone)
+        if person is None:
+            return False
+        import asyncio as _asyncio
+        reply = await _asyncio.to_thread(personal_memory.handle, person, text, "whatsapp")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("private note handling skipped: %s", exc)
+        return False
+    if not reply:
+        return False
+    try:
+        from vula import turns as _turns
+        _turns.mark_private()
+    except Exception:  # noqa: BLE001
+        pass
+    await _send_reply(phone, reply, tenant_id)
+    return True
 
 
 async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
@@ -7856,7 +8040,10 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
         from core.skills.base import looks_like_owner_admin_question
-        if looks_like_owner_admin_question(question):
+        # …and thinking something through ("should we…", "brainstorm…", "pros and cons…") goes
+        # to the AI advisor there, when this business has it on, instead of the general skill,
+        # which has no tools to check the numbers with (employees/advisor).
+        if looks_like_owner_admin_question(question) or _wants_advisor(tenant_id, question):
             try:
                 from core.skills.base import SkillInput
                 from core.skills.loader import get_skill
@@ -7916,18 +8103,23 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
         # commerce_admin/commerce_assistant's calls into this helper. Safe when phone is empty
         # (the dashboard-chat caller, vula/api/chat.py) — _run_with_holding_message's own
         # try/except swallows a failed send with no effect on the real result.
-        result = await _run_with_holding_message(
-            phone, tenant_id,
-            runner.run(
-                question=question,
-                tenant_id=tenant_id,
-                conversation_history=conversation_history,
-                metadata=metadata,
-                max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
-                max_tokens=700,    # room to hold working facts + show code calcs
-                top_k=5,           # retrieve enough to surface the right clause/doc
-            ),
-        )
+        # The router sees one message at a time; give it what this person asked last and which
+        # skill answered, so "and for next week?" isn't routed as a brand-new subject.
+        from core.hrm.orchestrator import route_context
+        from vula import route_memory
+        with route_context(route_memory.latest(tenant_id, phone) if phone else None, tenant_id):
+            result = await _run_with_holding_message(
+                phone, tenant_id,
+                runner.run(
+                    question=question,
+                    tenant_id=tenant_id,
+                    conversation_history=conversation_history,
+                    metadata=metadata,
+                    max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
+                    max_tokens=700,    # room to hold working facts + show code calcs
+                    top_k=5,           # retrieve enough to surface the right clause/doc
+                ),
+            )
         if result.final_answer and result.final_answer.strip():
             logger.info(
                 "Agent answered tenant=%s skill=%s confidence=%.2f",
@@ -7935,7 +8127,7 @@ async def _rag_reply_inner(tenant_id: str, question: str, conversation_history: 
             )
             _note_route("agent", skill=result.skill_used)
             if _is_insider(caller_role):
-                _remember_skill(tenant_id, phone, result.skill_used)
+                _remember_skill(tenant_id, phone, result.skill_used, question)
             try:
                 _LAST_CONF.set(float(result.confidence or 0.0))
             except Exception:
@@ -8772,14 +8964,23 @@ def _outbound_key_id(tenant_id: str, idem_key: str) -> str:
     return f"out:{tenant_id or '-'}:{idem_key}"[:200]
 
 
+_SENT_KEYS_LOCK = threading.Lock()
+
+
 def _claim_outbound(tenant_id: str, idem_key: str) -> bool:
     """Claim a once-only automated send. False = already sent (this worker, or any worker via
-    the vula_wa_msg_dedup primary key). A DB outage fails open to the in-memory check."""
+    the vula_wa_msg_dedup primary key). A DB outage fails open to the in-memory check.
+
+    The in-memory key is reserved under a lock BEFORE the database is asked (12 Nov 2026): callers
+    run this in threads, and two at once (a double tap on a checkout pay button) both found the key
+    free while the first was still waiting on the database, so both claimed it when it was down."""
     import time as _time
     key = _outbound_key_id(tenant_id, idem_key)
     now = _time.monotonic()
-    if now - _sent_keys.get(key, -1e9) < 86400:
-        return False
+    with _SENT_KEYS_LOCK:
+        if now - _sent_keys.get(key, -1e9) < 86400:
+            return False
+        _sent_keys[key] = now
     try:
         from vula.commerce import service as _cs
         _cs._client().table("vula_wa_msg_dedup").insert({"msg_id": key}).execute()
@@ -9787,6 +9988,16 @@ async def _sender_is_sales_rep(phone: str, tenant_id: str) -> bool:
 
 async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
                               detected_lang: Optional[str] = None) -> bool:
+    """Drive the commerce_admin skill (owner running the shop) with memory — answering this member,
+    so their own private documents may be used (vula/private_docs.py), nobody else's."""
+    from vula.ingestion.pipeline import kb_viewer
+    from vula.private_docs import member_id_for_phone
+    with kb_viewer(member_id_for_phone(tenant_id, phone)):
+        return await _run_commerce_admin_inner(phone, text, tenant_id, detected_lang)
+
+
+async def _run_commerce_admin_inner(phone: str, text: str, tenant_id: str,
+                                    detected_lang: Optional[str] = None) -> bool:
     """Drive the commerce_admin skill (owner running the shop) with memory."""
     try:
         from core.skills.base import SkillInput
@@ -9818,6 +10029,10 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
             await _send_reply(phone, costing_reply, tenant_id)
             return True
 
+    # Their own private notes ("remember that I…") — before the session or history is touched.
+    if await _private_note_reply(tenant_id, phone, text):
+        return True
+
     admin_session_key = f"admin:{phone}"
     history = ""
     session_id: Optional[str] = None
@@ -9828,9 +10043,14 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         )
         session_id = session["id"]
         preferred_language = session.get("preferred_language")
+        # This is the owner's / a staff member's own thread: label their turns with who they
+        # are, not "Customer" (the admin agent used to read its colleague back as a customer).
+        _who, _who_role = _caller_identity(tenant_id, phone)
         history = commerce_service.format_history(
-            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT)
+            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT),
+            user_label=(f"{_who} ({_who_role})" if _who and _who_role else (_who or "Owner")),
         )
+        history += await commerce_service.earlier_topics(tenant_id, session_id)
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)
 
@@ -9905,18 +10125,22 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     # turns this used to be silent-but-fast for — same reasoning as commerce_assistant's call
     # below (_run_with_holding_message), so an owner isn't left wondering if anything is
     # happening during a real live-IMAP round trip.
-    output = await _run_with_holding_message(
-        phone, tenant_id,
-        skill(
-            SkillInput(
-                question=text, tenant_id=tenant_id,
-                conversation_history=history + link_context,
-                metadata={"session_id": admin_session_key, "customer_phone": phone,
-                          "caller_name": caller_name, "caller_role": caller_role,
-                          "preferred_language": preferred_language},
-            )
-        ),
-    )
+    from core import voice
+    from vula import personal_memory
+    _notes = await _private_notes_block(tenant_id, phone)
+    with voice.use(tenant_id, "team", "whatsapp", _voice_prefs(tenant_id, phone)), personal_memory.use(_notes):
+        output = await _run_with_holding_message(
+            phone, tenant_id,
+            skill(
+                SkillInput(
+                    question=text, tenant_id=tenant_id,
+                    conversation_history=history + link_context,
+                    metadata={"session_id": admin_session_key, "customer_phone": phone,
+                              "caller_name": caller_name, "caller_role": caller_role,
+                              "preferred_language": preferred_language},
+                )
+            ),
+        )
     if not output.success or not output.answer:
         logger.warning("commerce_admin returned no answer: %s", output.error)
         return False
@@ -10267,19 +10491,21 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
         logger.debug("language preference update skipped: %s", exc)
 
     skill = get_skill("commerce_assistant")
-    output = await _run_with_holding_message(
-        phone, tenant_id,
-        skill(
-            SkillInput(
-                question=text,
-                tenant_id=tenant_id,
-                conversation_history=history,
-                metadata={"session_id": phone, "customer_phone": phone,
-                          "preferred_language": preferred_language,
-                          "forwarded": _FORWARDED.get()},
-            )
-        ),
-    )
+    from core import voice
+    with voice.use(tenant_id, "customer", "whatsapp"):
+        output = await _run_with_holding_message(
+            phone, tenant_id,
+            skill(
+                SkillInput(
+                    question=text,
+                    tenant_id=tenant_id,
+                    conversation_history=history,
+                    metadata={"session_id": phone, "customer_phone": phone,
+                              "preferred_language": preferred_language,
+                              "forwarded": _FORWARDED.get()},
+                )
+            ),
+        )
 
     if not output.success:
         logger.warning("commerce_assistant returned no answer: %s", output.error)
@@ -10319,7 +10545,18 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     # commerce_assistant.py's SkillOutput.media_url) before the text confirmation — reuses the
     # image-send path already proven for the greeting menu header (_send_wa_image). Best-effort:
     # a failed/missing image must never block the actual order confirmation text.
-    if output.media_url:
+    # 2026-11-12: listings as swipeable photo cards (real-estate add-on), before the text.
+    cards_sent = False
+    if getattr(output, "cards", None):
+        try:
+            creds = await _resolve_wa(tenant_id)
+            if creds:
+                cards_sent = await _send_wa_carousel(creds, _wa_number(phone),
+                                                     "Swipe to see them, tap View details for more.",
+                                                     output.cards)
+        except Exception as exc:
+            logger.debug("listing cards send skipped: %s", exc)
+    if output.media_url and not cards_sent:
         try:
             creds = await _resolve_wa(tenant_id)
             if creds:
@@ -10341,10 +10578,61 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     return True
 
 
+async def _handle_listing_tap(phone: str, tenant_id: str, reply_id: str) -> bool:
+    """A tap on a listing card or button. View details → the listing's photo, facts and
+    'Book a viewing'; Book a viewing → an enquiry that alerts the agent; Ask a question →
+    an invitation to type it. False when the id isn't a listing of this business."""
+    from vula.listings import service as ls, sharing
+    kind, slug = reply_id[:6], reply_id[6:]
+    try:
+        prop = await ls.public_property(tenant_id, slug)
+    except Exception as exc:
+        logger.warning("listing tap %s failed for %s: %s", reply_id[:40], tenant_id, exc)
+        return False
+    if not prop:
+        await _send_reply(phone, "Sorry, that property is no longer on the market. Tell me what "
+                                 "you're looking for and I'll show you what's available.", tenant_id)
+        return True
+    agent_name = (prop.get("agent") or {}).get("name")
+    if kind == sharing.VIEW:
+        creds = await _resolve_wa(tenant_id)
+        body = sharing.details_text(prop, prop.get("agent"))
+        ok = creds and await _send_wa_buttons(
+            creds, _wa_number(phone), body,
+            [{"id": f"{sharing.BOOK}{slug}", "title": "Book a viewing"},
+             {"id": f"{sharing.ASK}{slug}", "title": "Ask a question"}],
+            image_url=(prop.get("images") or [None])[0])
+        if not ok:
+            await _send_reply(phone, body + "\n\nReply *viewing* to arrange to see it.", tenant_id)
+        return True
+    if kind == sharing.BOOK:
+        try:
+            await ls.create_enquiry(tenant_id, {"name": "WhatsApp contact", "whatsapp": _wa_number(phone),
+                                                "property_slug": slug, "wants_viewing": True,
+                                                "source": "whatsapp", "message": "Tapped Book a viewing"})
+        except Exception as exc:
+            logger.warning("viewing request from tap not stored (%s): %s", tenant_id, exc)
+            await _send_reply(phone, "Sorry, I couldn't pass that on just now — please try again.", tenant_id)
+            return True
+        # No "when suits you?" here: an answer would reach the assistant and could be filed as a
+        # second viewing request. The agent arranges the time.
+        await _send_reply(phone, f"Thanks! {agent_name or 'An agent'} has your request and will contact "
+                                 f"you on this number to arrange a time to view *{prop['title']}*.", tenant_id)
+        return True
+    if kind == sharing.ASK:
+        await _send_reply(phone, f"Sure — what would you like to know about *{prop['title']}*?", tenant_id)
+        return True
+    return False
+
+
 async def _handle_commerce_interactive(
     phone: str, reply_id: str, reply_title: str, msg_id: str, tenant_id: str
 ) -> None:
     """Handle interactive list/button replies from the WhatsApp product catalog."""
+    if reply_id.startswith("lst_"):
+        # Listing cards (real-estate add-on, vula/listings/sharing.py): exact ids, no model.
+        if await _handle_listing_tap(phone, tenant_id, reply_id):
+            return
     if reply_id.startswith("chk_"):
         # Checkout steps (vula/commerce/button_checkout.py): exact ids, no model.
         from vula.commerce import button_checkout

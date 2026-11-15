@@ -7,4 +7,7 @@
 # runtime: vula/ingestion/docling_extract.py degrades to a no-op if this isn't installed (e.g.
 # local dev outside Docker), so it's safe to omit here without breaking anything else.
 --extra-index-url https://download.pytorch.org/whl/cpu
-docling-slim[standard]==2.126.0
+# 13 Nov 2026 audit: 2.126 required pillow<13, which downgraded the image's Pillow to 12.3.0
+# (42 advisories; WhatsApp photos are opened with PIL). 2.150 allows Pillow 13.
+docling-slim[standard]==2.150.0
+pillow>=13

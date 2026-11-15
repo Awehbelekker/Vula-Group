@@ -61,6 +61,14 @@ def reply(text: str, kind: str = "text", to: Optional[str] = None) -> None:
         turn["replies"].append(entry)
 
 
+def mark_private() -> None:
+    """This turn was about the sender's own private notes (vula/personal_memory.py): keep that it
+    happened and how it went, but not what they wrote or what was sent back."""
+    turn = _CURRENT.get()
+    if turn is not None:
+        turn["_private"] = True
+
+
 def _client():
     from vula.commerce import service
     return service._client()
@@ -68,6 +76,10 @@ def _client():
 
 def _save(turn: dict) -> None:
     row = {k: v for k, v in turn.items() if not k.startswith("_")}
+    if turn.get("_private"):
+        row["text"] = "[private note]"
+        row["replies"] = [{"kind": r.get("kind"), "ms": r.get("ms"), "text": "[private note]"}
+                          for r in (row.get("replies") or [])]
     try:
         _client().table("vula_turns").insert(row).execute()
     except Exception as exc:

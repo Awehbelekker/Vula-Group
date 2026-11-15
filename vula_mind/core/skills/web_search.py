@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from core.skills.base import BaseSkill, SkillInput, SkillOutput
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +77,31 @@ async def _fetch_text(url: str, max_chars: int = 2500) -> str:
         return ""
 
 
+NOT_LIVE_NOTE = "I couldn't reach live sources just now, so this is from general knowledge."
+
+
 class WebSearchSkill(BaseSkill):
     name = "web_search"
     description = "Searches the live web (SA tenders, prices, companies, news) and synthesises a grounded answer"
+
+    async def _general_knowledge(self, inp: SkillInput):
+        """The reasoning skill's answer, labelled as not live, or None when it has none.
+        `web_tried` stops reasoning from searching the web again."""
+        try:
+            from core.skills.loader import get_skill   # lazy: loader imports this module
+            out = await get_skill("reasoning")(SkillInput(
+                question=inp.question, tenant_id=inp.tenant_id,
+                conversation_history=inp.conversation_history,
+                metadata={**(inp.metadata or {}), "web_tried": True},
+                max_tokens=inp.max_tokens))
+        except Exception as exc:
+            logger.debug("web search general-knowledge fallback skipped: %s", exc)
+            return None
+        answer = (out.answer or "").strip()
+        if not out.success or not answer:
+            return None
+        return SkillOutput(answer=f"{NOT_LIVE_NOTE}\n\n{answer}", skill_name="reasoning",
+                           confidence=min(out.confidence or 0.5, 0.5), sources=out.sources)
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         q = inp.question.strip()
@@ -93,6 +115,14 @@ class WebSearchSkill(BaseSkill):
         # 1. Real search
         hits = await _ddg_search(search_q, limit=5)
         if not hits:
+            # 14 Nov 2026 (DIGG): "Where does electricity go when used?" was routed here, the
+            # search came back empty, and the whole reply was "Try rephrasing". A question the
+            # web couldn't answer just now is answered from general knowledge instead, and says
+            # so. Not when reasoning itself asked (it falls back to its own answer).
+            if not inp.metadata.get("from_reasoning"):
+                fallback = await self._general_knowledge(inp)
+                if fallback is not None:
+                    return fallback
             return SkillOutput(
                 answer="I couldn't find live web results for that right now. Try rephrasing.",
                 skill_name=self.name, confidence=0.2,
@@ -124,7 +154,7 @@ class WebSearchSkill(BaseSkill):
         try:
             import litellm
             from core.llm_router import resolve_generation_route
-            from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+            from core.prompt_safety import fence
             litellm.drop_params = True
             model, api_key, api_base = await resolve_generation_route(task_type="web_search")
 
@@ -142,7 +172,7 @@ class WebSearchSkill(BaseSkill):
                     "- End with a 'Best value:' line and any caveats (stock, delivery, date).\n"
                     "Cite real figures only; if a price isn't in the results, say 'price not listed'. "
                     "ZAR for money, SA suppliers. Don't invent numbers.\n\n"
-                    + UNTRUSTED_CONTENT_RULE
+                    + behaviour_preamble()
                 )
                 cap = max(inp.max_tokens, 900)
             else:
@@ -150,7 +180,7 @@ class WebSearchSkill(BaseSkill):
                     "You are Vula. Answer the question using ONLY the web search results below. "
                     "Be specific and cite figures/dates where present. If the results don't "
                     "answer it, say so. South African context, ZAR for money. Concise.\n\n"
-                    + UNTRUSTED_CONTENT_RULE
+                    + behaviour_preamble()
                 )
                 cap = min(inp.max_tokens, 600)
             resp = await litellm.acompletion(

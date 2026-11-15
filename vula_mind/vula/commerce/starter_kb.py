@@ -66,6 +66,14 @@ STARTER_SLOTS: Dict[str, List[Dict[str, str]]] = {
          "topic": "A short FAQ on the product ranges represented: where they are used, lead times "
                   "and how stock availability is checked."},
     ],
+    "real_estate": [
+        {"category": "Booking Policy",
+         "topic": "How property viewings work — booking a viewing, show days, what buyers or "
+                  "tenants should bring, and how to make an offer or apply to rent."},
+        {"category": "General Document",
+         "topic": "A short FAQ for buyers, sellers and tenants: the steps from offer to transfer, "
+                  "what a rental application needs, and how to ask for a valuation."},
+    ],
     "other": [
         {"category": "General Document",
          "topic": "A short FAQ covering common questions a customer might ask this business."},

@@ -1500,3 +1500,17 @@ test("delivery: workflow settings save the same body", async ({ page }) => {
   await page.getByRole("checkbox", { name: "Pay on delivery" }).click();
   expect((await put).postDataJSON().payment_methods).toEqual(["yoco", "eft", "cod"]);   // the fixture has yoco + eft; ticking adds cod
 });
+
+test("master tenant detail: a feature is switched on for this business and read back", async ({ page }) => {
+  await openScreen(page, MASTER, { viewport: VIEWPORTS.mobile, theme: "light" });
+  await page.evaluate(() => { window.location.hash = "#/master/tenant/demo-shop"; });
+  const list = page.getByRole("list", { name: "Features for this business" });
+  const voice = list.getByRole("checkbox", { name: /Company voice/ });
+  await expect(voice).not.toBeChecked();
+  await expect(list.getByRole("checkbox", { name: /Follow-ups keep their thread/ })).toBeDisabled();     // on for everyone
+  const sent = page.waitForRequest((r) => r.method() === "PATCH" && /\/features$/.test(new URL(r.url()).pathname));
+  await voice.check();
+  expect((await sent).postDataJSON()).toEqual({ voice_compose: true });
+  await expect(voice).toBeChecked();
+  await expect(list.getByText("· on for this business").first()).toBeVisible();
+});

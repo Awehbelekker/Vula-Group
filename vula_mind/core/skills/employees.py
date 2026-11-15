@@ -225,10 +225,46 @@ def _client():
     return service._client()
 
 
+# Employees a business has to switch on for itself. The advisor (12 Nov 2026) answers with ideas
+# as well as facts, which is a different kind of reply from the rest of the team, so it starts
+# off: an owner turns it on under Team › AI employees, or the platform turns it on for every
+# business with settings.advisor_mode_enabled.
+OPT_IN = frozenset({"advisor"})
+
+
+def _default_off(tenant_id: Optional[str] = None) -> FrozenSet[str]:
+    """Opt-in employees that start off — unless switched on for everyone or for this business
+    (vula/features.py). An owner's own on/off under Team › AI employees still wins."""
+    try:
+        from vula import features
+        return frozenset() if features.on(tenant_id, "advisor_mode") else OPT_IN
+    except Exception:  # noqa: BLE001
+        return OPT_IN
+
+
+def is_advisor(emp: Optional[Employee]) -> bool:
+    return emp is not None and emp.id == "advisor"
+
+
+IDEAS_NOT_RECORDS = "These are ideas to think through, not figures from your records.\n\n"
+
+
+def mark_ideas(answer: str, sources: list) -> str:
+    """An advisor reply that looked nothing up says so at the top, in code — so thinking aloud is
+    never read as a statement about the business's books. A reply that did use its tools, or one
+    the model already headed "Ideas (not facts)", is left as it is."""
+    text = answer or ""
+    used_records = any(isinstance(s, dict) and s.get("type") in ("tool", "database") for s in (sources or []))
+    if not text.strip() or used_records or "not facts" in text.lower() or text.startswith(IDEAS_NOT_RECORDS.strip()):
+        return text
+    return IDEAS_NOT_RECORDS + text
+
+
 def settings_for(tenant_id: str) -> Dict[str, Dict]:
     """{employee_id: {"enabled": bool, "instructions": str}} for every employee; defaults (on, no
     instructions) when nothing is saved or before migration 236."""
-    out = {e.id: {"enabled": True, "instructions": ""} for e in TEAM}
+    off = _default_off(tenant_id)
+    out = {e.id: {"enabled": e.id not in off, "instructions": ""} for e in TEAM}
     try:
         rows = (_client().table(TABLE).select("employee,enabled,instructions")
                 .eq("tenant_id", tenant_id).execute().data or [])

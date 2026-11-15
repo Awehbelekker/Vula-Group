@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -37,6 +39,22 @@ def _meter_classifier_call(model: str, t0: float, ok: bool, usage: Any, backend:
                           metering.get_request_tenant())
     except Exception:
         pass
+
+LOCAL_NUM_CTX = 8192   # what llm_router's litellm wrapper sends every local call
+
+
+def _local_failure_reason(exc: Exception) -> str:
+    """Why the local classifier call failed, for the audit trail: `local_unreachable` only when
+    the box couldn't be reached at all (connect error, timeout); `local_error:<status>` when it
+    answered with an error; `local_error:<Type>` otherwise. Before 14 Nov 2026 every failure
+    was logged as unreachable, though the box was answering every other call."""
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return "local_unreachable"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return f"local_error:{status}" if status else "local_error:http"
+    return f"local_error:{type(exc).__name__}"
+
 
 SKILL_REGISTRY_PATH = Path(__file__).parent.parent / "skills" / "registry.json"
 
@@ -176,6 +194,29 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     "reasoning":            [],  # fallback
 }
 
+# What each skill is for, for the keyword-miss classifier (_classifier_prompt). Keyword routing
+# above doesn't read these.
+SKILL_DESCRIPTIONS: dict[str, str] = {
+    "clickup_admin": "tasks, to-dos, reminders and meetings in ClickUp",
+    "draft_admin": "draft a letter, proposal, quote or other document",
+    "commerce_assistant": "a customer asking about products, prices, stock, orders or delivery",
+    "microsoft_admin": "Outlook mail, calendar or OneDrive",
+    "finance_admin": "the business's own money: income, expenses, invoices paid, bank, VAT owed",
+    "email_admin": "the business's email: find, read, summarise or send emails",
+    "google_admin": "Gmail, Google Calendar or Google Drive",
+    "standards_lookup": "building regulations and standards (SANS, NBR) and what they require",
+    "calculations": "a calculation: areas, quantities, costs from the business's own rates, VAT",
+    "architecture_planning": "architectural design, planning and building-project advice",
+    "web_search": "live or current information from the internet: today's prices, news, "
+                  "tenders, a named company",
+    "code_execution": "run or write a script",
+    "memory_recall": "what was said or decided earlier in this conversation",
+    "file_parse": "read or extract from a file the person sent",
+    "image_analysis": "describe or read an image or photo",
+    "financial_reasoning": "revenue, profit, budget or cashflow analysis",
+    "reasoning": "general knowledge, explanations, advice and anything else",
+}
+
 # Split out of architecture_planning's own keyword list (2026-09-18) — these generic words only
 # mean "this is architecture/construction" in an AEC context; anywhere else they're just
 # ordinary English. Checked only for a tenant whose business_type suggests professional/trades
@@ -190,6 +231,28 @@ _ARCHITECTURE_WEAK_KEYWORDS = [
     "architect", "design", "drawing", "elevation", "structure", "infrastructure", "plan",
 ]
 _ARCHITECTURE_WEAK_BUSINESS_TYPES = {"services", "trades"}
+
+
+# What this person asked last and which skill answered it, for the classifier (see
+# _classifier_prompt). Set by the entry point for one turn; empty everywhere else, and only used
+# when settings.follow_up_routing_enabled.
+_ROUTE_CONTEXT: ContextVar[Optional[dict]] = ContextVar("vula_route_context", default=None)
+
+
+@contextmanager
+def route_context(previous: Optional[dict], tenant_id: Optional[str] = None):
+    """`previous` is {"skill", "question"} (vula/route_memory.py::latest) or None. Used when
+    follow-up routing is on for everyone or for this business (vula/features.py)."""
+    try:
+        from vula import features
+        on = features.on(tenant_id, "follow_up_routing")
+    except Exception:  # noqa: BLE001
+        on = False
+    token = _ROUTE_CONTEXT.set(previous if (on and previous) else None)
+    try:
+        yield
+    finally:
+        _ROUTE_CONTEXT.reset(token)
 
 
 class HRMOrchestrator:
@@ -232,8 +295,10 @@ class HRMOrchestrator:
     def _llm_complexity(self, prompt: str) -> int:
         """Ask local LLM to score complexity 1–3. Falls back to keyword heuristic."""
         try:
+            from core.llm_router import _ollama_headers, think_off
             resp = httpx.post(
                 f"{self.ollama_url}/api/generate",
+                headers=_ollama_headers(),
                 json={
                     "model": self.model,
                     "prompt": (
@@ -241,7 +306,8 @@ class HRMOrchestrator:
                         f"Reply with only the number.\nTask: {prompt}"
                     ),
                     "stream": False,
-                    "options": {"num_predict": 5},
+                    **think_off(self.model),
+                    "options": {"num_predict": 5, "num_ctx": LOCAL_NUM_CTX},
                 },
                 timeout=10,
             )
@@ -368,10 +434,28 @@ class HRMOrchestrator:
         return "reasoning", "default"
 
     def _classifier_prompt(self, prompt: str) -> str:
-        options = ", ".join(SKILL_KEYWORDS.keys())
-        return (f"Pick the ONE best-fitting skill for this request from this exact "
-                f"list: {options}. If none clearly fits, reply 'none'. Reply with only "
-                f"the skill name, nothing else.\n"
+        # 14 Nov 2026 (DIGG): with bare names, "Where does electricity go when used?" went to
+        # web_search, found nothing and answered "Try rephrasing". Each skill now says what it's for.
+        options = "\n".join(f"- {name}: {SKILL_DESCRIPTIONS.get(name, name.replace('_', ' '))}"
+                            for name in SKILL_KEYWORDS)
+        # The classifier used to see the bare message, so "and for next week?" could only ever
+        # come back as 'none'. When the entry point knows what this person asked last and which
+        # skill answered it (route_context), the classifier is told.
+        context = ""
+        prev = _ROUTE_CONTEXT.get()
+        if prev and prev.get("skill") in SKILL_KEYWORDS:
+            said = f' Their previous message was: "{prev["question"]}".' if prev.get("question") else ""
+            context = (f"Context:{said} It was handled by '{prev['skill']}'. If this request only "
+                       f"makes sense as a follow-up to that (for example 'and for next week?' or "
+                       f"'what about the other one'), pick '{prev['skill']}'. If it is a new "
+                       f"subject, ignore the context.\n")
+        return (f"Pick the ONE best-fitting skill for this request from this exact list:\n"
+                f"{options}\n"
+                f"A general-knowledge question or a request to explain something is 'reasoning'. "
+                f"Pick 'web_search' only when the answer needs live or current information from "
+                f"the internet. If none clearly fits, reply 'none'. Reply with only the skill "
+                f"name, nothing else.\n"
+                f"{context}"
                 f"Request: {prompt}")
 
     @staticmethod
@@ -392,29 +476,42 @@ class HRMOrchestrator:
         became `reasoning` for as long as the box was down."""
         t0 = time.perf_counter()
         try:
-            from core.llm_router import _ollama_headers
-            # CF-Access headers: the Ollama tunnel rejects requests without the service token,
-            # and this call never sent it — so in production the fallback silently never ran.
-            resp = httpx.post(
-                f"{self.ollama_url}/api/generate",
-                headers=_ollama_headers(),
-                json={
-                    "model": self.model,
-                    "prompt": self._classifier_prompt(prompt),
-                    "stream": False,
-                    "options": {"num_predict": 10},
-                },
-                timeout=8,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            skill, data = self._local_classify_skill(prompt)
             _meter_classifier_call(self.model, t0, True, {"prompt_tokens": data.get("prompt_eval_count"),
                                                           "completion_tokens": data.get("eval_count")}, "local")
-            return self._skill_in(data.get("response") or "")
+            return skill
         except Exception as exc:
             _meter_classifier_call(self.model, t0, False, None, "local")
-            log.debug("local skill classification unavailable (%s) — trying cloud", exc)
-        return self._cloud_classify_skill(prompt)
+            reason = _local_failure_reason(exc)
+            # 14 Nov 2026: this was a debug line, so 14 days of fast local failures (the same
+            # model answered every other call) were invisible. Type and status only — no text.
+            log.warning("local skill classification failed (%s) — trying cloud", reason)
+        return self._cloud_classify_skill(prompt, reason=reason)
+
+    def _local_classify_skill(self, prompt: str, timeout: float = 8) -> tuple:
+        """The local model's pick (skill name or None) and Ollama's reply. Raises when the box
+        can't answer. Also used by vula/decision_bench.py to compare local models."""
+        from core.llm_router import _ollama_headers, think_off
+        # CF-Access headers: the Ollama tunnel rejects requests without the service token,
+        # and this call never sent it — so in production the fallback silently never ran.
+        resp = httpx.post(
+            f"{self.ollama_url}/api/generate",
+            headers=_ollama_headers(),
+            json={
+                "model": self.model,
+                "prompt": self._classifier_prompt(prompt),
+                "stream": False,
+                **think_off(self.model),
+                # num_ctx as the litellm wrapper sets it (llm_router.install_ollama_auth): every
+                # other call to this model sends 8192, and this one, sending none, never once
+                # succeeded in 14 days (14 Nov 2026).
+                "options": {"num_predict": 10, "num_ctx": LOCAL_NUM_CTX},
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return self._skill_in(data.get("response") or ""), data
 
     @staticmethod
     def _cloud_classifier_models() -> list[str]:
@@ -431,7 +528,7 @@ class HRMOrchestrator:
                 break
         return models
 
-    def _cloud_classify_skill(self, prompt: str) -> str | None:
+    def _cloud_classify_skill(self, prompt: str, reason: str = "local_unreachable") -> str | None:
         models = self._cloud_classifier_models()
         if not models or not settings.openrouter_api_key:
             return None
@@ -439,7 +536,7 @@ class HRMOrchestrator:
             import uuid
             from core.llm_router import _log_decision
             _log_decision(run_id=uuid.uuid4().hex[:12], task="skill_classifier", outcome="routed",
-                          escalated=True, backend="cloud", reason="local_unreachable")
+                          escalated=True, backend="cloud", reason=reason)
         except Exception:
             pass
         failures = []

@@ -9,6 +9,9 @@ os.environ.setdefault("OLLAMA_BASE", "http://localhost:11434")
 os.environ.setdefault("QDRANT_BASE", "http://localhost:6333")
 os.environ.setdefault("API_KEY", "")
 os.environ.setdefault("DEBUG", "true")
+# Production defaults tenant auth ON (config.py, 13 Nov 2026). Most route tests call admin routes
+# without a login; the auth tests turn it on themselves.
+os.environ.setdefault("ENFORCE_TENANT_AUTH", "false")
 
 # Never a real database. 2026-10-31: production's vula_takeoff_jobs ("j1", "test-tenant") and
 # vula_material_rates ("Item 0", "OK Item", "Test Tile"…) held rows written by this suite — someone
@@ -33,6 +36,18 @@ def _fresh_classifier_cache():
     from vula import escalation
     escalation._CLASSIFY_CACHE.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _fresh_document_batches():
+    """A sender's documents within 3 minutes form one batch (vula/api/doc_batch.py); one test's
+    documents must not make the next test's the second of a batch."""
+    from vula.api import doc_batch
+    doc_batch._bursts.clear()
+    doc_batch._last_doc.clear()
+    yield
+    doc_batch._bursts.clear()
+    doc_batch._last_doc.clear()
 
 
 @pytest.fixture(autouse=True)

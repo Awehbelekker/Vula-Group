@@ -424,15 +424,130 @@ async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
 
 
 def _order_item_name(cart_item: dict) -> str:
-    """Product name for an order/receipt line — appends the variant's option values
-    (e.g. "Hake Fillets — Size: L") when the cart item is for a specific variant."""
-    name = cart_item.get("commerce_products", {}).get("name", "")
-    variant = cart_item.get("commerce_product_variants")
-    options = (variant or {}).get("option_values") or {}
-    if options:
-        suffix = ", ".join(f"{k}: {v}" for k, v in options.items())
-        return f"{name} — {suffix}" if name else suffix
+    """Product name for an order/receipt line — appends the variant's option values and the
+    customer's choices (e.g. "Day Bag — Board Size: 9'6", Primary Colour: Olive Green"). The
+    name is what invoices, the PDF, delivery and the dashboard show, so a choice made here
+    reaches all of them."""
+    name = (cart_item.get("commerce_products") or {}).get("name", "")
+    label = line_label(cart_item)
+    if label:
+        return f"{name} — {label}" if name else label
     return name
+
+
+# ── Choices that don't change the price (migration 267) ──────────────────────
+# 13 Nov 2026 (Kelp Gear, bags made to order): size is a variant with its own price; colour,
+# trim, nose and tail style are choices on the same price, kept with the cart and order line.
+
+MAX_CHOICES = 8
+MAX_CHOICE_VALUES = 40
+
+
+def clean_product_choices(raw: Any) -> List[Dict[str, Any]]:
+    """A product's choices as [{"name", "values"}]: names and values trimmed, de-duplicated,
+    capped. Anything malformed is dropped. Raises nothing."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for c in raw if isinstance(raw, list) else []:
+        if not isinstance(c, dict):
+            continue
+        name = " ".join(str(c.get("name") or "").split())[:60]
+        values = list(dict.fromkeys(" ".join(str(v).split())[:80] for v in c.get("values") or []
+                                    if isinstance(v, (str, int, float)) and str(v).strip()))
+        if not name or not values or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        out.append({"name": name, "values": values[:MAX_CHOICE_VALUES]})
+    return out[:MAX_CHOICES]
+
+
+def product_choices(product: Optional[dict]) -> List[Dict[str, Any]]:
+    return clean_product_choices((product or {}).get("choices"))
+
+
+def resolve_choices(product: Optional[dict], given: Any) -> Tuple[Dict[str, str], List[str]]:
+    """What the customer chose, matched to the product's own choices: ({name: value}, missing
+    names). `given` is a dict ({"colour": "olive"}) or the customer's own words ("olive green,
+    fish tail"). A value is only taken when it matches one of the allowed values — exactly, or
+    as the one value the words contain or are contained in — never invented."""
+    choices = product_choices(product)
+    chosen: Dict[str, str] = {}
+    if not choices:
+        return chosen, []
+
+    def norm(s: Any) -> str:
+        return " ".join(re.sub(r"[^\w'\"]+", " ", str(s or "").lower()).split())
+
+    filler = {"a", "an", "the", "in", "with", "please", "and", "style", "colour", "color", "one"}
+
+    def pick(values: List[str], said: str, drop: frozenset = frozenset()) -> Optional[str]:
+        s = norm(said)
+        if not s:
+            return None
+        exact = [v for v in values if norm(v) == s]
+        if exact:
+            return exact[0]
+        inside = [v for v in values if norm(v) and f" {norm(v)} " in f" {s} "]
+        if inside:                                   # the longest value the words contain
+            best = max(len(norm(v)) for v in inside)
+            top = [v for v in inside if len(norm(v)) == best]
+            return top[0] if len(top) == 1 else None
+        words = set(s.split()) - filler - drop       # "a fish tail" → {"fish"} ⊂ "Wide Fish Tail"
+        if not words:
+            return None
+        part = [v for v in values if words <= set(norm(v).split())]
+        return part[0] if len(part) == 1 else None
+
+    def name_words(c: Dict[str, Any]) -> frozenset:
+        return frozenset(w for w in norm(c["name"]).split() if w not in filler)
+
+    def take(c: Dict[str, Any], said: Any) -> None:
+        val = pick(c["values"], said, name_words(c))
+        if val:
+            chosen[c["name"]] = val
+
+    def named(said_name: str) -> List[Dict[str, Any]]:
+        """The choices a name refers to: exact, else the ones it shares a word with."""
+        n = norm(said_name)
+        exact = [c for c in choices if norm(c["name"]) == n]
+        return exact or [c for c in choices if name_words(c) & set(n.split())] or \
+            [c for c in choices if n and n in norm(c["name"])]
+
+    if isinstance(given, dict):
+        pairs = list(given.items())
+        free: List[str] = []
+    else:
+        segs = [x.strip() for x in re.split(r"[,;\n/]|\band\b|\bwith\b|\bplus\b", str(given or "")) if x.strip()]
+        pairs = [tuple(x.split(":", 1)) for x in segs if ":" in x]
+        free = [x for x in segs if ":" not in x]
+    for k, v in pairs:                               # "Trim Colour: Beige", {"tail": "fish"}
+        hits = named(str(k))
+        if len(hits) == 1:
+            take(hits[0], v)
+        elif hits:                                   # "colour: olive" → the one whose values fit
+            fits = [c for c in hits if c["name"] not in chosen and pick(c["values"], v)]
+            if len(fits) == 1:
+                take(fits[0], v)
+    for seg in free:                                 # "olive green", "black trim", "fish tail"
+        open_ = [c for c in choices if c["name"] not in chosen]
+        hits = [c for c in open_ if pick(c["values"], seg, name_words(c))]
+        if len(hits) > 1:                            # "black" fits colour and trim: did they say which?
+            said = set(norm(seg).split())
+            hits = [c for c in hits if name_words(c) & said] or hits
+        if len(hits) == 1:
+            take(hits[0], seg)
+    missing = [c["name"] for c in choices if c["name"] not in chosen]
+    return chosen, missing
+
+
+def line_label(cart_item: dict) -> str:
+    """'Board Size: 9'6", Primary Colour: Olive Green' — a line's variant options, then its
+    choices; '' when it has neither."""
+    options = ((cart_item.get("commerce_product_variants") or {}).get("option_values") or {})
+    choices = cart_item.get("choices") if isinstance(cart_item.get("choices"), dict) else {}
+    parts = [f"{k}: {v}" for k, v in options.items()] + \
+        [f"{k}: {v}" for k, v in choices.items() if k not in options]
+    return ", ".join(parts)
 
 
 # ── Cart ─────────────────────────────────────────────────────────────────────
@@ -468,9 +583,12 @@ async def get_or_create_cart(tenant_id: str, session_id: str, customer_phone: Op
 
 
 async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: float,
-                      variant_id: Optional[str] = None) -> dict:
-    # Check existing — matched on (cart, product, variant) so different variants of the same
-    # product are separate lines, and non-variant items keep matching each other as before.
+                      variant_id: Optional[str] = None,
+                      choices: Optional[Dict[str, str]] = None) -> dict:
+    # Check existing — matched on (cart, product, variant, choices) so different variants of the
+    # same product are separate lines, two bags in different colours are two lines (267), and
+    # items without either keep matching each other as before.
+    choices = {str(k): str(v) for k, v in (choices or {}).items() if v}
     q = (
         _client()
         .table("commerce_cart_items")
@@ -479,10 +597,11 @@ async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: f
         .eq("product_id", product_id)
     )
     q = q.eq("variant_id", variant_id) if variant_id else q.is_("variant_id", "null")
-    existing = q.limit(1).execute()
+    same = [r for r in (q.execute().data or [])
+            if (r.get("choices") if isinstance(r.get("choices"), dict) else {}) == choices]
 
-    if existing.data:
-        row = existing.data[0]
+    if same:
+        row = same[0]
         result = (
             _client()
             .table("commerce_cart_items")
@@ -532,6 +651,7 @@ async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: f
         "unit_price_cents": unit_price,
         "created_at": _now(),
         "updated_at": _now(),
+        **({"choices": choices} if choices else {}),     # only when there are any: before 267
     }
     result = _client().table("commerce_cart_items").insert(item).execute()
     return result.data[0]
@@ -790,7 +910,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
     from vula import acting
     who = checkout_data.get("created_by") or acting.current()
     if who:
-        order["created_by"] = who                          # a team member's order (migration 260)
+        order["created_by"] = who                          # a team member's order (migration 277)
 
     try:
         try:
@@ -851,6 +971,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
             "quantity": i["quantity"],
             "unit_price_cents": i["unit_price_cents"],
             "total_cents": int(round(i["quantity"] * i["unit_price_cents"])),
+            **({"choices": i["choices"]} if isinstance(i.get("choices"), dict) and i["choices"] else {}),
         }
         for i in items
     ]
@@ -1517,11 +1638,13 @@ async def set_session_language(tenant_id: str, session_key: str, language: str) 
         logger.debug("set_session_language skipped (run migration 052?): %s", exc)
 
 
-async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> None:
-    """Persist a single conversation turn and update the session snapshot."""
+async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> str:
+    """Persist a single conversation turn and update the session snapshot. Returns the new
+    message's id (so a reply can be rated — the dashboard chat had no way to say "that's wrong")."""
+    message_id = str(uuid.uuid4())
     _client().table("commerce_conversation_messages").insert(
         {
-            "id": str(uuid.uuid4()),
+            "id": message_id,
             "tenant_id": tenant_id,
             "session_id": session_id,
             "role": role,
@@ -1540,6 +1663,7 @@ async def append_message(tenant_id: str, session_id: str, role: str, content: st
         }).eq("id", session_id).execute()
     except Exception:
         pass
+    return message_id
 
 
 async def set_session_paused(tenant_id: str, session_id: str, paused: bool,
@@ -1589,39 +1713,44 @@ async def find_stale_paused_sessions(tenant_id: str, hours: float = 2.0) -> list
 async def list_conversations(tenant_id: str, limit: int = 50,
                              assigned_member_id: Optional[str] = None) -> List[dict]:
     """Return recent conversation sessions for the shared inbox list view — only the ones
-    assigned to one team member when assigned_member_id is given (migration 261)."""
+    assigned to one team member when assigned_member_id is given (migration 278).
+
+    A staff member's own thread with Vula (session keys admin:{phone} / webadmin:{…}) is never
+    listed: the shared inbox is for customer conversations, and what a member asks Vula is
+    private to them (vula/identity.py). They were listed to every member of the business before.
+    """
+    from vula.identity import is_staff_session_key
     base = "id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at"
+    # Over-read so the staff threads that are dropped don't shorten the list.
+    fetch = limit + 50
     if assigned_member_id is not None:
         result = (
             _client().table("commerce_conversation_sessions")
             .select(base + ",assigned_to,agent_note,tags,paused_by,assigned_member_id")
             .eq("tenant_id", tenant_id).eq("assigned_member_id", assigned_member_id)
-            .order("updated_at", desc=True).limit(limit).execute()
+            .order("updated_at", desc=True).limit(fetch).execute()
         )
-        rows = result.data or []
-        for r in rows:
-            r["session_id"] = r["id"]
-        return rows
-    try:
+    else:
         try:
-            result = (
-                _client().table("commerce_conversation_sessions")
-                .select(base + ",assigned_to,agent_note,tags,paused_by,assigned_member_id")
-                .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
-            )
+            try:
+                result = (
+                    _client().table("commerce_conversation_sessions")
+                    .select(base + ",assigned_to,agent_note,tags,paused_by,assigned_member_id")
+                    .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
+                )
+            except Exception:
+                result = (                               # migration 278 not run yet
+                    _client().table("commerce_conversation_sessions")
+                    .select(base + ",assigned_to,agent_note,tags,paused_by")
+                    .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
+                )
         except Exception:
-            result = (                                   # migration 261 not run yet
-                _client().table("commerce_conversation_sessions")
-                .select(base + ",assigned_to,agent_note,tags,paused_by")
-                .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+            # team-inbox columns not present yet (migration 048 not run) — fall back gracefully.
+            result = (
+                _client().table("commerce_conversation_sessions").select(base)
+                .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
             )
-    except Exception:
-        # team-inbox columns not present yet (migration 048 not run) — fall back gracefully.
-        result = (
-            _client().table("commerce_conversation_sessions").select(base)
-            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
-        )
-    rows = result.data or []
+    rows = [r for r in (result.data or []) if not is_staff_session_key(r.get("session_key"))][:limit]
     # Expose session id as session_id for the frontend.
     for r in rows:
         r["session_id"] = r["id"]
@@ -1648,6 +1777,7 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
     messages = await get_recent_messages(tenant_id, session_id, limit=200, max_age_hours=None)
     return {
         "session_id": session["id"],
+        "session_key": session.get("session_key"),
         "customer": session.get("customer_name") or session.get("customer_phone") or session.get("session_key"),
         "phone": session.get("customer_phone") or session.get("session_key"),
         "paused": bool(session.get("paused")),
@@ -1691,6 +1821,45 @@ async def get_recent_messages(tenant_id: str, session_id: str, limit: int = DEFA
     return list(reversed(rows))
 
 
+EARLIER_TOPICS_DAYS = 7
+EARLIER_TOPICS_LIMIT = 5
+_EARLIER_TOPIC_CHARS = 120
+
+
+async def earlier_topics(tenant_id: str, session_id: str) -> str:
+    """What this person raised earlier in the week, for THEIR OWN thread with Vula — a few of
+    their own older messages, cut short and clearly marked as old.
+
+    The 24-hour window above exists because older lines were being answered as if they were new.
+    But it also means a staff member who was planning something on Monday is starting from
+    nothing on Wednesday. This gives the model the gist of what came up, with no model call and
+    without the old replies (which is where stale figures live). "" when the feature is off
+    (settings.history_earlier_topics_enabled) or there is nothing older."""
+    from vula import features
+    if not features.on(tenant_id, "history_earlier_topics"):
+        return ""
+    from core.time_fmt import cutoff_iso, relative_age_label
+    rows = (_client().table("commerce_conversation_messages").select("role,content,created_at")
+            .eq("tenant_id", tenant_id).eq("session_id", session_id).eq("role", "user")
+            .gte("created_at", cutoff_iso(EARLIER_TOPICS_DAYS * 24))
+            .lt("created_at", cutoff_iso(HISTORY_MAX_AGE_HOURS))
+            .order("created_at", desc=True).limit(EARLIER_TOPICS_LIMIT).execute().data or [])
+    lines = []
+    for m in reversed(rows):
+        text = " ".join((m.get("content") or "").split())
+        if not text:
+            continue
+        if len(text) > _EARLIER_TOPIC_CHARS:
+            text = text[:_EARLIER_TOPIC_CHARS].rstrip() + "…"
+        age = relative_age_label(m.get("created_at") or "") or "earlier"
+        lines.append(f"- {age}: {text}")
+    if not lines:
+        return ""
+    return ("\n\nEarlier this week they also raised (more than a day old — background on what "
+            "they've been working on, NOT a request to act on now, and not a source of figures):\n"
+            + "\n".join(lines))
+
+
 # Caveat suffixes appended to a reply AFTER the skill produces it (core/verification.py's
 # adversarial-review warning) — meant for a human reading the message/transcript, never for the
 # model itself. Confirmed live 2026-08-26: a customer-facing session that had one of these
@@ -1713,13 +1882,17 @@ def _strip_caveats_for_history(content: str) -> str:
     return content.strip()
 
 
-def format_history(messages: List[dict]) -> str:
+def format_history(messages: List[dict], user_label: str = "Customer") -> str:
     """Render messages into a compact transcript for the skill's conversation_history. Each
     line is tagged with its actual age (2026-08-27) — previously role+content only, giving the
     model no way to tell a 7-hour-old line apart from one said seconds ago (see
-    HISTORY_MAX_AGE_HOURS above for the full incident)."""
+    HISTORY_MAX_AGE_HOURS above for the full incident).
+
+    `user_label` names whoever wrote the "user" turns. It defaulted to "Customer" for every
+    thread, including an owner's or staff member's own thread with Vula — so the admin agent read
+    its own colleague's messages back as a customer's. Staff callers pass the member's name."""
     from core.time_fmt import relative_age_label
-    label = {"user": "Customer", "assistant": "Assistant"}
+    label = {"user": (user_label or "Customer").strip() or "Customer", "assistant": "Assistant"}
     lines = []
     for m in messages:
         if m.get("role") not in ("user", "assistant") or not m.get("content"):
@@ -1877,12 +2050,12 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     from vula import acting
     who = data.get("created_by") or acting.current()
     if who:
-        invoice["created_by"] = who                        # migration 260
+        invoice["created_by"] = who                        # migration 277
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
         # discount_cents/deposit_cents (053), project (055), requires_approval (136) or
-        # created_by (260) columns may not exist yet — drop them and retry so invoicing never
+        # created_by (277) columns may not exist yet — drop them and retry so invoicing never
         # breaks on a missing column.
         invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)
@@ -2237,11 +2410,11 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
         "updated_at": _now(),
     }
     if quote.get("created_by"):
-        invoice["created_by"] = quote["created_by"]      # the person who quoted keeps the sale (260)
+        invoice["created_by"] = quote["created_by"]      # the person who quoted keeps the sale (277)
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
-        # discount_cents/deposit_cents (053), project (055) or created_by (260) columns may not
+        # discount_cents/deposit_cents (053), project (055) or created_by (277) columns may not
         # exist yet in this environment — same graceful-degrade retry create_invoice() uses.
         invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)
@@ -2875,7 +3048,7 @@ def client_pays_directly(tenant_id: str, supplier: Optional[str],
 async def commit_inbound_document(
     tenant_id: str, extracted: dict, *, auto_commit: bool = True, source: str = "scanner",
     filed_document_id: Optional[str] = None, project: Optional[str] = None,
-    is_boq: bool = False,
+    is_boq: bool = False, notify: bool = True,
 ) -> dict:
     """Commit an extracted inbound document (invoice/quote/delivery_note/receipt) into the
     books: supplier match (or auto-create for a genuinely new supplier), due-date calc,
@@ -3197,7 +3370,9 @@ async def commit_inbound_document(
     # WhatsApp — supplier bill / our invoice / an expense — because filing it silently is what
     # put 51 of off-the-hook's own sales invoices on the wrong side of the books, and a
     # needs_review flag on its own reaches nobody in this case.
-    if ask_direction_of:
+    # notify=False (old mail found in a mailbox folder, 11 Nov 2026): it stays flagged for review
+    # on the dashboard; nobody gets a WhatsApp per old document.
+    if ask_direction_of and notify:
         try:
             from vula.api.whatsapp import ask_document_kind
             await ask_document_kind(tenant_id, ask_direction_of, supplier_name,
@@ -3209,7 +3384,7 @@ async def commit_inbound_document(
     # supplier bill — route the candidate match to the tenant's own admin team for a yes/no,
     # reusing the existing WhatsApp APPROVE/REJECT approval engine (vula/commerce/approvals.py)
     # rather than silently guessing or leaving it unresolved with no path to close it out.
-    if needs_review and is_invoice and supplier_match:
+    if needs_review and is_invoice and supplier_match and notify:
         try:
             from vula.commerce.approvals import create_approval, tenant_admin_approvers
             approvers = await tenant_admin_approvers(tenant_id)

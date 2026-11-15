@@ -40,12 +40,23 @@ def active_members(tenant_id: str) -> List[Dict[str, Any]]:
         if hit and now - hit[0] < TTL_SECONDS:
             return [dict(r) for r in hit[1]]
     from vula.commerce import service
-    try:
-        rows = (service._client().table("vula_team_members").select(_COLUMNS + ",team")
+
+    def read(columns: str):
+        return (service._client().table("vula_team_members").select(columns)
                 .eq("tenant_id", tenant_id).eq("active", True).execute().data)
-    except Exception:                       # migration 262 (team) not applied yet
-        rows = (service._client().table("vula_team_members").select(_COLUMNS)
-                .eq("tenant_id", tenant_id).eq("active", True).execute().data)
+
+    # `prefs` (migration 262) is each member's own style choices; `team` (migration 279) the
+    # preset team. Either may not be applied yet — drop what's missing rather than fail the read
+    # and have every staff member treated as a customer.
+    rows = None
+    for extra in (",prefs,team", ",prefs", ",team", ""):
+        try:
+            rows = read(_COLUMNS + extra)
+            break
+        except Exception as exc:
+            if not extra:
+                raise
+            logger.debug("team read without %s (run migrations 262/279?): %s", extra, exc)
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     with _LOCK:
         _CACHE[tenant_id] = (now, rows)

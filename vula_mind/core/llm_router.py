@@ -49,8 +49,30 @@ _FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning", "page_co
 
 # Health-probe cache: base_url -> (checked_at_monotonic, is_up)
 _HEALTH_TTL_S = 30.0
-_PROBE_TIMEOUT_S = 1.5
+# 12 Nov 2026: was 1.5 s. Railway runs in us-west2 and the box is in South Africa behind Cloudflare
+# Access, so /api/tags often takes 2-3 s on a healthy box. In one hour on 11 Nov, 72 calls went to
+# the cloud as "local_unreachable" (48 stayed local), while local_llm_watch's 8 s probe found the
+# box up all day. Tenant data left SA for no reason. 4 s still fails fast in a real outage, and a
+# failed probe is cached for _HEALTH_TTL_S, so a dead box costs one 4 s wait per 30 s at most.
+_PROBE_TIMEOUT_S = 4.0
 _cache: dict[str, tuple[float, bool]] = {}
+
+
+# Local models that reason before answering unless told not to. Vula's local work is short
+# classification, extraction and summaries: a reply that opens with "<think>Okay, the user…" breaks
+# callers that read the first few tokens (the skill classifier asks for 10), and the reasoning costs
+# seconds per call. Families only (the name before ":"); others are sent nothing, as before.
+_THINK_OFF_FAMILIES = {"qwen3"}
+
+
+def _model_family(model: str) -> str:
+    return str(model or "").split("/")[-1].split(":")[0].lower()
+
+
+def think_off(model: str) -> dict:
+    """Extra fields for a raw Ollama /api/generate or /api/chat body: {"think": False} for a
+    reasoning-capable local model, else {}."""
+    return {"think": False} if _model_family(model) in _THINK_OFF_FAMILIES else {}
 
 
 def _host(url: str) -> str:
@@ -111,6 +133,15 @@ def install_ollama_auth() -> None:
         if is_ollama and "num_ctx" not in kwargs:
             kwargs["num_ctx"] = 8192
         model = kwargs.get("model") or (args[0] if args else "")
+        # litellm's Ollama providers (ollama_chat/ and ollama/) send think=false for any
+        # reasoning_effort other than low/medium/high. generation_kwargs() already sends think=False
+        # for its callers; this covers the rest (the expense classifier, the decision benchmark…).
+        # A caller that sets think or reasoning_effort itself is left alone.
+        if (is_ollama and str(model).startswith(("ollama_chat/", "ollama/")) and think_off(model)
+                and "reasoning_effort" not in kwargs and "think" not in kwargs):
+            kwargs["reasoning_effort"] = "none"
+        if str(model).startswith("openrouter/"):
+            _with_zdr(kwargs)
         if not str(model).startswith("openrouter/") or args:
             return await _orig(*args, **kwargs)
         return await _with_cloud_fallback(_orig, kwargs)
@@ -286,6 +317,16 @@ def reset_health_cache() -> None:
     _cache.clear()
 
 
+def local_prompt_cap_tokens() -> int:
+    """The largest prompt (estimated tokens, chars/4) that stays local — assess_complexity's limit.
+    A caller that can shorten its prompt (vula/research.py) fits it under this to stay local."""
+    cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
+    ctx = int(getattr(settings, "local_context_tokens", 0) or 0)
+    if ctx:
+        cap = min(cap, max(ctx - 2048, 1024))
+    return cap
+
+
 def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] = None) -> Optional[str]:
     """Requirement (c): return a reason string if the task genuinely needs frontier (cloud)
     reasoning, else None. Explicit threshold: a frontier task_type, or an estimated prompt size
@@ -294,12 +335,9 @@ def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] 
     if task_type and task_type in _FRONTIER_TASK_TYPES:
         return f"complexity:{task_type}"
     if messages:
-        cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
         # A prompt that doesn't fit the local context window (leaving room for tool results
         # and the reply) can't be answered locally anyway — Ollama would silently drop its start.
-        ctx = int(getattr(settings, "local_context_tokens", 0) or 0)
-        if ctx:
-            cap = min(cap, max(ctx - 2048, 1024))
+        cap = local_prompt_cap_tokens()
         chars = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict))
         if chars // 4 >= cap:
             return f"complexity:tokens>={cap}"
@@ -529,6 +567,22 @@ def local_generation_kwargs(model: str) -> Dict[str, Any]:
     return kw
 
 
+def _with_zdr(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Every OpenRouter call goes only to providers that don't train on or keep the prompt
+    (settings.openrouter_zdr). 13 Nov 2026 audit: cloud_generation_kwargs reached 9 of 93 call
+    sites; the litellm wrapper (install_ollama_auth) now adds it to all of them. A caller's own
+    provider preferences are kept; only these two keys are filled in when missing."""
+    if not settings.openrouter_zdr:
+        return kwargs
+    extra = dict(kwargs.get("extra_body") or {})
+    provider = dict(extra.get("provider") or {})
+    provider.setdefault("data_collection", "deny")
+    provider.setdefault("zdr", True)
+    extra["provider"] = provider
+    kwargs["extra_body"] = extra
+    return kwargs
+
+
 def cloud_generation_kwargs(model: str) -> Dict[str, Any]:
     """Extra litellm kwargs for an OpenRouter call: only route to providers that don't train
     on or retain prompts (settings.openrouter_zdr). Empty for anything else."""
@@ -542,10 +596,22 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
     return {**local_generation_kwargs(model), **cloud_generation_kwargs(model)}
 
 
+# Built-in cloud models for some task types, used when CLOUD_MODEL_BY_TASK has no entry for
+# them (an entry there still wins). 13 Nov 2026, Ian: research writes a long, cited answer from
+# several pages — Gemini 2.5 Flash, not the general fallback model.
+_TASK_CLOUD_DEFAULTS = {"research": "google/gemini-2.5-flash", "research_plan": "google/gemini-2.5-flash",
+                        # reading prices off a supplier page (vula/takeoff, 14 Nov 2026)
+                        "rates_extract": "google/gemini-2.5-flash",
+                        # a trade build-up from cited pages (vula/commerce/buildups.py, 14 Nov 2026)
+                        "buildup_research": "google/gemini-2.5-flash"}
+
+
 def cloud_model_for(task_type: Optional[str]) -> str:
-    """The OpenRouter model for this task: CLOUD_MODEL_BY_TASK's entry, else model_worker_cloud.
-    A malformed map is ignored (logged), never fatal."""
-    default = settings.model_worker_cloud or settings.model_worker
+    """The OpenRouter model for this task: CLOUD_MODEL_BY_TASK's entry, else the built-in
+    default for the task (_TASK_CLOUD_DEFAULTS), else model_worker_cloud. A malformed map is
+    ignored (logged), never fatal."""
+    default = (_TASK_CLOUD_DEFAULTS.get(task_type or "")
+               or settings.model_worker_cloud or settings.model_worker)
     raw = (settings.cloud_model_by_task or "").strip()
     if not raw or not task_type:
         return default
@@ -603,6 +669,10 @@ async def resolve_generation_route(
     capped = _spend_capped(tenant_id)
     if capped:
         _alert_spend_cap_breach(tenant_id)
+    # 14 Nov 2026 (vula/ai_allowance.py): the month's AI allowance and top-ups used up pauses the
+    # extras only — Ask anything and research stay local (or stop). Nothing else is affected.
+    allowance_used = (not capped and task_type in CAP_HARD_TASKS and _allowance_used(tenant_id))
+    capped = capped or allowance_used
 
     # Explicit operator override — accuracy-first, but no longer the default and always logged so
     # even this path is auditable for "why did data leave SA".
@@ -620,10 +690,16 @@ async def resolve_generation_route(
             _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
                           backend=f"openrouter/{cloud_model}", reason=complex_reason)
             return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
-        reason = "spend_cap_soft_degrade" if (complex_reason and capped) else "local_first"
+        reason = (("ai_allowance_used" if allowance_used else "spend_cap_soft_degrade")
+                  if (complex_reason and capped) else "local_first")
         _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
                       backend=f"{_local_prefix()}/{local_model}", reason=reason)
         return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
+
+    if capped and task_type in CAP_HARD_TASKS:
+        _log_decision(run_id=run_id, task=task, outcome="blocked", escalated=False,
+                      backend="none", reason="ai_allowance_used" if allowance_used else "spend_cap_hard_stop")
+        raise SpendCapReached(tenant_id or "")
 
     # (a) local unreachable → cloud, logged with the reason a regulator would ask about.
     if settings.openrouter_api_key:
@@ -636,6 +712,31 @@ async def resolve_generation_route(
     _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
                   backend=f"{_local_prefix()}/{local_model}", reason="local_unreachable_no_cloud_key")
     return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
+
+
+# Task types whose cloud use is never forced by an outage: once the business's daily spend cap
+# is reached they stay local, and with local down too they stop (SpendCapReached) instead of
+# falling back to cloud. The dashboard's open chat (13 Nov 2026) is optional extra thinking,
+# not a business operation, so a cap holds for it absolutely.
+# Research mode (vula/research.py) is the same optional extra, so it holds too.
+CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research"})
+
+
+class SpendCapReached(RuntimeError):
+    """The business's daily AI spend cap is reached and the local model is unreachable, for a
+    task in CAP_HARD_TASKS: no generation route is allowed."""
+
+
+def _allowance_used(tenant_id: Optional[str]) -> bool:
+    """This business's monthly AI allowance and top-ups are used up (vula/ai_allowance.py).
+    Fail-open, like the spend cap."""
+    if not tenant_id:
+        return False
+    try:
+        from vula import ai_allowance
+        return ai_allowance.extras_paused(tenant_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _spend_capped(tenant_id: Optional[str]) -> bool:
@@ -684,6 +785,18 @@ def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,
     caller then keeps the local answer)."""
     if not settings.openrouter_api_key:
         return None
+    if task_type in CAP_HARD_TASKS:          # a capped open chat keeps its local answer
+        try:
+            from vula.integrations.metering import get_request_tenant
+            tid = get_request_tenant()
+            capped = _spend_capped(tid)
+            if capped or _allowance_used(tid):
+                _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type, outcome="local",
+                              escalated=False, backend="none",
+                              reason="spend_cap_hard_stop" if capped else "ai_allowance_used")
+                return None
+        except Exception:  # noqa: BLE001 — fail open, as _spend_capped does
+            pass
     cloud_model = cloud_model_for(task_type)
     _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type or "unspecified",
                   outcome="cloud", escalated=True, backend=f"openrouter/{cloud_model}", reason=reason)
@@ -721,7 +834,8 @@ async def complete_local_first(route: Tuple[str, Optional[str], str], *, task_ty
         return resp, esc
 
 
-async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optional[str], str]:
+async def resolve_cheap_route(model: Optional[str] = None,
+                              task_type: str = "cheap_tier") -> Tuple[str, Optional[str], str]:
     """Cheap tier for mechanical work (doc analysis, classification, extraction).
 
     Cloud cheap model (gemini-flash, ~1/15th of the 70B), then the 70B as a last resort.
@@ -729,9 +843,12 @@ async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optiona
     and is world-open); revisit once it's secured with a service token. Callers should
     validate the output and escalate to `resolve_cloud_route()` on failure/low confidence.
     """
-    if settings.openrouter_api_key:
-        return f"openrouter/{settings.model_worker_cheap}", settings.openrouter_api_key, OPENROUTER_BASE
-    return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
+    # 13 Nov 2026 audit: this always goes to the cloud and wasn't logged, so the "why did tenant
+    # data leave South Africa" audit missed every document analysis. Logged like every other route.
+    backend = settings.model_worker_cheap if settings.openrouter_api_key else settings.model_worker_cloud
+    _log_decision(run_id=uuid.uuid4().hex, task=task_type, outcome="cloud", escalated=True,
+                  backend=f"openrouter/{backend}", reason="cheap_tier")
+    return f"openrouter/{backend}", settings.openrouter_api_key, OPENROUTER_BASE
 
 
 def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
@@ -755,6 +872,8 @@ async def resolve_vision_route() -> Tuple[str, Optional[str], str]:
 
     if settings.openrouter_api_key:
         logger.info("Ollama unreachable — falling back to OpenRouter for vision")
+        _log_decision(run_id=uuid.uuid4().hex, task="vision", outcome="cloud", escalated=True,
+                      backend=f"openrouter/{settings.model_vision}", reason="local_unreachable")
         return f"openrouter/{settings.model_vision}", settings.openrouter_api_key, OPENROUTER_BASE
 
     logger.warning(
@@ -770,5 +889,7 @@ def resolve_cloud_vision_route() -> Optional[Tuple[str, Optional[str], str]]:
     cloud model (settings.model_vision). Returns None if no cloud key is set.
     """
     if settings.openrouter_api_key:
+        _log_decision(run_id=uuid.uuid4().hex, task="vision", outcome="cloud", escalated=True,
+                      backend=f"openrouter/{settings.model_vision}", reason="cloud_vision")
         return f"openrouter/{settings.model_vision}", settings.openrouter_api_key, OPENROUTER_BASE
     return None

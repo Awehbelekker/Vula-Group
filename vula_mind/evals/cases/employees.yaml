@@ -78,6 +78,14 @@
 - {prompt: "Mark OTH-00042 as dispatched", expect: operations}
 - {prompt: "Add Coastal Timber as a supplier", expect: operations}
 - {prompt: "What's in stock?", expect: operations}
+# Advisor: thinking something through, not a record or an action
+- {prompt: "Can we brainstorm ways to get more weekday customers?", expect: advisor}
+- {prompt: "I'm thinking of opening a second branch, what do you think?", expect: advisor}
+- {prompt: "Give me the pros and cons of hiring a driver versus using a courier", expect: advisor}
+- {prompt: "Help me think through our strategy for next year", expect: advisor}
+- {prompt: "Any ideas for a slow winter?", expect: advisor}
+- {prompt: "I need some advice on how to grow the business", expect: advisor}
+- {prompt: "Should we send payment reminders to everyone who owes us?", expect: bookkeeper, note: "an action about money, not a thinking-aloud question"}
 # The whole team (null): unclear, continuations, mixed
 - {prompt: "yes", expect: null}
 - {prompt: "Confirm", expect: null}

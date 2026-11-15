@@ -281,6 +281,9 @@ async def test_redacts_email_and_phone_from_samples(fake_client, monkeypatch):
     assert "client@example.com" not in captured["prompt"]
     assert "[phone]" in captured["prompt"]
     assert "[email]" in captured["prompt"]
+    # 14 Nov 2026 (DIGG): an email-heavy sample produced "sign off Kind Regards with a full
+    # signature block", applied to chat. Email sign-offs describe emails only.
+    assert "describe their emails only" in captured["prompt"]
 
 
 # ── Incremental recheck (migration 163, Tenant Mind Phase 2) ────────────────────────────

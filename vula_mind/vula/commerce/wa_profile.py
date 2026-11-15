@@ -23,7 +23,7 @@ from vula.meta_graph import graph_url  # noqa: E402  (the Graph API version live
 FIELDS = "about,address,description,email,profile_picture_url,websites,vertical"
 # Meta's categories, from the business type Vula knows.
 VERTICALS = {"food": "GROCERY", "retail": "RETAIL", "services": "PROF_SERVICES", "trades": "OTHER",
-             "rep": "OTHER", "beauty": "BEAUTY", "health": "HEALTH", "community": "NONPROFIT",
+             "rep": "OTHER", "real_estate": "PROF_SERVICES", "beauty": "BEAUTY", "health": "HEALTH", "community": "NONPROFIT",
              "education": "EDU", "hospitality": "HOTEL"}
 LIMITS = {"about": 139, "description": 512, "address": 256, "email": 128}
 

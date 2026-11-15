@@ -190,6 +190,27 @@ export function useBank(tenantId) {
     load();
   };
 
+  // The business's bank accounts (migration 261). An account tied to a project puts every line
+  // from it on that project; the rest are the whole business's (11 Nov 2026, Ian).
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const loadBankAccounts = useCallback(async () => {
+    if (!tenantId) return;
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/accounts`)
+      .then(r => r.json()).catch(() => ({}));
+    setBankAccounts(r.accounts || []);
+  }, [tenantId]);
+  const setAccountProject = async (id, project) => {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/accounts/${id}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: project || null }),
+    }).then(r => r.json()).catch(() => ({ detail: "network" }));
+    if (r.detail || r.error) { flash(String(r.detail || r.error)); return; }
+    flash(r.project
+      ? `Account ${r.account} is now ${r.project}'s — ${r.lines_moved} line${r.lines_moved === 1 ? "" : "s"} moved.`
+      : `Account ${r.account} is the whole business's again — ${r.lines_moved} line${r.lines_moved === 1 ? "" : "s"} moved back.`);
+    loadBankAccounts(); load();
+  };
+
   const reviewOnWhatsApp = async () => {
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/review/start`, { method: "POST" })
       .then(r => r.json()).catch(() => ({ error: "network" }));
@@ -217,6 +238,6 @@ export function useBank(tenantId) {
     sum, txns, shown, invoices, pendingOrders, accounts, workers, vatReg, filter, chooseFilter, noProject, chooseNoProject,
     pw, setPw, busy, msg, cat, setCat, grouped, setGrouped, groups, hasProjects, projectNames, sheet, setSheet,
     categorize, assignWorker, workerName, allocate, applyGroup, pickSheet, importSheet, saveSettings, upload, recategorize,
-    reviewOnWhatsApp, act,
+    reviewOnWhatsApp, act, bankAccounts, loadBankAccounts, setAccountProject,
   };
 }

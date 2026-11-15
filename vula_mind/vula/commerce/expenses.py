@@ -167,10 +167,24 @@ async def classify_purpose_category(tenant_id: str, vendor: str, amount_cents: i
         return det
 
     try:
-        import json
         import litellm
         from core.llm_router import resolve_generation_route
-        prompt = (
+        prompt = purpose_prompt(vendor, amount_cents, notes)
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route(task_type="expense_classification")
+        resp = await litellm.acompletion(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=200, api_key=api_key, api_base=api_base,
+        )
+        return parse_purpose(resp.choices[0].message.content or "")
+    except Exception as exc:
+        log.debug("purpose category classification skipped for %s: %s", tenant_id, exc)
+        return "uncertain"
+
+
+def purpose_prompt(vendor: str, amount_cents: int, notes: str = "") -> str:
+    """The purpose classifier's prompt (also used by vula/decision_bench.py to compare models)."""
+    return (
             "A small-business sales rep scanned a receipt. Classify what it was for, choosing "
             "ONLY ONE of: petrol (fuel/diesel), clients (a meal, coffee, or gift for a client — "
             "client entertainment/refreshments), accommodation (a hotel/lodge stay), other (does "
@@ -183,24 +197,22 @@ async def classify_purpose_category(tenant_id: str, vendor: str, amount_cents: i
             f"Vendor: {vendor or 'unknown'}\nAmount: R{(amount_cents or 0) / 100:.2f}\n"
             f"Notes: {notes or 'none'}\n\n"
             "Reply with STRICT JSON only: {\"category\": \"...\"}"
-        )
-        litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route(task_type="expense_classification")
-        resp = await litellm.acompletion(
-            model=model, messages=[{"role": "user", "content": prompt}],
-            temperature=0.0, max_tokens=200, api_key=api_key, api_base=api_base,
-        )
-        raw = (resp.choices[0].message.content or "").strip()
-        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-        i, j = raw.find("{"), raw.rfind("}")
-        if i < 0 or j <= i:
-            return "uncertain"
-        data = json.loads(raw[i:j + 1])
-        cat = str(data.get("category") or "").strip().lower()
-        return cat if cat in PURPOSE_CATEGORIES else "uncertain"
-    except Exception as exc:
-        log.debug("purpose category classification skipped for %s: %s", tenant_id, exc)
+    )
+
+
+def parse_purpose(raw: str) -> str:
+    """The model's reply -> one of PURPOSE_CATEGORIES, else 'uncertain'. Never raises."""
+    import json
+    raw = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.MULTILINE).strip()
+    i, j = raw.find("{"), raw.rfind("}")
+    if i < 0 or j <= i:
         return "uncertain"
+    try:
+        data = json.loads(raw[i:j + 1])
+    except Exception:
+        return "uncertain"
+    cat = str(data.get("category") or "").strip().lower()
+    return cat if cat in PURPOSE_CATEGORIES else "uncertain"
 
 
 def match_purpose_category(text: str) -> Optional[str]:

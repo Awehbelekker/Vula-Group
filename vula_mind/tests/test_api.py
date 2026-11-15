@@ -129,3 +129,20 @@ def test_invalid_tenant_id_raises():
     with pytest.raises(HTTPException) as exc:
         validate_tenant("../etc")
     assert exc.value.status_code == 422
+
+
+def test_status_tells_the_public_ok_or_error_and_nothing_else():
+    """13 Nov 2026 audit: /status gave anyone the local model names, the number of knowledge-base
+    collections (the number of businesses) and raw exception text."""
+    from unittest.mock import MagicMock
+    with patch("httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_client.return_value)
+        mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
+        ok = MagicMock()
+        ok.json.return_value = {"models": [{"name": "qwen3:8b"}], "result": {"collections": [{"name": "vula_x"}] * 17}}
+        mock_client.return_value.get = AsyncMock(return_value=ok)
+        with patch("vula.commerce.service._client", side_effect=RuntimeError("password=hunter2 at db.example")):
+            data = client.get("/status").json()
+    body = str(data)
+    assert "qwen3" not in body and "17" not in body and "hunter2" not in body
+    assert all(set(c) == {"status"} for c in data["checks"].values())

@@ -145,3 +145,20 @@
 .vst-health-h { margin: 0; display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
 .vst-health-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-2); }
 .vst-health-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+
+/* Settings › AI usage (14 Nov 2026): the allowance meter, packs and requests */
+.vai-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.vai-big { margin: 0; font-size: 1.25rem; color: var(--ink); }
+.vai-muted { font-size: var(--fs-body); color: var(--muted); }
+.vai-h3 { margin: 0; font-size: var(--fs-body); font-weight: 600; color: var(--ink); }
+.vai-bar { height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.vai-fill { display: block; height: 100%; border-radius: 999px; background: var(--ok-text, var(--brand)); }
+.vai-fill--warn { background: var(--warn-text, var(--brand)); }
+.vai-fill--danger { background: var(--danger-text, var(--brand)); }
+.vai-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-2); margin: 0; }
+.vai-facts dt { font-size: var(--fs-caption); color: var(--muted); }
+.vai-facts dd { margin: 0; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.vai-days { display: flex; align-items: flex-end; gap: 3px; height: 44px; }
+.vai-day { flex: 1 1 0; max-width: 14px; border-radius: 3px 3px 0 0; background: var(--brand); opacity: .75; }
+.vai-packs { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.vai-req { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: var(--fs-body); color: var(--ink); }

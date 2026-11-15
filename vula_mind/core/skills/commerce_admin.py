@@ -611,13 +611,19 @@ INVOICE_TOOLS = [
             "required": ["customer_name", "line_items"]}}},
     {"type": "function", "function": {
         "name": "send_invoice",
-        "description": "Send an existing invoice to the customer on WhatsApp, by its number "
-                       "(e.g. OTH-INV-00001). Without confirm=true, returns a preview of who it "
-                       "goes to instead of sending — only pass confirm=true after the owner has "
-                       "explicitly said to go ahead.",
-        "parameters": {"type": "object", "properties": {"invoice_number": {"type": "string"},
-                                                        "confirm": {"type": "boolean"}},
-                       "required": ["invoice_number"]}}},
+        "description": "Send an existing invoice to the customer, by its number (e.g. "
+                       "OTH-INV-00001) — on WhatsApp or by email. Leave `channel` out to use "
+                       "whichever the business and the customer's details allow (WhatsApp when "
+                       "the business has a number connected and the invoice has a phone number, "
+                       "otherwise email); set it when the owner says which. Without confirm=true "
+                       "it returns a preview of who it goes to and how, instead of sending — only "
+                       "pass confirm=true after the owner has explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_number": {"type": "string"},
+            "channel": {"type": "string", "enum": ["whatsapp", "email"],
+                        "description": "Only when the owner said how to send it."},
+            "confirm": {"type": "boolean"}},
+            "required": ["invoice_number"]}}},
     {"type": "function", "function": {
         "name": "payment_link",
         "description": "Send a customer a link to pay an amount — 'send Sam a payment link for "
@@ -1204,6 +1210,22 @@ REMINDER_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
 ]
+# 13 Nov 2026 (switch chat_recall, vula/chat_recall.py): "what did we decide about…" searches the
+# caller's OWN earlier threads with Vula (WhatsApp and dashboard), never a customer's or a
+# colleague's. Offered only where the switch is on.
+RECALL_TOOLS = [
+    {"type": "function", "function": {
+        "name": "search_past_chats",
+        "description": "Search the person's OWN earlier conversations with you (older than today, "
+                       "up to about 6 months) — for 'what did we say/decide about…', 'last time', "
+                       "'remember when…'. Returns dated exchanges. Quote them with the date; any "
+                       "amount, price or stock in an old reply must be re-checked with the right "
+                       "tool before you state it as current. Not for customers' chats.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "The topic, in a few key words (e.g. 'church layout')."},
+            "days": {"type": "integer", "description": "How far back, in days (default 180)."}},
+            "required": ["query"]}}},
+]
 # 5 Nov 2026: Vula buys for the business (vula/commerce/buying.py, migration 246). Offered only when
 # the owner has switched buying on in Settings › Buying; only the shops on its list are searched,
 # every price shown is printed on the shop's page, limits and approvers are checked in code.
@@ -1255,7 +1277,9 @@ SHEET_TOOLS = [
                        "status; expenses: date, supplier, description, amount, vat, account, project, "
                        "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
                        "date, due, project, excl_vat, vat, total, paid, owed, status, person (who made it); orders: "
-                       "number, date, customer, channel, status, subtotal, delivery, total, person; and what the TEAM did (owners/managers): meetings: "
+                       "number, date, customer, channel, status, subtotal, delivery, total, person; products (the "
+                       "catalogue, one row per variant, no period): name, variant, sku, category, choices, price, cost, "
+                       "stock, status; and what the TEAM did (owners/managers): meetings: "
                        "date, time, person, with, address, status, checked_in, distance_m; bookings: date, time, person, customer, service, "
                        "status; follow_ups: date (due), person, text, status, done; meeting_notes: date, person, summary, "
                        "actions — filter by person, group by person ('every meeting Thabo had this month', 'follow-ups "
@@ -1269,8 +1293,8 @@ SHEET_TOOLS = [
             "name": {"type": "string", "description": "For save/use: the sheet's name, e.g. 'Tile Co monthly'."},
             "spec": {"type": "object", "properties": {
                 "source": {"type": "string", "enum": ["supplier_invoices", "supplier_lines", "bank", "expenses",
-                                                      "customer_invoices", "orders", "meetings", "bookings",
-                                                      "follow_ups", "meeting_notes"]},
+                                                      "customer_invoices", "orders", "products", "meetings",
+                                                      "bookings", "follow_ups", "meeting_notes"]},
                 "columns": {"type": "array", "items": {"type": "string"}},
                 "group_by": {"type": "string", "enum": ["none", "month", "project", "supplier", "customer",
                                                         "account", "status", "person"]},
@@ -1307,6 +1331,66 @@ SHEET_TOOLS = [
 
 # 31 Oct 2026 (item 2): forms the team fills in (vula/commerce/forms.py). A returned form is read
 # in the WhatsApp document path and booked only on the owner's Confirm (form_book, dispatch only).
+# Trade costing, phase 2 (14 Nov 2026): what goes into one unit of building work — researched once
+# from cited sources, confirmed by an owner or manager, then looked up (vula/commerce/buildups.py).
+BUILDUP_TOOLS = [
+    {"type": "function", "function": {
+        "name": "trade_buildup",
+        "description": "Show what goes into ONE unit of an item of building work — its build-up: the "
+                       "materials, labour and plant per m2 (or per unit), with the waste on each "
+                       "line. Gives the business's own confirmed build-up, else one another Vula "
+                       "business confirmed and shared, else one waiting for confirmation. With "
+                       "research=true and none on file, research one from cited sources (a minute) "
+                       "and save it for an owner or manager to confirm. Use for 'what goes into a m2 "
+                       "of brick wall', 'how much cement and sand per m2 of plaster'. Quantities "
+                       "only — never prices.",
+        "parameters": {"type": "object", "properties": {
+            "item": {"type": "string", "description": "the work, e.g. 'one-brick wall' or 'plaster to brick walls'"},
+            "spec": {"type": "object", "additionalProperties": {"type": "string"},
+                     "description": "what changes the quantities, e.g. {\"thickness\": \"220 mm\", \"sides\": \"both\"}"},
+            "unit": {"type": "string", "description": "per what: m2 (default), m, m3, each"},
+            "research": {"type": "boolean", "description": "research one if none is on file"},
+        }, "required": ["item"]}}},
+    {"type": "function", "function": {
+        "name": "confirm_buildup",
+        "description": "An owner or manager confirms a build-up so Vula uses it for every estimate of "
+                       "that item — optionally changing lines first (a quantity, unit or waste %, "
+                       "adding or removing a component). Show the build-up and the changes first; "
+                       "call with confirm=true only after they say yes.",
+        "parameters": {"type": "object", "properties": {
+            "buildup_id": {"type": "string"},
+            "changes": {"type": "array", "items": {"type": "object", "properties": {
+                "component": {"type": "string"}, "qty_per_unit": {"type": "number"},
+                "unit": {"type": "string"}, "waste_pct": {"type": "number"},
+                "label": {"type": "string"}, "kind": {"type": "string", "enum": ["material", "labour", "plant"]},
+                "remove": {"type": "boolean"}}, "required": ["component"]}},
+            "confirm": {"type": "boolean"},
+        }, "required": ["buildup_id"]}}},
+    {"type": "function", "function": {
+        "name": "estimate_cost",
+        "description": "Estimate what building work will cost, built up from each item's trade "
+                       "build-up and priced from what the business paid, then its quotes/BOQs, "
+                       "then checked market prices — every line with where its price came from "
+                       "and its date, plus anything not priced or not covered. Sends an Excel "
+                       "breakdown. Split the work into items by trade: 'a 6 x 4 m wall, plastered "
+                       "both sides, not painted' is two items — walling (quantity_expr '6*4', m2) and "
+                       "plaster (quantity_expr '6*4*2', m2) — with 'painting' in exclusions. Give "
+                       "quantities as the person's own figures in quantity_expr; never work them out. "
+                       "If the wall thickness or which sides are plastered isn't said, ask first.",
+        "parameters": {"type": "object", "properties": {
+            "items": {"type": "array", "items": {"type": "object", "properties": {
+                "item": {"type": "string", "description": "e.g. 'one-brick wall', 'plaster to brick walls'"},
+                "spec": {"type": "object", "additionalProperties": {"type": "string"},
+                         "description": "e.g. {\"thickness\": \"220 mm\"}"},
+                "quantity_expr": {"type": "string", "description": "the person's figures, e.g. '6*4' or '6*4*2'"},
+                "unit": {"type": "string", "description": "m2 (default), m, m3, each"}},
+                "required": ["item", "quantity_expr"]}},
+            "exclusions": {"type": "array", "items": {"type": "string"},
+                           "description": "what the person said is not included, e.g. ['painting']"},
+            "title": {"type": "string"},
+        }, "required": ["items"]}}},
+]
+
 FORM_TOOLS = [
     {"type": "function", "function": {
         "name": "fill_in_form",
@@ -1511,8 +1595,19 @@ SUBSCRIPTION_TOOLS = [
 CRM_TOOLS = [
     {"type": "function", "function": {
         "name": "customer_lookup",
-        "description": "Look up a customer by phone or name: lifetime value, orders, last seen, preferred language.",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+        "description": (
+            "Everything on file about ONE client, found by their name, phone number or email "
+            "address: contact details, their orders and lifetime value, their invoices and "
+            "quotes with what is still owed, what was said in earlier conversations (a dated "
+            "note plus the latest messages), open follow-ups, and how much email there has been. "
+            "Use it whenever the owner or staff ask about a client — 'what's the story with "
+            "Sarah', 'does Thabo owe us anything', 'when did we last hear from 082…', 'summarise "
+            "this client'. Every amount in the result is read from the books: quote it exactly, "
+            "never add or re-total. If the result says a part was not read, say so rather than "
+            "assume there is nothing. If it asks which client was meant, ask the user that."),
+        "parameters": {"type": "object", "properties": {"query": {
+            "type": "string", "description": "The client's name, phone number or email address."}},
+            "required": ["query"]}}},
     {"type": "function", "function": {
         "name": "dynamics_lookup",
         "description": "Search the connected Dynamics 365 CRM for an account (company), contact (person), "
@@ -1658,6 +1753,16 @@ MANUFACTURING_TOOLS = [
 
 _MFG_TOOL_NAMES = {t["function"]["name"] for t in MANUFACTURING_TOOLS}
 
+# Add-ons (2026-11-10): a self-contained tool module per optional feature — listings (real
+# estate), pipeline (deals, any business type). Each exposes MODULE, ADMIN_TOOL_SPECS,
+# ADMIN_TOOL_NAMES, ADMIN_PREVIEW_FIRST and run_admin_tool; adding one is one line here.
+# Deliberately NOT _GATED_GROUPS entries: that list offers every group to a tenant with no
+# module config, and its keyword matcher would narrow other tenants' tools on everyday words
+# ("sold out"). An add-on's tools are offered only when its module is explicitly on.
+from core.skills import listing_tools as _lt, pipeline_tools as _pt  # noqa: E402
+_ADDONS = (_lt, _pt)
+_ADDON_FOR_TOOL = {n: a for a in _ADDONS for n in a.ADMIN_TOOL_NAMES}
+
 _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
@@ -1672,7 +1777,8 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
                    + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS + SHEET_TOOLS
-                   + FORM_TOOLS + BUYING_TOOLS)
+                   + FORM_TOOLS + BUYING_TOOLS + RECALL_TOOLS
+                   + [t for a in _ADDONS for t in a.ADMIN_TOOL_SPECS])
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1817,6 +1923,7 @@ def _match_groups(message: str) -> Optional[set]:
 # "invoices" and "broadcasts" enabled gets "bookkeeper" (the earlier entry), since that's the
 # more central day-to-day framing for most small businesses on this platform.
 _ROLE_LABELS: List[tuple] = [
+    ("listings", "AI property assistant"),      # only real-estate businesses have this module
     ("invoices", "AI bookkeeper"),
     ("purchase_orders", "AI procurement assistant"),
     ("broadcasts", "AI marketing assistant"),
@@ -1882,14 +1989,24 @@ def _product_tools_for(tenant_id: str) -> List[Dict[str, Any]]:
     return trimmed
 
 
+def _recall_tools(tenant_id: str) -> List[Dict[str, Any]]:
+    """search_past_chats, where the chat_recall switch is on for this business."""
+    try:
+        from vula import features
+        return list(RECALL_TOOLS) if features.on(tenant_id, "chat_recall") else []
+    except Exception:  # noqa: BLE001 — can't tell: off
+        return []
+
+
 def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") -> List[Dict[str, Any]]:
     """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
     role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
     which modules the tenant has enabled — a rep never gets shop-wide stock/invoice/broadcast
     tools just because the tenant (e.g. their employer) has those modules on. `message`
     (optional) narrows the gated groups further by keyword match — see _match_groups."""
+    recall = _recall_tools(tenant_id)
     if role == "sales_rep":
-        return list(_REP_TOOL_SPECS)
+        return list(_REP_TOOL_SPECS) + recall
     try:
         from vula.api.tenants import enabled_modules
         mods = set(enabled_modules(tenant_id) or [])
@@ -1898,7 +2015,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_DOC_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS + SHEET_TOOLS + FORM_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + DECISION_TOOLS + SHEET_TOOLS + FORM_TOOLS
+             + recall)  # always on (recall: where chat_recall is switched on)
     try:
         from vula.api.tenants import tenant_profile
         profile = tenant_profile(tenant_id)
@@ -1919,6 +2037,12 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         with_projects = uses_projects(tenant_id)
     except Exception:
         with_projects = True
+    try:
+        from vula import features
+        if features.on(tenant_id, "trade_costing"):
+            tools += BUILDUP_TOOLS
+    except Exception:  # noqa: BLE001 — off when the switch can't be read
+        pass
     tools += [t for t in PROJECT_TOOLS
               if with_projects or t["function"]["name"] not in ("project_profit", "boq_template", "share_project",
                                                                    "client_paid_direct", "project_bill_file",
@@ -1934,6 +2058,9 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
             continue
         if matched is None or mod in matched:
             tools += _product_tools_for(tenant_id) if mod == "products" else group
+    for addon in _ADDONS:
+        if addon.MODULE in mods:
+            tools += addon.ADMIN_TOOL_SPECS
     return tools
 
 
@@ -1954,10 +2081,10 @@ _TOOL_SCOPE: Dict[str, str] = {
     "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances", "custom_sheet": "finances",
+    "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances",
     # every document of a project, statements and proofs of payment included: owner and managers
     # only — no tab id grants it, so a restricted staff member never gets the tool.
-    "project_file": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_file": "owner_only", "confirm_buildup": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -1968,6 +2095,9 @@ _TOOL_SCOPE: Dict[str, str] = {
     # the owner's own briefs (money owed and paid): owner and managers only
     "owner_briefs": "owner_only",
     "team_messages": "owner_only",
+    # real-estate listing tools: staff granted the Listings tab
+    # add-on tools: staff granted that add-on's dashboard tab (tab id = module id)
+    **{n: a.MODULE for a in _ADDONS for n in a.ADMIN_TOOL_NAMES},
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -1977,6 +2107,33 @@ for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
         _TOOL_SCOPE.setdefault(_t["function"]["name"], _scope)
 
 _FULL_ACCESS_ROLES = {"owner", "manager", "admin"}
+def _has_whatsapp(tenant_id: str) -> bool:
+    """True when this business has its own WhatsApp number connected. One that doesn't (it uses
+    Vula from the dashboard, e.g. for invoicing only) is sent email instead."""
+    try:
+        from vula import whatsapp_numbers
+        return bool(whatsapp_numbers.main_number(tenant_id))
+    except Exception as exc:  # noqa: BLE001 — can't tell: behave as before
+        logger.debug("whatsapp number check skipped: %s", exc)
+        return True
+
+
+def _dashboard_note(tenant_id: str) -> str:
+    """For a turn that came from the dashboard chat. The prompt above was written for WhatsApp
+    ("reachable on WhatsApp", "keep replies WhatsApp-friendly"), which is wrong on a web page and
+    misleading for a business with no WhatsApp number at all."""
+    note = ("\n\nTHIS CONVERSATION IS IN THE WEB DASHBOARD, not on WhatsApp. Don't call it "
+            "WhatsApp or say you'll message the person there; a file or link you produce is "
+            "shown here.")
+    if not _has_whatsapp(tenant_id):
+        note += (" This business has NOT connected a WhatsApp number, so nothing can be sent to "
+                 "its customers on WhatsApp: send by email, and if a tool can only use WhatsApp, "
+                 "say so and that a number can be connected under Settings › WhatsApp.")
+    return note
+
+
+# Access that lets a member see what a client was billed and owes (customer_lookup).
+_MONEY_SCOPES = {"invoices", "finances"}
 
 
 def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
@@ -1995,6 +2152,17 @@ def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
     except Exception as exc:
         logger.debug("member access lookup skipped: %s", exc)
     return None
+
+
+def _ctx_access(tenant_id: str, ctx: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """The caller's granted scopes for this turn. On WhatsApp that is looked up from their
+    number; a dashboard chat has no number, so the endpoint passes the signed-in member's access
+    in the context ("access": a list, or None for full). Without this a restricted login got
+    every tool in the dashboard chat, because "no phone" read as "full access"."""
+    ctx = ctx or {}
+    if "access" in ctx:
+        return list(ctx["access"]) if ctx["access"] else None
+    return _member_access(tenant_id, ctx.get("phone") or None)
 
 
 def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]) -> List[Dict[str, Any]]:
@@ -2019,7 +2187,8 @@ _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "reco
                             # cancel/refund change what the customer was promised; the staff tools
                             # message the team; a discount code changes prices.
                             "order_payment", "create_manual_order", "create_discount_code",
-                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking"})
+                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking"}
+                           | frozenset().union(*(a.ADMIN_PREVIEW_FIRST for a in _ADDONS)))
 
 
 def _claim_preview(tenant_id: str, phone: Optional[str], tool: str) -> Optional[Dict[str, Any]]:
@@ -2075,12 +2244,13 @@ def _turn_note(step: str, **detail: Any) -> None:
         pass
 
 
-def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str]) -> List[Dict[str, Any]]:
+def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Optional[str],
+                ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The whole team's tools for this caller: today's set, minus what only a switched-off
     employee does."""
     from core.skills import employees
     tools = _restrict_to_access(_tools_for(tenant_id, role=role, message=message),
-                                _member_access(tenant_id, phone))
+                                _ctx_access(tenant_id, ctx if ctx is not None else {"phone": phone}))
     settings = employees.settings_for(tenant_id)
     return employees.without_switched_off(tools, {k for k, v in settings.items() if v["enabled"]})
 
@@ -2284,10 +2454,15 @@ class CommerceAdminSkill(BaseSkill):
             return SkillOutput(answer=refuse, skill_name=self.name, confidence=1.0)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
-               "message": inp.question}
+               "message": inp.question, "session_id": inp.metadata.get("session_id"),
+               # files a tool made this turn (custom_sheet): shared with the caller's metadata so the
+               # dashboard chat can offer them as downloads, whichever way the turn ends
+               "files": inp.metadata.setdefault("files_out", [])}
+        if "access" in inp.metadata:     # dashboard chat: the signed-in member's own access
+            ctx["access"] = inp.metadata["access"]
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         if caller_role != "sales_rep":   # reps already get their own narrow set
-            tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
+            tools = _restrict_to_access(tools, _ctx_access(inp.tenant_id, ctx))
         lang = inp.metadata.get("preferred_language", "")
         # The team of AI employees (core/skills/employees.py): the front desk hands a clear
         # message to one employee with only its job's tools; anything unclear stays with the team.
@@ -2298,6 +2473,9 @@ class CommerceAdminSkill(BaseSkill):
                                          lang=lang, role_label=employee.title if employee else None)
         if caller_role != "sales_rep":
             system_msg += self._decisions_block(inp.tenant_id, inp.question or "") + emp_note
+        from_dashboard = inp.metadata.get("channel") == "dashboard"
+        if from_dashboard:
+            system_msg += _dashboard_note(inp.tenant_id)
         collected_sources: List[Dict[str, Any]] = []
         try:
             try:
@@ -2307,15 +2485,25 @@ class CommerceAdminSkill(BaseSkill):
                 # The employee was given someone else's job: the whole team takes the turn, once.
                 logger.info("commerce_admin: %s handed over (%s)", employee.id if employee else "-", ho.reason)
                 _turn_note("employee_hand_over", name=employee.id if employee else None)
-                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"])
+                tools = _team_tools(inp.tenant_id, caller_role, inp.question or "", ctx["phone"], ctx)
                 system_msg = (self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
                                                   lang=lang)
-                              + self._decisions_block(inp.tenant_id, inp.question or ""))
+                              + self._decisions_block(inp.tenant_id, inp.question or "")
+                              + (_dashboard_note(inp.tenant_id) if from_dashboard else ""))
                 collected_sources.clear()
                 answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
                                                 tools, sources=collected_sources)
             if not answer:
                 raise RuntimeError("empty answer from admin agent loop")
+            advising = False
+            try:
+                from core.skills import employees as _employees
+                advising = _employees.is_advisor(employee)
+                if advising:
+                    # Thinking aloud that looked nothing up says so, in code (employees/advisor).
+                    answer = _employees.mark_ideas(answer, collected_sources)
+            except Exception:  # noqa: BLE001
+                pass
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
             # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
@@ -2333,7 +2521,9 @@ class CommerceAdminSkill(BaseSkill):
             # see the incident note on unverified_prices' definition.
             bad_prices = unverified_prices(answer, collected_sources,
                                            {"lookup_business_info", "competitor_check",
-                                            "find_document", "email_thread_summary"})
+                                            "find_document", "email_thread_summary",
+                                            # a client's invoices and order totals, read from the books
+                                            "customer_lookup"})
             if bad_prices:
                 logger.warning("commerce_admin unverified price(s) in answer, tenant=%s: %s",
                                inp.tenant_id, bad_prices)
@@ -2356,8 +2546,14 @@ class CommerceAdminSkill(BaseSkill):
                            f"these figures:\n{fixes}\n\nLet me redo the quote properly rather "
                            "than you working off a wrong total.")
                 confidence = 0.3
-            return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence,
-                               sources=collected_sources)
+            return SkillOutput(
+                answer=answer, skill_name=self.name, confidence=confidence, sources=collected_sources,
+                # The second-opinion pass looks for claims the records don't support — which is
+                # every idea an advisor offers, so it would caveat all of them. The advisor's
+                # reply is kept honest another way: figures still pass the supervisor's check
+                # against what the tools returned, and ideas are labelled as ideas.
+                verification=({"verifier": "advisor.ideas_labelled", "outcome": "skipped",
+                               "escalated": False, "defects": [], "extra": {}} if advising else None))
         except ConfirmationRequired as cr:
             summary = _preview_summary(cr.result)
             row = {
@@ -2418,12 +2614,18 @@ class CommerceAdminSkill(BaseSkill):
         # log_meeting's due_phrase + deterministic dateutil resolution) — this line only gives it
         # enough grounding to phrase a sensible tool call/question, not to compute a final date.
         today_line = f"Today's date is {datetime.now(timezone.utc).strftime('%A, %d %B %Y')}.\n\n"
+        # The voice for the business's OWN people. It used to be the whole persona_prompt, which
+        # for a shop is the voice learned from its customer messages ("Chat replies: …
+        # Promotions: …") — so the owner's assistant was told how to write promotions to
+        # customers. core/voice.py picks the team voice; when the composed voice is in force it
+        # arrives through behaviour_preamble instead and isn't repeated here.
         persona_block = ""
         try:
-            from vula.api.tenants import get_config
-            persona = (get_config(tenant_id) or {}).get("persona_prompt")
-            if persona:
-                persona_block = f"\n\nHow you should sound: {persona}"
+            from core import voice
+            if not voice.active():
+                persona = voice.chat_voice(tenant_id, "team")
+                if persona:
+                    persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
             pass
 
@@ -2525,7 +2727,10 @@ class CommerceAdminSkill(BaseSkill):
             # despite computing it — only the sales_rep branch above did. A non-English-speaking
             # owner got the generic "mirror their language" fallback instead of the explicit
             # per-language block, letting the loop drift to English mid-multi-turn.
-            + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
+            # The owner/staff branch never said WHO it was talking to (only the rep branch
+            # above did) — name and role go through the shared caller block.
+            + behaviour_preamble(agentic=True, preferred_language=lang,
+                                 caller_name=name or "", caller_role=role or "") + persona_block
                 + self._rules_block(tenant_id)
         )
 
@@ -3078,7 +3283,7 @@ class CommerceAdminSkill(BaseSkill):
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         """Every tool call runs as the person who sent the message, so a quote, invoice or order it
-        creates records who made it (vula/acting.py, migration 260)."""
+        creates records who made it (vula/acting.py, migration 277)."""
         from vula import acting
         with acting.acting_as(ctx.get("phone")):
             return await self._dispatch_tool_as(name, args, ctx)
@@ -3086,6 +3291,16 @@ class CommerceAdminSkill(BaseSkill):
     async def _dispatch_tool_as(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
         _log_tool_call(tid, "admin", name, args)
+        addon = _ADDON_FOR_TOOL.get(name)
+        if addon is not None:
+            try:
+                from vula.api.tenants import enabled_modules
+                on = addon.MODULE in (enabled_modules(tid) or [])
+            except Exception:
+                on = False
+            if not on:
+                return {"error": f"{name} isn't available for this business."}
+            return await addon.run_admin_tool(name, args, ctx)
         try:
             if name == "sales_summary":      return await self._sales_summary(tid, args.get("period", "today"))
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))
@@ -3111,8 +3326,10 @@ class CommerceAdminSkill(BaseSkill):
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
+            if name in ("trade_buildup", "confirm_buildup"): return await self._buildup(name, tid, args, ctx)
+            if name == "estimate_cost":       return await self._estimate_cost(tid, args, ctx)
             if name == "create_invoice":     return await self._create_invoice(tid, args)
-            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
+            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")), args.get("channel"))
             if name == "payment_link":       return await self._payment_link(tid, args)
             if name == "financial_report":   return await self._financial_report(tid, args)
             if name == "credit_note":        return await self._credit_note(tid, args)
@@ -3149,7 +3366,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "generate_marketing": return await self._generate_marketing(tid, args)
             if name == "create_subscription": return await self._create_subscription(tid, args)
             if name == "list_subscriptions": return await self._list_subscriptions(tid, args.get("status"))
-            if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""))
+            if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""), ctx)
             if name == "dynamics_lookup":    return await self._dynamics_lookup(tid, args.get("query", ""), args.get("kind", "contact"))
             if name == "send_broadcast":     return await self._send_broadcast(tid, args)
             if name == "list_storefront_pages": return await self._list_storefront_pages(tid)
@@ -3246,6 +3463,7 @@ class CommerceAdminSkill(BaseSkill):
                                     args.get("unit") or None, args.get("project") or None)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
             if name == "list_reminders":     return await self._list_reminders(tid, args, ctx)
+            if name == "search_past_chats":  return self._search_past_chats(tid, args, ctx)
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
@@ -3696,6 +3914,87 @@ class CommerceAdminSkill(BaseSkill):
                 "note": "Show this to the owner and ask if they'd like Vula to sound like this — "
                        "only call apply_voice_persona if they say yes."}
 
+    async def _estimate_cost(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """estimate_cost (vula/commerce/estimate.py): the reply is built in code from the estimate,
+        and the Excel breakdown is re-read against it before it is sent."""
+        import asyncio
+        from vula.api.tenants import display_name
+        from vula.commerce import estimate as est_mod, estimate_sheet, xlsx_check
+        phone = str(ctx.get("phone") or "")
+        try:
+            est = await est_mod.estimate(tid, list(args.get("items") or []),
+                                         exclusions=list(args.get("exclusions") or []), research=True,
+                                         created_by=phone or str(ctx.get("person_key") or ""),
+                                         title=str(args.get("title") or ""))
+        except est_mod.EstimateError as exc:
+            return {"status": "need_info", "message": str(exc)}
+        text = est_mod.summary(est)
+        if any(it.get("status") == "priced" for it in est["items"]):
+            try:
+                data, want = await asyncio.to_thread(estimate_sheet.workbook, display_name(tid), est)
+                wrong = xlsx_check.mismatches(data, want)
+                if wrong:
+                    logger.error("estimate sheet read-back failed for %s: %s", tid, wrong)
+                    text += "\n\n(The spreadsheet didn't add up, so I haven't sent it.)"
+                else:
+                    from vula.api.whatsapp import _send_invoice_document, _upload_to_storage
+                    from vula.storage_links import SHARE_TTL, signed
+                    fname = f"Estimate_{datetime.now(timezone.utc).date().isoformat()}.xlsx"
+                    ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    url = await asyncio.to_thread(_upload_to_storage, "documents",
+                                                  f"{tid}/estimates/{est.get('id') or 'draft'}/{fname}", data, ctype)
+                    link = signed(url, SHARE_TTL) if url else None
+                    sent = False
+                    if phone:
+                        try:
+                            sent = await _send_invoice_document(phone, data, fname, "Estimate", tid, content_type=ctype)
+                        except Exception as exc:  # noqa: BLE001 — the link still works
+                            logger.warning("estimate send failed for %s: %s", tid, exc)
+                    if link:
+                        ctx.setdefault("files", []).append({"name": fname, "url": link, "kind": "xlsx"})
+                    text += ("\n\nThe full breakdown is in the spreadsheet" + (" above." if sent else ".")
+                             + (f"\nDownload (for a week): {link}" if link else ""))
+            except Exception as exc:  # noqa: BLE001 — the estimate itself still stands
+                logger.warning("estimate sheet skipped for %s: %s", tid, exc)
+        return {"reply_verbatim": text, "estimate_id": est.get("id"), "total_cents": est["total_cents"]}
+
+    async def _buildup(self, name: str, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """trade_buildup / confirm_buildup (vula/commerce/buildups.py). Confirming needs full access
+        (owner or manager) — checked here as well as by the tool's owner_only scope, because an
+        unrestricted member also has no scope list."""
+        from vula.commerce import buildups
+        person = str(ctx.get("phone") or ctx.get("person_key") or "")
+        try:
+            if name == "trade_buildup":
+                item, spec = str(args.get("item") or ""), args.get("spec") or {}
+                b = buildups.find(tid, item, spec)
+                if not b and args.get("research"):
+                    b = await buildups.research(tid, item, spec, unit=str(args.get("unit") or "m2"), created_by=person)
+                if not b:
+                    return {"found": False, "message": "No build-up on file for that yet. I can research one "
+                                                       "from cited sources for an owner or manager to confirm."}
+                out = {"found": True, "buildup_id": b["id"], "status": b["origin"], "text": buildups.describe(b)}
+                if b["origin"] in ("proposed", "shared"):
+                    out["next"] = ("Show it and ask an owner or manager to confirm or change it — it's only "
+                                   "relied on once confirmed.")
+                return out
+            buildup_id = str(args.get("buildup_id") or "")
+            if not args.get("confirm"):
+                b = buildups.get(tid, buildup_id)
+                if not b:
+                    return {"error": "I can't find that build-up."}
+                return {"preview": True, "text": buildups.describe(b), "changes": args.get("changes") or [],
+                        "message": "Confirm to make this the build-up Vula uses for every estimate of this "
+                                   "item (call again with confirm=true)."}
+            b = buildups.confirm(tid, buildup_id, person=person, full_access=_ctx_access(tid, ctx) is None,
+                                 changes=args.get("changes") or [])
+            return _checked({"confirmed": True, "buildup_id": b["id"], "version": b.get("version"),
+                             "text": buildups.describe(b)},
+                            "✅ Confirmed — Vula will use this build-up for every estimate of this item:\n"
+                            + buildups.describe(b))
+        except buildups.BuildupError as exc:
+            return {"error": str(exc)}
+
     async def _apply_voice_persona(self, tid: str, persona_prompt: str,
                                    confirm: bool = False) -> Dict[str, Any]:
         """Same accept semantics as vula/api/commerce.py's admin_set_persona: set persona_prompt,
@@ -3783,23 +4082,65 @@ class CommerceAdminSkill(BaseSkill):
                 "Say 'send it' to WhatsApp it to the customer."))
         return result
 
-    async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False) -> Dict[str, Any]:
+    async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False,
+                            channel: Optional[str] = None) -> Dict[str, Any]:
+        """Send an invoice on WhatsApp or by email. It was WhatsApp-only, and refused an invoice
+        with no phone number — so a business that invoices by email (or has no WhatsApp number at
+        all) could create an invoice in chat and then not send it."""
         num = (invoice_number or "").strip()
         rows = (service._client().table("commerce_invoices")
-                .select("id,invoice_number,customer_phone,customer_name,total_cents")
+                .select("id,invoice_number,customer_phone,customer_email,customer_name,total_cents")
                 .eq("tenant_id", tid).eq("invoice_number", num).limit(1).execute().data or [])
         if not rows:
             return {"error": f"No invoice {num} found."}
-        if not rows[0].get("customer_phone"):
-            return {"error": f"Invoice {num} has no customer phone on file to send to."}
+        inv = rows[0]
+        phone = (inv.get("customer_phone") or "").strip()
+        email = (inv.get("customer_email") or "").strip()
+        via = (channel or "").strip().lower()
+        if via not in ("whatsapp", "email"):
+            # Not said: WhatsApp when the business can send on it, otherwise email.
+            via = "whatsapp" if (phone and _has_whatsapp(tid)) else ("email" if email else
+                                                                    ("whatsapp" if phone else ""))
+        who = inv.get("customer_name") or "the customer"
+        if via == "whatsapp" and not phone:
+            return {"status": "need_info", "message": (
+                f"Invoice {num} has no phone number on it."
+                + (f" I can email it to {email} instead — shall I?" if email else
+                   f" What's {who}'s WhatsApp number or email address?"))}
+        if via == "email" and not email:
+            return {"status": "need_info",
+                    "message": f"Invoice {num} has no email address on it. What's {who}'s email address?"}
+        if not via:
+            return {"status": "need_info", "message": (
+                f"Invoice {num} has no phone number or email address on it. Where should I send it?")}
+        to = phone if via == "whatsapp" else email
         if not confirm:
             # Messages a customer — preview who it goes to first, like every other outbound tool.
-            return {"preview": True, "invoice_number": num, "customer": rows[0].get("customer_name"),
-                    "to": rows[0].get("customer_phone"), "total": self._rands(rows[0].get("total_cents")),
-                    "message": "Confirm to send this invoice on WhatsApp (call again with confirm=true)."}
-        from vula.api.commerce import admin_send_invoice_whatsapp
-        await admin_send_invoice_whatsapp(tid, rows[0]["id"], {})
-        return {"sent": True, "invoice_number": num}
+            return {"preview": True, "invoice_number": num, "customer": inv.get("customer_name"),
+                    "to": to, "via": "WhatsApp" if via == "whatsapp" else "email",
+                    "total": self._rands(inv.get("total_cents")),
+                    "message": ("Confirm to send this invoice "
+                                + ("on WhatsApp" if via == "whatsapp" else "by email")
+                                + " (call again with confirm=true).")}
+        if via == "whatsapp":
+            from vula.api.commerce import admin_send_invoice_whatsapp
+            await admin_send_invoice_whatsapp(tid, inv["id"], {})
+            return {"sent": True, "invoice_number": num}
+        from fastapi import HTTPException
+        from vula.api.commerce import admin_send_invoice_email
+        try:
+            out = await admin_send_invoice_email(tid, inv["id"], {})
+        except HTTPException as exc:
+            return {"error": f"The invoice was not sent: {exc.detail}"}
+        if not (out or {}).get("sent"):
+            return {"error": "The invoice was not sent."}
+        # Read back, not reported: the invoice itself says it went by email.
+        back = (service._client().table("commerce_invoices").select("sent_channel,sent_at")
+                .eq("tenant_id", tid).eq("id", inv["id"]).limit(1).execute().data or [{}])[0]
+        result = {"sent": True, "invoice_number": num, "via": "email", "to": out.get("to") or email}
+        if (back or {}).get("sent_channel") != "email":
+            result["note"] = "Emailed, but the invoice record doesn't show it as sent yet."
+        return result
 
     async def _payment_link(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Invoice for exactly the amount asked + the tenant's pay page, sent on WhatsApp after
@@ -4114,7 +4455,7 @@ class CommerceAdminSkill(BaseSkill):
         if kind not in forms.TYPES:
             return {"status": "need_info", "message": "Which form — a quote / order form, a site checklist, a timesheet or a stock count?"}
         title, scope = forms.TYPES[kind]
-        access = _member_access(tid, phone or None)
+        access = _ctx_access(tid, {**(ctx or {}), "phone": phone or None})
         if scope and access is not None and scope not in access:
             return {"status": "need_info", "message": f"Your access doesn't include the {title.lower()} — ask the owner."}
         try:
@@ -4186,7 +4527,7 @@ class CommerceAdminSkill(BaseSkill):
         ctx = ctx or {}
         phone = ctx.get("phone") or ""
         by = phone or "dashboard"
-        access = _member_access(tid, phone or None)
+        access = _ctx_access(tid, {**(ctx or {}), "phone": phone or None})
         action = args.get("action") or "design"
 
         def refused(spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -4293,6 +4634,8 @@ class CommerceAdminSkill(BaseSkill):
                 if not (sent or link):
                     return {"error": "The sheet was made but couldn't be sent or stored just now — please try again."}
                 await asyncio.to_thread(sb.mark_built, tid, d)
+                if link:   # the dashboard chat shows it as a Download button (SkillOutput.files)
+                    ctx.setdefault("files", []).append({"name": fname, "url": link, "kind": "xlsx"})
                 fields = sb.fields_for(spec)
                 text = (f"📊 *{spec['title']}* — {len(rows):,} row(s), checked against the books."
                         + ("\nTotals: " + " · ".join(f"{fields[c].label} {sb._cell_text(fields[c], v)}" for c, v in tot.items()) if tot else "")
@@ -5198,23 +5541,28 @@ class CommerceAdminSkill(BaseSkill):
         return await email_service.summarize_correspondence(
             creds, args.get("query") or "", since=args.get("since"))
 
-    async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
-        from vula.api.commerce import _aggregate_customers, _norm_phone
-        q = (query or "").strip().lower()
-        if not q:
-            return {"error": "Give a name or phone to look up."}
-        customers = await _aggregate_customers(tid)
-        qd = _norm_phone(q)
-        match = None
-        for c in customers.values():
-            if (qd and qd in _norm_phone(c.get("phone"))) or (q in (c.get("name") or "").lower()):
-                match = c
-                break
-        if not match:
-            return {"message": f"No customer found for '{query}'."}
-        return {"name": match.get("name"), "phone": match.get("phone"),
-                "orders": match.get("orders", 0), "lifetime_value": self._rands(match.get("total_spent_cents")),
-                "last_seen": match.get("last_order_at") or match.get("last_seen_at")}
+    async def _customer_lookup(self, tid: str, query: str,
+                               ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The client's whole record (vula/clients.py). This used to return five things — name,
+        phone, order count, lifetime value, last seen — so "what's the story with Sarah" had no
+        conversations, invoices or notes behind it. Amounts are left out for a member whose
+        access doesn't include Money."""
+        import asyncio
+        from vula import client_memory, clients
+        if not (query or "").strip():
+            return {"error": "Give a name, phone number or email address to look up."}
+        found = await asyncio.to_thread(clients.resolve, tid, query)
+        if found.get("ambiguous"):
+            return {"status": "need_info",
+                    "message": f"More than one client matches '{query}'. Which one? "
+                               + "; ".join(found["ambiguous"])}
+        client = found.get("client")
+        if not client:
+            return {"message": f"No client found for '{query}'."}
+        access = _ctx_access(tid, ctx)
+        money = access is None or bool(set(access) & _MONEY_SCOPES)
+        summary = await asyncio.to_thread(client_memory.summary_for, tid, client.phone)
+        return await asyncio.to_thread(clients.brief, tid, client, money=money, summary=summary or None)
 
     async def _dynamics_lookup(self, tid: str, query: str, kind: str) -> Dict[str, Any]:
         q = (query or "").strip()
@@ -6683,6 +7031,22 @@ class CommerceAdminSkill(BaseSkill):
         if not (res.data and res.data[0].get("id")):
             return {"error": "Couldn't save the reminder — please try again."}
         return {"created": True, "text": text, "due_at": row["due_at"]}
+
+    def _search_past_chats(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """The caller's own earlier threads with Vula (vula/chat_recall.py). The session key comes
+        from the entry point, never from the model, so it can't be pointed at someone else's."""
+        from vula import chat_recall, features
+        if not features.on(tid, "chat_recall"):
+            return {"error": "Searching earlier chats isn't switched on for this business."}
+        query = (args.get("query") or ctx.get("message") or "").strip()
+        try:
+            hits = chat_recall.search(tid, ctx.get("session_id") or "", query, days=args.get("days"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("search_past_chats failed (tenant=%s): %s", tid, exc)
+            return {"error": "Couldn't search earlier chats just now."}
+        if not hits:
+            return {"found": 0, "message": chat_recall.NOTHING}
+        return {"found": len(hits), "past_chats": chat_recall.block(hits)}
 
     async def _list_reminders(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         status = (args.get("status") or "open").strip()

@@ -1,0 +1,20 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Plan ahead
+summary: Think through a plan or a strategy for the months ahead.
+triggers:
+- strategy
+- help me plan
+- help me think
+- think through
+- long term
+- grow the business
+- how can we grow
+- how do we grow
+tools:
+- sales_summary
+- finance_insights
+- financial_report
+- cash_summary
+- reorder_suggestions
+- list_bookings
+- list_quotes

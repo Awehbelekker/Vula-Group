@@ -157,10 +157,16 @@ async def master_update_tenant(tenant_id: str, body: dict,
     Audited."""
     allowed = {"display_name", "business_type", "modules", "theme", "active", "plan",
                "store_url", "default_payment_provider", "share_knowledge_with_network",
-               "spend_cap_usd", "ui_v2"}
+               "spend_cap_usd", "ui_v2", "ai_allowance_cents"}
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if "ui_v2" in patch:   # the redesigned dashboard on/off for this one business (215 / 217)
         patch["ui_v2"] = bool(patch["ui_v2"])
+    if "ai_allowance_cents" in patch:   # a per-business AI allowance (270); null = the plan's
+        v = patch["ai_allowance_cents"]
+        try:
+            patch["ai_allowance_cents"] = None if v in (None, "") else max(0, int(v))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ai_allowance_cents must be a whole number of cents")
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
     from vula.api import tenants as _t
@@ -176,8 +182,175 @@ async def master_update_tenant(tenant_id: str, body: dict,
         raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
     from vula.api import tenants as _tenants
     _tenants.invalidate(tenant_id)
+    if "ai_allowance_cents" in patch or "plan" in patch:
+        from vula import ai_allowance
+        ai_allowance.forget(tenant_id)
     audit(identity, "tenant_updated", tenant_id, patch=patch)
     return res.data[0]
+
+
+# ── AI allowance and top-ups (vula/ai_allowance.py, migration 270) ─────────────
+
+@router.get("/ai-credits")
+async def master_ai_credits(tenant_id: Optional[str] = None) -> dict:
+    """Top-ups waiting to be invoiced and marked paid (every business), or one business's
+    allowance, usage and credits."""
+    import asyncio
+    from vula import ai_allowance
+    if tenant_id:
+        st = await asyncio.to_thread(ai_allowance.status, tenant_id, True)
+        rows = await asyncio.to_thread(ai_allowance.credits, tenant_id, ("requested", "paid", "cancelled"))
+        return {"tenant_id": tenant_id, "status": st, "credits": rows}
+    return {"waiting": await asyncio.to_thread(ai_allowance.waiting)}
+
+
+@router.post("/ai-credits/{credit_id}/paid")
+async def master_ai_credit_paid(credit_id: str, body: dict, identity: dict = Depends(require_master)) -> dict:
+    """The top-up's invoice was paid: it counts from now. Read back."""
+    import asyncio
+    from vula import ai_allowance
+    row = await asyncio.to_thread(ai_allowance.mark_paid, credit_id, identity.get("email") or "master",
+                                  str((body or {}).get("reference") or ""))
+    if not row:
+        raise HTTPException(status_code=404, detail="That isn't a top-up waiting to be paid.")
+    audit(identity, "ai_topup_paid", row["tenant_id"], credit_id=credit_id, amount_cents=row["amount_cents"])
+    return {"credit": row}
+
+
+@router.post("/ai-credits/{credit_id}/cancel")
+async def master_ai_credit_cancel(credit_id: str, identity: dict = Depends(require_master)) -> dict:
+    import asyncio
+    from vula import ai_allowance
+    row = await asyncio.to_thread(ai_allowance.cancel, credit_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="That isn't a top-up waiting to be paid.")
+    audit(identity, "ai_topup_cancelled", row["tenant_id"], credit_id=credit_id)
+    return {"credit": row}
+
+
+@router.post("/tenants/{tenant_id}/ai-credit")
+async def master_ai_credit_grant(tenant_id: str, body: dict, identity: dict = Depends(require_master)) -> dict:
+    """Add AI credit to a business by hand (counts at once). Read back."""
+    import asyncio
+    from vula import ai_allowance
+    try:
+        row = await asyncio.to_thread(ai_allowance.grant, tenant_id, int((body or {}).get("amount_cents") or 0),
+                                      identity.get("email") or "master", str((body or {}).get("note") or ""))
+    except (ai_allowance.AllowanceError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "Give an amount in cents.")
+    audit(identity, "ai_credit_granted", tenant_id, amount_cents=row["amount_cents"])
+    return {"credit": row}
+
+
+# ── Per-business switches (vula/features.py, migration 266) ────────────────────
+# New behaviour piloted on one business before it is switched on for everyone.
+
+@router.get("/tenants/{tenant_id}/features")
+async def master_tenant_features(tenant_id: str) -> dict:
+    """Every switch: on for this business, and whether it is already on for everyone."""
+    from vula import features
+    return {"tenant_id": tenant_id, "features": features.listing(tenant_id)}
+
+
+@router.patch("/tenants/{tenant_id}/features")
+async def master_set_tenant_features(tenant_id: str, body: dict,
+                                     identity: dict = Depends(require_master)) -> dict:
+    """Switch features on or off for this one business: {"voice_compose": true, …}. Read back
+    and audited."""
+    from vula import features
+    from vula.api import tenants as _tenants
+    try:
+        patch = features.validate(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    rows = (_client().table("vula_tenant_config").select("features")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
+    merged = {**(rows[0].get("features") or {}), **patch}
+    try:
+        (_client().table("vula_tenant_config").update({"features": merged})
+         .eq("tenant_id", tenant_id).execute())
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't save ({exc}). Run migration 266?")
+    _tenants.invalidate(tenant_id)
+    back = (_client().table("vula_tenant_config").select("features")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0].get("features") or {}
+    if any(bool(back.get(k)) != v for k, v in patch.items()):
+        raise HTTPException(status_code=500, detail="The switches didn't save. Nothing changed.")
+    audit(identity, "tenant_features", tenant_id, patch=patch)
+    return {"tenant_id": tenant_id, "features": features.listing(tenant_id)}
+
+
+# ── Prospects (vula/prospects.py, migration 268) ────────────────────────────────
+# A business scanned before it's a client: its website read without saving, and the pitch.
+
+@router.get("/prospects")
+async def master_prospects() -> dict:
+    from vula import prospects
+    try:
+        return {"prospects": prospects.listing()}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't read prospects ({exc}). Run migration 268?")
+
+
+@router.post("/prospects")
+async def master_scan_prospect(body: dict, identity: dict = Depends(require_master)) -> dict:
+    """Scan a prospect: {url, name?, socials?: [links]}. Runs in the background; nothing is
+    saved to any tenant."""
+    from vula import prospects
+    try:
+        row = prospects.create((body or {}).get("url") or "", (body or {}).get("name") or "",
+                               (body or {}).get("socials"), identity.get("email") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't save ({exc}). Run migration 268?")
+    prospects.start(row["id"])
+    audit(identity, "prospect_scanned", None, url=row["url"], prospect_id=row["id"])
+    return {"prospect": row}
+
+
+@router.get("/prospects/{prospect_id}")
+async def master_prospect(prospect_id: str) -> dict:
+    from vula import prospects
+    row = prospects.get(prospect_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    return {"prospect": row}
+
+
+@router.post("/prospects/{prospect_id}/rescan")
+async def master_rescan_prospect(prospect_id: str, identity: dict = Depends(require_master)) -> dict:
+    from vula import prospects
+    row = prospects.rescan(prospect_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    audit(identity, "prospect_rescanned", None, prospect_id=prospect_id)
+    return {"prospect": row}
+
+
+@router.patch("/prospects/{prospect_id}")
+async def master_link_prospect(prospect_id: str, body: dict, identity: dict = Depends(require_master)) -> dict:
+    """{tenant_id}: the tenant this prospect became (set after "Make them a tenant")."""
+    from vula import prospects
+    tid = str((body or {}).get("tenant_id") or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="Send {tenant_id}.")
+    row = prospects.link_tenant(prospect_id, tid)
+    if not row:
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    audit(identity, "prospect_became_tenant", tid, prospect_id=prospect_id)
+    return {"prospect": row}
+
+
+@router.delete("/prospects/{prospect_id}")
+async def master_delete_prospect(prospect_id: str, identity: dict = Depends(require_master)) -> dict:
+    from vula import prospects
+    if not prospects.delete(prospect_id):
+        raise HTTPException(status_code=404, detail="No such prospect.")
+    audit(identity, "prospect_deleted", None, prospect_id=prospect_id)
+    return {"deleted": prospect_id}
 
 
 # ── Billing lifecycle (vula_tenants: signup/payment state) ─────────────────────
@@ -460,6 +633,17 @@ def setup_checklist(tenant_id: str) -> dict:
             "progress_pct": round(100 * done / len(steps))}
 
 
+def _staff_digits_or_refuse(tenant_id: str) -> set:
+    """The business's own people's numbers, for keeping their threads out of operator views. If
+    the team can't be read the request fails (503) — showing every thread would be the unsafe
+    way to fail."""
+    try:
+        from vula.identity import staff_phone_digits
+        return staff_phone_digits(tenant_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't check whose conversations these are: {exc}")
+
+
 @router.get("/tenants/{tenant_id}/conversations")
 async def master_tenant_conversations(tenant_id: str, limit: int = 30) -> dict:
     """Recent conversation threads for a tenant (Master Build Brief section 6a item 2) — support
@@ -468,7 +652,12 @@ async def master_tenant_conversations(tenant_id: str, limit: int = 30) -> dict:
     (vula/chat/history.py's vula_chat_messages) — this is the thread picker; see the sibling
     /conversations/{phone} endpoint below for one thread's actual messages."""
     from vula.chat.history import get_db
-    threads = get_db().list_threads(tenant_id, limit=min(limit, 100))
+    staff = _staff_digits_or_refuse(tenant_id)
+    from vula.identity import is_staff_thread
+    # Over-read, then drop the business's own people: what a staff member asks Vula is private
+    # to them, including from the platform operator.
+    threads = [t for t in get_db().list_threads(tenant_id, limit=min(limit, 100) + 50)
+               if not is_staff_thread(t.get("phone"), staff)][:min(limit, 100)]
     return {"tenant_id": tenant_id, "threads": threads}
 
 
@@ -479,6 +668,9 @@ async def master_tenant_conversation_messages(tenant_id: str, phone: str, limit:
     a conversation from days ago, unlike the AI's own prompt-context read which only wants
     recent turns."""
     from vula.chat.history import get_db
+    from vula.identity import is_staff_thread
+    if is_staff_thread(phone, _staff_digits_or_refuse(tenant_id)):
+        raise HTTPException(status_code=404, detail="Conversation not found")
     msgs = get_db().get(tenant_id, phone=phone, limit=min(limit, 200), max_age_hours=None)
     return {"tenant_id": tenant_id, "phone": phone,
             "messages": [{"role": m.role, "text": m.text, "created_at": m.created_at}
@@ -1556,7 +1748,39 @@ async def master_turns(tenant_id: Optional[str] = None, phone: Optional[str] = N
         rows = q.limit(max(1, min(int(limit), 200))).execute().data or []
     except Exception as exc:
         return {"turns": [], "error": f"turn record unavailable (run migration 195?): {exc}"}
-    return {"turns": rows}
+    return {"turns": _without_staff_words(rows)}
+
+
+_STEP_KEYS_KEPT = ("step", "ms", "name", "skill", "route", "outcome", "error", "model", "verified")
+
+
+def _without_staff_words(rows: list) -> list:
+    """What a business's own people write to Vula is private to them, including from the
+    operator (owner's decision, 12 Nov 2026). Their turns still show here — that something was
+    asked, which skill and tools ran, how long it took, and any error — but not the message,
+    the replies, or step details that could quote either. If it can't be told whose a turn is,
+    it is treated as a staff member's."""
+    from vula.identity import is_staff_thread, staff_phone_digits
+    staff_by_tenant: dict = {}
+    out = []
+    for r in rows:
+        tid = r.get("tenant_id")
+        if tid not in staff_by_tenant:
+            try:
+                staff_by_tenant[tid] = staff_phone_digits(tid) if tid else None
+            except Exception as exc:
+                log.warning("turns: staff lookup failed for %s (%s) — hiding the words", tid, exc)
+                staff_by_tenant[tid] = None
+        staff = staff_by_tenant[tid]
+        if staff is not None and not is_staff_thread(r.get("phone"), staff):
+            out.append(r)
+            continue
+        out.append({**r, "text": None, "private": True,
+                    "replies": [{"kind": x.get("kind"), "ms": x.get("ms")} for x in (r.get("replies") or [])
+                                if isinstance(x, dict)],
+                    "steps": [{k: st[k] for k in _STEP_KEYS_KEPT if k in st} for st in (r.get("steps") or [])
+                              if isinstance(st, dict)]})
+    return out
 
 
 # ── Decision benchmark (31 Oct 2026): Jev against today's classifiers ───────────────────────
@@ -1580,8 +1804,22 @@ async def decision_bench_start(body: Optional[dict] = None):
     run_id = "bench-" + uuid.uuid4().hex[:10]
     decisions = [d for d in (body.get("decisions") or []) if d in ("skill", "escalation", "expense_purpose")] or None
     limit = int(body["limit"]) if str(body.get("limit") or "").isdigit() else None
-    _BENCH_TASKS[run_id] = asyncio.create_task(decision_bench.run(run_id, decisions=decisions, limit=limit))
-    return {"run_id": run_id, "started": True}
+    # 12 Nov 2026: compare models on the local box too ("qwen3:8b", "llama3.1:8b"): each is asked
+    # today's prompt with no cloud fallback, next to today's classifier ("current").
+    local = [str(m).strip() for m in (body.get("local_models") or []) if str(m).strip()]
+    providers = None
+    if local:
+        if len(local) > 3:
+            raise HTTPException(status_code=422, detail="Compare up to 3 local models at a time.")
+        bad = [m for m in local if not decision_bench.LOCAL_MODEL_RE.match(m)]
+        if bad:
+            raise HTTPException(status_code=422, detail=f"Not an Ollama model name: {', '.join(bad)}")
+        providers = ["current"] + [decision_bench.LOCAL_PREFIX + m for m in local]
+        if body.get("include_jev"):
+            providers.insert(0, "jev")
+    _BENCH_TASKS[run_id] = asyncio.create_task(decision_bench.run(run_id, decisions=decisions, limit=limit,
+                                                                  providers=providers))
+    return {"run_id": run_id, "started": True, "providers": providers or list(decision_bench.PROVIDERS)}
 
 
 @router.get("/decision-bench")

@@ -258,7 +258,9 @@ async def analyze_voice(tenant_id: str) -> Dict[str, Any]:
         "greetings or sign-offs, sentence length, any recurring phrases. Write 2-4 sentences as "
         "direct instructions for an AI assistant to sound like them (e.g. 'Warm and casual, "
         "short replies, uses \"howzit\" and a thumbs-up emoji, never uses full stops on short "
-        "replies.'). Do not invent traits you don't see evidence for. Start directly with the "
+        "replies.'). Greetings, sign-offs and signatures you see in emails describe their "
+        "emails only; for chat, describe how they'd word a message. "
+        "Do not invent traits you don't see evidence for. Start directly with the "
         "instructions — no preamble like 'Here are...'.\n\nMessages:\n" + sample_block
     )
 

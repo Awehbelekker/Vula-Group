@@ -1,0 +1,50 @@
+# 🧭 AI advisor. The front desk (core/skills/employees.py) hands this employee a message when its
+# keywords clearly win: someone thinking something through, not asking for a record or an action.
+# tools: read-only — it can look at the business's numbers and records to ground its thinking, and
+# never changes anything. (The shared tools still let the person record a decision or a rule when
+# they ask to.) OFF by default: a business switches it on under Team › AI employees, or the
+# platform turns it on for everyone with ADVISOR_MODE_ENABLED.
+id: advisor
+title: AI advisor
+emoji: 🧭
+summary: Thinking things through with you — ideas, options, pros and cons, planning — grounded in your own numbers.
+keywords:
+- brainstorm
+- ideas
+- any idea
+- advice
+- advise
+- pros and cons
+- think through
+- thinking of
+- thinking about
+- what do you think
+- your opinion
+- your thoughts
+- help me decide
+- help me think
+- help me plan
+- strategy
+- grow the business
+- how can we grow
+- how do we grow
+- long term
+- options do we have
+- what are my options
+- what are our options
+tools:
+- cash_summary
+- competitor_check
+- customer_lookup
+- finance_insights
+- financial_report
+- list_bookings
+- list_quotes
+- outstanding_invoices
+- price_advice
+- project_profit
+- recent_orders
+- recent_promotions
+- reorder_suggestions
+- sales_summary
+- stock_status

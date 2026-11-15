@@ -224,19 +224,23 @@ async def _seed_training_on_boot() -> None:
 
 
 async def _weekly_rates_loop() -> None:
-    """Run construction rates scrape weekly. Starts 10 min after boot."""
+    """Construction market prices, read about weekly. Checks every 12 hours, starting 10 min after
+    boot; each source is read only when its last good read is over a week old and it wasn't
+    tried in the last day (ConstructionRatesScraper._fresh, persisted in Supabase). 14 Nov 2026:
+    this ran a full scrape on every boot — about ten a day with frequent deploys."""
     import asyncio as _asyncio
     await _asyncio.sleep(600)  # Let the server settle first
     while True:
         try:
             from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper
             scraper = ConstructionRatesScraper()
-            result = await scraper.run_full_update()
-            log.info("Weekly rates update: %d new, %d updated in %.1fs",
-                     result.new, result.updated, result.duration_s)
+            if any(not scraper._fresh(s) for s in scraper.SOURCES):
+                result = await scraper.run_full_update()
+                log.info("Weekly rates update: %d new, %d updated in %.1fs",
+                         result.new, result.updated, result.duration_s)
         except Exception as exc:
             log.warning("Weekly rates update failed: %s", exc)
-        await _asyncio.sleep(7 * 24 * 3600)  # sleep one week
+        await _asyncio.sleep(12 * 3600)
 
 
 async def _retention_loop() -> None:
@@ -1011,6 +1015,24 @@ async def _conversation_check_loop() -> None:
         await _asyncio.sleep(900)
 
 
+async def _client_memory_loop() -> None:
+    """Every 20 minutes: fold conversations that have gone quiet into each client's note
+    (vula/client_memory.py), so a client who returns later isn't a stranger. A no-op unless
+    CLIENT_MEMORY_ENABLED. Logs counts only."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(330)
+    while True:
+        try:
+            from vula import client_memory
+            if client_memory.enabled():
+                counts = await client_memory.sweep()
+                if counts.get("written") or counts.get("failed"):
+                    log.info("client memory sweep: %s", counts)
+        except Exception as exc:
+            log.warning("client memory loop error: %s", exc)
+        await _asyncio.sleep(1200)
+
+
 async def _shared_kb_loop() -> None:
     """Keeps the shared general-business KB and the sector packs seeded (vula/training/
     seeder.py::ensure_shared_kbs) — on boot, then daily. A no-op when nothing changed."""
@@ -1429,8 +1451,24 @@ async def _recurring_bills_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+async def _private_moves_loop() -> None:
+    """Move documents that belong to one team member out of the business's documents, chunks first
+    (vula/private_docs.py, migration 261). Every 5 minutes; nothing to do is one small read."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(30)
+    while True:
+        try:
+            from vula.private_docs import process_moves
+            await process_moves()
+        except Exception as exc:
+            log.warning("private document moves failed: %s", exc)
+        await _asyncio.sleep(300)
+
+
 async def _email_sync_loop() -> None:
-    """Auto-sync connected mailboxes every 15 min: build contacts + file attachments."""
+    """Check connected mailboxes every settings.email_sync_minutes (10): contacts, attachments,
+    follow-ups. Until 11 Nov 2026 this ran hourly (the docstring said 15 min), so a supplier's emailed
+    invoice could take an hour to appear and a mailbox's history took days."""
     import asyncio as _asyncio
     await _asyncio.sleep(45)  # settle on boot
     while True:
@@ -1441,7 +1479,8 @@ async def _email_sync_loop() -> None:
                 log.info("Email sync processed %d new message(s)", n)
         except Exception as exc:
             log.warning("Email sync loop error: %s", exc)
-        await _asyncio.sleep(60 * 60)   # hourly — email isn't time-critical; saves AI cost
+        from config import settings as _s
+        await _asyncio.sleep(max(1, int(getattr(_s, "email_sync_minutes", 10) or 10)) * 60)
 
 
 async def _clickup_sync_loop() -> None:
@@ -1560,6 +1599,20 @@ async def _local_llm_watch_loop() -> None:
     """WhatsApp Ian when the local Ollama tunnel stops answering (2026-10-19) — the router falls
     back to the cloud silently, and a 3½-day outage went unnoticed. See vula/local_llm_watch.py."""
     from vula.local_llm_watch import run_forever
+    await run_forever()
+
+
+async def _qdrant_migrate_loop() -> None:
+    """Copy the knowledge base to a new Qdrant cluster when QDRANT_MIGRATE_TO_BASE is set
+    (2026-11-13, moving it to the EU). See vula/integrations/qdrant_migrate.py."""
+    from vula.integrations.qdrant_migrate import run_once_after_boot
+    await run_once_after_boot()
+
+
+async def _local_models_loop() -> None:
+    """Download any model in LOCAL_MODELS_ENSURE that the local box doesn't have (12 Nov 2026),
+    through the same tunnel every local call uses. See vula/local_models.py."""
+    from vula.local_models import run_forever
     await run_forever()
 
 
@@ -1701,8 +1754,10 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_client_memory_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_advisor_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_private_moves_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))
@@ -1726,6 +1781,10 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
+    # Missing local models (LOCAL_MODELS_ENSURE) → Ollama downloads them (2026-11-12).
+    _scheduled_job_tasks.append(_asyncio.create_task(_local_models_loop()))
+    # Knowledge base → new Qdrant cluster, once per boot while QDRANT_MIGRATE_TO_BASE is set.
+    _scheduled_job_tasks.append(_asyncio.create_task(_qdrant_migrate_loop()))
     # Weekly: customers see only public documents, or the operator hears about it (2026-10-20).
     _scheduled_job_tasks.append(_asyncio.create_task(_kb_customer_view_weekly_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
@@ -1866,6 +1925,8 @@ app.add_middleware(
     ),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    # A downloaded file's name (the dashboard chat's "Download as spreadsheet", 13 Nov 2026).
+    expose_headers=["Content-Disposition"],
     allow_credentials=True,
 )
 
@@ -2128,6 +2189,12 @@ app.include_router(google_router, prefix="/v1/google")
 app.include_router(microsoft_router, prefix="/v1/microsoft")
 app.include_router(dynamics365_router, prefix="/v1/dynamics365")
 app.include_router(email_connect_router, prefix="/v1/email")
+from vula.api.me import router as me_router  # noqa: E402
+# The signed-in person's own settings — /v1/commerce/{tenant}/admin/me/… (same tenant guard).
+app.include_router(me_router, prefix="/v1/commerce")
+from vula.api.trade_costing import router as trade_costing_router  # noqa: E402
+# Build-ups for costing by trade — /v1/commerce/{tenant}/admin/buildups… (same tenant guard).
+app.include_router(trade_costing_router, prefix="/v1/commerce")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
@@ -2142,6 +2209,10 @@ app.include_router(manufacturing_router, prefix="/v1/commerce")   # /{tenant}/ad
 app.include_router(woo_webhook_router, prefix="/v1/woocommerce")   # WooCommerce's calls — HMAC-verified
 from vula.api.business_profile import router as business_profile_router  # noqa: E402
 app.include_router(business_profile_router, prefix="/v1/commerce")
+from vula.api.listings import router as listings_router  # noqa: E402
+app.include_router(listings_router, prefix="/v1/commerce")          # real-estate listings; /{tenant}/admin/* tenant-guarded
+from vula.api.pipeline import router as pipeline_router  # noqa: E402
+app.include_router(pipeline_router, prefix="/v1/commerce")          # deals pipeline; /{tenant}/admin/* tenant-guarded, `pipeline` module
 app.include_router(command_centre_router, prefix="/v1/commerce")  # /{tenant}/admin/activity|home|today — tenant-guarded
 app.include_router(bookings_router, prefix="/v1/bookings")
 app.include_router(subscriptions_router, prefix="/v1/subscriptions")
@@ -2515,28 +2586,34 @@ async def custom_scrape(request: Request, body: ScrapeRequest):
 
 @app.get("/status")
 async def health_check():
-    """Public health check — no auth required."""
+    """Public health check — no auth required.
+
+    13 Nov 2026 audit: it returned the local model names, the knowledge-base collection count (the
+    number of businesses) and raw exception text to anyone. Now each check is ok or error only;
+    the detail goes to the log, and /ready (operator only) has the full picture."""
     checks: dict = {}
 
     async with httpx.AsyncClient(timeout=3.0) as client:
         try:
             resp = await client.get(f"{settings.ollama_base}/api/tags")
-            models = [m["name"] for m in resp.json().get("models", [])]
-            checks["ollama"] = {"status": "ok", "models": models}
+            resp.json().get("models", [])
+            checks["ollama"] = {"status": "ok"}
         except Exception as exc:
-            checks["ollama"] = {"status": "error", "detail": str(exc)}
+            log.debug("status: local AI check failed: %s", type(exc).__name__)
+            checks["ollama"] = {"status": "error"}
 
         try:
             qdrant_headers = {"api-key": settings.qdrant_api_key} if settings.qdrant_api_key else {}
             resp = await client.get(f"{settings.qdrant_base}/collections", headers=qdrant_headers)
-            n = len(resp.json().get("result", {}).get("collections", []))
-            checks["qdrant"] = {"status": "ok", "collections": n}
+            resp.json().get("result", {}).get("collections", [])
+            checks["qdrant"] = {"status": "ok"}
         except Exception as exc:
-            checks["qdrant"] = {"status": "error", "detail": str(exc)}
+            log.debug("status: knowledge base check failed: %s", type(exc).__name__)
+            checks["qdrant"] = {"status": "error"}
 
         # Ollama on Railway routes to OpenRouter — check accordingly
         if checks.get("ollama", {}).get("status") == "error" and settings.openrouter_api_key:
-            checks["ollama"] = {"status": "ok", "models": ["openrouter/cloud"], "note": "via OpenRouter"}
+            checks["ollama"] = {"status": "ok"}
 
     # Supabase/Postgres reachability — previously unchecked here entirely, so a DB outage never
     # showed as "degraded" even though every tenant request depends on it more than Ollama/Qdrant
@@ -2552,7 +2629,8 @@ async def health_check():
         await _asyncio.wait_for(_asyncio.to_thread(_db_ping), timeout=3.0)
         checks["supabase"] = {"status": "ok"}
     except Exception as exc:
-        checks["supabase"] = {"status": "error", "detail": str(exc)}
+        log.warning("status: database check failed: %s", type(exc).__name__)
+        checks["supabase"] = {"status": "error"}
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {

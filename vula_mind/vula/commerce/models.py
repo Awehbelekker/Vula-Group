@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
@@ -127,6 +127,7 @@ class AddToCartRequest(BaseModel):
     quantity: float = 1             # 1.5 for a product sold by the kilo
     variant_id: Optional[UUID] = None
     customer_phone: Optional[str] = None
+    choices: Optional[Dict[str, str]] = None   # {"Primary Colour": "Olive Green"} (migration 267)
 
     @field_validator("quantity")
     @classmethod

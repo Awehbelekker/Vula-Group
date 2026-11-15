@@ -24,8 +24,10 @@ import OAuthConnectV2 from './connect/OAuthConnectV2'
 import EmailConnectV2 from './connect/EmailConnectV2'
 import ConnectionsHealth from './connect/ConnectionsHealth'
 import BuyingV2 from './connect/BuyingV2'
+import AiUsage from './AiUsage'
 import XeroMoveV2 from './connect/XeroMoveV2'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
+import ProfileDrafts from '../ProfileDrafts.jsx'
 import './settings.css'
 
 const GROUPS = [
@@ -63,6 +65,7 @@ const GROUPS = [
     { id: 'appearance', label: 'Appearance', Icon: SunMoon, hint: 'Light or dark, for this phone or computer only — everyone else keeps their own. Your business’s colours, logo and fonts are in Brand kit.' },
   ] },
   { label: 'Vula', items: [
+    { id: 'ai', label: 'AI usage', Icon: Sparkles, hint: "This month's AI allowance, what's used and top-ups. Vula's own AI is free; only cloud AI counts." },
     { id: 'learned', label: 'What Vula has learned', Icon: Brain, hint: "Everything Vula has picked up about how your business runs — your voice, answers learned from your team, and how it's learned to categorise your suppliers." },
   ] },
 ]
@@ -116,6 +119,7 @@ function Section({ id, tenantId, tenantName, adminEmail, onOpen }) {
     case 'hours': return <Hours tenantId={tenantId} />
     case 'delivery': return <Delivery tenantId={tenantId} />
     case 'learned': return <Learned tenantId={tenantId} />
+    case 'ai': return <AiUsage tenantId={tenantId} />
     // the connections: the same flows as the current panels (settings/connect/ hooks), redesigned
     case 'payments': return <YocoConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
     case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />
@@ -312,6 +316,7 @@ function BusinessProfile({ tenantId }) {
         <StatusChip tone={p.data.answered === p.data.total ? 'ok' : 'warn'}>{p.data.answered} of {p.data.total} answered</StatusChip>{' '}
         Ticked answers can be used when Vula replies to customers; the rest are only for you and your team.
       </p>
+      <ProfileDrafts tenantId={tenantId} onChanged={p.apply} />
       {p.data.questions.map(q => (
         <div key={q.key} className="vst-q">
           <label htmlFor={`bp-${q.key}`} className="vst-q-label">{q.q}</label>

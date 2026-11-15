@@ -24,17 +24,32 @@ const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="16
 const json = (body, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 /** [method | "*", RegExp on pathname, (match, url, request) => body | {__raw}] — first hit wins. */
-function routes(role, modules = []) {
+function routes(role, modules = [], features = []) {
   const T = "([^/]+)";
   const C = `^/v1/commerce/${T}`;
   const A = `${C}/admin`;
   const r = (m, re, fn) => [m, new RegExp(re + "$"), fn];
+  let docsRun = { running: false };
+  const masterFeatures = F.masterFeatures.map((f) => ({ ...f }));
+  const prospects = F.prospects.map((x) => ({ ...x }));
+  // Costing by trade: a copy per page, so a confirm in one test never shows in the next.
+  let tradeBuildups = F.tradeBuildups.map((b) => ({ ...b, lines: b.lines.map((l) => ({ ...l })) }));
+  const tradeEstimates = [];
+  const tradeOn = features.includes("trade_costing");
+  const tradeOff = { __raw: { status: 403, contentType: "application/json",
+    body: '{"detail":"Costing by trade isn\'t switched on for this business."}' } };
+  let aiUsage = { ...F.aiUsage, requested: [] };          // per page: a top-up requested here shows here only     // per page: a scan started here shows here only
+  // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
+  let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
+  const profile = { ...F.businessProfile, answers: { ...F.businessProfile.answers }, drafts: {} };
+  // A copy per page, so adding or forgetting a note in one test never leaks into the next.
+  const myNotes = F.myNotes.map((n) => ({ ...n }));
   return [
     // ── tenant / member / brand ──
     r("GET", `^/v1/tenants/?`, () => F.tenantsList),
     r("GET", `^/v1/tenants/registry`, () => F.registry),
     r("GET", `^/v1/tenants/${T}/home`, () => F.homeLayout),
-    r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? (modules.length ? { ...F.tenant, modules: [...F.tenant.modules, ...modules] } : F.tenant) : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
+    r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? (modules.length || features.length ? { ...F.tenant, modules: [...F.tenant.modules, ...modules], features } : F.tenant) : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
     r("GET", `^/v1/team/${T}/me`, () => F.teamMeFor(role)),
     r("GET", `^/v1/team/${T}/audit`, () => ({ events: F.teamAudit })),
     r("GET", `^/v1/team/${T}/notices/settings`, () => ({ settings: { birthdays: true, holidays: true, send_hour: 8 }, observances: [] })),
@@ -224,7 +239,7 @@ function routes(role, modules = []) {
     // ── Settings ──
     r("GET", `${A}/order-settings`, () => ({ settings: F.orderSettings })),
     r("GET", `${A}/learned-summary`, () => F.learnedSummary),
-    r("GET", `${A}/business-profile`, () => F.businessProfile),
+    r("GET", `${A}/business-profile`, () => ({ ...profile, answered: Object.keys(profile.answers).length })),
     r("PUT", `${A}/business-profile`, (m, url, req) => {        // the real endpoint echoes the saved profile
       const { answers = {}, public_keys = [] } = req.postDataJSON() || {};
       const answered = Object.values(answers).filter((v) => (v || "").trim()).length;
@@ -249,7 +264,13 @@ function routes(role, modules = []) {
     // ── Master ──
     r("GET", `^/status`, () => ({ status: "ok" })),   // server.py health check (master's Dashboard tab)
     r("GET", `^/v1/master/tenants`, () => (role === "master" ? { tenants: F.masterTenants } : { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Master access required."}' } })),
+    r("GET", `^/v1/master/tenants/${T}/features`, () => ({ features: masterFeatures })),
+    r("PATCH", `^/v1/master/tenants/${T}/features`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const f of masterFeatures) if (f.name in b) f.here = !!b[f.name]; return { features: masterFeatures }; }),
     r("GET", `^/v1/master/tenants/${T}/setup`, () => F.setup),
+    r("GET", `^/v1/master/prospects$`, () => ({ prospects: prospects.map(({ report, ...p }) => ({ ...p, kind: report?.kind, counts: report?.counts || {} })) })),
+    r("GET", `^/v1/master/prospects/${T}$`, (m) => ({ prospect: prospects.find((p) => p.id === m[1]) })),
+    r("POST", `^/v1/master/prospects$`, (m, url, req) => { const b = req.postDataJSON() || {}; const p = { id: `pr-${prospects.length + 1}`, name: b.name || b.url, url: `https://${String(b.url).replace(/^https?:\/\//, "")}`, socials: b.socials || [], status: "scanning", created_at: "2026-11-13T08:00:00Z", updated_at: "2026-11-13T08:00:00Z" }; prospects.unshift(p); return { prospect: p }; }),
+    r("PATCH", `^/v1/master/prospects/${T}$`, (m, url, req) => { const p = prospects.find((x) => x.id === m[1]); if (p) p.tenant_id = req.postDataJSON()?.tenant_id; return { prospect: p }; }),
     r("POST", `${A}/scan`, () => F.scanResult),
     r("POST", `${A}/scan/commit`, (m, url, req) => (req.postDataJSON()?.auto_commit
       ? { ok: true, message: "Booked R 1 842.50 from Atlantic Dairy Co-op as a bill, due 16 Nov.", record_type: "bill", kb_chunks_added: 0 }
@@ -349,10 +370,110 @@ function routes(role, modules = []) {
     r("GET", `^/v1/recurring-bills/${T}`, () => ({ bills: F.recurringBills })),
     r("POST", `^/v1/recurring-bills/${T}`, () => ({ id: "rb-new" })),
     r("POST", `^/v1/recurring-bills/${T}/${T}/status`, () => ({ ok: true })),
-    r("POST", `${A}/assistant`, (m, url, req) => ({ answer: `Today: 4 orders, R 1 842.50 paid. (${req.postDataJSON()?.message})` })),
+    r("POST", `${A}/assistant`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      if (/spreadsheet of (my|our) products/i.test(b.message || "")) return { answer: "📊 Price list — 3 row(s), checked against the books.\nDownload (for a week): https://files.vula.test/sheets/Price_list.xlsx",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business",
+        files: [{ name: "Price_list_2026-11-13.xlsx", url: "https://files.vula.test/sheets/Price_list.xlsx", kind: "xlsx" }] };
+      if (/as a table/i.test(b.message || "")) return { answer: "## Board bags\n| Supplier | Price |\n|---|---:|\n| Surf Shop | R 1 450 |\n| Bags Direct | R 1 390 |",
+        session_id: "sess-me", message_id: "msg-table", answered_by: "open" };
+      if (/stock/i.test(b.message || "")) return { answer: "Set the 9ft bag's stock to 4?", session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business",
+        confirm_request: { id: "pc-1", summary: "Set the 9ft bag's stock to 4?", confirm_label: "Confirm", cancel_label: "Cancel" } };
+      if (b.mode === "research" && /deck/i.test(b.message || "") && !b.fresh) return { answer: "Oil a timber deck once a year [1].",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "research",
+        research: { read: 1, searched: ["deck sealing"], sources: [{ n: 1, title: "Deck care", url: "https://decks.example/care" }],
+          documents: [], reused: { id: "rn-old", date: "3 Nov 2026", kind: "general", shared: true, mine: true } } };
+      if (b.mode === "research" && /deck/i.test(b.message || "")) return { answer: "Oil it every 9–12 months [1].",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "research",
+        research: { read: 4, searched: ["deck sealing"], sources: [{ n: 1, title: "Deck care", url: "https://decks.example/care" }],
+          documents: [], note_id: "rn-new", shared: !b.private } };
+      if (b.mode === "research") return { answer: "Two suppliers list it: R 1 450 at one [1], R 1 390 at the other [2]. Your price list has R 1 500 [D1].",
+        session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "research",
+        research: { read: 3, searched: ["board bag prices South Africa"], sources: [
+          { n: 1, title: "Board bags — Surf Shop", url: "https://www.surfshop.example/board-bags" },
+          { n: 2, title: "Travel bags price list", url: "https://bags.example/prices" }],
+          documents: [{ n: "D1", title: "price-list.pdf" }] } };
+      if (b.mode === "open" && !/owe|invoice|order/i.test(b.message || "")) return { answer: `Five ideas for you: (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "open" };
+      return { answer: `Today: 4 orders, R 1 842.50 paid. (${b.message})`, session_id: "sess-me", message_id: `msg-${Date.now()}`, answered_by: "business" };
+    }),
+    r("POST", `${A}/assistant/sheet$`, (m, url, req) => (req.postDataJSON()?.message_id === "msg-table"
+      ? { __raw: { status: 200, contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          body: Buffer.from("PK-fake-xlsx"), headers: { "Content-Disposition": 'attachment; filename="Board_bags_2026-11-13.xlsx"', "Access-Control-Expose-Headers": "Content-Disposition" } } }
+      : { __raw: { status: 400, contentType: "application/json", body: '{"detail":"There\'s no table in that answer to put in a spreadsheet."}' } })),
+    r("POST", `${A}/assistant/research/${T}/share`, (m, url, req) => ({ note: { id: m[2], shared: !!req.postDataJSON()?.shared } })),
+    r("POST", `${A}/assistant/attach$`, (m, url, req) => {
+      const names = [...String(req.postData() || "").matchAll(/filename="([^"]+)"/g)].map((x) => x[1]);
+      return { attachments: names.map((name, i) => ({ id: `${"a".repeat(31)}${i}`, name, pages: 1, chars: 1200, truncated: false, filed: false })), problems: [] };
+    }),
+    r("POST", `${A}/assistant/attach/${T}/file$`, (m) => ({ attachment: { id: m[1], filed: true } })),
+    r("POST", `${A}/assistant/confirm`, (m, url, req) => (req.postDataJSON()?.action === "cancel"
+      ? { answer: "Cancelled — nothing was changed.", ok: false } : { answer: "Stock for the 9ft bag is now 4.", ok: true })),
     r("GET", `${A}/agent-activity`, () => ({ events: F.agentEvents })),
+    r("GET", `${A}/quality`, () => F.quality),
+    // setting up from documents: an upload starts a "reading" that the next poll reports as done
+    r("POST", `${A}/setup-from-documents`, () => { docsRun = { running: true, files: [{ name: "Terms of trade.pdf", status: "reading", drafts: 0 }] }; return { status: "queued", files: ["Terms of trade.pdf"], skipped: [] }; }),
+    r("GET", `${A}/setup-from-documents`, () => { const now = docsRun; if (docsRun.running) { docsRun = { running: false, step: "done", drafts: 2, files: [{ name: "Terms of trade.pdf", status: "done", drafts: 2 }] }; profile.drafts = { ...F.profileDrafts }; } return { status: now }; }),
+    r("POST", `${A}/business-profile/drafts`, (m, url, req) => { const b = req.postDataJSON() || {}; for (const k of b.accept || []) { if (profile.drafts[k]) { profile.answers[k] = profile.drafts[k].answer; delete profile.drafts[k]; } } for (const k of b.dismiss || []) delete profile.drafts[k]; return { ...profile, answered: Object.keys(profile.answers).length, accepted: b.accept || [], dismissed: (b.dismiss || []).length }; }),
+    r("POST", `${A}/setup-from-website`, (m, url, req) => { welcome.siteRunning = true; welcome.website = { running: true, url: req.postDataJSON()?.url, step: "reading 9 pages", pages_read: 3, products_found: 12 }; return { url: req.postDataJSON()?.url, brand: { applied: true }, import_started: true }; }),
+    r("GET", `${A}/setup/first-run`, () => {
+      if (welcome.siteRunning && welcome.website.running) { welcome.polls = (welcome.polls || 0) + 1; if (welcome.polls > 1) { welcome.website = { ...F.firstRun.website }; welcome.siteRunning = false; profile.drafts = { ...F.profileDrafts }; } }
+      const kept = Object.keys(profile.answers);
+      return { show: welcome.show, closed: welcome.closed, running: !!welcome.website.running || docsRun.running, website: welcome.website,
+        documents: docsRun.files ? docsRun : {}, brand: F.firstRun.brand, profile: { answered: kept.length, total: 9, drafts: Object.keys(profile.drafts).length },
+        try_asking: [{ key: "hours", question: "What are your opening hours?", ready: true }, { key: "cancellations", question: "Can I cancel my order?", ready: kept.includes("cancellations") }] };
+    }),
+    r("POST", `${A}/setup/first-run/close`, (m, url, req) => { welcome.show = false; welcome.closed = req.postDataJSON()?.reason; return { closed: welcome.closed }; }),
+    r("POST", `${A}/setup/preview-answer`, (m, url, req) => ({ answer: "We're open Mon–Fri 07:30–17:00 and Sat 08:00–14:00. Closed Sundays.", sources: "Business profile — for customers", grounded: true, q: req.postDataJSON()?.question })),
+    r("GET", `${A}/setup/owner`, () => F.ownerSetup),
+    r("GET", `${A}/plan`, () => F.myPlan),
+    // ── Estimating › Costing by trade ──
+    r("GET", `${A}/buildups`, () => (tradeOn ? { buildups: tradeBuildups, can_confirm: role === "owner" } : tradeOff)),
+    r("POST", `${A}/buildups/research`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      const made = { id: `bu-${tradeBuildups.length + 1}`, trade: "Tiling", item: b.item, unit: b.unit || "m2", spec: b.spec || {},
+        status: "proposed", version: 1, origin: "proposed", sources: [{ n: 1, title: "Tiling guide", url: "https://tiles.example" }],
+        unknown: [{ key: "grout", label: "Grout" }],
+        lines: [{ component: "adhesive", label: "Tile adhesive", kind: "material", qty_per_unit: "0.2500", unit: "bag", waste_pct: "0.00", source_ref: "1" }] };
+      tradeBuildups = [...tradeBuildups, made];
+      return { buildup: made, researched: true };
+    }),
+    r("POST", `${A}/buildups/${T}/confirm`, (m, url, req) => {
+      if (role !== "owner") return { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Only an owner or manager can confirm a build-up."}' } };
+      const changes = (req.postDataJSON() || {}).changes || [];
+      tradeBuildups = tradeBuildups.map((b) => (b.id !== m[2] ? b : { ...b, status: "confirmed", origin: "own",
+        version: changes.length ? b.version + 1 : b.version, last_changes: changes,
+        lines: b.lines.map((l) => { const c = changes.find((x) => x.component === l.component) || {};
+          return { ...l, ...(c.qty_per_unit !== undefined ? { qty_per_unit: String(c.qty_per_unit) } : {}),
+            ...(c.waste_pct !== undefined ? { waste_pct: String(c.waste_pct) } : {}) }; }) }));
+      return { buildup: tradeBuildups.find((b) => b.id === m[2]) };
+    }),
+    r("POST", `${A}/buildups/${T}/retire`, (m) => { tradeBuildups = tradeBuildups.filter((b) => b.id !== m[2]); return { retired: true }; }),
+    r("GET", `${A}/estimates/${T}\\.xlsx`, () => ({ __raw: { status: 200,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", body: "PK-demo",
+      headers: { "content-disposition": 'attachment; filename="Estimate_2026-11-15.xlsx"', "access-control-expose-headers": "Content-Disposition" } } })),
+    r("POST", `${A}/estimates`, (m, url, req) => {
+      if (!tradeOn) return tradeOff;
+      tradeEstimates.unshift({ id: F.tradeEstimate.id, title: F.tradeEstimate.title, total_cents: F.tradeEstimate.total_cents,
+        created_at: "2026-11-15T07:00:00Z", request: req.postDataJSON() });
+      return { estimate: F.tradeEstimate, text: "Estimate: …" };
+    }),
+    r("GET", `${A}/estimates`, () => (tradeOn ? { estimates: tradeEstimates } : tradeOff)),
+    r("GET", `${A}/ai/usage`, () => aiUsage),
+    r("POST", `${A}/ai/topup`, (m, url, req) => {
+      const c = req.postDataJSON()?.amount_cents;
+      aiUsage = { ...aiUsage, requested: [...aiUsage.requested, { id: `tu-${c}`, amount: c, requested_at: "2026-11-14T09:00:00Z" }] };
+      return { request: { id: `tu-${c}`, amount: c }, already: false, message: `Top-up of R${c / 100} requested. We'll send an invoice; it's added as soon as it's paid.` };
+    }),
+    r("POST", `${A}/conversations/${T}/feedback`, () => ({ ok: true })),
+    r("GET", `${A}/assistant/history`, () => ({ messages: [], open_chat: !!F.assistantChat.openChat })),
+    r("GET", `${A}/me/memory`, () => ({ enabled: true, limit: 30, notes: myNotes })),
+    r("POST", `${A}/me/memory`, (m, url, req) => { myNotes.push({ id: `n${Date.now()}`, text: req.postDataJSON()?.text }); return { ok: true }; }),
+    r("DELETE", `${A}/me/memory/${T}`, (m) => { const i = myNotes.findIndex((n) => n.id === m[m.length - 1]); if (i >= 0) myNotes.splice(i, 1); return { ok: true }; }),
+    r("DELETE", `${A}/me/memory`, () => { myNotes.length = 0; return { ok: true, removed: 1 }; }),
+    r("GET", `${A}/me/prefs`, () => F.myVula),
+    r("PATCH", `${A}/me/prefs`, (m, url, req) => ({ ok: true, prefs: req.postDataJSON() || {} })),
     r("GET", `${A}/persona`, () => F.persona),
-    r("PATCH", `${A}/persona`, () => ({ ok: true })),
+    r("PATCH", `${A}/persona`, (m, url, req) => ({ ok: true, ...(req.postDataJSON() || {}) })),
     r("POST", `${A}/persona/analyze`, () => ({ suggested: F.persona.persona_prompt_suggested, sample_count: 42 })),
     r("POST", `${A}/agent-teach`, () => ({ ok: true })),
     r("GET", `${A}/automations`, () => ({ automations: F.automations })),
@@ -410,10 +531,10 @@ function routes(role, modules = []) {
 
 const seenUnmatched = new Set();
 
-export async function installMockApi(page, { role = "owner", modules = [] } = {}) {
+export async function installMockApi(page, { role = "owner", modules = [], features = [] } = {}) {
   // modules: extra tenant modules for one test (e.g. "followups"), so the shared fixture — and the
   // flag-off baseline screenshots — stay as they are
-  const table = routes(role, modules);
+  const table = routes(role, modules, features);
   const debug = process.env.MOCK_DEBUG === "1";
 
   // Offline: anything that isn't the dev server or the fake hosts is aborted (fonts, map tiles…).
@@ -442,7 +563,7 @@ export async function installMockApi(page, { role = "owner", modules = [] } = {}
       const hit = url.pathname.match(re);
       if (!hit) continue;
       const out = fn(hit, url, req);
-      if (out && out.__raw) return route.fulfill({ ...out.__raw, headers: cors });
+      if (out && out.__raw) return route.fulfill({ ...out.__raw, headers: { ...cors, ...(out.__raw.headers || {}) } });
       return route.fulfill({ ...json(out), headers: cors });
     }
 

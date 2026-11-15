@@ -5,7 +5,7 @@ vula/meetings.py — a team member's own meetings, booked on WhatsApp, with a re
 the address to open in maps?" Step 1 of meeting prep:
 
   "Meeting with Acme Builders Thursday 10am at 12 Main Road, Paarden Eiland"
-      → booked for the person who said it (vula_meetings, migration 258), read back, and
+      → booked for the person who said it (vula_meetings, migration 275), read back, and
         confirmed with the address and a Google Maps link
   "remind me an hour before"
       → a WhatsApp at that time with who, when, the address and the map link. No reminder is
@@ -29,11 +29,11 @@ log = logging.getLogger(__name__)
 
 TABLE = "vula_meetings"
 _COLS_BASE = "id,tenant_id,created_by,with_name,contact_phone,address,notes,starts_at,remind_minutes,reminded_at,status"
-_COLS = _COLS_BASE + ",with_brief"          # migration 263
+_COLS = _COLS_BASE + ",with_brief"          # migration 280
 
 
 def _select(build):
-    """Run a select with the brief flag, or without it before migration 263 is applied."""
+    """Run a select with the brief flag, or without it before migration 280 is applied."""
     try:
         return build(_COLS).execute().data or []
     except Exception:
@@ -111,7 +111,7 @@ def create(tenant_id: str, *, created_by: str, with_name: str, starts_at: dateti
            "notes": (notes or "").strip()[:1000] or None, "starts_at": starts_at.isoformat(),
            "remind_minutes": remind_minutes or None}
     if with_brief:
-        row["with_brief"] = True                       # migration 263
+        row["with_brief"] = True                       # migration 280
     try:
         res = _client().table(TABLE).insert(row).execute()
     except Exception:
@@ -214,7 +214,7 @@ async def send_due_reminders(now: Optional[datetime] = None) -> int:
                        .lte("starts_at", (now + timedelta(minutes=2880)).isoformat())
                        .limit(500))
     except Exception as exc:
-        log.debug("meeting reminders skipped (run migration 258?): %s", exc)
+        log.debug("meeting reminders skipped (run migration 275?): %s", exc)
         return 0
     sent = 0
     for m in rows:

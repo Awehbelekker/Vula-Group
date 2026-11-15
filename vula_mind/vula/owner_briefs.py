@@ -10,7 +10,7 @@ business switched it on, in onboarding (onboard_wa "briefs" step), by asking on 
 (commerce_admin owner_briefs tool) or in Team › Notices. Nothing turns it on for everyone. The
 owner chooses the time and the days, and Vula asks when they switch it on without saying.
 
-Stored in vula_tenant_config.owner_briefs (migration 257):
+Stored in vula_tenant_config.owner_briefs (migration 274):
   {"morning": {"on": true, "hour": 7, "minute": 0, "days": [0, 1, 2, 3, 4]},
    "weekly":  {"on": true, "day": 0, "hour": 8, "minute": 0}}
 Days are 0 = Monday … 6 = Sunday, times SAST.
@@ -138,7 +138,7 @@ def saved_for(tenant_id: str) -> Dict[str, Dict[str, Any]]:
         from vula.api.tenants import get_config
         raw = get_config(tenant_id).get("owner_briefs") or {}
     except Exception as exc:
-        log.debug("owner brief settings unread (run migration 257?): %s", exc)
+        log.debug("owner brief settings unread (run migration 274?): %s", exc)
         raw = {}
     if not isinstance(raw, dict):
         return {}

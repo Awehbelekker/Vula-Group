@@ -458,7 +458,7 @@ def checkout_prompt(tenant_id: str, cart: Dict[str, Any]) -> Optional[str]:
         prod = it.get("commerce_products") or {}
         cents = _line_cents(it["quantity"], it["unit_price_cents"])
         subtotal += cents
-        lines.append(f"• {_fmt_qty(prod, it['quantity'])} × {prod.get('name', 'Item')} — R{cents / 100:,.2f}")
+        lines.append(f"• {_fmt_qty(prod, it['quantity'])} × {_line_name(it)} — R{cents / 100:,.2f}")
     fee = ("" if not service.delivery_fee_known(tenant_id)
            else f"\nDelivery: R{service.delivery_fee_cents(tenant_id, cart, subtotal) / 100:,.2f}")
     return ("🧾 *Checkout*\n" + "\n".join(lines) + f"\nSubtotal: R{subtotal / 100:,.2f}" + fee
@@ -544,6 +544,14 @@ def _line_cents(qty, unit_price_cents) -> int:
     return int(round(float(qty) * float(unit_price_cents or 0)))
 
 
+def _line_name(item: Dict[str, Any]) -> str:
+    """A cart line as the customer sees it: 'Day Bag (Board Size: 9'6", Primary Colour: Olive
+    Green)' — the variant's options and the choices made (migration 267)."""
+    name = (item.get("commerce_products") or {}).get("name", "Item")
+    label = service.line_label(item)
+    return f"{name} ({label})" if label else name
+
+
 def _match_variant(variants: List[Dict[str, Any]], option_names: List[str], text: str):
     """Resolve a customer's free-text option choice (e.g. 'large', 'size L red') to a single
     variant. Returns (variant, unresolved_option_names): variant is set only on an exact single
@@ -612,6 +620,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                     "product": {"type": "string", "description": "Product name or slug."},
                     "quantity": {"type": "number", "description": "Amount to add. For products priced per kg, this is the number of kilograms (decimals allowed, e.g. 1.5). For packs, the number of packs. Only pass the amount the customer actually said — omit it if they didn't say one, and you'll be told to ask."},
                     "variant": {"type": "string", "description": "The customer's chosen option(s) for a product that has variants, in their own words (e.g. 'large', 'red', 'size L red'). Omit for products with no options."},
+                    "choices": {"type": "string", "description": "For a product with choices (listed under `choices`, e.g. colour, nose or tail style): what the customer chose, in their own words (e.g. 'olive green, black trim, fish tail'). Omit when the product has none."},
                 },
                 "required": ["product"],
             },
@@ -1073,6 +1082,11 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
 # again (see _TOOL_NAMES comment at the top of the module).
 _TOOL_NAMES.update(s["function"]["name"] for s in TOOL_SPECS + BOOKING_TOOL_SPECS)
 
+# Real-estate businesses (the `listings` module, core/skills/listing_tools.py): listing search,
+# details, viewing and call-back requests instead of the shop tools. Other tenants never see them.
+from core.skills import listing_tools as _lt  # noqa: E402
+_TOOL_NAMES.update(_lt.CUSTOMER_TOOL_NAMES)
+
 # Booking-focused tenants (see _is_booking_focused) get this instead of the full storefront
 # TOOL_SPECS — ask_team (the one universal, non-storefront tool) plus the booking tools.
 _ASK_TEAM_ONLY = [t for t in TOOL_SPECS if t["function"]["name"] == "ask_team"]
@@ -1100,7 +1114,9 @@ class CommerceAssistantSkill(BaseSkill):
 
     # ── Entry point ──────────────────────────────────────────────────────────
     async def run(self, inp: SkillInput) -> SkillOutput:
-        if _HOW_TO_ORDER_RE.search(inp.question or "") and not _is_booking_focused(inp.tenant_id):
+        listings = _lt.tenant_has_listings(inp.tenant_id)
+        if (_HOW_TO_ORDER_RE.search(inp.question or "") and not listings
+                and not _is_booking_focused(inp.tenant_id)):
             return SkillOutput(answer=HOW_TO_ORDER_REPLY, skill_name=self.name, confidence=0.95)
         ctx = {
             "tenant_id": inp.tenant_id,
@@ -1112,6 +1128,7 @@ class CommerceAssistantSkill(BaseSkill):
             "customer_phone": inp.metadata.get("customer_phone"),
             "bookings": _tenant_has_bookings(inp.tenant_id),
             "booking_focused": _is_booking_focused(inp.tenant_id),
+            "listings": listings,
             "current_message": inp.question,
             "language": _expected_language(inp.metadata.get("preferred_language"), inp.question),
             "forwarded": bool(inp.metadata.get("forwarded")),
@@ -1134,14 +1151,23 @@ class CommerceAssistantSkill(BaseSkill):
         # What we already know about this customer, so a repeat buyer isn't asked for their name
         # and address all over again (2026-09-01). Best-effort — never block a live order on it.
         profile = None
-        if ctx["customer_phone"] and not ctx["booking_focused"]:
+        if ctx["customer_phone"] and not ctx["booking_focused"] and not listings:
             try:
                 profile = await service.get_customer_profile(inp.tenant_id, ctx["customer_phone"])
             except Exception as exc:
                 logger.debug("customer profile lookup skipped: %s", exc)
         system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"),
                                          booking_focused=ctx["booking_focused"],
-                                         customer_profile=profile)
+                                         customer_profile=profile, listings=listings)
+        # What was said in earlier conversations with this customer — the model itself only
+        # reads the last 24 hours, so someone back after a month was a stranger
+        # (vula/client_memory.py). Matched on the number this message came from, nothing else.
+        if ctx["customer_phone"]:
+            try:
+                from vula import client_memory
+                system_msg += client_memory.block_for_prompt(inp.tenant_id, ctx["customer_phone"])
+            except Exception as exc:
+                logger.debug("client note skipped: %s", exc)
         if ctx["forwarded"]:
             # 2026-10-23 (Off the Hook): a forwarded post put 2 × Hake Fillets in a cart.
             system_msg += FORWARDED_NOTE
@@ -1156,7 +1182,8 @@ class CommerceAssistantSkill(BaseSkill):
                 raise RuntimeError("empty answer from agent loop")
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
             answer = substitute_if_leaked(answer, skill=self.name, customer=True, tenant_id=inp.tenant_id,
-                                          tool_names=[t["function"]["name"] for t in TOOL_SPECS])
+                                          tool_names=[t["function"]["name"] for t in TOOL_SPECS]
+                                          + sorted(_lt.CUSTOMER_TOOL_NAMES))
             if _repeats_last_reply(answer, inp.conversation_history or ""):
                 answer = REPEAT_REPLY
             built_from_data = False
@@ -1177,7 +1204,7 @@ class CommerceAssistantSkill(BaseSkill):
             # 2026-10-22: strict — a price stated with NO lookup this turn used to pass unchecked.
             # Trusted besides the tools: the business's own money facts, the customer's words,
             # and what Vula already told this customer earlier in the chat.
-            grounding = {"kb"} | {t["function"]["name"] for t in TOOL_SPECS}
+            grounding = {"kb"} | {t["function"]["name"] for t in TOOL_SPECS} | _lt.CUSTOMER_TOOL_NAMES
             trusted = " ".join([_price_facts_text(inp.tenant_id), inp.question or "",
                                 inp.conversation_history or ""])
             bad_prices = ([] if built_from_data else
@@ -1206,6 +1233,7 @@ class CommerceAssistantSkill(BaseSkill):
                 confidence=confidence,
                 sources=sources,
                 media_url=ctx.get("media_url"),
+                cards=ctx.get("cards"),
             )
         except Exception as exc:
             logger.warning("commerce_assistant tool loop failed (%s) — falling back", exc)
@@ -1251,7 +1279,8 @@ class CommerceAssistantSkill(BaseSkill):
 
     def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None,
                        booking_focused: bool = False,
-                       customer_profile: Optional[Dict[str, Any]] = None) -> str:
+                       customer_profile: Optional[Dict[str, Any]] = None,
+                       listings: bool = False) -> str:
         # 2026-08-08: this skill never called the platform's shared behaviour_preamble() at
         # all (confirmed while auditing every tool-calling skill for the same gap fixed in
         # commerce_admin.py earlier the same day) — it hand-rolled just an UNTRUSTED_CONTENT_RULE
@@ -1298,15 +1327,22 @@ class CommerceAssistantSkill(BaseSkill):
                        "Turn a day the customer names (\"Thursday\", \"tomorrow\") into its "
                        "YYYY-MM-DD date yourself when calling a tool — don't ask them for it.")
 
+        # The customer voice (the "chat" part of the business's voice). When the composed voice
+        # is in force it arrives through behaviour_preamble instead (core/voice.py).
         persona_block = ""
         try:
-            from vula.api.tenants import get_config
-            from vula.commerce.voice_profile import persona_part
-            persona = persona_part((get_config(tenant_id) or {}).get("persona_prompt") or "", "chat")
-            if persona:
-                persona_block = f"\n\nHow you should sound: {persona}"
+            from core import voice
+            if not voice.active():
+                persona = voice.company_voice(tenant_id, "customer")
+                if persona:
+                    persona_block = f"\n\nHow you should sound: {persona}"
         except Exception:
             pass
+
+        # Real-estate businesses: listings-first prompt (core/skills/listing_tools.py).
+        if listings:
+            return (_lt.customer_prompt(lang_block, persona_block)
+                    + "\n\n" + behaviour_preamble(agentic=True) + kb_block)
 
         # health/services tenants (see _is_booking_focused) get a bookings-first prompt instead
         # of the storefront one below — they have no products, cart, or orders, so the fish-shop
@@ -1526,7 +1562,9 @@ class CommerceAssistantSkill(BaseSkill):
         model, api_key, api_base = await resolve_generation_route(
             task_type="commerce_chat", messages=messages, run_id=run_id)
 
-        if ctx.get("booking_focused"):
+        if ctx.get("listings"):
+            tools = _ASK_TEAM_ONLY + _lt.CUSTOMER_TOOL_SPECS
+        elif ctx.get("booking_focused"):
             tools = _ASK_TEAM_ONLY + BOOKING_TOOL_SPECS
         elif ctx.get("bookings"):
             tools = TOOL_SPECS + BOOKING_TOOL_SPECS
@@ -1696,6 +1734,10 @@ class CommerceAssistantSkill(BaseSkill):
             log_tool_call(tid, "customer", name, args)
         except Exception:
             pass
+        if name in _lt.CUSTOMER_TOOL_NAMES:
+            if not ctx.get("listings"):
+                return {"error": f"unknown tool {name}"}
+            return await _lt.run_customer_tool(name, args, ctx)
         if name == "list_products":
             return await self._exec_list_products(tid, args)
         if name == "add_to_cart":
@@ -1975,6 +2017,8 @@ class CommerceAssistantSkill(BaseSkill):
                 "sold_by": p.get("sold_by"),
                 "size": p.get("pack_size") or (f"{p['weight_grams']}g" if p.get("weight_grams") else None),
                 **({"options": p["options"]} if p.get("options") else {}),
+                **({"choices": {c["name"]: c["values"] for c in service.product_choices(p)}}
+                   if service.product_choices(p) else {}),
             }
 
         # 2026-10-13 (SeedleMe): a shop that lists each colour as its own product gets one entry
@@ -2046,6 +2090,22 @@ class CommerceAssistantSkill(BaseSkill):
             if not variant.get("in_stock", True):
                 return {"error": f"That option of '{product['name']}' is currently out of stock."}
 
+        # 13 Nov 2026 (Kelp Gear, bags made to order): choices that don't change the price
+        # (colour, trim, nose, tail) are asked for like an option, and kept with the line.
+        chosen: Dict[str, str] = {}
+        if service.product_choices(product):
+            said = " ".join(str(args.get(k) or "") for k in ("variant", "choices"))
+            chosen, missing = service.resolve_choices(product, said)
+            if missing:
+                allowed = {c["name"]: c["values"] for c in service.product_choices(product)
+                           if c["name"] in missing}
+                return {"needs_selection": True, "product": product["name"],
+                        **({"chosen_so_far": chosen} if chosen else {}),
+                        "choices": allowed,
+                        "message": "Nothing was added. Ask the customer which " + " and ".join(missing)
+                                   + " they'd like (from the values listed), then call add_to_cart again "
+                                     "with everything they've chosen in `choices`."}
+
         # 2026-10-05 (off-the-hook): "I'd like to order Hake Centre Cuts" — no amount — was added
         # as 1kg anyway, then "did you want 1kg, or a different amount?" got "Yes" and a bare 👍.
         # The prompt's CART DISCIPLINE rule (add only with a quantity) didn't hold, so it's code:
@@ -2061,10 +2121,11 @@ class CommerceAssistantSkill(BaseSkill):
         qty = _norm_qty(product, args.get("quantity", 1))
         cart = await service.get_or_create_cart(tenant_id, session_id, phone)
         await service.add_to_cart(tenant_id, cart["id"], product["id"], qty,
-                                  variant_id=variant["id"] if variant else None)
+                                  variant_id=variant["id"] if variant else None,
+                                  **({"choices": chosen} if chosen else {}))
         unit = "/kg" if _is_kg(product) else ""
-        variant_label = (", ".join(f"{k}: {v}" for k, v in (variant.get("option_values") or {}).items())
-                        if variant else None)
+        variant_label = service.line_label(
+            {"commerce_product_variants": variant, "choices": chosen}) or None
         # 2026-08-14: show the customer a real photo of what they just added — image_url is a
         # real, populated column that was never surfaced anywhere in the ordering conversation
         # before this. WhatsApp send-side already existed (_send_wa_image, used only for the
@@ -2113,13 +2174,10 @@ class CommerceAssistantSkill(BaseSkill):
         lines, subtotal = [], 0
         for it in items:
             prod = it.get("commerce_products") or {}
-            variant = it.get("commerce_product_variants")
-            options = (variant or {}).get("option_values") or {}
-            label = ", ".join(f"{k}: {v}" for k, v in options.items())
             line_total = _line_cents(it["quantity"], it["unit_price_cents"])
             subtotal += line_total
             lines.append(
-                {"name": f"{prod.get('name')} ({label})" if label else prod.get("name"),
+                {"name": _line_name(it),
                  "quantity": _fmt_qty(prod, it["quantity"]),
                  "line_total": f"R{line_total / 100:.2f}"}
             )
@@ -2709,7 +2767,7 @@ class CommerceAssistantSkill(BaseSkill):
 
         item_lines = "\n".join(
             f"• {_fmt_qty(it.get('commerce_products') or {}, it['quantity'])} "
-            f"{(it.get('commerce_products') or {}).get('name', 'Item')} — "
+            f"{_line_name(it)} — "
             f"R{_line_cents(it['quantity'], it['unit_price_cents']) / 100:.2f}" for it in items)
         addr = (args.get("delivery_address") or "").strip()
         pay = ow.PAYMENT_LABELS.get(method) if method in enabled else None
@@ -2939,7 +2997,7 @@ class CommerceAssistantSkill(BaseSkill):
         for it in items:
             prod = it.get("commerce_products") or {}
             qty, unit = it["quantity"], it["unit_price_cents"]
-            lines.append({"name": prod.get("name", "Item"), "quantity": _fmt_qty(prod, qty),
+            lines.append({"name": _line_name(it), "quantity": _fmt_qty(prod, qty),
                           "line_total": f"R{_line_cents(qty, unit) / 100:.2f}"})
 
         total = order["total_cents"]
@@ -3035,6 +3093,11 @@ class CommerceAssistantSkill(BaseSkill):
         self, inp: SkillInput, ctx: Dict[str, Any], kb_context: str, sources: List[Dict[str, Any]]
     ) -> SkillOutput:
         import litellm
+
+        if ctx.get("listings"):
+            # No listing data on this path, so a model here could only invent properties.
+            return SkillOutput(answer=_lt.FALLBACK_REPLY, skill_name=self.name, confidence=0.3,
+                               sources=sources)
 
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route(task_type="commerce_assistant")

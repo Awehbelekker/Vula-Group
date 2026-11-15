@@ -32,7 +32,14 @@ class Settings(BaseSettings):
     model_worker: str = "deepseek-r1:8b"
     model_reasoner: str = "deepseek-r1:14b"
     model_embed: str = "bge-m3"
-    model_ocr: str = "llava:7b"
+    model_ocr: str = "llava:7b"            # local vision: Smart Scanner fields, drawing reader
+    # Local reader for scanned document pages (vula/ingestion/pipeline.py OCRProcessor): a
+    # document-OCR model, not a general vision model. GLM-OCR (0.9B, ~2.2 GB, MIT) fits next to
+    # the 8B text model on an 8 GB card. Not installed on the box -> model_ocr, as before.
+    model_doc_ocr: str = "glm-ocr"
+    # Models the local box should hold; any missing is downloaded through the tunnel after boot
+    # (vula/local_models.py). Comma-separated Ollama names; blank = never pull. Never deletes.
+    local_models_ensure: str = ""
     model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
     model_image: str = "google/gemini-2.5-flash-image"  # OpenRouter image GENERATION (AI product photos)
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
@@ -74,6 +81,10 @@ class Settings(BaseSettings):
     # ── Qdrant ──────────────────────────────────────────────────────────────
     qdrant_base: str = "http://localhost:6333"
     qdrant_api_key: str = ""            # set if Qdrant is running with auth
+    # Copy every collection to a new cluster (vula/integrations/qdrant_migrate.py), e.g. moving the
+    # knowledge base to the EU. Blank = never. Switch over by pointing QDRANT_BASE/KEY at it.
+    qdrant_migrate_to_base: str = ""
+    qdrant_migrate_to_api_key: str = ""
 
     # ── API Server ──────────────────────────────────────────────────────────
     api_host: str = "0.0.0.0"
@@ -103,6 +114,9 @@ class Settings(BaseSettings):
     # POPIA (2026-10-31): uploaded plans and their takeoff jobs are deleted this many days after
     # upload (vula/takeoff/api.purge_expired, run daily). 0 keeps them forever — not recommended.
     takeoff_retention_days: int = 90
+    # How often connected mailboxes are checked for new mail (vula/api/server.py::_email_sync_loop).
+    # A check with nothing new is one IMAP login; AI cost is per email read, not per check.
+    email_sync_minutes: int = 10
     # POPIA s14 retention, in days (0 keeps it). Agreed 9 Nov 2026: technical data briefly,
     # conversations and unconverted leads for a year. vula/retention.py; docs/security-model.md.
     wa_dedup_retention_days: int = 30          # vula_wa_msg_dedup (inbound dedupe, once-only send keys)
@@ -110,6 +124,10 @@ class Settings(BaseSettings):
     app_error_retention_days: int = 90         # vula_app_errors (by last_seen)
     lead_retention_days: int = 365             # vula_website_leads not won
     turn_retention_days: int = 365             # vula_turns, vula_kb_turns
+    # Conversations and the per-client note (vula/client_memory.py), counted from the LAST message
+    # in the conversation — an active client keeps their history. 12 Nov 2026, owner's decision:
+    # 24 months. 0 keeps them indefinitely.
+    conversation_retention_days: int = 730     # commerce_conversation_*, commerce_client_summaries
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
@@ -238,6 +256,14 @@ class Settings(BaseSettings):
     # recorded, nothing is silently substituted.
     whatsapp_notify_template: str = ""
     whatsapp_notify_template_lang: str = "en"
+    # Approved Meta UTILITY template that thanks someone who left their WhatsApp number on a
+    # business's website enquiry form (2026-11-10, vula/listings/service.py). They asked to be
+    # contacted, but haven't messaged the business, so free-form text can't reach them; this
+    # template can, and their reply opens the 24-hour window for the agent. Body parameters, in
+    # order: first name, business name, what they asked about. Wording to submit to Meta:
+    # docs/whatsapp-enquiry-template.md. Empty (the default) sends nothing — today's behaviour.
+    whatsapp_enquiry_template: str = ""
+    whatsapp_enquiry_template_lang: str = "en"
     # Approved Meta template for payment reminders outside the 24-hour window. Body parameters,
     # in order: customer name, invoice number, amount owed, pay-page link. Unset → a reminder
     # that can't go as free text is logged as an error (vula/api/commerce._send_reminder).
@@ -393,7 +419,10 @@ class Settings(BaseSettings):
     # /v1/team/{t}/* and /v1/users/{t}/* require a verified Supabase JWT belonging to that
     # tenant (or master). Shipped dark (false) so the dashboard's token-attach wrapper can be
     # verified first, then flipped via env — same env-flip rollout as the verification layer.
-    enforce_tenant_auth: bool = False
+    # 13 Nov 2026 audit: on by default — production has had it on since September, and a missing
+    # variable must not leave every business's admin routes unchecked. (Tests set it off in
+    # tests/conftest.py; the auth tests switch it on themselves.)
+    enforce_tenant_auth: bool = True
 
     # ── Google OAuth app (one app for all tenants — Drive + Gmail) ──────────
     # Create in Google Cloud Console; redirect URI = <api>/v1/google/oauth/callback
@@ -473,8 +502,75 @@ class Settings(BaseSettings):
     # Rand per US dollar for showing AI/infra costs in R on Master › Usage (display only — billing
     # and spend caps stay in USD, which is what the providers charge). Env: USD_ZAR_RATE.
     usd_zar_rate: float = 18.0
+    # Vula's price for cloud AI over its cost (vula/ai_allowance.py): a business's allowance, usage
+    # and top-ups are all rand at cost × usd_zar_rate × this. 14 Nov 2026 (Ian): cost plus 30%.
+    ai_markup: float = 1.30
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
+
+    # ── Voice (core/voice.py) ────────────────────────────────────────────────
+    # One composed voice for every skill: the company voice (team or customer), the staff
+    # member's own style, and the channel. Off = replies sound exactly as before (the company
+    # voice in the two commerce skills only). Turn on per environment once the weekly benchmark
+    # has been compared before/after — it changes every prompt at once.
+    voice_compose_enabled: bool = False
+
+    # ── Client memory (vula/client_memory.py) ────────────────────────────────
+    # A short dated note per client, written when a conversation goes quiet and shown to the
+    # assistant on their next message, so a client who returns after a month isn't a stranger.
+    # One local model call per conversation. Off = nothing is written or shown.
+    client_memory_enabled: bool = False
+
+    # ── Private notes (vula/personal_memory.py) ──────────────────────────────
+    # A staff member can ask Vula to remember something about them ("remember that I…"). It is
+    # kept for that person only, encrypted, and shown to the assistant only when they are the
+    # one talking. Nothing is saved unless they ask. Off = the phrases are not recognised and
+    # nothing is stored or shown.
+    personal_memory_enabled: bool = False
+    # A staff member's own thread with Vula also gets a few of their own messages from earlier in
+    # the week, cut short and marked as old (vula/commerce/service.py::earlier_topics), so
+    # planning that spans days isn't lost at the 24-hour history window. No model call.
+    history_earlier_topics_enabled: bool = False
+    # "What did we decide about…": search a staff member's OWN earlier threads with Vula
+    # (vula/chat_recall.py), dated quotes, old figures re-checked. No model call to search.
+    chat_recall_enabled: bool = False
+    chat_recall_days: int = 180
+
+    # ── Accuracy (12 Nov 2026) ───────────────────────────────────────────────
+    # A question about this business's own facts (hours, delivery, address, policies) with no
+    # document of its own behind it is declined instead of answered from general knowledge or a
+    # web search (core/skills/reasoning.py). Expect more "I don't have that" and more hand-offs
+    # to a person until the business profile is filled in.
+    strict_tenant_grounding: bool = False
+    # Short replies with no figures ("Yes, we deliver to Paarl") are checked by the second-opinion
+    # pass when the business's documents were retrieved for them (core/verification.py).
+    verify_short_assertions: bool = False
+    # A follow-up ("and for next week?") is routed with the previous message and the skill that
+    # answered it in view, and the last skill survives a restart (vula/route_memory.py).
+    follow_up_routing_enabled: bool = False
+
+    # ── Advisor (employees/advisor) ───────────────────────────────────────────
+    # The AI advisor — a thinking partner for staff (ideas, options, planning), read-only, with
+    # facts and ideas kept apart. Off = each business switches it on for itself under Team ›
+    # AI employees. On = it is on for every business unless they switch it off.
+    advisor_mode_enabled: bool = False
+    # The dashboard's open chat, "Ask anything" (13 Nov 2026): a staff member's general question
+    # (ideas, writing, planning) answered by the reasoning skill on Vula's own AI, local first;
+    # a question about the business's records still goes to the business assistant. For one
+    # business: Master › tenant › Features to pilot (vula/features.py "open_chat").
+    open_chat_enabled: bool = False
+    # Trade costing (vula/commerce/buildups.py): build-ups researched once, confirmed once, looked up.
+    trade_costing_enabled: bool = False
+    open_chat_per_hour: int = 60          # messages per person per hour in the open chat
+    research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
+    # Cut the research prompt to fit the local model so Vula's own model writes it; off = the
+    # full pages, which goes to the cloud for size (vula/research.py).
+    research_local_first: bool = True
+
+    # Website import (vula/commerce/site_import.py): copy each product's photos into the
+    # business's own storage, so they survive the old site changing. Off = keep the shop's CDN
+    # addresses, as before.
+    site_import_copy_images: bool = True
 
     # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
     # HRM's skill router is pure keyword substring matching; anything that misses every

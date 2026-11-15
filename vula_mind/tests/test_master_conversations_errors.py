@@ -13,6 +13,10 @@ from vula.api import master
 
 TENANT = "off-the-hook"
 
+# These threads are customers'. A staff member's own thread is hidden from this view — see
+# tests/test_inbox_staff_threads.py.
+_NO_STAFF = patch("vula.identity.staff_phone_digits", return_value=set())
+
 
 def _chain(data):
     """A table().select().eq().gte().order().limit().execute() chain that returns `data`
@@ -42,19 +46,20 @@ async def test_conversations_lists_threads_via_chat_history_db():
                      "last_at": "2026-09-15T10:00:00+00:00"}]
     fake_db = MagicMock()
     fake_db.list_threads.return_value = fake_threads
-    with patch("vula.chat.history.get_db", return_value=fake_db):
+    with patch("vula.chat.history.get_db", return_value=fake_db), _NO_STAFF:
         out = await master.master_tenant_conversations(TENANT)
     assert out == {"tenant_id": TENANT, "threads": fake_threads}
-    fake_db.list_threads.assert_called_once_with(TENANT, limit=30)
+    # over-reads by 50 so dropping the business's own people's threads can't shorten the list
+    fake_db.list_threads.assert_called_once_with(TENANT, limit=80)
 
 
 @pytest.mark.asyncio
 async def test_conversations_caps_limit_at_100():
     fake_db = MagicMock()
     fake_db.list_threads.return_value = []
-    with patch("vula.chat.history.get_db", return_value=fake_db):
+    with patch("vula.chat.history.get_db", return_value=fake_db), _NO_STAFF:
         await master.master_tenant_conversations(TENANT, limit=9999)
-    fake_db.list_threads.assert_called_once_with(TENANT, limit=100)
+    fake_db.list_threads.assert_called_once_with(TENANT, limit=150)     # 100 shown + the over-read
 
 
 @pytest.mark.asyncio
@@ -64,7 +69,7 @@ async def test_conversation_messages_for_one_thread():
                              phone="27821111111", tenant_id=TENANT)]
     fake_db = MagicMock()
     fake_db.get.return_value = fake_msgs
-    with patch("vula.chat.history.get_db", return_value=fake_db):
+    with patch("vula.chat.history.get_db", return_value=fake_db), _NO_STAFF:
         out = await master.master_tenant_conversation_messages(TENANT, "27821111111")
     assert out["tenant_id"] == TENANT
     assert out["phone"] == "27821111111"

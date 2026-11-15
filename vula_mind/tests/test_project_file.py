@@ -276,3 +276,20 @@ def test_the_api_is_full_members_only(monkeypatch):
         assert blocked is not None and blocked.status_code == 403
         monkeypatch.setattr(tenant_auth, "member_scope", full)
         assert asyncio.run(server._guard_check("GET", path, "Bearer x")) is None
+
+
+def test_the_client_copy_leaves_out_documents_that_name_another_project(world, monkeypatch):
+    """13 Nov 2026 audit: the client link's page hid a document naming another project (#297), but
+    "Download all" (the client copy of the pack) still held it — another client's site and amounts."""
+    from vula.commerce import project_share_docs as sd
+    monkeypatch.setattr(sd, "other_projects_by_doc", lambda *a, **k: {})
+    _, before = _pack(world, "client")
+    sup = pf._Suppliers(pf._supplier_rows(T), "Thandi Builders")
+    client_rows = [r for r in pf.organise(pf._documents(T, "Seaview"), sup)["rows"] if r["client"]]
+    assert client_rows, "the test world needs at least one client document"
+    leak = str(client_rows[0]["id"])
+    monkeypatch.setattr(sd, "other_projects_by_doc", lambda *a, **k: {leak: ["Paarden Island"]})
+    _, after = _pack(world, "client")
+    assert after["documents"] == before["documents"] - 1
+    _, internal = _pack(world, "internal")                       # the business's own copy keeps it
+    assert internal["documents"] > after["documents"]

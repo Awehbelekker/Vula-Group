@@ -35,7 +35,7 @@ def test_one_failing_rule_never_stops_the_others(monkeypatch):
 def test_the_registered_rules():
     assert [r.name for r in retention.RULES] == [
         "takeoff_plans", "whatsapp_dedupe", "whatsapp_logins", "app_errors", "website_leads",
-        "conversation_turns"]
+        "conversation_turns", "conversations"]
 
 
 def test_the_agreed_periods():

@@ -2,7 +2,7 @@
 vula/acting.py — who is doing this, for "who made it" on quotes, invoices and orders.
 
 12 Nov 2026: so sales can be counted per person (vula/team_activity.py), every quote, invoice
-and order records the team member who made it (created_by, migration 260). Rather than threading
+and order records the team member who made it (created_by, migration 277). Rather than threading
 a parameter through every caller, the request says once who is acting:
 
   WhatsApp   commerce_admin._dispatch_tool sets the sender's number for the tool call

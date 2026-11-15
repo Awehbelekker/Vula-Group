@@ -1,4 +1,4 @@
-"""Who made each quote, invoice and order (vula/acting.py, migration 260), and sales per person."""
+"""Who made each quote, invoice and order (vula/acting.py, migration 277), and sales per person."""
 import asyncio
 from datetime import datetime
 

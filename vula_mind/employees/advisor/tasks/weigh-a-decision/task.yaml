@@ -1,0 +1,17 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+title: Weigh a decision
+summary: Set out the pros and cons of a choice, and give a view when asked for one.
+triggers:
+- pros and cons
+- help me decide
+- what do you think
+- your opinion
+- thinking of
+- thinking about
+tools:
+- finance_insights
+- cash_summary
+- financial_report
+- outstanding_invoices
+- project_profit
+- price_advice

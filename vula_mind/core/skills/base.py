@@ -179,9 +179,10 @@ def caller_block(caller_name: str = "", caller_role: str = "") -> str:
 
 def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_language: str = "",
                        caller_name: str = "", caller_role: str = "") -> str:
-    """Assemble the shared behaviour policy. `persona` (optional, per-tenant) sets the
-    voice/style; the rest enforces integrity, honesty, reasoning, conversation, and
-    untrusted-content rules. `agentic=True` also appends AGENTIC_RULES — pass this for any
+    """Assemble the shared behaviour policy: integrity, honesty, reasoning, conversation and
+    untrusted-content rules, then the voice for this turn (core/voice.py — company voice, the
+    person's own style, the channel) when the entry point has set one. `persona` is an explicit
+    extra header that no caller passes today; the voice comes from core/voice.py. `agentic=True` also appends AGENTIC_RULES — pass this for any
     skill with its own tool-calling loop (TOOL_SPECS + tool_choice='auto').
 
     `caller_name`/`caller_role` (optional) — who is on the other end, when they're the tenant's
@@ -198,8 +199,24 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
     RULES' generic instruction still applies as the fallback, unchanged from before this existed."""
     from core.prompt_safety import UNTRUSTED_CONTENT_RULE
     head = (persona.strip() + "\n\n") if persona else ""
+    # The voice for this turn — company voice, the person's own style, the channel — is set once
+    # at the entry point and read here, so every skill gets it (core/voice.py). A language the
+    # person chose for themselves outranks one detected from a single message.
+    voice_block = ""
+    chosen_language = ""
+    try:
+        from core import voice
+        voice_block = voice.current_block()
+        chosen_language = voice.preferred_language()
+        preferred_language = chosen_language or preferred_language
+    except Exception:  # noqa: BLE001 — a voice must never cost a reply
+        pass
     lang_block = ""
-    if preferred_language:
+    if chosen_language == "en":
+        # They picked English for themselves: say so, or the generic "mirror their language"
+        # rule would follow a stray Afrikaans or isiZulu word.
+        lang_block = "This person has asked for replies in English, whatever language they write in.\n"
+    elif preferred_language:
         try:
             from core.lang import language_name
             name = language_name(preferred_language)
@@ -219,6 +236,18 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
         parts.append(who_block)
     if agentic:
         parts.append(AGENTIC_RULES)
+    try:
+        # Things the person talking asked Vula to remember about themselves — set by the entry
+        # point only when that person is the caller (vula/personal_memory.py). Empty otherwise.
+        from vula import personal_memory
+        notes_block = personal_memory.current_block()
+        if notes_block:
+            parts.append(notes_block)
+    except Exception:  # noqa: BLE001
+        pass
+    if voice_block:
+        # Last, after every rule: style is the lowest priority and says so itself.
+        parts.append(voice_block)
     return head + "\n".join(parts)
 
 
@@ -503,13 +532,68 @@ PRICE_CHECK_NOTE = ("I've left out a price I couldn't confirm from our price lis
                     "I'll check it for you.")
 
 
-def drop_unverified_price_sentences(answer: str, bad_prices: List[str]) -> str:
+def drop_unverified_price_sentences(answer: str, bad_prices: List[str],
+                                    note: str = PRICE_CHECK_NOTE) -> str:
     """Remove only the sentences/lines that state an unconfirmed price, keep everything else,
     and say so. Falls back to the note alone when nothing else is left."""
     parts = re.split(r"(?<=[.!?])\s+|\n", answer or "")
     kept = [p for p in parts if p.strip() and not any(b in p for b in bad_prices)]
     body = "\n".join(kept).strip() if any("\n" in (answer or "") for _ in [0]) else " ".join(kept).strip()
-    return f"{body}\n\n{PRICE_CHECK_NOTE}" if body else PRICE_CHECK_NOTE
+    return f"{body}\n\n{note}" if body else note
+
+
+# 14 Nov 2026 (DIGG): "I obtained the data from the "lookup_rate" tool, which is a part of the
+# tool results." The preamble already says never to name internal tools; the local 8B model
+# ignored it. This rewrites the names in code. A name with an underscore is never an ordinary
+# word, so it's replaced wherever it stands; a plain-word name ("calculate") only when it is
+# quoted or called a tool, so "let me calculate that" is left alone.
+_QUOTE_OPEN, _QUOTE_CLOSE = "[\"'`“‘]", "[\"'`”’]"
+_TOOL_RESULTS_RE = re.compile(r"\b(?:the\s+)?tool(?:\s+call)?\s+results?\b", re.IGNORECASE)
+DEFAULT_TOOL_LABEL = "your records"
+
+
+def plain_tool_words(answer: str, tool_names: Iterable[str],
+                     labels: Optional[Dict[str, str]] = None) -> str:
+    """`answer` with internal tool names and "tool results" put in plain words."""
+    if not answer:
+        return answer
+    out = answer
+    for name in sorted({n for n in tool_names if n}, key=len, reverse=True):
+        label = (labels or {}).get(name) or DEFAULT_TOOL_LABEL
+        n = re.escape(name)
+        suffix = r"(?:\s+(?:tool|function))"
+        if "_" in name:
+            pattern = rf"(?:\bthe\s+)?{_QUOTE_OPEN}?\b{n}\b{_QUOTE_CLOSE}?{suffix}?"
+        else:
+            pattern = (rf"(?:\bthe\s+)?(?:{_QUOTE_OPEN}{n}{_QUOTE_CLOSE}{suffix}?|\b{n}{suffix})")
+        out = re.sub(pattern, label, out, flags=re.IGNORECASE)
+    return _TOOL_RESULTS_RE.sub(DEFAULT_TOOL_LABEL, out)
+
+
+_TOOL_NAME_CACHE: Dict[type, frozenset] = {}
+
+
+def declared_tool_names(skill: Any) -> frozenset:
+    """The function names in the tool lists a skill's module declares (TOOL_SPECS,
+    ADMIN_TOOL_SPECS, CUSTOMER_TOOL_SPECS, AUTOMATION_TOOLS …). Cached per class."""
+    cls = type(skill)
+    if cls in _TOOL_NAME_CACHE:
+        return _TOOL_NAME_CACHE[cls]
+    names = set()
+    try:
+        import sys
+        module = sys.modules.get(cls.__module__)
+        for var, value in vars(module).items() if module else ():
+            if not (var.endswith("TOOL_SPECS") or var.endswith("_TOOLS")) or not isinstance(value, list):
+                continue
+            for spec in value:
+                fn = spec.get("function") if isinstance(spec, dict) else None
+                if isinstance(fn, dict) and fn.get("name"):
+                    names.add(str(fn["name"]))
+    except Exception:
+        pass
+    _TOOL_NAME_CACHE[cls] = frozenset(names)
+    return _TOOL_NAME_CACHE[cls]
 
 
 # Arithmetic stated in an answer, e.g. "11.8 x 18.2 = 215.56" or "214.76 × R198.00 = R42,522.48".
@@ -616,6 +700,80 @@ _TENANT_DATA_MARKERS = re.compile(
 # _TENANT_DATA_MARKERS with empty context is enough for it to decline.
 _POSSESSIVE_RE = re.compile(
     r"\b(my|our|ons|we|this project|hierdie projek|the client|die klant)\b", re.IGNORECASE)
+
+
+# A question about THIS business's own facts — when it's open, where it delivers, what it
+# charges for delivery, its address, its policies, how it takes payment, who to speak to. Only
+# the business can state these: the shared knowledge base holds general guidance, the web holds
+# other businesses, and a model's memory holds nothing about this one. With no document of the
+# business's own to answer from, the honest reply is "I don't have that" — the reasoning skill
+# used to answer these from general knowledge with a caveat, or from a web search that didn't
+# even include the business's name.
+_BUSINESS_FACT_TOPIC = re.compile(
+    r"\b("
+    r"open(?:ing)?\s+(?:hours?|times?)|trading\s+hours?|business\s+hours?|closing\s+time|"
+    r"(?:what|which)\s+(?:time|days?)\s+(?:do|are|is)\b|open\s+(?:on|today|tomorrow|now|this)|"
+    r"closed?\s+(?:on|today|tomorrow)|"
+    r"deliver(?:y|ies|ing)?\b|collect(?:ion)?\b|pick\s*-?\s*up|shipping|courier|"
+    r"address|located|location|directions|branch(?:es)?|where\s+(?:are|is)\b|"
+    r"(?:returns?|refunds?|exchange|cancellation|warranty|guarantee|privacy)\s+polic(?:y|ies)|"
+    r"refund|warranty|guarantee|"
+    r"payment\s+(?:methods?|options?|terms)|(?:accept|take)\s+(?:cards?|cash|eft|snapscan|zapper)|"
+    r"minimum\s+order|lead\s+time|turnaround|"
+    r"(?:phone|contact|whatsapp)\s+(?:number|details)|email\s+address|"
+    r"who\s+(?:is|are|do\s+i)\b|"
+    # Afrikaans
+    r"oop|lewer\w*|aflewer\w*|afhaal|adres|terugbetaling|waarborg"
+    r")\b", re.IGNORECASE)
+# …asked of the business itself ("do YOU deliver", "what are OUR hours", "the shop's address").
+_BUSINESS_SELF = re.compile(
+    r"\b(you|your|yours|u|ur|we|our|ours|us|the\s+(?:shop|store|business|company|office|restaurant|"
+    r"salon|practice|clinic|studio)|julle|jou|ons|die\s+winkel)\b", re.IGNORECASE)
+
+
+def looks_like_business_specific_question(text: str) -> bool:
+    """True for a question about this business's own facts (hours, delivery, address, policies,
+    payment, contacts) — something only the business itself can state. General questions on the
+    same subjects ("what does a typical returns policy say?") have no "you/our/the shop" and
+    are not matched."""
+    t = text or ""
+    return bool(_BUSINESS_FACT_TOPIC.search(t) and _BUSINESS_SELF.search(t))
+
+
+BUSINESS_FACT_NOT_ON_FILE_TEAM = (
+    "I don't have that on file for the business, so I won't guess. If you tell me, I can keep it "
+    "for next time (say \"remember that we…\"), or you can add it to the business profile.")
+BUSINESS_FACT_NOT_ON_FILE_CUSTOMER = (
+    "I don't have that information on file, and I don't want to give you a wrong answer.")
+
+
+def grounding_of(sources: Any) -> str:
+    """What an answer rested on, as one label for the turn record: the business's own documents
+    ("kb"), a tool or the database ("records"), Vula's shared guidance ("shared"), the web
+    ("web"), or nothing ("none"). The strongest present wins."""
+    kinds = {str((s or {}).get("type") or "") for s in (sources or []) if isinstance(s, dict)}
+    if any(k in ("tool", "database") for k in kinds):
+        return "records"
+    if any(k in ("kb", "tenant_kb") for k in kinds):
+        return "kb"
+    if "training_kb" in kinds:
+        return "shared"
+    if "web" in kinds:
+        return "web"
+    return "none"
+
+
+def source_names(sources: Any, limit: int = 6) -> str:
+    """The documents and tools behind an answer, by name only (never their text), for the turn
+    record — so a wrong answer can be traced to what it was read from."""
+    names: List[str] = []
+    for s in (sources or []):
+        if not isinstance(s, dict):
+            continue
+        n = str(s.get("filename") or s.get("name") or "").strip()
+        if n and n not in names:
+            names.append(n)
+    return "; ".join(names[:limit])
 
 
 def looks_like_tenant_data_question(text: str, require_possessive: bool = False) -> bool:
@@ -1117,6 +1275,9 @@ class SkillOutput:
     # carries a real image_url. Optional and unused by most skills; None means text-only, same
     # as before this field existed.
     media_url: Optional[str] = None
+    # 2026-11-12: swipeable photo cards to send before `answer` on WhatsApp (2–10 of
+    # {image, text, id, button}) — set by the real-estate listing search. None = none.
+    cards: Optional[List[Dict[str, Any]]] = None
     # 2026-08-25: a pending confirmation an owner needs to approve/reject via real WhatsApp
     # reply buttons rather than free text — {"id", "summary", "confirm_label", "cancel_label"}.
     # Set when a skill's tool call returned {"preview": True, ...} (see core.skills.commerce_
@@ -1190,6 +1351,8 @@ class BaseSkill(ABC):
             try:
                 customer = self.name == "commerce_assistant"
                 answer = strip_narration(result.answer)
+                answer = plain_tool_words(answer, declared_tool_names(self),
+                                          getattr(self, "tool_labels", None))
                 answer = substitute_if_leaked(answer, skill=self.name, customer=customer,
                                               tenant_id=inp.tenant_id)
                 # The supervisor (step 3, 6 Oct): unbacked action claims, wrong arithmetic and —
@@ -1214,6 +1377,10 @@ class BaseSkill(ABC):
             pass
         _turn_note_skill(self.name, confidence=result.confidence, latency_ms=result.latency_ms,
                          error=result.error, sources=len(result.sources or []),
+                         # What the answer rested on and which documents or tools it read —
+                         # names only — so a wrong answer can be traced to its source.
+                         grounding=grounding_of(result.sources),
+                         source_names=source_names(result.sources) or None,
                          verified=(result.verification or {}).get("outcome"))
         return result
 

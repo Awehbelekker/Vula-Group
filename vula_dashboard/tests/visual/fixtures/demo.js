@@ -1088,7 +1088,63 @@ export const agentEvents = [
   { kind: "route", task: "customer_reply", escalated: false, at: "2026-10-17T06:55:00Z" },
   { kind: "route", task: "document_extract", escalated: true, reason: "local GPU unreachable", at: "2026-10-16T15:20:00Z" },
 ];
-export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name." };
+export const persona = { persona_prompt: "Warm and quick. Small family deli, not corporate.", persona_prompt_suggested: "Friendly and brief, says 'shot!' for thanks, signs off with the shop name.", team_voice_prompt: "Relaxed and direct. We're a small team." };
+// What Vula drafts from an uploaded document, for the owner to keep or dismiss (ProfileDrafts.jsx).
+// Both are profile questions the demo business has not answered yet.
+const fromTerms = { url: "document: Terms of trade.pdf", source: { kind: "document", label: "Terms of trade.pdf" } };
+export const profileDrafts = {
+  cancellations: { answer: "Cancel up to 24 hours before delivery for a full refund.", quote: "You may cancel up to 24 hours before delivery for a full refund.", ...fromTerms },
+  faq: { answer: "Do you cater for events? Yes, with three days' notice.", quote: "We cater for events with three days' notice.", ...fromTerms },
+};
+// Master › a tenant › Features to pilot (vula/features.py).
+export const masterFeatures = [
+  { name: "voice_compose", label: "Company voice, each person's own style and the channel, in every reply", here: false, everywhere: false },
+  { name: "client_memory", label: "A dated note per client, shown on their next message", here: true, everywhere: false },
+  { name: "follow_up_routing", label: "Follow-ups keep their thread (the last question is given to the router)", here: false, everywhere: true },
+];
+// The first-run welcome (Welcome.jsx). `show` is false so other screens are unchanged; the
+// welcome spec turns it on.
+export const firstRun = {
+  show: false,
+  brand: { logo_url: null, accent_color: "#2F5D50", set: true },
+  website: { running: false, step: "done", url: "https://harbourvine.example", products_found: 12, pages_read: 9,
+    coverage: { products: { found: 12, with_price: 12, with_image: 11, with_description: 12, images_kept: 11 },
+      policies: { terms: "https://harbourvine.example/terms/", privacy: "https://harbourvine.example/privacy/", returns: null, shipping: "https://harbourvine.example/delivery/" },
+      contact: { phone: true, email: true, address: true, hours: true, socials: false },
+      pages: { found: 9, read: 9, used: 8, skipped: 1, how: "sitemap" }, pdfs: ["Our menu (PDF)"] } },
+};
+// Home's "Finish setting up" card and the plan under it (GettingStarted.jsx).
+export const ownerSetup = { done: 4, total: 6, complete: false, next: "profile", whatsapp_connected: false, steps: [
+  { id: "branding", label: "Add your logo and colour", why: "Your invoices and your dashboard carry your brand.", optional: false, done: true, tab: "settings" },
+  { id: "payments", label: "Say how customers pay you", why: "Bank details or a card gateway go on every invoice.", optional: false, done: true, tab: "payments" },
+  { id: "vat", label: "Confirm your VAT status", why: "Invoices are worked out with or without VAT from this.", optional: false, done: true, tab: "invoices" },
+  { id: "first_invoice", label: "Send your first invoice", why: "Create one in Invoices, or just ask Vula in the chat.", optional: false, done: true, tab: "invoices" },
+  { id: "profile", label: "Tell Vula about your business", why: "Hours, areas, policies: what Vula answers your customers from.", optional: false, done: false, tab: "settings" },
+  { id: "knowledge", label: "Add your products or documents", why: "Price lists, menus and policies Vula can look things up in.", optional: false, done: false, tab: "products" },
+  { id: "team", label: "Add your team", why: "Give staff their own login and say what each can see.", optional: true, done: true, tab: "team" },
+  { id: "whatsapp", label: "Connect a WhatsApp number", why: "Lets customers and staff talk to Vula on WhatsApp. You can run everything from this dashboard without one.", optional: true, done: false, tab: "settings" },
+] };
+export const myPlan = { plan: "starter", label: "Starter — R1,500/mo", paid: false, on_trial: true, trial_over: false, trial_days_left: 9,
+  users: { used: 2, limit: 2 }, documents: { used: 7, limit: 25 }, pay_url: "https://pay.vula.test/checkout",
+  ai: { used: 8_500, allowance: 10_000, topups_left: 0, remaining: 1_500, pct: 85, paused: false } };
+// Settings › AI usage (settings/AiUsage.jsx, vula/ai_allowance.py): rand cents at Vula's price.
+export const aiUsage = { month: "2026-11", allowance: 10_000, used: 8_500, topups_left: 0, remaining: 1_500, pct: 85,
+  paused: false, can_top_up: true, packs: [10_000, 25_000, 50_000], requested: [],
+  days: [{ day: "2026-11-03", cents: 2_340 }, { day: "2026-11-07", cents: 4_680 }, { day: "2026-11-12", cents: 1_480 }] };
+// "How Vula answered this week" — counts only (assistant/AgentActivityV2.jsx).
+export const quality = { days: 7, answers: 212, backed: { count: 151, of: 180, pct: 84 }, unsure: { count: 17, pct: 8 },
+  corrected: { count: 4, pct: 2 }, handed_on: { count: 9 } };
+// "What Vula remembers about you" — the signed-in person's private notes (assistant/MyVula.jsx).
+export const myNotes = [{ id: "n1", text: "I prefer the numbers first, then the detail" }, { id: "n2", text: "I'm off on Fridays" }];
+// "How Vula talks to you" — the signed-in person's own style (assistant/MyVula.jsx).
+export const myVula = {
+  known: true, name: "Demo Owner", prefs: { style: "friendly", reply_length: "short" },
+  options: {
+    style: [{ id: "friendly", label: "Friendly" }, { id: "fun", label: "Fun" }, { id: "formal", label: "Formal" }, { id: "direct", label: "Straight to the point" }],
+    reply_length: [{ id: "short", label: "Short" }, { id: "detailed", label: "Detailed" }],
+    language: [{ id: "en", label: "English" }, { id: "af", label: "Afrikaans" }, { id: "zu", label: "isiZulu" }, { id: "xh", label: "isiXhosa" }],
+  },
+};
 export const automations = [
   { id: "au-1", name: "On its way", trigger_type: "order_status", trigger_config: { to_status: "dispatched" }, action_type: "whatsapp_customer", enabled: true, fire_count: 14, created_from: "form" },
   { id: "au-2", name: "Cheddar running low", trigger_type: "low_stock", trigger_config: {}, action_type: "whatsapp_team", enabled: false, fire_count: 0, created_from: "conversation" },
@@ -1217,3 +1273,70 @@ export const appErrors = [
   { id: "ae-2", tenant_id: null, build: "a1b2c3d4e5f6", page: "", message: "unhandled: Session expired — please sign in again.",
     frames: null, browser: "Safari 18 · iPhone", count: 2, first_seen: "2026-10-27T07:01:00Z", last_seen: "2026-10-27T07:05:00Z", resolved_at: null },
 ];
+
+// Master › Prospects (13 Nov 2026): one scanned, one still scanning.
+export const prospects = [
+  { id: "pr-kelp", name: "Kelp Gear", url: "https://www.kelpgearshop.com", status: "done", created_at: "2026-11-13T07:00:00Z",
+    updated_at: "2026-11-13T07:02:00Z", report: {
+      name: "Kelp Gear", site: "www.kelpgearshop.com", kind: "shop",
+      found: ["15 pages with content (of 24 found, from the sitemap)", "6 products, 6 with a price",
+              "6 sold in sizes or options, 4 at different prices (e.g. Diving Fin Bags: R850–R2 200)",
+              "Their terms and conditions, privacy policy, returns or refund policy"],
+      gaps: ["No delivery or shipping policy on the website", "Not on the website: opening hours"],
+      offer: ["A WhatsApp shop: customers browse product cards and a catalogue, and order in the chat",
+              "Payment links and invoices from the order; the owner sees every order in one dashboard"],
+      pitch: "Kelp Gear: what Vula found on www.kelpgearshop.com\n• 6 products, 6 with a price\n\nWhat we'd fix:\n• No delivery or shipping policy on the website",
+      socials: ["https://instagram.com/kelp_boardbags_ct_sa"],
+      products: [{ name: "Kelp Classic Day Bag", price_min_cents: 120000, price_max_cents: 240000, options: 15, photos: 9 },
+                 { name: "Kelp Boardbag Trucker Hats", price_min_cents: 50000, price_max_cents: 50000, options: 3, photos: 2 }],
+      counts: { pages: 15, products: 6, policies: 3, contact: 4 } } },
+  { id: "pr-shopeazy", name: "ShopEazy", url: "https://shopeazy.co", status: "scanning", created_at: "2026-11-13T06:00:00Z",
+    updated_at: "2026-11-13T06:00:00Z", report: null },
+];
+
+// The dashboard chat's "Ask anything" (13 Nov 2026): off unless a spec file turns it on.
+export const assistantChat = { openChat: false };
+
+// ── Estimating › Costing by trade (15 Nov 2026; vula/api/trade_costing.py) ──────────────────
+export const tradeBuildups = [
+  { id: "bu-wall", trade: "Masonry", item: "one-brick wall", unit: "m2", spec: { thickness: "220 mm" }, status: "confirmed",
+    version: 2, origin: "own", sources: [{ n: 1, title: "Brickwork quantities guide", url: "https://bricks.example/guide" }],
+    unknown: [{ key: "wall_ties", label: "Wall ties" }],
+    lines: [
+      { component: "units", label: "Bricks or blocks", kind: "material", qty_per_unit: "104.0000", unit: "each", waste_pct: "5.00", source_ref: "1" },
+      { component: "mortar_cement", label: "Mortar cement", kind: "material", qty_per_unit: "0.5000", unit: "bag", waste_pct: "0.00", source_ref: "1" },
+      { component: "labour", label: "Labour", kind: "labour", qty_per_unit: "1.5000", unit: "hour", waste_pct: "0.00", source_ref: "confirmed by owner" },
+    ] },
+  { id: "bu-plaster", trade: "Plastering", item: "plaster to brick walls", unit: "m2", spec: {}, status: "proposed",
+    version: 1, origin: "proposed", sources: [{ n: 1, title: "Plastering guide", url: "https://plaster.example/guide" }], unknown: [],
+    lines: [
+      { component: "cement", label: "Plaster cement", kind: "material", qty_per_unit: "0.1200", unit: "bag", waste_pct: "0.00", source_ref: "1" },
+      { component: "plaster_sand", label: "Plaster sand", kind: "material", qty_per_unit: "0.0200", unit: "m3", waste_pct: "0.00", source_ref: "1" },
+    ] },
+];
+
+export const tradeEstimate = {
+  id: "est-1", title: "one-brick wall 24.000 m2; plaster to brick walls 48.000 m2",
+  totals_cents: { material: 1122001, labour: 300000, plant: 0 }, total_cents: 1422001,
+  unpriced: ["Plaster sand"], exclusions: ["painting"],
+  items: [
+    { item: "one-brick wall", quantity: "24.000", unit: "m2", status: "priced", buildup_origin: "own", total_cents: 1043619,
+      needs_figure: ["Wall ties"], not_in_buildup: ["Brickforce", "Damp-proof course"],
+      compare: { rate_cents: 55456, total_cents: 1330944, where: "your HPC Bokaap BOQ, 26 Oct 2026" },
+      lines: [
+        { component: "units", label: "Bricks or blocks", kind: "material", quantity: "2620.8", unit: "each", priced: true,
+          unit_price_cents: 299, cost_cents: 783619, source: "paid", date: "2026-11-09" },
+        { component: "mortar_cement", label: "Mortar cement", kind: "material", quantity: "12", unit: "bag", priced: true,
+          unit_price_cents: 9999, cost_cents: 119988, source: "paid", date: "2026-09-15", market_now_cents: 11499 },
+        { component: "labour", label: "Labour", kind: "labour", quantity: "36", unit: "hour", priced: true,
+          unit_price_cents: 5000, cost_cents: 180000, source: "paid", date: "2026-11-01" },
+      ] },
+    { item: "plaster to brick walls", quantity: "48.000", unit: "m2", status: "priced", buildup_origin: "proposed", total_cents: 378382,
+      needs_figure: [], not_in_buildup: ["Corner and stop beads"], compare: null,
+      lines: [
+        { component: "cement", label: "Plaster cement", kind: "material", quantity: "5.76", unit: "bag", priced: true,
+          unit_price_cents: 11499, cost_cents: 66234, source: "market", date: "2026-11-12" },
+        { component: "plaster_sand", label: "Plaster sand", kind: "material", quantity: "0.96", unit: "m3", priced: false },
+      ] },
+  ],
+};

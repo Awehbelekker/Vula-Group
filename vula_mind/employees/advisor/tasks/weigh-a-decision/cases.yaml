@@ -1,0 +1,3 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Give me the pros and cons of hiring a driver versus using a courier", expect: weigh-a-decision, tool: cash_summary}
+- {prompt: "I'm thinking of opening a second branch, what do you think?", expect: weigh-a-decision, tool: finance_insights}

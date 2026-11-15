@@ -105,6 +105,7 @@ deletes. There is deliberately one sweep, not a loop per feature.
 | `app_errors` | `APP_ERROR_RETENTION_DAYS` | 90 | `vula_app_errors`, by `last_seen` |
 | `website_leads` | `LEAD_RETENTION_DAYS` | 365 | `vula_website_leads` that were never won |
 | `conversation_turns` | `TURN_RETENTION_DAYS` | 365 | `vula_turns`, `vula_kb_turns` (crisis messages included) |
+| `conversations` | `CONVERSATION_RETENTION_DAYS` | 730 | `commerce_conversation_sessions` whose last message is older than the period, with their messages, reply ratings and the client's note (`commerce_client_summaries`). Counted from the last contact, so an active client keeps their history. Owner's decision, 12 Nov 2026 |
 
 Data that is **not** swept, and why:
 

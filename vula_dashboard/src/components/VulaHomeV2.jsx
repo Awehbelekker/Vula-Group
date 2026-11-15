@@ -18,6 +18,8 @@ import { ActivityDetail, ActivityList, shortWhen, useActivity } from "./VulaActi
 import { TodayList, useToday } from "./VulaToday";
 import { InstallCard } from "./install/InstallVula.jsx";
 import MakeItYours from "./MakeItYours.jsx";
+import GettingStarted from "./GettingStarted.jsx";
+import Welcome from "./Welcome.jsx";
 import DataHealth from "./DataHealth.jsx";
 import ProjectsOverview from "./projects/ProjectsOverview";
 
@@ -46,6 +48,7 @@ function Tile({ label, value, sub, hot, onClick }) {
 }
 
 export default function VulaHomeV2({ tenantId, onNavigate }) {
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
   const user = useAuthStore((s) => s.user);
   const [home, setHome] = useState(null);
   const [error, setError] = useState(false);
@@ -81,7 +84,11 @@ export default function VulaHomeV2({ tenantId, onNavigate }) {
   return (
     <div>
       <PageHeader headline title={greeting(user?.name)} sub={status || undefined} />
-      <MakeItYours tenantId={tenantId} onNavigate={onNavigate} />
+      {/* The first-run welcome does the website and document set-up while it is open; the
+          "Make it yours" card and the setup card's upload step stand aside until it closes. */}
+      <Welcome tenantId={tenantId} onOpenChange={setWelcomeOpen} />
+      {!welcomeOpen && <MakeItYours tenantId={tenantId} onNavigate={onNavigate} />}
+      <GettingStarted tenantId={tenantId} onNavigate={onNavigate} welcomeOpen={welcomeOpen} />
       <InstallCard />
       {error && <ErrorCard what="your Home figures" onRetry={load} />}
       {!home && <Skeleton lines={4} height={22} />}
