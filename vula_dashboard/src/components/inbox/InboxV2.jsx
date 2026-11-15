@@ -6,18 +6,21 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Bot, MessagesSquare, Send, ThumbsDown, ThumbsUp, UserRound } from 'lucide-react'
-import { Button, Card, EmptyState, FilterBar, IconButton, Input, ListRow, PageHeader, Skeleton, StatusChip } from '../ui/index.jsx'
+import { Button, Card, EmptyState, FilterBar, IconButton, Input, ListRow, PageHeader, Select, Skeleton, StatusChip } from '../ui/index.jsx'
 import { useBreakpoint } from '../../hooks/useBreakpoint'
-import { since, useEscalation, useInboxList, useThread } from './useInbox'
+import { since, useEscalation, useInboxList, useInboxTeam, useThread } from './useInbox'
 import './inbox.css'
 
 const initial = (c) => (c.customer_name || c.customer_phone || '?').charAt(0).toUpperCase()
 
-export default function InboxV2({ tenantId }) {
-  const { convos, escalations, loading, load, loadEscalations } = useInboxList(tenantId)
+export default function InboxV2({ tenantId, mine = false }) {
+  const { convos, escalations, loading, load, loadEscalations, mineOnly: serverMine } = useInboxList(tenantId)
+  const { members, me } = useInboxTeam(tenantId)
+  const mineOnly = mine || serverMine              // "My chats": only what's assigned to this login
   const [active, setActive] = useState(null)      // session_id of the open chat
   const [query, setQuery] = useState('')
   const [chips, setChips] = useState([])
+  const [person, setPerson] = useState('')        // filter by who a chat is assigned to
 
   const waitingPhones = useMemo(() => new Set(escalations.map(e => e.customer_phone)), [escalations])
   const shown = useMemo(() => {
@@ -26,8 +29,11 @@ export default function InboxV2({ tenantId }) {
       (!q || `${c.customer_name || ''} ${c.customer_phone || ''}`.toLowerCase().includes(q)) &&
       (!chips.includes('waiting') || waitingPhones.has(c.customer_phone)) &&
       (!chips.includes('mine') || c.paused) &&
-      (!chips.includes('vula') || !c.paused))
-  }, [convos, query, chips, waitingPhones])
+      (!chips.includes('vula') || !c.paused) &&
+      (!chips.includes('assigned_me') || (me?.member_id && c.assigned_member_id === me.member_id)) &&
+      (!mine || !me?.member_id || c.assigned_member_id === me.member_id) &&
+      (!person || (person === 'none' ? !c.assigned_member_id : c.assigned_member_id === person)))
+  }, [convos, query, chips, waitingPhones, me, person, mine])
 
   const toggle = (id) => setChips(cur => (cur.includes(id) ? cur.filter(c => c !== id) : [...cur, id]))
   const close = () => { setActive(null); load() }
@@ -35,7 +41,8 @@ export default function InboxV2({ tenantId }) {
   return (
     <div className="vin" data-open={active ? 'true' : 'false'}>
       {/* the shell's top bar already says "Inbox" */}
-      <PageHeader sub="Every customer chat, live. Open one to read it, or take over from Vula." />
+      <PageHeader sub={mineOnly ? "The customer chats assigned to you. Open one to read it or reply."
+        : "Every customer chat, live. Open one to read it, or take over from Vula."} />
       <div className="vin-panes">
         <section className="vin-list" aria-label="Chats">
           <FilterBar query={query} onQuery={setQuery} placeholder="Search by name or number" label="Show"
@@ -43,8 +50,16 @@ export default function InboxV2({ tenantId }) {
               { id: 'waiting', label: 'Waiting on you', count: escalations.length },
               { id: 'mine', label: 'A person is handling', count: convos.filter(c => c.paused).length },
               { id: 'vula', label: 'Vula is handling', count: convos.filter(c => !c.paused).length },
+              ...(!mineOnly && me?.member_id ? [{ id: 'assigned_me', label: 'Assigned to me',
+                count: convos.filter(c => c.assigned_member_id === me.member_id).length }] : []),
             ]}
             selected={chips} onToggle={toggle} />
+          {!mineOnly && members.length > 1 && (
+            <Select value={person} onChange={e => setPerson(e.target.value)} aria-label="Assigned to" className="vin-person">
+              <option value="">Anyone</option>
+              <option value="none">Not assigned</option>
+              {members.map(m => <option key={m.id} value={m.id}>{m.name || m.whatsapp}</option>)}
+            </Select>)}
 
           {escalations.length > 0 && (
             <Card pad={0} className="vin-esc">
@@ -84,7 +99,7 @@ export default function InboxV2({ tenantId }) {
 
         <section className="vin-thread" aria-label="Open chat">
           {active
-            ? <ThreadV2 key={active} tenantId={tenantId} sessionId={active} onBack={close} />
+            ? <ThreadV2 key={active} tenantId={tenantId} sessionId={active} onBack={close} members={members} canAssign={!mineOnly} />
             : <EmptyState Icon={MessagesSquare} title="Pick a chat">Open a chat on the left to read it or reply.</EmptyState>}
         </section>
       </div>
@@ -113,14 +128,19 @@ function EscalationRow({ tenantId, esc, onDone }) {
   )
 }
 
-function ThreadV2({ tenantId, sessionId, onBack }) {
+function ThreadV2({ tenantId, sessionId, onBack, members = [], canAssign = true }) {
   const { data, msgs, paused, input, setInput, busy, canned, rated, rate, setHandoff, sendReply, saveMeta } =
     useThread(tenantId, sessionId)
   const phone = useBreakpoint() === 'mobile'
   const meta = (
     <div className="vin-meta">
-      <Input key={`asg-${sessionId}`} defaultValue={data?.assigned_to || ''} placeholder="Assign to…" aria-label="Assign to"
-        onBlur={e => e.target.value !== (data?.assigned_to || '') && saveMeta({ assigned_to: e.target.value })} />
+      {canAssign && members.length > 0 ? (
+        <Select key={`asg-${sessionId}-${data?.assigned_member_id || ''}`} defaultValue={data?.assigned_member_id || ''} aria-label="Assign to"
+          onChange={e => saveMeta({ assigned_member_id: e.target.value })}>
+          <option value="">Not assigned</option>
+          {members.map(m => <option key={m.id} value={m.id}>{m.name || m.whatsapp}</option>)}
+        </Select>
+      ) : data?.assigned_to ? <StatusChip>{data.assigned_to}</StatusChip> : null}
       <Input key={`tag-${sessionId}`} defaultValue={(data?.tags || []).join(', ')} placeholder="Tags (comma)" aria-label="Tags"
         onBlur={e => saveMeta({ tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })} />
       <Input key={`note-${sessionId}`} defaultValue={data?.agent_note || ''} placeholder="Internal note (not sent)" aria-label="Internal note"

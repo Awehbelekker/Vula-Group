@@ -45,14 +45,18 @@ def active_members(tenant_id: str) -> List[Dict[str, Any]]:
         return (service._client().table("vula_team_members").select(columns)
                 .eq("tenant_id", tenant_id).eq("active", True).execute().data)
 
-    # `prefs` (migration 262) is each member's own style choices. If that migration hasn't been
-    # applied yet the column doesn't exist — fall back to the columns that always have, rather
-    # than fail the read and have every staff member treated as a customer.
-    try:
-        rows = read(_COLUMNS + ",prefs")
-    except Exception as exc:
-        logger.debug("team read without prefs (run migration 262?): %s", exc)
-        rows = read(_COLUMNS)
+    # `prefs` (migration 262) is each member's own style choices; `team` (migration 280) the
+    # preset team. Either may not be applied yet — drop what's missing rather than fail the read
+    # and have every staff member treated as a customer.
+    rows = None
+    for extra in (",prefs,team", ",prefs", ",team", ""):
+        try:
+            rows = read(_COLUMNS + extra)
+            break
+        except Exception as exc:
+            if not extra:
+                raise
+            logger.debug("team read without %s (run migrations 262/279?): %s", extra, exc)
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     with _LOCK:
         _CACHE[tenant_id] = (now, rows)

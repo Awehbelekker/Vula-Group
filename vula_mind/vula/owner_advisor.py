@@ -1,7 +1,7 @@
 """Weekly advisor message for each owner (2026-09-30).
 
 Ian: "Can Vula recommend?" — it had price advice and job-costing alerts, but nothing that looked
-across the business and said what needs attention. Monday mornings each owner gets one short
+across the business and said what needs attention. each owner who asked for it gets one short
 WhatsApp built ONLY from real rows — never a model, never a figure that isn't in the database:
 
   money owed      customer invoices past their due date, biggest first
@@ -12,7 +12,8 @@ WhatsApp built ONLY from real rows — never a model, never a figure that isn't 
   waiting         documents filed but not yet put on a project
 
 A section with nothing to say is left out; a week with nothing at all sends nothing.
-Gated by settings.owner_advisor_enabled (off until previewed in Master › Conversations).
+It goes only to a business whose owner switched it on, on the day and at the time they chose
+(vula/owner_briefs.py) — off for everyone else.
 """
 from __future__ import annotations
 
@@ -218,19 +219,35 @@ def render(d: Dict[str, Any]) -> Optional[str]:
     return f"Good morning 👋 Your week at {d['name']}:\n\n" + "\n\n".join(parts)
 
 
-def due(now: datetime) -> bool:
-    return now.weekday() == 0 and 8 <= now.hour < 11
+def summary_line(d: Dict[str, Any]) -> str:
+    """The weekly check in one line, for the weekly_check template outside the 24-hour window."""
+    bits = []
+    od = d.get("overdue") or {}
+    if od.get("count"):
+        bits.append(f"{_r(int(od.get('total_cents') or 0))} overdue from {od['count']} customer"
+                    + ("s" if od["count"] != 1 else ""))
+    if d.get("spending"):
+        bits.append(f"{len(d['spending'])} spending jump" + ("s" if len(d["spending"]) != 1 else ""))
+    if d.get("low_stock"):
+        bits.append(f"{len(d['low_stock'])} low on stock")
+    un = (d.get("unanswered") or {}).get("unanswered") or 0
+    if un:
+        bits.append(f"{un} unanswered question" + ("s" if un != 1 else ""))
+    if d.get("waiting_docs"):
+        bits.append(f"{d['waiting_docs']} document(s) waiting")
+    return ", ".join(bits[:4]) or "a few things to look at"
+
+
+_HANDLED: set = set()      # (tenant, ISO week) built already — see owner_digest._HANDLED
 
 
 async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
-    from config import settings
-    if not settings.owner_advisor_enabled:
-        return {"sent": 0, "reason": "owner_advisor_enabled is off"}
+    """Every business whose owner switched the weekly advisor on, on the day and at the time they
+    chose (vula/owner_briefs.py). Nobody else gets anything."""
     now = now or datetime.now(SAST)
     y, w, _ = now.isocalendar()
     week = f"{y}-W{w:02d}"
-    from vula import team_index
-    from vula.api.whatsapp import _send_reply
+    from vula import owner_briefs, team_index
     from vula.api import tenants as _t
     try:
         tenants = [r["tenant_id"] for r in (_client().table("vula_tenant_config")
@@ -239,15 +256,26 @@ async def send_all(now: Optional[datetime] = None) -> Dict[str, Any]:
     except Exception as exc:
         log.warning("advisor: tenant list failed: %s", exc)
         return {"sent": 0}
+    if len(_HANDLED) > 20_000:
+        _HANDLED.clear()
     sent = 0
     for tid in tenants:
+        if (tid, week) in _HANDLED:
+            continue
+        if not owner_briefs.due("weekly", owner_briefs.settings_for(tid)["weekly"], now):
+            continue
         try:
-            text = render(build(tid, now.date()))
+            d = build(tid, now.date())
+            text = render(d)
+            _HANDLED.add((tid, week))
             if not text:
                 continue
             for m in team_index.active_members(tid):
                 if (m.get("role") or "") == "owner" and m.get("whatsapp"):
-                    if await _send_reply(m["whatsapp"], text, tid, idem_key=f"advisor:{tid}:{week}:{m['whatsapp']}"):
+                    from vula import proactive
+                    if await proactive.send(tid, m["whatsapp"], text, suffix="weekly_check",
+                                            params=[d.get("name") or tid, summary_line(d)],
+                                            idem_key=f"advisor:{tid}:{week}:{m['whatsapp']}"):
                         sent += 1
         except Exception as exc:
             log.warning("advisor failed for %s: %s", tid, exc)

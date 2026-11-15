@@ -907,6 +907,10 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
         "created_at": _now(),
         "updated_at": _now(),
     }
+    from vula import acting
+    who = checkout_data.get("created_by") or acting.current()
+    if who:
+        order["created_by"] = who                          # a team member's order (migration 278)
 
     try:
         try:
@@ -920,6 +924,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
             order.pop("discount_code", None)
             order.pop("discount_cents", None)
             order.pop("attributed_broadcast_id", None)
+            order.pop("created_by", None)
             if method:
                 note = order.get("delivery_notes") or ""
                 order["delivery_notes"] = (f"[pay:{method}] " + note).strip()
@@ -1705,8 +1710,10 @@ async def find_stale_paused_sessions(tenant_id: str, hours: float = 2.0) -> list
     return rows
 
 
-async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
-    """Return recent conversation sessions for the shared inbox list view.
+async def list_conversations(tenant_id: str, limit: int = 50,
+                             assigned_member_id: Optional[str] = None) -> List[dict]:
+    """Return recent conversation sessions for the shared inbox list view — only the ones
+    assigned to one team member when assigned_member_id is given (migration 279).
 
     A staff member's own thread with Vula (session keys admin:{phone} / webadmin:{…}) is never
     listed: the shared inbox is for customer conversations, and what a member asks Vula is
@@ -1716,18 +1723,33 @@ async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
     base = "id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at"
     # Over-read so the staff threads that are dropped don't shorten the list.
     fetch = limit + 50
-    try:
+    if assigned_member_id is not None:
         result = (
             _client().table("commerce_conversation_sessions")
-            .select(base + ",assigned_to,agent_note,tags,paused_by")
-            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
+            .select(base + ",assigned_to,agent_note,tags,paused_by,assigned_member_id")
+            .eq("tenant_id", tenant_id).eq("assigned_member_id", assigned_member_id)
+            .order("updated_at", desc=True).limit(fetch).execute()
         )
-    except Exception:
-        # team-inbox columns not present yet (migration 048 not run) — fall back gracefully.
-        result = (
-            _client().table("commerce_conversation_sessions").select(base)
-            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
-        )
+    else:
+        try:
+            try:
+                result = (
+                    _client().table("commerce_conversation_sessions")
+                    .select(base + ",assigned_to,agent_note,tags,paused_by,assigned_member_id")
+                    .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
+                )
+            except Exception:
+                result = (                               # migration 279 not run yet
+                    _client().table("commerce_conversation_sessions")
+                    .select(base + ",assigned_to,agent_note,tags,paused_by")
+                    .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
+                )
+        except Exception:
+            # team-inbox columns not present yet (migration 048 not run) — fall back gracefully.
+            result = (
+                _client().table("commerce_conversation_sessions").select(base)
+                .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(fetch).execute()
+            )
     rows = [r for r in (result.data or []) if not is_staff_session_key(r.get("session_key"))][:limit]
     # Expose session id as session_id for the frontend.
     for r in rows:
@@ -1761,6 +1783,7 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
         "paused": bool(session.get("paused")),
         "paused_by": session.get("paused_by"),
         "assigned_to": session.get("assigned_to"),
+        "assigned_member_id": session.get("assigned_member_id"),
         "agent_note": session.get("agent_note"),
         "tags": session.get("tags") or [],
         "messages": [{"id": m.get("id"), "role": m["role"], "content": m["content"],
@@ -2024,11 +2047,17 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
         "created_at": _now(),
         "updated_at": _now(),
     }
+    from vula import acting
+    who = data.get("created_by") or acting.current()
+    if who:
+        invoice["created_by"] = who                        # migration 278
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
-        # discount_cents/deposit_cents (053), project (055), or requires_approval (136) columns
-        # may not exist yet — drop them and retry so invoicing never breaks on a missing column.
+        # discount_cents/deposit_cents (053), project (055), requires_approval (136) or
+        # created_by (278) columns may not exist yet — drop them and retry so invoicing never
+        # breaks on a missing column.
+        invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)
         invoice.pop("deposit_cents", None)
         invoice.pop("project", None)
@@ -2380,11 +2409,14 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
         "created_at": _now(),
         "updated_at": _now(),
     }
+    if quote.get("created_by"):
+        invoice["created_by"] = quote["created_by"]      # the person who quoted keeps the sale (278)
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
-        # discount_cents/deposit_cents (053) or project (055) columns may not exist yet in
-        # this environment — same graceful-degrade retry create_invoice() already uses.
+        # discount_cents/deposit_cents (053), project (055) or created_by (278) columns may not
+        # exist yet in this environment — same graceful-degrade retry create_invoice() uses.
+        invoice.pop("created_by", None)
         invoice.pop("discount_cents", None)
         invoice.pop("deposit_cents", None)
         invoice.pop("project", None)

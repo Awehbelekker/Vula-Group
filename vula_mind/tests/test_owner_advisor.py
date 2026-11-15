@@ -2,7 +2,6 @@
 import asyncio
 from datetime import date
 
-from config import settings
 from vula import owner_advisor as oa
 
 
@@ -44,5 +43,7 @@ def test_spending_jump_needs_history_and_size(monkeypatch):
 
 
 def test_off_by_default(monkeypatch):
-    monkeypatch.setattr(settings, "owner_advisor_enabled", False)
+    """A business that never asked for the weekly advisor gets nothing."""
+    from vula import owner_briefs
+    monkeypatch.setattr(owner_briefs, "saved_for", lambda tid: {})
     assert asyncio.run(oa.send_all())["sent"] == 0

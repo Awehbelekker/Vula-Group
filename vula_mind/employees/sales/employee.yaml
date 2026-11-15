@@ -5,6 +5,18 @@ title: AI sales and customer service assistant
 emoji: 🤝
 summary: Quotes, orders, customers and follow-ups, meetings, bookings and subscriptions.
 keywords:
+- week look
+- brief me
+- meeting brief
+- outlook
+- my calendar
+- calendar meeting
+- calendar reminder
+- arrived
+- check in
+- team activity
+- what did the team
+- what did the reps
 - quote
 - quotation
 - order
@@ -51,6 +63,8 @@ tools:
 - list_quotes
 - list_subscriptions
 - log_meeting
+- meeting
+- team_activity
 - order_payment
 - outstanding_invoices
 - payment_link

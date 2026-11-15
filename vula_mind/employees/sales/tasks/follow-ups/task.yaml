@@ -1,6 +1,6 @@
 # Words that pick this task once the employee has the message (only this task's words in it).
 title: Meetings and follow-ups
-summary: Log a client meeting, send the follow-up, and keep the weekly call sheet.
+summary: Book meetings with a reminder and map link, log a client meeting, send the follow-up, and keep the weekly call sheet.
 triggers:
 - meeting
 - follow up
@@ -9,7 +9,22 @@ triggers:
 - call sheet
 - visit
 - met with
+- diary
+- my meetings
+- week look
+- brief me
+- outlook
+- my calendar
+- calendar meeting
+- calendar reminder
+- arrived
+- check in
+- team activity
+- what did the team
+- what did the reps
 tools:
+- meeting
+- team_activity
 - log_meeting
 - draft_followup_email
 - view_call_sheet

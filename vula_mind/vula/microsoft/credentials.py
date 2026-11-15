@@ -48,7 +48,7 @@ def store_connection(tenant_id: str, *, access_token: str, refresh_token: str | 
     invalidate(tenant_id)
 
 
-async def _refresh(tenant_id: str, refresh_token: str) -> str | None:
+async def _refresh(tenant_id: str, refresh_token: str, granted: str | None = None) -> str | None:
     from vula.email_imap.credentials import encrypt_secret
     # 2026-08-26 fix: this used to hardcode its own copy of the scope string, independent of
     # service.SCOPES — adding a new scope there (e.g. Mail.Send) silently never reached a
@@ -56,12 +56,25 @@ async def _refresh(tenant_id: str, refresh_token: str) -> str | None:
     # Deferred import (not module-level) — service.py imports get_access_token from this module
     # at import time, so a module-level import here would be a circular import.
     from vula.microsoft.service import SCOPES
+    # 12 Nov 2026: Calendars.Read was added to SCOPES. Ask for the full current list first (an
+    # org-wide admin consent covers a new scope, so it reaches the token — the 26 Aug lesson).
+    # If Microsoft refuses because this user never consented to the new permission, retry with
+    # what THIS connection granted, so an older connection keeps its mail working; they get the
+    # calendar when they reconnect.
+    tries = [" ".join(SCOPES)]
+    if granted and granted.strip():
+        g = granted.strip() if "offline_access" in granted else granted.strip() + " offline_access"
+        if g != tries[0]:
+            tries.append(g)
     async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.post(_token_url(), data={
-            "client_id": settings.microsoft_client_id,
-            "client_secret": settings.microsoft_client_secret,
-            "refresh_token": refresh_token, "grant_type": "refresh_token",
-            "scope": " ".join(SCOPES)})
+        for scope in tries:
+            r = await client.post(_token_url(), data={
+                "client_id": settings.microsoft_client_id,
+                "client_secret": settings.microsoft_client_secret,
+                "refresh_token": refresh_token, "grant_type": "refresh_token",
+                "scope": scope})
+            if r.status_code == 200:
+                break
         if r.status_code != 200:
             logger.warning("MS token refresh failed for %s: %s", tenant_id, r.text[:200])
             return None
@@ -69,6 +82,8 @@ async def _refresh(tenant_id: str, refresh_token: str) -> str | None:
     access = d.get("access_token")
     expiry = (datetime.now(timezone.utc) + timedelta(seconds=int(d.get("expires_in", 3600)))).isoformat()
     update = {"access_token": encrypt_secret(access), "token_expiry": expiry, "updated_at": "now()"}
+    if d.get("scope"):
+        update["scopes"] = d["scope"]           # what the token can do now (calendar or not)
     if d.get("refresh_token"):  # MS rotates refresh tokens
         update["refresh_token"] = encrypt_secret(d["refresh_token"])
     try:
@@ -84,7 +99,7 @@ async def get_access_token(tenant_id: str) -> dict | None:
     from vula.email_imap.credentials import decrypt_secret
     try:
         rows = (_client().table("vula_microsoft_accounts")
-                .select("access_token,refresh_token,token_expiry,email,status")
+                .select("access_token,refresh_token,token_expiry,email,status,scopes")
                 .eq("tenant_id", tenant_id).eq("status", "connected").limit(1).execute().data or [])
     except Exception as exc:
         logger.debug("MS creds lookup failed for %s: %s", tenant_id, exc)
@@ -104,5 +119,5 @@ async def get_access_token(tenant_id: str) -> dict | None:
         except Exception:
             needs = True
     if needs and refresh_token:
-        token = await _refresh(tenant_id, refresh_token)
-    return {"access_token": token, "email": email} if token else None
+        token = await _refresh(tenant_id, refresh_token, r.get("scopes"))
+    return {"access_token": token, "email": email, "scopes": r.get("scopes") or ""} if token else None

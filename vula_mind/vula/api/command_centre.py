@@ -22,6 +22,7 @@ Separate module (like shopify_admin / manufacturing) rather than more of commerc
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -568,6 +569,21 @@ def compute_today(db, tenant_id: str, scope: dict, now: Optional[datetime] = Non
                   .order("start_at").limit(30).execute().data),
             lambda r: {"id": f"booking:{r['id']}", "kind": "booking", "label": f"Booking · {r.get('service_name') or 'appointment'}",
                        "contact_id": r.get("customer_phone"), "at": r.get("start_at"), "link": {"section": "sell", "tab": "bookings"}})
+
+    # The person's own meetings today (vula/meetings.py). A full member sees everyone's; anyone else
+    # only their own (booked from their WhatsApp number).
+    if scope.get("full") or own:
+        add(_safe(lambda: db.table("vula_meetings").select("id,with_name,starts_at,address,created_by")
+                  .eq("tenant_id", tenant_id).eq("status", "scheduled")
+                  .gte("starts_at", _iso(day0)).lt("starts_at", _iso(day1))
+                  .order("starts_at").limit(30).execute().data
+                  if scope.get("full") else
+                  db.table("vula_meetings").select("id,with_name,starts_at,address,created_by")
+                  .eq("tenant_id", tenant_id).eq("status", "scheduled").eq("created_by", re.sub(r"\D", "", own or ""))
+                  .gte("starts_at", _iso(day0)).lt("starts_at", _iso(day1))
+                  .order("starts_at").limit(30).execute().data),
+            lambda r: {"id": f"meeting:{r['id']}", "kind": "meeting", "label": f"Meeting · {r.get('with_name') or ''}".strip(),
+                       "detail": r.get("address"), "at": r.get("starts_at"), "link": None})
 
     return {"items": items, "date": day0.date().isoformat()}
 

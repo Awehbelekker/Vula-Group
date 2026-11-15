@@ -799,6 +799,14 @@ async def _automations_loop() -> None:
         except Exception as exc:
             log.warning("Reminder nudge check error: %s", exc)
         try:
+            # A person's own meetings, only those they asked to be reminded about (vula/meetings.py).
+            from vula import meetings as _meetings
+            met = await _meetings.send_due_reminders()
+            if met:
+                log.info("Meeting reminder sent for %d meeting(s)", met)
+        except Exception as exc:
+            log.warning("Meeting reminder check error: %s", exc)
+        try:
             from vula.open_questions import release_due
             released = await release_due()
             if released:
@@ -924,38 +932,51 @@ async def _programme_briefs_loop() -> None:
 
 
 async def _owner_advisor_loop() -> None:
-    """Monday 08:00–11:00 SAST: the weekly advisor WhatsApp to each owner (vula/owner_advisor.py).
-    Gated by settings.owner_advisor_enabled; one send per owner per ISO week (idem key)."""
+    """Every 5 minutes: the weekly advisor to each owner who switched it on, on their own day and
+    time (vula/owner_advisor.py, vula/owner_briefs.py). One per owner per ISO week (idem key)."""
     import asyncio as _asyncio
-    from datetime import datetime as _dt
     await _asyncio.sleep(330)
     while True:
         try:
             from vula import owner_advisor as _oa
-            if _oa.due(_dt.now(_oa.SAST)):
-                res = await _oa.send_all()
-                if res.get("sent"):
-                    log.info("owner advisor sent: %s", res)
+            res = await _oa.send_all()
+            if res.get("sent"):
+                log.info("owner advisor sent: %s", res)
         except Exception as exc:
             log.warning("owner advisor loop error: %s", exc)
-        await _asyncio.sleep(900)
+        await _asyncio.sleep(300)
 
 
 async def _owner_digest_loop() -> None:
-    """Weekdays 07:00–09:00 SAST: the morning money digest to each owner (vula/owner_digest.py).
-    One per owner per day (idem key)."""
+    """Every 5 minutes: the morning brief to each owner who switched it on, at their own time and
+    days (vula/owner_digest.py, vula/owner_briefs.py). One per owner per day (idem key)."""
     import asyncio as _asyncio
-    from datetime import datetime as _dt
     await _asyncio.sleep(300)
     while True:
         try:
             from vula import owner_digest as _od
-            if _od.due(_dt.now(_od.SAST)):
-                res = await _od.send_all()
-                if res.get("sent"):
-                    log.info("owner digest sent: %s", res)
+            res = await _od.send_all()
+            if res.get("sent"):
+                log.info("owner brief sent: %s", res)
         except Exception as exc:
-            log.warning("owner digest loop error: %s", exc)
+            log.warning("owner brief loop error: %s", exc)
+        await _asyncio.sleep(300)
+
+
+async def _outlook_calendar_loop() -> None:
+    """Every 15 minutes: the next 7 days of each connected Outlook calendar into the meetings
+    diary (vula/outlook_calendar.py). Reminders only for people who asked for them."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(360)
+    while True:
+        try:
+            from vula import outlook_calendar as _oc
+            res = await _oc.sync_all()
+            moved = {t: r for t, r in res.items() if any(r.get(k) for k in ("added", "updated", "cancelled"))}
+            if moved:
+                log.info("Outlook calendars synced: %s", moved)
+        except Exception as exc:
+            log.warning("Outlook calendar loop error: %s", exc)
         await _asyncio.sleep(900)
 
 
@@ -1728,6 +1749,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_benchmark_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_digest_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_outlook_calendar_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_staff_notices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
@@ -2149,6 +2171,10 @@ app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(projects_router, prefix="/v1/projects")
 from vula.api.staff_notices import router as staff_notices_router  # noqa: E402
 app.include_router(staff_notices_router, prefix="/v1/team")   # before team's /{tenant}/{member_id}
+from vula.api.owner_briefs import router as owner_briefs_router  # noqa: E402
+app.include_router(owner_briefs_router, prefix="/v1/team")    # before team's /{tenant}/{member_id}
+from vula.api.team_activity import router as team_activity_router  # noqa: E402
+app.include_router(team_activity_router, prefix="/v1/team")   # before team's /{tenant}/{member_id}
 app.include_router(team_router, prefix="/v1/team")
 app.include_router(payments_router, prefix="/v1/payments")
 app.include_router(tenants_router, prefix="/v1/tenants")

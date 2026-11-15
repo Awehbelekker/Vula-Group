@@ -501,6 +501,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "title": {"type": "string", "description": "A short heading, if the owner gave one."},
             "roles": {"type": "array", "items": {"type": "string"},
                       "description": "Only these roles (e.g. ['staff','sales_rep']); omit for everyone."},
+            "teams": {"type": "array", "items": {"type": "string"},
+                      "description": "Only these teams as said ('the sales team' → ['sales']); omit for everyone."},
             "must_read": {"type": "boolean",
                           "description": "True when they must confirm they've read it."},
             "confirm": {"type": "boolean"}},
@@ -520,6 +522,49 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "closes_in_days": {"type": "number", "description": "Only if the owner said when it closes."},
             "confirm": {"type": "boolean"}},
             "required": ["question", "options"]}}},
+    {"type": "function", "function": {
+        "name": "owner_briefs",
+        "description": "The owner's own WhatsApp briefs from Vula, which are OFF unless the owner asks: "
+                       "the MORNING brief (what needs a person today plus money paid, owed and due) "
+                       "and the WEEKLY advisor. Use for 'send me a morning brief at 7 on weekdays', "
+                       "'stop my morning brief', 'move my weekly advisor to Friday 3pm', 'am I getting "
+                       "the morning brief?', 'show me today's brief'. action=status says what's on; "
+                       "on/off switches; schedule changes the time/days; preview shows today's text "
+                       "without sending. Pass time/days ONLY as the owner said them — never invent a "
+                       "time; when switching on without one, the tool asks the owner. What the MORNING brief "
+                       "shows is the owner's choice too: 'only show money and meetings in my brief' "
+                       "(action=sections, mode=only), 'add tax dates', 'take out documents', 'show everything "
+                       "again' (mode=all). A bare 'brief' is "
+                       "the reply to the morning-brief WhatsApp → action=preview, which=morning; 'weekly "
+                       "check' → action=preview, which=weekly. ('meeting brief' is the meeting tool.)",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["status", "on", "off", "schedule", "preview", "sections"]},
+            "sections": {"type": "string", "description": "For action=sections: what to show/add/remove, in "
+                         "the owner's words ('money and meetings', 'tax', 'everything')."},
+            "mode": {"type": "string", "enum": ["only", "add", "remove", "all"],
+                     "description": "only = show just these; add/remove one; all = everything again."},
+            "which": {"type": "string", "enum": ["morning", "weekly", "both"],
+                      "description": "Which brief; 'both' only when the owner meant both."},
+            "when": {"type": "string",
+                     "description": "The owner's own words for the time and days, e.g. 'weekdays at 7', "
+                                    "'Mon-Sat 6:30', 'Friday 3pm', or 'yes' to accept the suggested time."}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "team_messages",
+        "description": "Switch the business's SCHEDULED messages to its own team on or off, or change "
+                       "their time: the morning list of the day's orders, the low-stock alert, the "
+                       "end-of-day sales message, the specials reminder, the documents-not-on-a-project "
+                       "reminder, and the reminder when a customer's question is still waiting. Use for "
+                       "'stop the low-stock alert', 'send the team the end-of-day sales at 6pm', "
+                       "'which messages does the team get?'. NOT for reading figures now (use the "
+                       "report tools for that). Pass a time only as the owner said it.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["status", "on", "off"]},
+            "message": {"type": "string", "enum": ["delivery_briefing", "low_stock_alert", "sales_summary",
+                                                   "friday_catch_reminder", "pending_project_nudge",
+                                                   "stale_escalation_nudge"]},
+            "when": {"type": "string", "description": "The owner's words for the time/day, e.g. '6pm', 'Friday 8am'."}},
+            "required": ["action"]}}},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -997,6 +1042,64 @@ CONTACT_TOOLS = [
 ]
 MEETING_TOOLS = [
     {"type": "function", "function": {
+        "name": "team_activity",
+        "description": (
+            "What a team member has on and has done — meetings, bookings, meeting notes, call-sheet "
+            "entries, follow-ups done and overdue, new contacts — or the same counts for the whole "
+            "team. E.g. 'how does Thabo's week look?', 'what did Thabo do last week?', 'what did the "
+            "team do this week?', 'the reps this month', 'how does my week look?'. action=person "
+            "(with `who`, or 'me' for the person asking) or team (optional role, e.g. sales_rep). "
+            "Pass `period` as the person said it (this week, last week, next week, today, tomorrow, "
+            "this month, last month). Only owners and managers can see other people; the tool "
+            "enforces it. For a spreadsheet use custom_sheet with the meetings/bookings/follow_ups/"
+            "meeting_notes sources."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["person", "team"]},
+            "who": {"type": "string", "description": "A name or number as said, or 'me'."},
+            "role": {"type": "string", "enum": ["sales_rep", "staff", "manager", "bookkeeper"]},
+            "team": {"type": "string", "description": "A team as said: sales, admin, bookkeeping, operations, "
+                                                      "marketing, field ('what did the sales team do?')."},
+            "period": {"type": "string"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "meeting",
+        "description": (
+            "The person's OWN diary of meetings, appointments and site visits, on WhatsApp — e.g. "
+            "'meeting with Acme Builders Thursday 10am at 12 Main Road', 'remind me an hour before "
+            "the Acme meeting', 'what meetings do I have this week?', 'move the Acme meeting to "
+            "11', 'add the address: 5 Dock Rd', 'cancel tomorrow's meeting', and checking in on arrival: "
+            "'arrived', 'I'm at Acme', 'check in' (action=check_in, `with` = where if they said), and a "
+            "brief on who they're meeting — last WhatsApp messages, emails, open quotes and invoices, "
+            "past meeting notes: 'brief me on the Acme meeting' (action=brief), or with_brief=true when "
+            "they ask for one on the reminder ('remind me an hour before with a brief'); 'meeting "
+            "brief' on its own (the reply to a meeting reminder) = action=brief for their next meeting. "
+            "Meetings in their Outlook calendar come in by themselves; 'remind me 30 minutes before my "
+            "Outlook meetings' / 'stop calendar reminders' / 'with a brief' set that once for all of "
+            "them (action=calendar, `remind`, with_brief). Each person can connect THEIR OWN Outlook "
+            "calendar: 'connect my calendar' (action=calendar, calendar_op=connect — sends them a link; "
+            "calendar_provider=google for 'connect my Google calendar'), "
+            "'disconnect my calendar' (calendar_op=disconnect), 'is my calendar connected?' (status). "
+            "action=book / list / update / cancel / check_in / brief / calendar. NOT a customer booking a service (create_booking) and NOT notes "
+            "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
+            "them — never work out a date or time yourself. No reminder unless they ask for one."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in", "brief", "calendar"]},
+            "with_brief": {"type": "boolean", "description": "Only when they asked for a brief on the reminder."},
+            "calendar_provider": {"type": "string", "enum": ["outlook", "google"],
+                                  "description": "For connect/disconnect: 'google' when they said Google/Gmail, else outlook."},
+            "calendar_op": {"type": "string", "enum": ["connect", "disconnect", "status", "remind"],
+                            "description": "For action=calendar: connect/disconnect their own calendar, "
+                                           "say what's connected, or set reminders (the default)."},
+            "with": {"type": "string", "description": "Who or which company the meeting is with "
+                                                      "(for update/cancel: which meeting)."},
+            "when": {"type": "string", "description": "The person's own words, e.g. 'Thursday at 10'."},
+            "address": {"type": "string", "description": "Where, as given."},
+            "remind": {"type": "string", "description": "The person's own words, e.g. '1 hour before', "
+                                                        "'30 min', 'the day before', or 'no'."},
+            "notes": {"type": "string", "description": "What it's about, if they said."},
+            "meeting_id": {"type": "string"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "log_meeting",
         "description": (
             "Log a client/site meeting from a description (usually a voice note transcript): "
@@ -1173,10 +1276,14 @@ SHEET_TOOLS = [
                        "date, description, payee, reference, money_in, money_out, amount, project, account, "
                        "status; expenses: date, supplier, description, amount, vat, account, project, "
                        "paid_with, paid_by, reimbursable, status; customer_invoices: number, type, customer, "
-                       "date, due, project, excl_vat, vat, total, paid, owed, status; orders: number, date, "
-                       "customer, channel, status, subtotal, delivery, total; products (the catalogue, one row per "
-                       "variant, no period): name, variant, sku, category, choices, price, cost, stock, status. "
-                       "Maths the owner asks for ('total minus "
+                       "date, due, project, excl_vat, vat, total, paid, owed, status, person (who made it); orders: "
+                       "number, date, customer, channel, status, subtotal, delivery, total, person; products (the "
+                       "catalogue, one row per variant, no period): name, variant, sku, category, choices, price, cost, "
+                       "stock, status; and what the TEAM did (owners/managers): meetings: "
+                       "date, time, person, with, address, status, checked_in, distance_m; bookings: date, time, person, customer, service, "
+                       "status; follow_ups: date (due), person, text, status, done; meeting_notes: date, person, summary, "
+                       "actions — filter by person, group by person ('every meeting Thabo had this month', 'follow-ups "
+                       "per person last week'). Maths the owner asks for ('total minus "
                        "VAT', 'margin %', 'quantity times price') goes in computed; 'running balance' in running; "
                        "'average/count/highest' in summary; 'totals per supplier only' is detail false with "
                        "group_by; 'with a chart' is chart (needs a grouping). The reply is sent exactly as returned.",
@@ -1186,10 +1293,11 @@ SHEET_TOOLS = [
             "name": {"type": "string", "description": "For save/use: the sheet's name, e.g. 'Tile Co monthly'."},
             "spec": {"type": "object", "properties": {
                 "source": {"type": "string", "enum": ["supplier_invoices", "supplier_lines", "bank", "expenses",
-                                                      "customer_invoices", "orders", "products"]},
+                                                      "customer_invoices", "orders", "products", "meetings",
+                                                      "bookings", "follow_ups", "meeting_notes"]},
                 "columns": {"type": "array", "items": {"type": "string"}},
                 "group_by": {"type": "string", "enum": ["none", "month", "project", "supplier", "customer",
-                                                        "account", "status"]},
+                                                        "account", "status", "person"]},
                 "totals": {"type": "array", "items": {"type": "string"},
                            "description": "Money columns to total; omit for all of them."},
                 "title": {"type": "string"},
@@ -1209,13 +1317,15 @@ SHEET_TOOLS = [
                 "chart": {"type": "string", "enum": ["bar", "line", "pie"], "description": "Needs group_by."},
                 "chart_of": {"type": "string", "description": "The totalled money column the chart shows."},
                 "filters": {"type": "object", "properties": {
-                    "period": {"type": "string", "enum": ["this_month", "last_month", "this_year", "last_year",
-                                                          "tax_year", "last_tax_year", "last_12_months", "all"]},
+                    "period": {"type": "string", "enum": ["this_week", "last_week", "this_month", "last_month",
+                                                          "this_year", "last_year", "tax_year", "last_tax_year",
+                                                          "last_12_months", "all"]},
                     "since": {"type": "string", "description": "YYYY-MM-DD"},
                     "until": {"type": "string", "description": "YYYY-MM-DD"},
                     "supplier": {"type": "string"}, "project": {"type": "string"},
                     "customer": {"type": "string"}, "account": {"type": "string"},
-                    "status": {"type": "string"}, "type": {"type": "string"}}}}}},
+                    "status": {"type": "string"}, "type": {"type": "string"},
+                    "person": {"type": "string", "description": "A team member's name as said (team sources)."}}}}}},
             "required": ["action"]}}},
 ]
 
@@ -1842,29 +1952,14 @@ def _role_label(tenant_id: str) -> str:
 
 
 def _resolve_due_at(due_phrase: Optional[str]) -> Optional[str]:
-    """Deterministic, never LLM-computed — a wrong due date is worse than none. Only trusts
-    dateutil's fuzzy parse when the phrase actually contains a real date/weekday/relative-day
-    signal (fuzzy=True alone can false-positive on ordinary text). Shared by log_meeting's
-    action-item due dates and create_reminder — both need a raw phrase resolved this same way,
-    never a date the model computed itself (confirmed live, 2026-08-26: asked to produce an ISO
-    datetime directly, the model — correctly recognizing it doesn't know today's real date —
-    asked the user what today's date was instead of just resolving "next Tuesday" itself)."""
+    """Deterministic, never LLM-computed — a wrong due date is worse than none. Shared by
+    log_meeting's action-item due dates and create_reminder. 12 Nov 2026: now vula/when.py, in
+    South African time — dateutil read "Friday at 10am" as 10:25 UTC (12:25 SAST: it kept the
+    current minutes and used UTC) and ignored "tomorrow". A day with no time means 08:00."""
     if not due_phrase:
         return None
-    if not re.search(
-        r"\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|"
-        r"sun(day)?|today|tomorrow|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|"
-        r"jul(y)?|aug(ust)?|sep(tember)?|oct(ober)?|nov(ember)?|dec(ember)?|"
-        r"\d{1,2}[/-]\d{1,2}|\d{1,2}(st|nd|rd|th)?)\b",
-        due_phrase, re.IGNORECASE,
-    ):
-        return None
-    try:
-        from dateutil import parser as _date_parser
-        dt = _date_parser.parse(due_phrase, fuzzy=True, default=datetime.now(timezone.utc))
-        return dt.isoformat()
-    except Exception:
-        return None
+    from vula.when import reminder_due
+    return reminder_due(due_phrase)
 
 
 def _product_tools_for(tenant_id: str) -> List[Dict[str, Any]]:
@@ -1997,6 +2092,9 @@ _TOOL_SCOPE: Dict[str, str] = {
     "financial_report": "finances", "finance_settings": "finances",
     "send_payment_reminders": "invoices",
     "staff_notice": "team", "staff_poll": "team",
+    # the owner's own briefs (money owed and paid): owner and managers only
+    "owner_briefs": "owner_only",
+    "team_messages": "owner_only",
     # real-estate listing tools: staff granted the Listings tab
     # add-on tools: staff granted that add-on's dashboard tab (tab id = module id)
     **{n: a.MODULE for a in _ADDONS for n in a.ADMIN_TOOL_NAMES},
@@ -2968,7 +3066,9 @@ class CommerceAdminSkill(BaseSkill):
             return {"status": "need_info", "message": "What should I tell the staff?"}
         title = str(args.get("title") or "").strip() or " ".join(body.split()[:6]).rstrip(".,!?:;")
         roles = [str(r).lower() for r in (args.get("roles") or []) if r]
-        spec = {"roles": roles} if roles else {"all": True}
+        from vula import team_presets
+        teams = [t for t in (team_presets.find(str(x)) for x in (args.get("teams") or [])) if t]
+        spec = {"teams": teams} if teams else {"roles": roles} if roles else {"all": True}
         must_read = bool(args.get("must_read"))
         me = re.sub(r"\D", "", str(ctx.get("phone") or ""))
         people = [m for m in sn.audience(tid, spec)
@@ -3004,6 +3104,135 @@ class CommerceAdminSkill(BaseSkill):
         if must_read:
             msg += " I'll remind anyone who hasn't confirmed in a day and tell you who."
         return _checked({"sent": t["sent"], "notice_id": row["id"]}, msg)
+
+    def _owner_briefs(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """The owner's briefs (vula/owner_briefs.py): off unless asked for, at the owner's own time.
+        Switching on without a time asks for one (never a time the owner didn't give). A change is
+        read back from the DB before it's reported. It only changes what Vula sends the owner, so
+        it needs no confirm step."""
+        from vula import owner_briefs as ob
+        action = str(args.get("action") or "status").lower()
+        which = str(args.get("which") or "morning").lower()
+        kinds = list(ob.KINDS) if which == "both" else [which]
+        if any(k not in ob.KINDS for k in kinds):
+            return {"status": "need_info", "message": "The morning brief, the weekly advisor, or both?"}
+        names = {"morning": "morning brief", "weekly": "weekly advisor"}
+        if action == "preview":
+            parts = []
+            for k in kinds:
+                if k == "morning":
+                    from vula import owner_digest as mod
+                    now = datetime.now(mod.SAST)
+                    text = mod.render(ob.apply_sections(mod.build(tid, now.date(), now),
+                                                        ob.settings_for(tid)["morning"].get("sections")))
+                else:
+                    from vula import owner_advisor as mod
+                    text = mod.render(mod.build(tid, datetime.now(mod.SAST).date()))
+                parts.append(text or f"Nothing for the {names[k]} today, so nothing would go out.")
+            return {"reply_verbatim": "\n\n".join(parts)}
+        current = ob.settings_for(tid)
+        if action == "sections":
+            mode = str(args.get("mode") or "only").lower()
+            asked = ob.sections_from_words(args.get("sections") or "")
+            have = list(current["morning"].get("sections") or ob.SECTIONS)
+            if mode == "all":
+                new = list(ob.SECTIONS)
+            elif not asked:
+                choices = ", ".join(ob.SECTION_LABELS[x] for x in ob.SECTIONS)
+                return {"status": "need_info", "message": f"Which parts? You can have: {choices} — or *money* / *work*."}
+            elif mode == "add":
+                new = [x for x in ob.SECTIONS if x in set(have) | set(asked)]
+            elif mode == "remove":
+                new = [x for x in have if x not in asked]
+            else:
+                new = asked
+            if not new:
+                return {"status": "need_info", "message": "That would leave the brief empty — switch it off instead? "
+                                                          "Say *stop my morning brief*."}
+            try:
+                ob.save(tid, {"morning": {"sections": new}})
+            except Exception as exc:
+                logger.warning("brief sections change failed for %s: %s", tid, exc)
+                return {"error": "I couldn't change that just now. Nothing was changed."}
+            back = ob.settings_for(tid)["morning"].get("sections")     # read back
+            if back != new:
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+            shown = ", ".join(ob.SECTION_LABELS[x] for x in back)
+            tail = "" if current["morning"]["on"] else "\nIt's switched off — say e.g. *send me a morning brief at 7 on weekdays*."
+            return {"reply_verbatim": f"✅ Your morning brief now shows: {shown}.{tail}"}
+        patch: Dict[str, Any] = {}
+        if action == "off":
+            patch = {k: {"on": False} for k in kinds}
+        elif action in ("on", "schedule"):
+            when = str(args.get("when") or "").strip()
+            for k in kinds:
+                parsed = ob.parse_schedule(k, when) if when else None
+                if parsed is None:
+                    if action == "on" and current[k]["time_chosen"]:
+                        parsed = {"on": True}              # back on at the time they chose before
+                    else:
+                        suggest = ob.describe(k, current[k])
+                        return {"status": "need_info", "message": f"{ob.ask_text(k)} Or reply *yes* for {suggest}."}
+                if action == "schedule" and "on" not in parsed:
+                    parsed["on"] = True
+                patch[k] = parsed
+        if patch:
+            try:
+                ob.save(tid, patch)
+            except Exception as exc:
+                logger.warning("owner brief change failed for %s: %s", tid, exc)
+                return {"error": "I couldn't change that just now. Nothing was changed — try again shortly."}
+        now_set = ob.settings_for(tid)          # read back from the DB, not assumed
+        for k, p in patch.items():
+            if any(now_set[k].get(f) != v for f, v in p.items()):
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+        lines = [(f"✅ Your {names[k]} is *on* — {now_set[k]['when']}." if now_set[k]["on"]
+                  else f"⏸️ Your {names[k]} is *off*.")
+                 for k in (kinds if patch else ob.KINDS)]
+        lines.append("Tell me any time to change the time or days, switch it off, or *show me today's brief*.")
+        return {"reply_verbatim": "\n".join(lines),
+                "settings": {k: {"on": now_set[k]["on"], "when": now_set[k]["when"]} for k in ob.KINDS}}
+
+    def _team_messages(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """The team's scheduled WhatsApp messages (vula/commerce/job_config.py): which are on, and
+        switching one on or off or moving its time — read back before it's reported."""
+        from vula import owner_briefs as ob
+        from vula.commerce import job_config as jc
+        action = str(args.get("action") or "status").lower()
+        job = str(args.get("message") or "")
+        fits = jc.team_message_choices(tid)
+        if action in ("on", "off"):
+            if job not in jc.TEAM_MESSAGES:
+                listing = "\n".join(f"• {jc.TEAM_MESSAGES[j]}" for j in fits)
+                return {"status": "need_info", "message": f"Which one?\n{listing}"}
+            patch: Dict[str, Any] = {"enabled": action == "on"}
+            when = str(args.get("when") or "").strip()
+            kind = jc.JOB_TYPES[job]["kind"]
+            if action == "on" and when and kind != "interval":
+                t, days = ob.parse_time(when), ob.parse_days(when)
+                if not t and not days:
+                    return {"status": "need_info", "message": "What time should it go? e.g. *6pm* or *Friday 8am*."}
+                if t:
+                    patch["hour"], patch["minute"] = t
+                if days and kind == "weekly":
+                    patch["day_of_week"] = days[0]
+            res = jc.upsert_config(tid, job, patch)
+            if res.get("error"):
+                logger.warning("team message change failed for %s: %s", tid, res["error"])
+                return {"error": "I couldn't change that just now. Nothing was changed — try again shortly."}
+            now = jc.get_configs(tid)[job]          # read back from the DB, not assumed
+            if any(now.get(k) != v for k, v in patch.items()):
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+            line = (f"✅ *{jc.TEAM_MESSAGES[job]}* is on — {jc.when_text(now)}." if now["enabled"]
+                    else f"⏸️ *{jc.TEAM_MESSAGES[job]}* is off.")
+            return {"reply_verbatim": line + "\nIt goes to the people on your team who chose it under Team."}
+        cfgs = jc.get_configs(tid)
+        lines = [f"{'✅' if cfgs[j]['enabled'] else '⏸️'} {jc.TEAM_MESSAGES[j]}"
+                 + (f" — {jc.when_text(cfgs[j])}" if cfgs[j]["enabled"] else " — off") for j in fits]
+        if not lines:
+            return {"reply_verbatim": "There are no scheduled team messages for this kind of business."}
+        return {"reply_verbatim": "Messages Vula sends your team:\n" + "\n".join(lines)
+                + "\nSay e.g. *stop the low-stock alert* or *send the end-of-day sales at 6pm*."}
 
     async def _staff_poll(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         """A poll to the business's own staff (vula/staff_polls.py): preview, then on Confirm send
@@ -3053,6 +3282,13 @@ class CommerceAdminSkill(BaseSkill):
 
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
+        """Every tool call runs as the person who sent the message, so a quote, invoice or order it
+        creates records who made it (vula/acting.py, migration 278)."""
+        from vula import acting
+        with acting.acting_as(ctx.get("phone")):
+            return await self._dispatch_tool_as(name, args, ctx)
+
+    async def _dispatch_tool_as(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
         _log_tool_call(tid, "admin", name, args)
         addon = _ADDON_FOR_TOOL.get(name)
@@ -3141,6 +3377,15 @@ class CommerceAdminSkill(BaseSkill):
                 return await draft_letter(args, tid, ctx.get("phone") or "")
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
+            if name == "meeting":
+                out = self._meeting(tid, args, ctx)
+                if out.get("brief_for"):             # the public web on the company (vula/company_research.py)
+                    from vula import company_research
+                    web = await company_research.section(tid, out.pop("brief_for"))
+                    if web:
+                        out["reply_verbatim"] += "\n" + web
+                return out
+            if name == "team_activity":      return self._team_activity(tid, args, ctx)
             if name == "setup_project":
                 # Only ever reached from the owner's Confirm tap on a plan Vula showed them
                 # (vula/api/whatsapp.py::_maybe_project_setup) — never offered to the model.
@@ -3184,6 +3429,10 @@ class CommerceAdminSkill(BaseSkill):
                 return await self._staff_notice(tid, args, ctx)
             if name == "staff_poll":
                 return await self._staff_poll(tid, args, ctx)
+            if name == "owner_briefs":
+                return self._owner_briefs(tid, args)
+            if name == "team_messages":
+                return self._team_messages(tid, args)
             if name == "boq_template":
                 return await self._boq_template(tid)
             if name == "share_project":
@@ -6482,6 +6731,278 @@ class CommerceAdminSkill(BaseSkill):
                 "creates the draft. Never save anything before they've confirmed."
             ),
         }
+
+    def _team_activity(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """One person's week or the team's counts (vula/team_activity.py). Owners and managers
+        see anyone; everyone else only themselves — checked here, not left to the prompt."""
+        from vula import team_activity as ta
+        from vula import team_index
+        phone = ctx.get("phone") or ""
+        me = team_index.member_for_phone(tid, phone) if phone else None
+        sees_all = bool(me) and ((me.get("role") or "").lower() in _FULL_ACCESS_ROLES or not (me.get("access") or []))
+        since, until, label = ta.period(str(args.get("period") or ""))
+        action = str(args.get("action") or "person").lower()
+        who = str(args.get("who") or "").strip()
+        if action == "team":
+            if not sees_all:
+                return {"reply_verbatim": "Only the owner or a manager can see the whole team. "
+                                          "Ask *how does my week look?* for your own."}
+            from vula import team_presets
+            team = team_presets.find(str(args.get("team") or ""))
+            if args.get("team") and not team:
+                return {"status": "need_info", "message": "Which team? " + ", ".join(
+                    t["label"] for t in team_presets.presets()) + "."}
+            rows = ta.team_summary(tid, since, until, args.get("role") or None, team=team)
+            return {"reply_verbatim": ta.team_text(rows, label, team_presets.TEAMS[team]["label"] + " team" if team else None)}
+        if not who or who.lower() in ("me", "my", "mine", "myself", "i"):
+            if not phone:
+                return {"error": "I can only show the diary of someone messaging me on WhatsApp."}
+            person = me or {"whatsapp": phone, "name": "You"}
+        else:
+            found = ta.match_member(tid, who)
+            if not found:
+                return {"status": "need_info", "message": f"I can't find *{who}* on the team list. Who do you mean?"}
+            if len(found) > 1:
+                names = "\n".join(f"• {m.get('name')} ({m.get('whatsapp')})" for m in found[:6])
+                return {"status": "need_info", "message": f"Which one?\n{names}"}
+            person = found[0]
+            is_me = me and ta._owner_key(person.get("whatsapp")) == ta._owner_key(phone)
+            if not sees_all and not is_me:
+                return {"reply_verbatim": "Only the owner or a manager can see someone else's diary. "
+                                          "Ask *how does my week look?* for your own."}
+        return {"reply_verbatim": ta.person_text(ta.person_week(tid, person, since, until), label)}
+
+    def _meeting(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """The person's own meetings (vula/meetings.py): book, list, update, cancel. Every change is
+        read back before it's reported. A reminder only when they ask for one."""
+        from vula import meetings as mt
+        from vula.when import resolve, say
+        phone = mt.digits(ctx.get("phone"))
+        if not phone:
+            return {"error": "I can only keep a diary for someone messaging me on WhatsApp."}
+        action = str(args.get("action") or "list").lower()
+        who = str(args.get("with") or "").strip()
+        remind_words = str(args.get("remind") or "").strip()
+        lead = mt.parse_lead(remind_words) if remind_words else None
+        if remind_words and lead is None:
+            return {"status": "need_info", "message": "How long before should I remind you? e.g. *1 hour before*, "
+                                                      "*30 min*, or *the day before*."}
+
+        def when_of(text: str) -> Any:
+            r = resolve(text)
+            if not r:
+                return {"status": "need_info", "message": "When is it? e.g. *Thursday at 10* or *15 Nov 2pm*."}
+            if not r["has_time"]:
+                return {"status": "need_info", "message": f"What time on {r['at'].strftime('%a %-d %b')}?"}
+            if r["at"] <= mt.now_sast():
+                return {"status": "need_info", "message": f"{say(r['at'])} has already passed — when is it?"}
+            return r["at"]
+
+        def done(m: Dict[str, Any], head: str, *, asked_remind: bool) -> Dict[str, Any]:
+            out = [f"{head} {mt.line(m)}"] + mt.where_lines(m)
+            if m.get("notes"):
+                out.append(f"📝 {m['notes']}")
+            if m.get("remind_minutes"):
+                at = mt._at(m) - timedelta(minutes=int(m["remind_minutes"]))
+                out.append(f"⏰ I'll remind you {mt.lead_text(int(m['remind_minutes']))} ({at.strftime('%H:%M')})"
+                           + (", with a brief on them." if m.get("with_brief") else "."))
+            elif m.get("with_brief"):
+                out.append("🗂️ Brief noted — say e.g. *remind me 1 hour before* and it comes with the reminder.")
+            elif not asked_remind:
+                out.append("Want a reminder before it? Say e.g. *remind me 1 hour before*.")
+            other = mt.clashes(tid, phone, mt._at(m), skip_id=m.get("id"))
+            if other:
+                out.append("⚠️ Close to: " + "; ".join(mt.line(o) for o in other[:2]))
+            return {"reply_verbatim": "\n".join(out), "meeting_id": m.get("id")}
+
+        if action == "book":
+            if not who:
+                return {"status": "need_info", "message": "Who is the meeting with?"}
+            at = when_of(str(args.get("when") or ""))
+            if isinstance(at, dict):
+                return at
+            address, contact_phone = str(args.get("address") or "").strip(), None
+            try:
+                rows = (service._client().table("commerce_contacts").select("phone,name,address")
+                        .eq("tenant_id", tid).ilike("name", f"%{who}%").limit(1).execute().data or [])
+                if rows:
+                    contact_phone = rows[0].get("phone")
+                    address = address or (rows[0].get("address") or "")
+            except Exception as exc:
+                logger.debug("meeting contact lookup skipped: %s", exc)
+            try:
+                m = mt.create(tid, created_by=phone, with_name=who, starts_at=at, address=address or None,
+                              contact_phone=contact_phone, notes=args.get("notes"), remind_minutes=lead or None,
+                              with_brief=bool(args.get("with_brief")))
+            except Exception as exc:
+                logger.warning("meeting booking failed for %s: %s", tid, exc)
+                m = None
+            if not m:
+                return {"error": "I couldn't save the meeting just now — nothing was booked. Try again shortly."}
+            return done(m, "📅 Booked:", asked_remind=bool(remind_words))
+
+        if action == "check_in":
+            from vula import checkins
+            try:
+                got = checkins.start(tid, phone, who)
+            except Exception as exc:
+                logger.warning("check-in start failed for %s: %s", tid, exc)
+                return {"error": "I couldn't start your check-in just now — try again in a minute."}
+            if not got.get("row"):
+                return {"error": "I couldn't start your check-in just now — try again in a minute."}
+            m = got.get("meeting")
+            head = (f"📍 Checking in for {mt.line(m)}." if m else
+                    f"📍 Checking in{' at *' + who + '*' if who else ''}.")
+            return {"reply_verbatim": f"{head}\n{checkins.ASK_PIN}"}
+
+        if action == "calendar":
+            from vula import outlook_calendar as oc
+            from vula import team_index
+            from vula.microsoft import member_credentials as mc
+            me = team_index.member_for_phone(tid, phone)
+            op = str(args.get("calendar_op") or ("remind" if remind_words or args.get("with_brief") is not None
+                                                  else "status")).lower()
+            if op in ("connect", "disconnect") and not me:
+                return {"error": "I can only connect the calendar of someone on the team list with this WhatsApp number."}
+            google = str(args.get("calendar_provider") or "").lower() == "google"
+            if op == "connect":
+                from vula.google import member_credentials as gcred
+                if google and not gcred.available():
+                    return {"reply_verbatim": "Google Calendar isn't switched on for Vula yet. Your Outlook calendar "
+                                              "works — say *connect my calendar*."}
+                try:
+                    url = (gcred if google else mc).link_for(tid, me["id"])
+                except Exception as exc:
+                    logger.warning("calendar link failed for %s: %s", tid, exc)
+                    return {"error": "I couldn't make the link just now — try again in a minute."}
+                kind = "Google" if google else "Outlook"
+                return {"reply_verbatim": f"📅 Open this on your phone to let me read your {kind} calendar "
+                                          f"(calendar only — not your email):\n{url}\nThe link works for 15 minutes. "
+                                          "Then tell me how long before each meeting to remind you, e.g. "
+                                          "*30 minutes before*, or *no reminders*."}
+            if op == "disconnect":
+                try:
+                    gone = oc.disconnect_member(tid, me["id"], provider="google" if google else "microsoft")
+                except Exception as exc:
+                    logger.warning("calendar disconnect failed for %s: %s", tid, exc)
+                    gone = False
+                if not gone:
+                    return {"error": "I couldn't disconnect it just now — it's still connected."}
+                return {"reply_verbatim": "✅ Your calendar is disconnected. Its upcoming meetings are out of "
+                                          "your Vula diary; the ones you booked with me stay."}
+            personal = (mc.get_row(tid, me["id"]) if me else None) or {}
+            from vula.google import member_credentials as gcred
+            try:
+                gpersonal = (gcred.get_row(tid, me["id"]) if me else None) or {}
+            except Exception:
+                gpersonal = {}
+            if personal.get("status") == "connected":
+                acct = {"status": "connected", "email": personal.get("email"), "scopes": personal.get("scopes")}
+            else:
+                try:
+                    acct = (service._client().table("vula_microsoft_accounts").select("email,scopes,status")
+                            .eq("tenant_id", tid).limit(1).execute().data or [{}])[0]
+                except Exception:
+                    acct = {}
+            if op == "status" and gpersonal.get("status") == "connected":
+                also = (f" and your own Outlook calendar ({personal.get('email')})"
+                        if personal.get("status") == "connected" else "")
+                return {"reply_verbatim": f"📅 I'm reading your Google calendar ({gpersonal.get('email')}){also}."}
+            if op == "status":
+                if acct.get("status") == "connected" and oc.has_calendar(acct.get("scopes")):
+                    whose = "your own" if personal else "the business's"
+                    return {"reply_verbatim": f"📅 I'm reading {whose} Outlook calendar ({acct.get('email')}). "
+                                              "Say *connect my calendar* to use your own instead." if not personal else
+                                              f"📅 I'm reading your own Outlook calendar ({acct.get('email')})."}
+                return {"reply_verbatim": "No calendar is connected for you. Say *connect my calendar* and I'll "
+                                          "send you a link."}
+            if acct.get("status") != "connected":
+                return {"reply_verbatim": "No Outlook calendar is connected. Say *connect my calendar* and I'll "
+                                          "send you a link — your meetings then come in by themselves."}
+            if not oc.has_calendar(acct.get("scopes")):
+                return {"reply_verbatim": f"Microsoft is connected ({acct.get('email')}) but without the calendar. "
+                                          "Reconnect it in Settings › Connections to let me read your meetings."}
+            if not remind_words and args.get("with_brief") is None:
+                return {"status": "need_info", "message": "How long before each Outlook meeting should I remind you? "
+                                                          "e.g. *30 minutes before*, *1 hour*, or *no reminders*."}
+            minutes = lead if remind_words else None
+            try:
+                back = oc.set_reminders(tid, phone, minutes if remind_words else None,
+                                        args.get("with_brief") if args.get("with_brief") is not None else None)
+            except Exception as exc:
+                logger.warning("calendar reminder setting failed for %s: %s", tid, exc)
+                back = None
+            if back is None:
+                return {"error": "I couldn't save that — are you on the team list with this WhatsApp number?"}
+            got = back.get("calendar_remind_minutes")
+            if remind_words and (got or None) != (minutes or None):
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+            if not got:
+                return {"reply_verbatim": f"⏸️ No reminders for your Outlook meetings ({acct.get('email')}). "
+                                          "They still show in your diary and brief."}
+            brief = " with a brief on who you're meeting" if back.get("calendar_brief") else ""
+            return {"reply_verbatim": f"✅ I'll remind you {mt.lead_text(int(got))} each meeting in your Outlook "
+                                      f"calendar ({acct.get('email')}){brief}, with the address and a map link."}
+
+        if action == "list":
+            rows = mt.upcoming(tid, phone)
+            if not rows:
+                return {"reply_verbatim": "You have no meetings booked for the next two weeks."}
+            lines = [f"• {mt.line(r)}" + (f" — {r['address']}" if r.get("address") else "") for r in rows]
+            return {"reply_verbatim": "📅 Your meetings:\n" + "\n".join(lines)}
+
+        # update / cancel: which meeting
+        if args.get("meeting_id"):
+            target = mt.get(tid, str(args["meeting_id"]))
+            found = [target] if target and mt.digits(target.get("created_by")) == phone else []
+        else:
+            found = mt.find(tid, phone, who)
+        if not found:
+            return {"status": "need_info", "message": "I can't find that meeting in your diary. Which one? "
+                                                      "Say *what meetings do I have* to see them."}
+        if len(found) > 1 and not who and not args.get("meeting_id"):
+            found = found[:1]                          # "remind me an hour before" → the next one
+        elif len(found) > 1:
+            listing = "\n".join(f"• {mt.line(r)}" for r in found[:5])
+            return {"status": "need_info", "message": f"Which one?\n{listing}"}
+        m = found[0]
+        if action == "brief":
+            from vula import meeting_brief
+            return {"reply_verbatim": f"{mt.line(m)}\n\n" + meeting_brief.build(tid, m, phone),
+                    "brief_for": m.get("with_name")}
+        if action == "cancel":
+            back = mt.update(tid, m["id"], {"status": "cancelled"})
+            if not back or back.get("status") != "cancelled":
+                return {"error": "I couldn't cancel it just now — it's still in your diary."}
+            return {"reply_verbatim": f"❌ Cancelled: {mt.line(m)}"}
+        patch: Dict[str, Any] = {}
+        if args.get("when"):
+            at = when_of(str(args["when"]))
+            if isinstance(at, dict):
+                return at
+            patch["starts_at"] = at.isoformat()
+        if args.get("address"):
+            patch["address"] = str(args["address"]).strip()[:300]
+        if args.get("notes"):
+            patch["notes"] = str(args["notes"]).strip()[:1000]
+        if remind_words:
+            patch["remind_minutes"] = lead or None
+        if "with_brief" in args and args["with_brief"] is not None:
+            patch["with_brief"] = bool(args["with_brief"])
+        if not patch:
+            return {"status": "need_info", "message": "What should I change — the time, the address, or a reminder?"}
+        back = mt.update(tid, m["id"], patch)
+        if not back:
+            return {"error": "I couldn't change it just now — nothing was changed."}
+        for k, v in patch.items():
+            got = back.get(k)
+            if k == "starts_at":
+                ok = got and mt._at(back) == datetime.fromisoformat(v)
+            else:
+                ok = got == v
+            if not ok:
+                return {"error": "I tried, but the change didn't stick. Nothing was changed."}
+        return done(back, "✅ Updated:", asked_remind=True)
 
     async def _create_reminder(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         text = (args.get("text") or "").strip()

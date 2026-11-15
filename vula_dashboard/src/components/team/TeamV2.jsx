@@ -5,13 +5,16 @@
  * chips are grouped by menu section — the redesign's menu, so Stock and Suppliers sit under
  * Operate — and each is a toggle button (aria-pressed). Ids are the same as before.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Cake, History, KeyRound, Plus, RotateCcw, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
 import { MERCHANT_GROUPS, withV2Moves } from "../../navConfig.jsx";
 import { Button, Card, EmptyState, Field, Input, PageHeader, SectionTabs, Select, StatusChip } from "../ui/index.jsx";
 import EmployeesV2 from "./EmployeesV2";
 import NoticesV2 from "./NoticesV2";
-import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, toggle, useTeam } from "./useTeam";
+import ActivityV2 from "./ActivityV2";
+import MyCalendar from "./MyCalendar";
+import { VULA_API } from "../../lib/authFetch";
+import { AUDIT_LABELS, EVENTS, MODULES, REP_MODULES, ROLE_LABELS, ROLES, TEAMS, TEAM_LABELS, toggle, useTeam } from "./useTeam";
 import "./team.css";
 
 /** MODULES grouped as the redesigned menu shows them; anything not in a section goes last. */
@@ -93,13 +96,23 @@ function Chip({ on, label, onClick }) {
 
 export default function TeamV2({ tenantId }) {
   const [tab, setTab] = useState("people");
+  // Team › Activity only where it fits (more than one person, a business with meetings/visits/
+  // bookings/follow-ups) — vula/api/team_activity.py decides.
+  const [activity, setActivity] = useState(false);
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${VULA_API}/v1/team/${tenantId}/activity/available`).then((r) => (r.ok ? r.json() : {}))
+      .then((d) => setActivity(!!d.available)).catch(() => setActivity(false));
+  }, [tenantId]);
+  const tabs = [{ id: "people", label: "People" }, ...(activity ? [{ id: "activity", label: "Activity" }] : []),
+    { id: "ai", label: "AI employees" }, { id: "notices", label: "Notices" }];
   return (
     <div>
       <PageHeader sub="Add people, give each their own WhatsApp, and choose what they see and get notified about. Send them notices, birthday wishes and public holiday reminders." />
-      <SectionTabs label="Team" active={tab} onChange={setTab}
-        tabs={[{ id: "people", label: "People" }, { id: "ai", label: "AI employees" }, { id: "notices", label: "Notices" }]} />
+      <SectionTabs label="Team" active={tab} onChange={setTab} tabs={tabs} />
       {tab === "notices" ? <NoticesV2 tenantId={tenantId} />
-        : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <People tenantId={tenantId} />}
+        : tab === "activity" && activity ? <ActivityV2 tenantId={tenantId} />
+        : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <><MyCalendar tenantId={tenantId} /><MyCalendar tenantId={tenantId} provider="google" /><People tenantId={tenantId} /></>}
     </div>
   );
 }
@@ -170,6 +183,12 @@ function People({ tenantId }) {
               {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
             </Select>
           </Field>
+          <Field label="Team" hint="Gives them the tabs that job needs">
+            <Select value={t.form.team || ""} onChange={(e) => t.setForm({ ...t.form, team: e.target.value })}>
+              <option value="">No team</option>
+              {TEAMS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </Select>
+          </Field>
           <div className="vtm-go"><Button Icon={Plus} onClick={t.add}>Add member</Button></div>
         </div>
       </Card>
@@ -190,8 +209,19 @@ function People({ tenantId }) {
                 <span className="vtm-sub">{m.whatsapp || "No WhatsApp number yet"}</span>
               </span>
               {!m.active && <StatusChip>Disabled</StatusChip>}
+              {m.calendar_connected && <StatusChip tone="ok">Calendar connected</StatusChip>}
               <Select value={m.role} onChange={(e) => t.patch(m.id, { role: e.target.value })} aria-label={`Role for ${m.name || m.whatsapp}`} className="vtm-role">
                 {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
+              </Select>
+              <Select value={m.team || ""} aria-label={`Team for ${m.name || m.whatsapp}`} className="vtm-role"
+                onChange={(e) => {
+                  const team = e.target.value;
+                  const who = m.name || m.whatsapp;
+                  const give = team && window.confirm(`Give ${who} the ${TEAM_LABELS[team]} team's tabs? Their current tabs are replaced (you can still change them after).`);
+                  t.patch(m.id, { team, apply_team_access: !!give });
+                }}>
+                <option value="">No team</option>
+                {TEAMS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
               </Select>
               <span className="vtm-actions">
                 <Button size="sm" variant="secondary" onClick={() => t.patch(m.id, { active: !m.active })}>{m.active ? "Disable" : "Enable"}</Button>

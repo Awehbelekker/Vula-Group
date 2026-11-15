@@ -19,6 +19,7 @@ export function since(ts, agoSuffix = false) {
 /** The conversation list and the open escalations, refreshed every 15s. */
 export function useInboxList(tenantId) {
   const [convos, setConvos] = useState([])
+  const [mineOnly, setMineOnly] = useState(false)   // the server sent only chats assigned to this login
   const [escalations, setEscalations] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -27,6 +28,7 @@ export function useInboxList(tenantId) {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations`)
       const d = await r.json()
       setConvos(d.conversations || [])
+      setMineOnly(!!d.mine_only)
     } catch {}
     setLoading(false)
   }, [tenantId])
@@ -47,7 +49,7 @@ export function useInboxList(tenantId) {
     return () => { clearInterval(t); clearInterval(te) }
   }, [load, loadEscalations])
 
-  return { convos, escalations, loading, load, loadEscalations }
+  return { convos, escalations, loading, load, loadEscalations, mineOnly }
 }
 
 /** Answer or dismiss one escalation. */
@@ -161,4 +163,17 @@ export function useThread(tenantId, sessionId) {
   }
 
   return { data, msgs, paused, input, setInput, busy, canned, rated, rate, setHandoff, sendReply, saveMeta }
+}
+
+/** The team (for "Assign to" and the person filter) and who is signed in. 12 Nov 2026. */
+export function useInboxTeam(tenantId) {
+  const [members, setMembers] = useState([])
+  const [me, setMe] = useState(null)
+  useEffect(() => {
+    if (!tenantId) return
+    fetch(`${VULA_API}/v1/team/${tenantId}`).then(r => (r.ok ? r.json() : {}))
+      .then(d => setMembers((d.members || []).filter(m => m.active !== false))).catch(() => {})
+    fetch(`${VULA_API}/v1/team/${tenantId}/me`).then(r => (r.ok ? r.json() : null)).then(setMe).catch(() => {})
+  }, [tenantId])
+  return { members, me }
 }

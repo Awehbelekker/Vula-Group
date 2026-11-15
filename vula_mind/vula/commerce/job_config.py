@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +104,64 @@ _ONLY_FOR_TYPES: Dict[str, set] = {"friday_catch_reminder": {"food"}}
 _ONLY_WITH_MODULES: Dict[str, set] = {"basket_reminder": {"wa_shop"}}
 _OFF_UNTIL_SWITCHED_ON = {"reorder_nudge"}
 
+# 12 Nov 2026 (Ian): "keep notifications off unless it was set on onboarding or asked". The
+# messages a job sends to the business's OWN team start off for a business created from this
+# date: the owner picks them in onboarding (onboard_wa "alerts" step), by asking on WhatsApp
+# (commerce_admin team_messages tool) or in the Scheduling tab. Businesses created before keep
+# exactly what they had. Customer-facing jobs (unpaid chase, basket reminder) are not affected.
+QUIET_SINCE = "2026-11-12"
+TEAM_MESSAGES: Dict[str, str] = {
+    "delivery_briefing": "Morning list of the day's orders",
+    "low_stock_alert": "Low-stock alert",
+    "sales_summary": "End-of-day sales",
+    "friday_catch_reminder": "Weekly reminder to update the specials",
+    "pending_project_nudge": "Weekly reminder of documents not yet on a project",
+    "stale_escalation_nudge": "Reminder when a customer's question is still waiting for your team",
+}
+_COMMERCE_JOBS = {"delivery_briefing", "low_stock_alert", "sales_summary", "friday_catch_reminder"}
+
+
+def quiet_by_default(tenant_id: str) -> bool:
+    """Created on or after QUIET_SINCE → its team messages start off. Unknown → not quiet (the
+    behaviour before this existed)."""
+    try:
+        from vula.api.tenants import get_config
+        created = str((get_config(tenant_id) or {}).get("created_at") or "")[:10]
+    except Exception:
+        return False
+    return bool(created) and created >= QUIET_SINCE
+
+
+def team_message_choices(tenant_id: str) -> List[str]:
+    """The team messages that fit this business, in a fixed order: shop messages only for a
+    business that takes orders, the specials reminder for food, documents for project firms."""
+    try:
+        from vula.api.tenants import enabled_modules, get_config, uses_projects
+        mods = set(enabled_modules(tenant_id))
+        btype = (get_config(tenant_id) or {}).get("business_type")
+        projects = uses_projects(tenant_id)
+    except Exception:
+        mods, btype, projects = set(), None, False
+    out = []
+    for job in TEAM_MESSAGES:
+        if job in _COMMERCE_JOBS and "orders" not in mods:
+            continue
+        if job == "friday_catch_reminder" and btype not in _ONLY_FOR_TYPES[job]:
+            continue
+        if job == "pending_project_nudge" and not projects:
+            continue
+        out.append(job)
+    return out
+
+
+def when_text(cfg: Dict[str, Any]) -> str:
+    days = ("Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays")
+    if cfg.get("kind") == "daily":
+        return f"daily at {cfg['hour']:02d}:{cfg['minute']:02d}"
+    if cfg.get("kind") == "weekly":
+        return f"{days[cfg['day_of_week']]} at {cfg['hour']:02d}:{cfg['minute']:02d}"
+    return "as it happens"
+
 
 def template_name(tenant_id: str, suffix: str) -> str:
     prefix = TEMPLATE_PREFIX.get(tenant_id) or tenant_id.replace("-", "_")
@@ -112,6 +170,8 @@ def template_name(tenant_id: str, suffix: str) -> str:
 
 def _default_enabled(tenant_id: str, job_type: str) -> bool:
     if job_type in _OFF_UNTIL_SWITCHED_ON:
+        return False
+    if job_type in TEAM_MESSAGES and quiet_by_default(tenant_id):
         return False
     mods = _ONLY_WITH_MODULES.get(job_type)
     if mods:
