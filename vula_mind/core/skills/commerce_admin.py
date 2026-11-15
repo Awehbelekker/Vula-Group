@@ -1278,7 +1278,34 @@ BUILDUP_TOOLS = [
             "exclusions": {"type": "array", "items": {"type": "string"},
                            "description": "what the person said is not included, e.g. ['painting']"},
             "title": {"type": "string"},
+            "project": {"type": "string", "description": "the project it's for, when the person says so — "
+                                                         "so it can later be compared with what was paid"},
         }, "required": ["items"]}}},
+    # phase 4 (15 Nov 2026): what the job actually cost against its estimate (vula/commerce/actuals.py)
+    {"type": "function", "function": {
+        "name": "compare_estimate",
+        "description": "Compare a kept estimate with what was actually paid on its project (filed "
+                       "invoices, expenses, labour) — per component: estimated vs bought quantity "
+                       "and cost. With finished=true (only when an owner or manager says the work "
+                       "is finished, or the project is complete) Vula keeps suggested build-up "
+                       "changes for them to accept or dismiss. Use for 'how did the Bokaap walls "
+                       "compare with the estimate', 'the walls are done — what did we learn'.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "the project the estimate is for"},
+            "estimate_id": {"type": "string"},
+            "finished": {"type": "boolean", "description": "the person says this work is finished"},
+        }}}},
+    {"type": "function", "function": {
+        "name": "buildup_suggestion",
+        "description": "Build-up changes Vula suggested from finished jobs: list them, or accept / "
+                       "dismiss one. Accepting saves a new version of the build-up with that one "
+                       "change. Show the suggestion first; call with confirm=true only after the "
+                       "owner or manager says yes.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "accept", "dismiss"]},
+            "suggestion_id": {"type": "string"},
+            "confirm": {"type": "boolean"},
+        }, "required": ["action"]}}},
 ]
 
 FORM_TOOLS = [
@@ -1989,7 +2016,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances",
     # every document of a project, statements and proofs of payment included: owner and managers
     # only — no tab id grants it, so a restricted staff member never gets the tool.
-    "project_file": "owner_only", "confirm_buildup": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_file": "owner_only", "confirm_buildup": "owner_only", "compare_estimate": "owner_only", "buildup_suggestion": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -3092,6 +3119,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name in ("trade_buildup", "confirm_buildup"): return await self._buildup(name, tid, args, ctx)
             if name == "estimate_cost":       return await self._estimate_cost(tid, args, ctx)
+            if name in ("compare_estimate", "buildup_suggestion"): return await self._actuals(name, tid, args, ctx)
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")), args.get("channel"))
             if name == "payment_link":       return await self._payment_link(tid, args)
@@ -3676,7 +3704,8 @@ class CommerceAdminSkill(BaseSkill):
             est = await est_mod.estimate(tid, list(args.get("items") or []),
                                          exclusions=list(args.get("exclusions") or []), research=True,
                                          created_by=phone or str(ctx.get("person_key") or ""),
-                                         title=str(args.get("title") or ""))
+                                         title=str(args.get("title") or ""),
+                                         project=str(args.get("project") or "") or None)
         except est_mod.EstimateError as exc:
             return {"status": "need_info", "message": str(exc)}
         text = est_mod.summary(est)
@@ -3708,6 +3737,67 @@ class CommerceAdminSkill(BaseSkill):
             except Exception as exc:  # noqa: BLE001 — the estimate itself still stands
                 logger.warning("estimate sheet skipped for %s: %s", tid, exc)
         return {"reply_verbatim": text, "estimate_id": est.get("id"), "total_cents": est["total_cents"]}
+
+    async def _actuals(self, name: str, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """compare_estimate / buildup_suggestion (vula/commerce/actuals.py). Replies built in code;
+        deciding needs full access (owner or manager), checked here as well as by owner_only."""
+        import asyncio
+        from vula.commerce import actuals, buildups
+        person = str(ctx.get("phone") or ctx.get("person_key") or "")
+        lead = _ctx_access(tid, ctx) is None
+        try:
+            if name == "compare_estimate":
+                est = None
+                if args.get("estimate_id"):
+                    est = await asyncio.to_thread(actuals.get_estimate, tid, str(args["estimate_id"]))
+                elif args.get("project"):
+                    from vula.commerce.estimate import EstimateError, registered_project
+                    try:
+                        proj = await asyncio.to_thread(registered_project, tid, str(args["project"]))
+                    except EstimateError as exc:
+                        return {"error": str(exc)}
+                    rows = (service._client().table("vula_estimates").select("*").eq("tenant_id", tid)
+                            .eq("project", proj).order("created_at", desc=True).limit(1).execute().data or [])
+                    est = rows[0] if rows else None
+                if not est:
+                    return {"error": "I can't find an estimate for that. Make one with the project named, "
+                                     "then I can compare it with what was paid."}
+                finished = bool(args.get("finished")) or await asyncio.to_thread(
+                    actuals.is_finished, tid, est.get("project") or "")
+                if finished and lead:
+                    res = await actuals.learn(tid, est["id"], person=person, full_access=True, notify=False)
+                    cmp = await asyncio.to_thread(actuals.compare, tid, est)
+                    text = actuals.summary(cmp, actuals.proposals(cmp), finished=True)
+                    if res["suggestions"]:
+                        text += "\n\nWaiting for your decision:\n" + "\n".join(
+                            f"{i}. {s['text']}" for i, s in enumerate(res["suggestions"], 1))
+                        text += "\nSay which to accept or dismiss — nothing changes until you do."
+                    return {"reply_verbatim": text,
+                            "suggestions": [{"id": s["id"], "text": s["text"]} for s in res["suggestions"]]}
+                cmp = await asyncio.to_thread(actuals.compare, tid, est)
+                return {"reply_verbatim": actuals.summary(cmp, actuals.proposals(cmp), finished=False)}
+            action = str(args.get("action") or "list")
+            if action == "list" or not args.get("suggestion_id"):
+                rows = await asyncio.to_thread(actuals.list_suggestions, tid)
+                if not rows:
+                    return {"suggestions": [], "message": "No build-up changes are waiting for a decision."}
+                return {"suggestions": [{"id": r["id"], "text": r["text"]} for r in rows]}
+            sid = str(args["suggestion_id"])
+            if not args.get("confirm"):
+                rows = [r for r in await asyncio.to_thread(actuals.list_suggestions, tid) if r["id"] == sid]
+                if not rows:
+                    return {"error": "I can't find that suggestion — it may already be decided."}
+                return {"preview": True, "text": rows[0]["text"],
+                        "message": f"Confirm to {action} it (call again with confirm=true)."}
+            if action == "accept":
+                b = await asyncio.to_thread(actuals.accept, tid, sid, person=person, full_access=lead)
+                return _checked({"accepted": True, "buildup_id": b["id"], "version": b.get("version")},
+                                "✅ Changed — Vula will use this build-up from now on:\n" + buildups.describe(b))
+            ok = await asyncio.to_thread(actuals.dismiss, tid, sid, person=person, full_access=lead)
+            return {"dismissed": ok, "message": "Dismissed — it won't be suggested again for this estimate."
+                    if ok else "That didn't save — please try again."}
+        except actuals.ActualsError as exc:
+            return {"error": str(exc)}
 
     async def _buildup(self, name: str, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         """trade_buildup / confirm_buildup (vula/commerce/buildups.py). Confirming needs full access

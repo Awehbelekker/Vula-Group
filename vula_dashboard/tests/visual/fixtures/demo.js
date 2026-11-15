@@ -1340,3 +1340,30 @@ export const tradeEstimate = {
       ] },
   ],
 };
+
+// Trade costing phase 4 (15 Nov 2026): the estimate beside what was paid on its project.
+export const tradeActuals = {
+  comparison: {
+    estimate_id: "est-1", title: "one-brick wall 24.000 m2; plaster to brick walls 48.000 m2", project: "Bay Events catering",
+    estimated_cents: 1422001, paid_cents: 1310900, not_in_estimate_cents: 300000,
+    groups: [
+      { key: "material:brick", label: "Bricks or blocks", kind: "material", unit: "each", items: ["one-brick wall"],
+        estimated_qty: "2620.8", bought_qty: "3100", gap_pct: "18.3", estimated_cents: 783619, paid_cents: 926900, shared: false,
+        lines: [{ description: "Clay stock brick", supplier: "Cashbuild", date: "2026-11-10", counted: "3100", how: "" }], not_comparable: [] },
+      { key: "material:cement", label: "Cement (mortar)", kind: "material", unit: "bag", items: ["one-brick wall", "plaster to brick walls"],
+        estimated_qty: "17.76", bought_qty: "20", gap_pct: "12.6", estimated_cents: 204222, paid_cents: 229980, shared: true,
+        lines: [{ description: "PPC cement 50kg", supplier: "Cashbuild", date: "2026-11-10", counted: "20", how: "" }], not_comparable: [] },
+      { key: "labour:labour", label: "Labour", kind: "labour", unit: "hour", items: ["one-brick wall", "plaster to brick walls"],
+        estimated_qty: "60", bought_qty: null, gap_pct: null, estimated_cents: 300000, paid_cents: 154020, shared: true,
+        lines: [], not_comparable: [{ description: "Labour brickwork", supplier: "Sipho", date: "2026-11-12", why: "bought per sum, the build-up counts per hour" }] },
+    ],
+    unclear: [{ description: "River sand", could_be: ["Mortar (building) sand", "Plaster sand"] }],
+    not_in_estimate: [{ description: "Y12 rebar 6m" }],
+  },
+  proposals: [{ group: "material:brick", verdict: "suggest", field: "waste_pct", current_value: "5", suggested_value: "24" }],
+};
+export const tradeSuggestion = {
+  id: "sg-1", estimate_id: "est-1", buildup_id: "bu-wall", item: "one-brick wall", component: "units", label: "Bricks or blocks",
+  field: "waste_pct", current_value: "5", suggested_value: "24", status: "pending",
+  text: "one-brick wall — Bricks or blocks: waste 5% → 24% (estimated 2620.8 each, bought 3100)",
+};

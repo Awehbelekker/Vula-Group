@@ -12,6 +12,10 @@ membership guard as the rest of the tenant admin API. Switched on per business w
   POST  /{tenant_id}/admin/buildups/{id}/retire        owner or manager: stop using it
   POST  /{tenant_id}/admin/estimates                   cost work from its build-ups (phase 3)
   GET   /{tenant_id}/admin/estimates[/{id}.xlsx]       kept estimates, and one as Excel
+  GET   /{tenant_id}/admin/estimates/{id}/actuals      the estimate beside what was paid (phase 4)
+  POST  /{tenant_id}/admin/estimates/{id}/learn        owner or manager: the work is finished — learn
+  GET   /{tenant_id}/admin/buildup-suggestions         suggested build-up changes waiting for a decision
+  POST  /{tenant_id}/admin/buildup-suggestions/{id}/accept|dismiss   owner or manager
 """
 from __future__ import annotations
 
@@ -150,6 +154,7 @@ class EstimateIn(BaseModel):
     exclusions: List[str] = []
     title: str = ""
     research: bool = True
+    project: Optional[str] = None
 
 
 @router.post("/{tenant_id}/admin/estimates")
@@ -161,7 +166,7 @@ async def make_estimate(tenant_id: str, body: EstimateIn, request: Request) -> d
     try:
         est = await estimate.estimate(tenant_id, [i.model_dump(exclude_none=True) for i in body.items],
                                       exclusions=body.exclusions, research=body.research,
-                                      created_by=person, title=body.title)
+                                      created_by=person, title=body.title, project=body.project or None)
     except estimate.EstimateError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"estimate": est, "text": estimate.summary(est)}
@@ -172,7 +177,7 @@ async def list_estimates(tenant_id: str, limit: int = 20) -> dict:
     _on(tenant_id)
     from vula.commerce import service
     rows = await asyncio.to_thread(
-        lambda: service._client().table("vula_estimates").select("id,title,total_cents,created_at")
+        lambda: service._client().table("vula_estimates").select("id,title,total_cents,created_at,project")
         .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
     return {"estimates": rows}
 
@@ -198,3 +203,68 @@ async def estimate_xlsx(tenant_id: str, estimate_id: str):
         raise HTTPException(status_code=500, detail="The spreadsheet didn't add up, so it wasn't sent.")
     return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="Estimate_{str(r.get("created_at") or "")[:10] or estimate_id[:8]}.xlsx"'})
+
+
+# ── what the job actually cost (phase 4) ─────────────────────────────────────
+
+def _actuals_err(exc: Exception) -> HTTPException:
+    msg = str(exc)
+    status = 403 if "owner or manager" in msg else 404 if msg.startswith("I can't find") else 400
+    return HTTPException(status_code=status, detail=msg)
+
+
+@router.get("/{tenant_id}/admin/estimates/{estimate_id}/actuals")
+async def estimate_actuals(tenant_id: str, estimate_id: str) -> dict:
+    """The estimate beside what was paid on its project. A running job is progress only."""
+    _on(tenant_id)
+    from vula.commerce import actuals
+    est = await asyncio.to_thread(actuals.get_estimate, tenant_id, estimate_id)
+    if not est:
+        raise HTTPException(status_code=404, detail="Estimate not found.")
+    try:
+        cmp = await asyncio.to_thread(actuals.compare, tenant_id, est)
+    except actuals.ActualsError as exc:
+        raise _actuals_err(exc)
+    finished = await asyncio.to_thread(actuals.is_finished, tenant_id, cmp["project"])
+    props = actuals.proposals(cmp)
+    suggestions = await asyncio.to_thread(actuals.list_suggestions, tenant_id, status=None, estimate_id=estimate_id)
+    return {"comparison": actuals.public(cmp), "finished": finished,
+            "proposals": [actuals._plain(p) for p in props], "suggestions": suggestions,
+            "text": actuals.summary(cmp, props, finished=finished)}
+
+
+@router.post("/{tenant_id}/admin/estimates/{estimate_id}/learn")
+async def estimate_learn(tenant_id: str, estimate_id: str, request: Request) -> dict:
+    _on(tenant_id)
+    from vula.commerce import actuals
+    person, lead = await _caller(tenant_id, request)
+    try:
+        res = await actuals.learn(tenant_id, estimate_id, person=person, full_access=lead, notify=False)
+    except actuals.ActualsError as exc:
+        raise _actuals_err(exc)
+    return res
+
+
+@router.get("/{tenant_id}/admin/buildup-suggestions")
+async def buildup_suggestions(tenant_id: str) -> dict:
+    _on(tenant_id)
+    from vula.commerce import actuals
+    return {"suggestions": await asyncio.to_thread(actuals.list_suggestions, tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/buildup-suggestions/{suggestion_id}/{decision}")
+async def decide_suggestion(tenant_id: str, suggestion_id: str, decision: str, request: Request) -> dict:
+    _on(tenant_id)
+    from vula.commerce import actuals, buildups
+    if decision not in ("accept", "dismiss"):
+        raise HTTPException(status_code=404, detail="Not found.")
+    person, lead = await _caller(tenant_id, request)
+    try:
+        if decision == "accept":
+            b = await asyncio.to_thread(actuals.accept, tenant_id, suggestion_id, person=person, full_access=lead)
+            return {"buildup": buildups.public(b),
+                    "message": "Changed — Vula will use the new build-up for every estimate of this item."}
+        ok = await asyncio.to_thread(actuals.dismiss, tenant_id, suggestion_id, person=person, full_access=lead)
+        return {"dismissed": ok}
+    except actuals.ActualsError as exc:
+        raise _actuals_err(exc)

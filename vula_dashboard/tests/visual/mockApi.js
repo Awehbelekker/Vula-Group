@@ -36,6 +36,7 @@ function routes(role, modules = [], features = []) {
   let tradeBuildups = F.tradeBuildups.map((b) => ({ ...b, lines: b.lines.map((l) => ({ ...l })) }));
   const tradeEstimates = [];
   const tradeOn = features.includes("trade_costing");
+  const trade = { finished: false, suggestions: [] };
   const tradeOff = { __raw: { status: 403, contentType: "application/json",
     body: '{"detail":"Costing by trade isn\'t switched on for this business."}' } };
   let aiUsage = { ...F.aiUsage, requested: [] };          // per page: a top-up requested here shows here only     // per page: a scan started here shows here only
@@ -453,9 +454,30 @@ function routes(role, modules = [], features = []) {
       headers: { "content-disposition": 'attachment; filename="Estimate_2026-11-15.xlsx"', "access-control-expose-headers": "Content-Disposition" } } })),
     r("POST", `${A}/estimates`, (m, url, req) => {
       if (!tradeOn) return tradeOff;
+      const body = req.postDataJSON() || {};
       tradeEstimates.unshift({ id: F.tradeEstimate.id, title: F.tradeEstimate.title, total_cents: F.tradeEstimate.total_cents,
-        created_at: "2026-11-15T07:00:00Z", request: req.postDataJSON() });
-      return { estimate: F.tradeEstimate, text: "Estimate: …" };
+        created_at: "2026-11-15T07:00:00Z", project: body.project || null, request: body });
+      return { estimate: { ...F.tradeEstimate, project: body.project || null }, text: "Estimate: …" };
+    }),
+    r("GET", `${A}/estimates/${T}/actuals`, () => ({ ...F.tradeActuals, finished: trade.finished, suggestions: trade.suggestions })),
+    r("POST", `${A}/estimates/${T}/learn`, () => {
+      if (role !== "owner") return { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Only an owner or manager can say the work is finished."}' } };
+      trade.finished = true;
+      const isNew = !trade.suggestions.length;
+      if (isNew) trade.suggestions = [{ ...F.tradeSuggestion }];
+      return { ...F.tradeActuals, suggestions: trade.suggestions, new: isNew ? 1 : 0 };
+    }),
+    r("GET", `${A}/buildup-suggestions`, () => (tradeOn ? { suggestions: trade.suggestions.filter((s) => s.status === "pending") } : tradeOff)),
+    r("POST", `${A}/buildup-suggestions/${T}/(accept|dismiss)`, (m) => {
+      const s = trade.suggestions.find((x) => x.id === m[2]);
+      if (!s || s.status !== "pending") return { __raw: { status: 400, contentType: "application/json", body: '{"detail":"That suggestion was already decided."}' } };
+      s.status = m[3] === "accept" ? "accepted" : "dismissed";
+      if (m[3] === "accept") {
+        tradeBuildups = tradeBuildups.map((b) => (b.id !== s.buildup_id ? b : { ...b, version: b.version + 1,
+          lines: b.lines.map((l) => (l.component === s.component ? { ...l, waste_pct: s.suggested_value } : l)) }));
+        return { buildup: tradeBuildups.find((b) => b.id === s.buildup_id) };
+      }
+      return { dismissed: true };
     }),
     r("GET", `${A}/estimates`, () => (tradeOn ? { estimates: tradeEstimates } : tradeOff)),
     r("GET", `${A}/ai/usage`, () => aiUsage),

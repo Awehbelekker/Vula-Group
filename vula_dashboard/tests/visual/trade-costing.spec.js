@@ -112,6 +112,70 @@ test.describe("costing by trade", () => {
     await expect(page.locator(".v2-content")).toContainText("Needs a figure: Grout");
   });
 
+  // phase 4: an estimate for a project, compared with what was paid on it
+  async function compare(page) {
+    await page.getByLabel("Item of work").first().fill("one-brick wall (220 mm)");
+    await page.getByLabel("Size").first().fill("6 x 4");
+    await page.getByLabel("Project").selectOption("Bay Events catering");
+    await page.getByRole("button", { name: "Work it out" }).click();
+    await page.getByRole("button", { name: "Compare with what was paid" }).click();
+    await page.getByText("compared with what was paid").first().waitFor();
+  }
+
+  for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+    test(`compare with what was paid ${vp}`, async ({ page }, ti) => {
+      const errors = await openScreen(page, SCREEN(), { viewport, theme: vp === "tablet" ? "dark" : "light" });
+      await compare(page);
+      const content = page.locator(".v2-content");
+      await expect(content).toContainText("Project Bay Events catering · estimated R 14 220.01 · paid on what it covers R 13 109.00");
+      await expect(content).toContainText("progress only");
+      await expect(content).toContainText("+18.3%");
+      await expect(content).toContainText("Used by one-brick wall and plaster to brick walls — total only");
+      await expect(content).toContainText("Couldn't tell which component: River sand (Mortar (building) sand or Plaster sand)");
+      await expect(content).toContainText("1 lines, R 3 000.00");
+      await check(page, ti, `actuals-${vp}`, viewport);
+      expect(errors).toEqual([]);
+    });
+  }
+
+  test("the estimate carries the project it's for", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    const sent = page.waitForRequest((r) => r.url().endsWith("/admin/estimates") && r.method() === "POST");
+    await compare(page);
+    expect((await sent).postDataJSON().project).toBe("Bay Events catering");
+  });
+
+  test("finished work: Vula suggests, the owner accepts, the build-up changes", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await compare(page);
+    await page.getByRole("button", { name: "This work is finished — learn from it" }).click();
+    await page.getByRole("button", { name: "Yes, it's finished" }).click();
+    const list = page.getByRole("region", { name: "Suggested build-up changes" });
+    await expect(list).toContainText("waste 5% → 24%");
+    await expect(page.locator(".v2-content")).not.toContainText("progress only");
+    await expect(page.locator(".v2-content")).toContainText("Suggested change");
+    const sent = page.waitForRequest((r) => /\/buildup-suggestions\/sg-1\/accept$/.test(r.url()));
+    await list.getByRole("button", { name: "Accept" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Accept" }).click();
+    await sent;
+    await expect(list).toContainText("Accepted");
+    await page.getByRole("tab", { name: /Build-ups/ }).click();
+    await expect(page.locator(".v2-content")).toContainText("104 each + 24% waste");
+  });
+
+  test("a suggestion can be dismissed from the build-ups tab", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await compare(page);
+    await page.getByRole("button", { name: "This work is finished — learn from it" }).click();
+    await page.getByRole("button", { name: "Yes, it's finished" }).click();
+    await page.getByRole("region", { name: "Suggested build-up changes" }).waitFor();
+    await page.getByRole("tab", { name: /Build-ups/ }).click();
+    const list = page.getByRole("region", { name: "Suggested build-up changes" });
+    await expect(page.locator(".v2-content")).toContainText("Suggested change");
+    await list.getByRole("button", { name: "Dismiss" }).click();
+    await expect(page.getByRole("region", { name: "Suggested build-up changes" })).toHaveCount(0);
+  });
+
   test("hidden where the switch is off", async ({ page }) => {
     await openScreen(page, { ...SCREEN("owner", []), tab: "Quick Cost", ready: "Cost breakdown" },
       { viewport: VIEWPORTS.desktop, theme: "light" });

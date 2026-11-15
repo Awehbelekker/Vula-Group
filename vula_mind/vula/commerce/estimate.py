@@ -155,10 +155,12 @@ async def market_price(component: str, label: str, unit: str, kind: str,
 
 async def estimate(tenant_id: str, items: List[Dict[str, Any]], *, exclusions: Optional[List[str]] = None,
                    research: bool = False, refresh: bool = True, created_by: str = "",
-                   title: str = "", save: bool = True) -> Dict[str, Any]:
-    """Cost each item from its build-up. See the module docstring for the rules."""
+                   title: str = "", save: bool = True, project: Optional[str] = None) -> Dict[str, Any]:
+    """Cost each item from its build-up. See the module docstring for the rules. `project` (a
+    registered project) ties the estimate to it, so it can later be compared with what was paid."""
     if not items:
         raise EstimateError("What should I cost? e.g. \"a 6 x 4 m one-brick wall, plastered both sides\".")
+    project = registered_project(tenant_id, project) if project else None
     out_items: List[Dict[str, Any]] = []
     totals = {"material": 0, "labour": 0, "plant": 0}
     unpriced: List[str] = []
@@ -238,12 +240,27 @@ async def estimate(tenant_id: str, items: List[Dict[str, Any]], *, exclusions: O
         "title": title or "; ".join(f"{i['item']} {i['quantity']} {i['unit']}" for i in out_items),
         "items": out_items, "totals_cents": totals, "total_cents": total,
         "unpriced": unpriced, "exclusions": [str(e) for e in (exclusions or [])],
-        "sources": counts, "hours_per_day": int(HOURS_PER_DAY),
+        "sources": counts, "hours_per_day": int(HOURS_PER_DAY), "project": project,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     if save:
         result["id"] = _save(tenant_id, result, created_by)
     return result
+
+
+def registered_project(tenant_id: str, name: str) -> str:
+    """The register's own name for a project (name, number or alias, any spelling), or an
+    EstimateError naming the projects there are — an estimate is never tied to a made-up project."""
+    from vula.commerce import service
+    key = service.project_key(name)
+    rows = service.registered_projects(tenant_id)
+    for r in rows:
+        if key and key in (service.project_key(r.get("name")), service.project_key(r.get("number")),
+                           *(service.project_key(a) for a in r.get("aliases") or [])):
+            return r["name"]
+    names = ", ".join(sorted(r["name"] for r in rows if r.get("status") != "complete")[:12])
+    raise EstimateError(f"I can't find a project called \"{name}\"."
+                        + (f" Your projects: {names}." if names else " Add it under Projects first."))
 
 
 def _compare(tenant_id: str, item: str, unit: str, q: Decimal, built_cents: int) -> Optional[Dict[str, Any]]:
@@ -274,6 +291,8 @@ def _save(tenant_id: str, est: Dict[str, Any], created_by: str) -> Optional[str]
                "items": est["items"], "totals": {**est["totals_cents"], "unpriced": est["unpriced"],
                                                   "exclusions": est["exclusions"], "sources": est["sources"]},
                "total_cents": est["total_cents"]}
+        if est.get("project"):
+            row["project"] = est["project"]
         got = service._client().table(TABLE).insert(row).execute().data or []
         return got[0]["id"] if got else None
     except Exception as exc:  # noqa: BLE001 — an estimate that can't be saved is still shown
@@ -289,7 +308,7 @@ _BASIS = {"paid": "what you paid", "quoted": "your quotes/BOQs", "market": "mark
 def summary(est: Dict[str, Any]) -> str:
     """A short plain reply for WhatsApp or the chat; the full breakdown goes in the spreadsheet.
     Every figure here is from the estimate dict — built in code, never by a model."""
-    out = [f"Estimate: {est['title']}", f"Total {rand(est['total_cents'])} — materials "
+    out = [f"Estimate: {est['title']}" + (f" — project {est['project']}" if est.get("project") else ""), f"Total {rand(est['total_cents'])} — materials "
            f"{rand(est['totals_cents'].get('material', 0))}, labour {rand(est['totals_cents'].get('labour', 0))}"
            + (f", plant {rand(est['totals_cents']['plant'])}" if est['totals_cents'].get('plant') else "") + "."]
     for it in est["items"]:
