@@ -1070,7 +1070,8 @@ MEETING_TOOLS = [
             "Meetings in their Outlook calendar come in by themselves; 'remind me 30 minutes before my "
             "Outlook meetings' / 'stop calendar reminders' / 'with a brief' set that once for all of "
             "them (action=calendar, `remind`, with_brief). Each person can connect THEIR OWN Outlook "
-            "calendar: 'connect my calendar' (action=calendar, calendar_op=connect — sends them a link), "
+            "calendar: 'connect my calendar' (action=calendar, calendar_op=connect — sends them a link; "
+            "calendar_provider=google for 'connect my Google calendar'), "
             "'disconnect my calendar' (calendar_op=disconnect), 'is my calendar connected?' (status). "
             "action=book / list / update / cancel / check_in / brief / calendar. NOT a customer booking a service (create_booking) and NOT notes "
             "after a meeting (log_meeting). Pass `when` and `remind` exactly as the person said "
@@ -1078,6 +1079,8 @@ MEETING_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["book", "list", "update", "cancel", "check_in", "brief", "calendar"]},
             "with_brief": {"type": "boolean", "description": "Only when they asked for a brief on the reminder."},
+            "calendar_provider": {"type": "string", "enum": ["outlook", "google"],
+                                  "description": "For connect/disconnect: 'google' when they said Google/Gmail, else outlook."},
             "calendar_op": {"type": "string", "enum": ["connect", "disconnect", "status", "remind"],
                             "description": "For action=calendar: connect/disconnect their own calendar, "
                                            "say what's connected, or set reminders (the default)."},
@@ -6513,19 +6516,25 @@ class CommerceAdminSkill(BaseSkill):
                                                   else "status")).lower()
             if op in ("connect", "disconnect") and not me:
                 return {"error": "I can only connect the calendar of someone on the team list with this WhatsApp number."}
+            google = str(args.get("calendar_provider") or "").lower() == "google"
             if op == "connect":
+                from vula.google import member_credentials as gcred
+                if google and not gcred.available():
+                    return {"reply_verbatim": "Google Calendar isn't switched on for Vula yet. Your Outlook calendar "
+                                              "works — say *connect my calendar*."}
                 try:
-                    url = mc.link_for(tid, me["id"])
+                    url = (gcred if google else mc).link_for(tid, me["id"])
                 except Exception as exc:
                     logger.warning("calendar link failed for %s: %s", tid, exc)
                     return {"error": "I couldn't make the link just now — try again in a minute."}
-                return {"reply_verbatim": "📅 Open this on your phone to let me read your Outlook calendar "
+                kind = "Google" if google else "Outlook"
+                return {"reply_verbatim": f"📅 Open this on your phone to let me read your {kind} calendar "
                                           f"(calendar only — not your email):\n{url}\nThe link works for 15 minutes. "
                                           "Then tell me how long before each meeting to remind you, e.g. "
                                           "*30 minutes before*, or *no reminders*."}
             if op == "disconnect":
                 try:
-                    gone = oc.disconnect_member(tid, me["id"])
+                    gone = oc.disconnect_member(tid, me["id"], provider="google" if google else "microsoft")
                 except Exception as exc:
                     logger.warning("calendar disconnect failed for %s: %s", tid, exc)
                     gone = False
@@ -6534,6 +6543,11 @@ class CommerceAdminSkill(BaseSkill):
                 return {"reply_verbatim": "✅ Your calendar is disconnected. Its upcoming meetings are out of "
                                           "your Vula diary; the ones you booked with me stay."}
             personal = (mc.get_row(tid, me["id"]) if me else None) or {}
+            from vula.google import member_credentials as gcred
+            try:
+                gpersonal = (gcred.get_row(tid, me["id"]) if me else None) or {}
+            except Exception:
+                gpersonal = {}
             if personal.get("status") == "connected":
                 acct = {"status": "connected", "email": personal.get("email"), "scopes": personal.get("scopes")}
             else:
@@ -6542,6 +6556,10 @@ class CommerceAdminSkill(BaseSkill):
                             .eq("tenant_id", tid).limit(1).execute().data or [{}])[0]
                 except Exception:
                     acct = {}
+            if op == "status" and gpersonal.get("status") == "connected":
+                also = (f" and your own Outlook calendar ({personal.get('email')})"
+                        if personal.get("status") == "connected" else "")
+                return {"reply_verbatim": f"📅 I'm reading your Google calendar ({gpersonal.get('email')}){also}."}
             if op == "status":
                 if acct.get("status") == "connected" and oc.has_calendar(acct.get("scopes")):
                     whose = "your own" if personal else "the business's"

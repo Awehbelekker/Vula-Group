@@ -145,11 +145,13 @@ def _personally_connected(tenant_id: str) -> set:
         return set()
 
 
-async def _sync_into(tenant_id: str, access_token: str, member: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+async def _sync_into(tenant_id: str, access_token: str, member: Dict[str, Any], now: datetime, *,
+                     source: str = "outlook", fetcher=None, mapper=None) -> Dict[str, Any]:
     """The next 7 days of one calendar into one person's diary: add, update, cancel what's gone.
-    Only this person's Outlook meetings are compared, so one calendar never touches another's."""
+    Only this person's meetings from this source are compared, so one calendar never touches
+    another's. Google Calendar uses the same with its own fetcher/mapper (vula/google_calendar.py)."""
     try:
-        events = await fetch(access_token, now, now + WINDOW)
+        events = await (fetcher or fetch)(access_token, now, now + WINDOW)
     except Exception as exc:
         log.warning("Outlook calendar read failed for %s: %s", tenant_id, exc)
         return {"error": str(exc)[:200]}
@@ -162,13 +164,13 @@ async def _sync_into(tenant_id: str, access_token: str, member: Dict[str, Any], 
         prefs = {}
     existing = {r["external_id"]: r for r in (db.table("vula_meetings")
                 .select("id,external_id,with_name,address,starts_at,status")
-                .eq("tenant_id", tenant_id).eq("source", "outlook").eq("created_by", person)
+                .eq("tenant_id", tenant_id).eq("source", source).eq("created_by", person)
                 .gte("starts_at", now.isoformat()).lte("starts_at", (now + WINDOW).isoformat())
                 .execute().data or []) if r.get("external_id")}
     added = updated = cancelled = 0
     seen = set()
     for ev in events:
-        row = to_meeting(ev)
+        row = (mapper or to_meeting)(ev)
         if not row:
             continue
         seen.add(row["external_id"])
@@ -188,7 +190,7 @@ async def _sync_into(tenant_id: str, access_token: str, member: Dict[str, Any], 
         if row["status"] == "cancelled":
             continue
         db.table("vula_meetings").insert({
-            **row, "tenant_id": tenant_id, "created_by": person, "source": "outlook",
+            **row, "tenant_id": tenant_id, "created_by": person, "source": source,
             "remind_minutes": prefs.get("calendar_remind_minutes") or None,
             "with_brief": bool(prefs.get("calendar_brief"))}).execute()
         added += 1
@@ -220,20 +222,26 @@ async def sync_all() -> Dict[str, Any]:
     for c in people:
         if has_calendar(c.get("scopes")):
             out[f"{c['tenant_id']}/{c['member_id']}"] = await sync_member(c["tenant_id"], c["member_id"])
+    try:
+        from vula import google_calendar
+        out.update(await google_calendar.sync_all())
+    except Exception as exc:
+        log.warning("Google calendars skipped: %s", exc)
     return out
 
 
-def disconnect_member(tenant_id: str, member_id: str, now: Optional[datetime] = None) -> bool:
+def disconnect_member(tenant_id: str, member_id: str, now: Optional[datetime] = None,
+                      provider: str = "microsoft") -> bool:
     """Forget this person's calendar connection; their future meetings from it are cancelled
     (past ones stay, for their activity history). True when it's gone, as read back."""
     from vula import team_index
     from vula.microsoft import member_credentials as mc
     now = now or now_sast()
     member = next((m for m in team_index.active_members(tenant_id) if str(m.get("id")) == str(member_id)), None)
-    gone = mc.disconnect(tenant_id, member_id)
+    gone = mc.disconnect(tenant_id, member_id, provider)
     if gone and member and member.get("whatsapp"):
         _client().table("vula_meetings").update({"status": "cancelled"}).eq("tenant_id", tenant_id) \
-            .eq("source", "outlook").eq("created_by", digits(member["whatsapp"])) \
+            .eq("source", "google" if provider == "google" else "outlook").eq("created_by", digits(member["whatsapp"])) \
             .gte("starts_at", now.isoformat()).execute()
     return gone
 

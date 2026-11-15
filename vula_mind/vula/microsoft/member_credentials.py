@@ -42,11 +42,11 @@ def link_for(tenant_id: str, member_id: str) -> str:
     return f"{settings.public_base_url}/v1/microsoft/my-calendar/start?t={quote(token)}"
 
 
-def store(tenant_id: str, member_id: str, tok: Dict[str, Any]) -> Dict[str, Any]:
+def store(tenant_id: str, member_id: str, tok: Dict[str, Any], provider: str = "microsoft") -> Dict[str, Any]:
     """Save a fresh token on this member and read the row back."""
     from vula.email_imap.credentials import encrypt_secret
     expiry = (datetime.now(timezone.utc) + timedelta(seconds=int(tok.get("expires_in") or 3600))).isoformat()
-    row = {"tenant_id": tenant_id, "member_id": str(member_id), "provider": "microsoft",
+    row = {"tenant_id": tenant_id, "member_id": str(member_id), "provider": provider,
            "email": tok.get("email") or "", "access_token": encrypt_secret(tok["access_token"]),
            "token_expiry": expiry, "scopes": tok.get("scope") or "", "status": "connected",
            "last_sync_error": None, "connected_at": datetime.now(timezone.utc).isoformat(),
@@ -54,37 +54,37 @@ def store(tenant_id: str, member_id: str, tok: Dict[str, Any]) -> Dict[str, Any]
     if tok.get("refresh_token"):
         row["refresh_token"] = encrypt_secret(tok["refresh_token"])
     _client().table(TABLE).upsert(row, on_conflict="tenant_id,member_id,provider").execute()
-    return get_row(tenant_id, member_id) or {}
+    return get_row(tenant_id, member_id, provider) or {}
 
 
-def get_row(tenant_id: str, member_id: str) -> Optional[Dict[str, Any]]:
+def get_row(tenant_id: str, member_id: str, provider: str = "microsoft") -> Optional[Dict[str, Any]]:
     rows = (_client().table(TABLE).select("id,tenant_id,member_id,email,status,scopes,token_expiry,"
                                           "last_synced_at,last_sync_error,connected_at")
-            .eq("tenant_id", tenant_id).eq("member_id", str(member_id)).eq("provider", "microsoft")
+            .eq("tenant_id", tenant_id).eq("member_id", str(member_id)).eq("provider", provider)
             .limit(1).execute().data or [])
     return rows[0] if rows else None
 
 
-def connections(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def connections(tenant_id: Optional[str] = None, provider: str = "microsoft") -> List[Dict[str, Any]]:
     q = (_client().table(TABLE).select("tenant_id,member_id,email,status,scopes")
-         .eq("provider", "microsoft").eq("status", "connected"))
+         .eq("provider", provider).eq("status", "connected"))
     if tenant_id:
         q = q.eq("tenant_id", tenant_id)
     return q.execute().data or []
 
 
-def disconnect(tenant_id: str, member_id: str) -> bool:
+def disconnect(tenant_id: str, member_id: str, provider: str = "microsoft") -> bool:
     _client().table(TABLE).delete().eq("tenant_id", tenant_id).eq("member_id", str(member_id)) \
-        .eq("provider", "microsoft").execute()
-    return get_row(tenant_id, member_id) is None
+        .eq("provider", provider).execute()
+    return get_row(tenant_id, member_id, provider) is None
 
 
-def mark(tenant_id: str, member_id: str, error: Optional[str]) -> None:
+def mark(tenant_id: str, member_id: str, error: Optional[str], provider: str = "microsoft") -> None:
     """Record how the last sync went (shown on the dashboard card)."""
     try:
         _client().table(TABLE).update({"last_synced_at": datetime.now(timezone.utc).isoformat(),
                                        "last_sync_error": (error or None) and str(error)[:300]}) \
-            .eq("tenant_id", tenant_id).eq("member_id", str(member_id)).execute()
+            .eq("tenant_id", tenant_id).eq("member_id", str(member_id)).eq("provider", provider).execute()
     except Exception:
         pass
 
@@ -116,7 +116,8 @@ async def _refresh(tenant_id: str, member_id: str, refresh_token: str, granted: 
     if d.get("refresh_token"):
         update["refresh_token"] = encrypt_secret(d["refresh_token"])
     try:
-        _client().table(TABLE).update(update).eq("tenant_id", tenant_id).eq("member_id", str(member_id)).execute()
+        _client().table(TABLE).update(update).eq("tenant_id", tenant_id).eq("member_id", str(member_id)) \
+            .eq("provider", "microsoft").execute()
     except Exception:
         pass
     return d.get("access_token")

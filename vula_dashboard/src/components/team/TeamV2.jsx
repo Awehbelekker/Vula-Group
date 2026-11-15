@@ -112,7 +112,7 @@ export default function TeamV2({ tenantId }) {
       <SectionTabs label="Team" active={tab} onChange={setTab} tabs={tabs} />
       {tab === "notices" ? <NoticesV2 tenantId={tenantId} />
         : tab === "activity" && activity ? <ActivityV2 tenantId={tenantId} />
-        : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <><MyCalendar tenantId={tenantId} /><People tenantId={tenantId} /></>}
+        : tab === "ai" ? <EmployeesV2 tenantId={tenantId} /> : <><MyCalendar tenantId={tenantId} /><MyCalendar tenantId={tenantId} provider="google" /><People tenantId={tenantId} /></>}
     </div>
   );
 }

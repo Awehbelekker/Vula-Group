@@ -44,6 +44,7 @@ export default function RepHomeV2({ tenantId, repPhone, onNavigate }) {
           </Card>
         </>)}
       <MyCalendar tenantId={tenantId} />
+      <MyCalendar tenantId={tenantId} provider="google" />
       <h2 className="vrp-overline">More of your work</h2>
       <Card pad={4} className="vrp-links">
         {LINKS.map(([id, title, detail, Icon]) => (
