@@ -52,8 +52,8 @@ def _patch_web(monkeypatch, answer, pages=PAGES, docs=()):
         return [{"title": "x", "url": "u"}]
     monkeypatch.setattr("vula.research._search", search)
 
-    async def read(hits, limit=6):
-        seen["limit"] = limit
+    async def read(hits, limit=6, max_chars=3500):
+        seen["limit"], seen["max_chars"] = limit, max_chars
         return list(pages)
     monkeypatch.setattr("vula.research.read_pages", read)
 
@@ -223,6 +223,35 @@ def test_the_base_of_a_rate_is_not_a_quantity():
     assert lines == []
 
 
+def test_the_model_sees_the_parts_about_the_components_even_deep_in_a_page():
+    checklist = trade_checklists.checklist_for("Masonry")
+    every = sorted({w for c in checklist for w in buildups._component_words(c["key"], c["label"])})
+    page = "About us. " * 600 + "A one-brick wall needs 104 bricks per m2. " + "Filler text. " * 400 + \
+        "Brickforce every 4th course, 2.7 m per m2."
+    part = buildups.excerpt(page, every, 1500)
+    assert len(part) <= 1600 and len(part) < len(page) / 5
+    assert "104 bricks per m2" in part and "2.7 m per m2" in part
+    assert buildups.excerpt("nothing relevant here", every, 10) == "nothing re"
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_fits_vulas_own_model(db, monkeypatch):
+    long_pages = [{"title": f"Guide {i}", "url": f"https://g{i}.example",
+                   "text": "Intro. " * 2000 + "A one-brick wall needs 104 bricks per m2. " + "More. " * 1000}
+                  for i in range(8)]
+    seen = _patch_web(monkeypatch, _answer(("units", 104, "each", 5, 1)), pages=long_pages)
+    sent = {}
+
+    async def complete(task, messages, **kw):
+        sent["chars"] = sum(len(m["content"]) for m in messages)
+        seen["accept"] = kw.get("accept")
+        return _answer(("units", 104, "each", 5, 1))
+    monkeypatch.setattr("vula.research._complete", complete)
+    monkeypatch.setattr("core.llm_router.local_prompt_cap_tokens", lambda: 8000)
+    await buildups.research(T, "One-brick wall", WALL)
+    assert sent["chars"] <= 8000 * 4 + 2000          # fits the local window (≈ 4 characters a token)
+
+
 @pytest.mark.asyncio
 async def test_a_thin_local_answer_goes_to_the_stronger_model(db, monkeypatch):
     seen = _patch_web(monkeypatch, _answer(("units", 104, "each", 5, 1), ("mortar_cement", 1.5, "bag", None, 1),
@@ -249,7 +278,8 @@ async def test_research_saves_a_proposed_build_up_with_sources_and_unknowns(db, 
                                "brick per m2 One-brick wall (220 mm)", "cement per m2 One-brick wall (220 mm)",
                                "building sand per m2 One-brick wall (220 mm)",
                                "labour hours per m2 One-brick wall (220 mm)"]
-    assert seen["limit"] == buildups.PAGES and not any("27820000000" in q for q in seen["queries"])
+    assert seen["limit"] == buildups.PAGES and seen["max_chars"] == buildups.PAGE_TEXT
+    assert not any("27820000000" in q for q in seen["queries"])
     assert b["status"] == "proposed" and b["origin"] == "proposed" and b["trade"] == "Masonry"
     assert [ln["component"] for ln in b["lines"]] == ["units", "mortar_sand"]
     assert {"brickforce", "mortar_cement", "labour"} <= {u["key"] for u in b["unknown"]}

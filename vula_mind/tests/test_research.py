@@ -235,3 +235,30 @@ async def test_a_local_answer_that_cites_nothing_goes_to_the_cloud_logged():
             assert await research._complete("research", [{"role": "user", "content": "q"}], 100, 5,
                                              accept=lambda a: research.cites_something(a, 1, 0)) == "Cited [1]."
         assert calls == ["ollama_chat/llama3.1:8b"] and not esc.called
+
+
+@pytest.mark.asyncio
+async def test_only_vulas_own_model_is_asked_for_logprobs():
+    """16 Nov 2026: asking the cloud model for logprobs left OpenRouter (zero data retention) with
+    no provider for Gemini and a 4 096-token one for Llama — build-up research failed outright."""
+    seen = {}
+
+    async def acompletion(**kw):
+        seen[kw["model"]] = "logprobs" in kw
+        text = "Prices vary a lot." if kw["model"].startswith("ollama") else "R 1 450 at the Surf Shop [1]."
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+    esc = MagicMock(return_value=("openrouter/google/gemini-2.5-flash", "k", "b"))
+    with patch("core.llm_router.resolve_generation_route", AsyncMock(return_value=("ollama_chat/llama3.1:8b", None, "b"))), \
+         patch("core.llm_router.escalate_to_cloud", esc), \
+         patch("core.llm_router.looks_unreliable", return_value=False), \
+         patch("litellm.acompletion", acompletion):
+        await research._complete("research", [{"role": "user", "content": "q"}], 100, 5,
+                                 accept=lambda a: research.cites_something(a, 1, 0))
+    assert seen == {"ollama_chat/llama3.1:8b": True, "openrouter/google/gemini-2.5-flash": False}
+    # and a request sent straight to the cloud (too big for the local window) carries none either
+    seen.clear()
+    with patch("core.llm_router.resolve_generation_route",
+               AsyncMock(return_value=("openrouter/google/gemini-2.5-flash", "k", "b"))), \
+         patch("litellm.acompletion", acompletion):
+        await research._complete("buildup_research", [{"role": "user", "content": "q"}], 100, 5)
+    assert seen == {"openrouter/google/gemini-2.5-flash": False}
