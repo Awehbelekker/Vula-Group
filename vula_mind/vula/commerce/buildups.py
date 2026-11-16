@@ -389,8 +389,74 @@ def _basis(unit_text: str, per_text: str, own_unit: str):
     return unit, ("other", per)
 
 
+# 16 Nov 2026, second live run: "Brickforce 1 m" and "Labour 1 hour" were kept because a "1" was
+# printed somewhere on the page. A figure now counts only when it is printed NEAR the component's
+# own words (its search words or label), within NEAR_CHARS on either side.
+NEAR_CHARS = 100
+_LABOUR_WORDS = ("labour", "labor", "hour", "man-hour", "manhour", "artisan", "bricklayer", "plasterer",
+                 "tiler", "worker", "productivity")
+_GENERIC = {"with", "over", "from", "openings", "course", "units", "unit", "materials", "general"}
+
+
+def _component_words(comp: str, label: str) -> List[str]:
+    """The component's own words: its search phrases whole ("brick force", not "brick"), its label,
+    and the label's distinctive single words."""
+    words = set()
+    for term in trade_checklists.search_terms(comp, label) + [label or "", comp.replace("_", " ")]:
+        t = re.sub(r"[()]", " ", (term or "").lower())
+        t = re.sub(r"\s+", " ", t).strip()
+        if len(t) >= 4:
+            words.add(t[:-1] if t.endswith("s") and len(t) > 4 else t)
+    for w in re.findall(r"[a-z]+", (label or "").lower()):
+        if len(w) >= 5 and w not in _GENERIC:
+            words.add(w[:-1] if w.endswith("s") else w)
+    if comp == "labour" or "labour" in (label or "").lower():
+        words.update(_LABOUR_WORDS)
+    return sorted(words)
+
+
+_UNIT_AFTER = re.compile(r"^\s*(m2|m²|sqm|sq\.?\s?m|square\s+met)", re.I)
+
+
+def _distance(low: str, words: List[str], start: int, end: int) -> int:
+    best = 10 ** 9
+    for w in words:
+        for m in re.finditer(re.escape(w), low):
+            d = start - m.end() if m.end() <= start else (m.start() - end if m.start() >= end else 0)
+            best = min(best, d)
+    return best
+
+
+def printed_near(text: str, qty: Decimal, words: List[str], others: Iterable[str] = ()) -> bool:
+    """Is `qty` printed in `text` within NEAR_CHARS of one of `words`, nearer to them than to any
+    other component's words (`others`), and as a quantity — not the base of a rate ("per 1 m²",
+    "1 m² of wall")? 16 Nov 2026: "1 bricklayer" counted as "brickforce 1 m"."""
+    low = (text or "").lower()
+    others = [o for o in others if o not in words]
+    for m in _NUM_RE.finditer(text or ""):
+        if not ({qty.normalize()} & numbers_in(m.group(0))):
+            continue
+        before, after = low[max(0, m.start() - 6): m.start()], (text or "")[m.end(): m.end() + 14]
+        if "per" in before or _UNIT_AFTER.match(after):
+            continue
+        # only the clause the number is in: up to the nearest sentence end, semicolon or line
+        lo = max([low.rfind(sep, 0, m.start()) for sep in (". ", ";", "\n", "|")] + [-1]) + 1
+        ends = [i for i in (low.find(sep, m.end()) for sep in (". ", ";", "\n", "|")) if i >= 0]
+        hi = min(ends) if ends else len(low)
+        clause = low[lo:hi]
+        a, z = m.start() - lo, m.end() - lo
+        mine = _distance(clause, words, a, z)
+        if mine <= NEAR_CHARS and mine <= _distance(clause, others, a, z):
+            return True
+    return False
+
+
+def _others(checklist: List[Dict[str, str]], comp: str) -> List[str]:
+    return sorted({w for c in checklist if c["key"] != comp for w in _component_words(c["key"], c["label"])})
+
+
 def _alternate(line: Dict[str, Any], it: Dict[str, Any], pages: List[Dict[str, Any]], own_unit: str,
-               used: set) -> None:
+               used: set, others: Iterable[str] = ()) -> None:
     """A second source's figure for a component already kept: when it is checked (printed there,
     per the item's own unit) and different, it goes in the note — "your spec: 108; guide: 104" —
     so whoever confirms sees both."""
@@ -401,7 +467,9 @@ def _alternate(line: Dict[str, Any], it: Dict[str, Any], pages: List[Dict[str, A
     if not 1 <= n <= len(pages) or str(n) == str(line.get("source_ref")):
         return
     qty = _num(it.get("qty_per_unit"))
-    if qty is None or qty <= 0 or qty.normalize() not in numbers_in(pages[n - 1].get("text") or ""):
+    if qty is None or qty <= 0 or not printed_near(pages[n - 1].get("text") or "", qty,
+                                                    _component_words(line["component"], line.get("label") or ""),
+                                                    others):
         return
     _unit, basis = _basis(str(it.get("unit") or ""), str(it.get("per") or ""), own_unit)
     if basis is not None or qty == line["qty_per_unit"]:
@@ -440,7 +508,7 @@ def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict
         if comp not in keys:
             continue
         if comp in lines:
-            _alternate(lines[comp], it, pages, own_unit, used)
+            _alternate(lines[comp], it, pages, own_unit, used, _others(checklist, comp))
             continue
         try:
             n = int(str(it.get("source")).strip("[] "))
@@ -449,8 +517,10 @@ def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict
         if not 1 <= n <= len(pages):
             continue
         qty = _num(it.get("qty_per_unit"))
-        printed = numbers_in(pages[n - 1].get("text") or "")
-        if qty is None or qty <= 0 or qty.normalize() not in printed:
+        page_text = pages[n - 1].get("text") or ""
+        printed = numbers_in(page_text)
+        if qty is None or qty <= 0 or not printed_near(page_text, qty, _component_words(comp, keys[comp]["label"]),
+                                                       _others(checklist, comp)):
             continue
         waste = _num(it.get("waste_pct"))
         note = str(it.get("note") or "")[:200]
@@ -494,6 +564,22 @@ def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict
     return ordered, unknown, used
 
 
+PAGES = 8                 # pages read for one build-up (Ask anything research reads 6)
+
+
+def search_queries(checklist: List[Dict[str, str]], what: str, unit: str) -> List[str]:
+    """The web searches for a build-up, made in code from the item and its trade's components —
+    never a client, project or person. 16 Nov 2026: one broad planned search left most components
+    unsearched. One overall, then the main materials and labour, each per unit of the item."""
+    unit_words = {"m2": "per m2", "m": "per metre", "m3": "per m3", "each": "each"}.get(unit, f"per {unit}")
+    qs = [f"{what} quantities {unit_words} South Africa"]
+    materials = [c for c in checklist if c["kind"] == "material"][:3]
+    for c in materials + [c for c in checklist if c["kind"] == "labour"][:1]:
+        term = trade_checklists.search_terms(c["key"], c["label"])[0]
+        qs.append(f"{term} {unit_words} {what}" if c["kind"] == "material" else f"labour hours {unit_words} {what}")
+    return list(dict.fromkeys(q[:120] for q in qs))[:5]
+
+
 def _parse(text: str) -> Any:
     from vula.takeoff.construction_rates_scraper import _parse_json_array
     return _parse_json_array(re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip())
@@ -516,8 +602,8 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
     # comparing with data from KB"), then the web. Same checks for both.
     docs = [{"title": d.get("title") or "document", "text": d.get("text") or "", "url": None, "own": True}
             for d in await web.own_documents(tenant_id, question)]
-    queries = await web.plan_queries(question)
-    pages = docs + await web.read_pages(await web._search(queries))
+    queries = search_queries(checklist, what, unit)
+    pages = docs + await web.read_pages(await web._search(queries), limit=PAGES)
     if not pages:
         raise BuildupError("I couldn't read any sources for that just now — try again later.")
     numbered = "\n\n".join(
@@ -540,7 +626,10 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
         f"Sources:\n{numbered}")}]
 
     def checks_out(text: str) -> bool:
-        return bool(grounded_lines(_parse(text), pages, checklist, unit)[0])
+        """The local model's answer is kept only when it found the main component and a few
+        others; a thin one goes to the cloud model (16 Nov 2026: two weak lines were accepted)."""
+        got = {ln["component"] for ln in grounded_lines(_parse(text), pages, checklist, unit)[0]}
+        return checklist[0]["key"] in got and len(got) >= min(3, len(checklist))
 
     raw = await web._complete("buildup_research", messages, max_tokens=1200, timeout_s=90.0, accept=checks_out)
     lines, unknown, used = grounded_lines(_parse(raw), pages, checklist, unit)

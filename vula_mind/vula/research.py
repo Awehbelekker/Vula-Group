@@ -165,16 +165,16 @@ async def _read(hit: Dict[str, str]) -> Optional[Dict[str, str]]:
     return {"title": (title or hit["title"]).strip()[:140], "url": hit["url"], "text": text[:PAGE_CHARS]}
 
 
-async def read_pages(hits: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Read pages in parallel until MAX_PAGES are readable or the time budget is spent."""
-    tasks = [asyncio.ensure_future(_read(h)) for h in hits[:MAX_PAGES * 2]]
+async def read_pages(hits: List[Dict[str, str]], limit: int = MAX_PAGES) -> List[Dict[str, str]]:
+    """Read pages in parallel until `limit` (MAX_PAGES) are readable or the time budget is spent."""
+    tasks = [asyncio.ensure_future(_read(h)) for h in hits[:limit * 2]]
     if not tasks:
         return []
     done, pending = await asyncio.wait(tasks, timeout=FETCH_BUDGET_S)
     for t in pending:
         t.cancel()
     pages = [t.result() for t in tasks if t in done and not t.cancelled() and t.exception() is None and t.result()]
-    return pages[:MAX_PAGES]
+    return pages[:limit]
 
 
 async def own_documents(tenant_id: str, question: str) -> List[Dict[str, str]]:
