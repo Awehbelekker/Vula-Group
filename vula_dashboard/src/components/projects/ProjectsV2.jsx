@@ -8,10 +8,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Upload, X } from "lucide-react";
 import { formatMoney } from "../../lib/money";
-import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea } from "../ui/index.jsx";
+import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea, confirmDialog } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
 import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, decideDownloadRequest, downloadBoq, downloadBoqPdf, downloadProjectFile, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
-  fetchProjectFile, fetchQsView, fetchTracker, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, setProjectFee, uploadToProject,
+  fetchClientEmails, fetchProjectFile, fetchQsView, fetchTracker, sendClientEmail, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, setProjectFee, uploadToProject,
   useProjects, withdrawDecision } from "./useProjects";
 import "./projects.css";
 import ProjectsOverview from "./ProjectsOverview";
@@ -604,6 +604,7 @@ function ProjectMoney({ tenantId, project }) {
         </Section>)}
       <ClientSlips tenantId={tenantId} slips={t.proposed_slips || []} onChange={load} />
       <DownloadRequests tenantId={tenantId} requests={t.download_requests || []} onChange={load} />
+      <ClientEmails tenantId={tenantId} project={project} />
       <DirectPayments tenantId={tenantId} project={project} p={p} onChange={load} />
       <ProjectFee tenantId={tenantId} project={project} p={p} onChange={load} />
       <Section title="Account" hint={fa ? "The open-book link shows this project's final account." : "Open book adds your agreed fee to your cost; price only works from your invoices."}>
@@ -735,6 +736,48 @@ function DownloadRequests({ tenantId, requests, onChange }) {
               <Button size="sm" variant="secondary" onClick={() => decide(r.id, false)}>Decline</Button></span>
             : <span className="vpj-sub">{state(r)}</span>} />
       ))}
+    </Section>
+  );
+}
+
+/** Email the project's client from the business's own mailbox (vula/commerce/project_emails.py): the owner
+ * writes it, confirms, and Vula sends it, sends a copy to the mailbox and keeps it on record here. */
+function ClientEmails({ tenantId, project }) {
+  const [emails, setEmails] = useState(null);           // null = this login can't (owner and managers only)
+  const [f, setF] = useState({ to: "", subject: "", body: "" });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const load = useCallback(() => { fetchClientEmails(tenantId, project).then(setEmails); }, [tenantId, project]);
+  useEffect(load, [load]);
+  useEffect(() => {
+    if (emails && emails.length && !f.to) setF((x) => ({ ...x, to: (emails[0].recipients || []).join(", ") }));
+  }, [emails]);  // eslint-disable-line react-hooks/exhaustive-deps
+  if (emails === null) return null;
+  const send = async () => {
+    const ok = await confirmDialog(`Send "${f.subject}" to ${f.to} from your mailbox? A copy goes to your mailbox and it's kept here on record.`,
+      { confirmLabel: "Send" });
+    if (!ok) return;
+    setBusy(true);
+    const r = await sendClientEmail(tenantId, { project, ...f });
+    setBusy(false);
+    if (r.error) { setNote(r.error); return; }
+    setNote(`Sent to ${(r.recipients || []).join(", ")} at ${String(r.sent_at || "").slice(0, 16).replace("T", " ")} UTC${r.copy_to ? `, with a copy to ${r.copy_to}` : ""}.`);
+    setF({ to: f.to, subject: "", body: "" });
+    load();
+  };
+  return (
+    <Section title="Email the client" hint="Sent from your business's own mailbox, with a copy to it — and kept here, so you can show exactly what was sent and when.">
+      {emails.slice(0, 10).map((e) => (
+        <Line key={e.id} label={`${e.subject} · to ${(e.recipients || []).join(", ")}`}
+          value={<span className="vpj-sub">{e.status === "sent" ? `sent ${String(e.sent_at || "").slice(0, 16).replace("T", " ")} UTC` : e.status === "failed" ? "not sent" : "sending"}</span>} />
+      ))}
+      <div className="vpj-form vpj-pad">
+        <Field label="To" hint="One or more email addresses, separated by commas."><Input type="email" multiple value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} /></Field>
+        <Field label="Subject"><Input value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} /></Field>
+        <Field label="Message" hint="Paste the client link in if the email is about it."><Textarea rows={8} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></Field>
+        <div className="vpj-go"><Button disabled={busy || !f.to || !f.subject || !f.body} onClick={send}>{busy ? "Sending…" : "Send"}</Button></div>
+        {note && <p className="vpj-sub" role="status">{note}</p>}
+      </div>
     </Section>
   );
 }

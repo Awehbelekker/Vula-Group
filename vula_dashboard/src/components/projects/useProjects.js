@@ -122,6 +122,18 @@ export const decideClientSlip = (tenantId, id, approve) =>
 export const decideDownloadRequest = (tenantId, id, approve) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/download-requests/${id}/decide`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve }) }).then((r) => r.ok).catch(() => false);
+/** Emails sent to the project's client from Vula (vula/commerce/project_emails.py); [] if not allowed. */
+export const fetchClientEmails = (tenantId, project) =>
+  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/client-emails?project=${encodeURIComponent(project)}`)
+    .then((r) => (r.ok ? r.json() : { emails: null })).then((d) => d.emails).catch(() => null);
+/** Send an email to the project's client from the business's mailbox; resolves to the saved row or { error }. */
+export async function sendClientEmail(tenantId, body) {
+  const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/client-emails`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+  if (!r) return { error: "Couldn't reach Vula — the email wasn't sent." };
+  const d = await r.json().catch(() => ({}));
+  return r.ok ? d : { error: d.detail || "The email wasn't sent." };
+}
 /** Record the owner's ruling in the decision log (vula/commerce/decisions.py); resolves to the row or { error }. */
 export async function addDecision(tenantId, body) {
   const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/decisions`, {

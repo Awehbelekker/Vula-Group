@@ -2058,6 +2058,9 @@ _SECTION_RULES = [
     # 2026-11-10: showing a document on a client link although it names another project — what the
     # client sees: owner and managers only (vula/commerce/project_share_docs.other_projects)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/documents/[^/]+/client-link/?$"), frozenset()),
+    # 2026-11-16: emailing a project's client from the business's mailbox, and the record of what was
+    # sent — speaks for the business: owner and managers only (vula/commerce/project_emails.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/client-emails/?$"), frozenset()),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)
