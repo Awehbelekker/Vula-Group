@@ -40,12 +40,18 @@ class Settings(BaseSettings):
     # Models the local box should hold; any missing is downloaded through the tunnel after boot
     # (vula/local_models.py). Comma-separated Ollama names; blank = never pull. Never deletes.
     local_models_ensure: str = ""
-    model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
+    # OpenRouter vision model for Smart Scanner when the local reader can't. 16 Nov 2026, Ian: was
+    # google/gemini-2.5-flash, which has had no endpoint under zero retention (openrouter_zdr) since
+    # every cloud call got it on 13 Nov — every cloud scan failed. Claude Sonnet 5 reads images and
+    # is served under zero retention on this account.
+    model_vision: str = "anthropic/claude-sonnet-5"
     model_image: str = "google/gemini-2.5-flash-image"  # OpenRouter image GENERATION (AI product photos)
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
     # the ollama.vula-ai.com tunnel, then this cheap cloud model, then escalate to the 70B.
     model_worker_cheap_local: str = "llama3.1:8b"          # free, on the local GPU via the tunnel
-    model_worker_cheap: str = "google/gemini-2.5-flash"    # cloud fallback when the tunnel is down
+    # cloud model for the cheap tier (document analysis…). 16 Nov 2026, Ian: was gemini-2.5-flash —
+    # no endpoint under zero retention since 13 Nov, so every call paid a failure and fell to Llama.
+    model_worker_cheap: str = "anthropic/claude-sonnet-5"
     # Context window of the local model, in tokens. Set it ON THE OLLAMA BOX
     # (OLLAMA_CONTEXT_LENGTH=8192), not per call: Ollama reloads a model whenever the requested
     # context size changes, so callers asking for different sizes make it thrash. 2026-09-23
@@ -335,7 +341,8 @@ class Settings(BaseSettings):
     # Crisis support (vula/safety.py): a message suggesting self-harm gets South Africa's crisis
     # lines and the business is asked to check in — before any assistant reply. On by default.
     crisis_support_enabled: bool = True
-    cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash"
+    # 16 Nov 2026: gemini-2.5-flash dropped — it has no endpoint under zero retention.
+    cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,anthropic/claude-sonnet-5"
     # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
     # grades. Empty = rules only.
     benchmark_judge_model: str = "openrouter/anthropic/claude-sonnet-5"

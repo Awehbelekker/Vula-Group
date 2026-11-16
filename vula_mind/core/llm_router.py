@@ -159,8 +159,18 @@ _NO_RETRY = {"BadRequestError", "AuthenticationError", "PermissionDeniedError", 
 _RETRY = {"APIError", "TimeoutError"}
 
 
+def _context_too_long(exc: BaseException) -> bool:
+    """A provider refused the prompt as too long for it. OpenRouter picks the provider, and one may
+    take far less than the model's listed window (16 Nov 2026: Llama 3.3 70B on SambaNova, 4 096
+    tokens, for a 6 268-token build-up prompt), so a different model can answer."""
+    text = str(exc).lower()
+    return any(s in text for s in ("context_length_exceeded", "max_len exceeded", "maximum context length"))
+
+
 def _worth_another_model(exc: BaseException) -> bool:
     names = {c.__name__ for c in type(exc).__mro__}
+    if _context_too_long(exc):
+        return True
     return not (names & _NO_RETRY) and bool(names & _RETRY)
 
 
@@ -598,12 +608,14 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
 
 # Built-in cloud models for some task types, used when CLOUD_MODEL_BY_TASK has no entry for
 # them (an entry there still wins). 13 Nov 2026, Ian: research writes a long, cited answer from
-# several pages — Gemini 2.5 Flash, not the general fallback model.
-_TASK_CLOUD_DEFAULTS = {"research": "google/gemini-2.5-flash", "research_plan": "google/gemini-2.5-flash",
+# several pages — a stronger model than the general fallback. 16 Nov 2026, Ian: Claude Sonnet 5,
+# not Gemini 2.5 Flash, which has had no endpoint under zero retention since 13 Nov (every one of
+# these calls failed over to Llama, which twice landed on a 4 096-token provider).
+_TASK_CLOUD_DEFAULTS = {"research": "anthropic/claude-sonnet-5", "research_plan": "anthropic/claude-sonnet-5",
                         # reading prices off a supplier page (vula/takeoff, 14 Nov 2026)
-                        "rates_extract": "google/gemini-2.5-flash",
+                        "rates_extract": "anthropic/claude-sonnet-5",
                         # a trade build-up from cited pages (vula/commerce/buildups.py, 14 Nov 2026)
-                        "buildup_research": "google/gemini-2.5-flash"}
+                        "buildup_research": "anthropic/claude-sonnet-5"}
 
 
 def cloud_model_for(task_type: Optional[str]) -> str:
@@ -838,7 +850,7 @@ async def resolve_cheap_route(model: Optional[str] = None,
                               task_type: str = "cheap_tier") -> Tuple[str, Optional[str], str]:
     """Cheap tier for mechanical work (doc analysis, classification, extraction).
 
-    Cloud cheap model (gemini-flash, ~1/15th of the 70B), then the 70B as a last resort.
+    Cloud cheap-tier model (settings.model_worker_cheap), then the fallbacks.
     The local GPU tunnel is intentionally NOT used (it sits behind Cloudflare bot-protection
     and is world-open); revisit once it's secured with a service token. Callers should
     validate the output and escalate to `resolve_cloud_route()` on failure/low confidence.

@@ -667,8 +667,13 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
     def checks_out(text: str) -> bool:
         """The local model's answer is kept only when it found the main component and a few
         others; a thin one goes to the cloud model (16 Nov 2026: two weak lines were accepted)."""
-        got = {ln["component"] for ln in grounded_lines(_parse(text), pages, checklist, unit)[0]}
-        return checklist[0]["key"] in got and len(got) >= min(3, len(checklist))
+        parsed = _parse(text)
+        got = {ln["component"] for ln in grounded_lines(parsed, pages, checklist, unit)[0]}
+        ok = checklist[0]["key"] in got and len(got) >= min(3, len(checklist))
+        if not ok:   # counts only, never the text (telemetry rule)
+            log.info("build-up local answer set aside: %d lines, %d checked out, main component %s",
+                     len(parsed), len(got), "found" if checklist[0]["key"] in got else "missing")
+        return ok
 
     raw = await web._complete("buildup_research", messages, max_tokens=1200, timeout_s=90.0, accept=checks_out)
     lines, unknown, used = grounded_lines(_parse(raw), pages, checklist, unit)
