@@ -308,9 +308,10 @@ def describe(b: Dict[str, Any]) -> str:
             " (set by owner)" if ln.get("source_ref") == "confirmed by owner" else "")
         out.append(f"• {ln['label']}: {_show(ln['qty_per_unit'])} {ln['unit']}"
                    + (f" + {_show(waste)}% waste" if waste else "") + where)
-    unknown = [u.get("label") or u.get("key") for u in (b.get("unknown") or [])]
+    unknown = [(u.get("label") or u.get("key")) + (f" ({u['why']})" if u.get("why") else "")
+               for u in (b.get("unknown") or [])]
     if unknown:
-        out.append("Not found in the sources, needs a figure: " + ", ".join(unknown))
+        out.append("Needs a figure (nothing usable in the sources): " + "; ".join(unknown))
     if b.get("sources"):
         out.append("Sources: " + " ".join(f"[{s.get('n')}] {s.get('url')}" for s in b["sources"]))
     return "\n".join(out)
@@ -348,15 +349,53 @@ def numbers_in(text: str) -> set:
     return out
 
 
-def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict[str, str]]):
+# ── what a quantity is per (16 Nov 2026) ──────────────────────────────────────
+# DIGG's first live build-up kept "3 bags per 1,000 bricks" as 3 bags per m² (ten times the
+# cement) and "R220/m²" labour as a quantity of 220. The number was printed on the page, but not
+# per m² and not a quantity. Now: a price is never a quantity; "per 1,000 bricks" is converted with
+# the bricks per m² (when that is known, itself from a source); anything else not per the item's
+# own unit is set aside as needing a figure, with the reason.
+_PRICE_UNIT = re.compile(r"(?<![a-z])(r|zar|rands?)(?![a-z])|\bprice\b|\bcost\b", re.I)
+_BRICK_BASIS = re.compile(r"^(?:(\d[\d ,]*)|(thousand|1k|hundred))?\s*(?:no\.?\s*)?(bricks?|br|blocks?|units?)\b", re.I)
+
+
+def _basis(unit_text: str, per_text: str, own_unit: str):
+    """(unit of the quantity, basis) — basis None (per the item's own unit), ("bricks", n),
+    ("price", text) or ("other", text)."""
+    from vula.takeoff.market_checks import norm_unit
+    raw = f"{unit_text or ''}".strip()
+    if _PRICE_UNIT.search(raw) or _PRICE_UNIT.search(per_text or ""):
+        return raw, ("price", raw)
+    parts = re.split(r"\s*(?:\bper\b|/)\s*", raw, maxsplit=1)
+    unit, per = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
+    per = (per_text or "").strip() or per
+    if not per or norm_unit(per) == norm_unit(own_unit) or norm_unit(per.removeprefix("1 ")) == norm_unit(own_unit):
+        return unit, None
+    m = _BRICK_BASIS.match(per)
+    if m:
+        n = Decimal(1000) if (m.group(2) or "").lower() in ("thousand", "1k") else \
+            Decimal(100) if (m.group(2) or "").lower() == "hundred" else \
+            (_num(re.sub(r"[ ,]", "", m.group(1))) if m.group(1) else Decimal(1))
+        if n and n > 0:
+            return unit, ("bricks", n)
+    return unit, ("other", per)
+
+
+def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict[str, str]],
+                   own_unit: str = "m2"):
     """(lines, unknown, used page numbers). A line is kept only when its quantity is printed on
-    the page it cites; a stated waste % must be printed there too (else 0, with a note)."""
+    the page it cites and is a quantity per the item's own unit (see _basis); a stated waste %
+    must be printed there too (else 0, with a note). What's set aside is listed with why."""
     keys = {c["key"]: c for c in checklist}
     lines: Dict[str, Dict[str, Any]] = {}
+    why: Dict[str, str] = {}
+    pending: List[tuple] = []          # per-brick figures, converted once bricks per unit is known
     used: set = set()
-    for it in items if isinstance(items, list) else []:
-        if not isinstance(it, dict):
-            continue
+    items = items if isinstance(items, list) else []
+    # bricks per unit first, so a "per 1,000 bricks" figure can be converted
+    items = sorted([i for i in items if isinstance(i, dict)],
+                   key=lambda i: 0 if _norm(i.get("component")).replace(" ", "_") == "units" else 1)
+    for it in items:
         comp = _norm(it.get("component")).replace(" ", "_")
         if comp not in keys or comp in lines:
             continue
@@ -374,11 +413,40 @@ def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict
         note = str(it.get("note") or "")[:200]
         if waste is not None and waste > 0 and waste.normalize() not in printed:
             waste, note = None, (note + " (waste not stated in the source)").strip()
-        lines[comp] = {"component": comp, "label": keys[comp]["label"], "kind": keys[comp]["kind"],
-                       "qty_per_unit": qty, "unit": str(it.get("unit") or keys[comp]["unit"])[:20],
-                       "waste_pct": waste or 0, "note": note or None, "source_ref": str(n)}
+        unit, basis = _basis(str(it.get("unit") or ""), str(it.get("per") or ""), own_unit)
+        shown = f"{_show(qty)} {it.get('unit') or ''}".strip() + (f" per {it.get('per')}" if it.get("per") else "")
+        if basis and basis[0] == "price":
+            why[comp] = f"the source gives a price ({shown}), not a quantity"
+            continue
+        if basis and basis[0] == "other":
+            why[comp] = f"the source gives it per {basis[1]}, not per {own_unit}"
+            continue
+        from vula.takeoff.market_checks import _UNIT_ALIASES, norm_unit
+        canon = norm_unit(unit)
+        line = {"component": comp, "label": keys[comp]["label"], "kind": keys[comp]["kind"],
+                "qty_per_unit": qty,
+                "unit": (canon if canon in set(_UNIT_ALIASES.values()) else (unit or keys[comp]["unit"]))[:20],
+                "waste_pct": waste or 0, "note": note or None, "source_ref": str(n)}
+        if basis and basis[0] == "bricks":
+            pending.append((comp, line, basis[1], shown, n))
+            continue
+        lines[comp] = line
         used.add(n)
-    unknown = [{"key": c["key"], "label": c["label"]} for c in checklist if c["key"] not in lines]
+    bricks = lines.get("units")
+    for comp, line, per_n, shown, n in pending:
+        if comp in lines:
+            continue
+        if not bricks:
+            why[comp] = f"the source gives it per {_show(per_n)} bricks ({shown}); needs the bricks per {own_unit}"
+            continue
+        per_unit = (line["qty_per_unit"] * bricks["qty_per_unit"] / per_n).quantize(Decimal("0.0001"))
+        line["qty_per_unit"] = per_unit
+        line["note"] = (f"{shown} × {_show(bricks['qty_per_unit'])} bricks per {own_unit}"
+                        + (f"; {line['note']}" if line.get("note") else ""))[:300]
+        lines[comp] = line
+        used.add(n)
+    unknown = [{"key": c["key"], "label": c["label"], **({"why": why[c["key"]]} if c["key"] in why else {})}
+               for c in checklist if c["key"] not in lines]
     ordered = [lines[c["key"]] for c in checklist if c["key"] in lines]
     return ordered, unknown, used
 
@@ -412,16 +480,20 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
         f"From the numbered sources below, give the quantities of each component needed for ONE "
         f"{unit} of: {what}.\nComponents:\n{comps}\n\n"
         "Rules: use only quantities printed in a source and copy the number exactly as printed; "
-        "cite the source number; leave out a component no source gives a figure for. Answer with "
-        'a JSON array only: [{"component": "units", "qty_per_unit": 104, "unit": "each", '
+        "cite the source number; leave out a component no source gives a figure for. "
+        f'"unit" is what is counted (each, bag, m3, kg, hour, day); "per" is what the figure is per '
+        f'exactly as the source says it: "{unit}" when it is per {unit}, or e.g. "1000 bricks". '
+        "Quantities only: labour as hours or days, never a rand amount. For bricks, look for the "
+        f"number of bricks per {unit} (brick calculators and guides print it). Answer with "
+        f'a JSON array only: [{{"component": "units", "qty_per_unit": 104, "unit": "each", "per": "{unit}", '
         '"waste_pct": 5, "source": 2, "note": "NFX bricks, 10 mm joints"}]\n\n'
         f"Sources:\n{numbered}")}]
 
     def checks_out(text: str) -> bool:
-        return bool(grounded_lines(_parse(text), pages, checklist)[0])
+        return bool(grounded_lines(_parse(text), pages, checklist, unit)[0])
 
     raw = await web._complete("buildup_research", messages, max_tokens=1200, timeout_s=90.0, accept=checks_out)
-    lines, unknown, used = grounded_lines(_parse(raw), pages, checklist)
+    lines, unknown, used = grounded_lines(_parse(raw), pages, checklist, unit)
     if not lines:
         raise BuildupError("I couldn't find quantities I could check in the sources for that — "
                            "an owner or manager can enter the build-up instead.")
