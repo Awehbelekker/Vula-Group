@@ -565,6 +565,39 @@ def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict
 
 
 PAGES = 8                 # pages read for one build-up (Ask anything research reads 6)
+PAGE_TEXT = 20000         # characters kept per page — figures are often deep in a guide
+PROMPT_OVERHEAD_CHARS = 3000
+EXCERPT_AROUND = 220
+
+
+def excerpt(text: str, words: Iterable[str], room: int) -> str:
+    """The parts of `text` around the components' words, in page order, up to `room` characters
+    ("…" between parts); the page's start when no word is there."""
+    low = (text or "").lower()
+    spans: List[List[int]] = []
+    for w in words:
+        for m in re.finditer(re.escape(w), low):
+            spans.append([max(0, m.start() - EXCERPT_AROUND), min(len(text), m.end() + EXCERPT_AROUND)])
+    if not spans:
+        return (text or "")[:room]
+    spans.sort()
+    merged = [spans[0]]
+    for a, z in spans[1:]:
+        if a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], z)
+        else:
+            merged.append([a, z])
+    out, used = [], 0
+    for a, z in merged:
+        part = text[a:z].strip()
+        if used + len(part) > room:
+            part = part[: max(0, room - used)]
+        if part:
+            out.append(part)
+            used += len(part) + 3
+        if used >= room:
+            break
+    return " … ".join(out)
 
 
 def search_queries(checklist: List[Dict[str, str]], what: str, unit: str) -> List[str]:
@@ -603,12 +636,18 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
     docs = [{"title": d.get("title") or "document", "text": d.get("text") or "", "url": None, "own": True}
             for d in await web.own_documents(tenant_id, question)]
     queries = search_queries(checklist, what, unit)
-    pages = docs + await web.read_pages(await web._search(queries), limit=PAGES)
+    pages = docs + await web.read_pages(await web._search(queries), limit=PAGES, max_chars=PAGE_TEXT)
     if not pages:
         raise BuildupError("I couldn't read any sources for that just now — try again later.")
+    # the parts of each page about the components (the checks below still read the whole page),
+    # cut to fit Vula's own model so it tries first (16 Nov 2026: 8 pages of 3 000 characters went
+    # over its window and straight to the cloud)
+    from core.llm_router import local_prompt_cap_tokens
+    every = sorted({w for c in checklist for w in _component_words(c["key"], c["label"])})
+    room = max(600, (local_prompt_cap_tokens() * 4 - PROMPT_OVERHEAD_CHARS) // max(1, len(pages)))
     numbered = "\n\n".join(
         (f"[{i}] YOUR DOCUMENT: {p.get('title')}" if p.get("own") else f"[{i}] {p.get('title') or ''} ({p.get('url')})")
-        + f"\n{(p.get('text') or '')[:3000]}" for i, p in enumerate(pages, 1))
+        + f"\n{excerpt(p.get('text') or '', every, room)}" for i, p in enumerate(pages, 1))
     comps = "\n".join(f"- {c['key']}: {c['label']} (usually per {c['unit']})" for c in checklist)
     messages = [{"role": "user", "content": (
         f"From the numbered sources below, give the quantities of each component needed for ONE "
