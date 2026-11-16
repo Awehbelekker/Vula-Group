@@ -101,6 +101,49 @@ def test_only_quantities_printed_on_the_cited_page_are_kept():
 
 # ── research ─────────────────────────────────────────────────────────────────
 
+# 16 Nov 2026, DIGG's first live build-up: "3 bags per 1,000 bricks" was kept as 3 bags per m²
+# (ten times the cement) and "R220/m²" labour as a quantity of 220.
+LIVE_PAGES = [{"title": "Brick calculator", "url": "https://calc.example",
+               "text": "A one-brick (220 mm) wall needs 104 bricks per m2. Mortar: 3 bags of cement and "
+                       "0.6 m3 sand per 1000 bricks."},
+              {"title": "Artisan labour costs", "url": "https://labour.example",
+               "text": "Double-skin wall R220/m², labour only, materials extra."}]
+LIVE_ITEMS = [{"component": "mortar_cement", "qty_per_unit": 3, "unit": "bags per thousand bricks", "source": 1},
+              {"component": "mortar_sand", "qty_per_unit": 0.6, "unit": "m³", "per": "1000 bricks", "source": 1},
+              {"component": "labour", "qty_per_unit": 220, "unit": "R/m²", "source": 2}]
+
+
+def test_a_figure_per_1000_bricks_is_converted_with_the_bricks_per_m2():
+    checklist = trade_checklists.checklist_for("Masonry")
+    items = LIVE_ITEMS + [{"component": "units", "qty_per_unit": 104, "unit": "each", "per": "m2", "source": 1}]
+    lines, unknown, used = buildups.grounded_lines(items, LIVE_PAGES, checklist, "m2")
+    by = {ln["component"]: ln for ln in lines}
+    assert by["units"]["qty_per_unit"] == 104
+    # 3 bags / 1000 bricks x 104 bricks per m2 = 0.312 bags per m2; 0.6 m3 / 1000 x 104 = 0.0624 m3
+    assert by["mortar_cement"]["qty_per_unit"] == Decimal("0.3120") and by["mortar_cement"]["unit"] == "bag"
+    assert by["mortar_sand"]["qty_per_unit"] == Decimal("0.0624") and by["mortar_sand"]["unit"] == "m3"
+    assert "× 104 bricks per m2" in by["mortar_cement"]["note"]
+    assert used == {1}
+
+
+def test_without_bricks_per_m2_they_need_a_figure_and_a_price_is_never_a_quantity():
+    checklist = trade_checklists.checklist_for("Masonry")
+    lines, unknown, used = buildups.grounded_lines(LIVE_ITEMS, LIVE_PAGES, checklist, "m2")
+    assert lines == []
+    why = {u["key"]: u.get("why") for u in unknown}
+    assert "per 1000 bricks" in why["mortar_cement"] and "needs the bricks per m2" in why["mortar_cement"]
+    assert "a price" in why["labour"] and "not a quantity" in why["labour"]
+
+
+def test_a_figure_per_something_else_is_set_aside():
+    checklist = trade_checklists.checklist_for("Masonry")
+    pages = [{"text": "Use 2 wall ties per 900 mm of height."}]
+    lines, unknown, _ = buildups.grounded_lines(
+        [{"component": "wall_ties", "qty_per_unit": 2, "unit": "each", "per": "900 mm of height", "source": 1}],
+        pages, checklist, "m2")
+    assert lines == [] and "per 900 mm of height, not per m2" in {u["key"]: u.get("why") for u in unknown}["wall_ties"]
+
+
 @pytest.mark.asyncio
 async def test_research_saves_a_proposed_build_up_with_sources_and_unknowns(db, monkeypatch):
     seen = _patch_web(monkeypatch, _answer(("units", 104, "each", 5, 1), ("mortar_sand", 0.15, "m3", None, 2),
@@ -114,7 +157,7 @@ async def test_research_saves_a_proposed_build_up_with_sources_and_unknowns(db, 
     assert [s["n"] for s in b["sources"]] == [1, 2]
     text = buildups.describe(b)
     assert "Bricks or blocks: 104 each + 5% waste [Brickwork quantities guide]" in text
-    assert "needs a figure" in text and "waiting for an owner or manager" in text
+    assert "Needs a figure" in text and "waiting for an owner or manager" in text
     # the local model's answer is only accepted when something in it checks out
     assert seen["accept"](_answer(("units", 999, "each", 0, 1))) is False
 
