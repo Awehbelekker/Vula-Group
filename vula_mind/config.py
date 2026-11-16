@@ -290,6 +290,11 @@ class Settings(BaseSettings):
     # Set OPENROUTER_API_KEY to enable cloud inference via OpenRouter.
     # When set, the server uses OpenRouter for generation and embeddings.
     openrouter_api_key: str = ""
+    # Web search (16 Nov 2026): DuckDuckGo's HTML page returns nothing to Railway's servers, so
+    # research, build-ups and market prices found nothing. With a key, searches go to Serper
+    # (Google results; only the query words are sent). Without one, DuckDuckGo as before.
+    serper_api_key: str = ""
+    search_country: str = "za"
 
     # ── Voice-note transcription (WhatsApp audio → text) ───────────────────────
     # OpenAI-compatible /audio/transcriptions endpoint. Local-first: point

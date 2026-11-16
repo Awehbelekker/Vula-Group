@@ -730,7 +730,11 @@ class ConstructionRatesScraper:
         (default 7; the AECOM guide 30) isn't read again; nor is one tried in the last day,
         whatever happened. 14 Nov 2026: only AECOM had refresh_days, and the loop starts on every
         boot, so every deploy re-read six sources — about ten times a day. The run log is kept
-        in Supabase (vula_material_rate_log) so it survives a deploy."""
+        in Supabase (vula_material_rate_log) so it survives a deploy.
+
+        16 Nov 2026: a good read counts only if the source has CHECKED prices on file. The last
+        reads before the checks went live (14 Nov) logged "ok" with every price unchecked, so the
+        source looked fresh for a week while estimates had no market price to use."""
         days = source.get("refresh_days") or DEFAULT_REFRESH_DAYS
         from vula import durable
         rows = durable.select("vula_material_rate_log", "url,scraped_at,rates_extracted,status",
@@ -743,8 +747,16 @@ class ConstructionRatesScraper:
             if i == 0 and r.get("url") == source["url"] and age < RETRY_AFTER_DAYS:
                 return True                              # tried in the last day — leave it
             if r.get("status") == "ok" and r.get("url") == source["url"] and r.get("rates_extracted"):
-                return age < days
+                return age < days and self._has_checked(source)
         return False
+
+    @staticmethod
+    def _has_checked(source: dict) -> bool:
+        """Any checked price on file from this source? Unknown (Supabase unavailable) counts as
+        yes, so an outage never turns into a read of every source."""
+        from vula import durable
+        rows = durable.select("vula_material_rates", "key", limit=1, source=source["name"], checked=True)
+        return rows is None or bool(rows)
 
     async def get_live_rate(self, material_description: str) -> Optional[Dict]:
         """

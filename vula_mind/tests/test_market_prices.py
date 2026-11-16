@@ -127,6 +127,29 @@ def test_a_source_is_read_about_weekly_not_on_every_deploy(monkeypatch, log, fre
     assert scraper._fresh(source) is fresh
 
 
+def test_a_good_read_with_no_checked_prices_is_read_again(monkeypatch):
+    """16 Nov 2026: the reads just before the checks went live logged "ok" but kept every price
+    unchecked — they must not count as fresh, or estimates wait a week for a market price."""
+    scraper = ConstructionRatesScraper.__new__(ConstructionRatesScraper)
+    source = next(s for s in ConstructionRatesScraper.SOURCES if not s.get("refresh_days"))
+    log = [{**_log(3), "url": source["url"]}]
+    seen = []
+
+    def select(table, *a, **k):
+        seen.append((table, k))
+        if table == "vula_material_rates":
+            return checked
+        return log
+    monkeypatch.setattr("vula.durable.select", select)
+    checked = []
+    assert scraper._fresh(source) is False
+    assert ("vula_material_rates", {"limit": 1, "source": source["name"], "checked": True}) in seen
+    checked = [{"key": "face_brick"}]
+    assert scraper._fresh(source) is True
+    checked = None                                   # can't tell: don't re-read everything
+    assert scraper._fresh(source) is True
+
+
 # ── looking up first ─────────────────────────────────────────────────────────
 
 def _db(tmp_path, *rows):
