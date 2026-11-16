@@ -183,11 +183,17 @@ def _has_image(messages) -> bool:
     return False
 
 
+VISION_FALLBACK = "anthropic/claude-sonnet-5"
+
+
 def cloud_fallback_chain(model: str, messages=None) -> list:
     """The openrouter/ models to try in order, starting with `model`. An image call only falls
     back to the vision model: the text models in the list can't read the picture."""
     if _has_image(messages):
-        extra = [settings.model_vision]
+        # 16 Nov 2026: a Railway MODEL_VISION still naming a model with no zero-retention endpoint
+        # (Gemini) left every cloud scan with nothing to fall back to. A model known to read
+        # images under zero retention always follows.
+        extra = [settings.model_vision, VISION_FALLBACK]
     else:
         extra = [m.strip() for m in (settings.cloud_model_fallbacks or "").split(",") if m.strip()]
     chain = [model]

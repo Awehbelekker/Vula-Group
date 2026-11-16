@@ -41,8 +41,12 @@ def test_chain_starts_with_the_route_and_skips_repeats(chain):
 def test_image_calls_only_fall_back_to_the_vision_model(chain):
     msgs = [{"role": "user", "content": [{"type": "text", "text": "read"},
                                          {"type": "image_url", "image_url": {"url": "data:x"}}]}]
+    # the configured vision model, then the vision model known to answer under zero retention
+    # (16 Nov 2026) — never a text-only fallback
     assert llm_router.cloud_fallback_chain("openrouter/x/vision-a", msgs) == [
-        "openrouter/x/vision-a", "openrouter/google/gemini-2.5-flash"]
+        "openrouter/x/vision-a", "openrouter/google/gemini-2.5-flash",
+        f"openrouter/{llm_router.VISION_FALLBACK}"]
+    assert "openrouter/meta-llama/llama-3.3-70b-instruct" not in llm_router.cloud_fallback_chain("openrouter/x/vision-a", msgs)
 
 
 def test_next_model_answers_when_the_first_is_down(chain):

@@ -94,6 +94,54 @@ def match_products(products: List[Dict[str, Any]], search: str) -> List[Dict[str
     return [p for _, _, p in scored]
 
 
+# 16 Nov 2026 (answer checks): Off the Hook told a customer "We don't have a braai box in our
+# catalogue" — the Braai Box is active, in stock, R350.00. A reply that says we don't have / stock /
+# sell something is checked against the whole catalogue before it goes out.
+_DENIES_RE = re.compile(
+    r"\b(?:don'?t|do\s+not|doesn'?t|does\s+not)\s+(?:have|stock|sell|carry|offer)\b"
+    r"|\bnot\s+(?:in\s+(?:our|the)\s+(?:catalogue|catalog|range|shop|store|list)|something\s+we\s+(?:sell|stock|have))\b"
+    r"|\bno\s+longer\s+(?:stock|sell|have)\b|\bcouldn'?t\s+find\s+(?:a|an|any|the)\b", re.I)
+
+
+def named_products(products: List[Dict[str, Any]], question: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """The products the question names: those sharing the most name words with it (at least two,
+    or the product's only word). Empty when nothing is named clearly."""
+    q = set(search_terms(question))
+    scored = []
+    for p in products:
+        words = {_fold(w) for w in re.findall(r"[a-z]+", (p.get("name") or "").lower()) if len(w) >= 3}
+        hit = len(q & words)
+        if words and (hit >= 2 or (hit == 1 and len(words) == 1)):
+            scored.append((hit, p))
+    if not scored:
+        return []
+    best = max(h for h, _ in scored)
+    return [p for h, p in scored if h == best][:limit]
+
+
+def _price_label(p: Dict[str, Any]) -> str:
+    rng = p.get("variant_price_range")
+    if rng and rng.get("min") is not None:
+        return (f"from R{rng['min'] / 100:,.2f}" if rng["min"] != rng.get("max") else f"R{rng['min'] / 100:,.2f}")
+    return f"R{int(p.get('price_cents') or 0) / 100:,.2f}"
+
+
+def denied_but_listed(answer: str, question: str, products: List[Dict[str, Any]]) -> Optional[str]:
+    """When the reply says we don't have something the question names and the catalogue has it
+    in stock, the reply built from the catalogue instead (names and prices from the database)."""
+    if not _DENIES_RE.search(answer or ""):
+        return None
+    found = named_products(products, question)
+    if not found:
+        return None
+    lines = []
+    for p in found:
+        size = p.get("pack_size") or (f"{p['weight_grams']}g" if p.get("weight_grams") else "")
+        lines.append(f"{p['name']}: {_price_label(p)}" + (f" ({size})" if size and size not in p["name"] else ""))
+    head = "Yes, we have it:" if len(lines) == 1 else "We have these:"
+    return head + "\n" + "\n".join(lines) + "\nWould you like me to add it to your order?"
+
+
 def _price_facts_text(tenant_id: str) -> str:
     """The money facts the business set itself (delivery fee, free-delivery threshold, minimum
     order) — the prompt states these as hard facts, so a reply quoting them is grounded even
@@ -1227,6 +1275,19 @@ class CommerceAssistantSkill(BaseSkill):
                 answer += ("\n\n⚠️ One moment — let me correct my own maths before you rely on "
                            f"this:\n{fixes}\n\nI'll redo those figures properly.")
                 confidence = 0.3
+            if _DENIES_RE.search(answer or ""):
+                try:
+                    catalogue = await service.list_products(inp.tenant_id, in_stock_only=True,
+                                                            statuses={"active"}, with_variant_price_range=True)
+                    corrected = denied_but_listed(answer, inp.question or "", catalogue)
+                except Exception as exc:  # noqa: BLE001 — fail open: the original reply stands
+                    logger.debug("catalogue check skipped: %s", exc)
+                    corrected = None
+                if corrected:
+                    logger.warning("commerce_assistant said we don't have a product the catalogue lists "
+                                   "in stock, tenant=%s — reply built from the catalogue", inp.tenant_id)
+                    answer, confidence = corrected, 0.9
+                    sources.append({"type": "database", "name": "catalogue_check"})
             return SkillOutput(
                 answer=answer,
                 skill_name=self.name,
@@ -1990,13 +2051,26 @@ class CommerceAssistantSkill(BaseSkill):
                 "message": f"Moved to {b.get('start_local')}."}
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
+        category = args.get("category")
         products = await service.list_products(
-            tenant_id, category=args.get("category"), in_stock_only=True, statuses={"active"},
+            tenant_id, category=category, in_stock_only=True, statuses={"active"},
             with_variant_price_range=True,
         )
         search = (args.get("search") or "").lower().strip()
         if search:
             products = match_products(products, search)
+        # 16 Nov 2026 (answer checks): a category the model guessed hid the Braai Box (filed under
+        # fresh_fish) and the customer was told we don't have one. Nothing in that category → the
+        # whole catalogue.
+        widened = False
+        if category and not products:
+            products = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"},
+                                                   with_variant_price_range=True)
+            if search:
+                products = match_products(products, search)
+            widened = True
+        logger.info("list_products: category=%s search=%s widened=%s -> %d",
+                    bool(category), bool(search), widened, len(products))
 
         def _price(p):
             rng = p.get("variant_price_range")

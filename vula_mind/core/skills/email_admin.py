@@ -168,6 +168,31 @@ def _fenced_result(name: str, result: Any) -> str:
                  json.dumps(for_model(result), default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
 
 
+def exact_amount_reply(question: str, result: Dict[str, Any]) -> Optional[str]:
+    """"Find the Solid Cape invoice for R7,571.44" (16 Nov 2026 answer check): find_document
+    matched the amount exactly, then the local model's reply quoted another figure, the price
+    check dropped it and what was left talked about a price list. A document found by its exact
+    amount is answered straight from the record — never re-read by a model."""
+    from core.skills.base import looks_like_document_lookup
+    from vula.commerce.service import money_in_query
+    if not (looks_like_document_lookup(question or "") and money_in_query(question or "")):
+        return None
+    if result.get("status") != "found" or not str(result.get("matched_by") or "").startswith("amount"):
+        return None
+    found = [m for m in (result.get("matches") or []) if isinstance(m, dict)][:3]
+    if not found:
+        return None
+    lines = []
+    for m in found:
+        amount = m.get("amount")
+        what = " — ".join(x for x in (m.get("party"), m.get("category")) if x) or (m.get("filename") or "document")
+        lines.append(f"• {what}: " + (f"R{float(amount):,.2f}" if amount is not None else "amount not read")
+                     + (f", filed {str(m.get('filed_at'))[:10]}" if m.get("filed_at") else "")
+                     + (f" ({m['filename']})" if m.get("filename") else ""))
+    head = "Found it:" if len(lines) == 1 else f"Found {len(lines)} documents with that amount:"
+    return head + "\n" + "\n".join(lines)
+
+
 async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any,
                                   tenant_id: str = "", history: str = "",
                                   phone: str = "") -> Optional[str]:
@@ -188,6 +213,9 @@ async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any]
     through to whichever path answers."""
     if tool != "find_document" or not isinstance(result, dict):
         return None
+    exact = exact_amount_reply(question, result)
+    if exact:
+        return exact
     if looks_like_supplier_history_question(question or ""):
         from vula.commerce.service import (answer_all_invoices, format_supplier_history_reply,
                                            names_no_party, send_supplier_history_xlsx,
