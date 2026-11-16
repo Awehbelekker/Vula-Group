@@ -4229,6 +4229,34 @@ async def admin_project_tracker(tenant_id: str, project: str):
     return out
 
 
+class ClientEmailIn(BaseModel):
+    project: str
+    to: str
+    subject: str
+    body: str
+
+
+@router.get("/{tenant_id}/admin/projects/client-emails")
+async def admin_project_client_emails(tenant_id: str, project: str):
+    """Every email sent to the project's client from Vula (vula/commerce/project_emails.py)."""
+    import asyncio
+    from vula.commerce import project_emails as pe
+    return {"emails": await asyncio.to_thread(pe.sent, tenant_id, project)}
+
+
+@router.post("/{tenant_id}/admin/projects/client-emails")
+async def admin_send_project_client_email(tenant_id: str, body: ClientEmailIn, request: Request):
+    """Send an email to the project's client from the business's own mailbox, with a copy to that
+    mailbox, and keep it on record (vula/commerce/project_emails.py). Owner and managers only. Read back."""
+    from vula.commerce import project_emails as pe
+    try:
+        return await pe.send(tenant_id, body.project, body.to, body.subject, body.body, by=_actor(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 class DownloadDecisionIn(BaseModel):
     approve: bool
     by: Optional[str] = None

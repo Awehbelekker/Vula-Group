@@ -170,6 +170,7 @@ vula_project_briefs: brief:text, project:text, tenant_id:text, updated_at:timest
 vula_project_budgets: budget:numeric, project:text, tenant_id:text, updated_at:timestamptz
 vula_project_cards: card_type:text, color:text, content:jsonb, created_at:timestamptz, created_by:text, height:numeric, id:uuid, project:text, tenant_id:text, updated_at:timestamptz, width:numeric, x:numeric, y:numeric, z_index:int4
 vula_project_claims: certified_at:timestamptz, certified_to_date_cents:int8, claim_date:date, claim_number:int4, created_at:timestamptz, cumulative_value_cents:int8, id:uuid, linked_invoice_id:uuid, notes:text, previous_certified_cents:int8, project:text, retention_cents:int8, retention_pct:numeric, status:text, tenant_id:text, this_payment_cents:int8
+vula_project_client_emails: body:text, copy_to:text, created_at:timestamptz, error:text, id:uuid, project:text, recipients:_text, sent_at:timestamptz, sent_by:text, status:text, subject:text, tenant_id:text
 vula_project_clients: created_at:timestamptz, created_by:text, id:uuid, name:text, phone:text, project:text, revoked_at:timestamptz, tenant_id:text, view:text
 vula_project_codes: code_id:uuid, created_at:timestamptz, id:uuid, project_id:uuid, tenant_id:text
 vula_project_direct_payments: amount_cents:int8, created_at:timestamptz, created_by:text, description:text, id:uuid, paid_on:date, project:text, status:text, supplier:text, tenant_id:text, updated_at:timestamptz
