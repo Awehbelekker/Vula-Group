@@ -32,6 +32,7 @@ from config import settings
 from core.llm_router import (
     generation_kwargs, is_local_model, resolve_generation_route, escalate_to_cloud,
     substitute_if_degenerate, looks_degenerate, next_cloud_model,
+    with_prompt_cache, cached_prompt_tokens,
 )
 from core.prompt_safety import fence
 from vula.storage_links import SHARE_TTL, signed
@@ -2727,7 +2728,9 @@ class CommerceAdminSkill(BaseSkill):
         retried_garbled = False
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(
-                model=model, messages=messages, tools=tools, tool_choice="auto",
+                # the same tools + system prompt on every step: cached on a Claude route
+                # (16 Nov 2026, cost); unchanged for any other model
+                model=model, messages=with_prompt_cache(messages, model), tools=tools, tool_choice="auto",
                 temperature=0.2, max_tokens=900, api_key=api_key, api_base=api_base,
                 # Unconditional — dropped silently wherever unsupported (cloud routes, older
                 # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
@@ -2735,6 +2738,9 @@ class CommerceAdminSkill(BaseSkill):
                 # loop otherwise force-escalates to cloud above.
                 logprobs=True, top_logprobs=1, **generation_kwargs(model),
             )
+            cached = cached_prompt_tokens(resp)
+            if cached:   # counts only
+                logger.info("commerce_admin: %d prompt tokens read from cache", cached)
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
 

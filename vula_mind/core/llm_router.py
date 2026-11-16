@@ -25,7 +25,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 import httpx
 
@@ -606,6 +606,37 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
     return {**local_generation_kwargs(model), **cloud_generation_kwargs(model)}
 
 
+# Anthropic caches a prompt prefix of at least ~1 024 tokens; below that a breakpoint does nothing.
+PROMPT_CACHE_MIN_CHARS = 4000
+
+
+def with_prompt_cache(messages: List[Dict[str, Any]], model: str) -> List[Dict[str, Any]]:
+    """Mark the system prompt for Anthropic's prompt cache on a Claude route (16 Nov 2026, Ian:
+    keep costs down). The business assistant re-sends the same ~9 000 tokens (tools + system
+    prompt) on every step of its tool loop and every turn; a cached read costs about a tenth of
+    normal input. Anthropic orders tools before the system prompt, so one breakpoint on the system
+    message covers both. Writing the cache costs a quarter more once, so this is only for callers
+    that repeat the same prefix within minutes. Any other model, or a short or non-text system
+    prompt, gets the messages back unchanged."""
+    if "anthropic/" not in (model or "") or not messages or messages[0].get("role") != "system":
+        return messages
+    content = messages[0].get("content")
+    if not isinstance(content, str) or len(content) < PROMPT_CACHE_MIN_CHARS:
+        return messages
+    first = {**messages[0], "content": [{"type": "text", "text": content,
+                                          "cache_control": {"type": "ephemeral"}}]}
+    return [first, *messages[1:]]
+
+
+def cached_prompt_tokens(resp: Any) -> int:
+    """Prompt tokens the provider read from its cache for this response (0 when none/unknown)."""
+    try:
+        details = getattr(resp.usage, "prompt_tokens_details", None)
+        return int(getattr(details, "cached_tokens", 0) or 0)
+    except Exception:
+        return 0
+
+
 # Built-in cloud models for some task types, used when CLOUD_MODEL_BY_TASK has no entry for
 # them (an entry there still wins). 13 Nov 2026, Ian: research writes a long, cited answer from
 # several pages — a stronger model than the general fallback. 16 Nov 2026, Ian: Claude Sonnet 5,
@@ -864,9 +895,16 @@ async def resolve_cheap_route(model: Optional[str] = None,
 
 
 def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
-    """Force the strong 70B cloud model — for user-facing answers and cheap-tier escalation."""
+    """A stronger cloud model than the cheap tier — the escalation when a cheap-tier read fails its
+    checks. 16 Nov 2026: with the cheap tier on Llama 3.3 70B (model_worker_cloud), escalating to
+    model_worker_cloud would ask the same model again, so it's the first different model in
+    cloud_model_fallbacks instead (Claude Sonnet 5)."""
     if settings.openrouter_api_key:
-        return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
+        strong = settings.model_worker_cloud
+        if strong == settings.model_worker_cheap:
+            strong = next((m.removeprefix("openrouter/") for m in cloud_fallback_chain(f"openrouter/{strong}")
+                           if m.removeprefix("openrouter/") != settings.model_worker_cheap), strong)
+        return f"openrouter/{strong}", settings.openrouter_api_key, OPENROUTER_BASE
     return None
 
 
