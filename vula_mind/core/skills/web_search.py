@@ -32,6 +32,17 @@ _HEADERS = {
 
 SERPER_URL = "https://google.serper.dev/search"
 
+# Searches made and how many found nothing, since vula/ai_health.py last read them (16 Nov 2026:
+# DuckDuckGo found nothing for days and nobody knew). Counts only, never queries.
+_stats = {"searches": 0, "empty": 0}
+
+
+def take_stats() -> dict:
+    """The counts since the last call, then reset."""
+    out = dict(_stats)
+    _stats.update(searches=0, empty=0)
+    return out
+
 
 async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
     """Web search — [{title, url, snippet?}]. Every caller in Vula comes through here (research,
@@ -41,6 +52,7 @@ async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
     `search_country`); DuckDuckGo stays the fallback when there's no key or Serper finds nothing.
     Logs say which provider and how many results — never the query (it's the person's words)."""
     from config import settings
+    _stats["searches"] += 1
     if getattr(settings, "serper_api_key", ""):
         hits = await _serper_search(query, limit)
         logger.info("web search: serper %d results", len(hits))
@@ -48,6 +60,8 @@ async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
             return hits
     hits = await _ddg_html(query, limit)
     logger.info("web search: duckduckgo %d results", len(hits))
+    if not hits:
+        _stats["empty"] += 1
     return hits
 
 

@@ -32,6 +32,7 @@ from config import settings
 from core.llm_router import (
     generation_kwargs, is_local_model, resolve_generation_route, escalate_to_cloud,
     substitute_if_degenerate, looks_degenerate, next_cloud_model,
+    with_prompt_cache, cached_prompt_tokens,
 )
 from core.prompt_safety import fence
 from vula.storage_links import SHARE_TTL, signed
@@ -106,6 +107,30 @@ def _checked(result: Dict[str, Any], text: str) -> Dict[str, Any]:
     result["verified"] = True
     result["reply_verbatim"] = text
     return result
+
+
+# 16 Nov 2026 (accuracy): a tool that fails must not turn into an answer from general knowledge.
+# The 07:21 build-up research failed in the cloud; the raw OpenRouter error went to the model,
+# which wrote its own account of it. The person is told plainly that the step failed and nothing
+# was checked, and the model is told not to fill the gap.
+TOOL_FAILED_NOTE = ("This step failed, so nothing was looked up or checked. Tell the person plainly "
+                    "that it didn't work and they can try again later. Do not answer from general "
+                    "knowledge instead, and do not give any figure in its place.")
+_TECHNICAL_MODULES = ("litellm", "openai", "httpx", "httpcore", "asyncio", "anyio", "postgrest", "supabase")
+
+
+def _tool_failed(exc: BaseException) -> Dict[str, Any]:
+    """A failed tool's result: a person-readable reason (a technical failure is not passed on
+    as raw provider text) plus TOOL_FAILED_NOTE."""
+    technical = (type(exc).__module__.split(".")[0] in _TECHNICAL_MODULES
+                 or isinstance(exc, (TimeoutError, ConnectionError)))
+    reason = "a technical problem on Vula's side" if technical else str(exc)
+    return {"error": reason, "failed": True, "note": TOOL_FAILED_NOTE}
+
+
+BUILDUP_FAILED = ("⚠️ I couldn't check sources just now (a technical problem on Vula's side), so I "
+                  "haven't saved a build-up and nothing was guessed. Please try again in a while, or "
+                  "an owner or manager can enter the figures.")
 
 
 def _not_confirmed(message: str) -> Dict[str, Any]:
@@ -2727,7 +2752,9 @@ class CommerceAdminSkill(BaseSkill):
         retried_garbled = False
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(
-                model=model, messages=messages, tools=tools, tool_choice="auto",
+                # the same tools + system prompt on every step: cached on a Claude route
+                # (16 Nov 2026, cost); unchanged for any other model
+                model=model, messages=with_prompt_cache(messages, model), tools=tools, tool_choice="auto",
                 temperature=0.2, max_tokens=900, api_key=api_key, api_base=api_base,
                 # Unconditional — dropped silently wherever unsupported (cloud routes, older
                 # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
@@ -2735,6 +2762,9 @@ class CommerceAdminSkill(BaseSkill):
                 # loop otherwise force-escalates to cloud above.
                 logprobs=True, top_logprobs=1, **generation_kwargs(model),
             )
+            cached = cached_prompt_tokens(resp)
+            if cached:   # counts only
+                logger.info("commerce_admin: %d prompt tokens read from cache", cached)
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
 
@@ -3246,7 +3276,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
-            return {"error": str(exc)}
+            return _tool_failed(exc)
         return {"error": f"unknown tool {name}"}
 
     def _rands(self, c: int) -> str:
@@ -3835,6 +3865,9 @@ class CommerceAdminSkill(BaseSkill):
                             + buildups.describe(b))
         except buildups.BuildupError as exc:
             return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — research reaches the web and cloud models
+            logger.warning("build-up tool %s failed: %s", name, type(exc).__name__)
+            return {**_tool_failed(exc), "reply_verbatim": BUILDUP_FAILED}
 
     async def _apply_voice_persona(self, tid: str, persona_prompt: str,
                                    confirm: bool = False) -> Dict[str, Any]:

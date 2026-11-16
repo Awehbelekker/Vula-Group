@@ -90,13 +90,18 @@ def _project_names(tenant_id: str, project: str) -> List[str]:
 
 
 def paid_lines(tenant_id: str, project: str) -> List[Dict[str, Any]]:
-    """Every line paid on the project (this business only), newest first, without repeats."""
+    """Every line paid on the project (this business only), newest first, without repeats — each
+    price on the same VAT basis as the business's estimates (excl when VAT registered, incl when
+    not; migration 284), so an invoice written either way compares like with like."""
     from vula.commerce import price_book
+    from vula.commerce.estimate import vat_registered
+    registered = vat_registered(tenant_id)
     seen, out = set(), []
     for name in _project_names(tenant_id, project):
         for r in price_book._fetch(tenant_id, "", None, name):
             if r.get("source_kind") not in _PAID:
                 continue
+            r = price_book._on_basis(r, registered)
             key = (r.get("doc_id"), r.get("description"), r.get("quantity"), r.get("unit_price_cents"))
             if key in seen:
                 continue

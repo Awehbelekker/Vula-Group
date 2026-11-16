@@ -5895,7 +5895,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 return True
             return False
 
-        # Cheap pass first (free local via tunnel / gemini-flash).
+        # Cheap pass first (the cheap-tier cloud model, settings.model_worker_cheap).
         result = None
         try:
             resp = await litellm.acompletion(model=model, messages=_msgs, temperature=0.1,
@@ -5911,7 +5911,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             cloud = resolve_cloud_route()
             if cloud:
                 try:
-                    logger.info("Doc analyze: cheap weak — escalating %s to 70B", filename)
+                    logger.info("Doc analyze: cheap weak — escalating %s to %s", filename, cloud[0])
                     _cm, _ck, _cb = cloud
                     resp = await litellm.acompletion(model=_cm, messages=_msgs, temperature=0.1,
                         max_tokens=1400, api_key=_ck, api_base=_cb)

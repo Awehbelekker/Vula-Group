@@ -1581,6 +1581,33 @@ async def _local_llm_watch_loop() -> None:
     await run_forever()
 
 
+async def _price_vat_backfill_on_boot() -> None:
+    """Once after boot: fill in whether VAT was included on prices learned before migration 284
+    (16 Nov 2026), from each document's own figures. Idempotent — only rows still 'unknown'."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(180)
+    try:
+        from vula.commerce.price_book import backfill_vat_basis
+        await _asyncio.to_thread(backfill_vat_basis)
+    except Exception as exc:
+        log.warning("price VAT basis backfill failed: %s", exc)
+
+
+async def _answer_checks_loop() -> None:
+    """After each deploy (and weekly): real questions to real businesses whose right answer is in
+    their own records, checked in code (16 Nov 2026). See evals/answer_checks.py."""
+    from evals.answer_checks import run_forever
+    await run_forever()
+
+
+async def _ai_health_loop() -> None:
+    """Every 6 h: each cloud model answers under zero retention and web search finds results
+    (16 Nov 2026 — a dead Gemini and an empty DuckDuckGo went unnoticed for days). See
+    vula/ai_health.py."""
+    from vula.ai_health import run_forever
+    await run_forever()
+
+
 async def _qdrant_migrate_loop() -> None:
     """Copy the knowledge base to a new Qdrant cluster when QDRANT_MIGRATE_TO_BASE is set
     (2026-11-13, moving it to the EU). See vula/integrations/qdrant_migrate.py."""
@@ -1759,6 +1786,12 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
+    # Cloud models + web search answering, loudly when not (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_ai_health_loop()))
+    # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
+    # Right answers from each business's own records, after every deploy (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_answer_checks_loop()))
     # Missing local models (LOCAL_MODELS_ENSURE) → Ollama downloads them (2026-11-12).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_models_loop()))
     # Knowledge base → new Qdrant cluster, once per boot while QDRANT_MIGRATE_TO_BASE is set.

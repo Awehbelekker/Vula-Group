@@ -49,9 +49,12 @@ class Settings(BaseSettings):
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
     # the ollama.vula-ai.com tunnel, then this cheap cloud model, then escalate to the 70B.
     model_worker_cheap_local: str = "llama3.1:8b"          # free, on the local GPU via the tunnel
-    # cloud model for the cheap tier (document analysis…). 16 Nov 2026, Ian: was gemini-2.5-flash —
-    # no endpoint under zero retention since 13 Nov, so every call paid a failure and fell to Llama.
-    model_worker_cheap: str = "anthropic/claude-sonnet-5"
+    # cloud model for the cheap tier (document analysis, BOQ lines, programmes…). 16 Nov 2026: was
+    # gemini-2.5-flash — no endpoint under zero retention since 13 Nov. Then Ian, "keep the costs
+    # down": Llama 3.3 70B (answers under zero retention, ~1/30th of Sonnet's price), with Sonnet
+    # next in cloud_model_fallbacks when Llama errors or its provider can't take the prompt. Money
+    # figures are still checked in code (scan_quality_ok, ungrounded_figures) and escalate.
+    model_worker_cheap: str = "meta-llama/llama-3.3-70b-instruct"
     # Context window of the local model, in tokens. Set it ON THE OLLAMA BOX
     # (OLLAMA_CONTEXT_LENGTH=8192), not per call: Ollama reloads a model whenever the requested
     # context size changes, so callers asking for different sizes make it thrash. 2026-09-23
