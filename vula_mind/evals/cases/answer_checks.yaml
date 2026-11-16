@@ -57,3 +57,57 @@
   entry: customer
   prompt: "Price of the Atlantic mackerel fillets please"
   amounts: [{kind: product_price, arg: "Atlantic Mackerel Fillets"}]
+
+# ── Seedleme (concrete basins and baths; customers) ──────────────────────────
+- id: seedleme-price-amazon-bath
+  component: "Answer checks · Seedleme"
+  tenant: seedleme
+  entry: customer
+  prompt: "How much is the Amazon Green bespoke bath?"
+  amounts: [{kind: product_price, arg: "Amazon Green Bespoke Bath 175 x 80 x 50cm"}]
+- id: seedleme-price-black-round-sink
+  component: "Answer checks · Seedleme"
+  tenant: seedleme
+  entry: customer
+  prompt: "What's the price of the black round concrete sink, 30 x 30?"
+  amounts: [{kind: product_price, arg: "Black Round Bespoke Concrete Sink 30 x 30 x 13cm"}]
+- id: seedleme-price-aquatina-basin
+  component: "Answer checks · Seedleme"
+  tenant: seedleme
+  entry: customer
+  prompt: "How much is the Aquatina blue basin?"
+  amounts: [{kind: product_price, arg: "Aquatina Blue Basin 47 x 23.5 x 12cm"}]
+- id: seedleme-price-double-butler-green
+  component: "Answer checks · Seedleme"
+  tenant: seedleme
+  entry: customer
+  prompt: "Price for the green double butler concrete sink please"
+  amounts: [{kind: product_price, arg: "Double Butler Concrete Sink – Green – 80 x 40 x 27cm (50mm outlet)"}]
+- id: seedleme-price-concave-terracotta
+  component: "Answer checks · Seedleme"
+  tenant: seedleme
+  entry: customer
+  prompt: "How much does the terracotta concave rectangle basin cost?"
+  amounts: [{kind: product_price, arg: "Concave Rectangle Concrete Basin – Terracotta – 52 x 40 x 13cm"}]
+
+# ── Gerflor (flooring; knowledge line; facts from its own catalogues and specifications) ──
+- id: gerflor-mipolam-classic-thickness
+  component: "Answer checks · Gerflor"
+  tenant: gerflor
+  prompt: "What thicknesses does Mipolam Classic come in?"
+  must_contain: ["1.5"]
+- id: gerflor-taralay-millenium-versions
+  component: "Answer checks · Gerflor"
+  tenant: gerflor
+  prompt: "Which versions of Taralay Millenium are there?"
+  must_contain: ["Compact", "Comfort"]
+- id: gerflor-spm-price-list
+  component: "Answer checks · Gerflor"
+  tenant: gerflor
+  prompt: "What does the SPM wall protection price list cover?"
+  must_contain: ["handrail"]
+- id: gerflor-sfw-gym-flooring
+  component: "Answer checks · Gerflor"
+  tenant: gerflor
+  prompt: "What gym flooring does Sports Flooring Warehouse offer?"
+  must_contain: ["Ultrafloor"]
