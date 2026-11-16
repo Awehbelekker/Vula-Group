@@ -2209,6 +2209,26 @@ def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Option
     return employees.without_switched_off(tools, {k for k, v in settings.items() if v["enabled"]})
 
 
+def _trade_costing_pick(tenant_id: str, message: str, enabled: set, off: set):
+    """(operations, its trade-costing task) for a costing message where the business has
+    trade_costing on (16 Nov 2026), else None. The keyword front desk sent "Estimate the cost of a
+    6 x 4 m wall" to sales' quote task, which has none of the costing tools, and most other costing
+    messages to the whole team. Uses the same detector as the WhatsApp costing turn."""
+    if "operations" not in enabled or "trade-costing" in (off or set()):
+        return None
+    try:
+        from vula import features
+        from vula.commerce.trade_checklists import is_costing_request
+        if not (features.on(tenant_id, "trade_costing") and is_costing_request(message or "")):
+            return None
+        from core.skills import employees
+        emp = employees.BY_ID.get("operations")
+        task = next((t for t in (emp.tasks if emp else ()) if t.id == "trade-costing"), None)
+        return (emp, task) if emp and task else None
+    except Exception:  # noqa: BLE001 — the keyword front desk decides instead
+        return None
+
+
 def _pick_employee(tenant_id: str, message: str, tools: List[Dict[str, Any]]):
     """(tools, employee or None, prompt note) — the front desk. Best-effort: on any error the
     whole team keeps today's tools."""
@@ -2218,10 +2238,17 @@ def _pick_employee(tenant_id: str, message: str, tools: List[Dict[str, Any]]):
         enabled = {k for k, v in settings.items() if v["enabled"]}
         team = employees.without_switched_off(tools, enabled)
         emp = employees.pick(message, enabled)
+        tsets = employees.task_settings(tenant_id)
+        costing = _trade_costing_pick(tenant_id, message, enabled, employees.tasks_off(tsets, "operations"))
+        if costing is not None:
+            emp, task = costing
+            _turn_note("employee", name=emp.id, task=task.id)
+            task_note = (tsets.get((emp.id, task.id)) or {}).get("instructions", "")
+            return (employees.narrow(team, emp, task), emp,
+                    employees.job_block(emp, settings[emp.id]["instructions"], task, task_note))
         if emp is None:
             _turn_note("employee", name="team")
             return team, None, ""
-        tsets = employees.task_settings(tenant_id)
         task = employees.pick_task(emp, message, employees.tasks_off(tsets, emp.id))
         _turn_note("employee", name=emp.id, task=task.id if task else None)
         task_note = (tsets.get((emp.id, task.id)) or {}).get("instructions", "") if task else ""

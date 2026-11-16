@@ -1,0 +1,5 @@
+# message -> this task (and the tool a good first move needs)
+- {prompt: "Show me our build-up for a one-brick wall", expect: trade-costing, tool: trade_buildup}
+- {prompt: "Research the build-up for plaster to brick walls", expect: trade-costing, tool: trade_buildup}
+- {prompt: "Confirm the build-up for floor screed", expect: trade-costing, tool: confirm_buildup}
+- {prompt: "Any suggestions for our build-ups?", expect: trade-costing, tool: buildup_suggestion}
