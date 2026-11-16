@@ -74,3 +74,25 @@ def test_the_client_documents_leave_it_off_and_never_fail(monkeypatch):
         assert [r["id"] for r in sd.client_documents(T, "Belladonna")] == ["b"]
     with patch("vula.integrations.project_resolver._projects", side_effect=RuntimeError("db down")):
         assert {r["id"] for r in sd.client_documents(T, "Belladonna")} == {"a", "b"}      # fail-open: page stays up
+
+
+def test_the_clients_zip_follows_the_same_rule_as_the_page(monkeypatch):
+    # 16 Nov 2026: the page left skip invoice 1091 off, but the "Download all" zip still carried it
+    from vula.commerce import project_file as pf
+    docs = [{"id": "a", "category": "Invoice", "summary": "Skip, 8 Wessex Paarden Island", "fields": {},
+             "created_at": "2026-10-22", "file_url": "https://x/a.pdf", "filename": "a.pdf"},
+            {"id": "b", "category": "Invoice", "summary": "Skip, 07 Belladonna Drive", "fields": {},
+             "created_at": "2026-10-23", "file_url": "https://x/b.pdf", "filename": "b.pdf"}]
+    monkeypatch.setattr(pf, "_documents", lambda t, p: docs)
+    monkeypatch.setattr(pf, "_supplier_rows", lambda t: [])
+    monkeypatch.setattr("vula.commerce.service.canonical_project", lambda t, p: p)
+    monkeypatch.setattr(sd, "_related", lambda t, p: {"belladonna"})
+    with patch("vula.integrations.project_resolver._projects", return_value=PROJECTS), \
+         patch.object(df, "own_address_phrases", return_value=[]):
+        data, man = pf.build_pack(T, "Belladonna", "client", fetch=lambda u: b"%PDF-1.4 x")
+        internal, _ = pf.build_pack(T, "Belladonna", "internal", fetch=lambda u: b"%PDF-1.4 x")
+    import io
+    import zipfile
+    names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+    assert not any("a.pdf" in n or "Wessex" in n for n in names) and len([n for n in names if n.endswith(".pdf")]) == 1
+    assert len([n for n in zipfile.ZipFile(io.BytesIO(internal)).namelist() if n.endswith(".pdf")]) == 2   # the business keeps all

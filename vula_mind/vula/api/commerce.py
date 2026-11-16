@@ -8408,10 +8408,9 @@ async def admin_document_client_link(tenant_id: str, doc_id: str, body: dict):
         if not rows:
             return None
         f = dict(rows[0].get("fields") or {})
-        if show:
-            f["_show_on_client_link"] = True
-        else:
-            f.pop("_show_on_client_link", None)
+        # an explicit false to stop showing it — the database keeps the owner's flags when a save
+        # leaves them out (migration 285), so removing the key would not undo the choice
+        f["_show_on_client_link"] = bool(show)
         db.table("vula_filed_documents").update({"fields": f}).eq("tenant_id", tenant_id).eq("id", doc_id).execute()
         back = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id).eq("id", doc_id)
                 .limit(1).execute().data or [{}])[0].get("fields") or {}
