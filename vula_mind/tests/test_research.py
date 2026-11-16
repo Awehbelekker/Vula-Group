@@ -177,14 +177,15 @@ async def test_research_needs_ask_anything_and_has_its_own_hourly_limit():
     open_chat.clear()
 
 
-# ── local first, Gemini Flash when it has to go to the cloud ─────────────────────────────────
+# ── local first, Claude Sonnet 5 when it has to go to the cloud ──────────────────────────────
+# (16 Nov 2026: Gemini 2.5 Flash has no endpoint under zero retention)
 
-def test_research_uses_gemini_flash_in_the_cloud_unless_the_map_names_another():
+def test_research_uses_sonnet_in_the_cloud_unless_the_map_names_another():
     from config import settings
     from core.llm_router import cloud_model_for
     with patch.object(settings, "cloud_model_by_task", ""):
-        assert cloud_model_for("research") == "google/gemini-2.5-flash"
-        assert cloud_model_for("research_plan") == "google/gemini-2.5-flash"
+        for task in ("research", "research_plan", "rates_extract", "buildup_research"):
+            assert cloud_model_for(task) == "anthropic/claude-sonnet-5"
         assert cloud_model_for("reasoning") == settings.model_worker_cloud
     with patch.object(settings, "cloud_model_by_task", '{"research": "x/other"}'):
         assert cloud_model_for("research") == "x/other"

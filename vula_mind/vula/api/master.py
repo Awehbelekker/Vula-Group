@@ -1254,7 +1254,7 @@ async def master_run_qdrant_backup(identity: dict = Depends(require_master)) -> 
 
 EVAL_CANDIDATES = [
     "openrouter/meta-llama/llama-3.3-70b-instruct",   # today's model_worker_cloud — the baseline
-    "openrouter/google/gemini-2.5-flash",             # today's model_worker_cheap
+    "openrouter/google/gemini-2.5-flash",             # model_worker_cheap until 16 Nov (no zero-retention endpoint)
     "openrouter/anthropic/claude-haiku-4.5",
     "openrouter/anthropic/claude-sonnet-5",
     "openrouter/openai/gpt-5-mini",
