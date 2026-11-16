@@ -15,7 +15,11 @@ from tests.fake_supabase import FakeSupabase
 def test_every_case_is_well_formed_and_its_figure_kind_exists():
     cases = benchmark.load_cases(ac.CASES)
     assert len(cases) >= 6 and len({c["id"] for c in cases}) == len(cases)
-    assert {c["tenant"] for c in cases} >= {"digg-demo", "off-the-hook"}
+    # every business with records to check (16 Nov: the other 8 tenants have no products, prices
+    # or documents yet)
+    assert {c["tenant"] for c in cases} >= {"digg-demo", "off-the-hook", "seedleme", "gerflor"}
+    for t in ("digg-demo", "off-the-hook", "seedleme", "gerflor"):
+        assert sum(1 for c in cases if c["tenant"] == t) >= 3, t
     for c in cases:
         for spec in c.get("amounts") or []:
             assert spec["kind"] in ac.AMOUNTS, c["id"]
