@@ -501,7 +501,11 @@ function BuildupCard({ b, x }) {
                 </span>
               ) : (
                 <span>{num(l.qty_per_unit)} {l.unit}{Number(l.waste_pct) ? ` + ${num(l.waste_pct)}% waste` : ""}
-                  {src ? <> · <a href={src.url} target="_blank" rel="noreferrer">{src.title || "source"}</a></> : null}
+                  {src ? <> · {src.url
+                    ? <a href={src.url} target="_blank" rel="noreferrer">{src.title || "source"}</a>
+                    : <span className="vtc-muted">your {src.title || "document"}</span>}</> : null}
+                  {l.source_ref === "a Vula business's records" ? <span className="vtc-muted"> · from a Vula business's records</span> : null}
+                  {l.note ? <span className="vtc-muted"> · {l.note}</span> : null}
                   {l.source_ref === "confirmed by owner" ? <span className="vtc-muted"> · set by you</span> : null}
                 </span>
               )}
@@ -510,7 +514,7 @@ function BuildupCard({ b, x }) {
         })}
       </ul>
       {(b.unknown || []).length > 0 && (
-        <p className="vtc-note"><strong>Needs a figure:</strong> {b.unknown.map((u) => u.label || u.key).join(", ")}</p>
+        <p className="vtc-note"><strong>Needs a figure:</strong> {b.unknown.map((u) => (u.why ? `${u.label || u.key} (${u.why})` : u.label || u.key)).join("; ")}</p>
       )}
       {x.canConfirm && (
         <div className="vtc-actions">

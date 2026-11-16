@@ -1300,11 +1300,13 @@ export const assistantChat = { openChat: false };
 // ── Estimating › Costing by trade (15 Nov 2026; vula/api/trade_costing.py) ──────────────────
 export const tradeBuildups = [
   { id: "bu-wall", trade: "Masonry", item: "one-brick wall", unit: "m2", spec: { thickness: "220 mm" }, status: "confirmed",
-    version: 2, origin: "own", sources: [{ n: 1, title: "Brickwork quantities guide", url: "https://bricks.example/guide" }],
-    unknown: [{ key: "wall_ties", label: "Wall ties" }],
+    version: 2, origin: "own", sources: [{ n: 1, title: "Brickwork quantities guide", url: "https://bricks.example/guide" },
+      { n: 2, title: "HPC Bokaap specification.pdf", url: null, own: true }],
+    unknown: [{ key: "wall_ties", label: "Wall ties", why: "the source gives it per 900 mm of height, not per m2" }],
     lines: [
       { component: "units", label: "Bricks or blocks", kind: "material", qty_per_unit: "104.0000", unit: "each", waste_pct: "5.00", source_ref: "1" },
-      { component: "mortar_cement", label: "Mortar cement", kind: "material", qty_per_unit: "0.5000", unit: "bag", waste_pct: "0.00", source_ref: "1" },
+      { component: "mortar_cement", label: "Mortar cement", kind: "material", qty_per_unit: "0.5000", unit: "bag", waste_pct: "0.00", source_ref: "2",
+        note: "also 0.3 bag per m2 in Brickwork quantities guide [1]" },
       { component: "labour", label: "Labour", kind: "labour", qty_per_unit: "1.5000", unit: "hour", waste_pct: "0.00", source_ref: "confirmed by owner" },
     ] },
   { id: "bu-plaster", trade: "Plastering", item: "plaster to brick walls", unit: "m2", spec: {}, status: "proposed",
