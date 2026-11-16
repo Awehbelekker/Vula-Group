@@ -1898,7 +1898,7 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
                 raise HTTPException(status_code=429, detail="That's a lot of research for one hour — "
                                                             "ask without research, or try again a little later.")
             answered_by = "research"
-        elif not open_chat.needs_records(body.message):
+        elif not open_chat.needs_records(body.message, tenant_id=tenant_id):
             answered_by = "open"
 
     metadata: Dict[str, Any] = {"session_id": session_key, "channel": "dashboard"}
