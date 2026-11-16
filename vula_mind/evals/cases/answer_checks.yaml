@@ -1,0 +1,59 @@
+# Answer checks — real questions to real businesses whose right answer is in that business's own
+# records (evals/answer_checks.py, 16 Nov 2026). Run after every deploy and weekly, read-only
+# (core.dry_run: nothing is changed or sent), checked in code — no AI judge.
+#
+# Same fields as benchmark.yaml, plus:
+#   amounts   figures the reply must state, read live from the business's records at run time
+#             (so the check stays right when the price or rate changes):
+#               qs_rate      the business's own rate for the item (rate library, then learned from
+#                            its BOQs/quotes) — arg "item | unit"
+#               product_price  a product's current price — arg: the product's exact name
+#
+# Add a case for every wrong answer someone reports, with the record that holds the right one.
+
+# ── DIGG (construction; knowledge line; owner) ───────────────────────────────
+- id: digg-rate-one-brick-wall
+  component: "Answer checks · DIGG"
+  tenant: digg-demo
+  prompt: "What's our rate for one brick walls?"
+  amounts: [{kind: qs_rate, arg: "one brick walls | m2"}]
+- id: digg-rate-half-brick-wall
+  component: "Answer checks · DIGG"
+  tenant: digg-demo
+  prompt: "What rate do we have for half brick walls per m2?"
+  amounts: [{kind: qs_rate, arg: "half brick walls | m2"}]
+- id: digg-projects
+  component: "Answer checks · DIGG"
+  tenant: digg-demo
+  prompt: "Which projects are we running?"
+  truth: [{kind: project_names}]
+- id: digg-supplier-invoices
+  component: "Answer checks · DIGG"
+  tenant: digg-demo
+  prompt: "How many invoices do we have from Solid Cape?"
+  truth: [{kind: supplier_invoices, arg: SOLID CAPE}]
+- id: digg-find-invoice
+  component: "Answer checks · DIGG"
+  tenant: digg-demo
+  prompt: "Find the Solid Cape invoice for R7,571.44"
+  must_contain: ["7,571.44"]
+
+# ── Off the Hook (seafood shop; customers) ───────────────────────────────────
+- id: oth-price-prawns
+  component: "Answer checks · Off the Hook"
+  tenant: off-the-hook
+  entry: customer
+  prompt: "How much are the Argentinian pink prawns?"
+  amounts: [{kind: product_price, arg: "Argentinian Pink Prawns (whole) — 1kg"}]
+- id: oth-price-braai-box
+  component: "Answer checks · Off the Hook"
+  tenant: off-the-hook
+  entry: customer
+  prompt: "What does the braai box cost?"
+  amounts: [{kind: product_price, arg: "Braai Box"}]
+- id: oth-price-mackerel-fillets
+  component: "Answer checks · Off the Hook"
+  tenant: off-the-hook
+  entry: customer
+  prompt: "Price of the Atlantic mackerel fillets please"
+  amounts: [{kind: product_price, arg: "Atlantic Mackerel Fillets"}]

@@ -849,6 +849,21 @@ async def master_health():
     return out
 
 
+@router.post("/answer-checks/run")
+async def master_answer_checks_run():
+    """Run the answer checks now (a few minutes; real questions, read-only). Returns at once —
+    the result shows in Master › Health when it's done."""
+    import asyncio
+    from evals import answer_checks
+    task = asyncio.get_running_loop().create_task(answer_checks.run_and_store("manual"))
+    _ANSWER_CHECK_TASKS.add(task)                 # keep a reference until it finishes
+    task.add_done_callback(_ANSWER_CHECK_TASKS.discard)
+    return {"started": True}
+
+
+_ANSWER_CHECK_TASKS: set = set()
+
+
 @router.post("/ai-health/run")
 async def master_ai_health_run():
     """Run the AI health check now (each cloud model + web search) and return the result."""

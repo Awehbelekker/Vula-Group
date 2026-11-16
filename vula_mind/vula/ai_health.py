@@ -238,9 +238,14 @@ def status() -> Dict[str, Any]:
         alerting.append("PLATFORM_SUPPORT_PHONE")
     if not settings.team_email or not settings.resend_api_key:
         alerting.append("TEAM_EMAIL + RESEND_API_KEY")
+    try:
+        from evals import answer_checks
+        answers = answer_checks.status()
+    except Exception:  # noqa: BLE001
+        answers = None
     return {"checks": checks, "failing": [c for c in checks if not c["ok"]],
             "last_run": rows[0]["created_at"] if rows else None,
-            "alerts_not_set_up": alerting}
+            "alerts_not_set_up": alerting, "answer_checks": answers}
 
 
 async def run_forever() -> None:

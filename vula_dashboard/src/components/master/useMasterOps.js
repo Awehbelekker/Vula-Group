@@ -40,7 +40,13 @@ export function useMasterHealth({ onError }) {
       setH(prev => ({ ...(prev || {}), ai_health: r }))
     } catch (e) { onError(e.message) } finally { setAiBusy(false) }
   }
-  return { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql, aiBusy, runAiHealth }
+  const runAnswerChecks = async () => {
+    try {
+      await authFetch('/v1/master/answer-checks/run', { method: 'POST' })
+      return true
+    } catch (e) { onError(e.message); return false }
+  }
+  return { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql, aiBusy, runAiHealth, runAnswerChecks }
 }
 
 /** Crashes in the dashboard on people's devices (GET /v1/master/app-errors, vula/app_errors.py):
