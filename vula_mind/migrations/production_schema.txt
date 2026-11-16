@@ -162,7 +162,7 @@ vula_payment_providers: active:bool, created_at:timestamptz, credentials:jsonb, 
 vula_personal_memory: content:text, created_at:timestamptz, id:uuid, member_id:uuid, source:text, tenant_id:text, user_id:uuid
 vula_platform_feedback: created_at:timestamptz, id:uuid, message:text, phone:text, sender_name:text, status:text, tenant_id:text
 vula_platform_state: key:text, updated_at:timestamptz, value:text
-vula_price_observations: created_at:timestamptz, description:text, doc_id:text, id:uuid, kind:text, norm_key:text, observed_on:date, project:text, quantity:numeric, section:text, source_kind:text, supplier:text, tenant_id:text, unit:text, unit_price_cents:int8
+vula_price_observations: created_at:timestamptz, description:text, doc_id:text, id:uuid, kind:text, norm_key:text, observed_on:date, project:text, quantity:numeric, section:text, source_kind:text, supplier:text, tenant_id:text, unit:text, unit_price_cents:int8, vat_basis:text
 vula_private_documents: category:text, content_hash:text, created_at:timestamptz, doc_id:text, fields:jsonb, file_url:text, filename:text, id:uuid, member_id:text, source:text, summary:text, tenant_id:text
 vula_private_moves: created_at:timestamptz, done_at:timestamptz, error:text, filed_document_id:uuid, id:uuid, member_id:text, tenant_id:text
 vula_project_boq: baseline_doc_id:text, baseline_locked:bool, baseline_set_at:timestamptz, created_at:timestamptz, id:uuid, project:text, sections:jsonb, source_job:text, tenant_id:text, title:text, total_cents:int8, updated_at:timestamptz

@@ -123,6 +123,22 @@ def _date(v: Any) -> Optional[str]:
         return None
 
 
+VAT_BASES = ("incl", "excl", "no_vat", "unknown")
+
+
+def document_vat_basis(fields: Dict[str, Any]) -> str:
+    """Whether a document's line prices include VAT (migration 284): the document saying its
+    amounts exclude VAT wins; otherwise its own figures decide (costing_history._vat_basis —
+    lines add up to the total = incl, lines + VAT = excl, no VAT = no_vat, else unknown)."""
+    if fields.get("amounts_exclude_vat") is True:
+        return "excl"
+    from vula.commerce.costing_history import _vat_basis
+    try:
+        return _vat_basis(fields)
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
 def observations_for(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     """One observation per priced line of a filed document row (vula_filed_documents shape).
     A line counts when it has a positive unit price, given or derived from total ÷ quantity,
@@ -133,6 +149,7 @@ def observations_for(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
     supplier = service._party_of(fields) or None
     observed = _date(fields.get("date")) or _date(row.get("created_at"))
+    vat_basis = document_vat_basis(fields)
     out = []
     for li in fields.get("line_items") or []:
         if not isinstance(li, dict):
@@ -165,6 +182,7 @@ def observations_for(row: Dict[str, Any]) -> List[Dict[str, Any]]:
             "unit": unit, "kind": (li.get("kind") or kind_of(desc))[:20],
             "section": (str(li.get("section")).strip()[:120] or None) if li.get("section") else None,
             "quantity": qty, "unit_price_cents": int(round(unit_c)), "observed_on": observed,
+            "vat_basis": vat_basis,
         })
     return out
 
@@ -222,7 +240,7 @@ def record_worker_rates(tenant_id: str) -> int:
         obs = {"tenant_id": tenant_id, "doc_id": doc_id, "source_kind": "labour_payment",
                "supplier": w.get("name"), "description": label, "norm_key": norm_key(label),
                "unit": unit, "kind": "labour", "quantity": 1, "unit_price_cents": cents,
-               "observed_on": date.today().isoformat()}
+               "observed_on": date.today().isoformat(), "vat_basis": "no_vat"}
         try:
             db = _client()
             db.table(_TABLE).delete().eq("tenant_id", tenant_id).eq("doc_id", doc_id).execute()
@@ -246,7 +264,7 @@ def _fetch(tenant_id: str, query: str = "", kind: Optional[str] = None,
     def make():
         q = (_client().table(_TABLE)
              .select("description,norm_key,unit,kind,section,supplier,project,source_kind,"
-                     "quantity,unit_price_cents,observed_on,doc_id")
+                     "quantity,unit_price_cents,observed_on,doc_id,vat_basis")
              .eq("tenant_id", tenant_id))
         if words:
             q = q.ilike("norm_key", f"%{max(words, key=len)}%")
@@ -267,10 +285,24 @@ def _money(cents: Optional[int]) -> Optional[str]:
     return None if cents is None else f"R{cents / 100:,.2f}"
 
 
-def rollup(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Observations → one learned rate per item (and unit, so R/m² and R/each never mix)."""
+def _on_basis(r: Dict[str, Any], vat_registered: Optional[bool]) -> Dict[str, Any]:
+    """The observation's price as this business's cost (migration 284): VAT taken off for a
+    VAT-registered business (it claims it back), added for one that isn't. Unchanged when
+    vat_registered is None (the price book as written) or the basis is unknown."""
+    if vat_registered is None:
+        return r
+    from vula.commerce.costing_history import cost_basis_price
+    cents, _note = cost_basis_price(int(r["unit_price_cents"]), r.get("vat_basis") or "unknown", vat_registered)
+    return {**r, "unit_price_cents": cents}
+
+
+def rollup(rows: Iterable[Dict[str, Any]], vat_registered: Optional[bool] = None) -> List[Dict[str, Any]]:
+    """Observations → one learned rate per item (and unit, so R/m² and R/each never mix).
+    With `vat_registered` (estimates), every price is first put on that business's cost basis —
+    excl VAT when registered, incl when not — so invoices written either way never mix."""
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
     for r in rows:
+        r = _on_basis(r, vat_registered)
         groups.setdefault((r.get("norm_key"), r.get("unit")), []).append(r)
     out = []
     for (_key, unit), obs in groups.items():
@@ -300,14 +332,48 @@ def rollup(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # What it was priced at (quotes/BOQs) when it has also been paid — the under-quote
             # signal job_costing.price_advice reports.
             "quoted_cents": int(round(median(quoted))) if paid and quoted else None,
+            # how many of the prices behind the rate didn't say whether VAT was in them
+            "vat_unknown": sum(1 for r in basis if (r.get("vat_basis") or "unknown") == "unknown"),
+            "vat": None if vat_registered is None else ("excl" if vat_registered else "incl"),
         })
     out.sort(key=lambda r: (-r["observations"], r["description"] or ""))
     return out
 
 
 def rates(tenant_id: str, query: str = "", *, kind: Optional[str] = None,
-          project: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-    return rollup(_fetch(tenant_id, query, kind, project))[:limit]
+          project: Optional[str] = None, limit: int = 50,
+          vat_registered: Optional[bool] = None) -> List[Dict[str, Any]]:
+    return rollup(_fetch(tenant_id, query, kind, project), vat_registered)[:limit]
+
+
+def backfill_vat_basis(limit_docs: int = 500) -> int:
+    """Fill vat_basis on observations recorded before migration 284, from each document's own
+    fields. Idempotent (only 'unknown' rows with a document); returns how many documents were
+    updated. Never raises."""
+    try:
+        db = _client()
+        rows = (db.table(_TABLE).select("tenant_id,doc_id").eq("vat_basis", "unknown")
+                .limit(5000).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        log.debug("vat basis backfill skipped (run migration 284?): %s", exc)
+        return 0
+    docs = list(dict.fromkeys((r["tenant_id"], r["doc_id"]) for r in rows
+                              if r.get("doc_id") and not str(r["doc_id"]).startswith("worker:")))[:limit_docs]
+    done = 0
+    for tenant_id, doc_id in docs:
+        try:
+            got = (db.table("vula_filed_documents").select("fields").eq("tenant_id", tenant_id)
+                   .eq("id", doc_id).limit(1).execute().data or [])
+            basis = document_vat_basis((got[0].get("fields") or {}) if got else {})
+            if basis != "unknown":
+                (db.table(_TABLE).update({"vat_basis": basis}).eq("tenant_id", tenant_id)
+                 .eq("doc_id", doc_id).eq("vat_basis", "unknown").execute())
+                done += 1
+        except Exception as exc:  # noqa: BLE001
+            log.debug("vat basis backfill skipped for a document: %s", exc)
+    if docs:
+        log.info("price book VAT basis: %d of %d documents filled in", done, len(docs))
+    return done
 
 
 def drift(manual: Dict[str, Any], learned: Dict[str, Any], threshold: float = 0.10) -> Optional[Dict[str, Any]]:

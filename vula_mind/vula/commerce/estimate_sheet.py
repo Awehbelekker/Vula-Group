@@ -29,6 +29,9 @@ def workbook(business: str, est: Dict[str, Any]) -> Tuple[bytes, Dict[str, int]]
     safe_text(ws.cell(row=1, column=1), f"{business} — estimate")
     ws.cell(row=1, column=1).font = Font(bold=True, size=13)
     safe_text(ws.cell(row=2, column=1), est["title"])
+    from vula.commerce.estimate import vat_text
+    if vat_text(est):    # which VAT basis every price and total is on (16 Nov 2026)
+        safe_text(ws.cell(row=3, column=1), vat_text(est))
     for c, h in enumerate(HEAD, 1):
         ws.cell(row=4, column=c, value=h).font = Font(bold=True)
     want: Dict[str, int] = {}
@@ -52,7 +55,8 @@ def workbook(business: str, est: Dict[str, Any]) -> Tuple[bytes, Dict[str, int]]
             if ln.get("priced"):
                 ws.cell(row=r, column=8, value=ln["unit_price_cents"] / 100).number_format = "#,##0.00"
                 ws.cell(row=r, column=9, value=f"=ROUND(F{r}*H{r},2)").number_format = "#,##0.00"
-                safe_text(ws.cell(row=r, column=10), f"{_BASIS.get(ln['source'], ln['source'])}: {ln.get('where') or ''}")
+                safe_text(ws.cell(row=r, column=10), f"{_BASIS.get(ln['source'], ln['source'])}: {ln.get('where') or ''}"
+                          + (" (VAT basis unknown)" if ln.get("vat_unknown") else ""))
                 ws.cell(row=r, column=11, value=ln.get("date") or "")
                 want[f"I{r}"] = int(ln["cost_cents"])
             else:
