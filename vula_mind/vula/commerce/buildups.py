@@ -108,8 +108,14 @@ def _with_lines(row: Dict[str, Any], origin: str) -> Dict[str, Any]:
     if origin == "shared":                       # never say which business it came from
         for k in _PRIVATE:
             out.pop(k, None)
+        # a figure from that business's own documents is shared as a quantity only: no file name,
+        # no note (it may quote their document)
+        own = {str(x.get("n")) for x in (out.get("sources") or []) if x.get("own")}
+        out["sources"] = [x for x in (out.get("sources") or []) if not x.get("own")]
         for line in out["lines"]:
             line.pop("tenant_id", None)
+            if str(line.get("source_ref") or "") in own:
+                line["source_ref"], line["note"] = "a Vula business's records", None
     return out
 
 
@@ -304,8 +310,9 @@ def describe(b: Dict[str, Any]) -> str:
     for ln in b.get("lines") or []:
         waste = _num(ln.get("waste_pct")) or Decimal(0)
         src = srcs.get(str(ln.get("source_ref") or "").strip("[]"))
-        where = f" [{src.get('title') or src.get('url')}]" if src else (
-            " (set by owner)" if ln.get("source_ref") == "confirmed by owner" else "")
+        where = (f" [your {src.get('title')}]" if src.get("own") else f" [{src.get('title') or src.get('url')}]") if src else (
+            " (set by owner)" if ln.get("source_ref") == "confirmed by owner" else
+            " (from a Vula business's records)" if ln.get("source_ref") == "a Vula business's records" else "")
         out.append(f"• {ln['label']}: {_show(ln['qty_per_unit'])} {ln['unit']}"
                    + (f" + {_show(waste)}% waste" if waste else "") + where)
     unknown = [(u.get("label") or u.get("key")) + (f" ({u['why']})" if u.get("why") else "")
@@ -313,7 +320,8 @@ def describe(b: Dict[str, Any]) -> str:
     if unknown:
         out.append("Needs a figure (nothing usable in the sources): " + "; ".join(unknown))
     if b.get("sources"):
-        out.append("Sources: " + " ".join(f"[{s.get('n')}] {s.get('url')}" for s in b["sources"]))
+        out.append("Sources: " + " ".join(f"[{s.get('n')}] " + (f"your {s.get('title')}" if s.get("own") else str(s.get("url")))
+                                          for s in b["sources"]))
     return "\n".join(out)
 
 
@@ -381,6 +389,31 @@ def _basis(unit_text: str, per_text: str, own_unit: str):
     return unit, ("other", per)
 
 
+def _alternate(line: Dict[str, Any], it: Dict[str, Any], pages: List[Dict[str, Any]], own_unit: str,
+               used: set) -> None:
+    """A second source's figure for a component already kept: when it is checked (printed there,
+    per the item's own unit) and different, it goes in the note — "your spec: 108; guide: 104" —
+    so whoever confirms sees both."""
+    try:
+        n = int(str(it.get("source")).strip("[] "))
+    except ValueError:
+        return
+    if not 1 <= n <= len(pages) or str(n) == str(line.get("source_ref")):
+        return
+    qty = _num(it.get("qty_per_unit"))
+    if qty is None or qty <= 0 or qty.normalize() not in numbers_in(pages[n - 1].get("text") or ""):
+        return
+    _unit, basis = _basis(str(it.get("unit") or ""), str(it.get("per") or ""), own_unit)
+    if basis is not None or qty == line["qty_per_unit"]:
+        return
+    page = pages[n - 1]
+    who = f"your {page.get('title')}" if page.get("own") else (page.get("title") or f"source {n}")
+    extra = f"also {_show(qty)} {line['unit']} per {own_unit} in {who} [{n}]"
+    line["note"] = ((line.get("note") + "; ") if line.get("note") else "") + extra
+    line["note"] = line["note"][:300]
+    used.add(n)
+
+
 def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict[str, str]],
                    own_unit: str = "m2"):
     """(lines, unknown, used page numbers). A line is kept only when its quantity is printed on
@@ -393,11 +426,21 @@ def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict
     used: set = set()
     items = items if isinstance(items, list) else []
     # bricks per unit first, so a "per 1,000 bricks" figure can be converted
+    def _own(i: Dict[str, Any]) -> int:
+        try:
+            n = int(str(i.get("source")).strip("[] "))
+            return 0 if 1 <= n <= len(pages) and pages[n - 1].get("own") else 1
+        except ValueError:
+            return 1
+    # bricks per unit first; within each, the business's own documents before the web
     items = sorted([i for i in items if isinstance(i, dict)],
-                   key=lambda i: 0 if _norm(i.get("component")).replace(" ", "_") == "units" else 1)
+                   key=lambda i: (0 if _norm(i.get("component")).replace(" ", "_") == "units" else 1, _own(i)))
     for it in items:
         comp = _norm(it.get("component")).replace(" ", "_")
-        if comp not in keys or comp in lines:
+        if comp not in keys:
+            continue
+        if comp in lines:
+            _alternate(lines[comp], it, pages, own_unit, used)
             continue
         try:
             n = int(str(it.get("source")).strip("[] "))
@@ -469,12 +512,17 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
     what = f"{item}" + (f" ({spec_text(spec)})" if spec else "")
     question = (f"Quantities of materials and labour per {unit} for {what} in South Africa: "
                 + ", ".join(c["label"] for c in checklist))
+    # the business's own documents first (its specs, BOQs, past jobs — 16 Nov 2026, Ian: "is it
+    # comparing with data from KB"), then the web. Same checks for both.
+    docs = [{"title": d.get("title") or "document", "text": d.get("text") or "", "url": None, "own": True}
+            for d in await web.own_documents(tenant_id, question)]
     queries = await web.plan_queries(question)
-    pages = await web.read_pages(await web._search(queries))
+    pages = docs + await web.read_pages(await web._search(queries))
     if not pages:
         raise BuildupError("I couldn't read any sources for that just now — try again later.")
-    numbered = "\n\n".join(f"[{i}] {p.get('title') or ''} ({p.get('url')})\n{(p.get('text') or '')[:3000]}"
-                           for i, p in enumerate(pages, 1))
+    numbered = "\n\n".join(
+        (f"[{i}] YOUR DOCUMENT: {p.get('title')}" if p.get("own") else f"[{i}] {p.get('title') or ''} ({p.get('url')})")
+        + f"\n{(p.get('text') or '')[:3000]}" for i, p in enumerate(pages, 1))
     comps = "\n".join(f"- {c['key']}: {c['label']} (usually per {c['unit']})" for c in checklist)
     messages = [{"role": "user", "content": (
         f"From the numbered sources below, give the quantities of each component needed for ONE "
@@ -483,6 +531,8 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
         "cite the source number; leave out a component no source gives a figure for. "
         f'"unit" is what is counted (each, bag, m3, kg, hour, day); "per" is what the figure is per '
         f'exactly as the source says it: "{unit}" when it is per {unit}, or e.g. "1000 bricks". '
+        "Sources marked YOUR DOCUMENT are the business's own records: prefer their figure, and when "
+        "another source gives a different figure for the same component, add it as a second entry. "
         "Quantities only: labour as hours or days, never a rand amount. For bricks, look for the "
         f"number of bricks per {unit} (brick calculators and guides print it). Answer with "
         f'a JSON array only: [{{"component": "units", "qty_per_unit": 104, "unit": "each", "per": "{unit}", '
@@ -497,9 +547,11 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
     if not lines:
         raise BuildupError("I couldn't find quantities I could check in the sources for that — "
                            "an owner or manager can enter the build-up instead.")
-    sources = [{"n": i, "title": (pages[i - 1].get("title") or "")[:140], "url": pages[i - 1].get("url")}
-               for i in sorted(used)]
-    log.info("build-up researched for %s (%s): %d grounded, %d unknown", tenant_id, trade, len(lines), len(unknown))
+    sources = [{"n": i, "title": (pages[i - 1].get("title") or "")[:140], "url": pages[i - 1].get("url"),
+                **({"own": True} if pages[i - 1].get("own") else {})} for i in sorted(used)]
+    own_n = {str(x["n"]) for x in sources if x.get("own")}
+    log.info("build-up researched for %s (%s): %d grounded (%d from own documents), %d unknown",
+             tenant_id, trade, len(lines), sum(1 for ln in lines if str(ln.get("source_ref")) in own_n), len(unknown))
     return save_proposed(tenant_id, trade=trade, item=item, spec=spec, unit=unit, lines=lines,
                          sources=sources, unknown=unknown, created_by=created_by)
 

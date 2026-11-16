@@ -35,8 +35,13 @@ def _answer(*rows):
                        for c, q, u, w, s in rows])
 
 
-def _patch_web(monkeypatch, answer, pages=PAGES):
+def _patch_web(monkeypatch, answer, pages=PAGES, docs=()):
     seen = {}
+
+    async def own(tenant_id, question):
+        seen["own_tenant"] = tenant_id
+        return list(docs)
+    monkeypatch.setattr("vula.research.own_documents", own)
 
     async def plan(question, history=""):
         seen["question"] = question
@@ -142,6 +147,45 @@ def test_a_figure_per_something_else_is_set_aside():
         [{"component": "wall_ties", "qty_per_unit": 2, "unit": "each", "per": "900 mm of height", "source": 1}],
         pages, checklist, "m2")
     assert lines == [] and "per 900 mm of height, not per m2" in {u["key"]: u.get("why") for u in unknown}["wall_ties"]
+
+
+# 16 Nov 2026 (Ian: "is it comparing with data from KB"): the business's own documents are read
+# first, with the same checks, and a different web figure is shown beside theirs.
+DIGG_DOCS = [{"title": "HPC Bokaap specification.pdf",
+              "text": "Brickwork: one-brick walls in NFX bricks, 108 bricks per m2, 10 mm joints, class II mortar."}]
+
+
+@pytest.mark.asyncio
+async def test_research_reads_the_business_own_documents_first(db, monkeypatch):
+    seen = _patch_web(monkeypatch, _answer(("units", 108, "each", None, 1), ("units", 104, "each", 5, 2),
+                                           ("mortar_sand", 0.15, "m3", None, 3)), docs=DIGG_DOCS)
+    b = await buildups.research(T, "One-brick wall", WALL, created_by="27820000000")
+    assert seen["own_tenant"] == T
+    by = {ln["component"]: ln for ln in b["lines"]}
+    assert Decimal(str(by["units"]["qty_per_unit"])) == 108 and by["units"]["source_ref"] == "1"
+    assert "also 104 each per m2 in Brickwork quantities guide [2]" in by["units"]["note"]
+    src = {x["n"]: x for x in b["sources"]}
+    assert src[1]["own"] is True and src[1]["title"] == "HPC Bokaap specification.pdf" and src[1]["url"] is None
+    assert set(src) == {1, 2, 3}
+    text = buildups.describe(b)
+    assert "Bricks or blocks: 108 each [your HPC Bokaap specification.pdf]" in text
+    assert "[1] your HPC Bokaap specification.pdf" in text
+
+
+@pytest.mark.asyncio
+async def test_a_figure_from_their_documents_is_shared_as_a_quantity_only(db, monkeypatch):
+    _patch_web(monkeypatch, _answer(("units", 108, "each", None, 1), ("mortar_sand", 0.15, "m3", None, 3)),
+               docs=DIGG_DOCS)
+    b = await buildups.research(T, "One-brick wall", WALL)
+    buildups.confirm(T, b["id"], person="judy", full_access=True)
+    other = buildups.find("another-builder", "One-brick wall", WALL)
+    assert other["origin"] == "shared"
+    units = next(ln for ln in other["lines"] if ln["component"] == "units")
+    assert Decimal(str(units["qty_per_unit"])) == 108
+    assert units["source_ref"] == "a Vula business's records" and units["note"] is None
+    assert all(not x.get("own") for x in other["sources"])
+    text = buildups.describe(other)
+    assert "HPC Bokaap" not in text and "from a Vula business's records" in text
 
 
 @pytest.mark.asyncio

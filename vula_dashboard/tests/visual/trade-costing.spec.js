@@ -57,6 +57,11 @@ test.describe("costing by trade", () => {
       const errors = await openScreen(page, SCREEN(), { viewport, theme: "dark" });
       await page.getByRole("tab", { name: /Build-ups/ }).click();
       await page.getByText("Plastering").first().waitFor();
+      const content = page.locator(".v2-content");
+      // a figure from the business's own documents says so (no link); the other source's figure beside it
+      await expect(content).toContainText("your HPC Bokaap specification.pdf");
+      await expect(content).toContainText("also 0.3 bag per m2 in Brickwork quantities guide [1]");
+      await expect(content).toContainText("Wall ties (the source gives it per 900 mm of height, not per m2)");
       await check(page, ti, `buildups-${vp}`, viewport);
       expect(errors).toEqual([]);
     });
