@@ -26,6 +26,8 @@
 .vtc-line a { color: var(--brand-text, var(--ink)); }
 .vtc-edit { display: inline-flex; flex-wrap: wrap; gap: var(--space-2, 8px); align-items: center; min-width: 0; }
 .vtc-edit .vula-input { width: 7rem; }
+.vtc-details { margin-top: var(--space-2, 8px); min-width: 0; overflow-wrap: anywhere; }
+.vtc-details summary { cursor: pointer; font-size: var(--fs-body, 14px); }
 
 @media (max-width: 767px) {
   .vtc-row { grid-template-columns: minmax(0, 1fr); }

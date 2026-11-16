@@ -8,11 +8,14 @@
  *  Build-ups  what goes into one unit of each item (vula/commerce/buildups.py), by trade. An owner
  *             or manager (`can_confirm` from the server) confirms, changes or removes one; anyone
  *             can ask Vula to research a new one.
+ *  Actuals    (phase 4) an estimate made for a project beside what was paid on it
+ *             (vula/commerce/actuals.py); once the work is finished, the build-up changes Vula
+ *             suggests — an owner or manager accepts (a new version) or dismisses each.
  *
  * Shown only where the business has the `trade_costing` switch on; a 403 says so. Every figure is
  * the server's, formatted with formatMoney — nothing is added up here.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Card, DataTable, EmptyState, ErrorCard, Field, Input, PageHeader, PillTabs, Select,
   Skeleton, StatusChip, confirmDialog, toast } from "../ui/index.jsx";
 import { formatMoney } from "../../lib/money.js";
@@ -61,8 +64,10 @@ const emptyRow = () => ({ item: "", detail: "", spec: null, size: "", unit: "m2"
 function EstimateTab({ x }) {
   const [rows, setRows] = useState([emptyRow()]);
   const [excluded, setExcluded] = useState("");
+  const [project, setProject] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [comparing, setComparing] = useState(null);
   const known = useMemo(() => (x.buildups || []).filter((b) => b.status !== "retired"), [x.buildups]);
 
   const set = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -81,7 +86,7 @@ function EstimateTab({ x }) {
     if (!items.length) { toast("Add an item of work and its size, e.g. one-brick wall, 6 x 4.", "danger"); return; }
     setBusy(true);
     const res = await x.estimate({
-      items, research: true,
+      items, research: true, ...(project ? { project } : {}),
       exclusions: excluded.split(",").map((s) => s.trim()).filter(Boolean),
     });
     setBusy(false);
@@ -123,6 +128,14 @@ function EstimateTab({ x }) {
           <div className="vtc-actions">
             <Button type="button" variant="secondary" size="sm" onClick={() => setRows((rs) => [...rs, emptyRow()])}>Add item</Button>
           </div>
+          {(x.projects || []).length > 0 && (
+            <Field label="Project" hint="Optional — later Vula compares the estimate with what was paid on it">
+              <Select value={project} onChange={(e) => setProject(e.target.value)}>
+                <option value="">Not for a project</option>
+                {x.projects.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+              </Select>
+            </Field>
+          )}
           <Field label="Not included" hint="Comma separated, e.g. painting, foundations">
             <Input value={excluded} onChange={(e) => setExcluded(e.target.value)} placeholder="painting" />
           </Field>
@@ -132,13 +145,15 @@ function EstimateTab({ x }) {
           </div>
         </form>
       </Card>
-      {result && <EstimateResult est={result} onDownload={() => x.download(result.id)} />}
-      <RecentEstimates x={x} />
+      {result && <EstimateResult est={result} onDownload={() => x.download(result.id)}
+        onCompare={result.project && result.id ? () => setComparing(result.id) : null} />}
+      {comparing && <Actuals key={comparing} id={comparing} x={x} onClose={() => setComparing(null)} />}
+      <RecentEstimates x={x} onCompare={setComparing} />
     </>
   );
 }
 
-function EstimateResult({ est, onDownload }) {
+function EstimateResult({ est, onDownload, onCompare }) {
   const t = est.totals_cents || {};
   async function save() {
     const got = await onDownload();
@@ -149,11 +164,15 @@ function EstimateResult({ est, onDownload }) {
       <div className="vtc-head">
         <div style={{ minWidth: 0 }}>
           <h2 className="vtc-h2">{est.title}</h2>
+          {est.project && <p className="vtc-muted">Project {est.project}</p>}
           <p className="vtc-total"><strong>{money(est.total_cents)}</strong></p>
           <p className="vtc-muted">Materials {money(t.material || 0)} · Labour {money(t.labour || 0)}
             {t.plant ? ` · Plant ${money(t.plant)}` : ""}</p>
         </div>
-        {est.id && <Button variant="secondary" onClick={save}>Download Excel</Button>}
+        <div className="vtc-actions">
+          {onCompare && <Button variant="ghost" onClick={onCompare}>Compare with what was paid</Button>}
+          {est.id && <Button variant="secondary" onClick={save}>Download Excel</Button>}
+        </div>
       </div>
       {(est.items || []).map((it, i) => <EstimateItem key={i} it={it} />)}
       {(est.unpriced || []).length > 0 && (
@@ -201,7 +220,7 @@ function EstimateItem({ it }) {
   );
 }
 
-function RecentEstimates({ x }) {
+function RecentEstimates({ x, onCompare }) {
   if (!(x.estimates || []).length) return null;
   async function save(id) {
     const got = await x.download(id);
@@ -212,12 +231,135 @@ function RecentEstimates({ x }) {
       <h2 className="vtc-h2">Recent estimates</h2>
       <DataTable rows={x.estimates} caption="Recent estimates" columns={[
         { key: "title", label: "Estimate" },
+        { key: "project", label: "Project", render: (e) => e.project || "—" },
         { key: "total_cents", label: "Total", align: "right", render: (e) => money(e.total_cents) },
         { key: "created_at", label: "Made", render: (e) => String(e.created_at || "").slice(0, 10) },
-        { key: "id", label: "", render: (e) => <Button variant="ghost" size="sm" onClick={() => save(e.id)}
-          aria-label={`Download ${e.title}`}>Excel</Button> },
+        { key: "id", label: "", render: (e) => (
+          <span className="vtc-actions">
+            {e.project && <Button variant="ghost" size="sm" onClick={() => onCompare(e.id)}
+              aria-label={`Compare ${e.title} with what was paid`}>Compare</Button>}
+            <Button variant="ghost" size="sm" onClick={() => save(e.id)} aria-label={`Download ${e.title}`}>Excel</Button>
+          </span>) },
       ]} />
     </Card>
+  );
+}
+
+// ── What it actually cost (phase 4) ──────────────────────────────────────────
+
+const gapText = (g) => (g.gap_pct == null ? "—" : `${Number(g.gap_pct) > 0 ? "+" : ""}${g.gap_pct}%`);
+const VERDICT = { close: ["Close to the estimate", "ok"], suggest: ["Suggested change", "warn"],
+  check: ["Too far off to learn from — check the invoices", "danger"] };
+const DECIDED = { accepted: ["Accepted", "ok"], dismissed: ["Dismissed", "muted"], pending: ["Waiting for a decision", "warn"] };
+
+function Actuals({ id, x, onClose }) {
+  const [res, setRes] = useState(null);
+  const [failed, setFailed] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    const r = await x.actuals(id);
+    if (!r.ok) { setFailed(reason(r, "The comparison didn't load — try again.")); return; }
+    setFailed(""); setRes(r.data);
+  }
+  useEffect(() => { load(); }, [id]);
+
+  async function finished() {
+    if (!(await confirmDialog("Is this work finished? Vula will compare it with what was paid and suggest build-up "
+      + "changes for you to accept or dismiss — nothing changes until you do.", { confirmLabel: "Yes, it's finished" }))) return;
+    setBusy(true);
+    const r = await x.learn(id);
+    setBusy(false);
+    if (!r.ok) { toast(reason(r, "That didn't work — try again."), "danger"); return; }
+    toast(r.data.new ? `${r.data.new} suggested change${r.data.new > 1 ? "s" : ""} to decide.` : "Nothing far enough off to change.");
+    x.reload(); load();
+  }
+
+  if (failed) return <Card><p className="vtc-note" role="alert">{failed}</p><Button size="sm" variant="ghost" onClick={onClose}>Close</Button></Card>;
+  if (!res) return <Card><Skeleton lines={4} /></Card>;
+  const c = res.comparison;
+  const verdict = Object.fromEntries((res.proposals || []).map((p) => [p.group, p]));
+  const columns = [
+    { key: "label", label: "Component" },
+    { key: "estimated_qty", label: "Estimated", align: "right", render: (g) => `${num(g.estimated_qty)} ${g.unit}` },
+    { key: "bought_qty", label: "Bought", align: "right", render: (g) => (g.bought_qty == null ? "Nothing on file yet" : `${num(g.bought_qty)} ${g.unit}`) },
+    { key: "gap_pct", label: "Gap", align: "right", render: gapText },
+    { key: "estimated_cents", label: "Estimated cost", align: "right", render: (g) => money(g.estimated_cents) },
+    { key: "paid_cents", label: "Paid", align: "right", render: (g) => money(g.paid_cents) },
+    { key: "key", label: "", render: (g) => {
+      if (g.shared) return <span className="vtc-muted">Used by {g.items.join(" and ")} — total only</span>;
+      const v = verdict[g.key];
+      if (!v || (!res.finished && v.verdict === "suggest")) return null;
+      const [label, tone] = VERDICT[v.verdict] || [];
+      return label ? <StatusChip tone={tone}>{label}</StatusChip> : null;
+    } },
+  ];
+  return (
+    <Card>
+      <div className="vtc-head">
+        <div style={{ minWidth: 0 }}>
+          <h2 className="vtc-h2">{c.title} — compared with what was paid</h2>
+          <p className="vtc-muted">Project {c.project} · estimated {money(c.estimated_cents)} · paid on what it covers {money(c.paid_cents)}</p>
+        </div>
+        <div className="vtc-actions">
+          {!res.finished && x.canConfirm && <Button size="sm" disabled={busy} onClick={finished}>This work is finished — learn from it</Button>}
+          <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+      {!res.finished && <p className="vtc-note">The work isn't marked finished, so this is progress only — nothing is suggested yet.</p>}
+      <DataTable columns={columns} rows={c.groups.map((g) => ({ ...g, id: g.key }))} caption={`${c.title}: estimated against paid`}
+        stack={{ title: (g) => g.label, detail: (g) => `Estimated ${num(g.estimated_qty)} ${g.unit} · bought ${g.bought_qty == null ? "nothing yet" : `${num(g.bought_qty)} ${g.unit}`}`
+          + (g.shared ? ` · used by ${g.items.join(" and ")}, total only` : ""),
+          trailing: gapText }} />
+      {c.groups.filter((g) => g.lines.length || g.not_comparable.length).map((g) => (
+        <details key={g.key} className="vtc-details">
+          <summary>{g.label}: invoice lines counted ({g.lines.length}){g.not_comparable.length ? `, not counted (${g.not_comparable.length})` : ""}</summary>
+          <ul className="vtc-lines">
+            {g.lines.map((l, i) => <li key={i} className="vtc-line"><span className="vtc-line-label">{l.description}</span>
+              <span>{l.supplier ? `${l.supplier}, ` : ""}{l.date} · {num(l.counted)} {g.unit}{l.how ? ` (${l.how})` : ""}</span></li>)}
+            {g.not_comparable.map((l, i) => <li key={`n${i}`} className="vtc-line"><span className="vtc-line-label">{l.description}</span>
+              <span className="vtc-muted">Not counted: {l.why}</span></li>)}
+          </ul>
+        </details>
+      ))}
+      {c.unclear.length > 0 && <p className="vtc-note"><strong>Couldn't tell which component:</strong> {c.unclear.map((u) => `${u.description} (${u.could_be.join(" or ")})`).join("; ")}</p>}
+      {c.not_in_estimate.length > 0 && <p className="vtc-note vtc-muted">Also paid on this project but not in the estimate (other work?): {c.not_in_estimate.length} lines, {money(c.not_in_estimate_cents)}.</p>}
+      {(res.suggestions || []).length > 0 && <Suggestions list={res.suggestions} x={x} onDecided={() => { x.reload(); load(); }} />}
+    </Card>
+  );
+}
+
+function Suggestions({ list, x, onDecided }) {
+  const [busy, setBusy] = useState(null);
+  async function decide(s, decision) {
+    if (decision === "accept" && !(await confirmDialog(`Change the build-up: ${s.text}? Vula saves a new version and uses it for every estimate of this item.`,
+      { confirmLabel: "Accept" }))) return;
+    setBusy(s.id);
+    const r = await x.decide(s.id, decision);
+    setBusy(null);
+    if (!r.ok) { toast(reason(r, "That didn't save — try again."), "danger"); return; }
+    toast(decision === "accept" ? "Changed — the new build-up is used from now on." : "Dismissed — it won't be suggested again.");
+    onDecided();
+  }
+  return (
+    <section aria-label="Suggested build-up changes">
+      <h3 className="vtc-h3 vtc-trade">Suggested build-up changes</h3>
+      <ul className="vtc-lines">
+        {list.map((s) => {
+          const [label, tone] = DECIDED[s.status] || DECIDED.pending;
+          return (
+            <li key={s.id} className="vtc-line">
+              <span className="vtc-line-label">{s.text}</span>
+              {s.status === "pending" && x.canConfirm ? (
+                <span className="vtc-actions">
+                  <Button size="sm" disabled={busy === s.id} onClick={() => decide(s, "accept")}>Accept</Button>
+                  <Button size="sm" variant="ghost" disabled={busy === s.id} onClick={() => decide(s, "dismiss")}>Dismiss</Button>
+                </span>
+              ) : <StatusChip tone={tone}>{label}</StatusChip>}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -231,6 +373,9 @@ function BuildupsTab({ x }) {
   }, [x.buildups]);
   return (
     <>
+      {(x.suggestions || []).length > 0 && (
+        <Card><Suggestions list={x.suggestions} x={x} onDecided={x.reload} /></Card>
+      )}
       <ResearchForm x={x} />
       {!groups.length && (
         <EmptyState title="No build-ups yet">
@@ -337,6 +482,7 @@ function BuildupCard({ b, x }) {
       <div className="vtc-item-head">
         <h3 className="vtc-h3">{nameOf(b)} <span className="vtc-muted">· per {unitLabel(b.unit)} · v{b.version}</span></h3>
         <StatusChip tone={tone}>{label}</StatusChip>
+        {(x.suggestions || []).some((s) => s.buildup_id === b.id) && <StatusChip tone="warn">Suggested change</StatusChip>}
       </div>
       <ul className="vtc-lines" aria-label={`What goes into ${nameOf(b)}`}>
         {(b.lines || []).map((l) => {
