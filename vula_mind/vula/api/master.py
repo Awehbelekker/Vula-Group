@@ -839,7 +839,22 @@ async def master_health():
 
     out["migration_state"] = _probe_migrations(db)
 
+    # 16 Nov 2026: each cloud model answering + web search finding results (vula/ai_health.py)
+    try:
+        from vula import ai_health
+        out["ai_health"] = ai_health.status()
+    except Exception as exc:
+        out["ai_health"] = {"error": str(exc), "checks": [], "failing": []}
+
     return out
+
+
+@router.post("/ai-health/run")
+async def master_ai_health_run():
+    """Run the AI health check now (each cloud model + web search) and return the result."""
+    from vula import ai_health
+    await ai_health.tick()
+    return ai_health.status()
 
 
 # Recent migrations this session added — a cheap existence probe since there's no formal

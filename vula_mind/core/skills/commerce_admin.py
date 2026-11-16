@@ -109,6 +109,30 @@ def _checked(result: Dict[str, Any], text: str) -> Dict[str, Any]:
     return result
 
 
+# 16 Nov 2026 (accuracy): a tool that fails must not turn into an answer from general knowledge.
+# The 07:21 build-up research failed in the cloud; the raw OpenRouter error went to the model,
+# which wrote its own account of it. The person is told plainly that the step failed and nothing
+# was checked, and the model is told not to fill the gap.
+TOOL_FAILED_NOTE = ("This step failed, so nothing was looked up or checked. Tell the person plainly "
+                    "that it didn't work and they can try again later. Do not answer from general "
+                    "knowledge instead, and do not give any figure in its place.")
+_TECHNICAL_MODULES = ("litellm", "openai", "httpx", "httpcore", "asyncio", "anyio", "postgrest", "supabase")
+
+
+def _tool_failed(exc: BaseException) -> Dict[str, Any]:
+    """A failed tool's result: a person-readable reason (a technical failure is not passed on
+    as raw provider text) plus TOOL_FAILED_NOTE."""
+    technical = (type(exc).__module__.split(".")[0] in _TECHNICAL_MODULES
+                 or isinstance(exc, (TimeoutError, ConnectionError)))
+    reason = "a technical problem on Vula's side" if technical else str(exc)
+    return {"error": reason, "failed": True, "note": TOOL_FAILED_NOTE}
+
+
+BUILDUP_FAILED = ("⚠️ I couldn't check sources just now (a technical problem on Vula's side), so I "
+                  "haven't saved a build-up and nothing was guessed. Please try again in a while, or "
+                  "an owner or manager can enter the figures.")
+
+
 def _not_confirmed(message: str) -> Dict[str, Any]:
     """A write the read-back couldn't confirm — said plainly, never softened by a model."""
     return {"error": message, "reply_verbatim": f"⚠️ {message}"}
@@ -3252,7 +3276,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
-            return {"error": str(exc)}
+            return _tool_failed(exc)
         return {"error": f"unknown tool {name}"}
 
     def _rands(self, c: int) -> str:
@@ -3841,6 +3865,9 @@ class CommerceAdminSkill(BaseSkill):
                             + buildups.describe(b))
         except buildups.BuildupError as exc:
             return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — research reaches the web and cloud models
+            logger.warning("build-up tool %s failed: %s", name, type(exc).__name__)
+            return {**_tool_failed(exc), "reply_verbatim": BUILDUP_FAILED}
 
     async def _apply_voice_persona(self, tid: str, persona_prompt: str,
                                    confirm: bool = False) -> Dict[str, Any]:

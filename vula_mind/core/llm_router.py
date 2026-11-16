@@ -236,8 +236,29 @@ def next_cloud_model(requested: str, answered_by: Optional[str] = None, *,
     return chain[idx + 1] if idx + 1 < len(chain) else None
 
 
+import contextvars as _contextvars
+
+# 16 Nov 2026 (vula/ai_health.py): a health probe must reach the model it names. The fallback
+# chain below hid a dead Gemini for 3 days — every call "worked" on Llama.
+_NO_FALLBACK: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("vula_no_cloud_fallback", default=False)
+
+
+class no_cloud_fallback:
+    """`with no_cloud_fallback(): await litellm.acompletion(...)` — only the named model is tried,
+    even one currently skipped as unavailable."""
+    def __enter__(self):
+        self._token = _NO_FALLBACK.set(True)
+        return self
+
+    def __exit__(self, *exc):
+        _NO_FALLBACK.reset(self._token)
+        return False
+
+
 async def _with_cloud_fallback(call, kwargs: dict):
     with_tools = bool(kwargs.get("tools"))
+    if _NO_FALLBACK.get():
+        return await call(**kwargs)
     full = cloud_fallback_chain(kwargs["model"], kwargs.get("messages"))
     chain = [m for m in full if not _skipped(m, with_tools)] or full
     for i, model in enumerate(chain):

@@ -31,7 +31,16 @@ export function useMasterHealth({ onError }) {
       setMigMsg(`Copied SQL for ${r.migrations.join(', ')} — paste it into the Supabase SQL editor and run once, then reload this page.`)
     } catch (e) { onError(`Couldn't copy: ${e.message}`) }
   }
-  return { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql }
+  // AI health (vula/ai_health.py): run every cloud model + web search check now
+  const [aiBusy, setAiBusy] = useState(false)
+  const runAiHealth = async () => {
+    setAiBusy(true)
+    try {
+      const r = await authFetch('/v1/master/ai-health/run', { method: 'POST' })
+      setH(prev => ({ ...(prev || {}), ai_health: r }))
+    } catch (e) { onError(e.message) } finally { setAiBusy(false) }
+  }
+  return { h, migMsg, qb, qbBusy, runQdrantBackup, copyPendingSql, aiBusy, runAiHealth }
 }
 
 /** Crashes in the dashboard on people's devices (GET /v1/master/app-errors, vula/app_errors.py):
