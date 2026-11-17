@@ -150,6 +150,14 @@ class _Query:
         return _Result([dict(r) for r in hit])
 
 
+class _Rpc:
+    def __init__(self, run: Callable[[], Any]):
+        self._run = run
+
+    def execute(self) -> _Result:
+        return _Result(self._run())
+
+
 class FakeSupabase:
     def __init__(self, rows: Dict[str, List[dict]] | None = None):
         self.rows: Dict[str, List[dict]] = {k: [dict(r) for r in v] for k, v in (rows or {}).items()}
@@ -158,6 +166,76 @@ class FakeSupabase:
 
     def table(self, name: str) -> _Query:
         return _Query(self, name)
+
+    # ── the ledger's database functions (migration 288), emulated ──
+    def rpc(self, name: str, params: Dict[str, Any]) -> _Rpc:
+        fn = getattr(self, "_rpc_" + name, None)
+        if fn is None:
+            raise RuntimeError(f"rpc {name} isn't emulated in FakeSupabase")
+        return _Rpc(lambda: fn(**params))
+
+    def _account_id(self, tenant_id: str, code: str) -> str:
+        acc = next((a for a in self.rows.get("commerce_accounts", [])
+                    if a.get("tenant_id") == tenant_id and a.get("code") == code), None)
+        if acc is None:
+            raise RuntimeError(f"unknown account code {code} for tenant {tenant_id}")
+        acc.setdefault("id", str(uuid.uuid4()))
+        return acc["id"]
+
+    def _rpc_post_journal_entry_v2(self, p_tenant_id, p_entry_date, p_description, p_source_type, p_source_id,
+                                   p_lines, p_meta=None):
+        p_meta = p_meta or {}
+        for view in ("accrual", "cash"):
+            dr = sum(int(ln.get("debit_cents") or 0) for ln in p_lines if (ln.get("basis") or "") in ("", view))
+            cr = sum(int(ln.get("credit_cents") or 0) for ln in p_lines if (ln.get("basis") or "") in ("", view))
+            if dr != cr:
+                raise RuntimeError(f"unbalanced journal entry ({view} view): debits {dr} != credits {cr}")
+        if not any(int(ln.get("debit_cents") or 0) for ln in p_lines):
+            raise RuntimeError("journal entry has zero value")
+        entries = self.rows.setdefault("journal_entries", [])
+        version = 1
+        if p_source_id is not None:
+            mine = [e for e in entries if e["tenant_id"] == p_tenant_id and e["source_type"] == p_source_type
+                    and e["source_id"] == p_source_id]
+            reversed_ids = {e.get("reverses_entry_id") for e in entries}
+            live = sorted((e for e in mine if e["id"] not in reversed_ids), key=lambda e: -e["version"])
+            if live:
+                return live[0]["id"]
+            version = max([e["version"] for e in mine], default=0) + 1
+        rev = p_meta.get("reverses_entry_id")
+        if rev and not any(e["id"] == rev and e["tenant_id"] == p_tenant_id for e in entries):
+            raise RuntimeError("the entry to reverse is not this business's")
+        if rev and any(e.get("reverses_entry_id") == rev for e in entries):
+            raise RuntimeError("duplicate key: journal_entries_reversed_once")
+        ids = [(ln, self._account_id(p_tenant_id, ln["account_code"])) for ln in p_lines]
+        eid = str(uuid.uuid4())
+        entries.append({"id": eid, "tenant_id": p_tenant_id, "entry_date": p_entry_date, "description": p_description,
+                        "source_type": p_source_type, "source_id": p_source_id, "version": version,
+                        "reverses_entry_id": rev, "doc_id": p_meta.get("doc_id"), "bank_txn_id": p_meta.get("bank_txn_id")})
+        for ln, acc_id in ids:
+            self.rows.setdefault("journal_lines", []).append({
+                "id": str(uuid.uuid4()), "journal_entry_id": eid, "account_id": acc_id,
+                "debit_cents": int(ln.get("debit_cents") or 0), "credit_cents": int(ln.get("credit_cents") or 0),
+                "memo": ln.get("memo"), "basis": ln.get("basis") or None, "bank_account_id": ln.get("bank_account_id")})
+        return eid
+
+    def _rpc_ledger_balances(self, p_tenant_id, p_from=None, p_to=None, p_basis="accrual"):
+        entries = {e["id"]: e for e in self.rows.get("journal_entries", []) if e["tenant_id"] == p_tenant_id
+                   and (p_from is None or str(e["entry_date"]) >= str(p_from))
+                   and (p_to is None or str(e["entry_date"]) <= str(p_to))}
+        accounts = {a.get("id"): a for a in self.rows.get("commerce_accounts", []) if a.get("tenant_id") == p_tenant_id}
+        out: Dict[tuple, dict] = {}
+        for ln in self.rows.get("journal_lines", []):
+            if ln["journal_entry_id"] not in entries or ln.get("basis") not in (None, p_basis):
+                continue
+            a = accounts.get(ln["account_id"], {})
+            k = (a.get("code"), ln.get("bank_account_id"))
+            row = out.setdefault(k, {"account_code": a.get("code"), "account_name": a.get("name"),
+                                     "account_type": a.get("type"), "debit_cents": 0, "credit_cents": 0,
+                                     "bank_account_id": ln.get("bank_account_id")})
+            row["debit_cents"] += ln["debit_cents"]
+            row["credit_cents"] += ln["credit_cents"]
+        return list(out.values())
 
     def count(self, table: str, **match: Any) -> int:
         return sum(1 for r in self.rows.get(table, []) if all(r.get(k) == v for k, v in match.items()))
