@@ -74,14 +74,21 @@ async def _named_document_first(pipeline, tenant_id: str, question: str, chunks:
         doc_id = (named[0].get("doc_id") if named else None) or None
         if not doc_id:
             return chunks
-        first = await pipeline.query(question, top_k=3, authoritative_only=True, doc_id=str(doc_id))
+        first = list(await pipeline.query(question, top_k=3, authoritative_only=True, doc_id=str(doc_id)) or [])
     except Exception as exc:  # noqa: BLE001
         logger.debug("named-document retrieval skipped: %s", exc)
         return chunks
+    # The document's own summary on file names what it covers (17 Nov 2026: the gym catalogue's
+    # chunks gave "aerobic, spinning, yoga studios" but never "Ultrafloor", which its summary lists).
+    summary = (named[0].get("summary") or "").strip()
+    if summary:
+        filename = named[0].get("filename") or "document"
+        first.insert(0, {"doc_id": str(doc_id), "filename": filename, "score": 1.0,
+                         "text": f"Summary of {filename}: {summary}"})
     if not first:
         return chunks
     seen = {(str(c.get("doc_id")), c.get("text")) for c in first}
-    return list(first) + [c for c in chunks or [] if (str(c.get("doc_id")), c.get("text")) not in seen]
+    return first + [c for c in chunks or [] if (str(c.get("doc_id")), c.get("text")) not in seen]
 
 
 class ReasoningSkill(BaseSkill):

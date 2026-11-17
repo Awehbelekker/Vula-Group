@@ -91,6 +91,11 @@ def ungrounded_amounts(answer: str, evidence: str) -> List[str]:
     return missing
 
 
+def _squash(text: str) -> str:
+    """Lowercase, without spaces and hyphens — for matching a needed fact however it's spaced."""
+    return re.sub(r"[\s\-\u2010-\u2015]+", "", (text or "").lower())
+
+
 def rule_checks(case: Dict[str, Any], *, skill: str, answer: str, calls: List[Dict[str, Any]],
                 truth: List[str], offered: List[str], error: Optional[str]) -> Dict[str, Any]:
     from core.skills.base import leaked_tool_output, tool_source, unbacked_action_claim
@@ -109,7 +114,9 @@ def rule_checks(case: Dict[str, Any], *, skill: str, answer: str, calls: List[Di
         checks["no_forbidden_tool"] = not any(t in names for t in case["forbid_tools"])
     need = list(case.get("must_contain") or []) + list(truth or [])
     if need:
-        checks["facts"] = all(s.lower() in low for s in need)
+        # "handrail" is in "Hand Rails" (17 Nov 2026 answer check): spacing and hyphens aside.
+        squashed = _squash(low)
+        checks["facts"] = all(s.lower() in low or _squash(s) in squashed for s in need)
     if case.get("must_not_contain"):
         checks["no_bad_content"] = not any(s.lower() in low for s in case["must_not_contain"])
     checks["no_leaked_plumbing"] = not leaked_tool_output(answer or "", offered)
