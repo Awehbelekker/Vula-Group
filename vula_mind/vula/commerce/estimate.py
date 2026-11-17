@@ -36,6 +36,10 @@ from vula.commerce import buildups, trade_checklists
 log = logging.getLogger(__name__)
 
 STALE_DAYS = {"material": 30, "plant": 30, "labour": 90}
+# 17 Nov 2026 audit: one request can't turn into hundreds of paid searches and model calls
+MAX_ITEMS = 40               # items in one estimate
+MAX_NEW_BUILDUPS = 3         # build-ups researched from the web in one estimate
+MAX_PRICE_SEARCHES = 12      # market prices looked up on the web in one estimate
 HOURS_PER_DAY = Decimal(8)            # labour priced per day, needed per hour (stated in the estimate)
 TABLE = "vula_estimates"
 
@@ -182,7 +186,23 @@ async def estimate(tenant_id: str, items: List[Dict[str, Any]], *, exclusions: O
     registered project) ties the estimate to it, so it can later be compared with what was paid."""
     if not items:
         raise EstimateError("What should I cost? e.g. \"a 6 x 4 m one-brick wall, plastered both sides\".")
+    if len(items) > MAX_ITEMS:
+        raise EstimateError(f"That's {len(items)} items — I can cost up to {MAX_ITEMS} at a time. "
+                            "Split it into parts (e.g. one per trade).")
+    from vula.takeoff import market
+    token = market.limit_web(MAX_PRICE_SEARCHES if refresh else 0)
+    try:
+        return await _estimate(tenant_id, items, exclusions=exclusions, research=research, refresh=refresh,
+                               created_by=created_by, title=title, save=save, project=project)
+    finally:
+        market.reset_web(token)
+
+
+async def _estimate(tenant_id: str, items: List[Dict[str, Any]], *, exclusions: Optional[List[str]],
+                    research: bool, refresh: bool, created_by: str, title: str, save: bool,
+                    project: Optional[str]) -> Dict[str, Any]:
     project = registered_project(tenant_id, project) if project else None
+    researched = 0
     out_items: List[Dict[str, Any]] = []
     totals = {"material": 0, "labour": 0, "plant": 0}
     unpriced: List[str] = []
@@ -196,7 +216,14 @@ async def estimate(tenant_id: str, items: List[Dict[str, Any]], *, exclusions: O
         q = quantity_of(it)
         unit = str(it.get("unit") or "m2")
         b = buildups.find(tenant_id, name, spec)
+        if b is None and research and researched >= MAX_NEW_BUILDUPS:
+            out_items.append({"item": name, "spec": spec, "quantity": str(q), "unit": unit,
+                              "status": "no_buildup",
+                              "message": f"Not researched: I research up to {MAX_NEW_BUILDUPS} new build-ups "
+                                         "per estimate. Ask again for this one."})
+            continue
         if b is None and research:
+            researched += 1
             try:
                 b = await buildups.research(tenant_id, name, spec, unit=unit, created_by=created_by)
             except buildups.BuildupError as exc:

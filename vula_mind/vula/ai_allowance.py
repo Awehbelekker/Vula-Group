@@ -234,7 +234,11 @@ async def request_topup(tenant_id: str, person_key: str, allowed: bool, pack_cen
 
 
 def _set(credit_id: str, patch: Dict[str, Any], want_status: str) -> Optional[Dict[str, Any]]:
-    _client().table(CREDITS).update(patch).eq("id", credit_id).execute()
+    # only while it is still requested (17 Nov 2026 audit): a cancel and a mark-paid at the same
+    # moment can't both land — the second finds nothing to change and reads back as None
+    upd = _client().table(CREDITS).update(patch).eq("id", credit_id).eq("status", "requested").execute()
+    if not (upd.data or []):
+        return None
     rows = _client().table(CREDITS).select("*").eq("id", credit_id).limit(1).execute().data or []
     row = rows[0] if rows else None
     if row:

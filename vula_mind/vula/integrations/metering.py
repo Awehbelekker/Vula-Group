@@ -137,6 +137,10 @@ def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens
     day = datetime.now(timezone.utc).date().isoformat()
     try:
         db = _client()
+        if _add_atomic(db, tenant_id, day, short, prompt_tokens, completion_tokens, cost):
+            if cost > 0:
+                _after_spend(tenant_id)
+            return
         ex = (db.table("vula_ai_usage").select("id,calls,prompt_tokens,completion_tokens,est_cost_usd")
               .eq("tenant_id", tenant_id).eq("day", day).eq("model", short).limit(1).execute().data or [])
         if ex:
@@ -157,6 +161,29 @@ def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens
         return
     if cost > 0:
         _after_spend(tenant_id)
+
+
+_ATOMIC = {"ok": True}
+
+
+def _add_atomic(db, tenant_id: str, day: str, model: str, prompt_tokens: int,
+                completion_tokens: int, cost: float) -> bool:
+    """One statement adds this call (migration 287), so two calls at once can't overwrite each
+    other's count. False when the function isn't there yet: the read-add-write path runs instead."""
+    if not _ATOMIC["ok"] or not hasattr(db, "rpc"):
+        return False
+    try:
+        db.rpc("vula_ai_usage_add", {"p_tenant_id": tenant_id, "p_day": day, "p_model": model,
+                                     "p_prompt_tokens": int(prompt_tokens),
+                                     "p_completion_tokens": int(completion_tokens),
+                                     "p_cost_usd": cost}).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "vula_ai_usage_add" in msg or "PGRST202" in msg or "does not exist" in msg:
+            _ATOMIC["ok"] = False          # not migrated yet: stop asking until the next boot
+        logger.debug("atomic meter skipped: %s", exc)
+        return False
 
 
 def _after_spend(tenant_id: str) -> None:

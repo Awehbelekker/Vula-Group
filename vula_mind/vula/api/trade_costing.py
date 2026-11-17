@@ -84,6 +84,16 @@ class ResearchIn(BaseModel):
     unit: str = "m2"
 
 
+def _research_allowed(tenant_id: str, person: str) -> None:
+    """17 Nov 2026 audit: web research costs searches and model calls — the same per-person
+    hourly limit as research in the chat (settings.research_per_hour)."""
+    from config import settings
+    from vula import open_chat
+    if not open_chat.allow(f"{tenant_id}:{person or 'anon'}:costing", settings.research_per_hour):
+        raise HTTPException(status_code=429, detail="That's a lot of research in an hour — try again a "
+                                                    "little later, or use what's already on file.")
+
+
 @router.post("/{tenant_id}/admin/buildups/research")
 async def research_buildup(tenant_id: str, body: ResearchIn, request: Request) -> dict:
     _on(tenant_id)
@@ -92,6 +102,7 @@ async def research_buildup(tenant_id: str, body: ResearchIn, request: Request) -
     existing = await asyncio.to_thread(buildups.find, tenant_id, body.item, body.spec)
     if existing and existing["origin"] in ("own", "shared"):
         return {"buildup": buildups.public(existing), "researched": False}
+    _research_allowed(tenant_id, person)
     try:
         b = await buildups.research(tenant_id, body.item, body.spec, unit=body.unit or "m2", created_by=person)
     except buildups.BuildupError as exc:
@@ -163,6 +174,8 @@ async def make_estimate(tenant_id: str, body: EstimateIn, request: Request) -> d
     _on(tenant_id)
     from vula.commerce import estimate
     person, _lead = await _caller(tenant_id, request)
+    if body.research:
+        _research_allowed(tenant_id, person)
     try:
         est = await estimate.estimate(tenant_id, [i.model_dump(exclude_none=True) for i in body.items],
                                       exclusions=body.exclusions, research=body.research,

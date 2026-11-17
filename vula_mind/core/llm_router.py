@@ -789,7 +789,8 @@ async def resolve_generation_route(
 # falling back to cloud. The dashboard's open chat (13 Nov 2026) is optional extra thinking,
 # not a business operation, so a cap holds for it absolutely.
 # Research mode (vula/research.py) is the same optional extra, so it holds too.
-CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research"})
+# 17 Nov 2026 audit: researching a build-up and reading prices off web pages are optional extras too.
+CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research", "buildup_research", "rates_extract"})
 
 
 class SpendCapReached(RuntimeError):
