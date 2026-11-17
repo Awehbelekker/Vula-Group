@@ -1839,6 +1839,10 @@ async def _assistant_session(tenant_id: str, request: Request, fallback_id: Opti
     person = await person_for_login(request.headers.get("authorization", ""), tenant_id)
     if person and person.web_session_key:
         return person, person.web_session_key
+    # 17 Nov 2026 audit: "m:<id>" / "u:<login>" are a signed-in person's own thread
+    # (Person.web_session_key) — a caller with no person never names one.
+    if fallback_id and re.match(r"^\s*[mu]:", fallback_id):
+        fallback_id = None
     return None, f"webadmin:{fallback_id or 'default'}"
 
 
@@ -1939,6 +1943,7 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest, request: Reque
     user_label = "Customer"
     if person is not None:
         metadata["access"] = person.access
+        metadata["person_key"] = person.key
         if person.name:
             metadata["caller_name"] = person.name
             user_label = person.name
@@ -2147,7 +2152,9 @@ async def admin_assistant_confirm(tenant_id: str, body: AssistantConfirm, reques
         caller = args.pop("_caller", None) or {}
         args["confirm"] = True
         ctx = {"tenant_id": tenant_id, "phone": person.phone if person.role == "sales_rep" else None,
-               "caller_name": caller.get("name"), "caller_role": caller.get("role"), "channel": "dashboard"}
+               "caller_name": caller.get("name"), "caller_role": caller.get("role"), "channel": "dashboard",
+               # 17 Nov 2026 audit: the same access and identity the preview ran with
+               "access": person.access, "person_key": person.key, "session_id": session_key}
         try:
             result = await CommerceAdminSkill()._dispatch_tool(row["tool_name"], args, ctx)
             answer = checked_reply(result) or _plain_result(result)
