@@ -85,7 +85,8 @@ def test_reasoning_reads_the_named_document_first_without_repeats():
     with patch("vula.commerce.service._client", lambda: DOCS):
         chunks = asyncio.run(reasoning._named_document_first(
             p, "gerflor", "What gym flooring does Sports Flooring Warehouse offer?", usual))
-    assert [c["text"] for c in chunks] == ["Ultrafloor gym flooring", "Hard court surfacing"]
+    assert chunks[0]["text"].startswith("Summary of SFW_Gym_Flooring_Catalogue.pdf:") and "Ultrafloor" in chunks[0]["text"]
+    assert [c["text"] for c in chunks[1:]] == ["Ultrafloor gym flooring", "Hard court surfacing"]
     assert p.calls[-1] == "k2"
 
 
@@ -95,3 +96,29 @@ def test_a_question_naming_nothing_on_file_keeps_the_usual_results():
     with patch("vula.commerce.service._client", lambda: DOCS):
         assert asyncio.run(reasoning._named_document_first(p, "gerflor", "How do I clean a floor?", usual)) == usual
     assert p.calls == []
+
+
+def test_the_named_documents_own_summary_is_read_even_when_its_chunks_miss():
+    """17 Nov 2026: the gym catalogue's chunks said "aerobic, spinning, yoga studios" but never
+    "Ultrafloor" — its summary on file lists the products."""
+    class Empty(_Pipeline):
+        async def query(self, question, top_k=4, authoritative_only=True, doc_id=None):
+            self.calls.append(doc_id)
+            return []
+    with patch("vula.commerce.service._client", lambda: DOCS):
+        chunks = asyncio.run(reasoning._named_document_first(
+            Empty(), "gerflor", "What gym flooring does Sports Flooring Warehouse offer?", []))
+    assert len(chunks) == 1 and "Ultrafloor" in chunks[0]["text"] and chunks[0]["doc_id"] == "k2"
+
+
+def test_a_needed_fact_matches_however_its_spaced():
+    from evals import benchmark
+    case = {"id": "x", "must_contain": ["handrail"]}
+    ok = benchmark.rule_checks(case, skill="reasoning", answer="Bumper Rails, Hand Rails and Dual Rails", calls=[], truth=[], offered=[], error=None)
+    assert ok["facts"] is True
+    miss = benchmark.rule_checks(case, skill="reasoning", answer="Bumper Rails and Corner Guards", calls=[], truth=[], offered=[], error=None)
+    assert miss["facts"] is False
+    # what must NOT appear stays exact
+    bad = benchmark.rule_checks({"id": "y", "must_not_contain": ["handrail"]}, skill="reasoning",
+                                answer="Hand Rails", calls=[], truth=[], offered=[], error=None)
+    assert bad["no_bad_content"] is True
