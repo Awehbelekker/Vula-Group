@@ -2205,6 +2205,9 @@ app.include_router(me_router, prefix="/v1/commerce")
 from vula.api.trade_costing import router as trade_costing_router  # noqa: E402
 # Build-ups for costing by trade — /v1/commerce/{tenant}/admin/buildups… (same tenant guard).
 app.include_router(trade_costing_router, prefix="/v1/commerce")
+from vula.api.books_audit import router as books_audit_router  # noqa: E402
+# The books audit and official-statement checks — /v1/commerce/{tenant}/admin/books-audit… (owner/manager).
+app.include_router(books_audit_router, prefix="/v1/commerce")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded

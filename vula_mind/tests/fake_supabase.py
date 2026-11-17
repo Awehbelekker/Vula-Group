@@ -86,6 +86,10 @@ class _Query:
         self._filters.append(lambda r: str(r.get(col) or "") >= str(val))
         return self
 
+    def lte(self, col, val):
+        self._filters.append(lambda r: str(r.get(col) or "") <= str(val))
+        return self
+
     def lt(self, col, val):
         self._filters.append(lambda r: str(r.get(col) or "") < str(val))
         return self
