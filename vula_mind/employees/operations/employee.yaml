@@ -35,6 +35,12 @@ keywords:
 - schedule
 tools:
 - add_material
+# costing building work by trade (tasks/trade-costing; only where trade_costing is on)
+- trade_buildup
+- confirm_buildup
+- estimate_cost
+- compare_estimate
+- buildup_suggestion
 - booking_availability
 - cancel_booking
 - cost_sheet

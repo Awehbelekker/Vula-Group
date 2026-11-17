@@ -111,3 +111,25 @@ def test_only_a_newly_wrong_answer_alerts(monkeypatch):
     assert len(alerts) == 1 and "digg-rate-one-brick-wall" in alerts[0] and "oth-price-prawns" not in alerts[0]
     saved = [r for r in db.rows["vula_eval_reports"] if r.get("status") == "done" and r.get("passed") == 6]
     assert saved and saved[0]["report"]["deploy_id"] == "dep-2"
+
+
+def test_the_expected_figure_from_the_records_counts_as_backed(monkeypatch):
+    """16 Nov 2026: the shop assistant's catalogue-built "Braai Box: R350.00" failed
+    figures_grounded because no tool returned it — it is the very figure the records hold."""
+    row = {**_row("Yes, we have it:\nBraai Box: R350.00"),
+           "checks": {"answered": True, "figures_grounded": False, "_ungrounded": ["R350.00"]}}
+    monkeypatch.setattr(benchmark, "run_agent_case", AsyncMock(return_value=row))
+    monkeypatch.setitem(ac.AMOUNTS, "product_price", AsyncMock(return_value=35000))
+    r = asyncio.run(ac.run_case({"id": "x", "component": "c", "tenant": "off-the-hook", "prompt": "q",
+                                 "amounts": [{"kind": "product_price", "arg": "Braai Box"}]}))
+    assert r["ok"], r["why"]
+
+
+def test_an_unbacked_figure_besides_the_expected_one_still_fails(monkeypatch):
+    row = {**_row("Braai Box: R350.00, delivery R95.00"),
+           "checks": {"answered": True, "figures_grounded": False, "_ungrounded": ["R350.00", "R95.00"]}}
+    monkeypatch.setattr(benchmark, "run_agent_case", AsyncMock(return_value=row))
+    monkeypatch.setitem(ac.AMOUNTS, "product_price", AsyncMock(return_value=35000))
+    r = asyncio.run(ac.run_case({"id": "x", "component": "c", "tenant": "off-the-hook", "prompt": "q",
+                                 "amounts": [{"kind": "product_price", "arg": "Braai Box"}]}))
+    assert not r["ok"] and "figures_grounded" in r["why"]

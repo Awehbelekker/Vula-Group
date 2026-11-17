@@ -1,0 +1,18 @@
+# Words that pick this task once the employee has the message (only this task's words in it).
+# 16 Nov 2026: costing building work by trade (build-ups, estimates, actual costs), where the
+# business has trade_costing on. The front desk (commerce_admin._pick_employee) also sends every
+# costing message trade_checklists.is_costing_request recognises here directly, so "estimate the
+# cost of a wall" no longer lands in sales' quote task without these tools.
+title: Costing building work by trade
+summary: What goes into a unit of building work, what a job will cost from the business's own and market prices, and how it compared with what was paid.
+triggers:
+- build-up
+- build-ups
+- buildup
+- build up
+tools:
+- trade_buildup
+- confirm_buildup
+- estimate_cost
+- compare_estimate
+- buildup_suggestion

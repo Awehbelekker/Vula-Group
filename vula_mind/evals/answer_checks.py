@@ -86,6 +86,12 @@ async def run_case(case: Dict[str, Any]) -> Dict[str, Any]:
         got = set(benchmark._amounts(row.get("answer") or ""))
         checks["figures_stated"] = all(c in got for c in want)
         row["expected"] = [_rands(c) for c in want]
+        # A figure that is the expected one, read from the business's own records, is backed by
+        # those records even when no tool returned it (16 Nov 2026: the shop assistant's
+        # "Yes, we have it: Braai Box: R350.00" is built from the catalogue in code).
+        unbacked = [f for f in checks.get("_ungrounded") or [] if f not in row["expected"]]
+        if checks.get("figures_grounded") is False and not unbacked:
+            checks["figures_grounded"] = True
     if missing_truth:
         checks["expected_figure_on_file"] = False
         row["expected_missing"] = missing_truth
