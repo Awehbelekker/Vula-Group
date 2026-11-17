@@ -193,6 +193,24 @@ def exact_amount_reply(question: str, result: Dict[str, Any]) -> Optional[str]:
     return head + "\n" + "\n".join(lines)
 
 
+async def answer_by_exact_amount(tenant_id: str, question: str) -> Optional[str]:
+    """A document lookup that names an amount ("Find the Solid Cape invoice for R7,571.44") is
+    matched on that amount in code, before any model runs. 17 Nov 2026 answer check: the model
+    searched "Solid Cape" without the amount, matched by name, quoted another figure and the price
+    check replaced the reply — whether it worked depended on what the model typed. None when the
+    question names no amount, nothing matches it exactly, or the search fails."""
+    from core.skills.base import looks_like_document_lookup
+    from vula.commerce.service import find_filed_document, money_in_query
+    if not tenant_id or not (looks_like_document_lookup(question) and money_in_query(question)):
+        return None
+    try:
+        result = await find_filed_document(tenant_id, question)
+    except Exception as exc:  # noqa: BLE001 — the tool loop still runs
+        logger.debug("exact-amount lookup skipped: %s", exc)
+        return None
+    return exact_amount_reply(question, result) if isinstance(result, dict) else None
+
+
 async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any,
                                   tenant_id: str = "", history: str = "",
                                   phone: str = "") -> Optional[str]:
@@ -286,6 +304,10 @@ class EmailAdminSkill(BaseSkill):
             if direct:
                 return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95,
                                    sources=[DB_ANSWER_SOURCE])
+        exact = await answer_by_exact_amount(inp.tenant_id, inp.question or "")
+        if exact:
+            return SkillOutput(answer=exact, skill_name=self.name, confidence=0.95,
+                               sources=[DB_ANSWER_SOURCE])
         creds = get_email_creds(inp.tenant_id)
         # 2026-09-23: filed-document lookups ("all invoices from X", "what materials did we buy
         # from X") are routed here for every knowledge-mode owner — this is the only skill on

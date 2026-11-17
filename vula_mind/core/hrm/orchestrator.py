@@ -276,25 +276,52 @@ def _name_terms(prompt: str) -> list:
     return out[:3]
 
 
-def named_in_own_documents(tenant_id: str, prompt: str) -> bool:
-    """True when the question names something that appears in the business's own filed documents
-    (their file name or summary) and doesn't ask for live information. Never raises."""
+_SHORT_STOP = frozenset("the and are for you our any how can was has had its not but all get".split())
+
+
+def _content_words(prompt: str) -> set:
+    """The question's own words that can tell documents apart ("gym" counts)."""
+    return {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", prompt or "")
+            if w.lower() not in _NAME_STOP and w.lower() not in _SHORT_STOP}
+
+
+def own_documents_named(tenant_id: str, prompt: str, limit: int = 2) -> list:
+    """The business's own filed documents whose summary names something the question names
+    (`_name_terms`), best first: [{doc_id, filename, summary}]. Ranked by how many of the question's
+    words the summary and file name hold, so "What gym flooring does Sports Flooring Warehouse
+    offer?" puts the SFW gym catalogue ahead of the SFW court catalogue (17 Nov 2026 answer check).
+    [] for a question asking for live information. This tenant only. Never raises."""
     if not tenant_id or _LIVE_INFO_RE.search(prompt or ""):
-        return False
+        return []
     terms = _name_terms(prompt)
     if not terms:
-        return False
+        return []
+    found: dict = {}
     try:
         from vula.commerce import service
         db = service._client()
         for t in terms:
-            rows = (db.table("vula_filed_documents").select("id").eq("tenant_id", tenant_id)
-                    .ilike("summary", f"%{t}%").limit(1).execute().data or [])
-            if rows:
-                return True
+            for r in (db.table("vula_filed_documents").select("id,doc_id,filename,summary")
+                      .eq("tenant_id", tenant_id).ilike("summary", f"%{t}%").limit(10).execute().data or []):
+                found.setdefault(r.get("id"), r)
     except Exception as exc:  # noqa: BLE001 — the classifier's choice stands
         log.debug("own-documents check skipped: %s", exc)
-    return False
+        return []
+    words = _content_words(prompt)
+
+    def score(r: dict) -> int:
+        text = f"{r.get('summary') or ''} {r.get('filename') or ''}".lower()
+        return sum(1 for w in words if w in text)
+
+    ranked = sorted(found.values(), key=score, reverse=True)
+    return [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "summary": r.get("summary")}
+            for r in ranked[:limit]]
+
+
+def named_in_own_documents(tenant_id: str, prompt: str) -> bool:
+    """True when the question names something that appears in the business's own filed documents
+    (their summary) and doesn't ask for live information. Never raises."""
+    return bool(own_documents_named(tenant_id, prompt, limit=1))
 
 
 class HRMOrchestrator:
