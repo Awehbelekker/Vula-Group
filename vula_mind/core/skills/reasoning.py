@@ -61,6 +61,29 @@ _WEB_FALLBACK_TIMEOUT_S = 25.0
 _WEB_FALLBACK_MIN_CONFIDENCE = 0.5
 
 
+async def _named_document_first(pipeline, tenant_id: str, question: str, chunks: list) -> list:
+    """When the question names something in one of the business's own filed documents, a few
+    chunks from the best-matching document go first, then the usual results without repeats.
+    17 Nov 2026 answer check: "What gym flooring does Sports Flooring Warehouse offer?" was
+    answered from the SFW court catalogue — the gym catalogue holding the answer wasn't in the top
+    4. Any failure leaves the usual results."""
+    try:
+        import asyncio
+        from core.hrm.orchestrator import own_documents_named
+        named = await asyncio.to_thread(own_documents_named, tenant_id, question, 1)
+        doc_id = (named[0].get("doc_id") if named else None) or None
+        if not doc_id:
+            return chunks
+        first = await pipeline.query(question, top_k=3, authoritative_only=True, doc_id=str(doc_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("named-document retrieval skipped: %s", exc)
+        return chunks
+    if not first:
+        return chunks
+    seen = {(str(c.get("doc_id")), c.get("text")) for c in first}
+    return list(first) + [c for c in chunks or [] if (str(c.get("doc_id")), c.get("text")) not in seen]
+
+
 class ReasoningSkill(BaseSkill):
     name = "reasoning"
     description = "General-purpose reasoning and analysis — the default skill for open questions"
@@ -97,6 +120,8 @@ class ReasoningSkill(BaseSkill):
             chunks = await pipeline.query(inp.question, top_k=max(inp.top_k, 8) if is_spec else inp.top_k,
                                           authoritative_only=True,
                                           **({"doc_id": pinned} if pinned else {}))
+            if not pinned:
+                chunks = await _named_document_first(pipeline, inp.tenant_id, inp.question, chunks)
             if is_spec and chunks and spec_product_missing(inp.question, chunks):
                 chunks = []
             if chunks and kb_learning.is_insider(role) and who:
