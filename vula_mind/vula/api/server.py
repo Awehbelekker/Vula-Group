@@ -224,19 +224,23 @@ async def _seed_training_on_boot() -> None:
 
 
 async def _weekly_rates_loop() -> None:
-    """Run construction rates scrape weekly. Starts 10 min after boot."""
+    """Construction market prices, read about weekly. Checks every 12 hours, starting 10 min after
+    boot; each source is read only when its last good read is over a week old and it wasn't
+    tried in the last day (ConstructionRatesScraper._fresh, persisted in Supabase). 14 Nov 2026:
+    this ran a full scrape on every boot — about ten a day with frequent deploys."""
     import asyncio as _asyncio
     await _asyncio.sleep(600)  # Let the server settle first
     while True:
         try:
             from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper
             scraper = ConstructionRatesScraper()
-            result = await scraper.run_full_update()
-            log.info("Weekly rates update: %d new, %d updated in %.1fs",
-                     result.new, result.updated, result.duration_s)
+            if any(not scraper._fresh(s) for s in scraper.SOURCES):
+                result = await scraper.run_full_update()
+                log.info("Weekly rates update: %d new, %d updated in %.1fs",
+                         result.new, result.updated, result.duration_s)
         except Exception as exc:
             log.warning("Weekly rates update failed: %s", exc)
-        await _asyncio.sleep(7 * 24 * 3600)  # sleep one week
+        await _asyncio.sleep(12 * 3600)
 
 
 async def _retention_loop() -> None:
@@ -1577,6 +1581,33 @@ async def _local_llm_watch_loop() -> None:
     await run_forever()
 
 
+async def _price_vat_backfill_on_boot() -> None:
+    """Once after boot: fill in whether VAT was included on prices learned before migration 284
+    (16 Nov 2026), from each document's own figures. Idempotent — only rows still 'unknown'."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(180)
+    try:
+        from vula.commerce.price_book import backfill_vat_basis
+        await _asyncio.to_thread(backfill_vat_basis)
+    except Exception as exc:
+        log.warning("price VAT basis backfill failed: %s", exc)
+
+
+async def _answer_checks_loop() -> None:
+    """After each deploy (and weekly): real questions to real businesses whose right answer is in
+    their own records, checked in code (16 Nov 2026). See evals/answer_checks.py."""
+    from evals.answer_checks import run_forever
+    await run_forever()
+
+
+async def _ai_health_loop() -> None:
+    """Every 6 h: each cloud model answers under zero retention and web search finds results
+    (16 Nov 2026 — a dead Gemini and an empty DuckDuckGo went unnoticed for days). See
+    vula/ai_health.py."""
+    from vula.ai_health import run_forever
+    await run_forever()
+
+
 async def _qdrant_migrate_loop() -> None:
     """Copy the knowledge base to a new Qdrant cluster when QDRANT_MIGRATE_TO_BASE is set
     (2026-11-13, moving it to the EU). See vula/integrations/qdrant_migrate.py."""
@@ -1755,6 +1786,12 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
+    # Cloud models + web search answering, loudly when not (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_ai_health_loop()))
+    # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
+    # Right answers from each business's own records, after every deploy (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_answer_checks_loop()))
     # Missing local models (LOCAL_MODELS_ENSURE) → Ollama downloads them (2026-11-12).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_models_loop()))
     # Knowledge base → new Qdrant cluster, once per boot while QDRANT_MIGRATE_TO_BASE is set.
@@ -1899,6 +1936,8 @@ app.add_middleware(
     ),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    # A downloaded file's name (the dashboard chat's "Download as spreadsheet", 13 Nov 2026).
+    expose_headers=["Content-Disposition"],
     allow_credentials=True,
 )
 
@@ -2019,6 +2058,9 @@ _SECTION_RULES = [
     # 2026-11-10: showing a document on a client link although it names another project — what the
     # client sees: owner and managers only (vula/commerce/project_share_docs.other_projects)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/documents/[^/]+/client-link/?$"), frozenset()),
+    # 2026-11-16: emailing a project's client from the business's mailbox, and the record of what was
+    # sent — speaks for the business: owner and managers only (vula/commerce/project_emails.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/client-emails/?$"), frozenset()),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)
@@ -2160,6 +2202,9 @@ app.include_router(email_connect_router, prefix="/v1/email")
 from vula.api.me import router as me_router  # noqa: E402
 # The signed-in person's own settings — /v1/commerce/{tenant}/admin/me/… (same tenant guard).
 app.include_router(me_router, prefix="/v1/commerce")
+from vula.api.trade_costing import router as trade_costing_router  # noqa: E402
+# Build-ups for costing by trade — /v1/commerce/{tenant}/admin/buildups… (same tenant guard).
+app.include_router(trade_costing_router, prefix="/v1/commerce")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded

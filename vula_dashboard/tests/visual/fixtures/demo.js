@@ -1125,7 +1125,12 @@ export const ownerSetup = { done: 4, total: 6, complete: false, next: "profile",
   { id: "whatsapp", label: "Connect a WhatsApp number", why: "Lets customers and staff talk to Vula on WhatsApp. You can run everything from this dashboard without one.", optional: true, done: false, tab: "settings" },
 ] };
 export const myPlan = { plan: "starter", label: "Starter — R1,500/mo", paid: false, on_trial: true, trial_over: false, trial_days_left: 9,
-  users: { used: 2, limit: 2 }, documents: { used: 7, limit: 25 }, pay_url: "https://pay.vula.test/checkout" };
+  users: { used: 2, limit: 2 }, documents: { used: 7, limit: 25 }, pay_url: "https://pay.vula.test/checkout",
+  ai: { used: 8_500, allowance: 10_000, topups_left: 0, remaining: 1_500, pct: 85, paused: false } };
+// Settings › AI usage (settings/AiUsage.jsx, vula/ai_allowance.py): rand cents at Vula's price.
+export const aiUsage = { month: "2026-11", allowance: 10_000, used: 8_500, topups_left: 0, remaining: 1_500, pct: 85,
+  paused: false, can_top_up: true, packs: [10_000, 25_000, 50_000], requested: [],
+  days: [{ day: "2026-11-03", cents: 2_340 }, { day: "2026-11-07", cents: 4_680 }, { day: "2026-11-12", cents: 1_480 }] };
 // "How Vula answered this week" — counts only (assistant/AgentActivityV2.jsx).
 export const quality = { days: 7, answers: 212, backed: { count: 151, of: 180, pct: 84 }, unsure: { count: 17, pct: 8 },
   corrected: { count: 4, pct: 2 }, handed_on: { count: 9 } };
@@ -1288,3 +1293,79 @@ export const prospects = [
   { id: "pr-shopeazy", name: "ShopEazy", url: "https://shopeazy.co", status: "scanning", created_at: "2026-11-13T06:00:00Z",
     updated_at: "2026-11-13T06:00:00Z", report: null },
 ];
+
+// The dashboard chat's "Ask anything" (13 Nov 2026): off unless a spec file turns it on.
+export const assistantChat = { openChat: false };
+
+// ── Estimating › Costing by trade (15 Nov 2026; vula/api/trade_costing.py) ──────────────────
+export const tradeBuildups = [
+  { id: "bu-wall", trade: "Masonry", item: "one-brick wall", unit: "m2", spec: { thickness: "220 mm" }, status: "confirmed",
+    version: 2, origin: "own", sources: [{ n: 1, title: "Brickwork quantities guide", url: "https://bricks.example/guide" },
+      { n: 2, title: "HPC Bokaap specification.pdf", url: null, own: true }],
+    unknown: [{ key: "wall_ties", label: "Wall ties", why: "the source gives it per 900 mm of height, not per m2" }],
+    lines: [
+      { component: "units", label: "Bricks or blocks", kind: "material", qty_per_unit: "104.0000", unit: "each", waste_pct: "5.00", source_ref: "1" },
+      { component: "mortar_cement", label: "Mortar cement", kind: "material", qty_per_unit: "0.5000", unit: "bag", waste_pct: "0.00", source_ref: "2",
+        note: "also 0.3 bag per m2 in Brickwork quantities guide [1]" },
+      { component: "labour", label: "Labour", kind: "labour", qty_per_unit: "1.5000", unit: "hour", waste_pct: "0.00", source_ref: "confirmed by owner" },
+    ] },
+  { id: "bu-plaster", trade: "Plastering", item: "plaster to brick walls", unit: "m2", spec: {}, status: "proposed",
+    version: 1, origin: "proposed", sources: [{ n: 1, title: "Plastering guide", url: "https://plaster.example/guide" }], unknown: [],
+    lines: [
+      { component: "cement", label: "Plaster cement", kind: "material", qty_per_unit: "0.1200", unit: "bag", waste_pct: "0.00", source_ref: "1" },
+      { component: "plaster_sand", label: "Plaster sand", kind: "material", qty_per_unit: "0.0200", unit: "m3", waste_pct: "0.00", source_ref: "1" },
+    ] },
+];
+
+export const tradeEstimate = {
+  id: "est-1", title: "one-brick wall 24.000 m2; plaster to brick walls 48.000 m2",
+  totals_cents: { material: 1122001, labour: 300000, plant: 0 }, total_cents: 1422001,
+  unpriced: ["Plaster sand"], exclusions: ["painting"],
+  items: [
+    { item: "one-brick wall", quantity: "24.000", unit: "m2", status: "priced", buildup_origin: "own", total_cents: 1043619,
+      needs_figure: ["Wall ties"], not_in_buildup: ["Brickforce", "Damp-proof course"],
+      compare: { rate_cents: 55456, total_cents: 1330944, where: "your HPC Bokaap BOQ, 26 Oct 2026" },
+      lines: [
+        { component: "units", label: "Bricks or blocks", kind: "material", quantity: "2620.8", unit: "each", priced: true,
+          unit_price_cents: 299, cost_cents: 783619, source: "paid", date: "2026-11-09" },
+        { component: "mortar_cement", label: "Mortar cement", kind: "material", quantity: "12", unit: "bag", priced: true,
+          unit_price_cents: 9999, cost_cents: 119988, source: "paid", date: "2026-09-15", market_now_cents: 11499 },
+        { component: "labour", label: "Labour", kind: "labour", quantity: "36", unit: "hour", priced: true,
+          unit_price_cents: 5000, cost_cents: 180000, source: "paid", date: "2026-11-01" },
+      ] },
+    { item: "plaster to brick walls", quantity: "48.000", unit: "m2", status: "priced", buildup_origin: "proposed", total_cents: 378382,
+      needs_figure: [], not_in_buildup: ["Corner and stop beads"], compare: null,
+      lines: [
+        { component: "cement", label: "Plaster cement", kind: "material", quantity: "5.76", unit: "bag", priced: true,
+          unit_price_cents: 11499, cost_cents: 66234, source: "market", date: "2026-11-12" },
+        { component: "plaster_sand", label: "Plaster sand", kind: "material", quantity: "0.96", unit: "m3", priced: false },
+      ] },
+  ],
+};
+
+// Trade costing phase 4 (15 Nov 2026): the estimate beside what was paid on its project.
+export const tradeActuals = {
+  comparison: {
+    estimate_id: "est-1", title: "one-brick wall 24.000 m2; plaster to brick walls 48.000 m2", project: "Bay Events catering",
+    estimated_cents: 1422001, paid_cents: 1310900, not_in_estimate_cents: 300000,
+    groups: [
+      { key: "material:brick", label: "Bricks or blocks", kind: "material", unit: "each", items: ["one-brick wall"],
+        estimated_qty: "2620.8", bought_qty: "3100", gap_pct: "18.3", estimated_cents: 783619, paid_cents: 926900, shared: false,
+        lines: [{ description: "Clay stock brick", supplier: "Cashbuild", date: "2026-11-10", counted: "3100", how: "" }], not_comparable: [] },
+      { key: "material:cement", label: "Cement (mortar)", kind: "material", unit: "bag", items: ["one-brick wall", "plaster to brick walls"],
+        estimated_qty: "17.76", bought_qty: "20", gap_pct: "12.6", estimated_cents: 204222, paid_cents: 229980, shared: true,
+        lines: [{ description: "PPC cement 50kg", supplier: "Cashbuild", date: "2026-11-10", counted: "20", how: "" }], not_comparable: [] },
+      { key: "labour:labour", label: "Labour", kind: "labour", unit: "hour", items: ["one-brick wall", "plaster to brick walls"],
+        estimated_qty: "60", bought_qty: null, gap_pct: null, estimated_cents: 300000, paid_cents: 154020, shared: true,
+        lines: [], not_comparable: [{ description: "Labour brickwork", supplier: "Sipho", date: "2026-11-12", why: "bought per sum, the build-up counts per hour" }] },
+    ],
+    unclear: [{ description: "River sand", could_be: ["Mortar (building) sand", "Plaster sand"] }],
+    not_in_estimate: [{ description: "Y12 rebar 6m" }],
+  },
+  proposals: [{ group: "material:brick", verdict: "suggest", field: "waste_pct", current_value: "5", suggested_value: "24" }],
+};
+export const tradeSuggestion = {
+  id: "sg-1", estimate_id: "est-1", buildup_id: "bu-wall", item: "one-brick wall", component: "units", label: "Bricks or blocks",
+  field: "waste_pct", current_value: "5", suggested_value: "24", status: "pending",
+  text: "one-brick wall — Bricks or blocks: waste 5% → 24% (estimated 2620.8 each, bought 3100)",
+};

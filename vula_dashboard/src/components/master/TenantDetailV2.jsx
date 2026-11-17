@@ -9,8 +9,9 @@ import { useState } from 'react'
 import { SA_TZ } from '../../lib/dates'
 import { Button, Card, DataTable, EmptyState, Field, Input, PageHeader, PillTabs, Skeleton, StatCard, StatusChip } from '../ui/index.jsx'
 import { ManageTenantV2 } from './TenantsV2'
-import { useLinkWhatsAppNumber, useTenantAudit, useTenantConversations, useTenantErrors, useTenantEscalations, useTenantFeatures, useTenantOverview,
+import { useLinkWhatsAppNumber, useTenantAiCredits, useTenantAudit, useTenantConversations, useTenantErrors, useTenantEscalations, useTenantFeatures, useTenantOverview,
   useTenantUsage, useWhatsAppCatalogue } from './useTenantDetail'
+import { rand } from '../settings/AiUsage.jsx'
 import './master.css'
 
 const TABS = [
@@ -140,13 +141,52 @@ function Catalogue({ tenantId }) {
   )
 }
 
+function AiAllowance({ tenantId, onError }) {
+  const x = useTenantAiCredits({ tenantId, onError })
+  const [ref, setRef] = useState('')
+  const [amount, setAmount] = useState('')
+  if (!x.data) return loading
+  const st = x.data.status || {}
+  const waiting = (x.data.credits || []).filter((c) => c.status === 'requested')
+  const done = (x.data.credits || []).filter((c) => c.status !== 'requested')
+  return (
+    <Card>
+      <section className="vms-ai" aria-label="AI allowance">
+        <h3 className="vms-h3">AI allowance this month</h3>
+        <p className="vms-muted">
+          {rand(st.used)} used of {rand(st.allowance)} included{st.topups_left ? ` + ${rand(st.topups_left)} top-ups left` : ''}
+          {st.paused ? ' — used up: Ask anything and research are on Vula\'s own AI' : ''}
+        </p>
+        {waiting.length > 0 && (
+          <ul className="vms-ai-list" aria-label="Top-ups waiting for payment">
+            {waiting.map((c) => (
+              <li key={c.id}>
+                <StatusChip tone="warn">Waiting</StatusChip> <b>{rand(c.amount_cents)}</b> · {String(c.requested_at || '').slice(0, 10)} · ref {c.id.slice(0, 8)}
+                <Input aria-label={`Payment reference for ${rand(c.amount_cents)}`} value={ref} placeholder="EFT reference" onChange={(e) => setRef(e.target.value)} />
+                <Button size="sm" disabled={x.busy} onClick={() => x.markPaid(c.id, ref)}>Mark paid</Button>
+                <Button size="sm" variant="secondary" disabled={x.busy} onClick={() => x.cancel(c.id)}>Cancel</Button>
+              </li>))}
+          </ul>)}
+        <form className="vms-ai-grant" onSubmit={(e) => { e.preventDefault(); const c = Math.round(parseFloat(amount) * 100); if (c > 0) { x.grant(c, 'Added in Master'); setAmount('') } }}>
+          <Field label="Add AI credit (R)"><Input inputMode="decimal" value={amount} placeholder="50" onChange={(e) => setAmount(e.target.value)} /></Field>
+          <Button size="sm" type="submit" disabled={x.busy || !(parseFloat(amount) > 0)}>Add credit</Button>
+        </form>
+        {done.length > 0 && (
+          <p className="vms-muted">Earlier: {done.map((c) => `${rand(c.amount_cents)} ${c.kind === 'grant' ? 'credit' : 'top-up'} ${c.status}`).join(' · ')}</p>)}
+      </section>
+    </Card>
+  )
+}
+
 function Usage({ tenantId, onError }) {
   const { u } = useTenantUsage({ tenantId, onError })
   if (!u) return loading
   const t = (u.per_tenant || {})[tenantId]
-  if (!t) return <EmptyState Icon={Coins} title="No usage">No usage recorded for this tenant in the last 14 days.</EmptyState>
+  if (!t) return <><AiAllowance tenantId={tenantId} onError={onError} /><EmptyState Icon={Coins} title="No usage">No usage recorded for this tenant in the last 14 days.</EmptyState></>
   const usd = (n) => `US$${(n || 0).toFixed(2)}`
   return (
+    <>
+    <AiAllowance tenantId={tenantId} onError={onError} />
     <div className="vms-stats">
       <StatCard variant="tile" label="AI calls (14 days)" value={t.calls} />
       <StatCard variant="tile" label="AI cost" value={usd(t.ai_cost_usd)} />
@@ -154,6 +194,7 @@ function Usage({ tenantId, onError }) {
       <StatCard variant="tile" label="Vectors" value={t.vectors ?? '—'} />
       <StatCard variant="tile" label="Storage" value={t.storage_mb != null ? `${Number(t.storage_mb).toFixed(0)} MB` : '—'} />
     </div>
+    </>
   )
 }
 

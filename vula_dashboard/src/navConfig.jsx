@@ -32,7 +32,7 @@ export const NAV_ICONS = {
   pages: Globe,
   operate: HardHat, projects: FolderKanban, workspace: FolderOpen, fieldops: HardHat, labour: BrickWall,
   qsrates: Ruler, documents: FileText,
-  estimating: Calculator, qs: Calculator, qspro: PencilRuler, takeoff: Ruler, draft: PenLine,
+  estimating: Calculator, qs: Calculator, qspro: PencilRuler, takeoff: Ruler, draft: PenLine, tradecosting: HardHat,
   team: UsersRound, settings: Settings,
   "my-work": Briefcase, "rep-contacts": Contact, "rep-callsheet": ClipboardList, "rep-bookings": CalendarDays,
   "rep-documents": Library, "rep-reminders": Clock, "rep-expenses": Receipt, "rep-expense-sheet": ReceiptText,
@@ -139,6 +139,7 @@ export const MERCHANT_GROUPS = [
       { id: "qspro", icon: "📐", label: "QS Pro" },
       { id: "takeoff", icon: "📏", label: "Takeoff" },
       { id: "draft", icon: "✍️", label: "AI Draft" },
+      { id: "tradecosting", icon: "🏗️", label: "Costing by trade" },
     ]},
   ]},
   { label: "Admin", items: [
@@ -236,6 +237,7 @@ const MERCHANT_MODMAP = {
 
   customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft',
+  tradecosting: 'estimating',  // Costing by trade — also needs its switch (MERCHANT_FEATUREMAP)
   discounts: 'products',
   stock: 'products',        // the Stock tab counts and receives the same products
   costing: 'manufacturing', // materials, recipes, batches, cost per unit (Manufacturing Core)
@@ -243,10 +245,16 @@ const MERCHANT_MODMAP = {
   'email-campaigns': 'broadcasts',  // same gate as WhatsApp broadcast — both are bulk-outreach features
 };
 
+// A tab piloted per business: shown only when its switch is on for the business (vula/features.py,
+// listed in GET /v1/tenants/{tid} as `features`). 15 Nov 2026: Costing by trade.
+const MERCHANT_FEATUREMAP = {
+  tradecosting: 'trade_costing',
+};
+
 /** Visibility predicate for merchant nav items: member access + tenant modules. Operates on a
  * real tab id (a leaf — either a standalone item's own id, or one of a section's subtab ids).
  * A section's own synthetic id (e.g. "money") is never passed to this — see filterGroups. */
-export function merchantVisible({ full, access, modules, profile }) {
+export function merchantVisible({ full, access, modules, profile, features }) {
   const canSee = (id) => full || id === 'overview' || (access || []).includes(id);
   // modules null = not known (still loading, or the lookup failed): the core tabs only, never
   // "everything" (a network blip used to open the whole nav).
@@ -259,6 +267,7 @@ export function merchantVisible({ full, access, modules, profile }) {
   return (id) => {
     if (id === 'team' || id === 'settings') return !!full;
     if (REP_TABS.has(id)) return (!full && (access || []).includes(id)) || !!profile?.is_rep_business;
+    if (MERCHANT_FEATUREMAP[id] && !(features || []).includes(MERCHANT_FEATUREMAP[id])) return false;
     return canSee(id) && tenantHas(id);
   };
 }

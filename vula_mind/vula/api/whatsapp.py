@@ -2461,6 +2461,12 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
             return
         # Admin agent failed → fall through to the normal KB/RAG flow below.
 
+    # ── Costing by trade on a knowledge line (16 Nov 2026) ── the team's build-up and estimate
+    # questions go to the business assistant, which has the costing tools; the knowledge
+    # assistant below would answer them from general knowledge.
+    if tenant_id and await _trade_costing_turn(phone, text, tenant_id):
+        return
+
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
         await _handle_task_complete(phone, tenant_id)
@@ -5889,7 +5895,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 return True
             return False
 
-        # Cheap pass first (free local via tunnel / gemini-flash).
+        # Cheap pass first (the cheap-tier cloud model, settings.model_worker_cheap).
         result = None
         try:
             resp = await litellm.acompletion(model=model, messages=_msgs, temperature=0.1,
@@ -5905,7 +5911,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             cloud = resolve_cloud_route()
             if cloud:
                 try:
-                    logger.info("Doc analyze: cheap weak — escalating %s to 70B", filename)
+                    logger.info("Doc analyze: cheap weak — escalating %s to %s", filename, cloud[0])
                     _cm, _ck, _cb = cloud
                     resp = await litellm.acompletion(model=_cm, messages=_msgs, temperature=0.1,
                         max_tokens=1400, api_key=_ck, api_base=_cb)
@@ -9933,6 +9939,43 @@ async def check_and_nudge_due_reminders() -> int:
             except Exception as exc:
                 logger.debug("marking reminder %s as nudged failed: %s", r.get("id"), exc)
     return sent
+
+
+# (tenant, phone digits) → until when a short reply still belongs to the costing conversation
+# ("yes", "220 mm, both sides" after Vula asked). In memory: after a restart the reply goes to
+# the knowledge assistant, which is no worse than before.
+_TRADE_FOLLOWUP: Dict[tuple, float] = {}
+TRADE_FOLLOWUP_SECONDS = 30 * 60
+TRADE_FOLLOWUP_MAX_WORDS = 15
+
+
+async def _trade_costing_turn(phone: str, text: str, tenant_id: str) -> bool:
+    """On a knowledge-mode line, a team member's costing message (trade_checklists.
+    is_costing_request), or a short reply within 30 minutes of one, goes to the business
+    assistant (trade_buildup / estimate_cost / compare_estimate). Only where the business has
+    `trade_costing` on, only for its own team. True when it was answered."""
+    try:
+        from vula import features
+        if not features.on(tenant_id, "trade_costing"):
+            return False
+        from vula.commerce.trade_checklists import is_costing_request
+        from vula import team_index
+        key = (tenant_id, team_index.digits_za(phone))
+        now = time.time()
+        followup = _TRADE_FOLLOWUP.get(key, 0) > now and len((text or "").split()) <= TRADE_FOLLOWUP_MAX_WORDS
+        if not (followup or is_costing_request(text)):
+            _TRADE_FOLLOWUP.pop(key, None)
+            return False
+        _name, role = _caller_identity(tenant_id, phone)
+        if not _is_insider(role):
+            return False
+    except Exception as exc:  # noqa: BLE001 — fall through to the knowledge assistant
+        logger.debug("trade costing routing skipped: %s", exc)
+        return False
+    if await _run_commerce_admin(phone, text, tenant_id):
+        _TRADE_FOLLOWUP[key] = time.time() + TRADE_FOLLOWUP_SECONDS
+        return True
+    return False
 
 
 async def _sender_is_sales_rep(phone: str, tenant_id: str) -> bool:

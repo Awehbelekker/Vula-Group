@@ -40,12 +40,21 @@ class Settings(BaseSettings):
     # Models the local box should hold; any missing is downloaded through the tunnel after boot
     # (vula/local_models.py). Comma-separated Ollama names; blank = never pull. Never deletes.
     local_models_ensure: str = ""
-    model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
+    # OpenRouter vision model for Smart Scanner when the local reader can't. 16 Nov 2026, Ian: was
+    # google/gemini-2.5-flash, which has had no endpoint under zero retention (openrouter_zdr) since
+    # every cloud call got it on 13 Nov — every cloud scan failed. Claude Sonnet 5 reads images and
+    # is served under zero retention on this account.
+    model_vision: str = "anthropic/claude-sonnet-5"
     model_image: str = "google/gemini-2.5-flash-image"  # OpenRouter image GENERATION (AI product photos)
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
     # the ollama.vula-ai.com tunnel, then this cheap cloud model, then escalate to the 70B.
     model_worker_cheap_local: str = "llama3.1:8b"          # free, on the local GPU via the tunnel
-    model_worker_cheap: str = "google/gemini-2.5-flash"    # cloud fallback when the tunnel is down
+    # cloud model for the cheap tier (document analysis, BOQ lines, programmes…). 16 Nov 2026: was
+    # gemini-2.5-flash — no endpoint under zero retention since 13 Nov. Then Ian, "keep the costs
+    # down": Llama 3.3 70B (answers under zero retention, ~1/30th of Sonnet's price), with Sonnet
+    # next in cloud_model_fallbacks when Llama errors or its provider can't take the prompt. Money
+    # figures are still checked in code (scan_quality_ok, ungrounded_figures) and escalate.
+    model_worker_cheap: str = "meta-llama/llama-3.3-70b-instruct"
     # Context window of the local model, in tokens. Set it ON THE OLLAMA BOX
     # (OLLAMA_CONTEXT_LENGTH=8192), not per call: Ollama reloads a model whenever the requested
     # context size changes, so callers asking for different sizes make it thrash. 2026-09-23
@@ -290,6 +299,11 @@ class Settings(BaseSettings):
     # Set OPENROUTER_API_KEY to enable cloud inference via OpenRouter.
     # When set, the server uses OpenRouter for generation and embeddings.
     openrouter_api_key: str = ""
+    # Web search (16 Nov 2026): DuckDuckGo's HTML page returns nothing to Railway's servers, so
+    # research, build-ups and market prices found nothing. With a key, searches go to Serper
+    # (Google results; only the query words are sent). Without one, DuckDuckGo as before.
+    serper_api_key: str = ""
+    search_country: str = "za"
 
     # ── Voice-note transcription (WhatsApp audio → text) ───────────────────────
     # OpenAI-compatible /audio/transcriptions endpoint. Local-first: point
@@ -330,7 +344,8 @@ class Settings(BaseSettings):
     # Crisis support (vula/safety.py): a message suggesting self-harm gets South Africa's crisis
     # lines and the business is asked to check in — before any assistant reply. On by default.
     crisis_support_enabled: bool = True
-    cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash"
+    # 16 Nov 2026: gemini-2.5-flash dropped — it has no endpoint under zero retention.
+    cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,anthropic/claude-sonnet-5"
     # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
     # grades. Empty = rules only.
     benchmark_judge_model: str = "openrouter/anthropic/claude-sonnet-5"
@@ -502,6 +517,9 @@ class Settings(BaseSettings):
     # Rand per US dollar for showing AI/infra costs in R on Master › Usage (display only — billing
     # and spend caps stay in USD, which is what the providers charge). Env: USD_ZAR_RATE.
     usd_zar_rate: float = 18.0
+    # Vula's price for cloud AI over its cost (vula/ai_allowance.py): a business's allowance, usage
+    # and top-ups are all rand at cost × usd_zar_rate × this. 14 Nov 2026 (Ian): cost plus 30%.
+    ai_markup: float = 1.30
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
 
@@ -528,6 +546,10 @@ class Settings(BaseSettings):
     # the week, cut short and marked as old (vula/commerce/service.py::earlier_topics), so
     # planning that spans days isn't lost at the 24-hour history window. No model call.
     history_earlier_topics_enabled: bool = False
+    # "What did we decide about…": search a staff member's OWN earlier threads with Vula
+    # (vula/chat_recall.py), dated quotes, old figures re-checked. No model call to search.
+    chat_recall_enabled: bool = False
+    chat_recall_days: int = 180
 
     # ── Accuracy (12 Nov 2026) ───────────────────────────────────────────────
     # A question about this business's own facts (hours, delivery, address, policies) with no
@@ -547,6 +569,18 @@ class Settings(BaseSettings):
     # facts and ideas kept apart. Off = each business switches it on for itself under Team ›
     # AI employees. On = it is on for every business unless they switch it off.
     advisor_mode_enabled: bool = False
+    # The dashboard's open chat, "Ask anything" (13 Nov 2026): a staff member's general question
+    # (ideas, writing, planning) answered by the reasoning skill on Vula's own AI, local first;
+    # a question about the business's records still goes to the business assistant. For one
+    # business: Master › tenant › Features to pilot (vula/features.py "open_chat").
+    open_chat_enabled: bool = False
+    # Trade costing (vula/commerce/buildups.py): build-ups researched once, confirmed once, looked up.
+    trade_costing_enabled: bool = False
+    open_chat_per_hour: int = 60          # messages per person per hour in the open chat
+    research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
+    # Cut the research prompt to fit the local model so Vula's own model writes it; off = the
+    # full pages, which goes to the cloud for size (vula/research.py).
+    research_local_first: bool = True
 
     # Website import (vula/commerce/site_import.py): copy each product's photos into the
     # business's own storage, so they survive the old site changing. Off = keep the shop's CDN

@@ -254,12 +254,44 @@ async def project_doc_request(token: str, request: Request):
     return RedirectResponse(f"/track/{token}?asked=1", status_code=303)
 
 
+_DECIDERS = ("owner", "admin", "manager")
+
+
+def _deciders(tenant_id: str) -> tuple:
+    """(WhatsApp numbers, email addresses) to ask about a client's download request: whoever gets
+    payment notices, and every active owner, admin and manager (16 Nov 2026, DIGG: Rudi's request
+    went only to Judy's WhatsApp, among a day of document replies, and waited six days)."""
+    from vula.api.whatsapp import _slip_approvers
+    from vula.integrations import notify
+    members = [m for m in notify._members(tenant_id) if (m.get("role") or "").lower() in _DECIDERS]
+    phones = list(_slip_approvers(tenant_id)) + [notify._digits(m["whatsapp"]) for m in members if m.get("whatsapp")]
+    emails = [str(m["email"]).strip() for m in members if "@" in str(m.get("email") or "")]
+    intl = lambda n: "27" + n[1:] if n.startswith("0") else n      # 064… and 2764… are one number  # noqa: E731
+    return (list(dict.fromkeys(intl(p) for p in phones if p)),
+            list(dict.fromkeys(e.lower() for e in emails)))
+
+
 async def _ask_owner(share: dict, request_id: str, text: str) -> None:
+    """The client's download request: asked on WhatsApp (yes / no) and sent by email — from the
+    business's own mailbox, so there's a written record of what was asked and when."""
     from vula import open_questions as oq
-    from vula.api.whatsapp import _send_reply, _slip_approvers
-    for to in _slip_approvers(share["tenant_id"]):
-        oq.ask(share["tenant_id"], to, "doc_download", request_id, text)
-        await _send_reply(to, text, tenant_id=share["tenant_id"])
+    from vula.api.whatsapp import _send_reply
+    tenant_id = share["tenant_id"]
+    phones, emails = await asyncio.to_thread(_deciders, tenant_id)
+    for to in phones:
+        oq.ask(tenant_id, to, "doc_download", request_id, text)
+        await _send_reply(to, text, tenant_id=tenant_id)
+    if emails:
+        from vula.commerce.mail_router import send_tenant_email
+        subject = f"{share.get('project') or 'Project'}: your client asks to download documents"
+        body = (text.replace("*", "") + "\n\nAnswer yes or no on WhatsApp, or under Projects › "
+                f"{share.get('project') or 'the project'} › Money in your dashboard.")
+        for to in emails:
+            try:
+                if not await send_tenant_email(tenant_id, to, subject, body):
+                    log.warning("download request email to %s… not sent (no mailbox connected?)", to[:3])
+            except Exception as exc:  # noqa: BLE001 — the WhatsApp question already went
+                log.warning("download request email failed: %s", exc)
 
 
 @router.get("/track/{token}/download/{doc_id}")

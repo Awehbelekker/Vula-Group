@@ -2060,6 +2060,9 @@ class VulaIngestionPipeline:
     # Low-authority content excluded from factual retrieval (ingested chat exports
     # and auto-learned Q&A) — see source_type tagging at ingest.
     _NON_AUTHORITATIVE = ["conversation", "learned"]
+    # Index-only entries: a research note's question is indexed so it can be FOUND
+    # (vula/research_memory.py), never to answer from — it is never a search result.
+    _INDEX_ONLY = ["research_note"]
 
     async def query(self, question: str, top_k: int = 5,
                     authoritative_only: bool = False, category: str | None = None,
@@ -2097,7 +2100,7 @@ class VulaIngestionPipeline:
         rerank (2026-10-26): "lexical" | "llm" | "off" — a second look at the top 20 before the
         best top_k are returned (vula/ingestion/rerank.py). None = settings.kb_rerank.
         """
-        exclude = self._NON_AUTHORITATIVE if authoritative_only else None
+        exclude = (self._NON_AUTHORITATIVE if authoritative_only else []) + self._INDEX_ONLY
         ov = _KB_OVERRIDES.get()
         # Inside one picked document every chunk is a candidate: the person already said which.
         threshold = 0.0 if doc_id else float(ov.get("score_threshold", kb_score_threshold(authoritative_only)))

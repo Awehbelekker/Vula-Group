@@ -33,12 +33,14 @@ TITLES = {
     "followup_digest": "Emails waiting for a reply", "procurement_done": "Order placed",
     "project_margin": "Project margin", "bank_details_changed": "Check these bank details",
     "property_enquiry": "New property enquiry",
+    "ai_allowance": "AI allowance",
 }
 PAGES = {
     "new_order": "orders", "order_paid": "orders", "approval": "orders", "customer_unanswered": "inbox",
     "payment_received": "invoices", "new_invoice": "invoices", "low_stock": "stock",
     "which_project": "documents", "procurement_done": "stock", "project_margin": "projects",
     "bank_details_changed": "suppliers", "property_enquiry": "listings",
+    "ai_allowance": "settings",
 }
 MAX_FAILURES = 5
 

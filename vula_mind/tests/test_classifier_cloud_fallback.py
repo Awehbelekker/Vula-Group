@@ -140,3 +140,53 @@ def test_no_cloud_model_configured_means_no_cloud(monkeypatch):
 def test_default_cloud_classifier_is_not_a_thinking_model():
     from config import Settings
     assert "gemini-2.5" not in Settings.model_fields["skill_classifier_cloud_model"].default
+
+
+# ── 14 Nov 2026: the local call never once succeeded, logged as "unreachable" ────────────────
+
+def _http_error(status):
+    req = httpx.Request("POST", "http://ollama.test/api/generate")
+    return httpx.HTTPStatusError("err", request=req, response=httpx.Response(status, request=req))
+
+
+def test_local_request_matches_the_working_calls(monkeypatch):
+    bodies = []
+
+    def fake_post(url, **kw):
+        bodies.append(kw["json"])
+        return _Resp({"response": "calculations"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    HRMOrchestrator()._llm_classify_skill("12 x 14")
+    assert bodies[0]["options"]["num_ctx"] == 8192
+
+
+def test_an_error_from_the_box_is_not_called_unreachable(monkeypatch):
+    def fake_post(url, **kw):
+        if "openrouter" in url:
+            return _Resp({"choices": [{"message": {"content": "reasoning"}}]})
+        raise _http_error(400)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(settings, "openrouter_api_key", "k")
+    logged = []
+    monkeypatch.setattr("core.llm_router._log_decision", lambda **kw: logged.append(kw))
+    assert HRMOrchestrator()._llm_classify_skill("where does electricity go") == "reasoning"
+    assert logged[0]["reason"] == "local_error:400"
+
+
+def test_failure_reasons():
+    from core.hrm.orchestrator import _local_failure_reason
+    assert _local_failure_reason(httpx.ConnectError("down")) == "local_unreachable"
+    assert _local_failure_reason(httpx.ReadTimeout("slow")) == "local_unreachable"
+    assert _local_failure_reason(_http_error(403)) == "local_error:403"
+    assert _local_failure_reason(ValueError("bad json")) == "local_error:ValueError"
+
+
+def test_the_classifier_is_told_what_each_skill_is_for():
+    from core.hrm.orchestrator import SKILL_DESCRIPTIONS, SKILL_KEYWORDS
+    assert set(SKILL_KEYWORDS) <= set(SKILL_DESCRIPTIONS)
+    prompt = HRMOrchestrator()._classifier_prompt("Where does electricity go when used?")
+    assert "- web_search: live or current information" in prompt
+    assert "general-knowledge question or a request to explain something is 'reasoning'" in prompt
+    assert prompt.rstrip().endswith("Request: Where does electricity go when used?")

@@ -4,7 +4,8 @@
  * UsersPanel (master/useMasterOps.js). States in words with a tone (no ✓ / ✗ / emoji), tables
  * as DataTables (stacked on a phone), times in SAST, USD with the rand beside it.
  */
-import { Bug, CalendarClock, Check, ClipboardCopy, Database, Eye, KeyRound, Mail, Plus, Send, ShieldCheck, Smartphone, Trash2, Waypoints } from 'lucide-react'
+import { useState } from 'react'
+import { AlertTriangle, Bug, CalendarClock, Check, ClipboardCopy, Database, Eye, KeyRound, Mail, Plus, RefreshCw, Send, ShieldCheck, Smartphone, Trash2, Waypoints } from 'lucide-react'
 import { Button, Card, DataTable, EmptyState, Field, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatCard, StatusChip } from '../ui/index.jsx'
 import { when } from './TenantDetailV2'
 import { useAppErrors, useLoginTemplate, useMasterConnections, useMasterHealth, useMasterUsage, useMasterUsers, useWeeklyDigest } from './useMasterOps'
@@ -101,6 +102,60 @@ function AppErrorsCard({ onError, onViewDetail }) {
   )
 }
 
+/* AI health (vula/ai_health.py, 16 Nov 2026): each cloud model answering under zero retention and
+ * web search finding results. Red while anything fails — a dead model hid behind the fallbacks
+ * for 3 days. */
+/* Answer checks (evals/answer_checks.py): real questions whose right answer is in the business's
+ * own records, after each deploy and weekly. */
+function AnswerChecks({ a, onRun }) {
+  const failing = (a && a.failing) || []
+  const [started, setStarted] = useState(false)
+  const run = async () => { if (await onRun()) setStarted(true) }
+  return (
+    <div className="vms-head">
+      <span className={failing.length ? 'vms-danger' : 'vms-muted'}>
+        {a ? `Answer checks: ${a.passed} of ${a.total} right · ${when(a.at)}` : 'Answer checks: not run yet'}
+      </span>
+      <Button size="sm" variant="secondary" disabled={started} onClick={run}>Run answer checks</Button>
+      {started && <span className="vms-ok" role="status">Started — takes a few minutes; reload Health to see it.</span>}
+      {failing.length > 0 && (
+        <ul className="vms-plain" role="alert">
+          {failing.map(f => <li key={f.id}><b>{f.tenant}</b> “{f.prompt}”: <span className="vms-danger">{(f.why || []).join(', ')}</span></li>)}
+        </ul>)}
+    </div>
+  )
+}
+
+export function AiHealthCard({ ai, busy, onRun, onRunAnswers }) {
+  const checks = (ai && Array.isArray(ai.checks)) ? ai.checks : []
+  const failing = checks.filter(c => !c.ok)
+  const notSetUp = (ai && ai.alerts_not_set_up) || []
+  return (
+    <Card className={`vms-form${failing.length ? ' vms-attn' : ''}`}>
+      <div className="vms-head">
+        <h3 className="vms-h vms-title-sm">
+          {failing.length ? <AlertTriangle size={16} aria-hidden="true" className="vms-ic" /> : <ShieldCheck size={16} aria-hidden="true" className="vms-ic" />}
+          AI models and web search
+        </h3>
+        <StatusChip tone={failing.length ? 'danger' : (checks.length ? 'ok' : 'muted')}>
+          {failing.length ? `${failing.length} failing` : (checks.length ? 'All answering' : 'Not checked yet')}
+        </StatusChip>
+        <Button size="sm" variant="secondary" Icon={RefreshCw} disabled={busy} aria-busy={busy} onClick={onRun}>{busy ? 'Checking…' : 'Check now'}</Button>
+      </div>
+      {failing.length > 0 && (
+        <ul className="vms-plain" role="alert">
+          {failing.map(c => <li key={c.name}><b>{c.label}</b>: <span className="vms-danger">{c.why}</span> <span className="vms-muted">since {when(c.since)}</span></li>)}
+        </ul>)}
+      {checks.length > 0 && failing.length === 0 && (
+        <p className="vms-muted">{checks.length} checks passed · last run {when(ai.last_run)}</p>)}
+      {ai && ai.error && <p className="vms-danger">{ai.error}</p>}
+      <AnswerChecks a={ai && ai.answer_checks} onRun={onRunAnswers} />
+      {notSetUp.length > 0 && (
+        <p className="vms-muted">Alerts only show here until these are set on Railway: {notSetUp.join(', ')}.</p>)}
+    </Card>
+  )
+}
+
 /* ── Health ── */
 export function HealthV2({ onError, onViewDetail }) {
   const x = useMasterHealth({ onError })
@@ -128,6 +183,8 @@ export function HealthV2({ onError, onViewDetail }) {
           sub={vrl.low_coverage ? 'Low coverage — too few events for a pass-rate to mean anything' : (vrl.last_event_at ? `last ${when(vrl.last_event_at)}` : undefined)}
           color={vrl.low_coverage ? 'var(--warn-text)' : undefined} />
       </div>
+
+      <AiHealthCard ai={h.ai_health} busy={x.aiBusy} onRun={x.runAiHealth} onRunAnswers={x.runAnswerChecks} />
 
       <ConnectionsCard onError={onError} onViewDetail={onViewDetail} />
 

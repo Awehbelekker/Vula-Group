@@ -32,8 +32,14 @@ FEATURES: Dict[str, tuple] = {
                         "Staff can ask Vula to remember things about them, privately"),
     "history_earlier_topics": ("history_earlier_topics_enabled",
                                "Staff threads carry their own messages from earlier in the week"),
+    "chat_recall": ("chat_recall_enabled",
+                    "Staff can ask about their own earlier chats (\"what did we decide about…\")"),
     "advisor_mode": ("advisor_mode_enabled",
                      "The AI advisor for brainstorming and planning"),
+    "open_chat": ("open_chat_enabled",
+                  "Ask anything: an open chat in the dashboard on Vula's own AI (local first)"),
+    "trade_costing": ("trade_costing_enabled",
+                      "Costing by trade: build-ups researched once, confirmed by an owner or manager, then looked up"),
 }
 
 

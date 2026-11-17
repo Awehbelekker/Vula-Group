@@ -532,13 +532,68 @@ PRICE_CHECK_NOTE = ("I've left out a price I couldn't confirm from our price lis
                     "I'll check it for you.")
 
 
-def drop_unverified_price_sentences(answer: str, bad_prices: List[str]) -> str:
+def drop_unverified_price_sentences(answer: str, bad_prices: List[str],
+                                    note: str = PRICE_CHECK_NOTE) -> str:
     """Remove only the sentences/lines that state an unconfirmed price, keep everything else,
     and say so. Falls back to the note alone when nothing else is left."""
     parts = re.split(r"(?<=[.!?])\s+|\n", answer or "")
     kept = [p for p in parts if p.strip() and not any(b in p for b in bad_prices)]
     body = "\n".join(kept).strip() if any("\n" in (answer or "") for _ in [0]) else " ".join(kept).strip()
-    return f"{body}\n\n{PRICE_CHECK_NOTE}" if body else PRICE_CHECK_NOTE
+    return f"{body}\n\n{note}" if body else note
+
+
+# 14 Nov 2026 (DIGG): "I obtained the data from the "lookup_rate" tool, which is a part of the
+# tool results." The preamble already says never to name internal tools; the local 8B model
+# ignored it. This rewrites the names in code. A name with an underscore is never an ordinary
+# word, so it's replaced wherever it stands; a plain-word name ("calculate") only when it is
+# quoted or called a tool, so "let me calculate that" is left alone.
+_QUOTE_OPEN, _QUOTE_CLOSE = "[\"'`“‘]", "[\"'`”’]"
+_TOOL_RESULTS_RE = re.compile(r"\b(?:the\s+)?tool(?:\s+call)?\s+results?\b", re.IGNORECASE)
+DEFAULT_TOOL_LABEL = "your records"
+
+
+def plain_tool_words(answer: str, tool_names: Iterable[str],
+                     labels: Optional[Dict[str, str]] = None) -> str:
+    """`answer` with internal tool names and "tool results" put in plain words."""
+    if not answer:
+        return answer
+    out = answer
+    for name in sorted({n for n in tool_names if n}, key=len, reverse=True):
+        label = (labels or {}).get(name) or DEFAULT_TOOL_LABEL
+        n = re.escape(name)
+        suffix = r"(?:\s+(?:tool|function))"
+        if "_" in name:
+            pattern = rf"(?:\bthe\s+)?{_QUOTE_OPEN}?\b{n}\b{_QUOTE_CLOSE}?{suffix}?"
+        else:
+            pattern = (rf"(?:\bthe\s+)?(?:{_QUOTE_OPEN}{n}{_QUOTE_CLOSE}{suffix}?|\b{n}{suffix})")
+        out = re.sub(pattern, label, out, flags=re.IGNORECASE)
+    return _TOOL_RESULTS_RE.sub(DEFAULT_TOOL_LABEL, out)
+
+
+_TOOL_NAME_CACHE: Dict[type, frozenset] = {}
+
+
+def declared_tool_names(skill: Any) -> frozenset:
+    """The function names in the tool lists a skill's module declares (TOOL_SPECS,
+    ADMIN_TOOL_SPECS, CUSTOMER_TOOL_SPECS, AUTOMATION_TOOLS …). Cached per class."""
+    cls = type(skill)
+    if cls in _TOOL_NAME_CACHE:
+        return _TOOL_NAME_CACHE[cls]
+    names = set()
+    try:
+        import sys
+        module = sys.modules.get(cls.__module__)
+        for var, value in vars(module).items() if module else ():
+            if not (var.endswith("TOOL_SPECS") or var.endswith("_TOOLS")) or not isinstance(value, list):
+                continue
+            for spec in value:
+                fn = spec.get("function") if isinstance(spec, dict) else None
+                if isinstance(fn, dict) and fn.get("name"):
+                    names.add(str(fn["name"]))
+    except Exception:
+        pass
+    _TOOL_NAME_CACHE[cls] = frozenset(names)
+    return _TOOL_NAME_CACHE[cls]
 
 
 # Arithmetic stated in an answer, e.g. "11.8 x 18.2 = 215.56" or "214.76 × R198.00 = R42,522.48".
@@ -1276,6 +1331,8 @@ class BaseSkill(ABC):
             try:
                 customer = self.name == "commerce_assistant"
                 answer = strip_narration(result.answer)
+                answer = plain_tool_words(answer, declared_tool_names(self),
+                                          getattr(self, "tool_labels", None))
                 answer = substitute_if_leaked(answer, skill=self.name, customer=customer,
                                               tenant_id=inp.tenant_id)
                 # The supervisor (step 3, 6 Oct): unbacked action claims, wrong arithmetic and —

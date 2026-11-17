@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -39,6 +40,22 @@ def _meter_classifier_call(model: str, t0: float, ok: bool, usage: Any, backend:
                           metering.get_request_tenant())
     except Exception:
         pass
+
+LOCAL_NUM_CTX = 8192   # what llm_router's litellm wrapper sends every local call
+
+
+def _local_failure_reason(exc: Exception) -> str:
+    """Why the local classifier call failed, for the audit trail: `local_unreachable` only when
+    the box couldn't be reached at all (connect error, timeout); `local_error:<status>` when it
+    answered with an error; `local_error:<Type>` otherwise. Before 14 Nov 2026 every failure
+    was logged as unreachable, though the box was answering every other call."""
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return "local_unreachable"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return f"local_error:{status}" if status else "local_error:http"
+    return f"local_error:{type(exc).__name__}"
+
 
 SKILL_REGISTRY_PATH = Path(__file__).parent.parent / "skills" / "registry.json"
 
@@ -178,6 +195,29 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     "reasoning":            [],  # fallback
 }
 
+# What each skill is for, for the keyword-miss classifier (_classifier_prompt). Keyword routing
+# above doesn't read these.
+SKILL_DESCRIPTIONS: dict[str, str] = {
+    "clickup_admin": "tasks, to-dos, reminders and meetings in ClickUp",
+    "draft_admin": "draft a letter, proposal, quote or other document",
+    "commerce_assistant": "a customer asking about products, prices, stock, orders or delivery",
+    "microsoft_admin": "Outlook mail, calendar or OneDrive",
+    "finance_admin": "the business's own money: income, expenses, invoices paid, bank, VAT owed",
+    "email_admin": "the business's email: find, read, summarise or send emails",
+    "google_admin": "Gmail, Google Calendar or Google Drive",
+    "standards_lookup": "building regulations and standards (SANS, NBR) and what they require",
+    "calculations": "a calculation: areas, quantities, costs from the business's own rates, VAT",
+    "architecture_planning": "architectural design, planning and building-project advice",
+    "web_search": "live or current information from the internet: today's prices, news, "
+                  "tenders, a named company",
+    "code_execution": "run or write a script",
+    "memory_recall": "what was said or decided earlier in this conversation",
+    "file_parse": "read or extract from a file the person sent",
+    "image_analysis": "describe or read an image or photo",
+    "financial_reasoning": "revenue, profit, budget or cashflow analysis",
+    "reasoning": "general knowledge, explanations, advice and anything else",
+}
+
 # Split out of architecture_planning's own keyword list (2026-09-18) — these generic words only
 # mean "this is architecture/construction" in an AEC context; anywhere else they're just
 # ordinary English. Checked only for a tenant whose business_type suggests professional/trades
@@ -214,6 +254,74 @@ def route_context(previous: Optional[dict], tenant_id: Optional[str] = None):
         yield
     finally:
         _ROUTE_CONTEXT.reset(token)
+
+
+_LIVE_INFO_RE = re.compile(r"\b(today|tonight|now|current(ly)?|latest|news|this week|this month|live|"
+                           r"exchange rate|weather|tender|price of .* (now|today))\b", re.I)
+_NAME_STOP = frozenset("""what which where when who whom whose does have there their they this that these those
+with from about into your ours ours offer offers come comes versions version price prices list cover
+covers much many sell sells give tell show please could would should range types kind kinds""".split())
+
+
+def _name_terms(prompt: str) -> list:
+    """The words of a question most likely to name a product, brand or company: capitalised words
+    (not the first), then long uncommon words. At most three."""
+    words = re.findall(r"[A-Za-z][A-Za-z\-]{2,}", prompt or "")
+    caps = [w for i, w in enumerate(words) if i > 0 and w[0].isupper() and w.lower() not in _NAME_STOP]
+    longs = [w for w in words if len(w) >= 7 and w.lower() not in _NAME_STOP and w not in caps]
+    out = []
+    for w in caps + longs:
+        if w.lower() not in (x.lower() for x in out):
+            out.append(w)
+    return out[:3]
+
+
+_SHORT_STOP = frozenset("the and are for you our any how can was has had its not but all get".split())
+
+
+def _content_words(prompt: str) -> set:
+    """The question's own words that can tell documents apart ("gym" counts)."""
+    return {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", prompt or "")
+            if w.lower() not in _NAME_STOP and w.lower() not in _SHORT_STOP}
+
+
+def own_documents_named(tenant_id: str, prompt: str, limit: int = 2) -> list:
+    """The business's own filed documents whose summary names something the question names
+    (`_name_terms`), best first: [{doc_id, filename, summary}]. Ranked by how many of the question's
+    words the summary and file name hold, so "What gym flooring does Sports Flooring Warehouse
+    offer?" puts the SFW gym catalogue ahead of the SFW court catalogue (17 Nov 2026 answer check).
+    [] for a question asking for live information. This tenant only. Never raises."""
+    if not tenant_id or _LIVE_INFO_RE.search(prompt or ""):
+        return []
+    terms = _name_terms(prompt)
+    if not terms:
+        return []
+    found: dict = {}
+    try:
+        from vula.commerce import service
+        db = service._client()
+        for t in terms:
+            for r in (db.table("vula_filed_documents").select("id,doc_id,filename,summary")
+                      .eq("tenant_id", tenant_id).ilike("summary", f"%{t}%").limit(10).execute().data or []):
+                found.setdefault(r.get("id"), r)
+    except Exception as exc:  # noqa: BLE001 — the classifier's choice stands
+        log.debug("own-documents check skipped: %s", exc)
+        return []
+    words = _content_words(prompt)
+
+    def score(r: dict) -> int:
+        text = f"{r.get('summary') or ''} {r.get('filename') or ''}".lower()
+        return sum(1 for w in words if w in text)
+
+    ranked = sorted(found.values(), key=score, reverse=True)
+    return [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "summary": r.get("summary")}
+            for r in ranked[:limit]]
+
+
+def named_in_own_documents(tenant_id: str, prompt: str) -> bool:
+    """True when the question names something that appears in the business's own filed documents
+    (their summary) and doesn't ask for live information. Never raises."""
+    return bool(own_documents_named(tenant_id, prompt, limit=1))
 
 
 class HRMOrchestrator:
@@ -256,9 +364,10 @@ class HRMOrchestrator:
     def _llm_complexity(self, prompt: str) -> int:
         """Ask local LLM to score complexity 1–3. Falls back to keyword heuristic."""
         try:
-            from core.llm_router import think_off
+            from core.llm_router import _ollama_headers, think_off
             resp = httpx.post(
                 f"{self.ollama_url}/api/generate",
+                headers=_ollama_headers(),
                 json={
                     "model": self.model,
                     "prompt": (
@@ -267,7 +376,7 @@ class HRMOrchestrator:
                     ),
                     "stream": False,
                     **think_off(self.model),
-                    "options": {"num_predict": 5},
+                    "options": {"num_predict": 5, "num_ctx": LOCAL_NUM_CTX},
                 },
                 timeout=10,
             )
@@ -375,6 +484,14 @@ class HRMOrchestrator:
         # a document-grounded skill). Fails open to "reasoning" on any error or disagreement.
         if settings.skill_llm_fallback_enabled:
             classified = self._llm_classify_skill(prompt)
+            # 16 Nov 2026 (answer checks): "Which versions of Taralay Millenium are there?" and
+            # "What gym flooring does Sports Flooring Warehouse offer?" went to web_search (a
+            # named company) though Gerflor's own catalogues hold the answers — the web said
+            # access denied, or listed the supplier's public site. A question naming something
+            # in the business's own filed documents, and not asking for live information, is
+            # answered from those documents.
+            if classified == "web_search" and tenant_id and named_in_own_documents(tenant_id, prompt):
+                return "reasoning", "own_documents"
             if classified:
                 return classified, "llm_fallback"
         # 2026-09-22 real incident (DIGG, knowledge-mode tenant): "I want a breakdown on what
@@ -394,7 +511,10 @@ class HRMOrchestrator:
         return "reasoning", "default"
 
     def _classifier_prompt(self, prompt: str) -> str:
-        options = ", ".join(SKILL_KEYWORDS.keys())
+        # 14 Nov 2026 (DIGG): with bare names, "Where does electricity go when used?" went to
+        # web_search, found nothing and answered "Try rephrasing". Each skill now says what it's for.
+        options = "\n".join(f"- {name}: {SKILL_DESCRIPTIONS.get(name, name.replace('_', ' '))}"
+                            for name in SKILL_KEYWORDS)
         # The classifier used to see the bare message, so "and for next week?" could only ever
         # come back as 'none'. When the entry point knows what this person asked last and which
         # skill answered it (route_context), the classifier is told.
@@ -406,9 +526,12 @@ class HRMOrchestrator:
                        f"makes sense as a follow-up to that (for example 'and for next week?' or "
                        f"'what about the other one'), pick '{prev['skill']}'. If it is a new "
                        f"subject, ignore the context.\n")
-        return (f"Pick the ONE best-fitting skill for this request from this exact "
-                f"list: {options}. If none clearly fits, reply 'none'. Reply with only "
-                f"the skill name, nothing else.\n"
+        return (f"Pick the ONE best-fitting skill for this request from this exact list:\n"
+                f"{options}\n"
+                f"A general-knowledge question or a request to explain something is 'reasoning'. "
+                f"Pick 'web_search' only when the answer needs live or current information from "
+                f"the internet. If none clearly fits, reply 'none'. Reply with only the skill "
+                f"name, nothing else.\n"
                 f"{context}"
                 f"Request: {prompt}")
 
@@ -436,8 +559,11 @@ class HRMOrchestrator:
             return skill
         except Exception as exc:
             _meter_classifier_call(self.model, t0, False, None, "local")
-            log.debug("local skill classification unavailable (%s) — trying cloud", exc)
-        return self._cloud_classify_skill(prompt)
+            reason = _local_failure_reason(exc)
+            # 14 Nov 2026: this was a debug line, so 14 days of fast local failures (the same
+            # model answered every other call) were invisible. Type and status only — no text.
+            log.warning("local skill classification failed (%s) — trying cloud", reason)
+        return self._cloud_classify_skill(prompt, reason=reason)
 
     def _local_classify_skill(self, prompt: str, timeout: float = 8) -> tuple:
         """The local model's pick (skill name or None) and Ollama's reply. Raises when the box
@@ -453,7 +579,10 @@ class HRMOrchestrator:
                 "prompt": self._classifier_prompt(prompt),
                 "stream": False,
                 **think_off(self.model),
-                "options": {"num_predict": 10},
+                # num_ctx as the litellm wrapper sets it (llm_router.install_ollama_auth): every
+                # other call to this model sends 8192, and this one, sending none, never once
+                # succeeded in 14 days (14 Nov 2026).
+                "options": {"num_predict": 10, "num_ctx": LOCAL_NUM_CTX},
             },
             timeout=timeout,
         )
@@ -476,7 +605,7 @@ class HRMOrchestrator:
                 break
         return models
 
-    def _cloud_classify_skill(self, prompt: str) -> str | None:
+    def _cloud_classify_skill(self, prompt: str, reason: str = "local_unreachable") -> str | None:
         models = self._cloud_classifier_models()
         if not models or not settings.openrouter_api_key:
             return None
@@ -484,7 +613,7 @@ class HRMOrchestrator:
             import uuid
             from core.llm_router import _log_decision
             _log_decision(run_id=uuid.uuid4().hex[:12], task="skill_classifier", outcome="routed",
-                          escalated=True, backend="cloud", reason="local_unreachable")
+                          escalated=True, backend="cloud", reason=reason)
         except Exception:
             pass
         failures = []

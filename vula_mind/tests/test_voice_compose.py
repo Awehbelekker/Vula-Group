@@ -88,6 +88,38 @@ def test_nothing_to_say_is_an_empty_block():
         assert voice.compose(T, "customer", "whatsapp") == ""
 
 
+EMAIL_VOICE = ("Formal and professional, beginning with \"Hi\" and the recipient's name. Sign off "
+               "\"Kind Regards\" with a full signature block.")
+
+
+@pytest.mark.parametrize("audience", ["team", "customer"])
+@pytest.mark.parametrize("channel", ["whatsapp", "dashboard"])
+def test_a_voice_learned_from_emails_still_replies_as_a_message(audience, channel):
+    """14 Nov 2026 (DIGG): an email voice made some chat replies read as letters."""
+    with _cfg(persona_prompt=EMAIL_VOICE):
+        block = voice.compose(T, audience, channel)
+    assert EMAIL_VOICE in block and voice.CHAT_SHAPE in block
+    assert block.index(voice.CHAT_SHAPE) > block.index(EMAIL_VOICE)
+
+
+def test_whatsapp_gets_one_length_rule_unless_the_person_chose_one():
+    with _cfg(team_voice_prompt="Direct.", persona_prompt=HANDWRITTEN):
+        assert voice.WHATSAPP_LENGTH in voice.compose(T, "team", "whatsapp")
+        assert voice.WHATSAPP_LENGTH in voice.compose(T, "team", "whatsapp", {"reply_length": "medium"})
+        assert voice.WHATSAPP_LENGTH in voice.compose(T, "customer", "whatsapp")
+        for chosen in ("short", "detailed"):
+            block = voice.compose(T, "team", "whatsapp", {"reply_length": chosen})
+            assert voice.WHATSAPP_LENGTH not in block and voice.LENGTHS[chosen] in block
+        assert voice.WHATSAPP_LENGTH not in voice.compose(T, "team", "dashboard")
+
+
+def test_chat_voice_carries_the_message_shape():
+    with _cfg(persona_prompt=EMAIL_VOICE):
+        assert voice.chat_voice(T, "team") == f"{EMAIL_VOICE}\n{voice.CHAT_SHAPE}"
+    with _cfg():
+        assert voice.chat_voice(T, "team") == ""
+
+
 # ── reaching every skill ────────────────────────────────────────────────────────────────────
 
 def test_off_by_default_changes_nothing():
@@ -147,7 +179,8 @@ def test_the_owners_assistant_is_no_longer_given_the_customer_voice():
         prompt = _admin_prompt(role="owner", name="Ian")
     assert "CAPS headline" not in prompt and "Warm and upbeat" not in prompt
     with _cfg(persona_prompt=HANDWRITTEN):
-        assert f"How you should sound: {HANDWRITTEN}" in _admin_prompt(role="owner", name="Ian")
+        prompt = _admin_prompt(role="owner", name="Ian")
+    assert f"How you should sound: {HANDWRITTEN}\n{voice.CHAT_SHAPE}" in prompt
 
 
 def test_the_owner_and_staff_branch_names_who_it_is_talking_to():

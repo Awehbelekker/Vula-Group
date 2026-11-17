@@ -25,7 +25,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 import httpx
 
@@ -159,8 +159,18 @@ _NO_RETRY = {"BadRequestError", "AuthenticationError", "PermissionDeniedError", 
 _RETRY = {"APIError", "TimeoutError"}
 
 
+def _context_too_long(exc: BaseException) -> bool:
+    """A provider refused the prompt as too long for it. OpenRouter picks the provider, and one may
+    take far less than the model's listed window (16 Nov 2026: Llama 3.3 70B on SambaNova, 4 096
+    tokens, for a 6 268-token build-up prompt), so a different model can answer."""
+    text = str(exc).lower()
+    return any(s in text for s in ("context_length_exceeded", "max_len exceeded", "maximum context length"))
+
+
 def _worth_another_model(exc: BaseException) -> bool:
     names = {c.__name__ for c in type(exc).__mro__}
+    if _context_too_long(exc):
+        return True
     return not (names & _NO_RETRY) and bool(names & _RETRY)
 
 
@@ -173,11 +183,17 @@ def _has_image(messages) -> bool:
     return False
 
 
+VISION_FALLBACK = "anthropic/claude-sonnet-5"
+
+
 def cloud_fallback_chain(model: str, messages=None) -> list:
     """The openrouter/ models to try in order, starting with `model`. An image call only falls
     back to the vision model: the text models in the list can't read the picture."""
     if _has_image(messages):
-        extra = [settings.model_vision]
+        # 16 Nov 2026: a Railway MODEL_VISION still naming a model with no zero-retention endpoint
+        # (Gemini) left every cloud scan with nothing to fall back to. A model known to read
+        # images under zero retention always follows.
+        extra = [settings.model_vision, VISION_FALLBACK]
     else:
         extra = [m.strip() for m in (settings.cloud_model_fallbacks or "").split(",") if m.strip()]
     chain = [model]
@@ -226,8 +242,29 @@ def next_cloud_model(requested: str, answered_by: Optional[str] = None, *,
     return chain[idx + 1] if idx + 1 < len(chain) else None
 
 
+import contextvars as _contextvars
+
+# 16 Nov 2026 (vula/ai_health.py): a health probe must reach the model it names. The fallback
+# chain below hid a dead Gemini for 3 days — every call "worked" on Llama.
+_NO_FALLBACK: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("vula_no_cloud_fallback", default=False)
+
+
+class no_cloud_fallback:
+    """`with no_cloud_fallback(): await litellm.acompletion(...)` — only the named model is tried,
+    even one currently skipped as unavailable."""
+    def __enter__(self):
+        self._token = _NO_FALLBACK.set(True)
+        return self
+
+    def __exit__(self, *exc):
+        _NO_FALLBACK.reset(self._token)
+        return False
+
+
 async def _with_cloud_fallback(call, kwargs: dict):
     with_tools = bool(kwargs.get("tools"))
+    if _NO_FALLBACK.get():
+        return await call(**kwargs)
     full = cloud_fallback_chain(kwargs["model"], kwargs.get("messages"))
     chain = [m for m in full if not _skipped(m, with_tools)] or full
     for i, model in enumerate(chain):
@@ -317,6 +354,16 @@ def reset_health_cache() -> None:
     _cache.clear()
 
 
+def local_prompt_cap_tokens() -> int:
+    """The largest prompt (estimated tokens, chars/4) that stays local — assess_complexity's limit.
+    A caller that can shorten its prompt (vula/research.py) fits it under this to stay local."""
+    cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
+    ctx = int(getattr(settings, "local_context_tokens", 0) or 0)
+    if ctx:
+        cap = min(cap, max(ctx - 2048, 1024))
+    return cap
+
+
 def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] = None) -> Optional[str]:
     """Requirement (c): return a reason string if the task genuinely needs frontier (cloud)
     reasoning, else None. Explicit threshold: a frontier task_type, or an estimated prompt size
@@ -325,12 +372,9 @@ def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] 
     if task_type and task_type in _FRONTIER_TASK_TYPES:
         return f"complexity:{task_type}"
     if messages:
-        cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
         # A prompt that doesn't fit the local context window (leaving room for tool results
         # and the reply) can't be answered locally anyway — Ollama would silently drop its start.
-        ctx = int(getattr(settings, "local_context_tokens", 0) or 0)
-        if ctx:
-            cap = min(cap, max(ctx - 2048, 1024))
+        cap = local_prompt_cap_tokens()
         chars = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict))
         if chars // 4 >= cap:
             return f"complexity:tokens>={cap}"
@@ -589,10 +633,55 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
     return {**local_generation_kwargs(model), **cloud_generation_kwargs(model)}
 
 
+# Anthropic caches a prompt prefix of at least ~1 024 tokens; below that a breakpoint does nothing.
+PROMPT_CACHE_MIN_CHARS = 4000
+
+
+def with_prompt_cache(messages: List[Dict[str, Any]], model: str) -> List[Dict[str, Any]]:
+    """Mark the system prompt for Anthropic's prompt cache on a Claude route (16 Nov 2026, Ian:
+    keep costs down). The business assistant re-sends the same ~9 000 tokens (tools + system
+    prompt) on every step of its tool loop and every turn; a cached read costs about a tenth of
+    normal input. Anthropic orders tools before the system prompt, so one breakpoint on the system
+    message covers both. Writing the cache costs a quarter more once, so this is only for callers
+    that repeat the same prefix within minutes. Any other model, or a short or non-text system
+    prompt, gets the messages back unchanged."""
+    if "anthropic/" not in (model or "") or not messages or messages[0].get("role") != "system":
+        return messages
+    content = messages[0].get("content")
+    if not isinstance(content, str) or len(content) < PROMPT_CACHE_MIN_CHARS:
+        return messages
+    first = {**messages[0], "content": [{"type": "text", "text": content,
+                                          "cache_control": {"type": "ephemeral"}}]}
+    return [first, *messages[1:]]
+
+
+def cached_prompt_tokens(resp: Any) -> int:
+    """Prompt tokens the provider read from its cache for this response (0 when none/unknown)."""
+    try:
+        details = getattr(resp.usage, "prompt_tokens_details", None)
+        return int(getattr(details, "cached_tokens", 0) or 0)
+    except Exception:
+        return 0
+
+
+# Built-in cloud models for some task types, used when CLOUD_MODEL_BY_TASK has no entry for
+# them (an entry there still wins). 13 Nov 2026, Ian: research writes a long, cited answer from
+# several pages — a stronger model than the general fallback. 16 Nov 2026, Ian: Claude Sonnet 5,
+# not Gemini 2.5 Flash, which has had no endpoint under zero retention since 13 Nov (every one of
+# these calls failed over to Llama, which twice landed on a 4 096-token provider).
+_TASK_CLOUD_DEFAULTS = {"research": "anthropic/claude-sonnet-5", "research_plan": "anthropic/claude-sonnet-5",
+                        # reading prices off a supplier page (vula/takeoff, 14 Nov 2026)
+                        "rates_extract": "anthropic/claude-sonnet-5",
+                        # a trade build-up from cited pages (vula/commerce/buildups.py, 14 Nov 2026)
+                        "buildup_research": "anthropic/claude-sonnet-5"}
+
+
 def cloud_model_for(task_type: Optional[str]) -> str:
-    """The OpenRouter model for this task: CLOUD_MODEL_BY_TASK's entry, else model_worker_cloud.
-    A malformed map is ignored (logged), never fatal."""
-    default = settings.model_worker_cloud or settings.model_worker
+    """The OpenRouter model for this task: CLOUD_MODEL_BY_TASK's entry, else the built-in
+    default for the task (_TASK_CLOUD_DEFAULTS), else model_worker_cloud. A malformed map is
+    ignored (logged), never fatal."""
+    default = (_TASK_CLOUD_DEFAULTS.get(task_type or "")
+               or settings.model_worker_cloud or settings.model_worker)
     raw = (settings.cloud_model_by_task or "").strip()
     if not raw or not task_type:
         return default
@@ -650,6 +739,10 @@ async def resolve_generation_route(
     capped = _spend_capped(tenant_id)
     if capped:
         _alert_spend_cap_breach(tenant_id)
+    # 14 Nov 2026 (vula/ai_allowance.py): the month's AI allowance and top-ups used up pauses the
+    # extras only — Ask anything and research stay local (or stop). Nothing else is affected.
+    allowance_used = (not capped and task_type in CAP_HARD_TASKS and _allowance_used(tenant_id))
+    capped = capped or allowance_used
 
     # Explicit operator override — accuracy-first, but no longer the default and always logged so
     # even this path is auditable for "why did data leave SA".
@@ -667,10 +760,16 @@ async def resolve_generation_route(
             _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
                           backend=f"openrouter/{cloud_model}", reason=complex_reason)
             return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
-        reason = "spend_cap_soft_degrade" if (complex_reason and capped) else "local_first"
+        reason = (("ai_allowance_used" if allowance_used else "spend_cap_soft_degrade")
+                  if (complex_reason and capped) else "local_first")
         _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
                       backend=f"{_local_prefix()}/{local_model}", reason=reason)
         return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
+
+    if capped and task_type in CAP_HARD_TASKS:
+        _log_decision(run_id=run_id, task=task, outcome="blocked", escalated=False,
+                      backend="none", reason="ai_allowance_used" if allowance_used else "spend_cap_hard_stop")
+        raise SpendCapReached(tenant_id or "")
 
     # (a) local unreachable → cloud, logged with the reason a regulator would ask about.
     if settings.openrouter_api_key:
@@ -683,6 +782,31 @@ async def resolve_generation_route(
     _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
                   backend=f"{_local_prefix()}/{local_model}", reason="local_unreachable_no_cloud_key")
     return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
+
+
+# Task types whose cloud use is never forced by an outage: once the business's daily spend cap
+# is reached they stay local, and with local down too they stop (SpendCapReached) instead of
+# falling back to cloud. The dashboard's open chat (13 Nov 2026) is optional extra thinking,
+# not a business operation, so a cap holds for it absolutely.
+# Research mode (vula/research.py) is the same optional extra, so it holds too.
+CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research"})
+
+
+class SpendCapReached(RuntimeError):
+    """The business's daily AI spend cap is reached and the local model is unreachable, for a
+    task in CAP_HARD_TASKS: no generation route is allowed."""
+
+
+def _allowance_used(tenant_id: Optional[str]) -> bool:
+    """This business's monthly AI allowance and top-ups are used up (vula/ai_allowance.py).
+    Fail-open, like the spend cap."""
+    if not tenant_id:
+        return False
+    try:
+        from vula import ai_allowance
+        return ai_allowance.extras_paused(tenant_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _spend_capped(tenant_id: Optional[str]) -> bool:
@@ -731,6 +855,18 @@ def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,
     caller then keeps the local answer)."""
     if not settings.openrouter_api_key:
         return None
+    if task_type in CAP_HARD_TASKS:          # a capped open chat keeps its local answer
+        try:
+            from vula.integrations.metering import get_request_tenant
+            tid = get_request_tenant()
+            capped = _spend_capped(tid)
+            if capped or _allowance_used(tid):
+                _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type, outcome="local",
+                              escalated=False, backend="none",
+                              reason="spend_cap_hard_stop" if capped else "ai_allowance_used")
+                return None
+        except Exception:  # noqa: BLE001 — fail open, as _spend_capped does
+            pass
     cloud_model = cloud_model_for(task_type)
     _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type or "unspecified",
                   outcome="cloud", escalated=True, backend=f"openrouter/{cloud_model}", reason=reason)
@@ -772,7 +908,7 @@ async def resolve_cheap_route(model: Optional[str] = None,
                               task_type: str = "cheap_tier") -> Tuple[str, Optional[str], str]:
     """Cheap tier for mechanical work (doc analysis, classification, extraction).
 
-    Cloud cheap model (gemini-flash, ~1/15th of the 70B), then the 70B as a last resort.
+    Cloud cheap-tier model (settings.model_worker_cheap), then the fallbacks.
     The local GPU tunnel is intentionally NOT used (it sits behind Cloudflare bot-protection
     and is world-open); revisit once it's secured with a service token. Callers should
     validate the output and escalate to `resolve_cloud_route()` on failure/low confidence.
@@ -786,9 +922,16 @@ async def resolve_cheap_route(model: Optional[str] = None,
 
 
 def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
-    """Force the strong 70B cloud model — for user-facing answers and cheap-tier escalation."""
+    """A stronger cloud model than the cheap tier — the escalation when a cheap-tier read fails its
+    checks. 16 Nov 2026: with the cheap tier on Llama 3.3 70B (model_worker_cloud), escalating to
+    model_worker_cloud would ask the same model again, so it's the first different model in
+    cloud_model_fallbacks instead (Claude Sonnet 5)."""
     if settings.openrouter_api_key:
-        return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
+        strong = settings.model_worker_cloud
+        if strong == settings.model_worker_cheap:
+            strong = next((m.removeprefix("openrouter/") for m in cloud_fallback_chain(f"openrouter/{strong}")
+                           if m.removeprefix("openrouter/") != settings.model_worker_cheap), strong)
+        return f"openrouter/{strong}", settings.openrouter_api_key, OPENROUTER_BASE
     return None
 
 

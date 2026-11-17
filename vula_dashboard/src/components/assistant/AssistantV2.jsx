@@ -4,22 +4,102 @@
  * and the agent takes real actions through the admin tools. Works full-page (Assistant tab) and
  * inside the Quick Launcher's sheet (inSheet).
  */
-import { Send, Sparkles, ThumbsDown, ThumbsUp } from 'lucide-react'
-import { Button, IconButton, Input } from '../ui/index.jsx'
+import { useRef } from 'react'
+import { Download, FileSpreadsheet, FileText, Globe, Paperclip, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { Button, IconButton, Input, PillTabs } from '../ui/index.jsx'
 import { SUGGESTIONS, useAssistantChat } from './useAssistantChat'
 import MyVula from './MyVula'
 import './assistant.css'
 
+const MODES = [{ id: 'business', label: 'Your business' }, { id: 'open', label: 'Ask anything' }]
+
+const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' } }
+
+// A reply's web addresses as links (http/https only; React elements, never HTML).
+const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g
+function Linked({ text }) {
+  const parts = String(text || '').split(URL_RE)
+  return parts.map((p, i) => (i % 2 === 1
+    ? <a key={i} href={p} target="_blank" rel="noopener noreferrer">{hostOf(p) || 'link'}</a>
+    : p))
+}
+// A reply with a Markdown table, or a researched reply with sources, can be downloaded as Excel.
+const hasTable = (text) => /^\s*\|.*\|\s*$/m.test(text || '') && /^\s*\|?\s*:?-{2,}/m.test(text || '')
+
+const ACCEPT = '.pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.png,.jpg,.jpeg,.webp,.gif'
+
 export default function AssistantV2({ tenantId, inSheet = false }) {
   const x = useAssistantChat(tenantId)
+  const picker = useRef(null)
   return (
     <>
     <section className={`vas-chat${inSheet ? ' vas-chat--sheet' : ''}`} aria-label="Chat to Vula">
       {!inSheet && <p className="vas-sub">Your AI assistant runs the shop with you: ask about sales, orders, stock, invoices or expenses, or tell it to update something. Also on WhatsApp.</p>}
-      <ol className="vas-thread" aria-live="polite" aria-label="Conversation">
+      {x.openAvailable && (
+        <div className="vas-mode">
+          <PillTabs label="Chat mode" tabs={MODES} active={x.mode} onChange={x.setMode} />
+          {x.mode === 'open' && <p className="vas-hint">Ask anything: ideas, writing, planning. Answered on Vula's own AI; questions about your records still use them.</p>}
+          {x.mode === 'open' && (
+            <Button size="sm" variant={x.research ? 'primary' : 'secondary'} Icon={Globe} aria-pressed={x.research}
+              onClick={() => x.setResearch(!x.research)}>Research the web</Button>)}
+          {x.mode === 'open' && x.research && <p className="vas-hint">Vula searches the web, reads a few pages and your own documents, and lists its sources. Only the topic is searched, never names or numbers from your records. Takes about half a minute. What it finds is kept for your team, so the same question is answered straight away next time.</p>}
+          {x.mode === 'open' && x.research && (
+            <label className="vas-check"><input type="checkbox" checked={x.keepPrivate}
+              onChange={e => x.setKeepPrivate(e.target.checked)} /> Keep this research private</label>)}
+        </div>)}
+      <ol className="vas-thread" aria-live="polite" aria-label="Conversation" tabIndex={0}>
         {x.messages.map((m, i) => (
           <li key={i} className={`vas-msg vas-msg--${m.role === 'user' ? 'me' : 'vula'}`}>
-            <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.text}
+            <span className="vas-sr">{m.role === 'user' ? 'You' : 'Vula'}: </span>{m.role === 'user' ? m.text : <Linked text={m.text} />}
+            {m.files?.length > 0 && (
+              <span className="vas-downloads" role="group" aria-label="Files from Vula">
+                {m.files.map(f => (
+                  <a key={f.url} className="vas-dl" href={f.url} download={f.name}
+                    target="_blank" rel="noopener noreferrer"><Download size={14} aria-hidden="true" /> Download {f.name}</a>))}
+              </span>)}
+            {m.role !== 'user' && m.id && (hasTable(m.text) || m.research?.sources?.length > 0) && (
+              <span className="vas-downloads">
+                <Button size="sm" variant="secondary" Icon={FileSpreadsheet} disabled={m.sheet === 'making'}
+                  onClick={() => x.downloadSheet(m)}>{m.sheet === 'making' ? 'Making the spreadsheet…' : 'Download as spreadsheet'}</Button>
+                {m.sheet === 'failed' && <span className="vas-warn" role="alert">{m.sheetNote || "Couldn't make the spreadsheet — try again."}</span>}
+              </span>)}
+            {m.files?.length > 0 && <span className="vas-by">📎 {m.files.join(', ')}</span>}
+            {m.answeredBy && x.openAvailable && (
+              <span className="vas-by">{m.answeredBy === 'research'
+                ? (m.research?.reused ? `From research on ${m.research.reused.date}` : `Researched · ${m.research?.read || 0} pages read`)
+                : m.answeredBy === 'open' ? "Vula's own AI" : 'Answered with your business records'}</span>)}
+            {(m.research?.sources?.length > 0 || m.research?.documents?.length > 0) && (
+              <span className="vas-sources" role="group" aria-label="Sources">
+                <span className="vas-by">Sources</span>
+                <ol>
+                  {m.research.sources.map(src => (
+                    <li key={src.n} value={src.n}>
+                      <a href={src.url} target="_blank" rel="noopener noreferrer">{src.title}</a>
+                      <span className="vas-host"> — {hostOf(src.url)}</span>
+                    </li>))}
+                  {(m.research.documents || []).map(d => (
+                    <li key={d.n} className="vas-doc">[{d.n}] {d.title} <span className="vas-host">(your documents)</span></li>))}
+                </ol>
+              </span>)}
+            {m.answeredBy === 'research' && m.research && (m.research.reused || m.research.note_id) && (
+              <span className="vas-research-acts" role="group" aria-label="This research">
+                {m.research.reused && <Button size="sm" variant="secondary" disabled={x.sending}
+                  onClick={() => x.researchAgain(m)}>Research again</Button>}
+                {(m.research.note_id || m.research.reused?.mine) && (() => {
+                  const shared = m.research.shared ?? m.research.reused?.shared
+                  return <>
+                    <span className="vas-hint">{shared ? 'Shared with your team' : 'Only you'}</span>
+                    <Button size="sm" variant="secondary" onClick={() => x.shareResearch(m, !shared)}>
+                      {shared ? 'Keep private' : 'Share with my team'}</Button>
+                  </>
+                })()}
+                {m.research.shareError && <span className="vas-warn" role="alert">Couldn't change that.</span>}
+              </span>)}
+            {m.confirm && (
+              <span className="vas-confirm" role="group" aria-label="Confirm this action">
+                <Button size="sm" disabled={m.confirm.busy} onClick={() => x.decide(m, 'confirm')}>{m.confirm.confirm_label || 'Confirm'}</Button>
+                <Button size="sm" variant="secondary" disabled={m.confirm.busy} onClick={() => x.decide(m, 'cancel')}>{m.confirm.cancel_label || 'Cancel'}</Button>
+              </span>)}
             {m.role !== 'user' && m.id && (
               <span className="vas-rate" role="group" aria-label="Rate this reply">
                 <IconButton Icon={ThumbsUp} label="Good answer" quiet aria-pressed={m.rating === 'up'}
@@ -29,17 +109,34 @@ export default function AssistantV2({ tenantId, inSheet = false }) {
                 {m.rateError && <span className="vas-warn" role="alert">Couldn't save that rating.</span>}
               </span>)}
           </li>))}
-        {x.sending && <li className="vas-msg vas-msg--vula vas-typing" aria-label="Vula is typing"><span /><span /><span /></li>}
+        {x.researching && <li className="vas-msg vas-msg--vula vas-hint" role="status">Researching — searching the web and reading pages…</li>}
+        {x.sending && !x.researching && <li className="vas-msg vas-msg--vula vas-typing" aria-label="Vula is typing"><span /><span /><span /></li>}
         <li ref={x.endRef} aria-hidden="true" className="vas-end" />
       </ol>
       {x.messages.length <= 1 && (
         <div className="vas-suggest" role="group" aria-label="Try asking">
           {SUGGESTIONS.map(q => <Button key={q} size="sm" variant="secondary" Icon={Sparkles} onClick={() => x.send(q)}>{q}</Button>)}
         </div>)}
+      {(x.files.length > 0 || x.fileError) && (
+        <div className="vas-files" role="group" aria-label="Attached files">
+          {x.files.map(f => (
+            <span key={f.id || f.tempId} className="vas-file">
+              <FileText size={14} aria-hidden="true" />
+              <span>{f.name}{f.reading ? ' — reading…' : f.truncated ? ' — long file, the start is read' : ''}</span>
+              {f.id && !f.filed && <Button size="sm" variant="secondary" onClick={() => x.keepFile(f.id)}>Keep in our documents</Button>}
+              {f.filed && <span className="vas-hint">In your documents</span>}
+              {f.id && <IconButton Icon={X} label={`Remove ${f.name}`} quiet onClick={() => x.removeFile(f.id)} />}
+            </span>))}
+          {x.fileError && <p className="vas-warn" role="alert">{x.fileError}</p>}
+        </div>)}
       <form className="vas-compose" onSubmit={e => { e.preventDefault(); x.send() }}>
+        <input ref={picker} type="file" multiple accept={ACCEPT} hidden aria-hidden="true" tabIndex={-1}
+          onChange={e => { x.attach(e.target.files); e.target.value = '' }} />
+        <IconButton Icon={Paperclip} label="Attach a file" quiet disabled={x.sending || x.files.length >= 3}
+          onClick={() => picker.current?.click()} />
         <Input value={x.input} onChange={e => x.setInput(e.target.value)} disabled={x.sending}
-          aria-label="Message Vula" placeholder="Ask, or tell Vula to do something…" />
-        <Button type="submit" Icon={Send} disabled={x.sending || !x.input.trim()}>Send</Button>
+          aria-label="Message Vula" placeholder={x.openAvailable && x.mode === 'open' ? 'Ask anything — ideas, a draft, a plan…' : 'Ask, or tell Vula to do something…'} />
+        <Button type="submit" Icon={Send} disabled={x.sending || (!x.input.trim() && !x.files.some(f => f.id)) || x.files.some(f => f.reading)}>Send</Button>
       </form>
     </section>
     {/* Below the chat, not inside it: the chat is a fixed-height column, and on a phone anything

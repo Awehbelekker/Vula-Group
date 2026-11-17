@@ -3,7 +3,9 @@
  * Phase F). Same call as VulaSubscriptions (master/useSignupsHQ.js): trial health and estimated
  * MRR, by urgency (expired, expiring in 3 days, this week, paid, healthy trials) or as one list.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { authFetch } from "../../lib/authFetch";
+import { rand } from "../settings/AiUsage.jsx";
 import { ChevronDown, ChevronUp, CreditCard, RefreshCw } from "lucide-react";
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, PillTabs, Skeleton, StatCard, StatusChip } from "../ui/index.jsx";
@@ -41,6 +43,24 @@ function Row({ t, selected, onSelect }) {
   );
 }
 
+// AI top-ups an owner requested (vula/ai_allowance.py): invoice them, then mark them paid on the
+// business's Usage tab. Shown only when there are some.
+function AiTopUpsWaiting() {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { authFetch("/v1/master/ai-credits").then((d) => setRows(d.waiting || [])).catch(() => setRows([])); }, []);
+  if (!rows || rows.length === 0) return null;
+  return (
+    <Card>
+      <h2 className="vhq-sub"><b>AI top-ups waiting</b> — invoice them, then mark them paid on the business's Usage tab.</h2>
+      <ul className="vhq-list" aria-label="AI top-ups waiting">
+        {rows.map((c) => (
+          <li key={c.id} className="vhq-item"><span className="vhq-grow"><b>{c.tenant_id}</b> <span className="vhq-muted">· {String(c.requested_at || "").slice(0, 10)} · ref {c.id.slice(0, 8)}</span></span>
+            <StatusChip tone="warn">{rand(c.amount_cents)}</StatusChip></li>))}
+      </ul>
+    </Card>
+  );
+}
+
 export default function SubscriptionsV2() {
   const x = useSubscriptions();
   const [open, setOpen] = useState(null);
@@ -53,6 +73,7 @@ export default function SubscriptionsV2() {
         <p className="vhq-sub vhq-grow">Trial health, estimated monthly revenue and who to follow up.</p>
         <Button variant="secondary" Icon={RefreshCw} disabled={x.loading} onClick={x.load}>{x.loading ? "Loading…" : "Refresh"}</Button>
       </div>
+      <AiTopUpsWaiting />
       <div className="vhq-tiles">
         <StatCard variant="tile" label="MRR (list prices)" value={formatMoney(x.mrr * 100, { cents: "never" })} sub={`${x.paid.length} paid ${x.paid.length === 1 ? "client" : "clients"}`} />
         <StatCard variant="tile" label="Tenants" value={String(x.tenants.length)} sub="all plans" />

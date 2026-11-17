@@ -29,7 +29,7 @@ def test_each_call_is_measured_under_its_task_without_any_text():
                                _Resp(), t0, t0 + timedelta(milliseconds=840))
     assert rec["task"] == "escalation_classify" and rec["latency_ms"] == 840 and rec["backend"] == "cloud"
     assert rec["prompt_tokens"] == 1200 and rec["completion_tokens"] == 30
-    assert rec["est_cost_usd"] == pytest.approx(1200 / 1e6 * 0.075 + 30 / 1e6 * 0.30)
+    assert rec["est_cost_usd"] == pytest.approx(1200 / 1e6 * 0.30 + 30 / 1e6 * 2.50)
     assert "secret" not in str(rec)
     local = metering.call_record({"model": "llama3.1:8b", "custom_llm_provider": "ollama"}, _Resp(), t0, t0)
     assert local["backend"] == "local" and local["est_cost_usd"] == 0

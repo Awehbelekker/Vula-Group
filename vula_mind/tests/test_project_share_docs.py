@@ -227,3 +227,37 @@ def test_open_requests_are_capped_per_link(world):
              "status": "requested"})
     with pytest.raises(ValueError):
         sd.ask(world["share"], "inv")
+
+
+def test_a_download_request_reaches_every_owner_admin_and_manager_by_whatsapp_and_email(monkeypatch):
+    # 16 Nov 2026, DIGG: Rudi's request went only to Judy's WhatsApp, among a day of document replies,
+    # and waited six days; Richard (admin) wasn't asked at all
+    import asyncio as _asyncio
+    from vula.api import project_track as ptk
+    from vula.api import whatsapp as wa
+    from vula.integrations import notify
+    from vula import open_questions
+    from vula.commerce import mail_router
+    members = [{"name": "Judy", "role": "owner", "whatsapp": "+27 64 000 0080", "email": "judy@example.com"},
+               {"name": "Richard", "role": "admin", "whatsapp": "0640000010", "email": "Richard@Example.com"},
+               {"name": "Site hand", "role": "staff", "whatsapp": "0640000099", "email": "hand@example.com"}]
+    monkeypatch.setattr(notify, "_members", lambda t: members)
+    monkeypatch.setattr(wa, "_slip_approvers", lambda t: ["27640000080"])
+    sent, mailed, asked = [], [], []
+
+    async def send(to, text, tenant_id=""):
+        sent.append(to)
+        return True
+
+    async def mail(tenant_id, to, subject, body, attachments=None):
+        mailed.append((to, subject, body))
+        return True
+    monkeypatch.setattr(wa, "_send_reply", send)
+    monkeypatch.setattr(mail_router, "send_tenant_email", mail)
+    monkeypatch.setattr(open_questions, "ask", lambda *a, **k: asked.append(a[1]))
+    _asyncio.run(ptk._ask_owner({"tenant_id": "t", "project": "Belladonna"}, "r1",
+                                "📥 The *Belladonna* client link asks to download all documents."))
+    assert sorted(sent) == ["27640000010", "27640000080"] and sorted(asked) == sorted(sent)   # never the staff member
+    assert sorted(m[0] for m in mailed) == ["judy@example.com", "richard@example.com"]
+    assert mailed[0][1] == "Belladonna: your client asks to download documents"
+    assert "*" not in mailed[0][2] and "Projects › Belladonna › Money" in mailed[0][2]

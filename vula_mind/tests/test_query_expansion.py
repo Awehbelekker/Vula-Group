@@ -408,4 +408,5 @@ async def test_the_authoritative_threshold_is_unchanged():
     with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
         await p.query("creation", authoritative_only=True)
     assert calls[0]["score_threshold"] == 0.35
-    assert calls[0]["exclude_source_types"] == pl.VulaIngestionPipeline._NON_AUTHORITATIVE
+    assert calls[0]["exclude_source_types"] == (pl.VulaIngestionPipeline._NON_AUTHORITATIVE
+                                                + pl.VulaIngestionPipeline._INDEX_ONLY)

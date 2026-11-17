@@ -50,6 +50,19 @@ LENGTHS: Dict[str, str] = {
 _NICKNAME_RE = re.compile(r"[^\w .'\-]", re.UNICODE)
 _MAX_NICKNAME = 30
 
+# 14 Nov 2026 (DIGG): a voice learned mostly from sent emails ("open with Hi <name>, sign off Kind
+# Regards with a full signature block") was applied whole to chat, so some replies read as letters
+# and others as messages. Chat is always message-shaped; the email voice stays for drafted emails.
+CHAT_SHAPE = (
+    "In this chat, reply as a message, not a letter: no 'Hi <name>' opener, no sign-off, no "
+    "signature block. Those belong only inside an email or document you are drafting for them."
+)
+# One length rule for WhatsApp instead of each skill's own; a person's chosen length wins.
+WHATSAPP_LENGTH = (
+    "On WhatsApp: the answer first, in a few short lines (about 80 words at most); if there's "
+    "more, give the headline and offer the rest."
+)
+
 STYLE_ONLY = (
     "The lines above are STYLE ONLY. They change how you say things, never what is true: "
     "figures, names, dates, and whether something was done stay exactly as your tools and "
@@ -159,6 +172,13 @@ def company_voice(tenant_id: str, audience: str) -> str:
     return "" if _parts(persona) else persona
 
 
+def chat_voice(tenant_id: str, audience: str) -> str:
+    """The company voice for a chat reply, with the message-not-a-letter line, or "". For a
+    caller that adds the voice itself (the composer off)."""
+    company = company_voice(tenant_id, audience)
+    return f"{company}\n{CHAT_SHAPE}" if company else ""
+
+
 def compose(tenant_id: str, audience: str = "customer", channel: str = "whatsapp",
             prefs: Optional[Dict[str, Any]] = None) -> str:
     """The style block for one turn, or "" when there is nothing to say."""
@@ -167,6 +187,7 @@ def compose(tenant_id: str, audience: str = "customer", channel: str = "whatsapp
     company = company_voice(tenant_id, audience)
     if company:
         lines.append(f"How this business sounds: {company}")
+        lines.append(CHAT_SHAPE)
     if prefs.get("style"):
         lines.append(f"This person prefers you to be {STYLES[prefs['style']]}.")
     if LENGTHS.get(prefs.get("reply_length", ""), ""):
@@ -179,7 +200,10 @@ def compose(tenant_id: str, audience: str = "customer", channel: str = "whatsapp
                      "where the detail helps.")
     if not lines:
         return ""
+    if channel == "whatsapp" and not LENGTHS.get(prefs.get("reply_length", ""), ""):
+        lines.append(WHATSAPP_LENGTH)
     return "\n".join(lines) + "\n" + STYLE_ONLY + "\n"
+
 
 
 def current_block() -> str:

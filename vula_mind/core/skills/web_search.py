@@ -1,9 +1,9 @@
 """
 core/skills/web_search.py
 
-Real web search skill. Does an actual web search (DuckDuckGo HTML — no API
-key), fetches the top results, and synthesises a grounded answer with the
-cloud LLM. Falls back to the structured scrapers for tenders/company lookups.
+Real web search skill. Does an actual web search (Serper — Google results — when
+SERPER_API_KEY is set, else DuckDuckGo HTML), fetches the top results, and synthesises a
+grounded answer with the cloud LLM. Falls back to the structured scrapers for tenders/company lookups.
 
 Flow:
   1. SA-tender query  → search etenders + general, list opportunities
@@ -30,8 +30,68 @@ _HEADERS = {
 }
 
 
+SERPER_URL = "https://google.serper.dev/search"
+
+# Searches made and how many found nothing, since vula/ai_health.py last read them (16 Nov 2026:
+# DuckDuckGo found nothing for days and nobody knew). Counts only, never queries.
+_stats = {"searches": 0, "empty": 0}
+
+
+def take_stats() -> dict:
+    """The counts since the last call, then reset."""
+    out = dict(_stats)
+    _stats.update(searches=0, empty=0)
+    return out
+
+
 async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
-    """DuckDuckGo HTML search — returns [{title, url, snippet}]. No API key."""
+    """Web search — [{title, url, snippet?}]. Every caller in Vula comes through here (research,
+    build-ups, market prices, the web_search skill…). 16 Nov 2026: DuckDuckGo's HTML page gave
+    Railway's servers a page with no results and no error, so research never found anything in
+    production. With SERPER_API_KEY set the search goes to Serper (Google results, country
+    `search_country`); DuckDuckGo stays the fallback when there's no key or Serper finds nothing.
+    Logs say which provider and how many results — never the query (it's the person's words)."""
+    from config import settings
+    _stats["searches"] += 1
+    if getattr(settings, "serper_api_key", ""):
+        hits = await _serper_search(query, limit)
+        logger.info("web search: serper %d results", len(hits))
+        if hits:
+            return hits
+    hits = await _ddg_html(query, limit)
+    logger.info("web search: duckduckgo %d results", len(hits))
+    if not hits:
+        _stats["empty"] += 1
+    return hits
+
+
+async def _serper_search(query: str, limit: int = 5) -> list[dict]:
+    """Serper (Google results). Only the query words are sent. Never raises; [] on any failure."""
+    from config import settings
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(SERPER_URL, headers={"X-API-KEY": settings.serper_api_key,
+                                                          "Content-Type": "application/json"},
+                                     json={"q": query, "gl": settings.search_country or "za",
+                                           "num": max(1, min(int(limit), 10))})
+        if resp.status_code != 200:
+            logger.warning("web search: serper answered %s", resp.status_code)
+            return []
+        out = []
+        for r in (resp.json() or {}).get("organic") or []:
+            url, title = r.get("link") or "", (r.get("title") or "").strip()
+            if url.startswith("http") and title:
+                out.append({"title": title, "url": url, "snippet": r.get("snippet") or ""})
+            if len(out) >= limit:
+                break
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("web search: serper failed (%s)", type(exc).__name__)
+        return []
+
+
+async def _ddg_html(query: str, limit: int = 5) -> list[dict]:
+    """DuckDuckGo HTML search — returns [{title, url}]. No API key."""
     results: list[dict] = []
     try:
         async with httpx.AsyncClient(timeout=12.0, headers=_HEADERS, follow_redirects=True) as client:
@@ -40,6 +100,9 @@ async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
                 data={"q": query},
             )
             html = resp.text
+        if 'class="result__a"' not in html:
+            # the bot page DuckDuckGo gives some servers: no results and no error
+            logger.warning("web search: duckduckgo gave a page with no results (HTTP %s)", resp.status_code)
         # Parse result blocks
         for m in re.finditer(
             r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html, re.S
@@ -77,9 +140,31 @@ async def _fetch_text(url: str, max_chars: int = 2500) -> str:
         return ""
 
 
+NOT_LIVE_NOTE = "I couldn't reach live sources just now, so this is from general knowledge."
+
+
 class WebSearchSkill(BaseSkill):
     name = "web_search"
     description = "Searches the live web (SA tenders, prices, companies, news) and synthesises a grounded answer"
+
+    async def _general_knowledge(self, inp: SkillInput):
+        """The reasoning skill's answer, labelled as not live, or None when it has none.
+        `web_tried` stops reasoning from searching the web again."""
+        try:
+            from core.skills.loader import get_skill   # lazy: loader imports this module
+            out = await get_skill("reasoning")(SkillInput(
+                question=inp.question, tenant_id=inp.tenant_id,
+                conversation_history=inp.conversation_history,
+                metadata={**(inp.metadata or {}), "web_tried": True},
+                max_tokens=inp.max_tokens))
+        except Exception as exc:
+            logger.debug("web search general-knowledge fallback skipped: %s", exc)
+            return None
+        answer = (out.answer or "").strip()
+        if not out.success or not answer:
+            return None
+        return SkillOutput(answer=f"{NOT_LIVE_NOTE}\n\n{answer}", skill_name="reasoning",
+                           confidence=min(out.confidence or 0.5, 0.5), sources=out.sources)
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         q = inp.question.strip()
@@ -93,6 +178,14 @@ class WebSearchSkill(BaseSkill):
         # 1. Real search
         hits = await _ddg_search(search_q, limit=5)
         if not hits:
+            # 14 Nov 2026 (DIGG): "Where does electricity go when used?" was routed here, the
+            # search came back empty, and the whole reply was "Try rephrasing". A question the
+            # web couldn't answer just now is answered from general knowledge instead, and says
+            # so. Not when reasoning itself asked (it falls back to its own answer).
+            if not inp.metadata.get("from_reasoning"):
+                fallback = await self._general_knowledge(inp)
+                if fallback is not None:
+                    return fallback
             return SkillOutput(
                 answer="I couldn't find live web results for that right now. Try rephrasing.",
                 skill_name=self.name, confidence=0.2,

@@ -41,8 +41,12 @@ def test_chain_starts_with_the_route_and_skips_repeats(chain):
 def test_image_calls_only_fall_back_to_the_vision_model(chain):
     msgs = [{"role": "user", "content": [{"type": "text", "text": "read"},
                                          {"type": "image_url", "image_url": {"url": "data:x"}}]}]
+    # the configured vision model, then the vision model known to answer under zero retention
+    # (16 Nov 2026) — never a text-only fallback
     assert llm_router.cloud_fallback_chain("openrouter/x/vision-a", msgs) == [
-        "openrouter/x/vision-a", "openrouter/google/gemini-2.5-flash"]
+        "openrouter/x/vision-a", "openrouter/google/gemini-2.5-flash",
+        f"openrouter/{llm_router.VISION_FALLBACK}"]
+    assert "openrouter/meta-llama/llama-3.3-70b-instruct" not in llm_router.cloud_fallback_chain("openrouter/x/vision-a", msgs)
 
 
 def test_next_model_answers_when_the_first_is_down(chain):
@@ -63,6 +67,35 @@ def test_a_bad_request_is_not_retried(chain):
         asyncio.run(llm_router._with_cloud_fallback(
             _fake({"openrouter/a/one"}, calls, bad), {"model": "openrouter/a/one", "messages": []}))
     assert calls == ["openrouter/a/one"]
+
+
+def test_a_provider_that_takes_a_shorter_prompt_moves_on_to_the_next_model(chain):
+    """16 Nov 2026: Llama 3.3 70B landed on SambaNova (4 096 tokens) with a 6 268-token build-up
+    prompt; another model takes it."""
+    calls = []
+
+    def short(model):
+        return litellm.BadRequestError(
+            message='OpenrouterException - {"error":{"message":"Provider returned error","metadata":'
+                    '{"raw":"{\\"error\\":\\"Max_len exceeded: Input is 6268 tokens but this model only '
+                    'supports 4096.\\",\\"error_code\\":\\"context_length_exceeded\\"}"}}}',
+            model=model, llm_provider="openrouter")
+
+    out = asyncio.run(llm_router._with_cloud_fallback(
+        _fake({"openrouter/a/one"}, calls, short), {"model": "openrouter/a/one", "messages": []}))
+    assert out == {"model": "openrouter/meta-llama/llama-3.3-70b-instruct"}
+    assert calls == ["openrouter/a/one", "openrouter/meta-llama/llama-3.3-70b-instruct"]
+
+
+def test_no_default_cloud_model_is_one_without_a_zero_retention_endpoint():
+    """16 Nov 2026: gemini-2.5-flash has had no endpoint under zero retention since 13 Nov, so
+    every scan, cheap-tier call and research call to it failed. None of the defaults name it."""
+    from config import Settings
+    assert Settings.model_fields["openrouter_zdr"].default is True
+    for name in ("model_vision", "model_worker_cheap", "model_worker_cloud", "cloud_model_fallbacks"):
+        assert "gemini-2.5-flash" not in getattr(Settings.model_fields[name], "default"), name
+    assert not any("gemini" in m for m in llm_router._TASK_CLOUD_DEFAULTS.values())
+    assert Settings.model_fields["model_vision"].default == "anthropic/claude-sonnet-5"
 
 
 def test_timeouts_and_rate_limits_move_on():

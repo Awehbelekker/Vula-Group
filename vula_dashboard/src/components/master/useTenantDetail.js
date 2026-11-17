@@ -84,6 +84,30 @@ export function useTenantUsage({ tenantId, onError }) {
   return { u }
 }
 
+// AI allowance and top-ups (vula/ai_allowance.py, 14 Nov 2026): this business's month, its
+// credits, and Master's actions — mark a requested top-up paid, cancel it, or add credit.
+export function useTenantAiCredits({ tenantId, onError }) {
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const load = () => authFetch(`/v1/master/ai-credits?tenant_id=${encodeURIComponent(tenantId)}`).then(setData).catch((e) => onError(e.message))
+  useEffect(() => { load() }, [tenantId])  // eslint-disable-line
+  const act = async (path, body) => {
+    setBusy(true)
+    try {
+      const d = await authFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+      if (d && d.detail) onError(typeof d.detail === 'string' ? d.detail : 'That didn\'t work.')
+      await load()
+    } catch (e) { onError(e.message) }
+    setBusy(false)
+  }
+  return {
+    data, busy,
+    markPaid: (id, reference) => act(`/v1/master/ai-credits/${id}/paid`, { reference }),
+    cancel: (id) => act(`/v1/master/ai-credits/${id}/cancel`),
+    grant: (amount_cents, note) => act(`/v1/master/tenants/${encodeURIComponent(tenantId)}/ai-credit`, { amount_cents, note }),
+  }
+}
+
 export function useTenantAudit({ tenantId, onError }) {
   const [events, setEvents] = useState(null)
   useEffect(() => {

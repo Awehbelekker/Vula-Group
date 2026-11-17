@@ -399,6 +399,17 @@ async def send_trial_expiry_email(
     return await _send(to, subject, html, text)
 
 
+async def send_ops_alert_email(subject: str, text: str) -> bool:
+    """A platform health alert to settings.team_email (16 Nov 2026, vula/ai_health.py) — the
+    second way an outage reaches someone besides the operator WhatsApp. Labels only, no tenant
+    content. False when email isn't set up."""
+    if not settings.team_email:
+        return False
+    import html as _html
+    body = f"<p>{_html.escape(text)}</p><p>Vula › Master › Health shows what's failing.</p>"
+    return await _send(settings.team_email, subject, body, text + "\n\nVula › Master › Health shows what's failing.")
+
+
 async def send_team_alert_email(
     company_name: str,
     contact_name: str,

@@ -632,6 +632,16 @@ async def update_project(tenant_id: str, project_id: str, body: ProjectPatch) ->
     if new_name and new_name != proj["name"]:
         from vula.commerce.service import rename_project_everywhere
         moved = rename_project_everywhere(tenant_id, proj["name"], new_name)
+    if patch.get("status") == "complete" and proj.get("status") != "complete":
+        # the job is finished: compare its estimates with what was paid and suggest build-up
+        # changes for an owner/manager to decide (vula/commerce/actuals.py). Background.
+        try:
+            from vula.commerce import actuals
+            from vula.commerce.background_tasks import run_background
+            run_background(tenant_id, "estimate_learn",
+                           actuals.learn_project(tenant_id, new_name or proj["name"]))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("learning from the finished project skipped: %s", exc)
     return {"id": project_id, **patch, "moved": moved}
 
 

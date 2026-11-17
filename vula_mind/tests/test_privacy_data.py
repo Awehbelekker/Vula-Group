@@ -97,6 +97,7 @@ def test_erase_removes_every_conversation_store_for_this_number_only():
     assert out["removed"] == {"chat_messages": 3, "conversations": 3, "turn_records": 1,
                               "question_log": 1, "open_questions": 1, "escalations": 1, "client_note": 1,
                               "private_notes": 0,        # a customer: no staff notes to remove
+                              "research_notes": 0,       # a customer: no research findings either
                               "property_enquiries": 2, "buyer_wish": 1, "listings_sent": 1,
                               # 13 Nov 2026: stores added to the erase (none hold rows in this test)
                               "messages_sent": 0, "contact_record": 0, "broadcasts_received": 0,

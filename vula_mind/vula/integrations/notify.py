@@ -27,6 +27,8 @@ EVENTS = (
     "bank_details_changed",  # an invoice asks for payment into a different account (supplier_details)
     "customer_unanswered",   # the shop assistant couldn't answer a customer: a person must reply
     "property_enquiry",      # someone asked about / wants to view a listing (vula/listings/)
+    "ai_allowance",          # 80% / all of this month's AI allowance used (vula/ai_allowance.py)
+    "buildup_suggestion",    # a finished job came out far from its build-up (vula/commerce/actuals.py)
 )
 
 # Alerts that must reach SOMEONE (2026-10-26). An ordinary event nobody subscribed to goes to no
@@ -34,7 +36,9 @@ EVENTS = (
 # bank-details fraud warning, so it would have reached nobody. These go to the business's owner(s)
 # when no one has subscribed; a member who did subscribe is still the one who gets it.
 # 2026-11-10: a property enquiry too — a lead nobody hears about is a lost sale.
-URGENT_EVENTS = {"bank_details_changed", "customer_unanswered", "property_enquiry"}
+URGENT_EVENTS = {"bank_details_changed", "customer_unanswered", "property_enquiry",
+                 "ai_allowance",    # 14 Nov 2026: the owner must hear the allowance is running out
+                 "buildup_suggestion"}   # 15 Nov 2026: only an owner/manager can decide, so they hear it
 
 
 def _client():
