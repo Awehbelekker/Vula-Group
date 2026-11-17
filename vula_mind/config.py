@@ -137,6 +137,7 @@ class Settings(BaseSettings):
     # in the conversation — an active client keeps their history. 12 Nov 2026, owner's decision:
     # 24 months. 0 keeps them indefinitely.
     conversation_retention_days: int = 730     # commerce_conversation_*, commerce_client_summaries
+    chat_attachment_retention_days: int = 1    # files attached to the dashboard chat (vula/chat_attachments.py)
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 

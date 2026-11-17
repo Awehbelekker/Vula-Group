@@ -99,6 +99,11 @@ def _conversations(days: int) -> Dict[str, int]:
     return out
 
 
+def _chat_attachments(days: int) -> Dict[str, int]:
+    from vula.chat_attachments import prune_all
+    return prune_all(days)
+
+
 RULES: List[Rule] = [
     Rule("takeoff_plans", "takeoff_retention_days", _takeoff),
     # 9 Nov 2026 (owner's decision, golive audit): the candidates docs/security-model.md listed.
@@ -109,6 +114,8 @@ RULES: List[Rule] = [
     Rule("conversation_turns", "turn_retention_days", _turns),
     # 12 Nov 2026 (owner's decision): 24 months after a client's last message.
     Rule("conversations", "conversation_retention_days", _conversations),
+    # 17 Nov 2026 audit: files attached to the dashboard chat ("read, not filed") — a day
+    Rule("chat_attachments", "chat_attachment_retention_days", _chat_attachments),
 ]
 
 

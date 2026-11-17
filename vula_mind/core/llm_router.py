@@ -922,7 +922,7 @@ async def resolve_cheap_route(model: Optional[str] = None,
     return f"openrouter/{backend}", settings.openrouter_api_key, OPENROUTER_BASE
 
 
-def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
+def resolve_cloud_route(task_type: str = "cheap_tier_escalation") -> Optional[Tuple[str, Optional[str], str]]:
     """A stronger cloud model than the cheap tier — the escalation when a cheap-tier read fails its
     checks. 16 Nov 2026: with the cheap tier on Llama 3.3 70B (model_worker_cloud), escalating to
     model_worker_cloud would ask the same model again, so it's the first different model in
@@ -932,6 +932,9 @@ def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
         if strong == settings.model_worker_cheap:
             strong = next((m.removeprefix("openrouter/") for m in cloud_fallback_chain(f"openrouter/{strong}")
                            if m.removeprefix("openrouter/") != settings.model_worker_cheap), strong)
+        # 17 Nov 2026 audit: logged as its own decision, so the record names the model that read it
+        _log_decision(run_id=uuid.uuid4().hex, task=task_type, outcome="cloud", escalated=True,
+                      backend=f"openrouter/{strong}", reason="cheap_tier_escalation")
         return f"openrouter/{strong}", settings.openrouter_api_key, OPENROUTER_BASE
     return None
 

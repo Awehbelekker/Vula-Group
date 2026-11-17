@@ -5908,7 +5908,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         # weak/arithmetically-inconsistent extraction — not just on the model's own say-so.
         first_read = result
         if _needs_escalation(result):
-            cloud = resolve_cloud_route()
+            cloud = resolve_cloud_route("document_analysis")
             if cloud:
                 try:
                     logger.info("Doc analyze: cheap weak — escalating %s to %s", filename, cloud[0])

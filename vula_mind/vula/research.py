@@ -56,9 +56,11 @@ _CITE = re.compile(r"\[(\d{1,2}|D\d{1,2})\]")
 
 
 def clean_query(q: str) -> str:
-    """A search query with emails and phone/account-like numbers removed, short."""
+    """A search query without emails, phone/account-like numbers, rand amounts or a titled
+    person's name (core/skills/web_search.scrub_query), short."""
+    from core.skills.web_search import scrub_query
     q = _NUMBER.sub(" ", _EMAIL.sub(" ", q or ""))
-    return " ".join(q.split())[:160]
+    return scrub_query(q)[:160]
 
 
 def _parse_queries(raw: str, question: str) -> List[str]:
@@ -319,9 +321,14 @@ async def run(tenant_id: str, question: str, history: str = "", metadata: Option
         return {**base, "answer": CAPPED}
     out = {**base, **finish(answer, pages, docs)}
     if not with_file:
-        out["note_id"] = await research_memory.save(tenant_id, person_key, question, out, shared=not private,
+        # 17 Nov 2026 audit: an answer written with the person's own thread or private notes in
+        # front of it can carry what they said there, so it's kept for them only. They can still
+        # share it themselves (research_memory.set_shared).
+        from vula import personal_memory
+        share = not private and not use_history and not personal_memory.current_block()
+        out["note_id"] = await research_memory.save(tenant_id, person_key, question, out, shared=share,
                                                     replaces=(earlier or {}).get("id"))
-        out["shared"] = bool(out["note_id"]) and not private
+        out["shared"] = bool(out["note_id"]) and share
     _emit(tenant_id, "research_reply", {"queries": len(queries), "pages": len(pages), "docs": len(docs),
                                         "cited": len(out["sources"]), "unchecked": len(out["unchecked"]),
                                         "kept": bool(out.get("note_id")), "fresh": bool(fresh)})
