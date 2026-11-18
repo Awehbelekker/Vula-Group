@@ -33,6 +33,7 @@ import { ArrowLeft, Eye } from "lucide-react";
 import VulaLogo from "./components/brand/VulaLogo.jsx";
 const VulaSubscriptions = lazyScreen(() => import("./components/VulaSubscriptions"));
 const VulaTraining = lazyScreen(() => import("./components/VulaTraining"));
+const TwoStep = lazyScreen(() => import("./components/settings/TwoStep"));
 const VulaFieldOps = lazyScreen(() => import("./components/VulaFieldOps"));
 const VulaDraft = lazyScreen(() => import("./components/VulaDraft"));
 const VulaAgent = lazyScreen(() => import("./components/VulaAgent"));
@@ -93,6 +94,7 @@ const TABS = [
   { id: "docs", label: "Documents", component: VulaDocuments },
   { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
   { id: "training", label: "Training KB", component: VulaTraining },
+  { id: "twostep", label: "Two-step sign-in", component: TwoStep },
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },
   { id: "reports", label: "Reports", component: VulaReports },
