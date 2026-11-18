@@ -896,10 +896,12 @@ async def master_books_audit_sign_off(tenant_id: str, audit_id: str, body: dict,
 
     def _do():
         db = service._client()
-        rows = (db.table("vula_books_audits").select("id").eq("tenant_id", tenant_id).eq("id", audit_id)
+        rows = (db.table("vula_books_audits").select("id,agreed_by").eq("tenant_id", tenant_id).eq("id", audit_id)
                 .limit(1).execute().data or [])
         if not rows:
             return None
+        if not rows[0].get("agreed_by"):
+            return {"not_agreed": True}
         db.table("vula_books_audits").update({"signed_off_by": who,
                                               "signed_off_at": datetime.now(timezone.utc).isoformat()}) \
             .eq("tenant_id", tenant_id).eq("id", audit_id).execute()
@@ -908,6 +910,8 @@ async def master_books_audit_sign_off(tenant_id: str, audit_id: str, body: dict,
     got = await asyncio.to_thread(_do)
     if not got:
         raise HTTPException(status_code=404, detail="no such audit for this business")
+    if got.get("not_agreed"):
+        raise HTTPException(status_code=409, detail="The business hasn't agreed this audit yet (Books review › Agree).")
     return {"ok": bool(got.get("signed_off_by")), **got}
 
 

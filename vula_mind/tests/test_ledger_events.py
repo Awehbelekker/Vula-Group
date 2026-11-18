@@ -22,7 +22,7 @@ def _chart():
 def db(monkeypatch):
     d = FakeSupabase({"commerce_accounts": _chart(), "journal_entries": [], "journal_lines": [],
                       "journal_post_failures": [], "commerce_invoice_settings": [{"tenant_id": T, "vat_registered": True}],
-                      "commerce_books_settings": [], "commerce_bank_accounts": [{"id": "ba-1", "tenant_id": T, "number": "62012345678"}],
+                      "commerce_books_settings": [], "commerce_bank_accounts": [{"id": "ba-1", "tenant_id": T, "account_number": "62012345678"}],
                       "commerce_invoices": [], "commerce_bank_transactions": [], "commerce_expenses": [],
                       "commerce_suppliers": []})
     for mod in (lv, accounting, ledger, ev, service):

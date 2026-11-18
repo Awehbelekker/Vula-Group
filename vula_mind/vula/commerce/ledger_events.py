@@ -500,9 +500,9 @@ def expense_reimbursed(tenant_id: str, expense_row: Dict[str, Any]) -> Optional[
 def _bank_account_ids(tenant_id: str) -> Dict[str, str]:
     """Account number as printed → its commerce_bank_accounts id."""
     try:
-        rows = (_client().table("commerce_bank_accounts").select("id,number").eq("tenant_id", tenant_id)
+        rows = (_client().table("commerce_bank_accounts").select("id,account_number").eq("tenant_id", tenant_id)
                 .limit(200).execute().data or [])
-        return {str(r.get("number")): str(r["id"]) for r in rows if r.get("number") and r.get("id")}
+        return {str(r.get("account_number")): str(r["id"]) for r in rows if r.get("account_number") and r.get("id")}
     except Exception:  # noqa: BLE001
         return {}
 

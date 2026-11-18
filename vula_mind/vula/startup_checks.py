@@ -205,6 +205,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("288", "journal_bank_links", None),
     ("288", "journal_lines", "basis"),
     ("288", "journal_entries", "version"),
+    ("291", "vula_books_audits", "agreed_by"),
 ]
 
 

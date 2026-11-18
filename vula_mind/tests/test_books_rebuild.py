@@ -76,7 +76,7 @@ def _history():
         {"id": "jl7", "journal_entry_id": "je3", "account_id": "acc-opening_balance_equity", "debit_cents": 0, "credit_cents": 115000}]
     return {"commerce_accounts": _chart(), "journal_entries": old_v1, "journal_lines": old_lines,
             "journal_post_failures": [], "commerce_invoice_settings": [{"tenant_id": T, "vat_registered": True}],
-            "commerce_books_settings": [], "commerce_bank_accounts": [{"id": "ba-1", "tenant_id": T, "number": ACC}],
+            "commerce_books_settings": [], "commerce_bank_accounts": [{"id": "ba-1", "tenant_id": T, "account_number": ACC}],
             "commerce_invoices": [inv, credited, cn, bill, draft_bill, xero, order_inv],
             "commerce_invoice_payments": payments, "commerce_orders": orders, "commerce_expenses": expenses,
             "commerce_bank_transactions": bank, "commerce_suppliers": [], "vula_books_audits": [],
