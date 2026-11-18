@@ -10,6 +10,16 @@ full access (an owner or manager) — the bank data behind the books is the busi
   GET  /{tenant_id}/admin/books-audit/statements          the comparisons, newest first
   GET  /{tenant_id}/admin/books-audit/statements/{id}     one comparison with its proposed actions
   POST /{tenant_id}/admin/books-audit/statements/{id}/apply   do the confirmed actions (all, or `accept`)
+
+18 Nov 2026, the books review screen (vula/commerce/books_review.py):
+  POST /{tenant_id}/admin/books-audit/run                 now also keeps the rebuild dry run (`books`)
+  GET  /{tenant_id}/admin/books-audit/review              the worklist, every item as it is now
+  POST /{tenant_id}/admin/books-audit/lines/restore       {ids, reason}  set-aside lines back in the books
+  POST /{tenant_id}/admin/books-audit/lines/set-aside     {ids, reason}  lines out of the books
+  POST /{tenant_id}/admin/books-audit/lines/transfer      {ids}          two legs of a move between own accounts
+  POST /{tenant_id}/admin/books-audit/lines/{id}/link     {invoice_id | expense_id}  this line IS that payment
+  POST /{tenant_id}/admin/books-audit/documents/{kind}/{id}/date  {date, reason}  correct a misread date
+  POST /{tenant_id}/admin/books-audit/{audit_id}/agree    {note}         the business agrees the audit
 """
 from __future__ import annotations
 
@@ -42,33 +52,96 @@ def _client():
     return c()
 
 
-def store_report(tenant_id: str, rep: dict, created_by: str) -> Optional[str]:
-    try:
-        got = (_client().table("vula_books_audits").insert({
-            "tenant_id": tenant_id, "report": rep, "summary": rep.get("summary") or {},
-            "created_by": created_by}).execute().data or [])
-        return got[0]["id"] if got else None
-    except Exception:  # noqa: BLE001 — before migration 287 the report is still returned
-        return None
-
-
 @router.post("/{tenant_id}/admin/books-audit/run")
 async def run_audit(tenant_id: str, request: Request) -> dict:
+    """The books audit and the rebuild dry run (what the one trusted book would hold), kept together."""
     person, _ = await _full(tenant_id, request)
-    from vula.commerce import books_audit
-    rep = await asyncio.to_thread(books_audit.run, tenant_id)
-    rep["id"] = await asyncio.to_thread(store_report, tenant_id, rep, person or "owner")
-    return rep
+    from vula.commerce import books_review
+    return await asyncio.to_thread(books_review.run, tenant_id, person or "owner")
 
 
 @router.get("/{tenant_id}/admin/books-audit/latest")
 async def latest_audit(tenant_id: str, request: Request) -> dict:
     await _full(tenant_id, request)
-    rows = await asyncio.to_thread(lambda: _client().table("vula_books_audits")
-                                   .select("id,report,created_by,created_at,signed_off_by,signed_off_at")
-                                   .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(1)
-                                   .execute().data or [])
-    return rows[0] if rows else {}
+    from vula.commerce import books_review
+    return await asyncio.to_thread(books_review.latest, tenant_id) or {}
+
+
+@router.get("/{tenant_id}/admin/books-audit/review")
+async def review(tenant_id: str, request: Request) -> dict:
+    await _full(tenant_id, request)
+    from vula.commerce import books_review
+    return await asyncio.to_thread(books_review.review, tenant_id)
+
+
+class LinesBody(BaseModel):
+    ids: List[str]
+    reason: Optional[str] = None
+
+
+class LinkBody(BaseModel):
+    invoice_id: Optional[str] = None
+    expense_id: Optional[str] = None
+
+
+class DateBody(BaseModel):
+    date: str
+    reason: str
+
+
+class AgreeBody(BaseModel):
+    note: Optional[str] = None
+
+
+async def _fix(fn, *args, **kwargs) -> dict:
+    from vula.commerce.books_review import Refused
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except Refused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/books-audit/lines/restore")
+async def restore_lines(tenant_id: str, body: LinesBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import books_review
+    return await _fix(books_review.restore, tenant_id, body.ids, body.reason or "", actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/lines/set-aside")
+async def set_aside_lines(tenant_id: str, body: LinesBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import books_review
+    return await _fix(books_review.set_aside, tenant_id, body.ids, body.reason or "", actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/lines/transfer")
+async def transfer_lines(tenant_id: str, body: LinesBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import books_review
+    return await _fix(books_review.transfer, tenant_id, body.ids, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/lines/{txn_id}/link")
+async def link_line(tenant_id: str, txn_id: str, body: LinkBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import books_review
+    return await _fix(books_review.link, tenant_id, txn_id, invoice_id=body.invoice_id,
+                      expense_id=body.expense_id, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/documents/{kind}/{doc_id}/date")
+async def correct_date(tenant_id: str, kind: str, doc_id: str, body: DateBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import books_review
+    return await _fix(books_review.set_date, tenant_id, kind, doc_id, body.date, body.reason, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/{audit_id}/agree")
+async def agree_audit(tenant_id: str, audit_id: str, body: AgreeBody, request: Request) -> dict:
+    person, actor = await _full(tenant_id, request)
+    from vula.commerce import books_review
+    return await _fix(books_review.agree, tenant_id, audit_id, body.note or "", person or "owner", actor=actor)
 
 
 @router.post("/{tenant_id}/admin/books-audit/statements")

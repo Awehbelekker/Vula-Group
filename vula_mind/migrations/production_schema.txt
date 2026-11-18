@@ -102,7 +102,7 @@ vula_app_errors: browser:text, build:text, count:int4, fingerprint:text, first_s
 vula_approval_steps: approval_id:uuid, approver_name:text, approver_phone:text, decided_at:timestamptz, id:uuid, notes:text, role:text, status:text
 vula_approvals: completed_at:timestamptz, created_at:timestamptz, deliver_via:text, entity_id:text, entity_type:text, id:uuid, meta:jsonb, requested_by:text, status:text, tenant_id:text, title:text
 vula_background_jobs: kind:text, running:bool, started_at:timestamptz, status:jsonb, tenant_id:text, updated_at:timestamptz
-vula_books_audits: created_at:timestamptz, created_by:text, id:uuid, report:jsonb, signed_off_at:timestamptz, signed_off_by:text, summary:jsonb, tenant_id:text
+vula_books_audits: agreed_at:timestamptz, agreed_by:text, agreed_note:text, created_at:timestamptz, created_by:text, id:uuid, report:jsonb, signed_off_at:timestamptz, signed_off_by:text, summary:jsonb, tenant_id:text
 vula_boq_drafts: lines:jsonb, project:text, tenant_id:text, total_cents:int8, updated_at:timestamptz, updated_by:text
 vula_buildup_lines: buildup_id:uuid, component:text, id:uuid, kind:text, label:text, note:text, position:int4, qty_per_unit:numeric, source_ref:text, tenant_id:text, unit:text, waste_pct:numeric
 vula_buildup_suggestions: bought_qty:numeric, buildup_id:uuid, component:text, created_at:timestamptz, current_value:numeric, decided_at:timestamptz, decided_by:text, estimate_id:uuid, estimated_qty:numeric, evidence:jsonb, field:text, id:uuid, item:text, kind:text, label:text, new_buildup_id:uuid, project:text, spec:jsonb, status:text, suggested_value:numeric, tenant_id:text, unit:text

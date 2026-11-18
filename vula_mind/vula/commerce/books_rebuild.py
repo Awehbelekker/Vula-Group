@@ -65,7 +65,7 @@ def _load(tenant_id: str) -> Dict[str, Any]:
             "orders": _safe_rows("commerce_orders", tenant_id),
             "expenses": _safe_rows("commerce_expenses", tenant_id),
             "bank": _safe_rows("commerce_bank_transactions", tenant_id),
-            "bank_accounts": _safe_rows("commerce_bank_accounts", tenant_id, "id,number"),
+            "bank_accounts": _safe_rows("commerce_bank_accounts", tenant_id, "id,account_number"),
             "tap_payments": _safe_rows("kb_payments", tenant_id),
             "tap_lines": _safe_rows("kb_ledger_lines", tenant_id),
             "tap_sessions": _safe_rows("kb_sessions", tenant_id, "id,bill_cents")}
@@ -94,7 +94,8 @@ def target(tenant_id: str, accrual_from: Optional[str] = None,
     for v in pays.values():
         v.sort(key=lambda p: (str(p.get("paid_at") or ""), str(p.get("id"))))
     invoices = {str(i["id"]): i for i in data["invoices"]}
-    accounts = {str(a.get("number")): str(a["id"]) for a in data["bank_accounts"] if a.get("number") and a.get("id")}
+    accounts = {str(a.get("account_number")): str(a["id"]) for a in data["bank_accounts"]
+                if a.get("account_number") and a.get("id")}
 
     with ev.capture({("settings", tenant_id): settings}) as entries:
         def tag(start: int, kind: str, row: Dict[str, Any]) -> None:
@@ -435,7 +436,7 @@ def plan(tenant_id: str, accrual_from: Optional[str] = None, *, audit: bool = Tr
                                                 for ln in e["lines"] if ln.get("account_code") == ev.SUSPENSE)}
                                  for e in suspense[:20]]},
         "in_transit_cents": acc.get(ev.CLEARING, 0),
-        "in_transit": {"by_kind": by_kind, "largest": open_items[:25]},
+        "in_transit": {"by_kind": by_kind, "largest": open_items[:500]},
         "creditors_by_bill": ap_off[:25], "debtors_by_invoice": ar_off[:25],
         "owed_to_staff_cents": -acc.get(ev.STAFF, 0), "cash_on_hand_cents": acc.get(ev.CASH, 0),
         "bank_reconciliation": recon,
