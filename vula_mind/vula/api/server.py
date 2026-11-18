@@ -1955,6 +1955,12 @@ import time as _time
 _request_stats: dict = {"total": 0, "errors": 0, "latencies_ms": []}
 
 
+_SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
 @app.middleware("http")
 async def request_middleware(request: Request, call_next):
     """Structured request logging with correlation ID, timing, and error tracking."""
@@ -1988,6 +1994,11 @@ async def request_middleware(request: Request, call_next):
 
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Latency-Ms"] = str(latency_ms)
+    # 18 Nov 2026 (pre-launch audit, "HSTS not set explicitly"): browsers keep to HTTPS for this
+    # host for a year and never guess a response's type. No frame rule here: some API pages are
+    # shown inside the storefronts.
+    for k, v in _SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
     return response
 
 

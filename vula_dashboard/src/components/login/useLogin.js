@@ -24,7 +24,7 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
-  const [info, setInfo] = useState(notice)       // e.g. "You've been signed out on this phone…"
+  const [info, setInfo] = useState(notice)       // e.g. "You've been signed out on this device…"
   const [loading, setLoading] = useState(false)
   const [loginBrand, setLoginBrand] = useState(null)
   const { login } = useAuthStore()

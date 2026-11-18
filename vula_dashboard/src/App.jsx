@@ -364,7 +364,7 @@ export default function App() {
   // Show login if not authenticated
   if (!user) {
     return <VulaLogin onSuccess={() => {}} email={signedOutEmail || ""}
-      notice={signedOutEmail ? "You've been signed out on this phone. Sign in again to carry on." : ""} />;
+      notice={signedOutEmail ? "You've been signed out on this device. Sign in again to carry on." : ""} />;
   }
 
   // #/ui-kit — every shared component on demo data (2026-10-17, UX redesign). Master only: it
