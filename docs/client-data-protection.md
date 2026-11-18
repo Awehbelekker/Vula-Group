@@ -14,6 +14,7 @@ Vula runs your business on WhatsApp and a web dashboard: orders, invoices, docum
 ## 2. Only the right people see the right things
 
 - Your team members get access only to the sections you give them. Removing someone from your team also removes their sign-in.
+- Every login can turn on two-step sign-in (Settings › Two-step sign-in): a 6-digit code from an app on their phone as well as their password. Once it's on, Vula's server refuses any session that didn't give the code.
 - A staff member's own conversations with Vula, and their private notes, are visible to them only. A bank account marked private to one person stays out of the business's books and searches.
 - When Vula researches something for a staff member, the answer is shared with their colleagues only if it was written without their own conversation or private notes in front of it. A colleague never sees the question as it was asked.
 - What each job actually cost (supplier prices and pay rates) is visible to owners and managers only.
@@ -83,7 +84,7 @@ Countries in the European Union protect personal information to a standard at le
 ## Still being finished
 
 - Moving the knowledge base to Frankfurt (see section 3).
-- Two-step sign-in for dashboard logins.
+- Turning on two-step sign-in for every owner login (it's available to every login now; see section 2).
 - A published PAIA manual and a named Information Officer.
 - Round-the-clock error alerts to the Vula team.
 

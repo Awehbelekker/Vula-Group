@@ -70,6 +70,14 @@ class SignupIn(BaseModel):
         return v
 
 
+@router.get("/auth/two-step-policy")
+async def two_step_policy() -> dict:
+    """Public: which roles must set up two-step sign-in (the login screen asks before letting
+    them in). Names roles only — never anything about a person."""
+    from vula.api.master_auth import required_roles
+    return {"required_roles": sorted(required_roles())}
+
+
 @router.post("/signup")
 async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user)) -> dict:
     """Create a brand-new tenant + its first owner login, both tied to the verified caller.
