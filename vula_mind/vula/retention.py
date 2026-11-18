@@ -104,6 +104,13 @@ def _chat_attachments(days: int) -> Dict[str, int]:
     return prune_all(days)
 
 
+def _table_rule(*pairs):
+    """A rule over one or more (table, date column) pairs, each counted on its own."""
+    def purge(days: int) -> Dict[str, int]:
+        return {table: _older_than(table, column, days) for table, column in pairs}
+    return purge
+
+
 RULES: List[Rule] = [
     Rule("takeoff_plans", "takeoff_retention_days", _takeoff),
     # 9 Nov 2026 (owner's decision, golive audit): the candidates docs/security-model.md listed.
@@ -116,6 +123,22 @@ RULES: List[Rule] = [
     Rule("conversations", "conversation_retention_days", _conversations),
     # 17 Nov 2026 audit: files attached to the dashboard chat ("read, not filed") — a day
     Rule("chat_attachments", "chat_attachment_retention_days", _chat_attachments),
+    # 18 Nov 2026 (pre-launch audit): the rest of what holds people's words or details, and the
+    # technical records. Never: filed documents, invoices, consent proof, audit trails, AI usage,
+    # emails sent to a project's client (kept like invoices).
+    Rule("whatsapp_sent", "outbound_retention_days", _table_rule(("vula_wa_outbound", "created_at"))),
+    Rule("escalations", "escalation_retention_days", _table_rule(("vula_escalations", "created_at"))),
+    Rule("chat_messages", "chat_message_retention_days", _table_rule(("vula_chat_messages", "created_at"))),
+    Rule("email_followups", "email_followup_retention_days", _table_rule(("vula_email_followups", "created_at"))),
+    Rule("email_contacts", "email_contact_retention_days", _table_rule(("vula_email_contacts", "last_seen"))),
+    Rule("email_voice_samples", "email_voice_sample_retention_days",
+         _table_rule(("vula_email_voice_samples", "created_at"))),
+    Rule("routing_telemetry", "telemetry_retention_days", _table_rule(("vula_reasoning_telemetry", "created_at"))),
+    Rule("health_checks", "health_event_retention_days",
+         _table_rule(("vula_health_events", "created_at"), ("vula_eval_reports", "created_at"))),
+    Rule("webhooks", "webhook_retention_days",
+         _table_rule(("vula_webhook_failures", "created_at"), ("kb_webhook_events", "received_at"))),
+    Rule("automation_log", "automation_log_retention_days", _table_rule(("commerce_automation_log", "fired_at"))),
 ]
 
 
