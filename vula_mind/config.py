@@ -643,6 +643,13 @@ class Settings(BaseSettings):
     from_email: str = "Vula Group <hello@vula.ai>"
     team_email: str = ""                # team notifications (Richard/Judy)
 
+    # ── Two-step sign-in (18 Nov 2026, vula/api/master_auth.py) ──────────────
+    # A login that has set up an authenticator app must give its code: a session without it
+    # (Supabase "aal1") is refused by every route, whatever this says. These roles must also set
+    # one up before Vula lets them in (comma-separated vula_tenant_users roles, e.g.
+    # "master,owner"). Empty = nobody is made to; turn it on once those logins have one.
+    mfa_required_roles: str = ""
+
     # ── Error monitoring (Sentry) ────────────────────────────────────────────
     # Empty (the default) keeps today's behaviour: errors only reach Railway's log stream, no
     # exception-level alerting. Set to enable — see vula/api/server.py's init for the PII-scrubbing

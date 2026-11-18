@@ -169,11 +169,11 @@ export default function App() {
     const onUnauthorized = async () => {
       if (checking) return;
       checking = true;
-      try { if ((await stillSignedIn()) === false) await expire(); } finally { checking = false; }
+      try { if ((await stillSignedIn(role)) === false) await expire(); } finally { checking = false; }
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
-  }, [user, expire]);
+  }, [user, role, expire]);
 
   // DB-driven tenant switcher: every configured tenant, not a hardcoded pair. Read again when
   // Master creates a business ("vula-tenants-changed", master/useMasterTenants.js): it loaded

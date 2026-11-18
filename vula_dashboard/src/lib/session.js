@@ -12,10 +12,19 @@
  */
 import { supabase } from './supabase'
 import { signedInFromAuthResult } from './sessionVerdict'
+import { twoStepNeeded } from './mfa'
 
-export async function stillSignedIn() {
+/** `role` is the signed-in role: a session that still owes its two-step code, or a role that must
+ * set two-step up and hasn't, counts as not signed in (18 Nov 2026) — Vula's server refuses it, so
+ * the login page asks for the code instead of every screen failing to load. */
+export async function stillSignedIn(role) {
   try {
-    return signedInFromAuthResult(await supabase.auth.getUser())
+    const verdict = signedInFromAuthResult(await supabase.auth.getUser())
+    if (verdict !== true) return verdict
+    try {
+      if (await twoStepNeeded(role)) return false
+    } catch { /* couldn't tell: keep them signed in */ }
+    return true
   } catch {
     return null
   }

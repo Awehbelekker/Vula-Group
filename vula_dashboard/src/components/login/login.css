@@ -54,3 +54,9 @@
 .vlg-pw { position: relative; display: block; }
 .vlg-pw > input { padding-right: 48px !important; }
 .vlg-pw-eye { position: absolute; top: 50%; right: 2px; transform: translateY(-50%); width: 40px !important; height: 40px !important; min-height: 40px !important; }
+
+/* Two-step sign-in (18 Nov 2026): the set-up steps, QR and key */
+.vlg-steps { margin: 0 0 var(--space-4, 16px); padding-left: 1.25rem; display: grid; gap: var(--space-2, 8px); }
+.vlg-steps li { line-height: 1.45; }
+.vlg-mfa-qr { display: block; margin: var(--space-2, 8px) 0; background: white; padding: 8px; border-radius: 8px; }
+.vlg-mfa-key { word-break: break-all; font-size: 0.85em; }

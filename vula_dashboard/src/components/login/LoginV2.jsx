@@ -5,7 +5,7 @@
  * Wears the tenant's brand on its own dashboard address (logo or name, "Powered by Vula").
  */
 import { useState } from 'react'
-import { ArrowLeft, Building2, Eye, EyeOff, KeyRound, LogIn, Mail, MessageCircle, QrCode, RotateCcw, Send, Smartphone, UserPlus } from 'lucide-react'
+import { ArrowLeft, Building2, Eye, EyeOff, KeyRound, LogIn, Mail, MessageCircle, QrCode, RotateCcw, Send, ShieldCheck, Smartphone, UserPlus } from 'lucide-react'
 import { Button, Card, Field, IconButton, Input, Select } from '../ui/index.jsx'
 import VulaLogo, { PoweredByVula } from '../brand/VulaLogo.jsx'
 import { useLogin } from './useLogin'
@@ -96,6 +96,33 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
           </>
         )}
 
+        {x.mode === 'two_step_code' && (
+          <>
+            <h1 className="vlg-h1">Enter your code</h1>
+            <p className="vlg-sub">Open your authenticator app and type the 6-digit code for Vula{x.pendingUser?.email ? ` (${x.pendingUser.email})` : ''}.</p>
+            <Notes x={x} />
+            <form onSubmit={x.handleTwoStepCode} className="vlg-form">
+              <TwoStepCode x={x} />
+              <Button size="lg" Icon={ShieldCheck} disabled={x.loading || x.twoStepCode.length !== 6} className="vlg-wide">{x.loading ? 'Checking…' : 'Sign in'}</Button>
+            </form>
+            <p className="vlg-muted">Lost your phone? Contact Vula support to switch two-step sign-in off for your login.</p>
+            <Back onClick={x.cancelTwoStep} />
+          </>
+        )}
+
+        {x.mode === 'two_step_setup' && (
+          <>
+            <h1 className="vlg-h1">Set up two-step sign-in</h1>
+            <Notes x={x} />
+            <TwoStepSetupSteps setup={x.twoStepSetup} />
+            <form onSubmit={x.handleTwoStepSetup} className="vlg-form">
+              <TwoStepCode x={x} />
+              <Button size="lg" Icon={ShieldCheck} disabled={x.loading || !x.twoStepSetup || x.twoStepCode.length !== 6} className="vlg-wide">{x.loading ? 'Checking…' : 'Turn on and sign in'}</Button>
+            </form>
+            <Back onClick={x.cancelTwoStep} />
+          </>
+        )}
+
         {x.mode === 'reset_request' && (
           <>
             <h1 className="vlg-h1">Reset password</h1>
@@ -126,6 +153,30 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
         )}
       </Card>
     </main>
+  )
+}
+
+function TwoStepCode({ x }) {
+  return (
+    <Field label="6-digit code">
+      <Input inputMode="numeric" required maxLength={6} value={x.twoStepCode} className="vlg-code" autoFocus
+        onChange={(e) => x.setTwoStepCode(e.target.value.replace(/\D/g, ''))} autoComplete="one-time-code" />
+    </Field>
+  )
+}
+
+/** The QR and the key to type instead, for setting up an authenticator app (also in Settings). */
+export function TwoStepSetupSteps({ setup }) {
+  if (!setup) return <p className="vlg-muted" role="status">Getting your QR code…</p>
+  return (
+    <ol className="vlg-steps">
+      <li>Install an authenticator app on your phone — Google Authenticator, Microsoft Authenticator or Authy.</li>
+      <li>In the app, add an account and scan this QR code:
+        {setup.qr && <img src={setup.qr} alt="QR code for your authenticator app" className="vlg-mfa-qr" width={180} height={180} />}
+        <span className="vlg-muted">Can't scan? Type this key instead: <code className="vlg-mfa-key">{setup.secret}</code></span>
+      </li>
+      <li>Type the 6-digit code the app shows.</li>
+    </ol>
   )
 }
 
