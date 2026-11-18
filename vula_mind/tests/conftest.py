@@ -39,6 +39,17 @@ def _fresh_classifier_cache():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_tenant_config_cache():
+    """get_config caches each business's config for a minute (vula/api/tenants.py). Every posting
+    now asks whether the business keeps the trusted book (features.on → get_config), so one test's
+    fake config must not become the next test's."""
+    from vula.api import tenants
+    tenants._CACHE.clear()
+    yield
+    tenants._CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
 def _fresh_document_batches():
     """A sender's documents within 3 minutes form one batch (vula/api/doc_batch.py); one test's
     documents must not make the next test's the second of a batch."""

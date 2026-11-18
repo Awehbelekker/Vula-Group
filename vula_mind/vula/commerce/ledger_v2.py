@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 # Accounts the trusted book needs beyond the default chart (accounting.DEFAULT_CHART), added only
 # for a business whose books_v2 is on. (code, name, type, vat_treatment, deductible, sort)
 LEDGER_CHART = [
-    ("clearing",               "Money in transit",                "asset",     "none", False, 6),
+    ("clearing",               "Payouts & money in transit",      "asset",     "none", False, 6),
     ("transfer_clearing",      "Transfers between own accounts",  "asset",     "none", False, 7),
     ("cash_on_hand",           "Cash on hand",                    "asset",     "none", False, 8),
     ("suspense",               "To review",                       "asset",     "none", False, 9),
@@ -36,8 +36,10 @@ LEDGER_CHART = [
     ("owner_capital",          "Owner's capital",                 "equity",    "none", False, 161),
     ("opening_balance_equity", "Opening balances",                "equity",    "none", False, 162),
 ]
-# Never offered when someone categorises a bank line or an expense; the books use them.
-SYSTEM_CODES = frozenset({"clearing", "suspense", "opening_balance_equity", "staff_reimbursements"})
+# Never offered when someone categorises a bank line or an expense; the books use them. (clearing
+# is offered for money in only — a card-machine or payment-link payout of sales already recorded —
+# see accounting.usable_for.)
+SYSTEM_CODES = frozenset({"suspense", "opening_balance_equity", "staff_reimbursements"})
 VIEWS = ("accrual", "cash")
 
 

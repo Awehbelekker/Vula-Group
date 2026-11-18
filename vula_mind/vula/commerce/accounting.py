@@ -235,8 +235,8 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
     from core.llm_router import resolve_generation_route, escalate_to_cloud
 
     accounts = accounts if accounts is not None else ensure_chart(tenant_id)
-    inc = [a for a in accounts if a.get("type") == "income"]
-    exp = [a for a in accounts if a.get("type") in ("expense", "equity")]
+    inc = [a for a in accounts if usable_for(a, "in")]
+    exp = [a for a in accounts if usable_for(a, "out")]
     results: List[Optional[Dict[str, Any]]] = [None] * len(txns)
 
     # A decided merchant profile outranks everything: it is the owner's own answer, or research
@@ -286,7 +286,9 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
             prompt = (
                 "You are the bookkeeper for a small South African business. Assign ONE account code "
                 "to each numbered bank transaction below.\n"
-                "Money [in] (credits) MUST use an income code:\n" + inc_listing + "\n"
+                "Money [in] (credits) MUST use one of these (income, or — only where listed — "
+                "money the owner put in or lent, or a transfer from the business's own other account):\n"
+                + inc_listing + "\n"
                 "Money [out] (debits) MUST use an expense code, or owner_drawings for the owner's "
                 "personal/family spend from the business account:\n" + exp_listing + "\n"
                 "Hints: 'Payment Received' / 'Card Machine Sales' = customers paying → sales. "
@@ -320,6 +322,46 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
     return results     # type: ignore[return-value]
 
 
+# 18 Nov 2026 (one trusted book): money coming in isn't always a sale — the owner putting money in
+# or lending it, a transfer from the business's own other account, or a card-machine payout of
+# sales already recorded. These codes exist only for a business on the trusted book
+# (ledger_v2.LEDGER_CHART); the accounts the books keep for themselves are never offered.
+MONEY_IN_CODES = frozenset({"owner_capital", "owner_loan", "transfer_clearing", "clearing"})
+MONEY_OUT_CODES = frozenset({"owner_loan", "transfer_clearing"})
+NEVER_PICKED = frozenset({"suspense", "opening_balance_equity", "staff_reimbursements",
+                          "bank_cash", "cash_on_hand", "accounts_receivable", "accounts_payable",
+                          "vat_output", "vat_input"})
+
+
+def usable_for(account: Optional[dict], direction: str) -> bool:
+    """Can a bank line going this way ('in'/'out') be categorised to this account?"""
+    if not account:
+        return False
+    code, kind = account.get("code"), account.get("type")
+    if code in NEVER_PICKED:
+        return False
+    if direction == "in":
+        return kind == "income" or code in MONEY_IN_CODES
+    return (kind in ("expense", "equity") and code not in ("owner_capital", "clearing")) or code in MONEY_OUT_CODES
+
+
+def refused_for(account: Optional[dict], direction: str) -> Optional[str]:
+    """Why a person can't put a bank line on this account, or None. Lenient on purpose: money in
+    to a cost account is a supplier's refund, so only what would break the books is refused."""
+    if not account:
+        return "unknown account_code"
+    code = account.get("code")
+    if code in NEVER_PICKED:
+        return f"{account.get('name') or code} is kept by the books themselves and can't be chosen."
+    if direction == "out" and code in ("clearing", "owner_capital"):
+        return f"{account.get('name') or code} is for money coming in only."
+    return None
+
+
+def directions_for(account: Optional[dict]) -> List[str]:
+    return [d for d in ("in", "out") if usable_for(account, d)]
+
+
 def _default_code(txn: dict, accounts: List[dict]) -> str:
     codes = {a["code"] for a in accounts}
     if txn.get("direction") == "in":
@@ -330,11 +372,14 @@ def _default_code(txn: dict, accounts: List[dict]) -> str:
 async def categorize(tenant_id: str, txn: dict, accounts: Optional[List[dict]] = None) -> Dict[str, Any]:
     """Allocate a transaction to an account: learned rule → AI → sensible default."""
     accounts = accounts if accounts is not None else ensure_chart(tenant_id)
+    direction = txn.get("direction") or "out"
+    # 18 Nov 2026: the single-line path now keeps to the line's direction, like the batch one.
+    usable = [a for a in accounts if usable_for(a, direction)] or accounts
     learned = lookup_learned_category(tenant_id, txn)
-    if learned and any(a["code"] == learned for a in accounts):
+    if learned and any(a["code"] == learned for a in usable):
         return {"account_code": learned, "source": "learned"}
-    ai = await _ai_categorize(txn, accounts)
-    if ai:
+    ai = await _ai_categorize(txn, usable)
+    if ai and any(a["code"] == ai for a in usable):
         return {"account_code": ai, "source": "ai"}
     return {"account_code": _default_code(txn, accounts), "source": "default"}
 
@@ -390,8 +435,11 @@ def is_vat_registered(tenant_id: str) -> bool:
         rows = (_client().table("commerce_invoice_settings").select("vat_registered")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
         return bool(rows[0].get("vat_registered", False)) if rows else False   # migration 253
-    except Exception:
-        return True
+    except Exception as exc:
+        # 18 Nov 2026: fail closed — never claim or charge VAT for a business we can't confirm is
+        # registered. Said out loud so a registered business's missing VAT is noticed.
+        log.warning("VAT registration not read for %s, treating as not registered: %s", tenant_id, exc)
+        return False
 
 
 def vat_return(tenant_id: str, since: str = None, until: str = None) -> dict:

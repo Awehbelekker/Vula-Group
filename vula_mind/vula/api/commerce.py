@@ -3243,6 +3243,17 @@ async def admin_bank_statement_from_upload(tenant_id: str, body: dict):
     return {"processing": True, "note": "Reconciling — check the Bank tab in a few minutes."}
 
 
+
+def _books_sync(tenant_id: str, txn_ids) -> None:
+    """The one trusted book (books_v2): post bank lines again as they now stand. Never blocks."""
+    try:
+        from vula.commerce import ledger_events
+        if ledger_events.on(tenant_id):
+            ledger_events.sync_bank_lines(tenant_id, [str(t) for t in txn_ids if t])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bank lines not re-posted to the books: %s", exc)
+
+
 @router.post("/{tenant_id}/admin/bank/recategorize")
 async def admin_bank_recategorize(tenant_id: str):
     """Re-run AI categorisation over every transaction still waiting for input (e.g. after a
@@ -3271,6 +3282,7 @@ async def admin_bank_recategorize(tenant_id: str):
             "categorized_by": c["source"],
         }).eq("id", r["id"]).execute()
         updated += 1
+    _books_sync(tenant_id, [r["id"] for r in rows])
     return {"reviewed": len(rows), "updated": updated, "still_pending": len(rows) - updated}
 
 
@@ -3500,7 +3512,8 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
         try:
             paid = await service.record_invoice_payment(
                 tenant_id, body.invoice_id, pay, payment_method="eft",
-                note=f"Bank {txn.get('txn_date') or ''}: {(txn.get('description') or '')[:80]}")
+                note=f"Bank {txn.get('txn_date') or ''}: {(txn.get('description') or '')[:80]}",
+                paid_at=(str(txn.get("txn_date"))[:10] if txn.get("txn_date") else None))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         patch = {"matched_invoice_id": body.invoice_id, "match_status": "matched"}
@@ -3538,7 +3551,7 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
         from uuid import uuid4
         exp = {"id": str(uuid4()), "tenant_id": tenant_id, "date": txn.get("txn_date"),
                "category": body.category or "other", "description": txn.get("description") or "Bank debit",
-               "amount_cents": int(txn.get("amount_cents") or 0)}
+               "amount_cents": int(txn.get("amount_cents") or 0), "paid_with": "company_card"}
         try:
             res = db.table("commerce_expenses").insert(exp).execute()
             patch = {"matched_expense_id": (res.data or [exp])[0].get("id"), "match_status": "matched"}
@@ -3552,6 +3565,7 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
     else:
         raise HTTPException(status_code=400, detail="action must be match|expense|ignore")
     db.table("commerce_bank_transactions").update(patch).eq("tenant_id", tenant_id).eq("id", txn_id).execute()
+    _books_sync(tenant_id, [txn_id])
     out = {"ok": True, **patch}
     if body.action == "match" and body.invoice_id:
         out.update(invoice_status=paid.get("status"), paid_cents=pay,
@@ -3609,8 +3623,11 @@ async def admin_bank_match_candidates(tenant_id: str, txn_id: str, limit: int = 
 async def admin_accounts(tenant_id: str):
     """Tenant's chart of accounts (seeded with SA defaults on first call)."""
     from vula.commerce import accounting
-    return {"accounts": accounting.ensure_chart(tenant_id),
-            "vat_registered": accounting.is_vat_registered(tenant_id)}
+    # 18 Nov 2026: the accounts the books keep for themselves are never offered, and each account
+    # says which way money can go on it (money in can be the owner's capital or a loan).
+    accounts = [{**a, "directions": accounting.directions_for(a)}
+                for a in accounting.ensure_chart(tenant_id) if a.get("code") not in accounting.NEVER_PICKED]
+    return {"accounts": accounts, "vat_registered": accounting.is_vat_registered(tenant_id)}
 
 
 class AccountIn(BaseModel):
@@ -3650,14 +3667,16 @@ async def admin_categorize_txn(tenant_id: str, txn_id: str, body: CategorizeIn):
     txn = rows[0]
     accts = {a["code"]: a for a in accounting.ensure_chart(tenant_id)}
     acc = accts.get(body.account_code)
-    if not acc:
-        raise HTTPException(status_code=400, detail="unknown account_code")
+    why = accounting.refused_for(acc, txn.get("direction") or "out")
+    if why:
+        raise HTTPException(status_code=400, detail=why)
     vat = accounting.vat_for(acc, int(txn.get("amount_cents") or 0), accounting.is_vat_registered(tenant_id))
     db.table("commerce_bank_transactions").update(
         {"account_code": body.account_code, "vat_cents": vat,
          "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
     ).eq("id", txn_id).execute()
     accounting.learn_category_rule(tenant_id, txn, body.account_code)   # so similar txns auto-fill
+    _books_sync(tenant_id, [txn_id])
     return {"ok": True, "account_code": body.account_code, "vat_cents": vat}
 
 
@@ -3778,6 +3797,9 @@ async def admin_bulk_categorize(tenant_id: str, body: BulkCategorizeIn):
             .eq("tenant_id", tenant_id).in_("id", body.txn_ids).execute().data or [])
     if not rows:
         raise HTTPException(status_code=404, detail="no matching transactions")
+    whys = {accounting.refused_for(acc, r.get("direction") or "out") for r in rows} - {None}
+    if whys:
+        raise HTTPException(status_code=400, detail=sorted(whys)[0])
 
     vat_reg = accounting.is_vat_registered(tenant_id)
     project = service.canonical_project(tenant_id, body.project) if body.project else None
@@ -3810,6 +3832,7 @@ async def admin_bulk_categorize(tenant_id: str, body: BulkCategorizeIn):
                              payee=rows[0].get("payee"))
         except Exception as exc:
             log.debug("bulk allocation learning skipped: %s", exc)
+    _books_sync(tenant_id, [r["id"] for r in rows])
     return {"ok": True, "updated": updated, "requested": len(body.txn_ids),
             "account_code": body.account_code, "project": project, "trade": trade}
 
@@ -3840,6 +3863,7 @@ async def admin_bulk_dismiss(tenant_id: str, body: BulkDismissIn):
             {"match_status": "ignored"}).in_("id", ids).execute()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"dismiss failed: {exc}")
+    _books_sync(tenant_id, ids)
     return {"ok": True, "dismissed": len(ids), "requested": len(body.txn_ids)}
 
 
@@ -4005,6 +4029,7 @@ async def admin_assign_worker(tenant_id: str, txn_id: str, body: AssignWorkerIn)
          "account_code": "casual_labour", "vat_cents": 0, "vat_treatment": "none",
          "categorized_by": "owner", "match_status": "matched"}).eq("id", txn_id).execute()
     accounting.learn_category_rule(tenant_id, txn, "casual_labour")   # so similar payments auto-file
+    _books_sync(tenant_id, [txn_id])
     return {"ok": True, "worker": w.get("name"), "project": w.get("default_project")}
 
 
