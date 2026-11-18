@@ -66,7 +66,11 @@ Countries in the European Union protect personal information to a standard at le
   - unconverted leads: 1 year;
   - error reports: 90 days;
   - sign-in codes: 30 days;
-  - files attached to the dashboard chat (read, not filed): 1 day.
+  - files attached to the dashboard chat (read, not filed): 1 day;
+  - records of WhatsApp messages sent, customer questions passed to your team, emails waiting on a
+    reply, and the extracts Vula learned your writing style from: 1 year;
+  - dashboard chat history and contacts found in your mailbox: 2 years after the last contact;
+  - system records (AI routing, health checks, delivery notices): 90 days to 1 year.
 - Accounting records are kept for 5 years, as tax law requires. Emails your business sends a client from its project page are kept the same way, as a record of what was sent.
 - When you connect a mailbox, Vula never reads folders named as personal, such as Personal, Private, Medical or Family.
 

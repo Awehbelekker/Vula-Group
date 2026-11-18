@@ -252,6 +252,16 @@ Vula deletes information automatically when it is no longer needed. A daily job 
 | WhatsApp sign-in requests | 30 days |
 | Records that stop a message being handled twice | 30 days |
 | Files attached to the dashboard chat | 1 day |
+| Records of WhatsApp messages Vula sent (a preview and whether it was delivered) | 1 year |
+| Customer questions passed to the business's team | 1 year |
+| Dashboard chat history | 2 years |
+| Emails waiting on a reply (preview and summary) | 1 year |
+| Email contacts found in a connected mailbox | 2 years after the last email with them |
+| Short extracts of sent emails used to learn the business's writing style | 1 year |
+| AI routing records (which model was used and why; no message content) | 1 year |
+| System health checks and answer-check reports | 180 days |
+| Failed and processed delivery notices from other services | 90 days |
+| Automation run log | 1 year |
 | Research notes | Reused for 30 days or 6 months (section 4), deleted a month after that |
 | Private notes | Until the person deletes them, asks for their data to be deleted, or leaves the team |
 | **Accounting records** (invoices, quotes, payments, bank lines, expenses, payroll) | **At least 5 years**, as the Tax Administration Act (s29) requires |
@@ -259,9 +269,9 @@ Vula deletes information automatically when it is no longer needed. A daily job 
 | Bookings, sales pipeline records and filed documents | Kept as the business's own records, until the business deletes them |
 | Backups | 7 days |
 
-[confirm: periods for outbound message records, escalations, AI telemetry, email tables and uploads.
-The 13 Nov audit notes no retention rule exists for these yet. Until one does, say "kept while the
-business uses Vula".]
+Uploaded documents and files the business filed are the business's own records and are kept until it
+deletes them, as above. Consent records (who agreed to or stopped messages) and audit trails are kept
+for as long as the business uses Vula, so we can show what was agreed.
 
 **When a business stops using Vula:** [confirm: what happens to the business's data and how long it
 is kept. The 13 Nov audit notes there is no business-wide export or erase yet.]
@@ -411,7 +421,7 @@ PAIA manual.
     transfer.
 13. Which POPIA s72 bases to rely on (legal adviser).
 14. Incident and breach notification process (s22).
-15. Retention periods not yet set (outbound messages, escalations, telemetry, email tables, uploads).
+15. (Done 18 Nov 2026: retention periods for outbound messages, escalations, telemetry, email tables; uploads are kept as business records.)
 16. What happens to a business's data when it leaves Vula.
 17. EXPORT needs the email service switched on.
 18. Whether order updates and deposits continue after STOP.

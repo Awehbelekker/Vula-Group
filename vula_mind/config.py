@@ -138,6 +138,20 @@ class Settings(BaseSettings):
     # 24 months. 0 keeps them indefinitely.
     conversation_retention_days: int = 730     # commerce_conversation_*, commerce_client_summaries
     chat_attachment_retention_days: int = 1    # files attached to the dashboard chat (vula/chat_attachments.py)
+    # 18 Nov 2026 (pre-launch audit: "no retention rule yet for …"). What a person said or was sent
+    # goes after a year (two for the chat history and mailbox contacts, like conversations);
+    # technical records sooner. Business records (filed documents, invoices, consent proof, audit
+    # trails, AI usage for billing, emails sent to a project's client) are never swept.
+    outbound_retention_days: int = 365          # vula_wa_outbound (WhatsApp messages Vula sent: previews, status)
+    escalation_retention_days: int = 365        # vula_escalations (customer questions handed to the team)
+    chat_message_retention_days: int = 730      # vula_chat_messages
+    email_followup_retention_days: int = 365    # vula_email_followups (email previews waiting on a reply)
+    email_contact_retention_days: int = 730     # vula_email_contacts, by last_seen
+    email_voice_sample_retention_days: int = 365  # vula_email_voice_samples (excerpts the voice was learned from)
+    telemetry_retention_days: int = 365         # vula_reasoning_telemetry (routing decisions; no content)
+    health_event_retention_days: int = 180      # vula_health_events, vula_eval_reports
+    webhook_retention_days: int = 90            # vula_webhook_failures, kb_webhook_events
+    automation_log_retention_days: int = 365    # commerce_automation_log
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
