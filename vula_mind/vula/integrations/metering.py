@@ -168,7 +168,7 @@ _ATOMIC = {"ok": True}
 
 def _add_atomic(db, tenant_id: str, day: str, model: str, prompt_tokens: int,
                 completion_tokens: int, cost: float) -> bool:
-    """One statement adds this call (migration 287), so two calls at once can't overwrite each
+    """One statement adds this call (migration 289), so two calls at once can't overwrite each
     other's count. False when the function isn't there yet: the read-add-write path runs instead."""
     if not _ATOMIC["ok"] or not hasattr(db, "rpc"):
         return False

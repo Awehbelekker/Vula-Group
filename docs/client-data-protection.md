@@ -17,6 +17,7 @@ Vula runs your business on WhatsApp and a web dashboard: orders, invoices, docum
 - A staff member's own conversations with Vula, and their private notes, are visible to them only. A bank account marked private to one person stays out of the business's books and searches.
 - When Vula researches something for a staff member, the answer is shared with their colleagues only if it was written without their own conversation or private notes in front of it. A colleague never sees the question as it was asked.
 - What each job actually cost (supplier prices and pay rates) is visible to owners and managers only.
+- When a business confirms a build-up (how much material and labour goes into one unit of building work), the quantities are shared with other Vula businesses. No names, documents, prices or notes go with them.
 - Links you share with a client open only that client's project. They are long random codes that expire after 180 days, and you can switch them off at any time. Documents that mention another of your projects are left out of what the client sees and downloads.
 
 ## 3. Where your data is kept
@@ -65,7 +66,7 @@ Countries in the European Union protect personal information to a standard at le
   - error reports: 90 days;
   - sign-in codes: 30 days;
   - files attached to the dashboard chat (read, not filed): 1 day.
-- Accounting records are kept for 5 years, as tax law requires.
+- Accounting records are kept for 5 years, as tax law requires. Emails your business sends a client from its project page are kept the same way, as a record of what was sent.
 - When you connect a mailbox, Vula never reads folders named as personal, such as Personal, Private, Medical or Family.
 
 ## 8. Backups

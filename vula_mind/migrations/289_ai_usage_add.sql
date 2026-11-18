@@ -1,4 +1,4 @@
--- 287_ai_usage_add.sql — add one AI call to today's usage row in a single statement.
+-- 289_ai_usage_add.sql — add one AI call to today's usage row in a single statement.
 --
 -- 17 Nov 2026 audit: vula/integrations/metering.py read today's row, added in Python and wrote the
 -- total back, so two calls finishing together overwrote each other's count and cost. Since #320 the
