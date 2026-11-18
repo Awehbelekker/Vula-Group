@@ -704,9 +704,20 @@ class Settings(BaseSettings):
         return warnings
 
 
+# Variable names saved with a stray space in Railway (18 Nov 2026: "XERO_CLIENT_SECRET " — the
+# setting read empty, so Xero couldn't connect). Read from the misspelt name when the right one is
+# unset; the variable should still be renamed in Railway.
+_SPACED_NAMES = {"xero_client_secret": "XERO_CLIENT_SECRET "}
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    import os
+    s = Settings()
+    for field, spaced in _SPACED_NAMES.items():
+        if not getattr(s, field) and os.environ.get(spaced):
+            setattr(s, field, os.environ[spaced].strip())
+    return s
 
 
 settings = get_settings()
