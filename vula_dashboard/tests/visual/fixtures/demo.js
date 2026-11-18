@@ -674,6 +674,24 @@ export const reportPnl = {
   expenses: [{ account: "Cost of sales", amount_cents: 7_412_000 }, { account: "Rent", amount_cents: 1_850_000 },
     { account: "Casual labour", amount_cents: 1_920_000 }, { account: "Motor vehicle", amount_cents: 642_800 }, { account: "Bank charges", amount_cents: 1_540_000 }],
 };
+// The one book (books_v2): the same business, read from its journal on each view.
+export const reportPnlJournal = { source: "journal", basis: "accrual",
+  total_income_cents: 19_210_000, total_expense_cents: 12_910_400, net_profit_cents: 6_299_600,
+  income: [{ account: "Sales", code: "sales", amount_cents: 19_210_000 }],
+  expenses: [{ account: "Cost of sales", code: "cost_of_sales", amount_cents: 8_120_000 },
+    { account: "Casual labour", code: "casual_labour", amount_cents: 2_150_000 },
+    { account: "Rent", code: "rent", amount_cents: 1_850_000 }, { account: "Bank charges", code: "bank_charges", amount_cents: 790_400 }],
+};
+export const reportPnlCash = { ...reportPnlJournal, basis: "cash",
+  total_income_cents: 17_540_000, total_expense_cents: 11_460_400, net_profit_cents: 6_079_600,
+  income: [{ account: "Sales", code: "sales", amount_cents: 17_540_000 }],
+  expenses: [{ account: "Cost of sales", code: "cost_of_sales", amount_cents: 6_670_000 },
+    { account: "Casual labour", code: "casual_labour", amount_cents: 2_150_000 },
+    { account: "Rent", code: "rent", amount_cents: 1_850_000 }, { account: "Bank charges", code: "bank_charges", amount_cents: 790_400 }],
+};
+export const reportVatJournal = { source: "journal", basis: "accrual", vat_registered: true,
+  output_vat_cents: 2_881_500, input_vat_cents: 1_336_560, net_vat_cents: 1_544_940, vat_payable_cents: 1_544_940,
+  note: "Net VAT payable to SARS (positive) or refundable (negative), from your books (invoice basis)." };
 export const reportVat = { vat_registered: true, output_vat_cents: 2_444_674, input_vat_cents: 1_198_210, net_vat_cents: 1_246_464,
   note: "From bank lines with VAT recorded — check against your invoices before filing." };
 

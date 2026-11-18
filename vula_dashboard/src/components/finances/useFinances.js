@@ -76,7 +76,10 @@ export function useLedger(tenantId) {
 
   const loadTrialBalance = useCallback(async () => {
     if (!tenantId) return;
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/trial-balance`);
+    // A business on the one book: the view chosen in Money › Books (accrual unless cash), per viewer.
+    let basis = "accrual";
+    try { if (localStorage.getItem("vula.books.basis") === "cash") basis = "cash"; } catch { /* private window */ }
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/trial-balance?basis=${basis}`);
     setTb(await r.json());
   }, [tenantId]);
 

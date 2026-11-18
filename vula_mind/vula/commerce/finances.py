@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -44,12 +44,14 @@ def _owed(inv: dict) -> int:
     return max(0, int(inv.get("total_cents") or 0) - int(inv.get("total_paid_cents") or 0))
 
 
-def _aging_buckets(out_inv: List[dict], today) -> Dict[str, int]:
+def _aging_buckets(out_inv: List[dict], today, owed=None,
+                   statuses=("sent", "overdue", "part_paid")) -> Dict[str, int]:
+    owed = owed or _owed
     buckets = {"current": 0, "days_1_30": 0, "days_31_60": 0, "days_61_90": 0, "days_90_plus": 0}
     for i in out_inv:
-        if i.get("status") not in ("sent", "overdue", "part_paid"):
+        if i.get("status") not in statuses:
             continue
-        total = _owed(i)
+        total = owed(i)
         if total <= 0:
             continue
         due = i.get("due_date")
@@ -72,6 +74,56 @@ def _aging_buckets(out_inv: List[dict], today) -> Dict[str, int]:
         else:
             buckets["days_90_plus"] += total
     return buckets
+
+
+def aged_creditors(tenant_id: str, as_at: Optional[str] = None) -> Dict[str, Any]:
+    """What the business still owes its suppliers, by how far past due each bill is (every business).
+
+    A bill counts once it's recorded (not a draft, not cancelled, not paid); what's owed is its total
+    less the payments on record against it, not a stored running total (DIGG had bills marked paid
+    with no payment). For a business on the one book the total is set beside the creditors account."""
+    db = _client()
+    today = datetime.fromisoformat(as_at[:10]).date() if as_at else datetime.now(timezone.utc).date()
+    try:
+        bills = (db.table("commerce_invoices")
+                 .select("id,number,supplier_id,customer_name,total_cents,status,issue_date,due_date,direction,doc_type")
+                 .eq("tenant_id", tenant_id).eq("direction", "inbound").execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("aged creditors skipped for %s: %s", tenant_id, exc)
+        return {"as_at": today.isoformat(), "total_cents": 0, "count": 0, "aging": _aging_buckets([], today),
+                "suppliers": []}
+    bills = [b for b in bills if (b.get("doc_type") or "invoice") == "invoice"
+             and b.get("status") not in ("draft", "cancelled", "paid", "void")
+             and (not b.get("issue_date") or str(b["issue_date"])[:10] <= today.isoformat())]
+    paid: Dict[str, int] = {}
+    ids = [b["id"] for b in bills]
+    for i in range(0, len(ids), 150):
+        try:
+            for p in (db.table("commerce_invoice_payments").select("invoice_id,amount_cents")
+                      .eq("tenant_id", tenant_id).in_("invoice_id", ids[i:i + 150]).execute().data or []):
+                paid[p["invoice_id"]] = paid.get(p["invoice_id"], 0) + int(p.get("amount_cents") or 0)
+        except Exception:  # noqa: BLE001
+            pass
+    owed = lambda b: max(0, int(b.get("total_cents") or 0) - paid.get(b["id"], 0))  # noqa: E731
+    open_bills = [b for b in bills if owed(b) > 0]
+    try:
+        names = {x["id"]: x.get("name") for x in (db.table("commerce_suppliers").select("id,name")
+                                                  .eq("tenant_id", tenant_id).execute().data or [])}
+    except Exception:  # noqa: BLE001
+        names = {}
+    per: Dict[str, int] = {}
+    for b in open_bills:
+        n = names.get(b.get("supplier_id")) or b.get("customer_name") or "Supplier not named"
+        per[n] = per.get(n, 0) + owed(b)
+    out = {"as_at": today.isoformat(), "total_cents": sum(per.values()), "count": len(open_bills),
+           "aging": _aging_buckets(open_bills, today, owed=owed, statuses=tuple({b.get("status") for b in open_bills})),
+           "suppliers": [{"name": k, "owed_cents": v} for k, v in sorted(per.items(), key=lambda kv: -kv[1])][:20]}
+    from vula.commerce import ledger_v2
+    if ledger_v2.is_on(tenant_id):
+        from vula.commerce import books_reports
+        out["control_cents"] = books_reports.control(tenant_id, "accounts_payable", today.isoformat())
+        out["ties"] = out["control_cents"] == out["total_cents"]
+    return out
 
 
 async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
@@ -143,7 +195,7 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
         [{"name": k, "revenue_cents": v} for k, v in cust.items() if k != "—"],
         key=lambda x: x["revenue_cents"], reverse=True)[:5]
 
-    return {
+    result = {
         "period_days": days, "since": since, "until": today.isoformat(),
         "revenue_cents": revenue,
         "revenue_breakdown": {"orders_cents": order_rev, "invoices_cents": inv_rev},
@@ -159,6 +211,39 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
         "top_customers": top_customers,
         "top_expense_categories": top_expenses,
     }
+    from vula.commerce import ledger_v2
+    if ledger_v2.is_on(tenant_id):
+        _from_books(tenant_id, result, since, today.isoformat())
+    return result
+
+
+def _from_books(tenant_id: str, result: Dict[str, Any], since: str, until: str) -> None:
+    """A business on the one book: income, costs, profit and VAT from its journal (accrual view),
+    and debtors and creditors set beside their control accounts. Orders, customers and the aging
+    lists stay as they are (they're about documents, not the book)."""
+    from vula.commerce import books_reports, reports
+    p = reports.profit_and_loss(tenant_id, since, until, "accrual")
+    v = books_reports.vat(tenant_id, since, until)
+    revenue, expenses = p["total_income_cents"], p["total_expense_cents"]
+    result.update({
+        "source": books_reports.SOURCE, "basis": "accrual",
+        "revenue_cents": revenue, "expenses_cents": expenses, "gross_profit_cents": revenue - expenses,
+        "margin_pct": round((revenue - expenses) / revenue * 100, 1) if revenue else 0.0,
+        "revenue_breakdown": {**result["revenue_breakdown"],
+                              "by_account": [{"account": r["name"], "code": r["code"], "amount_cents": r["cents"]}
+                                             for r in p["income"]]},
+        "top_expense_categories": [{"category": r["name"], "amount_cents": r["cents"]}
+                                   for r in sorted(p["expenses"], key=lambda r: -r["cents"])[:5]],
+        "vat": {"collected_cents": int(v.get("output_vat_cents") or 0),
+                "claimable_cents": int(v.get("input_vat_cents") or 0),
+                "note": ("VAT from your books (" + ("invoice" if v.get("basis") == "accrual" else "payments")
+                         + " basis) — your accountant files the return.") if v.get("vat_registered")
+                else "Not VAT registered — no VAT charged or claimed."},
+    })
+    rec = result["receivables"]
+    rec["control_cents"] = books_reports.control(tenant_id, "accounts_receivable", until)
+    rec["ties"] = rec["control_cents"] == rec["outstanding_cents"] + rec["overdue_cents"]
+    result["payables"] = aged_creditors(tenant_id, until)
 
 
 def _r(cents: int) -> str:

@@ -3926,40 +3926,81 @@ async def admin_dismiss_by_filter(tenant_id: str, body: DismissByFilterIn):
     return {"ok": True, "dismissed": dismissed, "total_cents": total}
 
 
+def _report_basis(basis: Optional[str]) -> Optional[str]:
+    """The view asked for (accrual or cash — it matters only for a business on the one book)."""
+    if not basis:
+        return None
+    from vula.commerce import books_reports
+    try:
+        return books_reports.basis_of(basis)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/{tenant_id}/admin/reports/pnl")
-async def admin_report_pnl(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+async def admin_report_pnl(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None,
+                           basis: Optional[str] = None):
     from vula.commerce import accounting
-    return accounting.pnl(tenant_id, since, until)
+    return accounting.pnl(tenant_id, since, until, _report_basis(basis))
 
 
 @router.get("/{tenant_id}/admin/reports/vat")
-async def admin_report_vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+async def admin_report_vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None,
+                           basis: Optional[str] = None):
     from vula.commerce import accounting
-    return accounting.vat_return(tenant_id, since, until)
+    return accounting.vat_return(tenant_id, since, until, _report_basis(basis))
 
 
 @router.get("/{tenant_id}/admin/reports/ledger")
-async def admin_report_ledger(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+async def admin_report_ledger(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None,
+                              basis: Optional[str] = None):
     from vula.commerce import accounting
-    return {"ledger": accounting.general_ledger(tenant_id, since, until)}
+    return {"ledger": accounting.general_ledger(tenant_id, since, until, _report_basis(basis))}
+
+
+_JOURNAL_CSV = ["Date", "Entry", "Description", "Account code", "Account", "Debit (R)", "Credit (R)",
+                "Source", "Source id", "Document", "Bank line", "Bank account", "Reverses", "View"]
 
 
 @router.get("/{tenant_id}/admin/reports/ledger.csv")
-async def admin_report_ledger_csv(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
-    """General ledger as CSV — the audit trail her accountant can file from."""
+async def admin_report_ledger_csv(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None,
+                                  basis: Optional[str] = None):
+    """General ledger as CSV — the audit trail her accountant can file from. A business on the one
+    book gets one row per journal line (debit/credit, with its source document and bank line)."""
     import csv, io
     from fastapi.responses import Response
-    from vula.commerce import accounting
-    rows = accounting.general_ledger(tenant_id, since, until)
+    from vula.commerce import accounting, ledger_v2
+    view = _report_basis(basis)
+    rows = accounting.general_ledger(tenant_id, since, until, view)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["Date", "Description", "Account", "Direction", "Amount (R)", "VAT (R)", "Reference", "Source"])
-    for r in rows:
-        w.writerow([r.get("date"), r.get("description"), r.get("account"), r.get("direction"),
-                    f"{(r.get('amount_cents') or 0)/100:.2f}", f"{(r.get('vat_cents') or 0)/100:.2f}",
-                    r.get("reference") or "", r.get("source") or ""])
+    if ledger_v2.is_on(tenant_id):
+        w.writerow(_JOURNAL_CSV)
+        for r in rows:
+            w.writerow([r["date"], f"{r['entry_id']} v{r['version']}", r["description"], r["account_code"],
+                        r["account"], f"{r['debit_cents'] / 100:.2f}", f"{r['credit_cents'] / 100:.2f}",
+                        r.get("source_type") or "", r.get("source_id") or "", r.get("doc_id") or "",
+                        r.get("bank_txn_id") or "", r.get("bank_account") or "", r.get("reverses_entry_id") or "",
+                        r.get("view") or ""])
+        name = f"ledger-{tenant_id}-{view or 'accrual'}.csv"
+    else:
+        w.writerow(["Date", "Description", "Account", "Direction", "Amount (R)", "VAT (R)", "Reference", "Source"])
+        for r in rows:
+            w.writerow([r.get("date"), r.get("description"), r.get("account"), r.get("direction"),
+                        f"{(r.get('amount_cents') or 0)/100:.2f}", f"{(r.get('vat_cents') or 0)/100:.2f}",
+                        r.get("reference") or "", r.get("source") or ""])
+        name = f"ledger-{tenant_id}.csv"
     return Response(content=buf.getvalue(), media_type="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="ledger-{tenant_id}.csv"'})
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/{tenant_id}/admin/reports/aged-creditors")
+async def admin_report_aged_creditors(tenant_id: str, as_at: Optional[str] = None):
+    """What's still owed to suppliers, by how far past due (every business)."""
+    import asyncio as _a
+    from vula.commerce import finances
+    return await _a.to_thread(finances.aged_creditors, tenant_id, (as_at or "")[:10] or None)
+
 
 
 @router.get("/{tenant_id}/admin/boq-template.xlsx")
@@ -4790,22 +4831,24 @@ async def admin_report_expenses(tenant_id: str, since: Optional[str] = None,
 
 @router.get("/{tenant_id}/admin/reports/statements")
 async def admin_report_statements(tenant_id: str, since: Optional[str] = None,
-                                  until: Optional[str] = None, period: str = "this_month"):
+                                  until: Optional[str] = None, period: str = "this_month",
+                                  basis: Optional[str] = None):
     """P&L, cash flow, VAT and balance sheet — all from the ledger (vula/commerce/reports.py)."""
     import asyncio as _a
     from vula.commerce import reports
     s, u = reports.period_dates(period)
+    view = _report_basis(basis)
     try:
-        return await _a.to_thread(reports.build_all, tenant_id, (since or s)[:10], (until or u)[:10])
+        return await _a.to_thread(reports.build_all, tenant_id, (since or s)[:10], (until or u)[:10], view)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Couldn't read the ledger: {exc}")
 
 
 @router.get("/{tenant_id}/admin/reports/trial-balance")
 async def admin_report_trial_balance(tenant_id: str, since: Optional[str] = None,
-                                     until: Optional[str] = None):
+                                     until: Optional[str] = None, basis: Optional[str] = None):
     from vula.commerce import ledger
-    return ledger.trial_balance(tenant_id, since=since, until=until)
+    return ledger.trial_balance(tenant_id, since=since, until=until, basis=_report_basis(basis))
 
 
 # ── Company cards (whose money paid — drives reimbursement + bank matching) ───
