@@ -577,6 +577,9 @@ class Settings(BaseSettings):
     open_chat_enabled: bool = False
     # Trade costing (vula/commerce/buildups.py): build-ups researched once, confirmed once, looked up.
     trade_costing_enabled: bool = False
+    # One trusted book (Phase 1 of Xero-quality books, migration 288): per business via
+    # vula_tenant_config.features, never on for everyone before each business's audit is signed off.
+    books_v2_enabled: bool = False
     open_chat_per_hour: int = 60          # messages per person per hour in the open chat
     research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
     # Cut the research prompt to fit the local model so Vula's own model writes it; off = the
