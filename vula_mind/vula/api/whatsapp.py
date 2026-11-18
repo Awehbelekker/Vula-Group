@@ -4081,6 +4081,7 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
         db.table("commerce_expenses").update(
             {"paid_with": paid_with, "reimbursable": reimbursable, "updated_at": service._now()}
         ).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
+        expenses.books_refresh(tenant_id, claim_id)      # who paid decides where it's owed
         if paid_with == "company_card":
             return (f"👍 Noted — that *R{amt:,.2f}* was paid by the company. "
                     "I'll match it against the bank statement.")
@@ -4695,6 +4696,8 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
                 service._client().table("commerce_expenses").update(
                     {"paid_with": paid_with, "reimbursable": not is_company,
                      "updated_at": service._now()}).eq("id", claim["id"]).execute()
+                from vula.commerce import expenses as _exp
+                _exp.books_refresh(tenant_id, claim["id"])
                 from vula import open_questions
                 open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 amt = int(claim.get("amount_cents") or 0) / 100
@@ -5195,6 +5198,8 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
                         .eq("id", exp["id"]).limit(1).execute().data or [{}])[0]
                 if int(back.get("amount_cents") or 0) == total:
                     note += f" The expense is updated to the full R{total / 100:,.2f}."
+                    from vula.commerce import expenses as _exp
+                    _exp.books_refresh(tenant_id, exp["id"])
             return note, row
         if category in _FINANCIAL_DOC_CATEGORIES:
             commit_fields = {k: v for k, v in merged.items() if not k.startswith("_")}

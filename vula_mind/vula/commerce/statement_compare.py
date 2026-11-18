@@ -258,7 +258,7 @@ def apply(tenant_id: str, check_id: str, *, person: str, full_access: bool,
         return {"error": f"That comparison is already {check.get('status')}."}
     chosen = [a for a in (check.get("actions") or []) if accept is None or a["id"] in set(accept)]
     tbl = "commerce_bank_transactions"
-    done, skipped, touched = [], [], []
+    done, skipped, touched, tagged = [], [], [], []
     for a in chosen:
         kind = a["kind"]
         try:
@@ -293,6 +293,7 @@ def apply(tenant_id: str, check_id: str, *, person: str, full_access: bool,
                 for rid in a["row_ids"]:
                     db.table(tbl).update({"bank_account": a["account"]}).eq("tenant_id", tenant_id) \
                         .eq("id", rid).execute()
+                    tagged.append(rid)
             elif kind == "review":
                 skipped.append({"id": a["id"], "why": "needs a person"})
                 continue
@@ -307,6 +308,12 @@ def apply(tenant_id: str, check_id: str, *, person: str, full_access: bool,
         if got.get("match_status") != want:
             wrong.append(rid)
     record = {"done": done, "skipped": skipped, "not_saved": wrong}
+    try:     # books_v2: the lines changed here say something new in the books (like any bank edit)
+        from vula.commerce import ledger_events
+        if ledger_events.on(tenant_id):
+            ledger_events.sync_bank_lines(tenant_id, [rid for rid, _ in touched] + tagged)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("statement check %s: lines not re-posted to the books: %s", check_id, exc)
     db.table("vula_statement_checks").update({
         "status": "applied", "applied_by": person, "applied_at": datetime.now(timezone.utc).isoformat(),
         "applied": record}).eq("tenant_id", tenant_id).eq("id", check_id).execute()

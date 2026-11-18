@@ -165,7 +165,15 @@ def _match_account(answer: str, accounts: List[dict], direction: str) -> Optiona
         "income": "other_income", "sale": "sales", "customer": "sales",
         "electricity": "utilities", "water": "utilities", "internet": "utilities",
         "advert": "marketing", "ads": "marketing",
+        "capital": "owner_capital", "loan": "owner_loan", "transfer": "transfer_clearing",
+        "payout": "clearing", "card machine": "clearing",
     }
+    if direction == "in":
+        # 18 Nov 2026: money IN from the owner is capital put in, not drawings.
+        aliases.update({"personal": "owner_capital", "private": "owner_capital", "own": "owner_capital",
+                        "owner": "owner_capital"})
+    from vula.commerce import accounting
+    accounts = [a for a in accounts if not accounting.refused_for(a, direction)]
     codes = {a["code"] for a in accounts}
     cleaned = low.replace(" ", "_")
     if cleaned in codes:
@@ -223,6 +231,7 @@ async def handle_answer(tenant_id: str, text: str) -> Optional[str]:
          "vat_treatment": (acct or {}).get("vat_treatment"),
          "categorized_by": "owner"}).eq("id", txn["id"]).execute()
     accounting.learn_category_rule(tenant_id, txn, code)   # similar lines auto-file next time
+    _books_sync(tenant_id, txn["id"])
     return _next_or_done(
         tenant_id, f"✅ R{int(txn.get('amount_cents') or 0)/100:,.2f} → *{(acct or {}).get('name', code)}* — learned.")
 
@@ -310,6 +319,20 @@ def start_client_review(tenant_id: str) -> Optional[str]:
     return _client_question(txn, 1, len(rows))
 
 
+def _bank_date(txn: dict) -> Optional[str]:
+    return str(txn.get("txn_date"))[:10] if txn.get("txn_date") else None
+
+
+def _books_sync(tenant_id: str, txn_id: Optional[str]) -> None:
+    """The one trusted book (books_v2): post the line again as it now stands. Never blocks."""
+    try:
+        from vula.commerce import ledger_events
+        if txn_id and ledger_events.on(tenant_id):
+            ledger_events.sync_bank_lines(tenant_id, [txn_id])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bank line %s not re-posted to the books: %s", txn_id, exc)
+
+
 async def _apply_order_match(tenant_id: str, txn: dict, order: dict) -> str:
     from vula.commerce import service
     await service.update_order_status(order["id"], "paid")
@@ -322,6 +345,7 @@ async def _apply_order_match(tenant_id: str, txn: dict, order: dict) -> str:
         log.warning("order-paid notify failed for WhatsApp bank match: %s", exc)
     _client().table("commerce_bank_transactions").update(
         {"matched_order_id": order["id"], "match_status": "matched"}).eq("id", txn["id"]).execute()
+    _books_sync(tenant_id, txn["id"])
     amt = int(txn.get("amount_cents") or 0) / 100
     return _next_client_or_done(
         tenant_id, f"✅ R{amt:,.2f} → order *{order.get('display_id') or order['id']}* "
@@ -330,9 +354,10 @@ async def _apply_order_match(tenant_id: str, txn: dict, order: dict) -> str:
 
 async def _apply_invoice_match(tenant_id: str, txn: dict, invoice: dict) -> str:
     from vula.commerce import service
-    await service.update_invoice_status(tenant_id, invoice["id"], "paid")
+    await service.update_invoice_status(tenant_id, invoice["id"], "paid", paid_at=_bank_date(txn))
     _client().table("commerce_bank_transactions").update(
         {"matched_invoice_id": invoice["id"], "match_status": "matched"}).eq("id", txn["id"]).execute()
+    _books_sync(tenant_id, txn["id"])
     amt = int(txn.get("amount_cents") or 0) / 100
     return _next_client_or_done(
         tenant_id, f"✅ R{amt:,.2f} → invoice *{invoice.get('invoice_number') or invoice['id']}* "
@@ -346,12 +371,13 @@ async def _apply_supplier_bill_match(tenant_id: str, txn: dict, bill: dict) -> s
     invent revenue from a payment the business MADE."""
     from vula.commerce import service
     from vula import open_questions
-    await service.update_invoice_status(tenant_id, bill["id"], "paid")
+    await service.update_invoice_status(tenant_id, bill["id"], "paid", paid_at=_bank_date(txn))
     try:
         _client().table("commerce_bank_transactions").update(
             {"matched_invoice_id": bill["id"], "match_status": "matched"}).eq("id", txn["id"]).execute()
     except Exception as exc:
         log.warning("supplier pop txn update failed: %s", exc)
+    _books_sync(tenant_id, txn["id"])
     amt = int(txn.get("amount_cents") or 0) / 100
     label = f"bill *{bill.get('invoice_number') or bill['id']}* ({bill.get('supplier') or 'supplier'})"
     # Read it back before saying so (verified, not reported).

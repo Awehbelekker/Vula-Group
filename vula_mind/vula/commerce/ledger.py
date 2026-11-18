@@ -29,6 +29,21 @@ def _today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+def _v2(tenant_id: Optional[str]) -> bool:
+    """The business keeps the one trusted book (books_v2): its postings go to ledger_events."""
+    from vula.commerce import ledger_v2
+    return bool(tenant_id) and ledger_v2.is_on(tenant_id)
+
+
+def ledger_events():
+    from vula.commerce import ledger_events as ev
+    return ev
+
+
+def _vat_share(amount: int, vat_total: int, total: int) -> int:
+    return max(0, min((amount * min(vat_total, total) // total) if total > 0 and vat_total > 0 else 0, amount))
+
+
 def _post(tenant_id: str, *, entry_date: str, description: str, source_type: str,
           source_id: Optional[str], lines: List[Dict[str, Any]]) -> None:
     try:
@@ -74,6 +89,9 @@ def _clear_owed(tenant_id: str, invoice: Dict[str, Any], amount: int, *, entry_d
 
 def post_order_paid(tenant_id: str, order: Dict[str, Any]) -> None:
     """commerce_orders has no vat_cents column — the full total posts as Sales, unsplit."""
+    if _v2(tenant_id):
+        ledger_events().order_paid(tenant_id, order)
+        return
     total = int(order.get("total_cents") or 0)
     if total <= 0:
         return
@@ -93,6 +111,9 @@ def post_order_refund(tenant_id: str, order: Dict[str, Any], amount_cents: Optio
     total = int(order.get("total_cents") or 0)
     amount = total if amount_cents is None else min(int(amount_cents), total)
     if amount <= 0:
+        return
+    if _v2(tenant_id):
+        ledger_events().order_refund(tenant_id, order, amount, str(source_id or order.get("id")))
         return
     label = "refunded" if amount == total else f"part refund R{amount / 100:,.2f}"
     _post(tenant_id, entry_date=order.get("updated_at") or _today(),
@@ -125,6 +146,9 @@ def post_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
     total = full - int(invoice.get("total_paid_cents") or 0)
     if total <= 0:
         return
+    if _v2(tenant_id):
+        ledger_events().invoice_paid(tenant_id, {"tenant_id": tenant_id, **invoice})
+        return
     if _migrated({"tenant_id": tenant_id, **invoice}):
         _clear_owed(tenant_id, invoice, total, entry_date=invoice.get("paid_at"), source_type="invoice_paid",
                     source_id=invoice.get("id"),
@@ -151,6 +175,9 @@ def post_invoice_refund(tenant_id: str, invoice: Dict[str, Any], credit_note: Di
     amount = int(amount_cents or 0)
     if amount <= 0:
         return
+    if _v2(tenant_id):
+        ledger_events().invoice_refund(tenant_id, invoice, credit_note, amount)
+        return
     inv_total = int(invoice.get("total_cents") or 0)
     inv_vat = int(invoice.get("vat_cents") or 0)
     vat = max(0, min((amount * inv_vat // inv_total) if inv_total > 0 else 0, amount))
@@ -176,6 +203,17 @@ def post_invoice_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict[
     the first and silently be dropped as "already posted"."""
     amount = int(payment.get("amount_cents") or 0)
     if amount <= 0:
+        return
+    if _v2(tenant_id):
+        ev = ledger_events()
+        if (payment.get("payment_method") or "") == "credit_note":
+            ev.credit_note(tenant_id, {"tenant_id": tenant_id, **invoice},
+                           {"id": payment.get("id"), "invoice_number": payment.get("reference"),
+                            "issue_date": payment.get("paid_at")}, amount)
+        else:
+            ev.invoice_payment(tenant_id, {"tenant_id": tenant_id, **invoice}, amount=amount,
+                               paid_at=payment.get("paid_at"), source_type="invoice_payment",
+                               source_id=str(payment.get("id")), method=payment.get("payment_method"))
         return
     if _migrated({"tenant_id": tenant_id, **invoice}):
         _clear_owed(tenant_id, invoice, amount, entry_date=payment.get("paid_at"), source_type="invoice_payment",
@@ -238,17 +276,21 @@ def post_supplier_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
     Mirrors post_expense: credit bank_cash, debit the expense account, VAT to input (reclaimable)
     rather than output (owed).
     """
-    amount = int(invoice.get("total_cents") or 0)
+    full = int(invoice.get("total_cents") or 0)
+    # 18 Nov 2026: only what isn't paid yet. Instalments (post_supplier_payment) are already in the
+    # books, so a part-paid bill later marked paid used to book them a second time.
+    amount = full - int(invoice.get("total_paid_cents") or 0)
     if amount <= 0:
         return
-    if _migrated({"tenant_id": tenant_id, **invoice}):
-        left = amount - int(invoice.get("total_paid_cents") or 0)
-        if left > 0:
-            _clear_owed(tenant_id, {**invoice, "direction": "inbound"}, left, entry_date=invoice.get("paid_at"),
-                        source_type="supplier_invoice_paid", source_id=invoice.get("id"),
-                        description=f"Paid supplier invoice {invoice.get('invoice_number') or invoice.get('id')} (brought in)")
+    if _v2(tenant_id):
+        ledger_events().bill_paid(tenant_id, {"tenant_id": tenant_id, **invoice})
         return
-    vat = max(0, min(int(invoice.get("vat_cents") or 0), amount))
+    if _migrated({"tenant_id": tenant_id, **invoice}):
+        _clear_owed(tenant_id, {**invoice, "direction": "inbound"}, amount, entry_date=invoice.get("paid_at"),
+                    source_type="supplier_invoice_paid", source_id=invoice.get("id"),
+                    description=f"Paid supplier invoice {invoice.get('invoice_number') or invoice.get('id')} (brought in)")
+        return
+    vat = _vat_share(amount, int(invoice.get("vat_cents") or 0), full)
     # commerce_invoices carries no account_code column, so without this every supplier payment
     # would land in "other_expense" and the trial balance would show all supplier spend in one
     # undifferentiated bucket. The supplier record does carry a category; use it only when it
@@ -277,6 +319,11 @@ def post_supplier_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict
     amount = int(payment.get("amount_cents") or 0)
     if amount <= 0:
         return
+    if _v2(tenant_id):
+        ledger_events().bill_payment(tenant_id, {"tenant_id": tenant_id, **invoice}, amount=amount,
+                                     paid_at=payment.get("paid_at"), source_type="bill_payment",
+                                     source_id=str(payment.get("id")), method=payment.get("payment_method"))
+        return
     if _migrated({"tenant_id": tenant_id, **invoice}):
         _clear_owed(tenant_id, {**invoice, "direction": "inbound"}, amount, entry_date=payment.get("paid_at"),
                     source_type="supplier_payment", source_id=payment.get("id"),
@@ -304,6 +351,9 @@ def post_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
     amount = int(expense.get("amount_cents") or 0)
     if amount <= 0:
         return
+    if _v2(tenant_id):
+        ledger_events().expense(tenant_id, expense)
+        return
     vat = max(0, min(int(expense.get("vat_cents") or 0), amount))
     account_code = expense.get("account_code") or "other_expense"
     lines = [{"account_code": "bank_cash", "debit_cents": 0, "credit_cents": amount}]
@@ -322,6 +372,9 @@ def reverse_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
     (unique on source). 2026-10-26: a slip the CLIENT paid directly is not the business's cost."""
     amount = int(expense.get("amount_cents") or 0)
     if amount <= 0:
+        return
+    if _v2(tenant_id):
+        ledger_events().expense_removed(tenant_id, expense)
         return
     vat = max(0, min(int(expense.get("vat_cents") or 0), amount))
     account_code = expense.get("account_code") or "other_expense"

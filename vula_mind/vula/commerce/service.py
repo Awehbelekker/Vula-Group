@@ -2035,7 +2035,10 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
         invoice.pop("requires_approval", None)
         logger.warning("invoice insert retried without discount/deposit/project/approval (run migrations 053/055/136?): %s", exc)
         result = _client().table("commerce_invoices").insert(invoice).execute()
-    return result.data[0]
+    created = result.data[0]
+    if (created.get("status") or "draft") != "draft":
+        _books_state(tenant_id, created)
+    return created
 
 
 def order_invoice_lines(order: dict) -> List[dict]:
@@ -2204,11 +2207,13 @@ async def list_invoices(
     return result.data or []
 
 
-async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) -> dict:
-    """Transition an invoice/quote status. Stamps paid_at when marked paid."""
+async def update_invoice_status(tenant_id: str, invoice_id: str, status: str,
+                                paid_at: Optional[str] = None) -> dict:
+    """Transition an invoice/quote status. Stamps paid_at when marked paid — the day the money
+    arrived when the caller knows it (a bank line's date), else now."""
     patch: dict = {"status": status, "updated_at": _now()}
     if status == "paid":
-        patch["paid_at"] = _now()
+        patch["paid_at"] = paid_at or _now()
     result = (
         _client()
         .table("commerce_invoices")
@@ -2218,6 +2223,7 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
         .execute()
     )
     invoice = result.data[0] if result.data else {}
+    _books_state(tenant_id, invoice)
     if status == "paid" and invoice:
         try:
             from vula.commerce import ledger
@@ -2412,7 +2418,7 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
 
 async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: int,
                                   payment_method: Optional[str] = None,
-                                  note: Optional[str] = None) -> dict:
+                                  note: Optional[str] = None, paid_at: Optional[str] = None) -> dict:
     """Record one instalment against an invoice (migration 130). Multiple calls are supported —
     real partial payments across several instalments — status becomes 'part_paid' until the
     running total reaches the invoice's total_cents, then flips to 'paid' automatically (and
@@ -2442,7 +2448,7 @@ async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: 
 
     payment = {
         "tenant_id": tenant_id, "invoice_id": invoice_id, "amount_cents": amount_cents,
-        "payment_method": payment_method, "note": note, "paid_at": _now(),
+        "payment_method": payment_method, "note": note, "paid_at": paid_at or _now(),
     }
     created_payment = _client().table("commerce_invoice_payments").insert(payment).execute().data[0]
 
@@ -2456,7 +2462,7 @@ async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: 
     # remaining balance from the normal invoice list fetch alone (migration 130).
     patch = {"status": new_status, "total_paid_cents": total_paid, "updated_at": _now()}
     if new_status == "paid":
-        patch["paid_at"] = _now()
+        patch["paid_at"] = paid_at or _now()
     updated_result = (_client().table("commerce_invoices").update(patch)
                       .eq("tenant_id", tenant_id).eq("id", invoice_id).execute())
     updated = updated_result.data[0] if updated_result.data else invoice
@@ -2502,7 +2508,22 @@ async def cancel_invoice(tenant_id: str, invoice_id: str, reason: Optional[str] 
     patch = {"status": "cancelled", "cancel_reason": reason, "cancelled_at": _now(), "updated_at": _now()}
     result = (_client().table("commerce_invoices").update(patch)
               .eq("tenant_id", tenant_id).eq("id", invoice_id).execute())
-    return result.data[0] if result.data else {}
+    cancelled = result.data[0] if result.data else {}
+    _books_state(tenant_id, cancelled)          # the one trusted book: it leaves debtors
+    return cancelled
+
+
+def _books_state(tenant_id: str, invoice: dict) -> None:
+    """books_v2 (accrual): an invoice is in debtors — a supplier bill in creditors — while it is
+    issued, and out again when it is a draft or cancelled. Never blocks the change itself."""
+    if not invoice or not invoice.get("id"):
+        return
+    try:
+        from vula.commerce import ledger_events
+        if ledger_events.on(tenant_id):
+            ledger_events.invoice_state(tenant_id, {"tenant_id": tenant_id, **invoice})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("books state not posted for invoice %s: %s", invoice.get("id"), exc)
 
 
 # ── Scheduled Jobs Logic ─────────────────────────────────────────────────────
@@ -3828,6 +3849,12 @@ async def credit_invoice(tenant_id: str, invoice_id: str, amount_cents: Optional
                 patch["cancel_reason"] = f"Credited in full by {cn.get('invoice_number')}"
                 patch["cancelled_at"] = _now()
         db.table("commerce_invoices").update(patch).eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+        try:      # the one trusted book: the sale and the debt come off on accrual
+            from vula.commerce import ledger_events
+            if ledger_events.on(tenant_id):
+                ledger_events.credit_note(tenant_id, {"tenant_id": tenant_id, **src}, cn, against_owed)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("credit note not posted: %s", exc)
     if refund:
         from vula.commerce import ledger
         ledger.post_invoice_refund(tenant_id, src, cn, refund)

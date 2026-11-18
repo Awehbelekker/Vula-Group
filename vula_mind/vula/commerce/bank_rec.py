@@ -525,16 +525,24 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     acc_map = {a["code"]: a for a in accounts}
     try:
         vat_reg = bool((await service.get_invoice_settings(tenant_id) or {}).get("vat_registered", False))
-    except Exception:
-        vat_reg = True
+    except Exception as exc:
+        # 18 Nov 2026: fail closed. Claiming VAT for a business that isn't registered is the worse
+        # mistake; a registered business's lines are re-allocated when the setting reads again.
+        log.warning("reconcile: VAT setting not read for %s, treating as not registered: %s", tenant_id, exc)
+        vat_reg = False
 
     # Outstanding invoices to match credits against.
     try:
         invoices = (db.table("commerce_invoices")
-                    .select("id,invoice_number,customer_name,total_cents,status,doc_type,issue_date,created_at")
-                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"])
+                    .select("id,invoice_number,customer_name,total_cents,total_paid_cents,status,doc_type,"
+                            "direction,issue_date,created_at")
+                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"])
                     .limit(2000).execute().data or [])
-        invoices = [i for i in invoices if (i.get("doc_type") or "invoice") == "invoice"]
+        # 18 Nov 2026: a part-paid invoice is matched on what is still owed, not its full total.
+        invoices = [{**i, "invoice_total_cents": i.get("total_cents"),
+                     "total_cents": int(i.get("total_cents") or 0) - int(i.get("total_paid_cents") or 0)}
+                    for i in invoices if (i.get("doc_type") or "invoice") == "invoice"
+                    and (i.get("direction") or "outbound") == "outbound"]
     except Exception as exc:
         log.debug("reconcile: invoice load skipped: %s", exc)
         invoices = []
@@ -664,9 +672,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     used_invoice_ids: set = set()
     used_order_ids: set = set()
     used_bill_ids: set = set()
+    saved_ids: List[str] = []
     for idx, t in enumerate(txns):
         status, inv_id, order_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None, None
         bill_project = None
+        # 18 Nov 2026: what this line settles is decided here but done only after the line itself
+        # is saved — before, an invoice could be marked paid while its bank line failed to save.
+        settle: Optional[tuple] = None
+        paid_on = str(t.get("date") or "")[:10] or None
         already = settled.get((str(t.get("date")), int(t["amount_cents"]), (t.get("description") or "")))
         if already:
             # Seen and settled before: keep that match, settle nothing new.
@@ -688,29 +701,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             candidates = [i for i in invoices if i["id"] not in used_invoice_ids]
             m = _match_invoice(t, candidates)
             if m:
-                try:
-                    await service.update_invoice_status(tenant_id, m["id"], "paid")
-                    inv_id, status = m["id"], "matched"
-                    used_invoice_ids.add(m["id"])
-                    matched_invoices += 1
-                except Exception as exc:
-                    log.warning("mark invoice paid failed: %s", exc)
+                inv_id, status, settle = m["id"], "matched", ("invoice", m)
+                used_invoice_ids.add(m["id"])
             else:
                 order_candidates = [o for o in orders if o["id"] not in used_order_ids]
                 om = _match_order(t, order_candidates)
                 if om:
-                    try:
-                        await service.update_order_status(om["id"], "paid")
-                        order_id, status = om["id"], "matched"
-                        used_order_ids.add(om["id"])
-                        matched_orders += 1
-                        from vula.api.yoco import _notify_order_paid
-                        await _notify_order_paid(
-                            tenant_id, om.get("display_id") or om["id"], om["id"],
-                            om.get("customer_phone"), om.get("customer_name") or "",
-                            int(om.get("total_cents") or 0))
-                    except Exception as exc:
-                        log.warning("mark order paid failed: %s", exc)
+                    order_id, status, settle = om["id"], "matched", ("order", om)
+                    used_order_ids.add(om["id"])
                 else:
                     unmatched_in += 1
         else:
@@ -721,14 +719,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             else:
                 exp = _match_card_expense(t)
                 if exp:
-                    exp_id, status = exp["id"], "matched"
+                    exp_id, status, settle = exp["id"], "matched", ("expense", exp)
                     used_exp_ids.add(exp["id"])
                     matched_expenses += 1
-                    try:     # the statement confirms the card purchase actually cleared
-                        db.table("commerce_expenses").update(
-                            {"status": "paid", "updated_at": _now()}).eq("id", exp["id"]).execute()
-                    except Exception:
-                        pass
                 else:
                     # Last fallback: an outgoing payment settling a SUPPLIER'S INVOICE. Placed
                     # after worker and card-expense matching so nothing that already matches
@@ -737,16 +730,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                     bill_candidates = [b for b in supplier_bills if b["id"] not in used_bill_ids]
                     bm = _match_supplier_bill(t, bill_candidates)
                     if bm:
-                        try:
-                            await service.update_invoice_status(tenant_id, bm["id"], "paid")
-                            inv_id, status = bm["id"], "matched"
-                            # the payment is for the bill's project (job costing)
-                            bill_project = bm.get("project")
-                            used_bill_ids.add(bm["id"])
-                            matched_bills += 1
-                        except Exception as exc:
-                            log.warning("mark supplier bill paid failed: %s", exc)
-                            unmatched_out += 1
+                        inv_id, status, settle = bm["id"], "matched", ("bill", bm)
+                        # the payment is for the bill's project (job costing)
+                        bill_project = bm.get("project")
+                        used_bill_ids.add(bm["id"])
                     else:
                         unmatched_out += 1
 
@@ -823,8 +810,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             row["project"] = canon[project]
         if trade:
             row["trade"] = trade
+        stored = None
         try:
-            db.table("commerce_bank_transactions").upsert(
+            stored = db.table("commerce_bank_transactions").upsert(
                 row, on_conflict="tenant_id,txn_date,amount_cents,description").execute()
             saved += 1
         except Exception:
@@ -834,11 +822,45 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                      "project", "matched_order_id", "trade", "bank_account", "project_source"):
                 row.pop(k, None)
             try:
-                db.table("commerce_bank_transactions").upsert(
+                stored = db.table("commerce_bank_transactions").upsert(
                     row, on_conflict="tenant_id,txn_date,amount_cents,description").execute()
                 saved += 1
             except Exception as exc2:
-                log.debug("bank txn upsert skipped (run migration 057?): %s", exc2)
+                log.warning("bank line not saved, so nothing it matched was settled: %s", exc2)
+        txn_id = ((getattr(stored, "data", None) or [{}])[0] or {}).get("id")
+        if txn_id:
+            saved_ids.append(str(txn_id))
+        if settle and stored is None:
+            # The line isn't in Vula, so it settles nothing (the next reading will try again).
+            matched_expenses -= settle[0] == "expense"
+            unmatched_in += settle[0] in ("invoice", "order")
+            unmatched_out += settle[0] in ("bill", "expense")
+            settle = None
+        if settle:
+            kind, target = settle
+            ok = await _settle(tenant_id, kind, target, paid_on, db)
+            if ok:
+                matched_invoices += kind == "invoice"
+                matched_orders += kind == "order"
+                matched_bills += kind == "bill"
+            else:
+                unmatched_in += kind in ("invoice", "order")
+                unmatched_out += kind == "bill"
+                if txn_id:     # the match didn't happen: the line says so
+                    try:
+                        db.table("commerce_bank_transactions").update(
+                            {"match_status": "unmatched", "matched_invoice_id": None,
+                             "matched_order_id": None, "matched_expense_id": None}) \
+                            .eq("tenant_id", tenant_id).eq("id", txn_id).execute()
+                    except Exception as exc3:  # noqa: BLE001
+                        log.warning("bank line %s still says matched after a failed settle: %s", txn_id, exc3)
+
+    try:     # the one trusted book: each saved line posted as it now stands
+        from vula.commerce import ledger_events
+        if saved_ids and ledger_events.on(tenant_id):
+            ledger_events.sync_bank_lines(tenant_id, saved_ids)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bank lines not posted to the books for %s: %s", tenant_id, exc)
 
     return {"parsed": len(txns), "saved": saved, "auto_settled": auto_settle,
             "matched_invoices": matched_invoices,
@@ -847,6 +869,31 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             "needs_input": needs_input, "card_settlements": card_settlements,
             "named_projects": named_counts,
             "unmatched_credits": unmatched_in, "unmatched_debits": unmatched_out}
+
+
+async def _settle(tenant_id: str, kind: str, target: Dict[str, Any], paid_on: Optional[str], db) -> bool:
+    """Settle what a saved bank line matched, dated the day the money moved. False when it failed."""
+    from vula.commerce import service
+    try:
+        if kind in ("invoice", "bill"):
+            await service.update_invoice_status(tenant_id, target["id"], "paid", paid_at=paid_on)
+        elif kind == "order":
+            await service.update_order_status(target["id"], "paid")
+            try:
+                from vula.api.yoco import _notify_order_paid
+                await _notify_order_paid(
+                    tenant_id, target.get("display_id") or target["id"], target["id"],
+                    target.get("customer_phone"), target.get("customer_name") or "",
+                    int(target.get("total_cents") or 0))
+            except Exception as exc:  # noqa: BLE001  (the order is paid; only the message failed)
+                log.warning("order paid message not sent: %s", exc)
+        elif kind == "expense":     # the statement confirms the card purchase actually cleared
+            db.table("commerce_expenses").update(
+                {"status": "paid", "updated_at": _now()}).eq("id", target["id"]).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("mark %s paid failed: %s", kind, exc)
+        return kind == "expense"     # as before: the card expense line stays matched
 
 
 def _load_settlements(db, tenant_id: str) -> List[Dict[str, Any]]:

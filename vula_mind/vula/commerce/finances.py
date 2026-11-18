@@ -38,12 +38,20 @@ def _cents(rows: List[dict], field: str, pred=lambda r: True) -> int:
 # replacement for the netted `receivable` total above. Deliberately gross per bucket, not netted
 # against credit notes — a credit note isn't tied to any one aging bucket, so there's no clean
 # way to net it into one; the top-level `receivable` figure stays the authoritative net number.
+def _owed(inv: dict) -> int:
+    """What is still owed on an invoice: its total less instalments and credit notes set against it
+    (both are in total_paid_cents). 18 Nov 2026: a part-paid invoice was left out of debtors."""
+    return max(0, int(inv.get("total_cents") or 0) - int(inv.get("total_paid_cents") or 0))
+
+
 def _aging_buckets(out_inv: List[dict], today) -> Dict[str, int]:
     buckets = {"current": 0, "days_1_30": 0, "days_31_60": 0, "days_61_90": 0, "days_90_plus": 0}
     for i in out_inv:
-        if i.get("status") not in ("sent", "overdue"):
+        if i.get("status") not in ("sent", "overdue", "part_paid"):
             continue
-        total = int(i.get("total_cents") or 0)
+        total = _owed(i)
+        if total <= 0:
+            continue
         due = i.get("due_date")
         if not due:
             buckets["current"] += total
@@ -84,19 +92,25 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
     # additional money owed to the tenant) were both missing here before this fix (2026-08-15),
     # same bug as admin_stats/admin_customer_detail in vula/api/commerce.py.
     inv_all = (db.table("commerce_invoices")
-               .select("total_cents,vat_cents,subtotal_cents,status,created_at,customer_name,direction,doc_type,due_date")
+               .select("total_cents,total_paid_cents,vat_cents,subtotal_cents,status,created_at,customer_name,direction,doc_type,"
+                       "due_date,credited_invoice_id")
                .eq("tenant_id", tenant_id).execute().data or [])
     out_inv = [i for i in inv_all if (i.get("direction") or "outbound") == "outbound"
               and i.get("doc_type") == "invoice"]
-    out_credits = [i for i in inv_all if (i.get("direction") or "outbound") == "outbound"
-                   and i.get("doc_type") == "credit_note"]
+    # A credit note tied to an invoice (credit_invoice) is already in that invoice's total_paid_cents;
+    # an older one written by hand isn't tied to anything, so it still comes off the total owed.
+    loose_credits = sum(int(i.get("total_cents") or 0) for i in inv_all
+                        if (i.get("direction") or "outbound") == "outbound" and i.get("doc_type") == "credit_note"
+                        and not i.get("credited_invoice_id"))
     inv_paid_period = [i for i in out_inv if i.get("status") == "paid" and (i.get("created_at") or "")[:10] >= since]
     inv_rev = _cents(inv_paid_period, "total_cents")
     vat_collected = _cents(inv_paid_period, "vat_cents")
-    credited = _cents(out_credits, "total_cents")
-    receivable = _cents(out_inv, "total_cents", lambda r: r.get("status") == "sent") - credited
-    overdue = _cents(out_inv, "total_cents", lambda r: r.get("status") == "overdue")
-    receivable_count = len([i for i in out_inv if i.get("status") in ("sent", "overdue")])
+    # What is still owed (credit notes against an invoice are already in its total_paid_cents; a
+    # credit note beyond what was owed was refunded, so it isn't owed either way).
+    receivable = sum(_owed(i) for i in out_inv if i.get("status") in ("sent", "part_paid")) - loose_credits
+    overdue = sum(_owed(i) for i in out_inv if i.get("status") == "overdue")
+    receivable_count = len([i for i in out_inv if i.get("status") in ("sent", "overdue", "part_paid")
+                            and _owed(i) > 0])
     aging = _aging_buckets(out_inv, today)
     from vula.commerce.payment_behavior import tenant_watch_list
     payment_behavior = await tenant_watch_list(tenant_id)
