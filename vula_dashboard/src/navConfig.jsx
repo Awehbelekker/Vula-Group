@@ -10,7 +10,7 @@ import {
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
   Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
   PenLine, PencilRuler, Receipt, ReceiptText, Repeat, Rocket, Route, Ruler, ScanLine, Settings,
-  ShoppingBag, Smartphone, Sparkles, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound,
+  ShieldCheck, ShoppingBag, Smartphone, Sparkles, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound,
   Wallet, Wrench, Zap,
 } from "lucide-react";
 
@@ -39,7 +39,7 @@ export const NAV_ICONS = {
   "rep-crm": Link,
   // master
   master: Wrench, training: Library, dashboard: LayoutDashboard, agent: Bot, reports: TrendingUp,
-  onboard: Rocket, admin: FileSignature, merchant: Store,
+  onboard: Rocket, admin: FileSignature, merchant: Store, twostep: ShieldCheck,
 };
 
 /** The Lucide icon for a nav id, or null (the shell then shows the emoji). */
@@ -191,6 +191,10 @@ export const MASTER_ZONES = [
       // Shared KBs every tenant falls back to — seeding is master-only on the server, so this
       // moved here from the tenant Estimating group (where its seed button could only 403).
       { id: "training", icon: "📚", label: "Training KB" },
+    ]},
+    // 18 Nov 2026: the master's own two-step sign-in, without opening a business's Settings
+    { label: "Your sign-in", items: [
+      { id: "twostep", icon: "🔐", label: "Two-step sign-in" },
     ]},
     { label: "Debug", items: [
       { id: "dashboard", icon: "🏠", label: "Dashboard" },
