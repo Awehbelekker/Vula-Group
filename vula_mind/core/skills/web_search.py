@@ -44,6 +44,20 @@ def take_stats() -> dict:
     return out
 
 
+_Q_EMAIL = re.compile(r"\S+@\S+")
+_Q_LONG_NUMBER = re.compile(r"\+?\d[\d\s-]{6,}\d")                    # phone, account, ID numbers
+_Q_MONEY = re.compile(r"(?i)\bR\s?\d[\d\s,]*(?:\.\d{1,2})?(?:\s?(?:k|m|mil|million))?\b")
+_Q_TITLED_NAME = re.compile(r"\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Mnr|Mev)\.?\s+[A-Z][\w'-]+(?:\s+[A-Z][\w'-]+)?")
+
+
+def scrub_query(query: str) -> str:
+    """What leaves Vula in a web search (17 Nov 2026 audit): the words of the question without
+    email addresses, phone/account/ID numbers, rand amounts or a titled person's name. The search
+    providers (Serper, DuckDuckGo) are outside the EU and South Africa."""
+    q = _Q_TITLED_NAME.sub(" ", _Q_MONEY.sub(" ", _Q_LONG_NUMBER.sub(" ", _Q_EMAIL.sub(" ", query or ""))))
+    return " ".join(q.split())[:200]
+
+
 async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
     """Web search — [{title, url, snippet?}]. Every caller in Vula comes through here (research,
     build-ups, market prices, the web_search skill…). 16 Nov 2026: DuckDuckGo's HTML page gave
@@ -53,6 +67,10 @@ async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
     Logs say which provider and how many results — never the query (it's the person's words)."""
     from config import settings
     _stats["searches"] += 1
+    query = scrub_query(query)
+    if not query:
+        _stats["empty"] += 1
+        return []
     if getattr(settings, "serper_api_key", ""):
         hits = await _serper_search(query, limit)
         logger.info("web search: serper %d results", len(hits))

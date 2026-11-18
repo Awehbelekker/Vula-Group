@@ -32,6 +32,7 @@ NO_PROBE = {
     "253": "a column default and two append-only triggers on the ledger — no table or column to probe",
     "256": "replaces two CHECK constraints on vula_project_terms (adds per_bill) — 255's sentinel probes the table",
     "285": "a trigger keeping the owner's flags in vula_filed_documents.fields — no table or column to probe",
+    "289": "one function (vula_ai_usage_add); metering falls back to its old path until it exists — no table or column to probe",
 }
 
 

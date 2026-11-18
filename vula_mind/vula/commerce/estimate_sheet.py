@@ -51,7 +51,7 @@ def workbook(business: str, est: Dict[str, Any]) -> Tuple[bytes, Dict[str, int]]
             ws.cell(row=r, column=4, value=float(ln["per_unit"]))
             ws.cell(row=r, column=5, value=float(ln["waste_pct"]))
             ws.cell(row=r, column=6, value=float(ln["quantity"]))
-            ws.cell(row=r, column=7, value=ln["unit"])
+            safe_text(ws.cell(row=r, column=7), ln["unit"])
             if ln.get("priced"):
                 ws.cell(row=r, column=8, value=ln["unit_price_cents"] / 100).number_format = "#,##0.00"
                 ws.cell(row=r, column=9, value=f"=ROUND(F{r}*H{r},2)").number_format = "#,##0.00"

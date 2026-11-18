@@ -2061,6 +2061,12 @@ _SECTION_RULES = [
     # 2026-11-16: emailing a project's client from the business's mailbox, and the record of what was
     # sent — speaks for the business: owner and managers only (vula/commerce/project_emails.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/client-emails/?$"), frozenset()),
+    # 17 Nov 2026 audit: costing by trade prices an estimate from what the business paid its
+    # suppliers and workers — Money access or the Costing by trade tab; what a job actually cost,
+    # line by line (supplier, unit price, pay rates), owner and managers only, like compare_estimate.
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:estimates|buildup-suggestions)(?:/|$)"),
+     _MONEY_TABS | {"tradecosting"}),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/estimates/[^/]+/(?:actuals|learn)/?$"), frozenset()),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)

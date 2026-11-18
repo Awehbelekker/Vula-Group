@@ -69,6 +69,59 @@ def prune(tenant_id: str, now: Optional[float] = None) -> int:
     return removed
 
 
+def prune_all(_days: int = 1) -> dict:
+    """Every business's chat attachments past their day (17 Nov 2026 audit: prune only ran when
+    the same business attached another file, so a file could stay on the volume indefinitely).
+    Run daily by the retention sweep (vula/retention.py)."""
+    from config import settings
+    removed = 0
+    root = Path(settings.upload_dir)
+    try:
+        for chat in root.glob("*/chat"):
+            if chat.is_dir():
+                removed += prune(chat.parent.name)
+    except OSError as exc:
+        logger.debug("chat attachment sweep skipped: %s", exc)
+    return {"attachments": removed}
+
+
+def erase(tenant_id: str, session_keys: List[str]) -> int:
+    """A person's chat attachments, now (vula/privacy_data.py): the file and its read text,
+    unless they kept it in the business's documents (then only the read text goes)."""
+    keys = {k for k in session_keys if k}
+    if not keys:
+        return 0
+    removed = 0
+    try:
+        for meta in _dir(tenant_id).glob("*.json"):
+            try:
+                m = json.loads(meta.read_text())
+            except (OSError, ValueError):
+                continue
+            if m.get("session_key") not in keys:
+                continue
+            if not m.get("filed"):
+                Path(m.get("path") or "").unlink(missing_ok=True)
+            meta.unlink(missing_ok=True)
+            removed += 1
+    except OSError as exc:
+        logger.debug("chat attachment erase skipped: %s", exc)
+    return removed
+
+
+async def read_capped(upload, limit_bytes: int) -> bytes:
+    """An upload's bytes, at most one past the limit: an oversized file is refused without being
+    read whole into memory (17 Nov 2026 audit)."""
+    size = getattr(upload, "size", None)
+    too_big = AttachmentError(f"{upload.filename or 'That file'} is over {limit_bytes // (1024 * 1024)} MB.")
+    if isinstance(size, int) and size > limit_bytes:
+        raise too_big
+    data = await upload.read(limit_bytes + 1)
+    if len(data) > limit_bytes:
+        raise too_big
+    return data
+
+
 async def attach(tenant_id: str, session_key: str, name: str, content: bytes,
                  mime: Optional[str] = None) -> Dict[str, Any]:
     """Save and read one file for this person. Returns its public summary."""

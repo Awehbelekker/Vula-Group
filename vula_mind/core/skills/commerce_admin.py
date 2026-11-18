@@ -2041,7 +2041,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances",
     # every document of a project, statements and proofs of payment included: owner and managers
     # only — no tab id grants it, so a restricted staff member never gets the tool.
-    "project_file": "owner_only", "confirm_buildup": "owner_only", "compare_estimate": "owner_only", "buildup_suggestion": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "project_file": "owner_only", "confirm_buildup": "owner_only", "compare_estimate": "owner_only", "estimate_cost": "tradecosting", "buildup_suggestion": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -2141,7 +2141,10 @@ _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "reco
                             # cancel/refund change what the customer was promised; the staff tools
                             # message the team; a discount code changes prices.
                             "order_payment", "create_manual_order", "create_discount_code",
-                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking"}
+                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking",
+                            # 17 Nov 2026 audit: a confirmed build-up sets the quantities of every
+                            # estimate (and other businesses' when shared) — shown before it's kept
+                            "confirm_buildup", "buildup_suggestion"}
                            | frozenset().union(*(a.ADMIN_PREVIEW_FIRST for a in _ADDONS)))
 
 
@@ -2436,6 +2439,7 @@ class CommerceAdminSkill(BaseSkill):
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
                "message": inp.question, "session_id": inp.metadata.get("session_id"),
+               "person_key": inp.metadata.get("person_key"),
                # files a tool made this turn (custom_sheet): shared with the caller's metadata so the
                # dashboard chat can offer them as downloads, whichever way the turn ends
                "files": inp.metadata.setdefault("files_out", [])}
