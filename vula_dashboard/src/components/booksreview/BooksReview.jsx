@@ -1,0 +1,472 @@
+/**
+ * BooksReview.jsx — Money › Books review (18 Nov 2026, Phase 0d of Xero-quality books).
+ *
+ * Before an accountant sees the books, the business works through what Vula's books audit and the
+ * rebuild dry run found (vula/commerce/books_review.py) and fixes each item:
+ *   Overview     every check with its result, what the books would look like, and — when it's clean,
+ *                or with what's still open noted — the business agrees the check (then Vula signs off)
+ *   Bank lines   set aside by mistake (put back), read twice (keep one), moved between own accounts
+ *                (a transfer), and lines Vula wasn't sure how to categorise
+ *   In transit   payments recorded with no bank line — "this bank line is that payment"
+ *   Staff claims claims paid with staff's own money, not yet marked paid back
+ *   Paperwork    draft bills and invoices, and dates that were misread
+ *   Statements   upload an official bank statement: compared line by line, nothing changes until the
+ *                ticked actions are applied
+ * Owners and managers only (the server says so with a 403). Every figure is the server's.
+ */
+import { useMemo, useState } from "react";
+import { Button, Card, DataTable, EmptyState, ErrorCard, Field, Input, PageHeader, PillTabs, Select,
+  Skeleton, StatusChip, Textarea, confirmDialog, promptDialog, toast } from "../ui/index.jsx";
+import { formatMoney } from "../../lib/money.js";
+import { reason, useBooksReview } from "./useBooksReview.js";
+import "./booksreview.css";
+
+const money = (c) => formatMoney(c, { cents: "always" });
+const signed = (ln) => (ln.direction === "in" ? "+" : "−") + money(ln.amount_cents);
+const TONE = { ok: "ok", attention: "warn", problem: "danger" };
+const STATUS = { ok: "Fine", attention: "To look at", problem: "To fix" };
+const KIND = { bill: "Supplier bill", invoice: "Invoice", expense: "Expense" };
+
+async function done(res, okText, failText) {
+  if (res.ok) { toast(okText); return true; }
+  toast(reason(res, failText), "danger");
+  return false;
+}
+
+export default function BooksReview({ tenantId }) {
+  const x = useBooksReview(tenantId);
+  const [tab, setTab] = useState("overview");
+  const [busy, setBusy] = useState(false);
+  if (x.state === "loading") return <Card><Skeleton lines={6} /></Card>;
+  if (x.state === "failed") return <ErrorCard what="the books review" onRetry={x.reload} />;
+  if (x.state === "off") {
+    return (
+      <EmptyState title="Only an owner or manager can review the books">
+        Ask the business owner to sign in to work through the books check.
+      </EmptyState>
+    );
+  }
+
+  async function runCheck() {
+    setBusy(true);
+    const res = await x.runCheck();
+    setBusy(false);
+    if (await done(res, "Checked again — the list below is up to date.", "The check didn't run — try again.")) x.reload();
+  }
+
+  const r = x.review || {};
+  const open = r.open || {};
+  const header = (
+    <PageHeader title="Books review"
+      sub="Work through what Vula found in your books before your accountant sees them. Every change is kept with its reason."
+      actions={<Button onClick={runCheck} disabled={busy}>{busy ? "Checking… (about a minute)" : r.report ? "Run the check again" : "Run the check"}</Button>} />
+  );
+  if (!r.report) {
+    return (
+      <div className="vbr2-page">
+        {header}
+        <EmptyState title="No books check yet">
+          Run the check: Vula reads every bank line, bill, invoice and expense and lists what needs fixing.
+        </EmptyState>
+      </div>
+    );
+  }
+  const n = (k) => (open[k] ? ` (${open[k]})` : "");
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "lines", label: `Bank lines${(open.restore || 0) + (open.duplicates || 0) + (open.transfers || 0) + (open.to_categorise || 0) ? ` (${(open.restore || 0) + (open.duplicates || 0) + (open.transfers || 0) + (open.to_categorise || 0)})` : ""}` },
+    { id: "transit", label: `In transit${n("in_transit")}` },
+    { id: "claims", label: `Staff claims${n("staff_claims")}` },
+    { id: "paperwork", label: `Paperwork${(open.drafts || 0) + (open.odd_dates || 0) ? ` (${(open.drafts || 0) + (open.odd_dates || 0)})` : ""}` },
+    { id: "statements", label: "Statements" },
+  ];
+  return (
+    <div className="vbr2-page">
+      {header}
+      <PillTabs label="Books review" active={tab} onChange={setTab} tabs={tabs} />
+      {tab === "overview" && <Overview x={x} r={r} />}
+      {tab === "lines" && <Lines x={x} r={r} />}
+      {tab === "transit" && <Transit x={x} r={r} />}
+      {tab === "claims" && <Claims x={x} r={r} />}
+      {tab === "paperwork" && <Paperwork x={x} r={r} />}
+      {tab === "statements" && <Statements x={x} />}
+    </div>
+  );
+}
+
+// ── Overview ─────────────────────────────────────────────────────────────────
+
+function Overview({ x, r }) {
+  const books = r.books || {};
+  const tb = (books.trial_balance || {}).after || {};
+  const ctl = books.control || {};
+  const balanced = Object.values(tb).length > 0 && Object.values(tb).every((v) => v.balanced);
+  const report = r.report;
+  const [note, setNote] = useState("");
+  const left = Object.entries(r.open || {}).filter(([, v]) => v);
+
+  async function agree() {
+    if (!r.clean && note.trim().length < 10) {
+      toast("Some items are still open — say in the note what you accept as open, for the accountant.", "danger");
+      return;
+    }
+    if (!(await confirmDialog("Agree this books check? Vula's team then signs it off before your books are rebuilt.",
+      { confirmLabel: "Agree" }))) return;
+    if (await done(await x.agree(report.id, note.trim()), "Agreed — thank you.", "That didn't save — try again.")) x.reload();
+  }
+
+  return (
+    <div className="vbr2-stack">
+      <Card>
+        <h3 className="vbr2-h">What Vula checked</h3>
+        <p className="vbr2-sub">Last run {String(report.created_at || "").slice(0, 16).replace("T", " ")}.</p>
+        <ul className="vbr2-list">
+          {(r.checks || []).map((c) => (
+            <li key={c.key} className="vbr2-row">
+              <StatusChip tone={TONE[c.status] || "muted"}>{STATUS[c.status] || c.status}</StatusChip>
+              <span className="vbr2-text"><b>{c.title}</b> — {c.headline}</span>
+            </li>
+          ))}
+        </ul>
+      </Card>
+      {!books.error && (
+        <Card>
+          <h3 className="vbr2-h">Your books, as they would be</h3>
+          <ul className="vbr2-list">
+            <li className="vbr2-row"><StatusChip tone={balanced ? "ok" : "danger"}>{balanced ? "Balance" : "Don't balance"}</StatusChip>
+              <span className="vbr2-text">Both views of the books (accrual and cash)</span></li>
+            <li className="vbr2-row"><StatusChip tone={ctl.debtors_tie ? "ok" : "warn"}>{ctl.debtors_tie ? "Tie" : "Don't tie"}</StatusChip>
+              <span className="vbr2-text">Owed to you: {money(ctl.debtors_books_cents || 0)}</span></li>
+            <li className="vbr2-row"><StatusChip tone={ctl.creditors_tie ? "ok" : "warn"}>{ctl.creditors_tie ? "Tie" : "Don't tie"}</StatusChip>
+              <span className="vbr2-text">You owe suppliers: {money(ctl.creditors_books_cents || 0)}</span></li>
+            <li className="vbr2-row"><span className="vbr2-text">To categorise: {money(Math.abs((books.suspense || {}).cents || 0))} on {(books.suspense || {}).lines || 0} lines</span></li>
+            <li className="vbr2-row"><span className="vbr2-text">In transit (paid, with no bank line): {money(Math.abs(books.in_transit_cents || 0))}</span></li>
+            <li className="vbr2-row"><span className="vbr2-text">Owed to staff for claims: {money(books.owed_to_staff_cents || 0)}</span></li>
+            {r.no_account ? <li className="vbr2-row"><span className="vbr2-text">{r.no_account} bank lines have no account number — upload your official bank statements under Statements.</span></li> : null}
+          </ul>
+        </Card>
+      )}
+      <Card>
+        <h3 className="vbr2-h">Agree the check</h3>
+        {report.signed_off_by ? (
+          <p className="vbr2-text">Signed off by {report.signed_off_by} on {String(report.signed_off_at).slice(0, 10)}.</p>
+        ) : report.agreed_by ? (
+          <p className="vbr2-text">You agreed this check on {String(report.agreed_at).slice(0, 10)}. Vula's team signs it off next.</p>
+        ) : (
+          <>
+            {left.length ? (
+              <p className="vbr2-sub">Still open: {left.map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ")}.
+                Fix them, or say in the note what you accept as open.</p>
+            ) : <p className="vbr2-sub">Nothing is left to fix.</p>}
+            <Field label="Note for your accountant">
+              <Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. the two drafts from Build It are being checked with the supplier" />
+            </Field>
+            <Button onClick={agree}>{r.clean ? "Agree the check" : "Agree, with what's still open noted"}</Button>
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ── Bank lines ───────────────────────────────────────────────────────────────
+
+function LineTable({ rows, caption, select }) {
+  const cols = [
+    ...(select ? [{ key: "pick", label: "Choose", width: 70, render: (ln) => (
+      <input type="checkbox" aria-label={`Choose ${ln.description}`} checked={select.picked.has(ln.id)}
+        onChange={() => select.toggle(ln.id)} />) }] : []),
+    { key: "date", label: "Date", width: 110 },
+    { key: "description", label: "What the bank says" },
+    { key: "amount_cents", label: "Amount", align: "right", render: (ln) => signed(ln) },
+    { key: "bank_account", label: "Account", render: (ln) => ln.bank_account || "—" },
+  ];
+  return <DataTable columns={cols} rows={rows} caption={caption} stack />;
+}
+
+function usePick(rows) {
+  const [picked, setPicked] = useState(() => new Set(rows.map((r) => r.id)));
+  return { picked, toggle: (id) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }) };
+}
+
+function Lines({ x, r }) {
+  const restore = r.restore || [];
+  const sel = usePick(restore);
+  const options = useMemo(() => x.accounts || [], [x.accounts]);
+
+  async function putBack() {
+    const ids = restore.filter((ln) => sel.picked.has(ln.id)).map((ln) => ln.id);
+    if (!ids.length) return;
+    const why = await promptDialog(`Put ${ids.length} line${ids.length === 1 ? "" : "s"} back in the books? Say why (kept for the accountant):`,
+      { initial: "The running balance shows these lines are real." });
+    if (!why) return;
+    if (await done(await x.restore(ids, why), "Put back in the books.", "That didn't save — try again.")) x.reload();
+  }
+  async function keepOne(group) {
+    const rest = group.lines.slice(1).map((ln) => ln.id);
+    if (await done(await x.setAside(rest, "The same bank line read twice; one copy kept."),
+      "The extra copies are set aside.", "That didn't save — try again.")) x.reload();
+  }
+  async function isTransfer(pair) {
+    if (await done(await x.transfer(pair.lines.map((ln) => ln.id)), "Booked as a transfer between your accounts.",
+      "That didn't save — try again.")) x.reload();
+  }
+  async function categorise(ln, code) {
+    if (!code) return;
+    if (await done(await x.categorise([ln.id], code), "Categorised.", "That didn't save — try again.")) x.reload();
+  }
+
+  return (
+    <div className="vbr2-stack">
+      <Card>
+        <h3 className="vbr2-h">Set aside by mistake</h3>
+        <p className="vbr2-sub">Each of these fills a gap in its statement's running balance, so it's a real line that was set aside with a misread copy.</p>
+        {restore.length ? (
+          <>
+            <LineTable rows={restore} caption="Lines set aside by mistake" select={sel} />
+            <Button onClick={putBack}>Put the chosen lines back</Button>
+          </>
+        ) : <p className="vbr2-text">Nothing here — well done.</p>}
+      </Card>
+      <Card>
+        <h3 className="vbr2-h">Read twice</h3>
+        {(r.duplicates || []).length ? (r.duplicates || []).map((g, i) => (
+          <div key={i} className="vbr2-group">
+            <LineTable rows={g.lines} caption={`Copies of the same line, group ${i + 1}`} />
+            <Button variant="secondary" onClick={() => keepOne(g)}>Keep the first, set the rest aside</Button>
+          </div>
+        )) : <p className="vbr2-text">No line is in the books twice.</p>}
+      </Card>
+      <Card>
+        <h3 className="vbr2-h">Moved between your own accounts</h3>
+        <p className="vbr2-sub">Money out of one of your accounts and into another isn't income or a cost.</p>
+        {(r.transfers || []).length ? (r.transfers || []).map((p, i) => (
+          <div key={i} className="vbr2-group">
+            <LineTable rows={p.lines} caption={`Possible transfer ${i + 1}`} />
+            <Button variant="secondary" onClick={() => isTransfer(p)}>Yes, it's a transfer</Button>
+          </div>
+        )) : <p className="vbr2-text">None found.</p>}
+      </Card>
+      <Card>
+        <h3 className="vbr2-h">To categorise</h3>
+        {(r.to_categorise || []).length ? (
+          <ul className="vbr2-list">
+            {(r.to_categorise || []).map((ln) => (
+              <li key={ln.id} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text">{ln.date} · {ln.description} · <b>{signed(ln)}</b></span>
+                <Select aria-label={`Category for ${ln.description}`} defaultValue="" onChange={(e) => categorise(ln, e.target.value)}>
+                  <option value="">Choose a category…</option>
+                  {options.filter((a) => !a.directions || a.directions.includes(ln.direction))
+                    .map((a) => <option key={a.code} value={a.code}>{a.name}</option>)}
+                </Select>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="vbr2-text">Every line has a category.</p>}
+      </Card>
+    </div>
+  );
+}
+
+// ── In transit ───────────────────────────────────────────────────────────────
+
+function Transit({ x, r }) {
+  const docs = r.in_transit || [];
+  async function link(doc, ln) {
+    const target = doc.kind === "expense" ? { expense_id: doc.id } : { invoice_id: doc.id };
+    if (await done(await x.link(ln.id, target), "Tied together — no longer in transit.", "That didn't save — try again.")) x.reload();
+  }
+  async function notPaid(doc) {
+    if (!(await confirmDialog(`Mark ${doc.label || "this bill"} as not paid yet?`, { confirmLabel: "Not paid yet" }))) return;
+    if (await done(await x.recordDraft(doc.id), "Marked as still owed.", "That didn't save — try again.")) x.reload();
+  }
+  if (!docs.length) return <Card><p className="vbr2-text">Every recorded payment has its bank line.</p></Card>;
+  return (
+    <div className="vbr2-stack">
+      <p className="vbr2-sub">These are marked paid, but no bank line is tied to them. Often the bank line is in the books as a separate cost, so the same money is counted twice. Tie each to its bank line.</p>
+      {docs.map((d) => (
+        <Card key={`${d.kind}-${d.id}`}>
+          <div className="vbr2-row vbr2-wrap">
+            <span className="vbr2-text"><b>{KIND[d.kind] || d.kind} {d.label}</b> · {d.date} · {money(Math.abs(d.open_cents))}</span>
+            {d.kind === "bill" && <Button variant="ghost" onClick={() => notPaid(d)}>It wasn't paid</Button>}
+          </div>
+          {(d.candidates || []).length ? (
+            <ul className="vbr2-list">
+              {d.candidates.map((ln) => (
+                <li key={ln.id} className="vbr2-row vbr2-wrap">
+                  <span className="vbr2-text">{ln.date} · {ln.description} · {signed(ln)}</span>
+                  <Button variant="secondary" onClick={() => link(d, ln)}>This is the payment</Button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="vbr2-sub">No bank line with this amount — check whether it was really paid, or from which account.</p>}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+// ── Staff claims ─────────────────────────────────────────────────────────────
+
+function Claims({ x, r }) {
+  const rows = r.staff_claims || [];
+  async function paidBack(c) {
+    if (await done(await x.paidBack(c.id), "Marked as paid back.", "That didn't save — try again.")) x.reload();
+  }
+  const cols = [
+    { key: "date", label: "Date", width: 110 },
+    { key: "paid_by_name", label: "Who paid", render: (c) => c.paid_by_name || "—" },
+    { key: "description", label: "What", render: (c) => c.description || c.supplier || "—" },
+    { key: "amount_cents", label: "Amount", align: "right", render: (c) => money(c.amount_cents) },
+    { key: "act", label: "", render: (c) => <Button size="sm" variant="secondary" onClick={() => paidBack(c)}>Paid back</Button> },
+  ];
+  return (
+    <Card>
+      <h3 className="vbr2-h">Claims paid with staff's own money</h3>
+      <p className="vbr2-sub">Until they're marked paid back, the books show this money as owed to the person.</p>
+      <DataTable columns={cols} rows={rows} caption="Staff claims not yet paid back" stack empty="No claims waiting." />
+    </Card>
+  );
+}
+
+// ── Paperwork ────────────────────────────────────────────────────────────────
+
+function Paperwork({ x, r }) {
+  async function record(d) {
+    if (await done(await x.recordDraft(d.id), "Recorded.", "That didn't save — try again.")) x.reload();
+  }
+  async function cancel(d) {
+    const why = await promptDialog(`Cancel ${d.invoice_number || "this draft"}? Say why:`, { initial: "A duplicate of another bill." });
+    if (!why) return;
+    if (await done(await x.cancelDraft(d.id, why), "Cancelled.", "That didn't save — try again.")) x.reload();
+  }
+  async function fixDate(o) {
+    const date = await promptDialog("The right date (YYYY-MM-DD):", { initial: o.date });
+    if (!date) return;
+    const why = await promptDialog("Why? (kept for the accountant)", { initial: "The year was misread from the slip." });
+    if (!why) return;
+    if (await done(await x.correctDate(o.kind, o.id, date, why), "Date corrected.", "That didn't save — try again.")) x.reload();
+  }
+  const draftCols = [
+    { key: "issue_date", label: "Date", width: 110 },
+    { key: "invoice_number", label: "Number" },
+    { key: "who", label: "From / to", render: (d) => (d.direction === "inbound" ? d.supplier : d.customer_name) || "—" },
+    { key: "total_cents", label: "Total", align: "right", render: (d) => money(d.total_cents) },
+    { key: "act", label: "", render: (d) => (
+      <span className="vbr2-actions">
+        <Button size="sm" variant="secondary" onClick={() => record(d)}>Record it</Button>
+        <Button size="sm" variant="ghost" onClick={() => cancel(d)}>Cancel it</Button>
+      </span>) },
+  ];
+  return (
+    <div className="vbr2-stack">
+      <Card>
+        <h3 className="vbr2-h">Drafts</h3>
+        <p className="vbr2-sub">A draft isn't in the books yet. Record the real ones; cancel duplicates and quotes filed as bills.</p>
+        <DataTable columns={draftCols} rows={r.drafts || []} caption="Draft bills and invoices" stack empty="No drafts." />
+      </Card>
+      <Card>
+        <h3 className="vbr2-h">Dates that look wrong</h3>
+        {(r.odd_dates || []).length ? (
+          <ul className="vbr2-list">
+            {(r.odd_dates || []).map((o) => (
+              <li key={o.id} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text">{o.date} · {o.what}</span>
+                <Button size="sm" variant="secondary" onClick={() => fixDate(o)}>Fix the date</Button>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="vbr2-text">No odd dates.</p>}
+      </Card>
+    </div>
+  );
+}
+
+// ── Official statements ──────────────────────────────────────────────────────
+
+const ACTION = {
+  restore: "Put back in the books", add: "Add — it's on the statement but not in Vula",
+  set_aside: "Set aside — not on the statement", review: "Check by hand — it's tied to a bill, invoice or worker",
+  tag: "Tag with this account number",
+};
+
+function Statements({ x }) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(null);
+  const [ticked, setTicked] = useState(new Set());
+
+  async function upload() {
+    if (!file) return;
+    setBusy(true);
+    const res = await x.upload(file);
+    setBusy(false);
+    if (await done(res, "Compared — nothing has changed yet.", "That statement couldn't be read exactly.")) {
+      setFile(null);
+      x.reload();
+      if (res.data.check_id) show(res.data.check_id);
+    }
+  }
+  async function show(id) {
+    const res = await x.check(id);
+    if (!res.ok) { toast(reason(res, "Couldn't open that comparison."), "danger"); return; }
+    setOpen(res.data);
+    setTicked(new Set((res.data.actions || []).filter((a) => a.kind !== "review").map((a) => a.id)));
+  }
+  async function apply() {
+    const accept = [...ticked];
+    if (!(await confirmDialog(`Apply ${accept.length} change${accept.length === 1 ? "" : "s"} from ${open.filename}?`,
+      { confirmLabel: "Apply" }))) return;
+    const res = await x.apply(open.id, accept);
+    if (await done(res, res.data.not_saved && res.data.not_saved.length ? `${res.data.not_saved.length} didn't save — open it again.` : "Applied.",
+      "That didn't apply — try again.")) { setOpen(null); x.reload(); }
+  }
+  const toggle = (id) => setTicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  return (
+    <div className="vbr2-stack">
+      <Card>
+        <h3 className="vbr2-h">Upload an official bank statement</h3>
+        <p className="vbr2-sub">The PDF from online banking › Statements (not a transaction history). Vula reads it, checks it adds up to the cent and compares it line by line. Nothing changes until you apply.</p>
+        <div className="vbr2-row vbr2-wrap">
+          <Field label="Statement PDF">
+            <Input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </Field>
+          <Button onClick={upload} disabled={!file || busy}>{busy ? "Reading…" : "Compare it"}</Button>
+        </div>
+      </Card>
+      <Card>
+        <h3 className="vbr2-h">Comparisons</h3>
+        {(x.checks || []).length ? (
+          <ul className="vbr2-list">
+            {x.checks.map((c) => (
+              <li key={c.id} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text"><b>{c.filename}</b> · {c.account || "—"} · {c.period_from} to {c.period_to}</span>
+                <StatusChip tone={c.status === "applied" ? "ok" : "warn"}>{c.status === "applied" ? "Applied" : "To review"}</StatusChip>
+                <Button size="sm" variant="secondary" onClick={() => show(c.id)}>Open</Button>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="vbr2-text">No statement compared yet.</p>}
+      </Card>
+      {open && (
+        <Card>
+          <h3 className="vbr2-h">{open.filename}</h3>
+          <p className="vbr2-sub">{(open.summary || {}).already_right || 0} lines already right. Tick what to change.</p>
+          <ul className="vbr2-list">
+            {(open.actions || []).map((a) => (
+              <li key={a.id} className="vbr2-row vbr2-wrap">
+                <input type="checkbox" aria-label={`${ACTION[a.kind] || a.kind}: ${a.reason || ""}`} checked={ticked.has(a.id)}
+                  disabled={open.status === "applied" || a.kind === "review"} onChange={() => toggle(a.id)} />
+                <span className="vbr2-text"><b>{ACTION[a.kind] || a.kind}</b>{a.line ? ` · ${a.line.date} · ${a.line.description} · ${money(a.line.amount_cents)}` : ""}
+                  {a.cents != null && !a.line ? ` · ${money(a.cents)}` : ""}{a.reason ? ` — ${a.reason}` : ""}</span>
+              </li>
+            ))}
+          </ul>
+          {open.status !== "applied" && <Button onClick={apply} disabled={!ticked.size}>Apply the ticked ones</Button>}
+        </Card>
+      )}
+    </div>
+  );
+}

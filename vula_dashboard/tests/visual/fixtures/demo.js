@@ -1369,3 +1369,42 @@ export const tradeSuggestion = {
   field: "waste_pct", current_value: "5", suggested_value: "24", status: "pending",
   text: "one-brick wall — Bricks or blocks: waste 5% → 24% (estimated 2620.8 each, bought 3100)",
 };
+
+// ── Money › Books review (18 Nov 2026; vula/commerce/books_review.py) ──
+const brLine = (id, date, description, cents, direction = "out", extra = {}) => ({
+  id, date, description, amount_cents: cents, direction, status: "unmatched", account_code: "cost_of_sales",
+  categorized_by: "owner", excluded_reason: null, bank_account: "…5678", matched: false, ...extra });
+export const booksReview = {
+  report: { id: "audit-1", created_at: "2026-11-18T09:00:00Z", created_by: "owner", agreed_by: null, agreed_at: null,
+    agreed_note: null, signed_off_by: null, signed_off_at: null },
+  checks: [
+    { key: "restore", title: "Lines set aside by mistake", status: "problem", headline: "2 real lines were set aside" },
+    { key: "transfers", title: "Money between your own accounts", status: "problem", headline: "1 transfer is booked as income and a cost" },
+    { key: "vat", title: "VAT registration", status: "attention", headline: "Income over 12 months is above R1 million" },
+  ],
+  books: { trial_balance: { after: { accrual: { balanced: true }, cash: { balanced: true } } },
+    control: { debtors_tie: true, debtors_books_cents: 1800000, creditors_tie: true, creditors_books_cents: 0 },
+    suspense: { lines: 1, cents: -56217 }, in_transit_cents: -2300000, owed_to_staff_cents: 400000 },
+  open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0 },
+  clean: false,
+  restore: [brLine("r1", "2026-07-18", "POS Purchase Build It", 28500, "out", { status: "ignored", excluded_reason: "misread copy" }),
+    brLine("r2", "2026-07-18", "POS Purchase Cashbuild", 191389, "out", { status: "ignored" })],
+  duplicates: [{ lines: [brLine("d1", "2026-08-02", "FNB App Payment Nelitho", 300000), brLine("d2", "2026-08-02", "FNB App Payment Nelitho", 300000)], extra_cents: 300000 }],
+  transfers: [{ lines: [brLine("t1", "2026-09-01", "Transfer to savings", 500000), brLine("t2", "2026-09-01", "Transfer from cheque", 500000, "in")], cents: 500000 }],
+  to_categorise: [brLine("u1", "2026-10-03", "Magtape Credit Smit", 56217, "in", { categorized_by: "default", account_code: null })],
+  in_transit: [{ kind: "bill", id: "bill-35", label: "DIG-INV-00035", date: "2026-06-23", recorded_cents: -4993381, bank_cents: 0,
+    open_cents: -4993381, candidates: [brLine("p1", "2026-07-02", "Payshap Solid Cape", 4993381)] }],
+  staff_claims: [{ id: "claim-1", date: "2026-10-12", description: "Fuel for site visit", amount_cents: 400000, status: "submitted",
+    paid_by_name: "Judy", paid_with: "personal", reimbursable: true }],
+  drafts: [{ id: "draft-1", invoice_number: "DIG-BILL-00139", direction: "inbound", supplier: "PUDLO S.A", issue_date: "2026-10-15",
+    total_cents: 1422845, status: "draft", doc_type: "invoice" }],
+  odd_dates: [{ kind: "expense", id: "exp-old", date: "2015-10-26", what: "Expense: tax invoice from Pudlo S.A" }],
+  no_account: 0,
+};
+export const booksStatementChecks = [{ id: "chk-1", filename: "FNB official Sep.pdf", account: "…5678", bank: "FNB",
+  period_from: "2026-09-01", period_to: "2026-09-30", summary: { already_right: 40 }, status: "proposed", created_at: "2026-11-18T09:10:00Z" }];
+export const booksStatementCheck = { ...booksStatementChecks[0], actions: [
+  { id: "a1", kind: "restore", row_id: "r1", cents: 28500, reason: "on the statement; set aside by mistake" },
+  { id: "a2", kind: "add", reason: "on the statement, not in Vula", line: { date: "2026-09-25", description: "POS Purchase Build It City", amount_cents: 99050, direction: "out" } },
+  { id: "a3", kind: "review", row_id: "r6", cents: 7000, reason: "not on the statement, but tied to a worker" },
+] };

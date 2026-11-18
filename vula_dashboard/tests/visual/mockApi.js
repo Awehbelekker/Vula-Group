@@ -39,6 +39,10 @@ function routes(role, modules = [], features = []) {
   const trade = { finished: false, suggestions: [] };
   const tradeOff = { __raw: { status: 403, contentType: "application/json",
     body: '{"detail":"Costing by trade isn\'t switched on for this business."}' } };
+  // Books review: a copy per page, so a fix in one test never shows in the next.
+  const books = JSON.parse(JSON.stringify(F.booksReview));
+  const booksOff = { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Only an owner or manager can audit the books."}' } };
+  const booksOwner = role === "owner";
   let aiUsage = { ...F.aiUsage, requested: [] };          // per page: a top-up requested here shows here only     // per page: a scan started here shows here only
   // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
   let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
@@ -427,6 +431,38 @@ function routes(role, modules = [], features = []) {
     r("POST", `${A}/setup/preview-answer`, (m, url, req) => ({ answer: "We're open Mon–Fri 07:30–17:00 and Sat 08:00–14:00. Closed Sundays.", sources: "Business profile — for customers", grounded: true, q: req.postDataJSON()?.question })),
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
+    // ── Money › Books review ──
+    r("GET", `${A}/books-audit/review`, () => (booksOwner ? books : booksOff)),
+    r("POST", `${A}/books-audit/run`, () => (booksOwner ? { id: "audit-2", summary: {} } : booksOff)),
+    r("POST", `${A}/books-audit/lines/restore`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      books.restore = books.restore.filter((x) => !b.ids.includes(x.id));
+      books.open.restore = books.restore.length;
+      return { ok: true, done: b.ids };
+    }),
+    r("POST", `${A}/books-audit/lines/set-aside`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      books.duplicates = books.duplicates.filter((g) => !g.lines.some((x) => b.ids.includes(x.id)));
+      books.open.duplicates = books.duplicates.length;
+      return { ok: true, done: b.ids };
+    }),
+    r("POST", `${A}/books-audit/lines/transfer`, () => { books.transfers = []; books.open.transfers = 0; return { ok: true }; }),
+    r("POST", `${A}/books-audit/lines/${T}/link`, (m) => {
+      books.in_transit = []; books.open.in_transit = 0;
+      return { ok: true, line: { id: m[2] }, linked_to: "DIG-INV-00035" };
+    }),
+    r("POST", `${A}/books-audit/documents/${T}/${T}/date`, () => { books.odd_dates = []; books.open.odd_dates = 0; return { ok: true }; }),
+    r("POST", `${A}/books-audit/${T}/agree`, (m, url, req) => {
+      books.report.agreed_by = "owner"; books.report.agreed_at = "2026-11-18T10:00:00Z";
+      books.report.agreed_note = (req.postDataJSON() || {}).note;
+      return { ok: true, agreed_by: "owner" };
+    }),
+    r("GET", `${A}/books-audit/statements`, () => ({ checks: F.booksStatementChecks })),
+    r("GET", `${A}/books-audit/statements/${T}`, () => F.booksStatementCheck),
+    r("POST", `${A}/books-audit/statements/${T}/apply`, (m, url, req) => ({ ok: true, done: (req.postDataJSON() || {}).accept, skipped: [], not_saved: [] })),
+    r("POST", `${A}/books-audit/statements`, () => ({ check_id: "chk-1", summary: { already_right: 40 } })),
+    r("POST", `${A}/bank/transactions/bulk-categorize`, () => { books.to_categorise = []; books.open.to_categorise = 0; return { ok: true, updated: 1 }; }),
+    r("POST", `${A}/expenses/${T}/status`, () => { books.staff_claims = []; books.open.staff_claims = 0; return { ok: true }; }),
     // ── Estimating › Costing by trade ──
     r("GET", `${A}/buildups`, () => (tradeOn ? { buildups: tradeBuildups, can_confirm: role === "owner" } : tradeOff)),
     r("POST", `${A}/buildups/research`, (m, url, req) => {
