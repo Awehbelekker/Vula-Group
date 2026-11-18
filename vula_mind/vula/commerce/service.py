@@ -3836,10 +3836,10 @@ async def credit_invoice(tenant_id: str, invoice_id: str, amount_cents: Optional
     except Exception as exc:
         logger.warning("credit note link not saved: %s", exc)
     if against_owed:
-        db.table("commerce_invoice_payments").insert({
+        pay_rows = db.table("commerce_invoice_payments").insert({
             "tenant_id": tenant_id, "invoice_id": invoice_id, "amount_cents": against_owed,
             "payment_method": "credit_note", "note": f"Credit note {cn.get('invoice_number')}",
-            "paid_at": _now()}).execute()
+            "paid_at": _now()}).execute().data or []
         new_paid = paid + against_owed
         patch = {"total_paid_cents": new_paid, "updated_at": _now()}
         if new_paid >= total:
@@ -3851,8 +3851,10 @@ async def credit_invoice(tenant_id: str, invoice_id: str, amount_cents: Optional
         db.table("commerce_invoices").update(patch).eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
         try:      # the one trusted book: the sale and the debt come off on accrual
             from vula.commerce import ledger_events
-            if ledger_events.on(tenant_id):
-                ledger_events.credit_note(tenant_id, {"tenant_id": tenant_id, **src}, cn, against_owed)
+            if ledger_events.on(tenant_id) and pay_rows:
+                # keyed by the credit's payment row, so a rebuild of the history finds the same entry
+                ledger_events.credit_note(tenant_id, {"tenant_id": tenant_id, **src},
+                                          {**cn, "id": pay_rows[0]["id"]}, against_owed)
         except Exception as exc:  # noqa: BLE001
             logger.warning("credit note not posted: %s", exc)
     if refund:

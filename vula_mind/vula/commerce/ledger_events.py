@@ -21,8 +21,10 @@ by a model. Nothing here raises: a posting must never block the business action 
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from vula.commerce import ledger_v2 as lv
 
@@ -44,6 +46,67 @@ def _client():
     return service._client()
 
 
+# ── capture: what the books SHOULD hold, without writing (books_rebuild) ──────
+# Inside `capture()`, every posting below records the entry it would make instead of making it,
+# reads of the live journal see nothing, and settings/supplier lookups are read once per business.
+_cap: ContextVar[Optional[Dict[str, Any]]] = ContextVar("ledger_events_capture", default=None)
+
+
+@contextmanager
+def capture(memo: Optional[Dict[tuple, Any]] = None) -> Iterator[List[Dict[str, Any]]]:
+    """`memo` seeds the lookups, e.g. {("settings", tenant): {"accrual_from": "2026-03-01"}}."""
+    box: Dict[str, Any] = {"entries": [], "memo": dict(memo or {})}
+    token = _cap.set(box)
+    try:
+        yield box["entries"]
+    finally:
+        _cap.reset(token)
+
+
+def _memo(key: tuple, make):
+    box = _cap.get()
+    if box is None:
+        return make()
+    if key not in box["memo"]:
+        box["memo"][key] = make()
+    return box["memo"][key]
+
+
+def _entry(tenant_id: str, kw: Dict[str, Any]) -> Dict[str, Any]:
+    return {"tenant_id": tenant_id, "source_type": kw["source_type"], "source_id": str(kw["source_id"]),
+            "entry_date": (kw.get("entry_date") or _today())[:10], "description": kw.get("description") or "",
+            "lines": kw["lines"], "doc_id": kw.get("doc_id"), "bank_txn_id": kw.get("bank_txn_id")}
+
+
+def _post(tenant_id: str, **kw) -> Optional[str]:
+    box = _cap.get()
+    if box is not None:
+        box["entries"].append(_entry(tenant_id, kw))
+        return "captured"
+    return lv.post(tenant_id, **kw)
+
+
+def _repost(tenant_id: str, **kw) -> Optional[str]:
+    box = _cap.get()
+    if box is not None:
+        kw.pop("reason", None)
+        box["entries"].append(_entry(tenant_id, kw))
+        return "captured"
+    return lv.repost(tenant_id, **kw)
+
+
+def _unpost(tenant_id: str, source_type: str, source_id: str, reason: str = "removed") -> Optional[str]:
+    if _cap.get() is not None:
+        return None
+    return lv.unpost(tenant_id, source_type, source_id, reason=reason)
+
+
+def _live(tenant_id: str, source_type: str, source_id: str) -> Optional[Dict[str, Any]]:
+    if _cap.get() is not None:
+        return None
+    return lv.live_entry(tenant_id, source_type, source_id)
+
+
 def _today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
@@ -57,6 +120,8 @@ def on(tenant_id: Optional[str]) -> bool:
 
 
 def _ready(tenant_id: str) -> None:
+    if _cap.get() is not None:
+        return
     try:
         lv.ensure_ledger_chart(tenant_id)
     except Exception as exc:  # noqa: BLE001
@@ -64,6 +129,10 @@ def _ready(tenant_id: str) -> None:
 
 
 def _settings(tenant_id: str) -> Dict[str, Any]:
+    return _memo(("settings", tenant_id), lambda: _read_settings(tenant_id))
+
+
+def _read_settings(tenant_id: str) -> Dict[str, Any]:
     try:
         rows = (_client().table("commerce_books_settings").select("*").eq("tenant_id", tenant_id)
                 .limit(1).execute().data or [])
@@ -74,7 +143,7 @@ def _settings(tenant_id: str) -> Dict[str, Any]:
 
 def _vat_registered(tenant_id: str) -> bool:
     from vula.commerce import accounting
-    return accounting.is_vat_registered(tenant_id)
+    return _memo(("vat", tenant_id), lambda: accounting.is_vat_registered(tenant_id))
 
 
 def _split(amount: int, vat_total: int, total: int, before: int = 0) -> int:
@@ -111,6 +180,12 @@ def _on_accrual(tenant_id: str, inv: Dict[str, Any]) -> bool:
     from vula.commerce import ledger
     if ledger._migrated({"tenant_id": tenant_id, **inv}):
         return False
+    # 18 Nov 2026: an order's own invoice (send_order_invoice, or a deposit/balance) is not a second
+    # sale: the shop settles the order and the invoice together (_settle_order_invoice /
+    # _settle_linked_order) and only one of them posts. So it never sits in debtors; its payment
+    # is the sale, like the old books.
+    if inv.get("order_id") and (inv.get("direction") or "outbound") == "outbound":
+        return False
     start = _d(_settings(tenant_id).get("accrual_from"))
     when = _d(inv.get("issue_date") or inv.get("created_at"))
     return not (start and when and when < start)
@@ -138,13 +213,13 @@ def invoice_state(tenant_id: str, invoice: Dict[str, Any]) -> Optional[str]:
     if status == "cancelled" and int(inv.get("total_paid_cents") or 0) > 0:
         status = "credited"          # settled by credit notes: they take it out of debtors, not this
     if status in ("draft", "cancelled", "void") or total <= 0 or not _on_accrual(tenant_id, inv):
-        if lv.live_entry(tenant_id, "invoice_issued", str(inv["id"])):
-            return lv.unpost(tenant_id, "invoice_issued", str(inv["id"]), reason=f"invoice {status}")
+        if _live(tenant_id, "invoice_issued", str(inv["id"])):
+            return _unpost(tenant_id, "invoice_issued", str(inv["id"]), reason=f"invoice {status}")
         return None
     _ready(tenant_id)
     vat = max(0, min(int(inv.get("vat_cents") or 0), total))
     lines = [lv.line(AR, total, basis="accrual")] + _sale_lines(total, vat, basis="accrual")
-    return lv.repost(tenant_id, source_type="invoice_issued", source_id=str(inv["id"]),
+    return _repost(tenant_id, source_type="invoice_issued", source_id=str(inv["id"]),
                      entry_date=_d(inv.get("issue_date") or inv.get("created_at")) or _today(),
                      description=f"Invoice {_number(inv)} issued ({inv.get('customer_name') or 'customer'})",
                      lines=lines, reason="invoice changed")
@@ -173,7 +248,7 @@ def invoice_payment(tenant_id: str, invoice: Dict[str, Any], *, amount: int, pai
         lines = [money_in, lv.line(AR, credit=amount, basis="accrual")] + _sale_lines(amount, vat, basis="cash")
     else:
         lines = [money_in] + _sale_lines(amount, vat, basis=None)
-    return lv.post(tenant_id, entry_date=_d(paid_at) or _today(),
+    return _post(tenant_id, entry_date=_d(paid_at) or _today(),
                    description=f"Payment on invoice {_number(inv)}", source_type=source_type,
                    source_id=source_id, lines=lines, doc_id=inv.get("doc_id"))
 
@@ -195,7 +270,7 @@ def credit_note(tenant_id: str, invoice: Dict[str, Any], credit: Dict[str, Any],
     vat = _split(amount, int(invoice.get("vat_cents") or 0), int(invoice.get("total_cents") or 0),
                  before=int(invoice.get("total_paid_cents") or 0))
     lines = _sale_lines(amount, vat, basis="accrual", sign=-1) + [lv.line(AR, credit=amount, basis="accrual")]
-    return lv.post(tenant_id, entry_date=_d(credit.get("issue_date") or credit.get("created_at")) or _today(),
+    return _post(tenant_id, entry_date=_d(credit.get("issue_date") or credit.get("created_at")) or _today(),
                    description=f"Credit note {_number(credit)} against invoice {_number(invoice)}",
                    source_type="credit_note", source_id=str(credit["id"]), lines=lines)
 
@@ -208,7 +283,7 @@ def invoice_refund(tenant_id: str, invoice: Dict[str, Any], credit: Dict[str, An
     _ready(tenant_id)
     vat = _split(amount, int(invoice.get("vat_cents") or 0), int(invoice.get("total_cents") or 0))
     lines = _sale_lines(amount, vat, basis=None, sign=-1) + [lv.line(CLEARING, credit=amount)]
-    return lv.post(tenant_id, entry_date=_d(credit.get("issue_date")) or _today(),
+    return _post(tenant_id, entry_date=_d(credit.get("issue_date")) or _today(),
                    description=f"Refund under credit note {_number(credit)} (invoice {_number(invoice)})",
                    source_type="invoice_refund", source_id=str(credit["id"]), lines=lines)
 
@@ -217,8 +292,37 @@ def invoice_refund(tenant_id: str, invoice: Dict[str, Any], credit: Dict[str, An
 
 def _bill_account(tenant_id: str, bill: Dict[str, Any]) -> str:
     from vula.commerce import ledger
-    return bill.get("account_code") or ledger._supplier_account_code(tenant_id, bill.get("supplier_id"),
-                                                                      bill.get("supplier"))
+    if bill.get("account_code"):
+        return bill["account_code"]
+    if _cap.get() is not None:      # a dry run reads the chart, never seeds it
+        return _memo(("supplier_account", tenant_id, bill.get("supplier_id"), bill.get("supplier")),
+                     lambda: _supplier_code_read_only(tenant_id, bill))
+    return ledger._supplier_account_code(tenant_id, bill.get("supplier_id"), bill.get("supplier"))
+
+
+def _supplier_code_read_only(tenant_id: str, bill: Dict[str, Any]) -> str:
+    """ledger._supplier_account_code without accounting.ensure_chart (which adds missing accounts)."""
+    if not (bill.get("supplier_id") or bill.get("supplier")):
+        return "other_expense"
+    try:
+        db = _client()
+        q = db.table("commerce_suppliers").select("category").eq("tenant_id", tenant_id)
+        q = q.eq("id", bill["supplier_id"]) if bill.get("supplier_id") else q.eq("name", bill["supplier"])
+        rows = q.limit(1).execute().data or []
+        cat = ((rows[0].get("category") if rows else "") or "").strip().lower().replace(" ", "_")
+        codes = _memo(("expense_codes", tenant_id), lambda: {
+            a["code"] for a in (db.table("commerce_accounts").select("code,type").eq("tenant_id", tenant_id)
+                                .execute().data or []) if a.get("type") == "expense"})
+        return cat if cat and cat in codes else "other_expense"
+    except Exception:  # noqa: BLE001
+        return "other_expense"
+
+
+def _claimable(tenant_id: str, vat: int) -> int:
+    """Input VAT on a supplier's document is claimable only by a VAT-registered business; otherwise
+    it is part of the cost (18 Nov 2026: DIGG isn't registered, and R56k of supplier VAT would have
+    been booked as claimable)."""
+    return vat if vat > 0 and _vat_registered(tenant_id) else 0
 
 
 def _cost_lines(amount: int, vat: int, account: str, *, basis: Optional[str]) -> List[Dict[str, Any]]:
@@ -236,14 +340,15 @@ def bill_state(tenant_id: str, bill: Dict[str, Any]) -> Optional[str]:
     if (bill.get("doc_type") or "invoice") in DOC_TYPES_NOT_SALES:
         return None
     if status in ("draft", "cancelled", "void") or total <= 0 or not _on_accrual(tenant_id, bill):
-        if lv.live_entry(tenant_id, "bill_recorded", str(bill["id"])):
-            return lv.unpost(tenant_id, "bill_recorded", str(bill["id"]), reason=f"bill {status}")
+        if _live(tenant_id, "bill_recorded", str(bill["id"])):
+            return _unpost(tenant_id, "bill_recorded", str(bill["id"]), reason=f"bill {status}")
         return None
     _ready(tenant_id)
     vat = max(0, min(int(bill.get("vat_cents") or 0), total))
+    vat = _claimable(tenant_id, vat)
     lines = _cost_lines(total, vat, _bill_account(tenant_id, bill), basis="accrual") + \
         [lv.line(AP, credit=total, basis="accrual")]
-    return lv.repost(tenant_id, source_type="bill_recorded", source_id=str(bill["id"]),
+    return _repost(tenant_id, source_type="bill_recorded", source_id=str(bill["id"]),
                      entry_date=_d(bill.get("issue_date") or bill.get("created_at")) or _today(),
                      description=f"Supplier invoice {_number(bill)} ({bill.get('supplier') or 'supplier'})",
                      lines=lines, doc_id=bill.get("doc_id"), reason="bill changed")
@@ -257,7 +362,8 @@ def bill_payment(tenant_id: str, bill: Dict[str, Any], *, amount: int, paid_at: 
         return None
     _ready(tenant_id)
     total = int(bill.get("total_cents") or 0)
-    vat = _split(amount, int(bill.get("vat_cents") or 0), total, before=int(bill.get("total_paid_cents") or 0))
+    vat = _claimable(tenant_id, _split(amount, int(bill.get("vat_cents") or 0), total,
+                                       before=int(bill.get("total_paid_cents") or 0)))
     money_out = lv.line(_received(method), credit=amount)
     from vula.commerce import ledger
     if ledger._migrated({"tenant_id": tenant_id, **bill}):
@@ -268,7 +374,7 @@ def bill_payment(tenant_id: str, bill: Dict[str, Any], *, amount: int, paid_at: 
             _cost_lines(amount, vat, _bill_account(tenant_id, bill), basis="cash") + [money_out]
     else:
         lines = _cost_lines(amount, vat, _bill_account(tenant_id, bill), basis=None) + [money_out]
-    return lv.post(tenant_id, entry_date=_d(paid_at) or _today(),
+    return _post(tenant_id, entry_date=_d(paid_at) or _today(),
                    description=f"Paid supplier invoice {_number(bill)} ({bill.get('supplier') or 'supplier'})",
                    source_type=source_type, source_id=source_id, lines=lines, doc_id=bill.get("doc_id"))
 
@@ -279,9 +385,7 @@ def bill_paid(tenant_id: str, bill: Dict[str, Any]) -> Optional[str]:
                         source_id=str(bill["id"]), method=bill.get("payment_method"))
 
 
-# ── orders ───────────────────────────────────────────────────────────────────
-# (Card-machine "tap to pay" payments carry staff tips that aren't sales; they join in PR 3 with
-# the payout reconciliation.)
+# ── orders and the card machine ──────────────────────────────────────────────
 
 def _vat_in(total: int, registered: bool) -> int:
     """VAT inside a VAT-inclusive total (15/115), whole cents — only for a VAT-registered business."""
@@ -294,7 +398,7 @@ def order_paid(tenant_id: str, order: Dict[str, Any]) -> Optional[str]:
         return None
     _ready(tenant_id)
     vat = _vat_in(total, _vat_registered(tenant_id))
-    return lv.post(tenant_id, entry_date=_d(order.get("paid_at") or order.get("updated_at")) or _today(),
+    return _post(tenant_id, entry_date=_d(order.get("paid_at") or order.get("updated_at")) or _today(),
                    description=f"Order {order.get('display_id') or order.get('id')} paid",
                    source_type="order_paid", source_id=str(order["id"]),
                    lines=[lv.line(CLEARING, total)] + _sale_lines(total, vat, basis=None))
@@ -305,10 +409,46 @@ def order_refund(tenant_id: str, order: Dict[str, Any], amount: int, source_id: 
         return None
     _ready(tenant_id)
     vat = _vat_in(amount, _vat_registered(tenant_id))
-    return lv.post(tenant_id, entry_date=_d(order.get("updated_at")) or _today(),
+    return _post(tenant_id, entry_date=_d(order.get("updated_at")) or _today(),
                    description=f"Order {order.get('display_id') or order.get('id')} refund",
                    source_type="order_refund", source_id=source_id,
                    lines=_sale_lines(amount, vat, basis=None, sign=-1) + [lv.line(CLEARING, credit=amount)])
+
+
+def tap_payment(tenant_id: str, payment: Dict[str, Any], lines: Iterable[Any], *, bill_cents: int) -> Optional[str]:
+    """A card-machine (tap to pay) payment, split the way vula/tap/core/money.allocate_payment split it
+    (kind bill | tip | provider_fee | platform_fee, per party — the business is party 'merchant'):
+      Dr clearing (the whole amount; the payout's bank line clears what's left after fees)
+      Cr sales + VAT on the bill (VAT only for a registered business)
+      a staff member's share of the bill: Dr wages / Cr tips & shares owed to staff
+      a tip to staff: Cr owed to staff; a tip the business keeps: Cr other income
+      a fee the business bears: Dr bank charges; one a staff member bears: Dr owed to staff
+      all fees: Cr clearing.
+    A test payment is never posted (the tap service doesn't call this for one)."""
+    amount = int(payment.get("amount_cents") or 0)
+    if amount <= 0:
+        return None
+    _ready(tenant_id)
+    bill = max(0, min(int(bill_cents or 0), amount))
+    out = [lv.line(CLEARING, amount)] + _sale_lines(bill, _vat_in(bill, _vat_registered(tenant_id)), basis=None)
+    fees = 0
+    for ln in lines:
+        kind, party, cents = getattr(ln, "kind", None), getattr(ln, "party", None), int(getattr(ln, "cents", 0) or 0)
+        if isinstance(ln, dict):
+            kind, party, cents = ln.get("kind"), ln.get("party") or ln.get("party_id"), int(ln.get("cents") or 0)
+        staff = party not in (None, "", "merchant")
+        if kind == "bill" and staff and cents > 0:
+            out += [lv.line("wages", cents, memo="staff share"), lv.line("tips_payable", credit=cents)]
+        elif kind == "tip" and cents > 0:
+            out.append(lv.line("tips_payable" if staff else "other_income", credit=cents))
+        elif kind in ("provider_fee", "platform_fee") and cents < 0:
+            out.append(lv.line("tips_payable" if staff else "bank_charges", -cents))
+            fees += -cents
+    if fees:
+        out.append(lv.line(CLEARING, credit=fees))
+    return _post(tenant_id, entry_date=_d(payment.get("created_at") or payment.get("paid_at")) or _today(),
+                 description=f"Card machine payment {payment.get('provider_ref') or payment.get('id')}",
+                 source_type="tap_payment", source_id=str(payment["id"]), lines=out)
 
 
 # ── expenses ─────────────────────────────────────────────────────────────────
@@ -330,17 +470,17 @@ def expense(tenant_id: str, expense_row: Dict[str, Any]) -> Optional[str]:
     if amount <= 0:
         return None
     _ready(tenant_id)
-    vat = max(0, min(int(expense_row.get("vat_cents") or 0), amount))
+    vat = _claimable(tenant_id, max(0, min(int(expense_row.get("vat_cents") or 0), amount)))
     lines = _cost_lines(amount, vat, expense_row.get("account_code") or "other_expense", basis=None) + \
         [lv.line(_paid_from(expense_row), credit=amount)]
-    return lv.repost(tenant_id, source_type="expense", source_id=str(expense_row["id"]),
+    return _repost(tenant_id, source_type="expense", source_id=str(expense_row["id"]),
                      entry_date=_d(expense_row.get("date")) or _today(),
                      description=f"Expense: {expense_row.get('description') or expense_row.get('supplier') or 'expense'}",
                      lines=lines, doc_id=expense_row.get("doc_id"), reason="expense changed")
 
 
 def expense_removed(tenant_id: str, expense_row: Dict[str, Any], reason: str = "not the business's cost") -> Optional[str]:
-    return lv.unpost(tenant_id, "expense", str(expense_row["id"]), reason=reason)
+    return _unpost(tenant_id, "expense", str(expense_row["id"]), reason=reason)
 
 
 def expense_reimbursed(tenant_id: str, expense_row: Dict[str, Any]) -> Optional[str]:
@@ -349,7 +489,7 @@ def expense_reimbursed(tenant_id: str, expense_row: Dict[str, Any]) -> Optional[
     if amount <= 0 or _paid_from(expense_row) != STAFF:
         return None
     _ready(tenant_id)
-    return lv.post(tenant_id, entry_date=_d(expense_row.get("reimbursed_at")) or _today(),
+    return _post(tenant_id, entry_date=_d(expense_row.get("reimbursed_at")) or _today(),
                    description=f"Claim paid back: {expense_row.get('description') or 'expense'}",
                    source_type="expense_reimbursed", source_id=str(expense_row["id"]),
                    lines=[lv.line(STAFF, amount), lv.line(CLEARING, credit=amount)])
@@ -390,6 +530,19 @@ def bank_line_lines(row: Dict[str, Any], *, bank_account_id: Optional[str] = Non
     return [bank] + [ln for ln in rest if ln["debit_cents"] or ln["credit_cents"]]
 
 
+def is_live(row: Dict[str, Any]) -> bool:
+    return (row.get("match_status") or "unmatched") in LIVE_STATUSES and int(row.get("amount_cents") or 0) > 0
+
+
+def bank_line(tenant_id: str, row: Dict[str, Any], accounts: Dict[str, str]) -> Optional[str]:
+    """Post (or correct) one live bank line's entry."""
+    return _repost(tenant_id, source_type="bank_line", source_id=str(row["id"]),
+                   entry_date=_d(row.get("txn_date")) or _today(),
+                   description=(row.get("description") or "bank line")[:300],
+                   lines=bank_line_lines(row, bank_account_id=accounts.get(str(row.get("bank_account")))),
+                   bank_txn_id=str(row["id"]), reason="bank line changed")
+
+
 def sync_bank_lines(tenant_id: str, ids: Iterable[str]) -> Dict[str, int]:
     """Make the books say what each bank line says now: posted, corrected (a new version), or taken
     out when the line was set aside. Re-reads the rows, so it is safe to call from anywhere."""
@@ -410,17 +563,12 @@ def sync_bank_lines(tenant_id: str, ids: Iterable[str]) -> Dict[str, int]:
         return out
     for row in rows:
         try:
-            live = (row.get("match_status") or "unmatched") in LIVE_STATUSES and int(row.get("amount_cents") or 0) > 0
-            if not live:
-                if lv.live_entry(tenant_id, "bank_line", str(row["id"])):
-                    lv.unpost(tenant_id, "bank_line", str(row["id"]), reason=row.get("excluded_reason") or "set aside")
+            if not is_live(row):
+                if _live(tenant_id, "bank_line", str(row["id"])):
+                    _unpost(tenant_id, "bank_line", str(row["id"]), reason=row.get("excluded_reason") or "set aside")
                     out["removed"] += 1
                 continue
-            got = lv.repost(tenant_id, source_type="bank_line", source_id=str(row["id"]),
-                            entry_date=_d(row.get("txn_date")) or _today(),
-                            description=(row.get("description") or "bank line")[:300],
-                            lines=bank_line_lines(row, bank_account_id=accounts.get(str(row.get("bank_account")))),
-                            bank_txn_id=str(row["id"]), reason="bank line changed")
+            got = bank_line(tenant_id, row, accounts)
             out["posted" if got else "failed"] += 1
         except Exception as exc:  # noqa: BLE001
             log.warning("ledger: bank line %s not posted: %s", row.get("id"), exc)
