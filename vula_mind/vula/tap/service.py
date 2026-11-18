@@ -618,6 +618,12 @@ class TapService:
             {"tenant_id": tenant_id, "payment_id": pay["id"], "kind": l.kind,
              "party_id": l.party, "cents": l.cents} for l in alloc.lines])
         s["_alloc"] = alloc
+        try:     # the one trusted book (books_v2): the sale, tips owed to staff, fees
+            from vula.commerce import ledger_events
+            if ledger_events.on(tenant_id):
+                ledger_events.tap_payment(tenant_id, pay, alloc.lines, bill_cents=int(s.get("bill_cents") or 0))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tap payment %s not posted to the books: %s", pay.get("id"), exc)
 
     async def _notify_staff(self, tenant_id: str, s: dict, phone: str) -> None:
         alloc = s.get("_alloc")

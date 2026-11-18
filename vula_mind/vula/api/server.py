@@ -1608,6 +1608,13 @@ async def _ai_health_loop() -> None:
     await run_forever()
 
 
+async def _books_health_loop() -> None:
+    """Hourly: failed postings tried again; daily: every business on the one trusted book checked
+    (balanced, complete, bank reconciled, debtors/creditors tied) — loudly. See vula/books_health.py."""
+    from vula.books_health import run_forever
+    await run_forever()
+
+
 async def _qdrant_migrate_loop() -> None:
     """Copy the knowledge base to a new Qdrant cluster when QDRANT_MIGRATE_TO_BASE is set
     (2026-11-13, moving it to the EU). See vula/integrations/qdrant_migrate.py."""
@@ -1788,6 +1795,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
     # Cloud models + web search answering, loudly when not (2026-11-16).
     _scheduled_job_tasks.append(_asyncio.create_task(_ai_health_loop()))
+    # The one trusted book: retries hourly, checks daily (2026-11-18).
+    _scheduled_job_tasks.append(_asyncio.create_task(_books_health_loop()))
     # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
     _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
     # Right answers from each business's own records, after every deploy (2026-11-16).

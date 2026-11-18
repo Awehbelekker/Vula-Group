@@ -32,6 +32,7 @@ LEDGER_CHART = [
     ("cash_on_hand",           "Cash on hand",                    "asset",     "none", False, 8),
     ("suspense",               "To review",                       "asset",     "none", False, 9),
     ("staff_reimbursements",   "Owed to staff (claims)",          "liability", "none", False, 175),
+    ("tips_payable",           "Tips and shares owed to staff",   "liability", "none", False, 177),
     ("owner_loan",             "Loan from owner",                 "liability", "none", False, 176),
     ("owner_capital",          "Owner's capital",                 "equity",    "none", False, 161),
     ("opening_balance_equity", "Opening balances",                "equity",    "none", False, 162),
@@ -39,7 +40,7 @@ LEDGER_CHART = [
 # Never offered when someone categorises a bank line or an expense; the books use them. (clearing
 # is offered for money in only — a card-machine or payment-link payout of sales already recorded —
 # see accounting.usable_for.)
-SYSTEM_CODES = frozenset({"suspense", "opening_balance_equity", "staff_reimbursements"})
+SYSTEM_CODES = frozenset({"suspense", "opening_balance_equity", "staff_reimbursements", "tips_payable"})
 VIEWS = ("accrual", "cash")
 
 

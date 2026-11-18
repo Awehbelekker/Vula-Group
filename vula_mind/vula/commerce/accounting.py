@@ -328,7 +328,7 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
 # (ledger_v2.LEDGER_CHART); the accounts the books keep for themselves are never offered.
 MONEY_IN_CODES = frozenset({"owner_capital", "owner_loan", "transfer_clearing", "clearing"})
 MONEY_OUT_CODES = frozenset({"owner_loan", "transfer_clearing"})
-NEVER_PICKED = frozenset({"suspense", "opening_balance_equity", "staff_reimbursements",
+NEVER_PICKED = frozenset({"suspense", "opening_balance_equity", "staff_reimbursements", "tips_payable",
                           "bank_cash", "cash_on_hand", "accounts_receivable", "accounts_payable",
                           "vat_output", "vat_input"})
 

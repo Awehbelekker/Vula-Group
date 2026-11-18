@@ -313,3 +313,13 @@ async def test_reconcile_treats_an_unreadable_vat_setting_as_not_registered():
                                side_effect=lambda acc, amt, reg: seen.append(reg) or 0))
         await bank_rec.reconcile("off-the-hook", [{**TXN[0], "description": "CASH DEPOSIT"}])
     assert seen == [False]
+
+
+def test_a_business_not_registered_for_vat_claims_none_its_supplier_vat_is_cost(db):
+    db.rows["commerce_invoice_settings"][0]["vat_registered"] = False
+    ledger.post_expense(T, {"id": "e1", "amount_cents": 11500, "vat_cents": 1500, "account_code": "fuel",
+                            "paid_with": "company_card", "date": "2026-10-03"})
+    ev.invoice_state(T, {"id": "b1", "tenant_id": T, "invoice_number": "S-1", "direction": "inbound",
+                         "doc_type": "invoice", "status": "sent", "total_cents": 23000, "vat_cents": 3000,
+                         "issue_date": "2026-10-02", "account_code": "cost_of_sales", "source": None})
+    assert _bal(T, "vat_input") == 0 and _bal(T, "fuel") == 11500 and _bal(T, "cost_of_sales") == 23000
