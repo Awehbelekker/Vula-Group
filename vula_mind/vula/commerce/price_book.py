@@ -130,6 +130,8 @@ def document_vat_basis(fields: Dict[str, Any]) -> str:
     """Whether a document's line prices include VAT (migration 284): the document saying its
     amounts exclude VAT wins; otherwise its own figures decide (costing_history._vat_basis —
     lines add up to the total = incl, lines + VAT = excl, no VAT = no_vat, else unknown)."""
+    if fields.get("vat_basis") in ("incl", "excl", "no_vat"):
+        return fields["vat_basis"]          # said by the business (Books review, 19 Nov 2026)
     if fields.get("amounts_exclude_vat") is True:
         return "excl"
     from vula.commerce.costing_history import _vat_basis

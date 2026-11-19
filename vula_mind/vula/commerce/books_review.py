@@ -14,6 +14,9 @@ turns that into a worklist an owner or manager can fix from the dashboard, and t
                              second payment
   set_date                   correct an expense's or a document's date (misread years)
   agree                      the business agrees the audit; only then can Vula sign it off
+  documents (doc_audit.py)   the documents behind the money: correct what was read, say it's right,
+                             book an invoice on file, not a bill, a duplicate document or bill, a bill
+                             booked at its document's figures, whether a document's prices include VAT
 
 Every fix is scoped to the business, keeps its reason, is read back, written to vula_merchant_audit, and
 posts again in the one trusted book where that's on. Amounts are integer cents, worked out in code.
@@ -33,6 +36,8 @@ LINE_COLS = ("id,txn_date,description,amount_cents,direction,match_status,accoun
              "source_file")
 EXPENSE_POSTED = ("submitted", "approved", "paid", "reimbursed")
 FIRST_DATE = date(2015, 1, 1)
+# the document groups that count as open (price_vat and access are for information)
+DOC_GROUPS = ("doc_figures", "not_booked", "bill_mismatch", "doc_duplicates", "bill_duplicates", "suppliers")
 
 
 class Refused(ValueError):
@@ -268,11 +273,20 @@ def review(tenant_id: str) -> Dict[str, Any]:
 
     no_account = sum(1 for x in live if not (x.get("bank_account") or "").strip())
 
+    # the documents behind the money (doc_audit, 19 Nov 2026), re-read now
+    try:
+        from vula.commerce import doc_audit
+        docs = doc_audit.worklist(tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("books review: document worklist failed for %s: %s", tenant_id, exc)
+        docs = {}
+
     problems = [{"key": s.get("key"), "title": s.get("title"), "status": s.get("status"), "headline": s.get("headline")}
                 for s in rep.get("sections") or []]
     open_now = {"restore": len(restore), "duplicates": len(dups), "transfers": len(transfers),
                 "to_categorise": len(to_categorise), "in_transit": len(in_transit), "staff_claims": len(claims),
-                "drafts": len(drafts), "odd_dates": len(odd), "no_account": no_account}
+                "drafts": len(drafts), "odd_dates": len(odd), "no_account": no_account,
+                **{k: len(docs.get(k) or []) for k in DOC_GROUPS}}
     return {"report": {"id": row.get("id"), "created_at": row.get("created_at"), "created_by": row.get("created_by"),
                        "agreed_by": row.get("agreed_by"), "agreed_at": row.get("agreed_at"),
                        "agreed_note": row.get("agreed_note"), "signed_off_by": row.get("signed_off_by"),
@@ -280,7 +294,7 @@ def review(tenant_id: str) -> Dict[str, Any]:
             "checks": problems, "books": books, "open": open_now, "clean": not any(open_now.values()),
             "restore": restore, "duplicates": dups, "transfers": transfers, "to_categorise": to_categorise,
             "in_transit": in_transit, "staff_claims": claims, "drafts": drafts, "odd_dates": odd,
-            "no_account": no_account}
+            "no_account": no_account, "documents": docs}
 
 
 # ── fixes ────────────────────────────────────────────────────────────────────
