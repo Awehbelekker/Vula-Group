@@ -127,7 +127,37 @@ def shown(doc: Dict[str, Any]) -> Dict[str, Any]:
             "supplier": _sup(f) or None, "number": _num(f) or None, "date": str(f.get("date") or "")[:10] or None,
             "total_cents": _int(f.get("total_cents") if f.get("total_cents") is not None else f.get("amount_cents")),
             "vat_cents": _int(f.get("vat_cents")), "subtotal_cents": _int(f.get("subtotal_cents")),
-            "project": doc.get("project"), "bill_id": doc.get("commerce_invoice_id")}
+            "project": doc.get("project"), "bill_id": doc.get("commerce_invoice_id"),
+            "customer": _customer(f) or None}
+
+
+def _customer(f: Dict[str, Any]) -> str:
+    """Who a document is addressed to, as read (an invoice's customer / bill-to)."""
+    v = f.get("customer") or f.get("client") or f.get("bill_to") or f.get("customer_name") or ""
+    if isinstance(v, dict):
+        v = v.get("name") or ""
+    return str(v).strip()
+
+
+def own_names(tenant_id: str) -> Tuple[List[str], List[str]]:
+    """Every name and number the business itself goes by (service.own_business_names). Fail-open: none."""
+    from vula.commerce import service
+    try:
+        return asyncio.run(service.own_business_names(tenant_id))
+    except Exception:  # noqa: BLE001
+        return [], []
+
+
+def is_own(f: Dict[str, Any], own: Tuple[List[str], List[str]]) -> bool:
+    """The document was issued BY the business (its own invoice to a client, not a supplier's bill)."""
+    from vula.commerce.service import is_own_name
+    names, numbers = own
+    if not names:
+        return False
+    sup = _sup(f)
+    parts = [sup] + [p.strip(" ,-") for p in re.split(r"\bt\s*/\s*a\b|\btrading as\b", sup, flags=re.I)]
+    tax = f.get("tax_id") or f.get("supplier_vat_number")
+    return any(is_own_name(p, names, numbers, tax) for p in parts if p)
 
 
 # ── the file itself ──────────────────────────────────────────────────────────
@@ -310,14 +340,46 @@ def unbooked(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def books_findings(tenant_id: str, docs: List[Dict[str, Any]], bill_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def books_findings(tenant_id: str, docs: List[Dict[str, Any]], bill_rows: List[Dict[str, Any]],
+                   own: Optional[Tuple[List[str], List[str]]] = None) -> List[Dict[str, Any]]:
+    """19 Nov 2026 (DIGG's first run): of 43 invoices on file and not booked, 8 were DIGG's OWN invoices to
+    clients (R836k), 2 more had the same amount as one of them with the client read as the supplier, and
+    several were addressed to another business. None of those is a cost to book: own invoices are listed
+    as `our_invoice` (never offered for booking), and one addressed to someone else says so."""
     from vula.commerce import data_checks
+    from vula.commerce.service import is_own_name
     from vula.commerce.supplier_identity import same_name
+    own = own if own is not None else own_names(tenant_id)
     out: List[Dict[str, Any]] = []
-    for d in unbooked(docs):
+    pending = unbooked(docs)
+    ours = [d for d in pending if is_own(d.get("fields") or {}, own)]
+    our_totals = {abs(_int((d.get("fields") or {}).get("total_cents")) or 0): d for d in ours} | {
+        abs(_int((d.get("fields") or {}).get("total_cents")) or 0): d for d in docs
+        if d not in pending and is_own(d.get("fields") or {}, own)}
+    for d in pending:
         s = shown(d)
-        out.append({"kind": "not_booked", "severity": "problem", "rows": [d["id"]], "doc": s, "cents": s["total_cents"],
-                    "text": f"{_label(s)} for {_rands(s['total_cents'])} is on file but not in the books."})
+        if d in ours:
+            out.append({"kind": "our_invoice", "severity": "attention", "rows": [d["id"]], "doc": s, "cents": s["total_cents"],
+                        "text": (f"{_label(s)} for {_rands(s['total_cents'])} is the business's own invoice"
+                                 f"{' to ' + s['customer'] if s.get('customer') else ''} — a sale, not a bill. "
+                                 "Check it's in Invoices; it is never booked as a cost here.")})
+            continue
+        twin = our_totals.get(abs(s["total_cents"] or 0))
+        if twin is not None:
+            t = shown(twin)
+            out.append({"kind": "our_invoice", "severity": "attention", "rows": [d["id"], twin["id"]], "doc": s,
+                        "cents": s["total_cents"], "twin": t,
+                        "text": (f"{_label(s)} for {_rands(s['total_cents'])} has the same amount as the business's own "
+                                 f"invoice {t.get('number') or ''} — most likely that invoice with the client read as the "
+                                 "supplier. Not a bill.")})
+            continue
+        cust = s.get("customer")
+        to_other = bool(cust and own[0] and not is_own_name(cust, own[0], own[1]))
+        out.append({"kind": "not_booked", "severity": "attention" if to_other else "problem", "rows": [d["id"]],
+                    "doc": {**s, "addressed_to_other": to_other}, "cents": s["total_cents"],
+                    "text": (f"{_label(s)} for {_rands(s['total_cents'])} is on file but not in the books."
+                             + (f" It's addressed to {cust}, not the business — book it only if the business paid it."
+                                if to_other else ""))})
     for m in data_checks.bill_amount_mismatches(tenant_id, docs, bill_rows):
         doc = next((d for d in docs if str(d.get("commerce_invoice_id")) == str(m["id"])), None)
         out.append({"kind": "bill_amount", "severity": "problem", "rows": [m["id"]] + ([doc["id"]] if doc else []),
@@ -550,11 +612,15 @@ def sections(tenant_id: str, check_files: bool = True) -> List[Dict[str, Any]]:
 
     f_books = books_findings(tenant_id, docs, bill_rows)
     nb = [f for f in f_books if f["kind"] == "not_booked"]
+    ours = [f for f in f_books if f["kind"] == "our_invoice"]
+    diff = [f for f in f_books if f["kind"] in ("bill_amount", "bill_supplier")]
     out.append(_section("doc_books", "Documents and the books disagree", f_books,
                         "Every invoice on file is in the books at its own amount." if not f_books else
-                        f"{len(nb)} invoices on file aren't in the books"
+                        f"{len(nb)} supplier invoices on file aren't in the books"
                         f" ({_rands(sum(f.get('cents') or 0 for f in nb))}); "
-                        f"{len(f_books) - len(nb)} bills differ from their document.", problem=bool(f_books)))
+                        f"{len(ours)} are the business's own invoices ({_rands(sum(f.get('cents') or 0 for f in ours))}), "
+                        f"not bills; {len(diff)} bills differ from their document.",
+                        problem=any(f["severity"] == "problem" for f in f_books)))
 
     f_dup = duplicate_findings(docs, bill_rows)
     db_ = [f for f in f_dup if f["kind"] == "bill_duplicate"]
@@ -620,6 +686,8 @@ def worklist(tenant_id: str) -> Dict[str, Any]:
     _, people = access_findings(tenant_id)
     return {"doc_figures": figures,
             "not_booked": [{**f["doc"], "text": f["text"]} for f in books if f["kind"] == "not_booked"],
+            "our_invoices": [{**f["doc"], "text": f["text"], "twin": f.get("twin")} for f in books
+                             if f["kind"] == "our_invoice"],
             "bill_mismatch": mismatch,
             "doc_duplicates": [{"docs": f["docs"], "keep": f["keep"], "text": f["text"]}
                                for f in dups if f["kind"] == "doc_duplicate"],
@@ -742,6 +810,9 @@ async def book(tenant_id: str, doc_id: str, actor: Optional[dict] = None) -> Dic
         raise _refused("Only a supplier invoice on file can be booked here.")
     if doc.get("commerce_invoice_id"):
         raise _refused("That document is already in the books.")
+    names, numbers = await service.own_business_names(tenant_id)
+    if is_own(f, (names, numbers)):
+        raise _refused("That's the business's own invoice to a client — a sale, not a bill. It isn't booked as a cost.")
     if any(p["problem"] for p in figure_problems(doc)):
         raise _refused("Its figures aren't confirmed yet — correct them or say they're right first.")
     if not (_int(f.get("total_cents")) or 0) > 0:

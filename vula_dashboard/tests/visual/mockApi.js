@@ -499,7 +499,8 @@ function routes(role, modules = [], features = []) {
           return { ok: true, changed: [], doc: { id: m[2] }, bill_differs: { id: "bill-bb55" } }; })),
         r("POST", `${A}/books-audit/docs/${T}/confirm`, own((m) => { drop("doc_figures", (d) => d.id === m[2]); return { ok: true }; })),
         r("POST", `${A}/books-audit/docs/${T}/book`, own((m) => { drop("not_booked", (d) => d.id === m[2]); return { ok: true, bill_id: "bill-new" }; })),
-        r("POST", `${A}/books-audit/docs/${T}/not-a-bill`, own((m) => { drop("not_booked", (d) => d.id === m[2]); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/not-a-bill`, own((m) => { drop("not_booked", (d) => d.id === m[2]);
+          drop("our_invoices", (d) => d.id === m[2]); return { ok: true }; })),
         r("POST", `${A}/books-audit/docs/${T}/duplicate`, own(() => { drop("doc_duplicates", () => true); return { ok: true }; })),
         r("POST", `${A}/books-audit/docs/${T}/vat-basis`, own((m, url, req) => ({ ok: true, prices: 12, basis: (req.postDataJSON() || {}).basis }))),
         r("POST", `${A}/books-audit/bills/${T}/cancel-duplicate`, own(() => { drop("bill_duplicates", () => true); return { ok: true }; })),
