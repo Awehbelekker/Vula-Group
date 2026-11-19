@@ -10,6 +10,8 @@
  *   In transit   payments recorded with no bank line — "this bank line is that payment"
  *   Staff claims claims paid with staff's own money, not yet marked paid back
  *   Paperwork    draft bills and invoices, and dates that were misread
+ *   Documents    the documents behind the money, checked against their own files and the books
+ *                (DocumentsReview.jsx, 19 Nov 2026)
  *   Statements   upload an official bank statement: compared line by line, nothing changes until the
  *                ticked actions are applied
  * Owners and managers only (the server says so with a 403). Every figure is the server's.
@@ -19,6 +21,7 @@ import { Button, Card, DataTable, EmptyState, ErrorCard, Field, Input, PageHeade
   Skeleton, StatusChip, Textarea, confirmDialog, promptDialog, toast } from "../ui/index.jsx";
 import { formatMoney } from "../../lib/money.js";
 import { reason, useBooksReview } from "./useBooksReview.js";
+import DocumentsReview, { docCount } from "./DocumentsReview.jsx";
 import "./booksreview.css";
 
 const money = (c) => formatMoney(c, { cents: "always" });
@@ -78,6 +81,7 @@ export default function BooksReview({ tenantId }) {
     { id: "transit", label: `In transit${n("in_transit")}` },
     { id: "claims", label: `Staff claims${n("staff_claims")}` },
     { id: "paperwork", label: `Paperwork${(open.drafts || 0) + (open.odd_dates || 0) ? ` (${(open.drafts || 0) + (open.odd_dates || 0)})` : ""}` },
+    { id: "documents", label: `Documents${docCount(open) ? ` (${docCount(open)})` : ""}` },
     { id: "statements", label: "Statements" },
   ];
   return (
@@ -89,6 +93,7 @@ export default function BooksReview({ tenantId }) {
       {tab === "transit" && <Transit x={x} r={r} />}
       {tab === "claims" && <Claims x={x} r={r} />}
       {tab === "paperwork" && <Paperwork x={x} r={r} />}
+      {tab === "documents" && <DocumentsReview x={x} r={r} tenantId={tenantId} />}
       {tab === "statements" && <Statements x={x} />}
     </div>
   );

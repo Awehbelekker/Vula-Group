@@ -461,6 +461,27 @@ def price_vat_findings(tenant_id: str) -> List[Dict[str, Any]]:
                       + ") — estimates mark them; say per document.")}]
 
 
+def price_vat_documents(tenant_id: str, ids: List[str], limit: int = 50) -> List[Dict[str, Any]]:
+    """The documents behind prices with no VAT basis, as the review screen names them (largest first)."""
+    ids = [str(i) for i in ids[:limit]]
+    rows: Dict[str, Dict[str, Any]] = {}
+    for i in range(0, len(ids), 150):
+        try:
+            for r in (_client().table("vula_filed_documents").select("id,category,filename,fields")
+                      .eq("tenant_id", tenant_id).in_("id", ids[i:i + 150]).execute().data or []):
+                rows[str(r["id"])] = r
+        except Exception as exc:  # noqa: BLE001
+            log.debug("price VAT documents not read: %s", exc)
+    out = []
+    for i in ids:
+        r = rows.get(i)
+        if r:
+            f = r.get("fields") or {}
+            out.append({"id": r["id"], "category": r.get("category"), "filename": r.get("filename"),
+                        "supplier": _sup(f) or None, "date": str(f.get("date") or "")[:10] or None})
+    return out
+
+
 def access_findings(tenant_id: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     from vula.api.tenant_auth import ACCOUNTANT, _FULL_TEAM_ROLES
     try:
@@ -592,6 +613,10 @@ def worklist(tenant_id: str) -> Dict[str, Any]:
             mismatch.append({"kind": f["kind"], "text": f["text"], "bill": _bill_shown(b) if b else None,
                              "doc": f.get("doc")})
     pv = price_vat_findings(tenant_id)
+    price_vat = None
+    if pv:
+        price_vat = {k: pv[0][k] for k in ("count", "by_kind", "documents", "text")}
+        price_vat["docs"] = price_vat_documents(tenant_id, pv[0].get("rows") or [])
     _, people = access_findings(tenant_id)
     return {"doc_figures": figures,
             "not_booked": [{**f["doc"], "text": f["text"]} for f in books if f["kind"] == "not_booked"],
@@ -601,7 +626,7 @@ def worklist(tenant_id: str) -> Dict[str, Any]:
             "bill_duplicates": [{"bills": f["bills"], "keep": f["keep"], "text": f["text"], "extra_cents": f["cents"]}
                                 for f in dups if f["kind"] == "bill_duplicate"],
             "suppliers": [{k: v for k, v in f.items() if k not in ("severity",)} for f in sup],
-            "price_vat": pv[0] if pv else None,
+            "price_vat": price_vat,
             "access": people}
 
 

@@ -30,7 +30,7 @@ async function answer(page, text) {
 test.describe("books review", () => {
   for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
     for (const [tab, theme] of [["Overview", "light"], ["Bank lines", "dark"], ["In transit", "light"],
-      ["Paperwork", "dark"], ["Statements", "light"]]) {
+      ["Paperwork", "dark"], ["Documents", "dark"], ["Statements", "light"]]) {
       test(`${tab} ${vp}`, async ({ page }, ti) => {
         const errors = await openScreen(page, SCREEN(), { viewport, theme });
         await page.getByRole("tab", { name: new RegExp(`^${tab}`) }).click();
@@ -107,5 +107,76 @@ test.describe("books review", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Agree" }).click();
     expect((await agreed).postDataJSON().note).toContain("PUDLO");
     await expect(page.locator(".v2-content")).toContainText("Vula's team signs it off next");
+  });
+
+  // ── Documents (19 Nov 2026, vula/commerce/doc_audit.py) ──
+  async function docs(page) {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await page.getByRole("tab", { name: /^Documents/ }).click();
+  }
+
+  test("the documents tab counts what's open and lists each finding", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await expect(page.getByRole("tab", { name: "Documents (8)" })).toBeVisible();
+    await page.getByRole("tab", { name: /^Documents/ }).click();
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("The total read as R2,500.00 isn't in the document itself.");
+    await expect(content).toContainText("STE Scaffolding STE00866");
+    await expect(content).toContainText("Booked at R2,500.00, the document says R2,300.00.");
+    await expect(content).toContainText("Cancel this copy");
+    await expect(content).toContainText("Everything — no sections chosen");
+  });
+
+  test("correcting figures sends cents as typed, with the reason", async ({ page }) => {
+    await docs(page);
+    await page.getByRole("button", { name: "Correct the figures" }).first().click();
+    const form = page.getByRole("group", { name: /Correct the figures on Invoice from Build It/ });
+    await form.getByLabel("Total (R)", { exact: true }).fill("2 300.00");
+    const sent = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-bb55/figures"));
+    await form.getByRole("button", { name: "Save the corrected figures" }).click();
+    await expect(page.getByText("Say why")).toBeVisible();                       // a reason is required
+    await form.getByLabel("Why (kept for the accountant)").fill("The PDF says R2 300.00");
+    await form.getByRole("button", { name: "Save the corrected figures" }).click();
+    expect((await sent).postDataJSON()).toEqual({ changes: { total_cents: 230000 }, reason: "The PDF says R2 300.00" });
+  });
+
+  test("a document is opened through the server", async ({ page }) => {
+    await docs(page);
+    const opened = page.waitForRequest((r) => r.url().includes("/filed/doc-ste/open"));
+    const popup = page.waitForEvent("popup").catch(() => null);
+    await page.getByRole("button", { name: /Open Invoice from STE Scaffolding/ }).click();
+    await opened;
+    await popup;
+  });
+
+  test("an invoice on file is booked, a bill matched to its document, a copy cancelled", async ({ page }) => {
+    await docs(page);
+    const booked = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-ste/book"));
+    await page.getByRole("button", { name: "Book it", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Book it" }).click();
+    await booked;
+    await expect(page.locator(".v2-content")).toContainText("Every invoice on file is in the books.");
+    const matched = page.waitForRequest((r) => r.url().endsWith("/books-audit/bills/bill-bb55/match-document"));
+    await page.getByRole("button", { name: "Book it at the document's figures" }).click();
+    await answer(page, "The bill was booked at a misread total.");
+    expect((await matched).postDataJSON().reason).toBe("The bill was booked at a misread total.");
+    const cancelled = page.waitForRequest((r) => r.url().endsWith("/books-audit/bills/bill-hpc2/cancel-duplicate"));
+    await page.getByRole("button", { name: "Cancel this copy" }).click();
+    await answer(page, "The same invoice booked twice.");
+    expect((await cancelled).postDataJSON()).toEqual({ of_id: "bill-hpc1", reason: "The same invoice booked twice." });
+  });
+
+  test("copies, suppliers and a document's VAT basis", async ({ page }) => {
+    await docs(page);
+    const dup = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-q2/duplicate"));
+    await page.getByRole("button", { name: "Keep the first, the rest are copies" }).click();
+    expect((await dup).postDataJSON()).toEqual({ of_id: "doc-q1" });
+    const merged = page.waitForRequest((r) => r.url().endsWith("/suppliers/merge"));
+    await page.getByRole("button", { name: "Merge into one" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Merge" }).click();
+    expect((await merged).postDataJSON()).toEqual({ keep_id: "sup-1", duplicate_ids: ["sup-2"] });
+    const basis = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-pudlo/vat-basis"));
+    await page.getByLabel(/VAT on the prices in Quote/).selectOption("excl");
+    expect((await basis).postDataJSON()).toEqual({ basis: "excl" });
   });
 });

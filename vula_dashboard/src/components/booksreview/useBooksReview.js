@@ -20,6 +20,18 @@ const send = (method, url, body) => call(url, { method, headers: { "Content-Type
   body: JSON.stringify(body || {}) });
 const post = (url, body) => send("POST", url, body);
 
+/** "2 300.00", "R2,300", "2300,5" → 230000 / 230050 cents, read as written (no arithmetic on floats);
+ * null when it isn't an amount. */
+export function randToCents(text) {
+  const t = String(text ?? "").replace(/[R\s\u00a0]/gi, "");
+  if (!t) return null;
+  const m = t.match(/^(-?)(\d{1,3}(?:,\d{3})+|\d+)(?:[.,](\d{1,2}))?$/);
+  if (!m) return null;
+  const whole = m[2].replace(/,/g, "");
+  const cents = Number(whole) * 100 + Number((m[3] || "0").padEnd(2, "0"));
+  return m[1] ? -cents : cents;
+}
+
 /** The server's reason, as it wrote it, or a plain fallback. */
 export const reason = (res, fallback) =>
   (typeof res?.data?.detail === "string" && res.data.detail) || fallback;
@@ -60,6 +72,16 @@ export function useBooksReview(tenantId) {
   const recordDraft = (invoiceId) => send("PATCH", `${base(tenantId)}/invoices/${invoiceId}`, { status: "sent" });
   const cancelDraft = (invoiceId, why) => post(`${base(tenantId)}/invoices/${invoiceId}/cancel`, { reason: why });
   const check = (id) => call(a(`/statements/${id}`));
+  // the documents behind the money (19 Nov 2026, vula/commerce/doc_audit.py)
+  const docFigures = (id, changes, why) => post(a(`/docs/${id}/figures`), { changes, reason: why });
+  const docConfirm = (id, note) => post(a(`/docs/${id}/confirm`), { note });
+  const docBook = (id) => post(a(`/docs/${id}/book`));
+  const docNotABill = (id, why) => post(a(`/docs/${id}/not-a-bill`), { reason: why });
+  const docDuplicate = (id, ofId) => post(a(`/docs/${id}/duplicate`), { of_id: ofId });
+  const docVatBasis = (id, basis) => post(a(`/docs/${id}/vat-basis`), { basis });
+  const billCancelDuplicate = (id, ofId, why) => post(a(`/bills/${id}/cancel-duplicate`), { of_id: ofId, reason: why });
+  const billMatchDocument = (id, why) => post(a(`/bills/${id}/match-document`), { reason: why });
+  const mergeSuppliers = (keepId, ids) => post(`${base(tenantId)}/suppliers/merge`, { keep_id: keepId, duplicate_ids: ids });
   const apply = (id, accept) => post(a(`/statements/${id}/apply`), { accept });
 
   /** Upload one official statement PDF — compared only; nothing changes until it's applied. */
@@ -70,5 +92,6 @@ export function useBooksReview(tenantId) {
   }
 
   return { review, accounts, checks, state, reload, runCheck, restore, setAside, transfer, link, correctDate,
-    agree, categorise, paidBack, recordDraft, cancelDraft, upload, check, apply };
+    agree, categorise, paidBack, recordDraft, cancelDraft, upload, check, apply, docFigures, docConfirm, docBook,
+    docNotABill, docDuplicate, docVatBasis, billCancelDuplicate, billMatchDocument, mergeSuppliers };
 }

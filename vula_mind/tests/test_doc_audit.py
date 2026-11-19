@@ -176,7 +176,7 @@ def test_the_worklist_reads_things_as_they_are_now(db):
     assert [d["id"] for d in w["doc_figures"]] == ["bad", "photo"]
     assert {d["id"] for d in w["not_booked"]} == {"photo", "dup1", "dup2"}
     assert w["bill_duplicates"][0]["keep"] == "b-hpc1"
-    assert w["price_vat"]["count"] == 2
+    assert w["price_vat"]["count"] == 2 and [d["id"] for d in w["price_vat"]["docs"]] == ["photo"]
     db.rows["vula_books_audits"].append({"id": "a1", "tenant_id": T, "report": {"sections": []},
                                          "created_at": "2026-11-19T09:00:00Z"})
     out = br.review(T)
