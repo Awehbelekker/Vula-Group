@@ -207,3 +207,20 @@ def test_backfill_keeps_the_originals_on_the_server_and_says_which_are_gone(db, 
 def test_another_business_documents_are_never_in_the_folders(db):
     _folders_db(db)
     assert all(f["count"] == 0 for f in ff.organise("t2", "2026-03-01")["folders"])
+
+
+def test_a_backfill_asked_for_runs_once_for_that_business_only(db, monkeypatch):
+    db.rows["vula_tenant_config"] = [
+        {"tenant_id": T, "features": {"statement_backfill": True, "books_v2": False}},
+        {"tenant_id": "t2", "features": {"trade_costing": True}}]
+    ran = []
+
+    async def fake_backfill(tid):
+        ran.append(tid)
+        return {"kept": 2, "relabelled": 1, "missing": ["a.pdf"], "statement_files": 3}
+    monkeypatch.setattr(sf, "backfill", fake_backfill)
+    done = asyncio.run(sf.run_requested())
+    assert ran == [T] and done[T]["kept"] == 2
+    assert db.rows["vula_tenant_config"][0]["features"] == {"statement_backfill": False, "books_v2": False}
+    assert db.rows["vula_tenant_config"][1]["features"] == {"trade_costing": True}
+    assert asyncio.run(sf.run_requested()) == {} and ran == [T]          # once

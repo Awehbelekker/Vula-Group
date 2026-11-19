@@ -283,3 +283,54 @@ def coverage(tenant_id: str, start: Optional[date] = None, end: Optional[date] =
                     "months": rows, "missing": [r["month"] for r in rows if not r["statement"]]})
     no_account = sum(1 for ln in lines if not ln.get("bank_account") and ln.get("match_status") != "ignored")
     return {"from": start.isoformat(), "to": end.isoformat(), "accounts": out, "lines_on_no_account": no_account}
+
+
+# ── a backfill asked for ─────────────────────────────────────────────────────
+# The originals live on the server's volume, so the backfill runs there. Ian (or Master) asks for it by
+# setting `"statement_backfill": true` in a business's vula_tenant_config.features; the scheduler leader
+# looks every ten minutes, runs it once, turns the request off and logs what it did.
+
+REQUEST = "statement_backfill"
+
+
+def requested() -> List[str]:
+    try:
+        rows = (_client().table("vula_tenant_config").select("tenant_id,features").execute().data or [])
+    except Exception:  # noqa: BLE001
+        return []
+    return [r["tenant_id"] for r in rows if (r.get("features") or {}).get(REQUEST) is True]
+
+
+def _clear(tenant_id: str) -> None:
+    db = _client()
+    rows = db.table("vula_tenant_config").select("features").eq("tenant_id", tenant_id).limit(1).execute().data or []
+    if rows:
+        feats = dict(rows[0].get("features") or {})
+        feats[REQUEST] = False
+        db.table("vula_tenant_config").update({"features": feats}).eq("tenant_id", tenant_id).execute()
+
+
+async def run_requested() -> Dict[str, Any]:
+    """Each business that asked for it: its statements filed under their accounts, once."""
+    done: Dict[str, Any] = {}
+    for tid in requested():
+        _clear(tid)                       # first, so a failure can't make it run again and again
+        try:
+            done[tid] = await backfill(tid)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("statement backfill for %s failed: %s", tid, exc)
+            done[tid] = {"error": str(exc)[:200]}
+        log.info("statement backfill for %s: %s", tid,
+                 {k: (len(v) if isinstance(v, list) else v) for k, v in (done[tid] or {}).items()})
+    return done
+
+
+async def run_forever() -> None:
+    import asyncio
+    await asyncio.sleep(180)
+    while True:
+        try:
+            await run_requested()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("statement backfill pass failed: %s", exc)
+        await asyncio.sleep(600)
