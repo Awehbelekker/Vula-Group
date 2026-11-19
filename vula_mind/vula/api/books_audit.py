@@ -20,6 +20,17 @@ full access (an owner or manager) — the bank data behind the books is the busi
   POST /{tenant_id}/admin/books-audit/lines/{id}/link     {invoice_id | expense_id}  this line IS that payment
   POST /{tenant_id}/admin/books-audit/documents/{kind}/{id}/date  {date, reason}  correct a misread date
   POST /{tenant_id}/admin/books-audit/{audit_id}/agree    {note}         the business agrees the audit
+
+19 Nov 2026, the documents behind the money (vula/commerce/doc_audit.py), owner/manager only:
+  POST …/books-audit/docs/{id}/figures      {changes, reason}  correct what was read (old values kept)
+  POST …/books-audit/docs/{id}/confirm      {note}             the figures are right as read
+  POST …/books-audit/docs/{id}/book                            put an invoice on file into the books
+  POST …/books-audit/docs/{id}/not-a-bill   {reason}           an invoice on file that isn't a cost to book
+  POST …/books-audit/docs/{id}/duplicate    {of_id}            a second copy of another document
+  POST …/books-audit/docs/{id}/vat-basis    {basis}            its prices include VAT / exclude it / no VAT
+  POST …/books-audit/bills/{id}/cancel-duplicate {of_id, reason}  the second copy of a bill (never a paid one)
+  POST …/books-audit/bills/{id}/match-document   {reason}     an unpaid bill booked at its document's figures
+  Duplicate suppliers are merged with the existing POST /admin/suppliers/merge.
 """
 from __future__ import annotations
 
@@ -154,6 +165,88 @@ async def agree_audit(tenant_id: str, audit_id: str, body: AgreeBody, request: R
     person, actor = await _full(tenant_id, request)
     from vula.commerce import books_review
     return await _fix(books_review.agree, tenant_id, audit_id, body.note or "", person or "owner", actor=actor)
+
+
+class FiguresBody(BaseModel):
+    changes: dict
+    reason: str
+
+
+class NoteBody(BaseModel):
+    note: Optional[str] = None
+
+
+class ReasonBody(BaseModel):
+    reason: str
+
+
+class OfBody(BaseModel):
+    of_id: str
+    reason: Optional[str] = None
+
+
+class BasisBody(BaseModel):
+    basis: str
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/figures")
+async def doc_figures(tenant_id: str, doc_id: str, body: FiguresBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.correct_figures, tenant_id, doc_id, body.changes, body.reason, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/confirm")
+async def doc_confirm(tenant_id: str, doc_id: str, body: NoteBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.confirm, tenant_id, doc_id, body.note or "", actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/book")
+async def doc_book(tenant_id: str, doc_id: str, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    from vula.commerce.books_review import Refused
+    try:
+        return await doc_audit.book(tenant_id, doc_id, actor=actor)
+    except Refused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/not-a-bill")
+async def doc_not_a_bill(tenant_id: str, doc_id: str, body: ReasonBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.not_a_bill, tenant_id, doc_id, body.reason, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/duplicate")
+async def doc_duplicate(tenant_id: str, doc_id: str, body: OfBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.mark_duplicate, tenant_id, doc_id, body.of_id, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/vat-basis")
+async def doc_vat_basis(tenant_id: str, doc_id: str, body: BasisBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.set_vat_basis, tenant_id, doc_id, body.basis, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/bills/{bill_id}/cancel-duplicate")
+async def bill_cancel_duplicate(tenant_id: str, bill_id: str, body: OfBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.cancel_duplicate_bill, tenant_id, bill_id, body.of_id, body.reason or "", actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/bills/{bill_id}/match-document")
+async def bill_match_document(tenant_id: str, bill_id: str, body: ReasonBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.match_document, tenant_id, bill_id, body.reason, actor=actor)
 
 
 @router.post("/{tenant_id}/admin/books-audit/statements")

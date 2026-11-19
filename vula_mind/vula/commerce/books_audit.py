@@ -32,6 +32,9 @@ Sections (the report's `sections`, in order):
   paperwork     — supplier bills and customer invoices still in draft; expenses with no document
   dates         — ledger and expense dates outside the business's own trading period
   vat           — turnover over any 12 months against the R1m compulsory VAT registration line
+  doc_figures, doc_books, doc_duplicates, suppliers, price_vat, access
+                — the documents behind the money, checked against their own files and the books
+                  (vula/commerce/doc_audit.py, 19 Nov 2026)
 """
 from __future__ import annotations
 
@@ -381,8 +384,11 @@ def _section(key: str, title: str, findings: List[Dict[str, Any]], headline: str
     return {"key": key, "title": title, "status": status, "headline": headline, "findings": findings}
 
 
-def run(tenant_id: str, today: Optional[date] = None) -> Dict[str, Any]:
-    """The whole bank-data audit for one business. Reads only."""
+def run(tenant_id: str, today: Optional[date] = None, documents: bool = True,
+        check_files: bool = True) -> Dict[str, Any]:
+    """The whole audit for one business: the bank data, then (documents=True) the documents behind the
+    money (vula/commerce/doc_audit.py). Reads only, except that check_files keeps what each PDF itself
+    contains on the document (fields._file_check), so a file is read once."""
     today = today or datetime.now(timezone.utc).date()
     lines = _rows("commerce_bank_transactions", TXN_COLS, tenant_id)
     try:
@@ -553,6 +559,15 @@ def run(tenant_id: str, today: Optional[date] = None) -> Dict[str, Any]:
     sections.append(_dates(tenant_id, lines, today))
     # vat
     sections.append(_vat(tenant_id, live, in_transfer, today))
+    # the documents behind the money (19 Nov 2026, Phase 0b)
+    if documents:
+        try:
+            from vula.commerce import doc_audit
+            sections.extend(doc_audit.sections(tenant_id, check_files=check_files))
+        except Exception as exc:  # noqa: BLE001 — the bank audit stands on its own
+            log.warning("books audit: document checks failed for %s: %s", tenant_id, exc)
+            sections.append(_section("doc_figures", "Documents whose figures don't match the file", [],
+                                     "The documents couldn't be checked just now — run the check again."))
 
     problems = sum(1 for s in sections if s["status"] == "problem")
     return {"tenant_id": tenant_id, "generated_at": datetime.now(timezone.utc).isoformat(),
