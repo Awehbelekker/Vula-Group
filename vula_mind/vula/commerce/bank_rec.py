@@ -1122,9 +1122,18 @@ def _statement_account(tenant_id: str, text: str, txns: List[Dict[str, Any]]) ->
     return number
 
 
+async def _keep_file(tenant_id: str, pdf_path: Path, source_file: str, source: str, text: str,
+                     txns: List[Dict[str, Any]], password: Optional[str]) -> None:
+    """The statement PDF itself is kept, under its bank account (vula/commerce/statement_files.py) —
+    until 19 Nov 2026 a statement from WhatsApp or the dashboard was read and then thrown away."""
+    from vula.commerce import statement_files
+    await statement_files.keep(tenant_id, Path(pdf_path), filename=source_file or Path(pdf_path).name,
+                               source=source or "dashboard", text=text, txns=txns, password=password)
+
+
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,
                            source_file: str = "", trusted: bool = False,
-                           settle: bool = True) -> Dict[str, Any]:
+                           settle: bool = True, source: str = "") -> Dict[str, Any]:
     """Full pipeline: decrypt (stored ID password if not given) → parse → reconcile.
     `trusted`: the owner uploaded it as their bank statement (dashboard) — skip the check that
     an automatically-detected PDF (email/WhatsApp) really is their own bank statement.
@@ -1152,6 +1161,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         result["extraction_reconciled"] = True
         result["parser"] = "fnb"
         log.info("bank statement (FNB, exact) reconciled for %s: %s", tenant_id, result)
+        await _keep_file(tenant_id, pdf_path, source_file, source, fnb_text, txns, pwd)
         return result
     try:
         text = extract_pdf_text(Path(pdf_path), pwd)
@@ -1191,6 +1201,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     result["extraction_reconciled"] = reconciled
     result["bank_account"] = acct
     log.info("bank statement reconciled for %s: %s", tenant_id, result)
+    await _keep_file(tenant_id, pdf_path, source_file, source, text, txns, pwd)
     return result
 
 

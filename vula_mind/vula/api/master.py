@@ -939,6 +939,15 @@ async def master_books_rebuild_latest(tenant_id: str) -> dict:
     return rows[0] if rows else {"backfill_report": None}
 
 
+@router.post("/books/{tenant_id}/statement-files/backfill")
+async def master_statement_files_backfill(tenant_id: str) -> dict:
+    """File every bank statement already behind a business's bank lines under its account (the originals
+    still on the server and copies filed under another name); says which are gone for good
+    (vula/commerce/statement_files.py). Writes documents, so it runs only when asked."""
+    from vula.commerce import statement_files
+    return await statement_files.backfill(tenant_id)
+
+
 @router.post("/books-health/run")
 async def master_books_health_run() -> dict:
     """Run the books health checks now (every business on the one book) and return the result."""

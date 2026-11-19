@@ -166,6 +166,13 @@ function routes(role, modules = [], features = []) {
       return { invoices: rows, count: rows.length };
     }),
     r("GET", `${A}/bank/reconciliation`, () => F.bankSummary),
+    // 19 Nov 2026: the accountant's folders and named bank accounts (owner/manager only)
+    r("GET", `${A}/finance-folders`, () => (booksOwner ? F.financeFolders : booksOff)),
+    r("GET", `${A}/finance-folders.zip`, () => (booksOwner
+      ? { __raw: { status: 200, contentType: "application/zip", body: "PK", headers: { "content-disposition": 'attachment; filename="Documents_2026-27_all.zip"' } } }
+      : booksOff)),
+    r("GET", `${A}/bank/accounts`, () => ({ accounts: F.bankAccountsList })),
+    r("POST", `${A}/bank/accounts/([^/]+)`, () => ({ ok: true, account: "…7663", project: null, lines_moved: 0 })),
     r("GET", `${A}/bank/transactions/groups`, () => ({ groups: F.bankGroups })),
     r("GET", `${A}/bank/transactions/([^/]+)/candidates`, () => ({ candidates: F.bankCandidates })),
     r("GET", `${A}/bank/transactions`, (m, url) => {

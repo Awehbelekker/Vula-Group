@@ -1426,3 +1426,43 @@ export const booksStatementCheck = { ...booksStatementChecks[0], actions: [
   { id: "a2", kind: "add", reason: "on the statement, not in Vula", line: { date: "2026-09-25", description: "POS Purchase Build It City", amount_cents: 99050, direction: "out" } },
   { id: "a3", kind: "review", row_id: "r6", cents: 7000, reason: "not on the statement, but tied to a worker" },
 ] };
+
+// ── Documents › For your accountant + named bank accounts (19 Nov 2026) ──────────────────────────
+const ffUrl = (n) => `https://x.supabase.co/storage/v1/object/sign/documents/demo/${n}.pdf?token=t`;
+export const financeFolders = {
+  from: "2026-03-01", to: "2027-02-28",
+  coverage: {
+    from: "2026-03-01", to: "2026-10-17", lines_on_no_account: 12,
+    accounts: [
+      { id: "ba-1", account: "Business cheque …7663", missing: ["2026-07", "2026-10"],
+        months: [{ month: "2026-09", statement: true, official: true, lines: 41 }] },
+      { id: "ba-2", account: "FNB …4607", missing: [], months: [] },
+    ],
+  },
+  folders: [
+    { key: "bank", title: "01 Bank statements", count: 2, groups: [
+      { name: "Business cheque …7663", count: 2, items: [
+        { id: "st-1", date: "2026-08-31", label: "FNB statement …7663, 1 Aug 2026 to 31 Aug 2026", category: "Bank Statement",
+          amount_cents: null, filename: "…7663_Aug.pdf", file_url: ffUrl("st-1"), official: false },
+        { id: "st-2", date: "2026-09-30", label: "FNB statement …7663, 1 Sep 2026 to 30 Sep 2026", category: "Bank Statement",
+          amount_cents: null, filename: "FNB Sep.pdf", file_url: ffUrl("st-2"), official: true }] }] },
+    { key: "sales", title: "02 Sales invoices and credit notes", count: 1, groups: [
+      { name: "2026-09 September", count: 1, items: [
+        { id: "si-1", date: "2026-09-12", label: "INV-0041", category: "Invoice", amount_cents: 864_200, filename: "INV-0041.pdf",
+          file_url: ffUrl("si-1"), official: null }] }] },
+    { key: "bills", title: "03 Supplier invoices and delivery notes", count: 2, groups: [
+      { name: "Atlantic Dairy Co-op", count: 2, items: [
+        { id: "b-1", date: "2026-09-03", label: "Atlantic Dairy Co-op BILL-0031", category: "Invoice", amount_cents: 864_200,
+          filename: "Atlantic-Dairy-invoice-BILL-0031.pdf", file_url: ffUrl("b-1"), official: null },
+        { id: "b-2", date: "2026-09-20", label: "Atlantic Dairy Co-op BILL-0034", category: "Invoice", amount_cents: 412_850,
+          filename: "BILL-0034.pdf", file_url: ffUrl("b-2"), official: null }] }] },
+    { key: "pops", title: "04 Proofs of payment", count: 0, groups: [] },
+    { key: "settlements", title: "05 Card machine and payment settlements", count: 0, groups: [] },
+    { key: "statements", title: "06 Statements from suppliers and customers", count: 0, groups: [] },
+    { key: "legal", title: "07 Contracts, insurance and legal", count: 0, groups: [] },
+  ],
+};
+export const bankAccountsList = [
+  { id: "ba-1", account: "…7663", bank: "FNB", name: "Business cheque", holder: null, project: null, lines: 146 },
+  { id: "ba-2", account: "…4607", bank: "FNB", name: null, holder: null, project: null, lines: 493 },
+];
