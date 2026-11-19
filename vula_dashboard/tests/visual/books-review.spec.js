@@ -85,7 +85,7 @@ test.describe("books review", () => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
     await page.getByRole("tab", { name: /^Statements/ }).click();
     const up = page.waitForRequest((r) => r.url().endsWith("/books-audit/statements") && r.method() === "POST");
-    await page.getByLabel("Statement PDF").setInputFiles({ name: "FNB Sep.pdf", mimeType: "application/pdf",
+    await page.getByLabel("Statement PDFs").setInputFiles({ name: "FNB Sep.pdf", mimeType: "application/pdf",
       buffer: Buffer.from("%PDF-1.4 demo") });
     await page.getByRole("button", { name: "Compare it" }).click();
     const req = await up;
@@ -191,5 +191,22 @@ test.describe("books review", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Yes, it's there" }).click();
     expect((await noted).postDataJSON().reason).toContain("Our own invoice to Vizion Developments");
     await expect(content).not.toContainText("Your own invoices on file");
+  });
+
+  test("several statements are compared in one go, each on its own", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await page.getByRole("tab", { name: /^Statements/ }).click();
+    const posts = [];
+    page.on("request", (r) => { if (r.url().endsWith("/books-audit/statements") && r.method() === "POST") posts.push(r); });
+    await page.getByLabel("Statement PDFs").setInputFiles([
+      { name: "FNB …7663 Jul.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 a") },
+      { name: "FNB …7663 Aug.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 b") },
+      { name: "FNB …4607 Mar.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 c") }]);
+    await page.getByRole("button", { name: "Compare 3 statements" }).click();
+    await expect(page.getByRole("list", { name: "Statements just compared" }).getByRole("listitem")).toHaveCount(3);
+    expect(posts.length).toBe(3);
+    expect(posts.every((r) => r.headers()["content-type"].includes("multipart/form-data"))).toBe(true);
+    await page.getByRole("button", { name: "Open the comparison for FNB …7663 Aug.pdf" }).click();
+    await page.getByText("40 lines already right").waitFor();
   });
 });
