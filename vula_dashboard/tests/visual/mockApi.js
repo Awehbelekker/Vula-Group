@@ -489,6 +489,25 @@ function routes(role, modules = [], features = []) {
       books.report.agreed_note = (req.postDataJSON() || {}).note;
       return { ok: true, agreed_by: "owner" };
     }),
+    // the documents behind the money (19 Nov 2026)
+    ...(() => {
+      const D = () => books.documents;
+      const drop = (group, pred) => { D()[group] = D()[group].filter((x) => !pred(x)); books.open[group] = D()[group].length; };
+      const own = (fn) => (m, url, req) => (booksOwner ? fn(m, url, req) : booksOff);
+      return [
+        r("POST", `${A}/books-audit/docs/${T}/figures`, own((m) => { drop("doc_figures", (d) => d.id === m[2]);
+          return { ok: true, changed: [], doc: { id: m[2] }, bill_differs: { id: "bill-bb55" } }; })),
+        r("POST", `${A}/books-audit/docs/${T}/confirm`, own((m) => { drop("doc_figures", (d) => d.id === m[2]); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/book`, own((m) => { drop("not_booked", (d) => d.id === m[2]); return { ok: true, bill_id: "bill-new" }; })),
+        r("POST", `${A}/books-audit/docs/${T}/not-a-bill`, own((m) => { drop("not_booked", (d) => d.id === m[2]); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/duplicate`, own(() => { drop("doc_duplicates", () => true); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/vat-basis`, own((m, url, req) => ({ ok: true, prices: 12, basis: (req.postDataJSON() || {}).basis }))),
+        r("POST", `${A}/books-audit/bills/${T}/cancel-duplicate`, own(() => { drop("bill_duplicates", () => true); return { ok: true }; })),
+        r("POST", `${A}/books-audit/bills/${T}/match-document`, own(() => { drop("bill_mismatch", () => true); return { ok: true }; })),
+        r("POST", `${A}/suppliers/merge`, own(() => { drop("suppliers", (f) => f.kind === "supplier_duplicate");
+          return { ok: true, merged: 1, message: "Merged." }; })),
+      ];
+    })(),
     r("GET", `${A}/books-audit/statements`, () => ({ checks: F.booksStatementChecks })),
     r("GET", `${A}/books-audit/statements/${T}`, () => F.booksStatementCheck),
     r("POST", `${A}/books-audit/statements/${T}/apply`, (m, url, req) => ({ ok: true, done: (req.postDataJSON() || {}).accept, skipped: [], not_saved: [] })),

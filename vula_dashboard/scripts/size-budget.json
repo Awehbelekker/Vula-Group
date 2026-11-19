@@ -1,5 +1,5 @@
 {
-  "_note": "KB gzipped, checked by scripts/check-size.mjs after the build. 5 Nov 2026: the old design retired — first_load 184 KB (was 204), everything 845 KB. Set ~10% over.",
+  "_note": "KB gzipped, checked by scripts/check-size.mjs after the build. 5 Nov 2026: the old design retired \u2014 first_load 184 KB (was 204), everything 845 KB. Set ~10% over. 19 Nov 2026: everything 960 \u2014 Books review \u203a Documents (lazy, owner/manager only) took the total to 933 KB; the first load is unchanged.",
   "first_load": 205,
-  "everything": 930
+  "everything": 960
 }
