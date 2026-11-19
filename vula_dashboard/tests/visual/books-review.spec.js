@@ -85,7 +85,7 @@ test.describe("books review", () => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
     await page.getByRole("tab", { name: /^Statements/ }).click();
     const up = page.waitForRequest((r) => r.url().endsWith("/books-audit/statements") && r.method() === "POST");
-    await page.getByLabel("Statement PDF").setInputFiles({ name: "FNB Sep.pdf", mimeType: "application/pdf",
+    await page.getByLabel("Statement PDFs").setInputFiles({ name: "FNB Sep.pdf", mimeType: "application/pdf",
       buffer: Buffer.from("%PDF-1.4 demo") });
     await page.getByRole("button", { name: "Compare it" }).click();
     const req = await up;
@@ -117,7 +117,7 @@ test.describe("books review", () => {
 
   test("the documents tab counts what's open and lists each finding", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
-    await expect(page.getByRole("tab", { name: "Documents (8)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Documents (9)" })).toBeVisible();
     await page.getByRole("tab", { name: /^Documents/ }).click();
     const content = page.locator(".v2-content");
     await expect(content).toContainText("The total read as R2,500.00 isn't in the document itself.");
@@ -152,10 +152,9 @@ test.describe("books review", () => {
   test("an invoice on file is booked, a bill matched to its document, a copy cancelled", async ({ page }) => {
     await docs(page);
     const booked = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-ste/book"));
-    await page.getByRole("button", { name: "Book it", exact: true }).click();
+    await page.getByRole("button", { name: "Book it", exact: true }).first().click();
     await page.getByRole("dialog").getByRole("button", { name: "Book it" }).click();
     await booked;
-    await expect(page.locator(".v2-content")).toContainText("Every invoice on file is in the books.");
     const matched = page.waitForRequest((r) => r.url().endsWith("/books-audit/bills/bill-bb55/match-document"));
     await page.getByRole("button", { name: "Book it at the document's figures" }).click();
     await answer(page, "The bill was booked at a misread total.");
@@ -178,5 +177,36 @@ test.describe("books review", () => {
     const basis = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-pudlo/vat-basis"));
     await page.getByLabel(/VAT on the prices in Quote/).selectOption("excl");
     expect((await basis).postDataJSON()).toEqual({ basis: "excl" });
+  });
+
+  test("the business's own invoices are never offered for booking; one addressed elsewhere says so", async ({ page }) => {
+    await docs(page);
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Your own invoices on file");
+    await expect(content).toContainText("Addressed to Enziglo (Pty) Ltd");
+    const own = page.locator("li", { hasText: "DIGG-2026-HPC02" });
+    await expect(own.getByRole("button", { name: "Book it" })).toHaveCount(0);
+    const noted = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-own/not-a-bill"));
+    await own.getByRole("button", { name: "It's in Invoices" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Yes, it's there" }).click();
+    expect((await noted).postDataJSON().reason).toContain("Our own invoice to Vizion Developments");
+    await expect(content).not.toContainText("Your own invoices on file");
+  });
+
+  test("several statements are compared in one go, each on its own", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await page.getByRole("tab", { name: /^Statements/ }).click();
+    const posts = [];
+    page.on("request", (r) => { if (r.url().endsWith("/books-audit/statements") && r.method() === "POST") posts.push(r); });
+    await page.getByLabel("Statement PDFs").setInputFiles([
+      { name: "FNB …7663 Jul.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 a") },
+      { name: "FNB …7663 Aug.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 b") },
+      { name: "FNB …4607 Mar.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 c") }]);
+    await page.getByRole("button", { name: "Compare 3 statements" }).click();
+    await expect(page.getByRole("list", { name: "Statements just compared" }).getByRole("listitem")).toHaveCount(3);
+    expect(posts.length).toBe(3);
+    expect(posts.every((r) => r.headers()["content-type"].includes("multipart/form-data"))).toBe(true);
+    await page.getByRole("button", { name: "Open the comparison for FNB …7663 Aug.pdf" }).click();
+    await page.getByText("40 lines already right").waitFor();
   });
 });

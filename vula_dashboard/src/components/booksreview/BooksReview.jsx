@@ -397,21 +397,30 @@ const ACTION = {
 };
 
 function Statements({ x }) {
-  const [file, setFile] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [results, setResults] = useState([]);
   const [open, setOpen] = useState(null);
   const [ticked, setTicked] = useState(new Set());
 
+  // Several statements at once (19 Nov 2026): each is read and compared on its own, one after another,
+  // and each gets its own comparison to open and apply. Nothing changes until one is applied.
   async function upload() {
-    if (!file) return;
-    setBusy(true);
-    const res = await x.upload(file);
-    setBusy(false);
-    if (await done(res, "Compared — nothing has changed yet.", "That statement couldn't be read exactly.")) {
-      setFile(null);
-      x.reload();
-      if (res.data.check_id) show(res.data.check_id);
+    if (!files.length) return;
+    const out = [];
+    for (const [i, f] of files.entries()) {
+      setBusy(`Reading ${i + 1} of ${files.length}…`);
+      const res = await x.upload(f);
+      out.push({ name: f.name, ok: res.ok, id: res.data?.check_id,
+        why: res.ok ? null : reason(res, "It couldn't be read exactly.") });
+      setResults([...out]);
     }
+    setBusy("");
+    setFiles([]);
+    const good = out.filter((r) => r.ok);
+    toast(`${good.length} of ${out.length} compared — nothing has changed yet.`, good.length === out.length ? "ok" : "warn");
+    x.reload();
+    if (out.length === 1 && good.length === 1 && good[0].id) show(good[0].id);
   }
   async function show(id) {
     const res = await x.check(id);
@@ -432,14 +441,26 @@ function Statements({ x }) {
   return (
     <div className="vbr2-stack">
       <Card>
-        <h3 className="vbr2-h">Upload an official bank statement</h3>
-        <p className="vbr2-sub">The PDF from online banking › Statements (not a transaction history). Vula reads it, checks it adds up to the cent and compares it line by line. Nothing changes until you apply.</p>
+        <h3 className="vbr2-h">Upload official bank statements</h3>
+        <p className="vbr2-sub">The PDFs from online banking › Statements (not a transaction history) — choose as many as you like. Vula reads each, checks it adds up to the cent and compares it line by line. Nothing changes until you apply.</p>
         <div className="vbr2-row vbr2-wrap">
-          <Field label="Statement PDF">
-            <Input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <Field label="Statement PDFs">
+            <Input type="file" accept="application/pdf" multiple onChange={(e) => setFiles([...(e.target.files || [])])} />
           </Field>
-          <Button onClick={upload} disabled={!file || busy}>{busy ? "Reading…" : "Compare it"}</Button>
+          <Button onClick={upload} disabled={!files.length || !!busy}>
+            {busy || (files.length > 1 ? `Compare ${files.length} statements` : "Compare it")}</Button>
         </div>
+        {results.length > 0 && (
+          <ul className="vbr2-list" aria-label="Statements just compared">
+            {results.map((r, i) => (
+              <li key={i} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text"><b>{r.name}</b>{r.why ? ` — ${r.why}` : ""}</span>
+                {r.ok ? <Button size="sm" variant="secondary" onClick={() => show(r.id)} aria-label={`Open the comparison for ${r.name}`}>Open</Button>
+                  : <StatusChip tone="danger">Not read</StatusChip>}
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
       <Card>
         <h3 className="vbr2-h">Comparisons</h3>

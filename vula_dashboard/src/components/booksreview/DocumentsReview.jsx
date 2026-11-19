@@ -3,7 +3,10 @@
  * vula/commerce/doc_audit.py). The documents behind the money, as Vula's check found them:
  *   Figures to check        a document whose figures aren't in its own file, or don't add up — correct
  *                           what was read (the old values are kept), or say they're right
- *   On file, not booked     an invoice on file with no bill — book it, or say it isn't a bill
+ *   On file, not booked     an invoice on file with no bill — book it, or say it isn't a bill (one addressed
+ *                           to another business says so: book it only if the business paid it)
+ *   Your own invoices       the business's own invoices to clients found among them — a sale, never a bill;
+ *                           noted once checked in Invoices (never offered for booking)
  *   Bills and documents     a bill booked at a different amount from its document — book it at the
  *                           document's figures (unpaid bills only)
  *   Twice                   the same document on file twice; the same bill in the books twice (a paid
@@ -29,7 +32,7 @@ async function done(res, okText, failText) {
   return false;
 }
 
-export const DOC_GROUPS = ["doc_figures", "not_booked", "bill_mismatch", "doc_duplicates", "bill_duplicates", "suppliers"];
+export const DOC_GROUPS = ["doc_figures", "not_booked", "our_invoices", "bill_mismatch", "doc_duplicates", "bill_duplicates", "suppliers"];
 export const docCount = (open) => DOC_GROUPS.reduce((n, k) => n + (open?.[k] || 0), 0);
 
 export default function DocumentsReview({ x, r, tenantId }) {
@@ -40,6 +43,7 @@ export default function DocumentsReview({ x, r, tenantId }) {
       <p className="vbr2-sub">Each money document was checked against its own file and against the books. Fix what's wrong here; every change is kept with who made it and why.</p>
       <Figures x={x} items={d.doc_figures || []} open={open} />
       <NotBooked x={x} items={d.not_booked || []} open={open} />
+      <OurInvoices x={x} items={d.our_invoices || []} open={open} />
       <Mismatch x={x} items={d.bill_mismatch || []} open={open} />
       <Twice x={x} docs={d.doc_duplicates || []} bills={d.bill_duplicates || []} open={open} />
       <Suppliers x={x} items={d.suppliers || []} />
@@ -153,7 +157,8 @@ function FigureForm({ x, doc, onDone }) {
 
 function NotBooked({ x, items, open }) {
   async function book(doc) {
-    if (!(await confirmDialog(`Put ${label(doc)} for ${money(doc.total_cents)} into the books as a supplier bill?`,
+    const warn = doc.addressed_to_other ? ` It's addressed to ${doc.customer}, not you — book it only if you paid it.` : "";
+    if (!(await confirmDialog(`Put ${label(doc)} for ${money(doc.total_cents)} into the books as a supplier bill?${warn}`,
       { confirmLabel: "Book it" }))) return;
     if (await done(await x.docBook(doc.id), "Booked.", "It couldn't be booked.")) x.reload();
   }
@@ -169,13 +174,39 @@ function NotBooked({ x, items, open }) {
       {items.length ? (
         <ul className="vbr2-list">
           {items.map((doc) => (
-            <DocLine key={doc.id} doc={{ ...doc, text: null }} open={open}>
+            <DocLine key={doc.id} doc={{ ...doc, text: doc.addressed_to_other ? `Addressed to ${doc.customer}, not you — book it only if you paid it.` : null }} open={open}>
+              {doc.addressed_to_other && <StatusChip tone="warn">Addressed to {doc.customer}</StatusChip>}
               <Button size="sm" variant="secondary" onClick={() => book(doc)}>Book it</Button>
               <Button size="sm" variant="ghost" onClick={() => notBill(doc)}>Not a bill</Button>
             </DocLine>
           ))}
         </ul>
       ) : <p className="vbr2-text">Every invoice on file is in the books.</p>}
+    </Card>
+  );
+}
+
+// ── Your own invoices on file ────────────────────────────────────────────────
+
+function OurInvoices({ x, items, open }) {
+  async function noted(doc) {
+    if (!(await confirmDialog(`${label(doc)} is your own invoice${doc.customer ? ` to ${doc.customer}` : ""}. Is it in Money › Invoices?`,
+      { confirmLabel: "Yes, it's there" }))) return;
+    if (await done(await x.docNotABill(doc.id, `Our own invoice${doc.customer ? ` to ${doc.customer}` : ""} — a sale, in Invoices`),
+      "Noted.", "That didn't save — try again.")) x.reload();
+  }
+  if (!items.length) return null;
+  return (
+    <Card>
+      <h3 className="vbr2-h">Your own invoices on file</h3>
+      <p className="vbr2-sub">These were filed like supplier invoices, but they're invoices you sent — sales, not costs. Vula never books them as bills. Check each is in Money › Invoices.</p>
+      <ul className="vbr2-list">
+        {items.map((doc) => (
+          <DocLine key={doc.id} doc={doc} open={open}>
+            <Button size="sm" variant="secondary" onClick={() => noted(doc)}>It's in Invoices</Button>
+          </DocLine>
+        ))}
+      </ul>
     </Card>
   );
 }

@@ -276,3 +276,36 @@ def test_staff_cannot_use_the_document_fixes(monkeypatch):
     assert e.value.status_code == 403
     with pytest.raises(HTTPException):
         asyncio.run(api.bill_cancel_duplicate(T, "b-hpc2", api.OfBody(of_id="b-hpc1", reason="dup"), Req()))
+
+
+def test_the_business_s_own_invoices_are_never_offered_as_bills(db):
+    """DIGG's first run (19 Nov 2026): 8 of 43 'not booked' invoices were DIGG's own invoices to clients,
+    2 more were one of them with the client read as the supplier, and some were addressed to another
+    business. None of them is a cost to book."""
+    db.rows["vula_filed_documents"] += [
+        _doc("own1", supplier="AwehBelekker (Pty) Ltd t/a DIGG", document_number="DIGG-2026-HPC02",
+             customer="Vizion Developments", date="2026-07-01", total_cents=24966844),
+        _doc("twin1", supplier="Vizion Developments (Pty) Ltd", date="2026-07-01", total_cents=24966844),
+        _doc("other1", supplier="Teck Flooring Pty Ltd", document_number="51934", customer="Enziglo (Pty) Ltd",
+             date="2026-07-15", total_cents=27843245)]
+
+    async def names(tid):
+        return ["DIGG", "AwehBelekker (Pty) Ltd"], []
+    import vula.commerce.service as svc
+    orig = svc.own_business_names
+    svc.own_business_names = names
+    try:
+        found = {f["rows"][0]: f for f in da.books_findings(T, da.money_docs(T), da.bills(T))}
+        assert found["own1"]["kind"] == "our_invoice" and "own invoice to Vizion Developments" in found["own1"]["text"]
+        assert found["twin1"]["kind"] == "our_invoice" and found["twin1"]["twin"]["id"] == "own1"
+        assert found["other1"]["kind"] == "not_booked" and found["other1"]["doc"]["addressed_to_other"]
+        assert "addressed to Enziglo" in found["other1"]["text"] and found["other1"]["severity"] == "attention"
+        w = da.worklist(T)
+        assert {d["id"] for d in w["our_invoices"]} == {"own1", "twin1"}
+        assert "own1" not in {d["id"] for d in w["not_booked"]}
+        with pytest.raises(br.Refused, match="own invoice"):
+            asyncio.run(da.book(T, "own1"))
+        da.not_a_bill(T, "own1", "Our own invoice to Vizion — in Invoices")
+        assert "own1" not in {d["id"] for d in da.worklist(T)["our_invoices"]}
+    finally:
+        svc.own_business_names = orig
