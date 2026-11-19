@@ -125,6 +125,9 @@ async def create_user(tenant: str, body: CreateUserIn,
                       identity: dict = Depends(require_tenant_admin)) -> dict:
     """Create (or attach) a login for this tenant and return a one-time temp password."""
     from vula.commerce.plan_limits import PlanLimitError
+    if (body.role or "").lower() == "accountant":
+        raise HTTPException(status_code=400, detail="Invite an accountant from Team › Accountant — "
+                                                    "their login can only view the books.")
     temp = secrets.token_urlsafe(9)
     r = await _auth_admin("POST", "/users", {
         "email": body.email, "password": temp, "email_confirm": True,
@@ -145,6 +148,8 @@ async def create_user(tenant: str, body: CreateUserIn,
             return {"error": "Couldn't check that login just now. Try again."}
         if any(x.get("role") == "master" for x in rows):
             return {"error": "That email is a Vula admin login. Use a different email."}
+        if any(x.get("role") == "accountant" for x in rows):
+            return {"error": "That email is an accountant's login. Use a different email for a team login."}
         if rows and all(x.get("tenant_id") == tenant for x in rows):
             # Already only this business's login: a new temp password is the owner's to give.
             await _auth_admin("PUT", f"/users/{user_id}", {"password": temp, "email_confirm": True})
@@ -222,6 +227,8 @@ async def update_role(tenant: str, user_id: str, body: RolePatch,
                       identity: dict = Depends(require_tenant_admin)) -> dict:
     if body.role == "master":
         raise HTTPException(status_code=403, detail="Master access can't be given from a business.")
+    if body.role == "accountant":
+        raise HTTPException(status_code=400, detail="Invite an accountant from Team › Accountant.")
     login_role = body.role if body.role in _TENANT_USER_ROLES else "staff"
     try:
         rows = _memberships(user_id)
@@ -232,6 +239,9 @@ async def update_role(tenant: str, user_id: str, body: RolePatch,
     if any(x.get("role") == "master" for x in rows):
         # Demoting the master's row here would take away master everywhere.
         raise HTTPException(status_code=403, detail="A Vula admin login's role can't be changed here.")
+    if any(x.get("role") == "accountant" for x in rows):
+        raise HTTPException(status_code=403, detail="An accountant's login stays view-only. Remove it "
+                                                    "and create a team login instead.")
     try:
         _client().table("vula_tenant_users").update({"role": login_role}) \
             .eq("user_id", user_id).eq("tenant_id", tenant).execute()
@@ -265,3 +275,137 @@ async def list_users(tenant: str, identity: dict = Depends(require_tenant_admin)
     return {"users": [{"user_id": x["user_id"], "role": x["role"],
                        "email": emap.get(x["user_id"], {}).get("email"),
                        "last_sign_in": emap.get(x["user_id"], {}).get("last_sign_in")} for x in rows]}
+
+
+
+# ── The accountant (19 Nov 2026, Phase 3 of Xero-quality books) ──────────────────────────────────
+# An outside accountant the owner invites: a login that can only view the books (tenant_auth
+# ACCOUNTANT, server.py's guard), takes no paid seat, needs two-step sign-in, and whose every view and
+# download is on the business's record (vula/accountant_activity.py). One accountant can be invited by
+# several businesses: their login and password stay theirs. An accountant's login is never also a team
+# login (or the other way round), so what it may do is always clear.
+
+class AccountantIn(BaseModel):
+    email: str
+    name: Optional[str] = None
+    expires_on: Optional[str] = None      # YYYY-MM-DD: access ends after this day
+
+
+def _clear_auth_caches() -> None:
+    from vula.api import tenant_auth
+    for c in (tenant_auth._CACHE, tenant_auth._SCOPE_CACHE, tenant_auth._ACC_CACHE):
+        c.clear()
+
+
+@router.post("/{tenant}/accountants")
+async def invite_accountant(tenant: str, body: AccountantIn,
+                            identity: dict = Depends(require_tenant_admin)) -> dict:
+    """Give an accountant view-only access to this business. A new email gets a one-time password;
+    an accountant who already has a Vula login (another client's) keeps their own."""
+    from datetime import date
+    email = (body.email or "").strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=400, detail="Give the accountant's email address.")
+    end = None
+    if body.expires_on:
+        try:
+            end = date.fromisoformat(body.expires_on[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="The end date is YYYY-MM-DD.")
+        if end < date.today():
+            raise HTTPException(status_code=400, detail="The end date has already passed.")
+    temp = secrets.token_urlsafe(12)
+    r = await _auth_admin("POST", "/users", {"email": email, "password": temp, "email_confirm": True,
+                                             "user_metadata": {"full_name": body.name or email}})
+    created = r.status_code in (200, 201)
+    if created:
+        user_id = r.json().get("id")
+    else:
+        user_id = await _find_user_id(email)
+        if not user_id:
+            return {"error": f"Could not create the login: {r.text[:200]}"}
+        try:
+            rows = _memberships(user_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("membership lookup failed for %s: %s", user_id, exc)
+            return {"error": "Couldn't check that login just now. Try again."}
+        if any(x.get("role") != "accountant" for x in rows):
+            return {"error": "That email is already a team or owner login. Ask the accountant for the "
+                             "email they use for their clients' books."}
+        if rows and all(x.get("tenant_id") == tenant for x in rows):
+            await _auth_admin("PUT", f"/users/{user_id}", {"password": temp, "email_confirm": True})
+        else:
+            temp = None                     # another client's accountant: their password stays theirs
+    db = _client()
+    have = (db.table("vula_tenant_users").select("role").eq("user_id", user_id).eq("tenant_id", tenant)
+            .limit(1).execute().data or [])
+    if have and have[0].get("role") != "accountant":
+        return {"error": "That login is already on this business's team."}
+    if not have:
+        db.table("vula_tenant_users").insert({"user_id": user_id, "tenant_id": tenant,
+                                              "role": "accountant"}).execute()   # no paid seat
+    member = (db.table("vula_team_members").select("id,role").eq("tenant_id", tenant).eq("email", email)
+              .limit(1).execute().data or [])
+    if member and member[0].get("role") != "accountant":
+        return {"error": "Someone on the team already uses that email."}
+    row = {"tenant_id": tenant, "name": body.name or email, "email": email, "role": "accountant",
+           "access": [], "active": True, "expires_on": end.isoformat() if end else None, "can_adjust": False}
+    if member:
+        db.table("vula_team_members").update(row).eq("id", member[0]["id"]).execute()
+    else:
+        db.table("vula_team_members").insert(row).execute()
+    back = (db.table("vula_tenant_users").select("role").eq("user_id", user_id).eq("tenant_id", tenant)
+            .limit(1).execute().data or [])
+    if not back or back[0].get("role") != "accountant":
+        return {"error": "The accountant's access didn't save. Try again."}
+    from vula import team_index
+    team_index.invalidate(tenant)
+    _clear_auth_caches()
+    merchant_audit.audit(tenant, identity, "accountant_invited", email=email,
+                         expires_on=end.isoformat() if end else None)
+    out = {"email": email, "temp_password": temp, "created": created,
+           "note": ("They sign in at the dashboard with this email and the one-time password, then set "
+                    "up two-step sign-in.") if temp else
+                   "This accountant already has a Vula login. They sign in with their own password."}
+    return out
+
+
+@router.get("/{tenant}/accountants")
+async def list_accountants(tenant: str, identity: dict = Depends(require_tenant_admin)) -> dict:
+    from vula import accountant_activity
+    rows = (_client().table("vula_team_members").select("id,name,email,active,expires_on,created_at")
+            .eq("tenant_id", tenant).eq("role", "accountant").order("created_at").execute().data or [])
+    seen = {}
+    for a in accountant_activity.activity(tenant, 500):
+        seen.setdefault((a.get("actor_email") or "").lower(), a.get("created_at"))
+    return {"accountants": [{**r, "last_seen": seen.get((r.get("email") or "").lower())} for r in rows]}
+
+
+@router.get("/{tenant}/accountants/activity")
+async def accountant_activity_list(tenant: str, limit: int = 100,
+                                   identity: dict = Depends(require_tenant_admin)) -> dict:
+    """What the business's accountants looked at, opened and downloaded, newest first."""
+    from vula import accountant_activity
+    return {"events": accountant_activity.activity(tenant, limit)}
+
+
+@router.delete("/{tenant}/accountants/{member_id}")
+async def revoke_accountant(tenant: str, member_id: str,
+                            identity: dict = Depends(require_tenant_admin)) -> dict:
+    """The accountant can no longer open this business (their login stays theirs for other clients)."""
+    db = _client()
+    rows = (db.table("vula_team_members").select("id,email,role").eq("tenant_id", tenant).eq("id", member_id)
+            .limit(1).execute().data or [])
+    if not rows or rows[0].get("role") != "accountant":
+        raise HTTPException(status_code=404, detail="No such accountant on this business.")
+    email = rows[0].get("email") or ""
+    user_id = await _find_user_id(email) if email else None
+    if user_id:
+        db.table("vula_tenant_users").delete().eq("user_id", user_id).eq("tenant_id", tenant) \
+            .eq("role", "accountant").execute()
+    db.table("vula_team_members").update({"active": False}).eq("id", member_id).eq("tenant_id", tenant).execute()
+    from vula import team_index
+    team_index.invalidate(tenant)
+    _clear_auth_caches()
+    merchant_audit.audit(tenant, identity, "accountant_revoked", email=email)
+    return {"id": member_id, "revoked": True}

@@ -93,4 +93,5 @@ def test_the_login_screen_can_ask_which_roles_must_set_it_up(monkeypatch):
     from vula.api.server import app
     monkeypatch.setattr(settings, "mfa_required_roles", "owner,master")
     r = TestClient(app).get("/v1/auth/two-step-policy")
-    assert r.status_code == 200 and r.json() == {"required_roles": ["master", "owner"]}
+    # an accountant's login always needs it (19 Nov 2026)
+    assert r.status_code == 200 and r.json() == {"required_roles": ["accountant", "master", "owner"]}

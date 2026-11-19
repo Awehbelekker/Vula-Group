@@ -3431,10 +3431,17 @@ async def admin_bank_review_start(tenant_id: str):
 
 @router.get("/{tenant_id}/admin/bank/transactions")
 async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, limit: int = 200,
-                                  account_code: Optional[str] = None):
+                                  account_code: Optional[str] = None, account_id: Optional[str] = None,
+                                  offset: int = 0):
     db = service._client()
     try:
         q = db.table("commerce_bank_transactions").select("*").eq("tenant_id", tenant_id)
+        if account_id:              # one bank account's lines (the accountant's Bank view, 19 Nov 2026)
+            acct = (db.table("commerce_bank_accounts").select("account_number").eq("tenant_id", tenant_id)
+                    .eq("id", account_id).limit(1).execute().data or [])
+            if not acct:
+                return {"transactions": []}
+            q = q.eq("bank_account", acct[0]["account_number"])
         if account_code:            # "show me all Casual labour" (DIGG re-booking, 6 Oct)
             q = q.eq("account_code", account_code)
         if status == "needs_input":
@@ -3446,7 +3453,10 @@ async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, 
                  .is_("project", "null").neq("match_status", "ignored"))
         elif status:
             q = q.eq("match_status", status)
-        rows = q.order("txn_date", desc=True).limit(min(limit, 500)).execute().data or []
+        n = min(max(limit, 1), 500)
+        q = q.order("txn_date", desc=True)
+        q = q.range(offset, offset + n - 1) if offset > 0 else q.limit(n)
+        rows = q.execute().data or []
     except Exception as exc:
         return {"transactions": [], "error": f"{exc} (run migration 057?)"}
     return {"transactions": rows}

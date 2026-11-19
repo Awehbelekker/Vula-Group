@@ -1,0 +1,34 @@
+/* accountant.css — the accountant's workspace (accountant/AccountantWorkspace.jsx, 19 Nov 2026).
+   Tokens only; every flex child that can hold a long name has min-width: 0 (no sideways scroll). */
+.vac { min-height: 100vh; background: var(--bg); color: var(--ink); }
+.vac-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); background: var(--surface); }
+.vac-who { min-width: 0; }
+.vac-over { margin: 0; font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.vac-name { margin: 0; font: 600 var(--fs-title, 20px)/1.3 var(--font-sans); overflow-wrap: anywhere; }
+.vac-top-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.vac-switch { min-width: 0; }
+.vac-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vac-main { max-width: 1100px; margin: 0 auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vac-note { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.vac-stack { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vac-card { min-width: 0; }
+.vac-h { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); font: 600 var(--fs-body)/1.4 var(--font-sans); }
+.vac-pad { padding: var(--space-3) var(--space-4) 0; }
+.vac-sub { margin: var(--space-2) 0 0; font-size: var(--fs-caption); color: var(--muted); }
+.vac-sub svg { vertical-align: -2px; }
+.vac-row { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.vac-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.vac-list li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-2); min-width: 0; }
+.vac-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.vac-wide { flex-direction: column; align-items: flex-start !important; }
+.vac-strong { font-weight: 600; }
+.vac-missing { color: var(--danger-text); font-size: var(--fs-caption); }
+.vac-range { display: grid; gap: var(--space-2) var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); align-items: end; }
+.vac-group { min-width: 0; }
+.vac-lines { margin: 0; padding: var(--space-2) var(--space-4) var(--space-3); display: grid; gap: var(--space-1); }
+.vac-line { display: flex; justify-content: space-between; gap: var(--space-3); min-width: 0; }
+.vac-line dt { min-width: 0; overflow-wrap: anywhere; }
+.vac-line dd { margin: 0; white-space: nowrap; }
+.vac-total { border-top: 1px solid var(--line); padding-top: var(--space-1); font-weight: 600; }
+.vac-two { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }

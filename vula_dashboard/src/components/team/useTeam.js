@@ -54,6 +54,9 @@ export const AUDIT_LABELS = {
   member_removed: "removed team member", login_created: "created a login",
   password_reset: "reset a password", login_role_changed: "changed a login's role",
   login_access_removed: "revoked a login",
+  accountant_invited: "gave the accountant access", accountant_revoked: "removed the accountant's access",
+  accountant_viewed: "(accountant) looked at the books", accountant_opened: "(accountant) opened a document",
+  accountant_downloaded: "(accountant) downloaded",
 };
 
 export const toggle = (arr, key) => (arr || []).includes(key) ? arr.filter((k) => k !== key) : [...(arr || []), key];
@@ -73,9 +76,10 @@ export function useTeam(tenantId) {
     if (!tenantId) return;
     const r = await fetch(`${VULA_API}/v1/team/${tenantId}`);
     const d = await r.json();
-    setMembers(d.members || []);
+    // an accountant (view-only, 19 Nov 2026) has its own card — not a team member or a team login
+    setMembers((d.members || []).filter((m) => m.role !== "accountant"));
     const lu = await fetch(`${VULA_API}/v1/users/${tenantId}/users`).then((x) => x.json()).catch(() => ({}));
-    setLogins(lu.users || []);
+    setLogins((lu.users || []).filter((u) => u.role !== "accountant"));
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
 
