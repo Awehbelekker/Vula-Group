@@ -3108,7 +3108,7 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
     if not _looks_like_statement(text):
         return False
     from vula.commerce import bank_rec
-    rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
+    rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name, source="whatsapp")
     if rec.get("not_bank_statement"):
         return False                  # a supplier's statement of account → filed as a document
     if rec.get("private"):
@@ -5520,6 +5520,9 @@ _DOC_CATEGORIES = [
     # delivery note, a supplier's statement or an insurance schedule in (vula/commerce/doc_quality.py).
     "Delivery Note", "Account Statement", "Insurance", "Legal / Property",
     "Brochure / Product Info", "Correspondence",
+    # 19 Nov 2026: a bank's own statement of one of the business's accounts — kept under its account
+    # (vula/commerce/statement_files.py), never "Account Statement" (a supplier's statement of what is owed).
+    "Bank Statement",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in

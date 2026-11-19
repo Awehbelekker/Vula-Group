@@ -211,6 +211,17 @@ export function useBank(tenantId) {
     loadBankAccounts(); load();
   };
 
+  // 19 Nov 2026: a name for each account ("DIGG cheque"), so statements are filed and shown under it.
+  const nameAccount = async (id, project, name) => {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/accounts/${id}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: project || null, name: (name || "").trim() }),
+    }).then(r => r.json()).catch(() => ({ detail: "network" }));
+    if (r.detail || r.error) { flash(String(r.detail || r.error)); return; }
+    flash(`Account ${r.account} is now called ${(name || "").trim() || "by its bank"}.`);
+    loadBankAccounts();
+  };
+
   const reviewOnWhatsApp = async () => {
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/review/start`, { method: "POST" })
       .then(r => r.json()).catch(() => ({ error: "network" }));
@@ -238,6 +249,6 @@ export function useBank(tenantId) {
     sum, txns, shown, invoices, pendingOrders, accounts, workers, vatReg, filter, chooseFilter, noProject, chooseNoProject,
     pw, setPw, busy, msg, cat, setCat, grouped, setGrouped, groups, hasProjects, projectNames, sheet, setSheet,
     categorize, assignWorker, workerName, allocate, applyGroup, pickSheet, importSheet, saveSettings, upload, recategorize,
-    reviewOnWhatsApp, act, bankAccounts, loadBankAccounts, setAccountProject,
+    reviewOnWhatsApp, act, bankAccounts, loadBankAccounts, setAccountProject, nameAccount,
   };
 }

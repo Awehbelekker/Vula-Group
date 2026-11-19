@@ -165,7 +165,10 @@ def test_every_route_is_for_an_owner_or_manager(monkeypatch):
     for call in (api.review("t1", Req()),
                  api.restore_lines("t1", api.LinesBody(ids=["r1"], reason="x y z"), Req()),
                  api.link_line("t1", "p1", api.LinkBody(invoice_id="bill1"), Req()),
-                 api.agree_audit("t1", "a1", api.AgreeBody(note=""), Req())):
+                 api.agree_audit("t1", "a1", api.AgreeBody(note=""), Req()),
+                 api.finance_folders("t1", Req()),                       # 19 Nov 2026: the accountant's folders
+                 api.finance_folders_zip("t1", Req()),
+                 api.statement_coverage("t1", Req())):
         with pytest.raises(HTTPException) as e:
             asyncio.run(call)
         assert e.value.status_code == 403

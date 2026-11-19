@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button, Card, EmptyState, Field, IconButton, Input, PageHeader, PillTabs, Select, StatusChip } from "../ui/index.jsx";
 import FiledLibraryV2, { FileBadge } from "./FiledLibraryV2";
+import FinanceFolders from "./FinanceFolders";
 import {
   ACCEPT, AUDIENCE_BADGE, SORT_REASON, formatSize, num,
   useCustomerPreview, useDocumentsHealth, useDriveImport, useKbUpload, useKnowledgeVisibility, useLearn, useMediaUpload,
@@ -18,7 +19,7 @@ import {
 } from "./useDocuments";
 import "./documents.css";
 
-const TABS = [{ id: "library", label: "Library" }, { id: "add", label: "Add" }, { id: "tidy", label: "Tidy up" }, { id: "customers", label: "What customers see" }];
+const TABS = [{ id: "library", label: "Library" }, { id: "accountant", label: "For your accountant" }, { id: "add", label: "Add" }, { id: "tidy", label: "Tidy up" }, { id: "customers", label: "What customers see" }];
 const AUDIENCE_TONE = { public: "ok", staff: "muted", owner: "info", mixed: "warn", untagged: "warn" };
 const Audience = ({ audience }) => {
   const a = AUDIENCE_BADGE[audience] ? audience : "untagged";
@@ -45,6 +46,7 @@ export default function DocumentsV2({ tenantId = "default", defaultFiledBy }) {
         actions={tab !== "add" && <Button Icon={Upload} onClick={() => setTab("add")}>Add documents</Button>} />
       <PillTabs label="Documents" active={tab} onChange={setTab} tabs={TABS} />
       {tab === "library" && <FiledLibraryV2 key={kb.libraryKey} tenantId={tenantId} defaultFiledBy={defaultFiledBy} title="Filed documents & media" />}
+      {tab === "accountant" && <FinanceFolders tenantId={tenantId} />}
       {tab === "add" && (
         <div className="vdc-stack">
           <KbUpload kb={kb} />

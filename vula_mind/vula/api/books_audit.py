@@ -157,6 +157,12 @@ async def upload_statement(tenant_id: str, request: Request, file: UploadFile = 
         path.write_bytes(data)
         out = await asyncio.to_thread(statement_compare.compare, tenant_id, filename=name, pdf_path=path,
                                       created_by=person or "owner")
+        if not out.get("error"):
+            # the official statement itself is kept, under its account (vula/commerce/statement_files.py)
+            from vula.commerce import statement_files
+            kept = await statement_files.keep(tenant_id, path, filename=name, source="dashboard", official=True,
+                                              filed_by=person or "owner")
+            out["filed"] = bool(kept and kept.get("id"))
     if out.get("error"):
         raise HTTPException(status_code=422, detail=out["error"])
     return out
@@ -205,3 +211,51 @@ async def apply_check(tenant_id: str, check_id: str, body: ApplyBody, request: R
     if out.get("error") and not out.get("done"):
         raise HTTPException(status_code=400, detail=out["error"])
     return out
+
+
+# ── 19 Nov 2026: the accountant's file room (vula/commerce/finance_folders.py, statement_files.py) ──
+
+@router.get("/{tenant_id}/admin/finance-folders")
+async def finance_folders(tenant_id: str, request: Request, year: Optional[str] = None) -> dict:
+    """The year's money documents in an accountant's folders, with the bank statements per account and
+    the months still missing. `year`: the first day of the financial year (default: this one)."""
+    await _full(tenant_id, request)
+    from vula.commerce import finance_folders as ff
+    try:
+        tree = await asyncio.to_thread(ff.organise, tenant_id, year)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="year is the first day of the financial year, e.g. 2026-03-01")
+    return ff.public(tree)
+
+
+@router.get("/{tenant_id}/admin/finance-folders.zip")
+async def finance_folders_zip(tenant_id: str, request: Request, year: Optional[str] = None,
+                              folder: Optional[str] = None):
+    """The year's money documents (or one folder) as a zip with Index.xlsx, both read back first."""
+    await _full(tenant_id, request)
+    from fastapi.responses import Response
+    from vula.commerce import finance_folders as ff
+    try:
+        data, manifest = await asyncio.to_thread(ff.build_zip, tenant_id, year, folder)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{ff.zip_filename(manifest)}"',
+                             "X-Files-Failed": str(len(manifest["files_failed"]))})
+
+
+@router.get("/{tenant_id}/admin/bank-statements/coverage")
+async def statement_coverage(tenant_id: str, request: Request, year: Optional[str] = None) -> dict:
+    """Per bank account and month of the year: is the statement on file, and how many bank lines."""
+    await _full(tenant_id, request)
+    from datetime import date as _date
+    from vula.commerce import statement_files
+    try:
+        start = _date.fromisoformat(year[:10]) if year else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="year is the first day of the financial year, e.g. 2026-03-01")
+    return await asyncio.to_thread(statement_files.coverage, tenant_id, start)

@@ -96,7 +96,7 @@ export default function BankV2({ tenantId }) {
           <Button variant="secondary" Icon={RefreshCw} disabled={b.busy} onClick={() => { b.recategorize(); setTools(false); }}>Re-run the AI on unallocated lines</Button>
           <Button variant="secondary" Icon={MessageCircle} onClick={() => { b.reviewOnWhatsApp(); setTools(false); }}>Review on WhatsApp</Button>
           <p className="vbr-sub">Vula asks you about each unallocated line on WhatsApp — reply to allocate it.</p>
-          {b.hasProjects && <BankAccounts b={b} />}
+          {(b.hasProjects || b.bankAccounts.length > 0) && <BankAccounts b={b} />}
           {b.msg && <p className="vbr-msg" role="status">{plain(b.msg)}</p>}
         </div>
       </Sheet>
@@ -105,23 +105,28 @@ export default function BankV2({ tenantId }) {
 }
 
 // An account kept for one project (DIGG's Porterfield account): every line from it is that project's.
-// Every other account is the whole business's — its lines go on projects one by one.
+// Every other account is the whole business's — its lines go on projects one by one. Each account can be
+// named (19 Nov 2026): its statements are filed and shown under that name (Documents › Folders).
 function BankAccounts({ b }) {
   return (
     <section className="vbr-accounts" aria-label="Bank accounts">
       <h3 className="vbr-h">Bank accounts</h3>
-      <p className="vbr-sub">A statement is the whole business's. If an account is kept for one project, choose it here and every line from that account goes on that project.</p>
+      <p className="vbr-sub">Name each account so its statements are easy to find. A statement is the whole business's{b.hasProjects ? "; if an account is kept for one project, choose it here and every line from that account goes on that project" : ""}.</p>
       {b.bankAccounts.length === 0
         ? <p className="vbr-sub">No accounts yet — they appear as Vula reads your statements.</p>
         : <ul className="vbr-acct-list">{b.bankAccounts.map(a => (
             <li key={a.id} className="vbr-acct">
               <span className="vbr-acct-name"><b>{[a.bank, a.account].filter(Boolean).join(" ")}</b>
                 {a.lines != null && <span className="vbr-sub"> · {a.lines} line{a.lines === 1 ? "" : "s"}</span>}</span>
-              <Select aria-label={`Project for account ${a.account}`} value={a.project || ""}
-                onChange={e => b.setAccountProject(a.id, e.target.value)}>
-                <option value="">Whole business</option>
-                {b.projectNames.map(p => <option key={p} value={p}>{p}</option>)}
-              </Select>
+              <Input aria-label={`Name for account ${a.account}`} placeholder="e.g. Business cheque"
+                defaultValue={a.name || ""} maxLength={60}
+                onBlur={e => { if ((e.target.value || "").trim() !== (a.name || "")) b.nameAccount(a.id, a.project, e.target.value); }} />
+              {b.hasProjects && (
+                <Select aria-label={`Project for account ${a.account}`} value={a.project || ""}
+                  onChange={e => b.setAccountProject(a.id, e.target.value)}>
+                  <option value="">Whole business</option>
+                  {b.projectNames.map(p => <option key={p} value={p}>{p}</option>)}
+                </Select>)}
             </li>))}</ul>}
     </section>
   );

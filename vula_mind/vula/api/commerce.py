@@ -3169,7 +3169,7 @@ async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
         try:
             rec = await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
                                                   source_file=body.filename or "upload.pdf",
-                                                  trusted=True)
+                                                  trusted=True, source="dashboard")
             if rec.get("private"):
                 # One member's own account: filed for them alone, never the business's books.
                 from vula import private_docs
