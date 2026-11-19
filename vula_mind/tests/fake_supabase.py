@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List
 class _Result:
     def __init__(self, data: List[dict]):
         self.data = data
+        self.count = len(data) if isinstance(data, list) else None
 
 
 class _Query:

@@ -5,6 +5,7 @@ import VulaPrivacy from "./components/VulaPrivacy";
 const VulaPageRender = lazy(() => import("./components/VulaPageRender"));
 const VulaInvoiceApproval = lazy(() => import("./components/VulaInvoiceApproval"));
 const VulaUiKit = lazy(() => import("./components/VulaUiKit")); // #/ui-kit, master only (UX redesign)
+const AccountantWorkspace = lazy(() => import("./components/accountant/AccountantWorkspace")); // an accountant's view-only login (19 Nov 2026)
 const ShareSheet = lazy(() => import("./components/share/ShareSheet")); // #/share, from the phone's Share sheet
 import { useAuthStore } from "./store/auth";
 import { lazyScreen, ScreenSuspense } from "./lib/lazyScreen.jsx";
@@ -285,7 +286,7 @@ export default function App() {
   // Real Inbox badge (P0.4): count of open escalations waiting on a human — polled per
   // effective tenant, for whichever shell (owner/staff or master-open-as-tenant) is live.
   useEffect(() => {
-    if (!user || role === "master" && activeTab !== "merchant") return;
+    if (!user || role === "accountant" || (role === "master" && activeTab !== "merchant")) return;
     const tid = (role === "master") ? masterTenant : ownTenant;
     if (!tid) return;
     const API = VULA_API;
@@ -375,6 +376,26 @@ export default function App() {
     return (
       <Suspense fallback={<div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>}>
         <VulaUiKit />
+      </Suspense>
+    );
+  }
+
+  // ── An accountant's login: their own view-only workspace (19 Nov 2026) ─────────
+  // Not the business's menu — the server refuses everything but reading the books for this role
+  // (vula_mind/vula/api/server.py _ACCOUNTANT_READS), and every view is on the business's record.
+  if (role === "accountant") {
+    if (!ownTenant) {
+      return (
+        <div style={{ padding: 32, color: "var(--text)", maxWidth: 480, margin: "10vh auto" }}>
+          <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>No business has given you access yet</h2>
+          <p style={{ fontSize: 14, color: "var(--muted)", lineHeight: 1.5 }}>Ask your client to invite you under Team › Accountant.</p>
+          <button onClick={logout} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>Sign out</button>
+        </div>
+      );
+    }
+    return (
+      <Suspense fallback={<div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>}>
+        <AccountantWorkspace key={ownTenant} tenantId={ownTenant} />
       </Suspense>
     );
   }

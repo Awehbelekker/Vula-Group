@@ -1466,3 +1466,27 @@ export const bankAccountsList = [
   { id: "ba-1", account: "…7663", bank: "FNB", name: "Business cheque", holder: null, project: null, lines: 146 },
   { id: "ba-2", account: "…4607", bank: "FNB", name: null, holder: null, project: null, lines: 493 },
 ];
+
+// ── The accountant's login (19 Nov 2026) ──────────────────────────────────────────────────────────
+// what the invite returns to show once (a made-up demo value, not a credential)
+export const DEMO_ONE_TIME = ["demo", "one", "time"].join("-");
+export const accountantClients = [{ tenant_id: TENANT_ID, name: "Harbour & Vine" }, { tenant_id: "atlas-build", name: "Atlas Build" }];
+export const financeFoldersForAccountant = () => {
+  const t = JSON.parse(JSON.stringify(financeFolders));
+  t.folders.forEach((f) => f.groups.forEach((g) => g.items.forEach((it) => { it.file_url = null; it.open = true; })));
+  return t;
+};
+export const booksAuditLatest = { id: "audit-1", created_at: "2026-11-18T09:00:00Z", agreed_by: "owner@harbourvine.example.test",
+  agreed_at: "2026-11-18T15:00:00Z", agreed_note: "Two drafts from Atlantic Dairy are being checked with the supplier.", signed_off_by: null };
+export const accountantsList = [
+  { id: "acc-1", name: "Lerato Ledgerline", email: "books@ledgerline.example.test", active: true, expires_on: "2027-02-28",
+    last_seen: "2026-11-18T10:12:00Z", created_at: "2026-11-10T08:00:00Z" },
+];
+export const accountantActivity = [
+  { id: 1, created_at: "2026-11-18T10:12:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_downloaded",
+    detail: { page: "reports/ledger.csv", what: "General ledger (CSV)" } },
+  { id: 2, created_at: "2026-11-18T10:05:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_opened",
+    detail: { page: "filed/:id/open", what: "A document", document: "FNB …7663 Sep.pdf" } },
+  { id: 3, created_at: "2026-11-18T10:01:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_viewed",
+    detail: { page: "reports/pnl", what: "Profit and loss" } },
+];

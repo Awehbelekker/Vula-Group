@@ -64,7 +64,22 @@ def two_step_missing(user: dict, token: str) -> Optional[str]:
     need = required_roles()
     if need and user.get("id") and (_role_for_user(user["id"]) or "").lower() in need:
         return "setup"
+    # 19 Nov 2026 (Ian): an accountant sees a business's bank lines and documents — two-step
+    # sign-in is always required for that login, whatever MFA_REQUIRED_ROLES says.
+    if user.get("id") and _is_accountant(user["id"]):
+        return "setup"
     return None
+
+
+def _is_accountant(user_id: str) -> bool:
+    try:
+        from vula.commerce import service as cs
+        rows = (cs._client().table("vula_tenant_users").select("role").eq("user_id", user_id)
+                .eq("role", "accountant").limit(1).execute().data or [])
+        return bool(rows)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("accountant check failed for %s: %s", user_id, exc)
+        return False
 
 
 async def _verify_jwt(token: str) -> Optional[dict]:

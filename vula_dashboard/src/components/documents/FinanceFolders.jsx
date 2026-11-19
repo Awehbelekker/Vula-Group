@@ -11,6 +11,7 @@ import { ChevronRight, Download, FolderOpen, Landmark } from "lucide-react";
 import { VULA_API } from "../../lib/authFetch";
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, ErrorCard, Select, Skeleton, StatusChip, toast } from "../ui/index.jsx";
+import { openDocument } from "../accountant/useAccountant";
 
 const money = (c) => formatMoney(c || 0, { cents: "always" });
 const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
@@ -67,13 +68,13 @@ export function useFinanceFolders(tenantId) {
   return { options, year, setYear, tree, state, busy, reload: load, download };
 }
 
-export default function FinanceFolders({ tenantId }) {
+export default function FinanceFolders({ tenantId, accountant = false }) {
   const x = useFinanceFolders(tenantId);
   return (
     <div className="vdc-stack vff">
       <Card className="vdc-panel">
-        <h3 className="vdc-h"><FolderOpen size={18} aria-hidden="true" />For your accountant</h3>
-        <p className="vdc-sub">Your money documents for the year, in the folders an accountant expects — sorted by what each document is and its own date. Nothing is moved.</p>
+        <h3 className="vdc-h"><FolderOpen size={18} aria-hidden="true" />{accountant ? "The year's documents" : "For your accountant"}</h3>
+        <p className="vdc-sub">{accountant ? "The business's" : "Your"} money documents for the year, in the folders an accountant expects — sorted by what each document is and its own date. Nothing is moved.</p>
         <div className="vdc-row">
           <label className="vdc-grow"><span className="vdc-sr">Financial year</span>
             <Select aria-label="Financial year" value={x.year} onChange={(e) => x.setYear(e.target.value)}>
@@ -88,13 +89,14 @@ export default function FinanceFolders({ tenantId }) {
       {x.state === "loading" && <Card><Skeleton lines={5} /></Card>}
       {x.state === "failed" && <ErrorCard what="your folders" onRetry={x.reload} />}
       {x.state === "off" && (
-        <EmptyState Icon={FolderOpen} title="Only an owner or manager can see these folders">
-          They hold the business's bank statements and money documents.
+        <EmptyState Icon={FolderOpen} title={accountant ? "This business hasn't given you access right now" : "Only an owner or manager can see these folders"}>
+          {accountant ? "Ask the business to check your access under Team › Accountant." : "They hold the business's bank statements and money documents."}
         </EmptyState>)}
       {x.state === "ready" && x.tree && (
         <>
           <Coverage cover={x.tree.coverage} />
-          {x.tree.folders.map((f) => <Folder key={f.key} f={f} busy={x.busy} onDownload={() => x.download(f.key)} />)}
+          {x.tree.folders.map((f) => <Folder key={f.key} f={f} busy={x.busy} onDownload={() => x.download(f.key)}
+            onOpen={(id) => openDocument(tenantId, id)} />)}
         </>)}
     </div>
   );
@@ -124,7 +126,7 @@ function Coverage({ cover }) {
   );
 }
 
-function Folder({ f, busy, onDownload }) {
+function Folder({ f, busy, onDownload, onOpen }) {
   const [open, setOpen] = useState(false);
   return (
     <Card pad={0} className="vff-folder">
@@ -149,7 +151,9 @@ function Folder({ f, busy, onDownload }) {
                   <span className="vff-date">{it.date}</span>
                   {it.file_url
                     ? <a className="vff-label" href={it.file_url} target="_blank" rel="noreferrer">{it.label}</a>
-                    : <span className="vff-label">{it.label}</span>}
+                    : it.open
+                      ? <button type="button" className="vff-label vff-open" onClick={() => onOpen(it.id)}>{it.label}</button>
+                      : <span className="vff-label">{it.label}</span>}
                   {it.official && <StatusChip tone="ok">Official</StatusChip>}
                   {it.amount_cents != null && <span className="vula-money">{money(it.amount_cents)}</span>}
                 </li>))}

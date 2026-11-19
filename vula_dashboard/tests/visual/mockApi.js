@@ -43,6 +43,9 @@ function routes(role, modules = [], features = []) {
   const books = JSON.parse(JSON.stringify(F.booksReview));
   const booksOff = { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Only an owner or manager can audit the books."}' } };
   const booksOwner = role === "owner";
+  // 19 Nov 2026: an accountant's view-only login reads the books check, folders and coverage too
+  const booksViewer = booksOwner || role === "accountant";
+  const accountants = F.accountantsList.map((a) => ({ ...a }));
   let aiUsage = { ...F.aiUsage, requested: [] };          // per page: a top-up requested here shows here only     // per page: a scan started here shows here only
   // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
   let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
@@ -140,6 +143,8 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/delivery-list`, () => F.deliveryList),
     r("GET", `^/v1/subscriptions/${T}`, () => ({ subscriptions: F.recurringSubs })),
     r("GET", `${A}/finances/insights`, () => F.financeInsights),
+    r("GET", `${A}/reports/aged-creditors`, () => ({ as_at: "2026-10-17", total_cents: 1_275_050, count: 2,
+      aging: { current: 412_850, days_1_30: 862_200, days_31_60: 0, days_61_90: 0, days_90_plus: 0 }, suppliers: [] })),
     r("GET", `${A}/reports/trial-balance`, (m, url) => (features.includes("books_v2")
       ? { ...F.trialBalance, source: "journal", basis: url.searchParams.get("basis") || "accrual", balanced: true }
       : F.trialBalance)),
@@ -167,11 +172,24 @@ function routes(role, modules = [], features = []) {
     }),
     r("GET", `${A}/bank/reconciliation`, () => F.bankSummary),
     // 19 Nov 2026: the accountant's folders and named bank accounts (owner/manager only)
-    r("GET", `${A}/finance-folders`, () => (booksOwner ? F.financeFolders : booksOff)),
-    r("GET", `${A}/finance-folders.zip`, () => (booksOwner
+    r("GET", `${A}/finance-folders`, () => (booksViewer
+      ? (role === "accountant" ? F.financeFoldersForAccountant() : F.financeFolders) : booksOff)),
+    r("GET", `${A}/finance-folders.zip`, () => (booksViewer
       ? { __raw: { status: 200, contentType: "application/zip", body: "PK", headers: { "content-disposition": 'attachment; filename="Documents_2026-27_all.zip"' } } }
       : booksOff)),
     r("GET", `${A}/bank/accounts`, () => ({ accounts: F.bankAccountsList })),
+    r("GET", `^/v1/accountant/clients`, () => ({ clients: F.accountantClients })),
+    r("GET", `^/v1/documents/${T}/filed/([^/]+)/open`, (m) => ({ url: `https://x.supabase.co/storage/v1/object/sign/documents/demo/${m[2]}.pdf?token=t`, filename: `${m[2]}.pdf` })),
+    r("GET", `^/v1/users/${T}/accountants/activity`, () => ({ events: F.accountantActivity })),
+    r("GET", `^/v1/users/${T}/accountants`, () => ({ accountants: accountants.filter((a) => a.active !== false) })),
+    r("POST", `^/v1/users/${T}/accountants`, () => {
+      accountants.push({ id: "acc-2", name: "New Accountant", email: "new@firm.example.test", active: true, expires_on: null, last_seen: null });
+      return { email: "new@firm.example.test", temp_password: F.DEMO_ONE_TIME, created: true,
+        note: "They sign in at the dashboard with this email and the one-time password, then set up two-step sign-in." };
+    }),
+    r("DELETE", `^/v1/users/${T}/accountants/([^/]+)`, (m) => {
+      const a = accountants.find((x) => x.id === m[2]); if (a) a.active = false; return { id: m[2], revoked: true };
+    }),
     r("POST", `${A}/bank/accounts/([^/]+)`, () => ({ ok: true, account: "…7663", project: null, lines_moved: 0 })),
     r("GET", `${A}/bank/transactions/groups`, () => ({ groups: F.bankGroups })),
     r("GET", `${A}/bank/transactions/([^/]+)/candidates`, () => ({ candidates: F.bankCandidates })),
@@ -444,7 +462,9 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
     // ── Money › Books review ──
-    r("GET", `${A}/books-audit/review`, () => (booksOwner ? books : booksOff)),
+    r("GET", `${A}/books-audit/review`, () => (booksViewer ? books : booksOff)),
+    r("GET", `${A}/books-audit/latest`, () => (booksViewer ? F.booksAuditLatest : booksOff)),
+    r("GET", `${A}/bank-statements/coverage`, () => (booksViewer ? F.financeFolders.coverage : booksOff)),
     r("POST", `${A}/books-audit/run`, () => (booksOwner ? { id: "audit-2", summary: {} } : booksOff)),
     r("POST", `${A}/books-audit/lines/restore`, (m, url, req) => {
       const b = req.postDataJSON() || {};
@@ -655,6 +675,8 @@ export async function seedSession(page, { role = "owner", theme = "light" } = {}
       role: "staff", access: F.teamMeFor("staff").access, full: false },
     rep: { user: { id: "u-rep", email: "rep@harbourvine.example.test", name: "Demo Rep" }, tenantId: F.TENANT_ID,
       role: "staff", access: F.teamMeFor("rep").access, full: false, teamRole: "sales_rep", teamPhone: "+27820000009" },
+    accountant: { user: { id: "u-acc", email: "books@ledgerline.example.test", name: "Demo Accountant" }, tenantId: F.TENANT_ID,
+      role: "accountant", access: [], full: false },
   };
   const auth = who[role] || who.owner;
   await page.addInitScript(([a, t, masterTenant]) => {

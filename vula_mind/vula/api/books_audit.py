@@ -47,6 +47,18 @@ async def _full(tenant_id: str, request: Request) -> tuple:
     return (person.key if person is not None else ""), {"email": (scope or {}).get("email")}
 
 
+async def _viewer(tenant_id: str, request: Request) -> dict:
+    """An owner or manager, or the business's accountant (read-only, 19 Nov 2026); 403 for anyone
+    else. Returns the scope."""
+    from vula.api.tenant_auth import ACCOUNTANT, member_scope, scope_allows
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    if scope_allows(scope, frozenset()):
+        return scope
+    if scope and scope.get("role") == ACCOUNTANT and scope.get("access"):
+        return scope
+    raise HTTPException(status_code=403, detail="Only an owner, a manager or the business's accountant can see this.")
+
+
 def _client():
     from vula.commerce.service import _client as c
     return c()
@@ -62,14 +74,14 @@ async def run_audit(tenant_id: str, request: Request) -> dict:
 
 @router.get("/{tenant_id}/admin/books-audit/latest")
 async def latest_audit(tenant_id: str, request: Request) -> dict:
-    await _full(tenant_id, request)
+    await _viewer(tenant_id, request)
     from vula.commerce import books_review
     return await asyncio.to_thread(books_review.latest, tenant_id) or {}
 
 
 @router.get("/{tenant_id}/admin/books-audit/review")
 async def review(tenant_id: str, request: Request) -> dict:
-    await _full(tenant_id, request)
+    await _viewer(tenant_id, request)
     from vula.commerce import books_review
     return await asyncio.to_thread(books_review.review, tenant_id)
 
@@ -219,12 +231,22 @@ async def apply_check(tenant_id: str, check_id: str, body: ApplyBody, request: R
 async def finance_folders(tenant_id: str, request: Request, year: Optional[str] = None) -> dict:
     """The year's money documents in an accountant's folders, with the bank statements per account and
     the months still missing. `year`: the first day of the financial year (default: this one)."""
-    await _full(tenant_id, request)
+    scope = await _viewer(tenant_id, request)
     from vula.commerce import finance_folders as ff
     try:
         tree = await asyncio.to_thread(ff.organise, tenant_id, year)
     except ValueError:
         raise HTTPException(status_code=400, detail="year is the first day of the financial year, e.g. 2026-03-01")
+    if scope.get("role") == "accountant":
+        # no signed links for an accountant: each document is opened through
+        # /v1/documents/{t}/filed/{id}/open, which puts it on the business's record
+        for f in tree["folders"]:
+            for g in f["groups"]:
+                for it in g["items"]:
+                    it["file_url"] = None
+                    it["open"] = True
+                    it.pop("ext", None)
+        return tree
     return ff.public(tree)
 
 
@@ -232,7 +254,7 @@ async def finance_folders(tenant_id: str, request: Request, year: Optional[str] 
 async def finance_folders_zip(tenant_id: str, request: Request, year: Optional[str] = None,
                               folder: Optional[str] = None):
     """The year's money documents (or one folder) as a zip with Index.xlsx, both read back first."""
-    await _full(tenant_id, request)
+    await _viewer(tenant_id, request)
     from fastapi.responses import Response
     from vula.commerce import finance_folders as ff
     try:
@@ -251,7 +273,7 @@ async def finance_folders_zip(tenant_id: str, request: Request, year: Optional[s
 @router.get("/{tenant_id}/admin/bank-statements/coverage")
 async def statement_coverage(tenant_id: str, request: Request, year: Optional[str] = None) -> dict:
     """Per bank account and month of the year: is the statement on file, and how many bank lines."""
-    await _full(tenant_id, request)
+    await _viewer(tenant_id, request)
     from datetime import date as _date
     from vula.commerce import statement_files
     try:

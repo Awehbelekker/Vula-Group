@@ -75,7 +75,8 @@ async def two_step_policy() -> dict:
     """Public: which roles must set up two-step sign-in (the login screen asks before letting
     them in). Names roles only — never anything about a person."""
     from vula.api.master_auth import required_roles
-    return {"required_roles": sorted(required_roles())}
+    # an accountant's login always needs it (master_auth.two_step_missing, 19 Nov 2026)
+    return {"required_roles": sorted(required_roles() | {"accountant"})}
 
 
 @router.post("/signup")

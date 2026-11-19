@@ -15,7 +15,7 @@ export const useAuthStore = create(
     (set, get) => ({
       user: null,          // { id, email, name }
       tenantId: null,      // 'off-the-hook' | 'master' | etc.
-      role: null,          // 'master' | 'owner' | 'staff'
+      role: null,          // 'master' | 'owner' | 'staff' | 'accountant' (view-only, 19 Nov 2026)
       access: [],          // module keys this member may see (empty = all)
       full: true,          // owner/manager (or no access list) → sees everything
       teamRole: null,      // this member's vula_team_members.role (e.g. 'sales_rep') — distinct
@@ -33,6 +33,12 @@ export const useAuthStore = create(
         const before = get().signedOutEmail
         if (before && (user?.email || '').toLowerCase() !== before.toLowerCase()) clearPersonData()
         set({ user, tenantId, role, signedOutEmail: null })
+      },
+      // An accountant who looks after several businesses moves between them (19 Nov 2026); the
+      // server only answers for businesses this login is the accountant for.
+      switchTenant: (tenantId) => {
+        try { localStorage.setItem('vula.accountant.tenant', tenantId) } catch { /* private mode */ }
+        set({ tenantId })
       },
       setMember: ({ access, full, role: teamRole, whatsapp }) =>
         set({ access: access || [], full: !!full, teamRole: teamRole || null, teamPhone: whatsapp || null }),

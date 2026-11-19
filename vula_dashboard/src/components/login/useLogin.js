@@ -4,6 +4,7 @@
  * email + password, Google, magic link, password reset, invite/recovery set-password, and the
  * self-serve "set up your workspace" step for a signed-in user with no tenant yet.
  */
+import { pickAssignment } from '../../lib/assignment'
 import { useState, useEffect, useRef } from 'react'
 import { supabase, supabaseConfigured } from '../../lib/supabase'
 import { finishSetup, giveCode, startSetup, twoStepNeeded } from '../../lib/mfa'
@@ -73,12 +74,12 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
   // too (Google OAuth, password, magic link all funnel through this same function), so instead
   // of throwing, offer them the chance to create their own workspace right here.
   async function resolveAndLogin(user) {
-    const { data: assignment, error: dbErr } = await supabase
+    const { data: rows, error: dbErr } = await supabase
       .from('vula_tenant_users')
       .select('tenant_id, role')
       .eq('user_id', user.id)
-      .limit(1)
-      .single()
+      .limit(50)
+    const assignment = pickAssignment(rows || [])
     if (dbErr || !assignment) {
       setPendingUser(user)
       setBusinessName('')
@@ -317,12 +318,12 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
 
       // Now get tenant assignment
       const user = data.user
-      const { data: assignment, error: dbErr } = await supabase
+      const { data: rows, error: dbErr } = await supabase
         .from('vula_tenant_users')
         .select('tenant_id, role')
         .eq('user_id', user.id)
-        .limit(1)
-        .single()
+        .limit(50)
+      const assignment = pickAssignment(rows || [])
 
       if (dbErr || !assignment) {
         throw new Error('Password set! Now sign in with your new password.')
