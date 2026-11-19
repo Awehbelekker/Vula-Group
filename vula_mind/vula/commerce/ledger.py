@@ -401,9 +401,17 @@ def _all_pages(make_query, page: int = 1000) -> List[Dict[str, Any]]:
         start += page
 
 
-def trial_balance(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None) -> Dict[str, Any]:
+def trial_balance(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None,
+                  basis: Optional[str] = None) -> Dict[str, Any]:
     """Sum debits/credits per account across posted journal entries — total debits should always
-    equal total credits, since every entry is balance-checked at post time by the RPC."""
+    equal total credits, since every entry is balance-checked at post time by the RPC.
+
+    A business on the one book (books_v2) keeps two views in the same journal; adding every line
+    together would count a sale in both, so its trial balance is for one view (accrual unless
+    `basis` says cash) — vula/commerce/books_reports.py."""
+    if _v2(tenant_id):
+        from vula.commerce import books_reports
+        return books_reports.trial_balance(tenant_id, since, until, books_reports.basis_of(basis))
     db = _client()
 
     def _entries_query():

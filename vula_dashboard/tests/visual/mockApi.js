@@ -130,14 +130,19 @@ function routes(role, modules = [], features = []) {
       const rows = F.expenses.filter((e) => (!st || e.status === st) && (!reimb || e.reimbursable));
       return { expenses: rows, ...F.expenseLists };
     }),
-    r("GET", `${A}/reports/pnl`, () => F.reportPnl),
-    r("GET", `${A}/reports/vat`, () => F.reportVat),
+    // books_v2 (the one book): reports come from the journal and say which view (18 Nov 2026)
+    r("GET", `${A}/reports/pnl`, (m, url) => (features.includes("books_v2")
+      ? (url.searchParams.get("basis") === "cash" ? F.reportPnlCash : F.reportPnlJournal) : F.reportPnl)),
+    r("GET", `${A}/reports/vat`, () => (features.includes("books_v2") ? F.reportVatJournal : F.reportVat)),
+    r("GET", `${A}/reports/ledger.csv`, () => ({ __raw: { status: 200, contentType: "text/csv", body: "Date,Entry\n" } })),
     r("GET", `^/v1/payments/${T}/providers`, () => F.paymentProviders),
     r("GET", `${A}/discount-codes`, () => ({ discount_codes: F.discountCodes })),
     r("GET", `${A}/delivery-list`, () => F.deliveryList),
     r("GET", `^/v1/subscriptions/${T}`, () => ({ subscriptions: F.recurringSubs })),
     r("GET", `${A}/finances/insights`, () => F.financeInsights),
-    r("GET", `${A}/reports/trial-balance`, () => F.trialBalance),
+    r("GET", `${A}/reports/trial-balance`, (m, url) => (features.includes("books_v2")
+      ? { ...F.trialBalance, source: "journal", basis: url.searchParams.get("basis") || "accrual", balanced: true }
+      : F.trialBalance)),
     r("GET", `${A}/reports/vat-scenario`, () => ({ detail: "not in the demo" })),
     r("GET", `${A}/reports`, () => F.salesReport),
     r("GET", `${A}/crosscheck`, () => F.crossCheck),

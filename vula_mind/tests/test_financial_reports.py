@@ -25,7 +25,7 @@ ENTRIES = [  # (date, [(account, debit, credit)])
 ]
 
 
-def fake_tb(tenant_id, since=None, until=None):
+def fake_tb(tenant_id, since=None, until=None, basis=None):
     rows = {}
     for d, lines in ENTRIES:
         if (since and d < since) or (until and d > until):

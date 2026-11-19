@@ -408,7 +408,19 @@ def _txns(tenant_id: str, since: Optional[str], until: Optional[str]) -> List[di
         return []
 
 
-def pnl(tenant_id: str, since: str = None, until: str = None) -> dict:
+def _v2(tenant_id: str) -> bool:
+    """The business keeps the one trusted book: its reports read the journal (books_reports)."""
+    from vula.commerce import ledger_v2
+    return ledger_v2.is_on(tenant_id)
+
+
+def pnl(tenant_id: str, since: str = None, until: str = None, basis: Optional[str] = None) -> dict:
+    if _v2(tenant_id):
+        from vula.commerce import reports
+        p = reports.profit_and_loss(tenant_id, since, until, basis)
+        rows = lambda key: [{"account": r["name"], "code": r["code"], "amount_cents": r["cents"]}  # noqa: E731
+                            for r in sorted(p[key], key=lambda r: -r["cents"])]
+        return {**p, "income": rows("income"), "expenses": rows("expenses")}
     accounts = {a["code"]: a for a in ensure_chart(tenant_id)}
     rows = _txns(tenant_id, since, until)
     income, expense = {}, {}
@@ -442,7 +454,10 @@ def is_vat_registered(tenant_id: str) -> bool:
         return False
 
 
-def vat_return(tenant_id: str, since: str = None, until: str = None) -> dict:
+def vat_return(tenant_id: str, since: str = None, until: str = None, basis: Optional[str] = None) -> dict:
+    if _v2(tenant_id):
+        from vula.commerce import books_reports
+        return books_reports.vat(tenant_id, since, until, basis)
     if not is_vat_registered(tenant_id):
         return {"vat_registered": False}
     accounts = {a["code"]: a for a in ensure_chart(tenant_id)}
@@ -461,7 +476,11 @@ def vat_return(tenant_id: str, since: str = None, until: str = None) -> dict:
             "note": "Net VAT payable to SARS (positive) or refundable (negative). Cash-basis from the bank ledger."}
 
 
-def general_ledger(tenant_id: str, since: str = None, until: str = None) -> List[dict]:
+def general_ledger(tenant_id: str, since: str = None, until: str = None, basis: Optional[str] = None) -> List[dict]:
+    """Bank lines; for a business on the one book, one row per journal line in the view."""
+    if _v2(tenant_id):
+        from vula.commerce import books_reports
+        return books_reports.general_ledger(tenant_id, since, until, books_reports.basis_of(basis))
     accounts = {a["code"]: a for a in ensure_chart(tenant_id)}
     out = []
     for r in _txns(tenant_id, since, until):

@@ -82,6 +82,15 @@ function Insights({ tenantId }) {
                   ["31–60 days overdue", money(d.receivables.aging.days_31_60)], ["61–90 days overdue", money(d.receivables.aging.days_61_90)],
                   ["90+ days overdue", money(d.receivables.aging.days_90_plus)]]} />
               </Card>)}
+            {d.payables?.total_cents > 0 && (
+              <Card pad={0} className="vfn-card">
+                <h3 className="vfn-card-h">You owe suppliers</h3>
+                <Lines rows={[["Not yet due", money(d.payables.aging.current)], ["1–30 days overdue", money(d.payables.aging.days_1_30)],
+                  ["31–60 days overdue", money(d.payables.aging.days_31_60)], ["61–90 days overdue", money(d.payables.aging.days_61_90)],
+                  ["90+ days overdue", money(d.payables.aging.days_90_plus)], ["Total", money(d.payables.total_cents)]]} />
+                {d.payables.ties === false && (
+                  <p className="vfn-sub vfn-pad">Your books show {money(d.payables.control_cents)} owed to suppliers — check bills recorded before your books started.</p>)}
+              </Card>)}
             {d.payment_behavior?.watch_list?.length > 0 && (
               <Card pad={0} className="vfn-card">
                 <h3 className="vfn-card-h"><Users size={16} aria-hidden="true" />Customers to watch</h3>
@@ -316,6 +325,7 @@ function TrialBalance({ L }) {
             : tb.accounts.length === 0 ? <p className="vfn-empty">No journal entries yet — these post by themselves as orders and invoices are paid and expenses are logged.</p>
               : (
                 <div className="vfn-tb-wrap" role="region" aria-label="Trial balance" tabIndex={0}>
+                  {tb.basis && <p className="vfn-sub vfn-pad">From your books, {tb.basis === "cash" ? "cash" : "accrual"} view (change it in Money › Books).</p>}
                   <table className="vfn-tb">
                     <thead><tr><th scope="col">Account</th><th scope="col">Debit</th><th scope="col">Credit</th></tr></thead>
                     <tbody>{tb.accounts.map((a) => (

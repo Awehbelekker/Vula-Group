@@ -19,3 +19,4 @@
 .vbk2-line--total dt, .vbk2-line--total dd { font-weight: 600; }
 .vbk2-empty { margin: 0; padding: var(--space-4); font-size: var(--fs-body); color: var(--muted); }
 .vbk2-pad { padding: 0 var(--space-4) var(--space-3); }
+.vbk2-view { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }

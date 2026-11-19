@@ -135,6 +135,7 @@ DENIED_TO_REP = [
     ("GET", f"/v1/commerce/{T}/admin/bank/reconciliation"),
     ("GET", f"/v1/commerce/{T}/admin/accounts/ledger"),
     ("GET", f"/v1/commerce/{T}/admin/reports/pnl"),
+    ("GET", f"/v1/commerce/{T}/admin/reports/aged-creditors"),
     ("GET", f"/v1/commerce/{T}/admin/finances"),
     ("PUT", f"/v1/payments/{T}/providers/payfast"),
     ("GET", f"/v1/users/{T}/users"),
