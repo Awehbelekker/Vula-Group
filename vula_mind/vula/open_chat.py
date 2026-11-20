@@ -43,6 +43,12 @@ def needs_records(text: str, tenant_id: str = "") -> bool:
     t = text or ""
     if _ACTION.search(t) or _RECORDS.search(t) or looks_like_tenant_data_question(t, require_possessive=True):
         return True
+    try:
+        from vula.commerce.doc_send import is_send_request
+        if is_send_request(t):                 # "send our bank letter to …" (20 Nov 2026)
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     if tenant_id:
         try:
             from vula import features

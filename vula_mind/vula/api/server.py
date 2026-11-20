@@ -2114,7 +2114,7 @@ _SECTION_RULES = [
 _ACCOUNTANT_READS = [re.compile(p) for p in (
     r"^/v1/commerce/([^/]+)/admin/reports/[^/]+/?$",
     r"^/v1/commerce/([^/]+)/admin/accounts/?$",
-    r"^/v1/commerce/([^/]+)/admin/bank/(?:transactions|reconciliation|accounts)/?$",
+    r"^/v1/commerce/([^/]+)/admin/bank/(?:transactions|transactions\.csv|reconciliation|accounts)/?$",
     r"^/v1/commerce/([^/]+)/admin/invoices/?$",
     r"^/v1/commerce/([^/]+)/admin/invoices/[^/]+/pdf/?$",
     r"^/v1/commerce/([^/]+)/admin/expenses/?$",

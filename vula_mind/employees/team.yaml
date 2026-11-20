@@ -27,4 +27,5 @@ shared_tools:
 - record_decision
 - remember_rule
 - search_past_chats
+- send_document
 - withdraw_decision

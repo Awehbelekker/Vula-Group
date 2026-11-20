@@ -101,7 +101,8 @@ export function useReports(tenantId) {
     });
   }, [tenantId, qs]);
   const ledgerCsv = () => download(`${admin(tenantId)}/reports/ledger.csv?${qs(true)}`, "ledger.csv");
-  return { since, setSince, until, setUntil, basis, setBasis, ...d, state, ledgerCsv };
+  const statementsPdf = () => download(`${admin(tenantId)}/reports/statements.pdf?${qs(true)}`, "financial-statements.pdf");
+  return { since, setSince, until, setUntil, basis, setBasis, ...d, state, ledgerCsv, statementsPdf };
 }
 
 export function useBankLines(tenantId) {
@@ -127,7 +128,9 @@ export function useBankLines(tenantId) {
     setState("ready");
   }, [tenantId, account]);
   useEffect(() => { load(0); }, [load]);
-  return { accounts, account, setAccount, lines, more, loadMore: () => load(lines.length), state };
+  const csv = () => download(`${admin(tenantId)}/bank/transactions.csv${account ? `?account_id=${encodeURIComponent(account)}` : ""}`,
+    "bank-lines.csv");
+  return { accounts, account, setAccount, lines, more, loadMore: () => load(lines.length), state, csv };
 }
 
 export function useInvoiceList(tenantId) {

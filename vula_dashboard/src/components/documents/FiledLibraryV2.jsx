@@ -9,6 +9,7 @@
 import { CalendarDays, FileText, FolderInput, ListChecks, User } from "lucide-react";
 import { Button, Card, FilterBar, Input, Select, Sheet, Skeleton, StatusChip } from "../ui/index.jsx";
 import { EXT_ICON, extOf, isImageDoc, needsProject, useFiledLibrary } from "./useDocuments";
+import SendDocument from "./SendDocument.jsx";
 import "./documents.css";
 
 const EXT_TONE = { PDF: "danger", DOC: "info", XLS: "ok", CSV: "ok" };
@@ -61,7 +62,7 @@ export default function FiledLibraryV2({ tenantId, customerPhone, defaultFiledBy
 
       {docs.length > 0 && (
         <ul className="vdc-grid" aria-label={title}>
-          {docs.map((doc) => <DocTile key={doc.id} doc={doc} projects={x.projects} onAssign={x.assign} onMove={x.move} onOpenImage={x.setLightboxDoc} />)}
+          {docs.map((doc) => <DocTile key={doc.id} tenantId={tenantId} doc={doc} projects={x.projects} onAssign={x.assign} onMove={x.move} onOpenImage={x.setLightboxDoc} />)}
         </ul>
       )}
 
@@ -78,7 +79,7 @@ export default function FiledLibraryV2({ tenantId, customerPhone, defaultFiledBy
   );
 }
 
-function DocTile({ doc, projects, onAssign, onMove, onOpenImage }) {
+function DocTile({ tenantId, doc, projects, onAssign, onMove, onOpenImage }) {
   const ext = extOf(doc.filename);
   const isImage = isImageDoc(doc);
   const open = () => (isImage ? onOpenImage(doc) : doc.file_url && window.open(doc.file_url, "_blank"));
@@ -99,6 +100,7 @@ function DocTile({ doc, projects, onAssign, onMove, onOpenImage }) {
         {doc.clickup_task_id && <span className="vdc-tag" title="Attached in ClickUp"><ListChecks size={14} aria-hidden="true" /><span className="vdc-sr">Attached in ClickUp</span></span>}
       </div>
       {doc.summary && <p className="vdc-summary">{doc.summary}</p>}
+      {canOpen && tenantId && <div className="vdc-actions"><SendDocument tenantId={tenantId} doc={doc} /></div>}
       {needsProject(doc) && (
         <label className="vdc-assign"><FolderInput size={16} aria-hidden="true" />
           <Select defaultValue="" aria-label={`File ${doc.filename} under a project`} onChange={(e) => onAssign(doc.id, e.target.value)}>

@@ -138,6 +138,8 @@ function routes(role, modules = [], features = []) {
       ? (url.searchParams.get("basis") === "cash" ? F.reportPnlCash : F.reportPnlJournal) : F.reportPnl)),
     r("GET", `${A}/reports/vat`, () => (features.includes("books_v2") ? F.reportVatJournal : F.reportVat)),
     r("GET", `${A}/reports/ledger.csv`, () => ({ __raw: { status: 200, contentType: "text/csv", body: "Date,Entry\n" } })),
+    r("GET", `${A}/reports/statements\\.pdf`, () => ({ __raw: { status: 200, contentType: "application/pdf", body: "%PDF-1.4\n" } })),
+    r("GET", `${A}/bank/transactions\\.csv`, () => ({ __raw: { status: 200, contentType: "text/csv", body: "Date,Account\n" } })),
     r("GET", `^/v1/payments/${T}/providers`, () => F.paymentProviders),
     r("GET", `${A}/discount-codes`, () => ({ discount_codes: F.discountCodes })),
     r("GET", `${A}/delivery-list`, () => F.deliveryList),
@@ -182,6 +184,12 @@ function routes(role, modules = [], features = []) {
     r("POST", `^/ingest`, () => ({ status: "queued", filename: "doc.pdf", message: "processing" })),
     r("GET", `${A}/bank/accounts`, () => ({ accounts: F.bankAccountsList })),
     r("GET", `^/v1/accountant/clients`, () => ({ clients: F.accountantClients })),
+    r("POST", `^/v1/documents/${T}/filed/([^/]+)/send`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      if (!b.confirm) return { preview: true, via: "email", to: `${b.to} (accounts@example.com)`,
+        message: `I'll send our bank confirmation letter (account …6574) to ${b.to} (accounts@example.com) by email.` };
+      return { sent: true, via: "email", reply_verbatim: `Sent our bank confirmation letter (account …6574) to ${b.to} by email (from your mailbox).` };
+    }),
     r("GET", `^/v1/documents/${T}/filed/([^/]+)/open`, (m) => ({ url: `https://x.supabase.co/storage/v1/object/sign/documents/demo/${m[2]}.pdf?token=t`, filename: `${m[2]}.pdf` })),
     r("GET", `^/v1/users/${T}/accountants/activity`, () => ({ events: F.accountantActivity })),
     r("GET", `^/v1/users/${T}/accountants`, () => ({ accountants: accountants.filter((a) => a.active !== false) })),

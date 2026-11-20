@@ -105,6 +105,39 @@ async def open_filed(tenant_id: str, doc_id: str, authorization: str = Header(de
     return {"url": signed(rows[0]["file_url"], DASHBOARD_TTL), "filename": rows[0].get("filename")}
 
 
+class SendBody(BaseModel):
+    to: str
+    channel: Optional[str] = None
+    note: Optional[str] = None
+    confirm: bool = False
+
+
+@router.post("/{tenant_id}/filed/{doc_id}/send")
+async def send_filed(tenant_id: str, doc_id: str, body: SendBody, request: Request) -> dict:
+    """Send one filed document to a client, a supplier, an email address or a WhatsApp number
+    (vula/commerce/doc_send.py, 20 Nov 2026). confirm=false is the preview; nothing leaves until
+    confirm=true. Owner, manager, or a member with Documents; an accountant never (read-only)."""
+    from vula.api.tenant_auth import ACCOUNTANT, member_scope, scope_allows
+    from vula.commerce import doc_send
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    if (scope or {}).get("role") == ACCOUNTANT or not scope_allows(scope, frozenset({"documents"})):
+        raise HTTPException(status_code=403, detail="Only the business's own team can send its documents.")
+    try:
+        out = await doc_send.send(tenant_id, doc_id, body.to, channel=body.channel, note=body.note or "",
+                                  confirm=body.confirm, actor={"email": (scope or {}).get("email")},
+                                  full_access=scope_allows(scope, frozenset()))
+    except doc_send.Refused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if out.get("status") == "need_info":
+        raise HTTPException(status_code=422, detail=out["message"])
+    if out.get("sent"):
+        try:
+            out["sends"] = doc_send.sends(doc_send._doc(tenant_id, doc_id))
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
 @router.get("/{tenant_id}/health")
 async def documents_health(tenant_id: str) -> dict:
     """Documents › Health: catch-alls, missing details, waiting on a project, and project names
