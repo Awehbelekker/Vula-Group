@@ -74,7 +74,7 @@ test.describe("books review", () => {
 
   test("lines an old rule filed are re-filed once per payee", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
-    await expect(page.getByRole("tab", { name: /^Bank lines/ })).toContainText("(15)");
+    await expect(page.getByRole("tab", { name: /^Bank lines/ })).toContainText("(16)");
     await page.getByRole("tab", { name: /^Bank lines/ }).click();
     const content = page.locator(".v2-content");
     await expect(content).toContainText("FNB App Payment To Skipp Rubble Removal · 8 lines");
@@ -85,6 +85,22 @@ test.describe("books review", () => {
     expect((await sent).postDataJSON()).toEqual({ txn_ids: ["sk1", "sk2", "sk3", "sk4", "sk5", "sk6", "sk7", "sk8"],
       account_code: "cost_of_sales" });
     await expect(content).not.toContainText("Skipp Rubble Removal · 8 lines");
+  });
+
+  test("a bank payment pays the supplier's open bill, under the account chosen", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await page.getByRole("tab", { name: /^Bank lines/ }).click();
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Payments that pay a supplier's bill");
+    const paid = page.getByRole("button", { name: "Paid DIG-BILL-00196 (2026-07-13, HPC Bokaap)" });
+    await paid.click();                                  // no account chosen yet: nothing is sent
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByLabel("Account for payments to Belekkie Skips (R Engelbrecht)").selectOption("cost_of_sales");
+    const sent = page.waitForRequest((r) => r.url().endsWith("/books-audit/lines/p1/pay-bill"));
+    await paid.click();
+    await page.getByRole("dialog").getByRole("button", { name: "It paid DIG-BILL-00196" }).click();
+    expect((await sent).postDataJSON()).toEqual({ bill_id: "bill-196", account_code: "cost_of_sales" });
+    await expect(content).not.toContainText("Payments that pay a supplier's bill");
   });
 
   test("a payment in transit is tied to its bank line", async ({ page }) => {

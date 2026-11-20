@@ -190,7 +190,7 @@ function LineTable({ rows, caption, select }) {
   return <DataTable columns={cols} rows={rows} caption={caption} stack />;
 }
 
-const lineCount = (open) => ["restore", "duplicates", "transfers", "to_categorise", "refile"]
+const lineCount = (open) => ["restore", "duplicates", "transfers", "to_categorise", "bill_payments", "refile"]
   .reduce((t, k) => t + (open[k] || 0), 0);
 
 function usePick(rows) {
@@ -281,6 +281,7 @@ function Lines({ x, r }) {
           </ul>
         ) : <p className="vbr2-text">Every line has a category.</p>}
       </Card>
+      <BillPayments x={x} groups={r.bill_payments || []} options={options} nameOf={nameOf} />
       <Card>
         <h3 className="vbr2-h">Filed by an old rule</h3>
         <p className="vbr2-sub">Vula filed these by a single word in the bank's description (like "App" in "FNB App
@@ -306,6 +307,55 @@ function Lines({ x, r }) {
         ) : <p className="vbr2-text">Nothing left that an old rule filed.</p>}
       </Card>
     </div>
+  );
+}
+
+// ── Bank payments that pay a supplier's open bill ─────────────────────────────
+
+function BillPayments({ x, groups, options, nameOf }) {
+  const [acct, setAcct] = useState({});
+  if (!groups.length) return null;
+  const outs = options.filter((a) => !a.directions || a.directions.includes("out"));
+  async function pay(g, ln, bill) {
+    const code = acct[g.key];
+    if (!code) { toast("Choose the account for these payments first.", "danger"); return; }
+    if (!(await confirmDialog(`${ln.date} ${money(ln.amount_cents)} paid ${bill.number || "this bill"}? The bill is marked `
+      + `paid on that date and the payment filed as ${nameOf(code)}, so the cost is counted once.`,
+    { confirmLabel: `It paid ${bill.number || "the bill"}` }))) return;
+    if (await done(await x.payBill(ln.id, bill.id, code), "Bill paid from the bank line.", "That didn't save — try again.")) x.reload();
+  }
+  return (
+    <Card>
+      <h3 className="vbr2-h">Payments that pay a supplier's bill</h3>
+      <p className="vbr2-sub">Each payment names a supplier whose bill is still open for exactly that amount. Tie them
+        together so the bill isn't booked as a second cost. Vula also remembers the name you pay them under.</p>
+      {groups.map((g) => (
+        <div key={g.key} className="vbr2-group">
+          <div className="vbr2-row vbr2-wrap">
+            <span className="vbr2-text"><b>{g.supplier}</b> · {g.lines.length} payment{g.lines.length === 1 ? "" : "s"} · <b>{money(g.cents)}</b></span>
+            <Select aria-label={`Account for payments to ${g.supplier}`} value={acct[g.key] || ""}
+              onChange={(e) => setAcct((s) => ({ ...s, [g.key]: e.target.value }))}>
+              <option value="">File the payments as…</option>
+              {outs.map((a) => <option key={a.code} value={a.code}>{a.name}</option>)}
+            </Select>
+          </div>
+          <ul className="vbr2-list">
+            {g.lines.map((ln) => (
+              <li key={ln.id} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text">{ln.date} · {ln.description} · <b>{money(ln.amount_cents)}</b></span>
+                <span className="vbr2-actions">
+                  {ln.bills.map((b) => (
+                    <Button key={b.id} variant="secondary" onClick={() => pay(g, ln, b)}>
+                      {`Paid ${b.number || "bill"} (${b.date}${b.project ? `, ${b.project}` : ""})`}
+                    </Button>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </Card>
   );
 }
 
