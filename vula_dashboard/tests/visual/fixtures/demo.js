@@ -1403,7 +1403,7 @@ export const booksReview = {
   books: { trial_balance: { after: { accrual: { balanced: true }, cash: { balanced: true } } },
     control: { debtors_tie: true, debtors_books_cents: 1800000, creditors_tie: true, creditors_books_cents: 0 },
     suspense: { lines: 1, cents: -56217 }, in_transit_cents: -2300000, owed_to_staff_cents: 400000 },
-  open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 1, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
+  open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 2, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
     doc_figures: 2, not_booked: 1, our_invoices: 1, bill_mismatch: 1, doc_duplicates: 1, bill_duplicates: 1, suppliers: 2 },
   clean: false,
   restore: [brLine("r1", "2026-07-18", "POS Purchase Build It", 28500, "out", { status: "ignored", excluded_reason: "misread copy" }),
@@ -1411,10 +1411,14 @@ export const booksReview = {
   duplicates: [{ lines: [brLine("d1", "2026-08-02", "FNB App Payment Nelitho", 300000), brLine("d2", "2026-08-02", "FNB App Payment Nelitho", 300000)], extra_cents: 300000 }],
   transfers: [{ lines: [brLine("t1", "2026-09-01", "Transfer to savings", 500000), brLine("t2", "2026-09-01", "Transfer from cheque", 500000, "in")], cents: 500000 }],
   to_categorise: [brLine("u1", "2026-10-03", "Magtape Credit Smit", 56217, "in", { categorized_by: "default", account_code: null })],
-  bill_payments: [{ key: "sup-belekkie", supplier: "Belekkie Skips (R Engelbrecht)", cents: 560000, lines: [
+  bill_payments: [{ key: "sup-belekkie", supplier: "Belekkie Skips (R Engelbrecht)", cents: 1400000, lines: [
     { ...brLine("p1", "2026-07-14", "Payshap Account Off-Us Skipp Rubble Remova", 560000, "out", { account_code: "casual_labour", categorized_by: "learned" }),
-      bills: [{ id: "bill-196", number: "DIG-BILL-00196", supplier: "R Engelbrecht", date: "2026-07-13", owed_cents: 560000,
-        status: "draft", project: "HPC Bokaap" }] }] }],
+      options: [{ cents: 560000, bills: [{ id: "bill-196", number: "DIG-BILL-00196", supplier: "R Engelbrecht", date: "2026-07-13",
+        owed_cents: 560000, status: "draft", already_paid: false, project: "HPC Bokaap" }] }] },
+    { ...brLine("p8", "2026-09-25", "FNB App Payment To Skipp Rubble Removal", 840000, "out", { account_code: "casual_labour", categorized_by: "learned" }),
+      options: [{ cents: 840000, bills: [
+        { id: "bill-81", number: "DIG-BILL-00081", supplier: "R Engelbrecht", date: "2026-09-22", owed_cents: 560000, status: "draft", already_paid: false, project: "HPC Bokaap" },
+        { id: "bill-97", number: "DIG-BILL-00197", supplier: "R Engelbrecht", date: "2026-09-22", owed_cents: 280000, status: "paid", already_paid: true, project: "Belladonna" }] }] }] }],
   refile: [
     { key: "skipp rubble|out|one_word_rule", payee: "skipp rubble", label: "FNB App Payment To Skipp Rubble Removal",
       direction: "out", why: "one_word_rule", why_text: "Filed by an old one-word rule, not by who was paid", suggested: null,

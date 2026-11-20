@@ -108,7 +108,8 @@ class LinkBody(BaseModel):
 
 
 class PayBillBody(BaseModel):
-    bill_id: str
+    bill_ids: List[str] = []
+    bill_id: Optional[str] = None       # one bill (the first screen sent this)
     account_code: str
 
 
@@ -162,7 +163,8 @@ async def link_line(tenant_id: str, txn_id: str, body: LinkBody, request: Reques
 async def pay_bill(tenant_id: str, txn_id: str, body: PayBillBody, request: Request) -> dict:
     _, actor = await _full(tenant_id, request)
     from vula.commerce import books_review
-    return await _fix(books_review.pay_bill, tenant_id, txn_id, body.bill_id, body.account_code, actor=actor)
+    return await _fix(books_review.pay_bill, tenant_id, txn_id, body.bill_ids or [body.bill_id or ""],
+                      body.account_code, actor=actor)
 
 
 @router.post("/{tenant_id}/admin/books-audit/documents/{kind}/{doc_id}/date")

@@ -74,7 +74,7 @@ test.describe("books review", () => {
 
   test("lines an old rule filed are re-filed once per payee", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
-    await expect(page.getByRole("tab", { name: /^Bank lines/ })).toContainText("(16)");
+    await expect(page.getByRole("tab", { name: /^Bank lines/ })).toContainText("(17)");
     await page.getByRole("tab", { name: /^Bank lines/ }).click();
     const content = page.locator(".v2-content");
     await expect(content).toContainText("FNB App Payment To Skipp Rubble Removal · 8 lines");
@@ -99,7 +99,15 @@ test.describe("books review", () => {
     const sent = page.waitForRequest((r) => r.url().endsWith("/books-audit/lines/p1/pay-bill"));
     await paid.click();
     await page.getByRole("dialog").getByRole("button", { name: "It paid DIG-BILL-00196" }).click();
-    expect((await sent).postDataJSON()).toEqual({ bill_id: "bill-196", account_code: "cost_of_sales" });
+    expect((await sent).postDataJSON()).toEqual({ bill_ids: ["bill-196"], account_code: "cost_of_sales" });
+    await expect(content).not.toContainText("Paid DIG-BILL-00196");
+    // one transfer for two bills: the open one paid, the one already marked paid only tied
+    const two = page.getByRole("button", { name: /Paid DIG-BILL-00081 R\s?5\s?600\.00 \+ DIG-BILL-00197 R\s?2\s?800\.00 \(marked paid\)/ });
+    const both = page.waitForRequest((r) => r.url().endsWith("/books-audit/lines/p8/pay-bill"));
+    await two.click();
+    await expect(page.getByRole("dialog")).toContainText("DIG-BILL-00197 is already marked paid");
+    await page.getByRole("dialog").getByRole("button", { name: "It paid DIG-BILL-00081 + DIG-BILL-00197" }).click();
+    expect((await both).postDataJSON()).toEqual({ bill_ids: ["bill-81", "bill-97"], account_code: "cost_of_sales" });
     await expect(content).not.toContainText("Payments that pay a supplier's bill");
   });
 

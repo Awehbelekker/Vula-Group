@@ -81,7 +81,7 @@ def _history():
             "commerce_invoice_payments": payments, "commerce_orders": orders, "commerce_expenses": expenses,
             "commerce_bank_transactions": bank, "commerce_suppliers": [], "vula_books_audits": [],
             "vula_tenant_config": [{"tenant_id": T, "features": {}}], "vula_merchant_audit": [],
-            "kb_payments": [], "kb_ledger_lines": [], "kb_sessions": []}
+            "kb_payments": [], "kb_ledger_lines": [], "kb_sessions": [], "commerce_bank_line_documents": []}
 
 
 @pytest.fixture
@@ -252,3 +252,23 @@ def test_a_bill_marked_paid_with_no_payment_recorded_leaves_creditors_and_shows_
     rep = br.plan(T, "2026-03-01", audit=False)
     assert rep["control"]["creditors_tie"]
     assert any(x["id"] == "bill9" and x["open_cents"] == -49933 for x in rep["in_transit"]["largest"])
+
+
+def test_one_bank_payment_for_two_bills_leaves_neither_in_transit(db):
+    """DIGG, 25 Sep: one R8,400 transfer paid two skips bills (R5,600 + R2,800). Tied through
+    commerce_bank_line_documents, each bill is cleared by its share — not one looking overpaid and the
+    other still in transit."""
+    for i, cents in (("billA", 5600), ("billB", 2800)):
+        db.rows["commerce_invoices"].append({
+            "id": i, "tenant_id": T, "invoice_number": i, "supplier": "Belekkie Skips", "direction": "inbound",
+            "doc_type": "invoice", "status": "paid", "total_cents": cents, "vat_cents": 0, "total_paid_cents": cents,
+            "issue_date": "2026-09-22", "paid_at": "2026-09-25", "account_code": "cost_of_sales", "source": "whatsapp"})
+    db.rows["commerce_bank_transactions"].append(_bank("pay8", "2026-09-25", "out", 8400, 0,
+                                                       matched_invoice_id="billA", match_status="matched"))
+    before = br.plan(T, "2026-03-01", audit=False)["in_transit"]["largest"]
+    assert {x["id"] for x in before} >= {"billA", "billB"}           # one overpaid, one with no bank line
+    db.rows["commerce_bank_line_documents"] += [
+        {"id": "s1", "tenant_id": T, "txn_id": "pay8", "invoice_id": "billA", "amount_cents": 5600},
+        {"id": "s2", "tenant_id": T, "txn_id": "pay8", "invoice_id": "billB", "amount_cents": 2800}]
+    after = br.plan(T, "2026-03-01", audit=False)["in_transit"]["largest"]
+    assert not {x["id"] for x in after} & {"billA", "billB"}

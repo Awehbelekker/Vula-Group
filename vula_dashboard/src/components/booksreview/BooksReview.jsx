@@ -316,19 +316,24 @@ function BillPayments({ x, groups, options, nameOf }) {
   const [acct, setAcct] = useState({});
   if (!groups.length) return null;
   const outs = options.filter((a) => !a.directions || a.directions.includes("out"));
-  async function pay(g, ln, bill) {
+  const names = (o) => o.bills.map((b) => b.number || "bill").join(" + ");
+  async function pay(g, ln, o) {
     const code = acct[g.key];
     if (!code) { toast("Choose the account for these payments first.", "danger"); return; }
-    if (!(await confirmDialog(`${ln.date} ${money(ln.amount_cents)} paid ${bill.number || "this bill"}? The bill is marked `
-      + `paid on that date and the payment filed as ${nameOf(code)}, so the cost is counted once.`,
-    { confirmLabel: `It paid ${bill.number || "the bill"}` }))) return;
-    if (await done(await x.payBill(ln.id, bill.id, code), "Bill paid from the bank line.", "That didn't save — try again.")) x.reload();
+    const marked = o.bills.filter((b) => b.already_paid).map((b) => b.number).join(", ");
+    if (!(await confirmDialog(`${ln.date} ${money(ln.amount_cents)} paid ${names(o)}? `
+      + (o.bills.length > 1 ? "Each bill gets its share. " : "") + "Bills still owed are marked paid on that date"
+      + (marked ? ` (${marked} is already marked paid and is only tied to this payment)` : "")
+      + `, and the payment is filed as ${nameOf(code)}, so each cost is counted once.`,
+    { confirmLabel: `It paid ${names(o)}` }))) return;
+    if (await done(await x.payBill(ln.id, o.bills.map((b) => b.id), code), "Tied to the bill.", "That didn't save — try again.")) x.reload();
   }
   return (
     <Card>
       <h3 className="vbr2-h">Payments that pay a supplier's bill</h3>
-      <p className="vbr2-sub">Each payment names a supplier whose bill is still open for exactly that amount. Tie them
-        together so the bill isn't booked as a second cost. Vula also remembers the name you pay them under.</p>
+      <p className="vbr2-sub">Each payment names a supplier whose bills come to exactly that amount — one bill, or two or
+        three of theirs paid together. Tie them so no bill is booked as a second cost. Vula also remembers the name you
+        pay them under.</p>
       {groups.map((g) => (
         <div key={g.key} className="vbr2-group">
           <div className="vbr2-row vbr2-wrap">
@@ -344,9 +349,11 @@ function BillPayments({ x, groups, options, nameOf }) {
               <li key={ln.id} className="vbr2-row vbr2-wrap">
                 <span className="vbr2-text">{ln.date} · {ln.description} · <b>{money(ln.amount_cents)}</b></span>
                 <span className="vbr2-actions">
-                  {ln.bills.map((b) => (
-                    <Button key={b.id} variant="secondary" onClick={() => pay(g, ln, b)}>
-                      {`Paid ${b.number || "bill"} (${b.date}${b.project ? `, ${b.project}` : ""})`}
+                  {(ln.options || []).map((o) => (
+                    <Button key={o.bills.map((b) => b.id).join("+")} variant="secondary" onClick={() => pay(g, ln, o)}>
+                      {o.bills.length === 1
+                        ? `Paid ${names(o)} (${o.bills[0].date}${o.bills[0].project ? `, ${o.bills[0].project}` : ""})`
+                        : `Paid ${o.bills.map((b) => `${b.number} ${money(b.owed_cents)}${b.already_paid ? " (marked paid)" : ""}`).join(" + ")}`}
                     </Button>
                   ))}
                 </span>

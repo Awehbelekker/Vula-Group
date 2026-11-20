@@ -514,8 +514,11 @@ function routes(role, modules = [], features = []) {
     r("POST", `${A}/books-audit/statements/${T}/apply`, (m, url, req) => ({ ok: true, done: (req.postDataJSON() || {}).accept, skipped: [], not_saved: [] })),
     r("POST", `${A}/books-audit/statements`, () => ({ check_id: "chk-1", summary: { already_right: 40 } })),
     r("POST", `${A}/books-audit/lines/${T}/pay-bill`, (m, url, req) => {
-      books.bill_payments = []; books.open.bill_payments = 0;
-      return { ok: true, bill: "DIG-BILL-00196", bill_status: "paid", remembered: "Skipp Rubble", body: req.postDataJSON() };
+      const id = url.pathname.split("/lines/")[1].split("/")[0];
+      books.bill_payments = (books.bill_payments || []).map((g) => ({ ...g, lines: g.lines.filter((l) => l.id !== id) }))
+        .filter((g) => g.lines.length);
+      books.open.bill_payments = books.bill_payments.reduce((t, g) => t + g.lines.length, 0);
+      return { ok: true, bills: (req.postDataJSON() || {}).bill_ids, bill_status: "paid", remembered: "Skipp Rubble" };
     }),
     r("POST", `${A}/bank/transactions/bulk-categorize`, (m, url, req) => {
       const ids = (req.postDataJSON() || {}).txn_ids || [];

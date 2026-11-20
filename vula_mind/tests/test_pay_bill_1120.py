@@ -47,7 +47,7 @@ def db(monkeypatch):
             _bill("far", "DIG-BILL-00001", 125000, "2026-01-05"),
             _bill("other-sup", "SC-1", 280000, "2026-08-07", supplier="Solid Cape", supplier_id="sup-sc"),
             _bill("x1", "X-1", 560000, "2026-07-13", tenant_id="other")],
-        "commerce_invoice_payments": [],
+        "commerce_invoice_payments": [], "commerce_bank_line_documents": [],
         "commerce_bank_transactions": [
             _line("p1", "Payshap Account Off-Us Skipp Rubble Remova", 560000, "2026-07-14"),
             _line("p2", "Payshap Account Off-Us Hpc Skip And Rubble", 280000, "2026-08-07"),
@@ -82,8 +82,8 @@ def test_words_alike(a, b, same):
 def test_a_payment_is_offered_the_open_bill_its_payee_names(db):
     groups = br.bill_payments(T, _lines(db))
     assert len(groups) == 1 and groups[0]["supplier"] == "Belekkie Skips (R Engelbrecht)"
-    by = {x["id"]: [b["id"] for b in x["bills"]] for x in groups[0]["lines"]}
-    assert by == {"p1": ["b1"], "p2": ["b2", "b3"]}       # nearest date first; no Solid Cape, no paid/cancelled/old bill
+    by = {x["id"]: [[b["id"] for b in o["bills"]] for o in x["options"]] for x in groups[0]["lines"]}
+    assert by == {"p1": [["b1"]], "p2": [["b2"], ["b3"]]}  # nearest date first; no Solid Cape, no paid/cancelled/old bill
     assert "p5" not in by and "in1" not in by
 
 
@@ -111,7 +111,7 @@ def test_paying_records_the_bill_once_ties_the_line_and_remembers_the_payee(db):
 def test_pay_bill_refuses_what_would_book_money_wrong(db):
     with pytest.raises(br.Refused, match="isn't what's still owed"):
         br.pay_bill(T, "p3", "b2", "cost_of_sales")
-    with pytest.raises(br.Refused, match="paid, not waiting"):
+    with pytest.raises(br.Refused, match="is paid, not waiting"):
         br.pay_bill(T, "p2", "paid", "cost_of_sales")
     with pytest.raises(br.Refused, match="cancelled"):
         br.pay_bill(T, "p2", "gone", "cost_of_sales")
@@ -134,3 +134,53 @@ def test_a_line_with_a_bill_is_not_also_offered_for_re_filing(db, monkeypatch):
     refiling = {i for g in out["refile"] for i in g["ids"]}
     assert paying == {"p1", "p2"} and not (paying & refiling) and {"p3", "p4"} <= refiling
     assert out["open"]["bill_payments"] == 2
+
+
+def _two_bills(db):
+    """DIGG, 25 Sep: one R8,400 transfer for 00081 (R5,600, draft) and 00197 (R2,800, marked paid on
+    10 Nov with no payment and no bank line)."""
+    db.rows["commerce_invoices"] += [_bill("b81", "DIG-BILL-00081", 560000, "2026-09-22", supplier_id=None),  # name only
+                                     _bill("b97", "DIG-BILL-00197", 280000, "2026-09-22", status="paid",
+                                           project="Belladonna")]
+    db.rows["commerce_bank_transactions"].append(
+        _line("p8", "FNB App Payment To Skipp Rubble Removal", 840000, "2026-09-25"))
+
+
+def test_one_payment_for_two_bills_is_offered_when_no_single_bill_fits(db):
+    _two_bills(db)
+    line = next(x for g in br.bill_payments(T, _lines(db)) for x in g["lines"] if x["id"] == "p8")
+    opts = [[b["id"] for b in o["bills"]] for o in line["options"]]
+    assert opts[0] == ["b81", "b97"] and all(sum(b["owed_cents"] for b in o["bills"]) == 840000 for o in line["options"])
+    b97 = next(b for o in line["options"] for b in o["bills"] if b["id"] == "b97")
+    assert b97["already_paid"] is True
+
+
+def test_paying_two_bills_records_the_open_one_and_ties_both(db):
+    _two_bills(db)
+    out = br.pay_bill(T, "p8", ["b81", "b97"], "cost_of_sales")
+    assert out["ok"] and out["bills"] == ["DIG-BILL-00081", "DIG-BILL-00197"]
+    assert _row(db, "commerce_invoices", "b81")["status"] == "paid"
+    pays = db.rows["commerce_invoice_payments"]
+    assert [(p["invoice_id"], p["amount_cents"]) for p in pays] == [("b81", 560000)]   # 00197 isn't paid twice
+    shares = sorted((d["invoice_id"], d["amount_cents"]) for d in db.rows["commerce_bank_line_documents"])
+    assert shares == [("b81", 560000), ("b97", 280000)]
+    ln = _row(db, "commerce_bank_transactions", "p8")
+    assert ln["matched_invoice_id"] == "b81" and ln["account_code"] == "cost_of_sales"
+    # 00197 now has its bank line: never offered again, and the review counts it as tied
+    assert "b97" in br._tied_bills(T)
+    assert not any(b["id"] == "b97" for b in br._open_bills(T))
+    with pytest.raises(br.Refused, match="already tied"):
+        br.pay_bill(T, "p8", ["b81", "b97"], "cost_of_sales")
+
+
+def test_several_bills_must_add_up_and_be_one_supplier_s(db):
+    _two_bills(db)
+    with pytest.raises(br.Refused, match="the bills together"):
+        br.pay_bill(T, "p8", ["b81", "b1"], "cost_of_sales")          # R5,600 + R5,600 isn't R8,400
+    with pytest.raises(br.Refused, match="same supplier"):
+        br.pay_bill(T, "p8", ["b81", "other-sup"], "cost_of_sales")   # adds up, but Solid Cape's bill
+    with pytest.raises(br.Refused, match="is paid, not waiting"):
+        br.pay_bill(T, "p2", ["b97"], "cost_of_sales")                # one paid bill alone: Money in transit
+    with pytest.raises(br.Refused, match="at most 3"):
+        br.pay_bill(T, "p8", ["b1", "b2", "b3", "b81"], "cost_of_sales")
+    assert db.rows["commerce_invoice_payments"] == [] and db.rows["commerce_bank_line_documents"] == []

@@ -284,12 +284,13 @@ def _supplier_words(tenant_id: str, bills: List[Dict[str, Any]],
                     names: Optional[Dict[str, str]] = None) -> Dict[str, set]:
     """Words naming each bill's supplier: the bill's own supplier text, plus the supplier record's name,
     aliases and bank account holder — never the business's own names."""
-    db = _client()
-    ids = sorted({str(b["supplier_id"]) for b in bills if b.get("supplier_id")})
+    by_name = _supplier_ids(tenant_id)
+    ids = sorted({_supplier_key(b, by_name) for b in bills} & set(by_name.values())
+                 | {str(b["supplier_id"]) for b in bills if b.get("supplier_id")})
     recs: Dict[str, Dict[str, Any]] = {}
     if ids:
         try:
-            recs = {str(r["id"]): r for r in (db.table("commerce_suppliers")
+            recs = {str(r["id"]): r for r in (_client().table("commerce_suppliers")
                                               .select("id,name,aliases,bank_account_name")
                                               .eq("tenant_id", tenant_id).in_("id", ids).execute().data or [])}
         except Exception:  # noqa: BLE001
@@ -303,7 +304,7 @@ def _supplier_words(tenant_id: str, bills: List[Dict[str, Any]],
         names.update({k: str(r.get("name") or "") for k, r in recs.items()})
     out: Dict[str, set] = {}
     for b in bills:
-        r = recs.get(str(b.get("supplier_id") or ""), {})
+        r = recs.get(_supplier_key(b, by_name), {})
         words = set().union(_words(b.get("supplier")), _words(r.get("name")), _words(r.get("bank_account_name")),
                             *(_words(a) for a in (r.get("aliases") or [])))
         out[str(b["id"])] = {w for w in words if not any(_alike(w, o) for o in own)}
@@ -314,37 +315,132 @@ def _owed(b: Dict[str, Any]) -> int:
     return int(b.get("total_cents") or 0) - int(b.get("total_paid_cents") or 0)
 
 
-def _open_bills(tenant_id: str) -> List[Dict[str, Any]]:
+LINE_DOCS = "commerce_bank_line_documents"
+MAX_BILLS = 3                   # one payment for at most three bills
+MAX_OPTIONS = 5
+
+
+def line_documents(tenant_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    """txn_id → [{invoice_id, amount_cents}]: a bank payment that paid several bills (migration 293).
+    Empty before the migration."""
+    try:
+        from vula.commerce.ledger import _all_pages
+        rows = _all_pages(lambda: _client().table(LINE_DOCS).select("txn_id,invoice_id,amount_cents")
+                          .eq("tenant_id", tenant_id).order("id"))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("bank line documents unavailable (run migration 293?): %s", exc)
+        return {}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        out.setdefault(str(r["txn_id"]), []).append(r)
+    return out
+
+
+def _bills(tenant_id: str, statuses: Iterable[str]) -> List[Dict[str, Any]]:
     try:
         from vula.commerce.ledger import _all_pages
         rows = _all_pages(lambda: _client().table("commerce_invoices")
                           .select("id,invoice_number,supplier,supplier_id,issue_date,total_cents,total_paid_cents,"
-                                  "status,project,doc_type")
-                          .eq("tenant_id", tenant_id).eq("direction", "inbound").in_("status", list(OPEN_BILL))
+                                  "status,project,doc_type,direction")
+                          .eq("tenant_id", tenant_id).eq("direction", "inbound").in_("status", list(statuses))
                           .order("id"))
     except Exception:  # noqa: BLE001
         rows = []
-    return [b for b in rows if (b.get("doc_type") or "invoice") == "invoice" and b.get("issue_date") and _owed(b) > 0]
+    return [b for b in rows if (b.get("doc_type") or "invoice") == "invoice" and b.get("issue_date")]
+
+
+def _tied_bills(tenant_id: str, lines: Optional[List[Dict[str, Any]]] = None) -> set:
+    """Bills a live bank line already stands for (matched, or a share of a several-bills payment)."""
+    if lines is None:
+        try:
+            from vula.commerce.ledger import _all_pages
+            lines = _all_pages(lambda: _client().table(BANK).select(LINE_COLS).eq("tenant_id", tenant_id)
+                               .eq("direction", "out").order("id"))
+        except Exception:  # noqa: BLE001
+            lines = []
+    live = {str(x["id"]) for x in lines if _live(x)}
+    tied = {str(x["matched_invoice_id"]) for x in lines if x.get("matched_invoice_id") and str(x["id"]) in live}
+    for txn, docs in line_documents(tenant_id).items():
+        if txn in live:
+            tied |= {str(d["invoice_id"]) for d in docs}
+    return tied
+
+
+def _payable(b: Dict[str, Any]) -> int:
+    """What a bank payment would settle on this bill: what's still owed, or — for a bill already marked
+    paid with no bank line behind it — its whole total."""
+    return int(b.get("total_cents") or 0) if b.get("status") == "paid" else _owed(b)
+
+
+def _open_bills(tenant_id: str, lines: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Bills a payment can stand for: open ones with something owed, and ones marked paid that no bank
+    line stands for yet (DIGG marked three skips bills paid on 10 Nov with no payment or line)."""
+    tied = _tied_bills(tenant_id, lines)
+    rows = _bills(tenant_id, list(OPEN_BILL) + ["paid"])
+    return [b for b in rows if _payable(b) > 0 and (b.get("status") != "paid" or str(b["id"]) not in tied)]
 
 
 def _bill_shown(b: Dict[str, Any]) -> Dict[str, Any]:
     return {"id": b["id"], "number": b.get("invoice_number"), "supplier": b.get("supplier"),
-            "date": str(b.get("issue_date"))[:10], "owed_cents": _owed(b), "status": b.get("status"),
-            "project": b.get("project")}
+            "date": str(b.get("issue_date"))[:10], "owed_cents": _payable(b), "status": b.get("status"),
+            "already_paid": b.get("status") == "paid", "project": b.get("project")}
+
+
+def _supplier_ids(tenant_id: str) -> Dict[str, str]:
+    """A supplier's name or alias (lower case) → its record id, so a bill that only names its supplier
+    ("R Engelbrecht", no supplier_id) is still that supplier's (Belekkie Skips, alias R Engelbrecht)."""
+    try:
+        rows = (_client().table("commerce_suppliers").select("id,name,aliases").eq("tenant_id", tenant_id)
+                .limit(5000).execute().data or [])
+    except Exception:  # noqa: BLE001
+        return {}
+    out: Dict[str, str] = {}
+    for r in rows:
+        for n in [r.get("name")] + list(r.get("aliases") or []):
+            if n and str(n).strip():
+                out.setdefault(str(n).strip().lower(), str(r["id"]))
+    return out
+
+
+def _supplier_key(b: Dict[str, Any], ids: Optional[Dict[str, str]] = None) -> str:
+    name = (b.get("supplier") or "").strip().lower()
+    return str(b.get("supplier_id") or (ids or {}).get(name) or name)
+
+
+def _options(amount: int, day: date, cands: List[Dict[str, Any]],
+             ids: Optional[Dict[str, str]] = None) -> List[List[Dict[str, Any]]]:
+    """Bills that together make exactly `amount`: one open bill first (nearest date), then two or three
+    bills of one supplier, at least one of them still open. Never more than MAX_OPTIONS."""
+    from itertools import combinations
+    gap = lambda b: abs((day - date.fromisoformat(str(b["issue_date"])[:10])).days)   # noqa: E731
+    cands = sorted(cands, key=lambda b: (gap(b), str(b.get("invoice_number") or "")))[:20]
+    singles = [[b] for b in cands if b.get("status") != "paid" and _payable(b) == amount]
+    if singles:
+        return singles[:MAX_OPTIONS]
+    out: List[List[Dict[str, Any]]] = []
+    for n in range(2, MAX_BILLS + 1):
+        for combo in combinations(cands, n):
+            if (sum(_payable(b) for b in combo) == amount and len({_supplier_key(b, ids) for b in combo}) == 1
+                    and any(b.get("status") != "paid" for b in combo)):
+                out.append(sorted(combo, key=lambda b: str(b["issue_date"])))
+        if out:
+            break
+    out.sort(key=lambda c: (max(gap(b) for b in c), sum(gap(b) for b in c),
+                            [str(b.get("invoice_number") or "") for b in c]))
+    return out[:MAX_OPTIONS]
 
 
 def bill_payments(tenant_id: str, lines: List[Dict[str, Any]],
                   bills: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-    """Untied payments out whose payee names a supplier with an open bill for exactly that amount.
-    One group per supplier; each line lists its bills, nearest date first. Nothing is chosen."""
+    """Untied payments out whose payee names a supplier with bills making exactly that amount — one
+    open bill, or two or three of that supplier's (one may be marked paid already with no bank line).
+    One group per supplier; each line lists its options, nearest dates first. Nothing is chosen."""
     bills = _open_bills(tenant_id) if bills is None else bills
     if not bills:
         return []
     names: Dict[str, str] = {}
     words = _supplier_words(tenant_id, bills, names)
-    by_amount: Dict[int, List[Dict[str, Any]]] = {}
-    for b in bills:
-        by_amount.setdefault(_owed(b), []).append(b)
+    ids = _supplier_ids(tenant_id)
     groups: Dict[str, Dict[str, Any]] = {}
     for ln in lines:
         if (ln.get("direction") or "out") != "out" or _shown(ln)["matched"] or not _live(ln):
@@ -353,57 +449,75 @@ def bill_payments(tenant_id: str, lines: List[Dict[str, Any]],
             day = date.fromisoformat(str(ln.get("txn_date"))[:10])
         except ValueError:
             continue
+        amount = int(ln.get("amount_cents") or 0)
         said = _words(ln.get("description"))
-        found = []
-        for b in by_amount.get(int(ln.get("amount_cents") or 0), []):
-            gap = (day - date.fromisoformat(str(b["issue_date"])[:10])).days
-            if BILL_DAYS[0] <= gap <= BILL_DAYS[1] and any(_alike(a, w) for a in said for w in words[str(b["id"])]):
-                found.append((abs(gap), b))
-        if not found:
+        cands = [b for b in bills
+                 if BILL_DAYS[0] <= (day - date.fromisoformat(str(b["issue_date"])[:10])).days <= BILL_DAYS[1]
+                 and 0 < _payable(b) <= amount
+                 and any(_alike(a, w) for a in said for w in words[str(b["id"])])]
+        options = _options(amount, day, cands, ids)
+        if not options:
             continue
-        found.sort(key=lambda x: (x[0], str(x[1].get("invoice_number") or "")))
-        first = found[0][1]
-        key = str(first.get("supplier_id") or first.get("supplier") or "")
-        rec_name, on_bill = names.get(str(first.get("supplier_id") or ""), ""), first.get("supplier") or ""
+        first = options[0][0]
+        key = _supplier_key(first, ids)
+        rec_name, on_bill = names.get(key, ""), first.get("supplier") or ""
         label = (f"{rec_name} ({on_bill})" if rec_name and on_bill and rec_name.lower() != on_bill.lower()
                  else rec_name or on_bill)
         g = groups.setdefault(key, {"key": key, "supplier": label, "lines": [], "cents": 0})
-        g["lines"].append({**_shown(ln), "bills": [_bill_shown(b) for _, b in found[:5]]})
-        g["cents"] += int(ln.get("amount_cents") or 0)
+        g["lines"].append({**_shown(ln), "options": [{"bills": [_bill_shown(b) for b in o],
+                                                      "cents": sum(_payable(b) for b in o)} for o in options]})
+        g["cents"] += amount
     out = sorted(groups.values(), key=lambda g: (-g["cents"], str(g["supplier"])))
     for g in out:
         g["lines"].sort(key=lambda x: x["date"])
     return out
 
 
-def pay_bill(tenant_id: str, txn_id: str, bill_id: str, account_code: str,
+def pay_bill(tenant_id: str, txn_id: str, bill_ids: Any, account_code: str,
              actor: Optional[dict] = None) -> Dict[str, Any]:
-    """This bank payment paid that supplier bill: the bill's payment is recorded on the bank date
-    (so it leaves draft and isn't owed), the line is tied to it and filed under the chosen account,
-    and the payee is remembered for the supplier — so the cost is counted once."""
+    """This bank payment paid those supplier bills (one, or up to three of one supplier): each open
+    bill's payment is recorded once on the bank date; a bill already marked paid with no bank line is
+    only tied to it; the line is filed under the chosen account and the payee remembered for the
+    supplier — so each cost is counted once and nothing is left 'in transit'."""
     import asyncio
     from vula.commerce import accounting, service
+    ids = [str(i) for i in dict.fromkeys([bill_ids] if isinstance(bill_ids, str) else (bill_ids or [])) if i]
+    if not ids:
+        raise Refused("Choose the bill this payment paid.")
+    if len(ids) > MAX_BILLS:
+        raise Refused(f"One payment can be tied to at most {MAX_BILLS} bills here.")
     rows = _lines(tenant_id, [txn_id])
     if not rows or not _live(rows[0]):
         raise Refused("That bank line isn't in the books (it may be set aside).")
     ln = rows[0]
     if (ln.get("direction") or "out") != "out":
         raise Refused("Only money going out can pay a supplier's bill.")
-    if _shown(ln)["matched"]:
+    if _shown(ln)["matched"] or line_documents(tenant_id).get(str(txn_id)):
         raise Refused("That bank line is already tied to something.")
     db = _client()
-    got = (db.table("commerce_invoices").select("id,invoice_number,supplier,supplier_id,direction,doc_type,status,"
-                                                 "total_cents,total_paid_cents,project,issue_date")
-           .eq("tenant_id", tenant_id).eq("id", bill_id).limit(1).execute().data or [])
-    if not got or (got[0].get("direction") or "outbound") != "inbound" or (got[0].get("doc_type") or "invoice") != "invoice":
+    got = {str(b["id"]): b for b in (db.table("commerce_invoices")
+                                     .select("id,invoice_number,supplier,supplier_id,direction,doc_type,status,"
+                                             "total_cents,total_paid_cents,project,issue_date")
+                                     .eq("tenant_id", tenant_id).in_("id", ids).execute().data or [])}
+    bills = [got.get(i) for i in ids]
+    if any(b is None or (b.get("direction") or "outbound") != "inbound" or (b.get("doc_type") or "invoice") != "invoice"
+           for b in bills):
         raise Refused("That supplier bill isn't there.")
-    bill = got[0]
-    if bill.get("status") not in OPEN_BILL:
-        raise Refused(f"That bill is {bill.get('status')}, not waiting to be paid.")
+    tied = _tied_bills(tenant_id)
+    for b in bills:
+        if b.get("status") == "paid" and (len(bills) == 1 or str(b["id"]) in tied):
+            raise Refused(f"{b.get('invoice_number') or 'That bill'} is paid, not waiting to be paid.")
+        if b.get("status") not in OPEN_BILL + ("paid",):
+            raise Refused(f"{b.get('invoice_number') or 'That bill'} is {b.get('status')}, not waiting to be paid.")
+    if len({_supplier_key(b, _supplier_ids(tenant_id)) for b in bills}) > 1:
+        raise Refused("One payment can only be tied to bills from the same supplier.")
+    if all(b.get("status") == "paid" for b in bills):
+        raise Refused("Those bills are all marked paid already — tie them in Money in transit.")
     amount = int(ln.get("amount_cents") or 0)
-    if amount != _owed(bill):
-        raise Refused(f"The payment ({amount / 100:,.2f}) isn't what's still owed on the bill "
-                      f"({_owed(bill) / 100:,.2f}).")
+    shares = {str(b["id"]): _payable(b) for b in bills}
+    if amount != sum(shares.values()):
+        what = "what's still owed on the bill" if len(bills) == 1 else "the bills together"
+        raise Refused(f"The payment ({amount / 100:,.2f}) isn't {what} ({sum(shares.values()) / 100:,.2f}).")
     accts = {a["code"]: a for a in accounting.ensure_chart(tenant_id)}
     acc = accts.get(account_code)
     if not acc:
@@ -412,29 +526,40 @@ def pay_bill(tenant_id: str, txn_id: str, bill_id: str, account_code: str,
     if why:
         raise Refused(why)
     paid_on = str(ln.get("txn_date"))[:10]
-    asyncio.run(service.record_invoice_payment(
-        tenant_id, bill_id, amount, payment_method="eft",
-        note=f"Bank payment {paid_on}: {ln.get('description') or ''}"[:200], paid_at=paid_on))
-    patch = {"matched_invoice_id": bill_id, "match_status": "matched", "account_code": account_code,
+    if len(bills) > 1:      # the shares first, so a half-done pay is still visible as this line's
+        db.table(LINE_DOCS).insert([{"tenant_id": tenant_id, "txn_id": txn_id, "invoice_id": i, "amount_cents": c,
+                                     "created_by": (actor or {}).get("email")} for i, c in shares.items()]).execute()
+    for b in bills:
+        if b.get("status") != "paid":
+            asyncio.run(service.record_invoice_payment(
+                tenant_id, b["id"], shares[str(b["id"])], payment_method="eft",
+                note=f"Bank payment {paid_on}: {ln.get('description') or ''}"[:200], paid_at=paid_on))
+    main = max(bills, key=lambda b: (shares[str(b["id"])], str(b["issue_date"])))
+    patch = {"matched_invoice_id": main["id"], "match_status": "matched", "account_code": account_code,
              "vat_cents": accounting.vat_for(acc, amount, accounting.is_vat_registered(tenant_id)),
              "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
-    if bill.get("project") and not ln.get("project"):
-        patch["project"] = bill["project"]
+    if main.get("project") and not ln.get("project"):
+        patch["project"] = main["project"]
     db.table(BANK).update(patch).eq("tenant_id", tenant_id).eq("id", txn_id).execute()
     back = _lines(tenant_id, [txn_id])[0]
-    after = (db.table("commerce_invoices").select("status,total_paid_cents").eq("tenant_id", tenant_id)
-             .eq("id", bill_id).limit(1).execute().data or [{}])[0]
-    ok = all(back.get(k) == v for k, v in patch.items() if k != "project") and after.get("status") == "paid"
+    after = {str(r["id"]): r for r in (db.table("commerce_invoices").select("id,status").eq("tenant_id", tenant_id)
+                                       .in_("id", ids).execute().data or [])}
+    shared = line_documents(tenant_id).get(str(txn_id), []) if len(bills) > 1 else []
+    ok = (all(back.get(k) == v for k, v in patch.items() if k != "project")
+          and all((after.get(i) or {}).get("status") == "paid" for i in ids)
+          and (len(bills) == 1 or sorted((str(d["invoice_id"]), int(d["amount_cents"])) for d in shared)
+               == sorted(shares.items())))
     try:
         accounting.learn_category_rule(tenant_id, ln, account_code)
     except Exception as exc:  # noqa: BLE001
         log.debug("pay_bill: rule not learned: %s", exc)
-    alias = _remember_payee(tenant_id, bill, ln)
-    _audit(tenant_id, actor, "bank_line_paid_bill", txn_id=txn_id, invoice_id=bill_id, cents=amount,
+    alias = _remember_payee(tenant_id, main, ln)
+    _audit(tenant_id, actor, "bank_line_paid_bill", txn_id=txn_id, invoice_ids=ids, cents=amount,
            account_code=account_code)
     _resync(tenant_id, [txn_id])
-    return {"ok": ok, "line": _shown(back), "bill": bill.get("invoice_number") or bill_id,
-            "bill_status": after.get("status"), "remembered": alias}
+    return {"ok": ok, "line": _shown(back), "bills": [b.get("invoice_number") or b["id"] for b in bills],
+            "bill": main.get("invoice_number") or main["id"], "bill_status": (after.get(str(main["id"])) or {}).get("status"),
+            "remembered": alias}
 
 
 def _remember_payee(tenant_id: str, bill: Dict[str, Any], ln: Dict[str, Any]) -> Optional[str]:
@@ -527,6 +652,9 @@ def review(tenant_id: str) -> Dict[str, Any]:
     refile = refile_groups([x for x in free if x["id"] not in paying], known, decided)
     linked_docs = {str(x.get("matched_invoice_id") or x.get("matched_expense_id"))
                    for x in live if x.get("matched_invoice_id") or x.get("matched_expense_id")}
+    live_ids = {str(x["id"]) for x in live}
+    linked_docs |= {str(d["invoice_id"]) for t, docs in line_documents(tenant_id).items() if t in live_ids
+                    for d in docs}
     in_transit = []
     for d in (books.get("in_transit") or {}).get("largest") or []:
         if str(d.get("id")) in linked_docs or d.get("kind") not in ("bill", "invoice", "expense"):

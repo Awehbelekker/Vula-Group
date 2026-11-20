@@ -64,8 +64,8 @@ export function useBooksReview(tenantId) {
   const setAside = (ids, why) => post(a("/lines/set-aside"), { ids, reason: why });
   const transfer = (ids) => post(a("/lines/transfer"), { ids });
   const link = (txnId, target) => post(a(`/lines/${txnId}/link`), target);
-  const payBill = (txnId, billId, accountCode) => post(a(`/lines/${txnId}/pay-bill`),
-    { bill_id: billId, account_code: accountCode });
+  const payBill = (txnId, billIds, accountCode) => post(a(`/lines/${txnId}/pay-bill`),
+    { bill_ids: billIds, account_code: accountCode });
   const correctDate = (kind, id, date, why) => post(a(`/documents/${kind}/${id}/date`), { date, reason: why });
   const agree = (auditId, note) => post(a(`/${auditId}/agree`), { note });
   const categorise = (ids, accountCode) => post(`${base(tenantId)}/bank/transactions/bulk-categorize`,
