@@ -738,7 +738,14 @@ def worklist(tenant_id: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("supplier statement worklist failed for %s: %s", tenant_id, exc)
         sup_st = []
+    try:
+        from vula.commerce import pop_links
+        pops = pop_links.review(tenant_id)["items"]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("proof-of-payment worklist failed for %s: %s", tenant_id, exc)
+        pops = []
     return {"certificates": certs, "sales_not_in_invoices": sales_on_file, "supplier_statements": sup_st,
+            "pops": pops,
             "doc_figures": figures,
             "not_booked": [{**f["doc"], "text": f["text"]} for f in books if f["kind"] == "not_booked"],
             "our_invoices": [{**f["doc"], "text": f["text"], "twin": f.get("twin")} for f in books

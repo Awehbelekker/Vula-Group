@@ -74,6 +74,13 @@ test.describe("the accountant's workspace", () => {
     const csv = page.waitForRequest((r) => r.url().includes("/reports/ledger.csv"));
     await page.getByRole("button", { name: "General ledger (CSV)" }).click();
     await csv;
+    const pdf = page.waitForRequest((r) => r.url().includes("/reports/statements.pdf"));
+    await page.getByRole("button", { name: "Financial statements (PDF)" }).click();
+    await pdf;
+    await page.getByRole("tab", { name: "Bank" }).click();
+    const lines = page.waitForRequest((r) => r.url().includes("/bank/transactions.csv"));
+    await page.getByRole("button", { name: "Download bank lines (CSV)" }).click();
+    await lines;
   });
 
   test("an accountant with several clients switches business", async ({ page }) => {

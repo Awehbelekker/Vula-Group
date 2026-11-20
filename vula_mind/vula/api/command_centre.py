@@ -60,7 +60,7 @@ _TOOL_LABELS = {
     "record_payment": "recorded a payment", "send_broadcast": "sent a broadcast",
     "draft_storefront_page": "drafted a storefront page", "add_storefront_section": "added to the storefront",
     "create_automation_rule": "set up an automation", "create_invoice": "drafted an invoice or quote",
-    "send_invoice": "sent an invoice", "convert_quote_to_invoice": "turned a quote into an invoice",
+    "send_invoice": "sent an invoice", "send_document": "sent a document", "convert_quote_to_invoice": "turned a quote into an invoice",
     "update_quote_status": "updated a quote", "update_order_status": "updated an order",
     "create_booking": "made a booking", "add_expense": "logged an expense",
     "create_manual_order": "created an order", "create_product": "added a product",

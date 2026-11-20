@@ -287,6 +287,27 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["query"]},
     }},
     {"type": "function", "function": {
+        "name": "send_document",
+        "description": "Send one of the business's own filed documents to someone — a client, a "
+                       "supplier, or an email address / WhatsApp number — when asked: 'send our bank "
+                       "letter to Atlantis Foods', 'email the tax clearance to accounts@x.co.za', "
+                       "'forward the proof of payment for R5,600 to Belekkie Skips'. Name the document in "
+                       "`document` in the person's words (or give doc_id from find_document). Without "
+                       "confirm=true it returns a preview; show it and wait for a yes. If it returns "
+                       "status: need_info (which document, which account, who, or their email), that "
+                       "message IS your reply. Never say it was sent unless the result says sent.",
+        "parameters": {"type": "object", "properties": {
+            "document": {"type": "string", "description": "What to send, in the person's words, e.g. "
+                         "'bank letter for the 6574 account', 'tax clearance', 'COR14.3'."},
+            "doc_id": {"type": "string", "description": "A document id from find_document, when known."},
+            "to": {"type": "string", "description": "Who: a client or supplier name, an email address "
+                   "or a WhatsApp number."},
+            "channel": {"type": "string", "enum": ["email", "whatsapp"]},
+            "note": {"type": "string", "description": "An optional short line to go with it."},
+            "confirm": {"type": "boolean"}},
+            "required": ["to"]},
+    }},
+    {"type": "function", "function": {
         "name": "email_thread_summary",
         "description": "Summarize the actual CONTENT of every email matching a supplier/sender "
                        "name, company, or topic — reads the real email bodies (HTML included, "
@@ -2041,6 +2062,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances",
     # every document of a project, statements and proofs of payment included: owner and managers
     # only — no tab id grants it, so a restricted staff member never gets the tool.
+    "send_document": "documents",
     "project_file": "owner_only", "confirm_buildup": "owner_only", "compare_estimate": "owner_only", "estimate_cost": "tradecosting", "buildup_suggestion": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
@@ -2144,7 +2166,9 @@ _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "reco
                             "update_order_status", "staff_notice", "staff_poll", "cancel_booking",
                             # 17 Nov 2026 audit: a confirmed build-up sets the quantities of every
                             # estimate (and other businesses' when shared) — shown before it's kept
-                            "confirm_buildup", "buildup_suggestion"}
+                            "confirm_buildup", "buildup_suggestion",
+                            # 20 Nov 2026: a document leaves the business — shown before it goes
+                            "send_document"}
                            | frozenset().union(*(a.ADMIN_PREVIEW_FIRST for a in _ADDONS)))
 
 
@@ -3165,6 +3189,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "finance_settings":   return await self._finance_settings(tid, args)
             if name == "confirm_expense":    return await self._confirm_expense(tid, args)
             if name == "find_document":      return await self._find_document(tid, args)
+            if name == "send_document":      return await self._send_document(tid, args, ctx)
             if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
@@ -3986,6 +4011,38 @@ class CommerceAdminSkill(BaseSkill):
                 + (f" (incl. {_r(vat)} VAT)" if vat else "") + ".\n"
                 "Say 'send it' to WhatsApp it to the customer."))
         return result
+
+    async def _send_document(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """send_document (20 Nov 2026, vula/commerce/doc_send.py): find the document, preview, then send.
+        Every word of the reply is built in code; a refusal says why and nothing is sent."""
+        from vula.commerce import doc_send
+        doc_id = (args.get("doc_id") or "").strip()
+        if not doc_id:
+            found = await doc_send.find_any(tid, args.get("document") or "")
+            docs = found["documents"]
+            if not docs:
+                what = found.get("kind") or (args.get("document") or "that document")
+                return {"status": "need_info", "message": f"I couldn't find our {what} on file. Upload it "
+                        "(Documents › For your accountant › Company and tax documents) or tell me which one."}
+            if len(docs) > 1:
+                opts = "; ".join(f"{d['document']}" + (f", {d['date']}" if d.get("date") else "") for d in docs[:6])
+                return {"status": "need_info", "message": f"Which one? {opts}.", "documents": docs[:6]}
+            doc_id = docs[0]["id"]
+        actor = {"phone": ctx.get("phone"), "name": ctx.get("caller_name") or ctx.get("name"),
+                 "email": ctx.get("email") or ctx.get("person_key")}
+        try:
+            out = await doc_send.send(tid, doc_id, args.get("to") or "", channel=args.get("channel"),
+                                      note=args.get("note") or "", confirm=bool(args.get("confirm")),
+                                      actor=actor, full_access=_ctx_access(tid, ctx) is None,
+                                      requester_phone=(ctx.get("phone") or "")
+                                      if re.fullmatch(r"\+?\d{9,15}", ctx.get("phone") or "") else "")
+        except doc_send.Refused as exc:
+            return _not_confirmed(str(exc))
+        if out.get("status") == "need_info":
+            return out
+        if out.get("preview"):
+            return {**out, "doc_id": doc_id}
+        return out
 
     async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False,
                             channel: Optional[str] = None) -> Dict[str, Any]:

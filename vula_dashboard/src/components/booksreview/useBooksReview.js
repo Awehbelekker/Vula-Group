@@ -80,6 +80,9 @@ export function useBooksReview(tenantId) {
   const docBook = (id) => post(a(`/docs/${id}/book`));
   const docNotABill = (id, why) => post(a(`/docs/${id}/not-a-bill`), { reason: why });
   const docCertificate = (id) => post(a(`/docs/${id}/certificate`));
+  // proofs of payment the business sent, linked to the supplier's bill(s) (20 Nov 2026, pop_links.py)
+  const popLink = (id, billIds) => post(a(`/pops/${id}/link`), { bill_ids: billIds });
+  const popDismiss = (id, why) => post(a(`/pops/${id}/dismiss`), { reason: why });
   const docAddToInvoices = (id, txnId) => post(a(`/docs/${id}/add-to-invoices`), { txn_id: txnId || null });
   const docLinkInvoice = (id, invoiceId) => post(a(`/docs/${id}/link-invoice`), { of_id: invoiceId });
   const docDuplicate = (id, ofId) => post(a(`/docs/${id}/duplicate`), { of_id: ofId });
@@ -98,5 +101,5 @@ export function useBooksReview(tenantId) {
 
   return { review, accounts, checks, state, reload, runCheck, restore, setAside, transfer, link, correctDate,
     agree, categorise, payBill, paidBack, recordDraft, cancelDraft, upload, check, apply, docFigures, docConfirm, docBook,
-    docNotABill, docCertificate, docAddToInvoices, docLinkInvoice, docDuplicate, docVatBasis, billCancelDuplicate, billMatchDocument, mergeSuppliers };
+    docNotABill, docCertificate, popLink, popDismiss, docAddToInvoices, docLinkInvoice, docDuplicate, docVatBasis, billCancelDuplicate, billMatchDocument, mergeSuppliers };
 }

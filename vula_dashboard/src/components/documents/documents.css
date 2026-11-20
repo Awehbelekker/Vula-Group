@@ -108,3 +108,9 @@
 a.vff-label { color: var(--brand-text); text-decoration: underline; }
 .vff-toggle .vdc-sub { white-space: nowrap; }
 .vff-open { background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; color: var(--brand-text); text-decoration: underline; min-height: 24px; }
+
+/* Send a document (SendDocument.jsx, 20 Nov 2026) */
+.vdc-actions { display: flex; justify-content: flex-end; padding: 0 var(--space-2) var(--space-2); }
+.vdc-send-preview { margin: var(--space-3) 0 0; padding: var(--space-2) var(--space-3); border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); overflow-wrap: anywhere; }
+.vdc-send-error { margin: var(--space-3) 0 0; color: var(--danger-text); overflow-wrap: anywhere; }

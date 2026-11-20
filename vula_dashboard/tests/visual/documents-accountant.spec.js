@@ -99,3 +99,40 @@ test.describe("for your accountant", () => {
     expect((await saved).postDataJSON()).toEqual({ project: null, name: "Savings" });
   });
 });
+
+// 20 Nov 2026 (Ian): "it would be nice if Vula can send this to a client when asked" — Send on a document.
+test.describe("send a document", () => {
+  for (const [vp, viewport] of Object.entries(VIEWPORTS)) {
+    for (const theme of ["light", "dark"]) {
+      test(`send dialog ${vp} ${theme}`, async ({ page }, ti) => {
+        const errors = await openScreen(page, DOCS(), { viewport, theme });
+        await page.getByRole("button", { name: "Send Health-certificate-2026.pdf" }).click();
+        const dialog = page.getByRole("dialog", { name: "Send this document" });
+        await dialog.getByLabel(/^To/).fill("Atlantis Foods");
+        await dialog.getByRole("button", { name: "Preview" }).click();
+        await expect(dialog.getByRole("status")).toContainText("to Atlantis Foods (accounts@example.com) by email");
+        await page.screenshot({ path: out(ti, `send-${vp}-${theme}.png`), fullPage: true, animations: "disabled" });
+        expect(bad(await new AxeBuilder({ page }).include('[role="dialog"]').analyze())).toEqual([]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+        expect(errors).toEqual([]);
+      });
+    }
+  }
+
+  test("preview sends nothing; Send sends the confirmed request", async ({ page }) => {
+    await openScreen(page, DOCS(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    const bodies = [];
+    page.on("request", (r) => { if (/\/filed\/[^/]+\/send$/.test(r.url())) bodies.push(r.postDataJSON()); });
+    await page.getByRole("button", { name: "Send Health-certificate-2026.pdf" }).click();
+    const dialog = page.getByRole("dialog", { name: "Send this document" });
+    await dialog.getByLabel(/^To/).fill("accounts@atlantis.co.za");
+    await dialog.getByLabel(/^Send by/).selectOption("email");
+    await dialog.getByRole("button", { name: "Preview" }).click();
+    await expect(dialog.getByRole("status")).toBeVisible();
+    expect(bodies).toEqual([{ to: "accounts@atlantis.co.za", channel: "email", note: null, confirm: false }]);
+    await dialog.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByText(/^Sent our bank confirmation letter/)).toBeVisible();
+    expect(bodies[1]).toEqual({ to: "accounts@atlantis.co.za", channel: "email", note: null, confirm: true });
+    await expect(dialog).toBeHidden();
+  });
+});

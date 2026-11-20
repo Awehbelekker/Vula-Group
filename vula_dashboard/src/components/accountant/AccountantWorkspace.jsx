@@ -121,6 +121,7 @@ function Reports({ tenantId }) {
         {journal && <PillTabs label="View" tabs={[{ id: "accrual", label: "Accrual" }, { id: "cash", label: "Cash" }]}
           active={r.basis} onChange={r.setBasis} />}
         <Button Icon={Download} onClick={r.ledgerCsv}>General ledger (CSV)</Button>
+        <Button Icon={Download} variant="secondary" onClick={r.statementsPdf}>Financial statements (PDF)</Button>
       </Card>
       {r.state === "loading" && <Card><Skeleton lines={6} /></Card>}
       {r.state === "off" && <Off />}
@@ -204,6 +205,7 @@ function Bank({ tenantId }) {
             {b.accounts.map((a) => <option key={a.id} value={a.id}>{[a.name || a.bank, a.account].filter(Boolean).join(" ")}</option>)}
           </Select>
         </Field>
+        <Button Icon={Download} onClick={b.csv}>Download bank lines (CSV)</Button>
       </Card>
       {b.state === "off" && <Off />}
       {b.state === "failed" && <ErrorCard what="the bank lines" />}

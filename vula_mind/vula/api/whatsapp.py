@@ -2467,6 +2467,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     if tenant_id and await _trade_costing_turn(phone, text, tenant_id):
         return
 
+    # ── "Send our bank letter to …" on a knowledge line (20 Nov 2026) ── the team's requests to
+    # send one of the business's documents go to the business assistant, which has send_document.
+    if tenant_id and await _doc_send_turn(phone, text, tenant_id):
+        return
+
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
         await _handle_task_complete(phone, tenant_id)
@@ -8659,7 +8664,8 @@ async def _alert_off_whatsapp(tenant_id: str, subject: str, body: str) -> bool:
 
 async def send_template_message(tenant_id: str, to: str, name: str, params: list,
                                 header_image_url: Optional[str] = None,
-                                lang: Optional[str] = None) -> Optional[str]:
+                                lang: Optional[str] = None,
+                                header_document: Optional[dict] = None) -> Optional[str]:
     """send_template with an optional image header, returning Meta's message id (wamid) so the
     delivered / read ticks can be matched back (staff notices, vula/staff_notices.py). None when
     it couldn't be sent — logged, never silent."""
@@ -8675,6 +8681,11 @@ async def send_template_message(tenant_id: str, to: str, name: str, params: list
     if header_image_url:
         components.append({"type": "header", "parameters": [
             {"type": "image", "image": {"link": header_image_url}}]})
+    elif header_document and header_document.get("link"):
+        # a DOCUMENT header (vula_document_share, 20 Nov 2026): Meta fetches the file from the link
+        components.append({"type": "header", "parameters": [
+            {"type": "document", "document": {"link": header_document["link"],
+                                              "filename": header_document.get("filename") or "document.pdf"}}]})
     if params:
         components.append({"type": "body", "parameters": [
             {"type": "text", "text": str(p)[:1000]} for p in params]})
@@ -10003,6 +10014,35 @@ async def _trade_costing_turn(phone: str, text: str, tenant_id: str) -> bool:
         return False
     if await _run_commerce_admin(phone, text, tenant_id):
         _TRADE_FOLLOWUP[key] = time.time() + TRADE_FOLLOWUP_SECONDS
+        return True
+    return False
+
+
+_DOC_SEND_FOLLOWUP: Dict[tuple, float] = {}
+
+
+async def _doc_send_turn(phone: str, text: str, tenant_id: str) -> bool:
+    """On a knowledge-mode line, a team member asking Vula to send one of the business's documents
+    (doc_send.is_send_request), or a short reply within 30 minutes of one ("the 6574 one", "yes"),
+    goes to the business assistant's send_document. Only for the business's own team. True when
+    it was answered."""
+    try:
+        from vula.commerce.doc_send import is_send_request
+        from vula import team_index
+        key = (tenant_id, team_index.digits_za(phone))
+        followup = (_DOC_SEND_FOLLOWUP.get(key, 0) > time.time()
+                    and len((text or "").split()) <= TRADE_FOLLOWUP_MAX_WORDS)
+        if not (followup or is_send_request(text)):
+            _DOC_SEND_FOLLOWUP.pop(key, None)
+            return False
+        _name, role = _caller_identity(tenant_id, phone)
+        if not _is_insider(role):
+            return False
+    except Exception as exc:  # noqa: BLE001 — fall through to the knowledge assistant
+        logger.debug("document send routing skipped: %s", exc)
+        return False
+    if await _run_commerce_admin(phone, text, tenant_id):
+        _DOC_SEND_FOLLOWUP[key] = time.time() + TRADE_FOLLOWUP_SECONDS
         return True
     return False
 

@@ -3593,6 +3593,60 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
     return out
 
 
+@router.get("/{tenant_id}/admin/bank/transactions.csv")
+async def admin_bank_transactions_csv(tenant_id: str, account_id: Optional[str] = None,
+                                      since: Optional[str] = None, until: Optional[str] = None):
+    """Every bank line (one account, or all) as a spreadsheet — set-aside lines included and marked,
+    account numbers by their last 4 digits only (20 Nov 2026: the accountant's login)."""
+    import csv, io
+    from fastapi.responses import Response
+    db = service._client()
+    accounts = {a["account_number"]: a for a in (db.table("commerce_bank_accounts")
+                .select("id,account_number,name,private_to").eq("tenant_id", tenant_id).execute().data or [])
+                if a.get("account_number")}
+    private = {n for n, a in accounts.items() if a.get("private_to")}
+    rows, start = [], 0
+    while True:
+        q = db.table("commerce_bank_transactions").select(
+            "txn_date,description,direction,amount_cents,balance_cents,account_code,match_status,"
+            "categorized_by,reference,bank_account,project,source_file").eq("tenant_id", tenant_id)
+        if account_id:
+            num = next((n for n, a in accounts.items() if a["id"] == account_id), None)
+            if not num:
+                rows = []
+                break
+            q = q.eq("bank_account", num)
+        if since:
+            q = q.gte("txn_date", since[:10])
+        if until:
+            q = q.lte("txn_date", until[:10])
+        page = q.order("txn_date").order("id").range(start, start + 999).execute().data or []
+        rows += page
+        if len(page) < 1000:
+            break
+        start += 1000
+    rows = [r for r in rows if r.get("bank_account") not in private
+            and (r.get("source_file") or "") != "whatsapp_pop"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Date", "Account", "Description", "Money in (R)", "Money out (R)", "Balance (R)", "Category",
+                "Status", "Filed by", "Reference", "Project", "Statement file"])
+    for r in rows:
+        amt = (r.get("amount_cents") or 0) / 100
+        acct = r.get("bank_account") or ""
+        w.writerow([r.get("txn_date"), f"…{acct[-4:]}" if acct else "",
+                    r.get("description") or "", f"{amt:.2f}" if r.get("direction") == "in" else "",
+                    f"{amt:.2f}" if r.get("direction") == "out" else "",
+                    f"{r['balance_cents'] / 100:.2f}" if r.get("balance_cents") is not None else "",
+                    r.get("account_code") or "",
+                    "set aside" if r.get("match_status") == "ignored" else (r.get("match_status") or ""),
+                    r.get("categorized_by") or "", r.get("reference") or "", r.get("project") or "",
+                    r.get("source_file") or ""])
+    name = f"bank-lines-{tenant_id}{'-' + account_id[:8] if account_id else ''}.csv"
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @router.get("/{tenant_id}/admin/bank/transactions/{txn_id}/candidates")
 async def admin_bank_match_candidates(tenant_id: str, txn_id: str, limit: int = 40):
     """Open documents this bank line could settle, closest first: money in → our unpaid
@@ -4852,6 +4906,28 @@ async def admin_report_statements(tenant_id: str, since: Optional[str] = None,
         return await _a.to_thread(reports.build_all, tenant_id, (since or s)[:10], (until or u)[:10], view)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Couldn't read the ledger: {exc}")
+
+
+@router.get("/{tenant_id}/admin/reports/statements.pdf")
+async def admin_report_statements_pdf(tenant_id: str, since: Optional[str] = None,
+                                      until: Optional[str] = None, period: str = "this_month",
+                                      basis: Optional[str] = None):
+    """The same financial statements as a PDF, to download (20 Nov 2026: the accountant's login)."""
+    import asyncio as _a
+    from fastapi.responses import Response
+    from vula.commerce import reports
+    s, u = reports.period_dates(period)
+    view = _report_basis(basis)
+    try:
+        d = await _a.to_thread(reports.build_all, tenant_id, (since or s)[:10], (until or u)[:10], view)
+        from vula.api.tenants import get_config
+        business = (get_config(tenant_id) or {}).get("display_name") or tenant_id
+        pdf = await _a.to_thread(reports.render_pdf, business, d)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't build the statements: {exc}")
+    name = f"financial-statements-{d['since']}-to-{d['until']}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @router.get("/{tenant_id}/admin/reports/trial-balance")
