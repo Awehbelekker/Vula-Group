@@ -1405,7 +1405,7 @@ export const booksReview = {
     control: { debtors_tie: true, debtors_books_cents: 1800000, creditors_tie: true, creditors_books_cents: 0 },
     suspense: { lines: 1, cents: -56217 }, in_transit_cents: -2300000, owed_to_staff_cents: 400000 },
   open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 2, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
-    doc_figures: 2, not_booked: 1, our_invoices: 1, sales_not_in_invoices: 2, certificates: 3, supplier_statements: 1, bill_mismatch: 1,
+    doc_figures: 2, not_booked: 1, our_invoices: 1, sales_not_in_invoices: 2, certificates: 3, supplier_statements: 1, pops: 2, bill_mismatch: 1,
     doc_duplicates: 1, bill_duplicates: 1, suppliers: 2 },
   clean: false,
   restore: [brLine("r1", "2026-07-18", "POS Purchase Build It", 28500, "out", { status: "ignored", excluded_reason: "misread copy" }),
@@ -1440,6 +1440,14 @@ export const booksReview = {
   no_account: 0,
   // the documents behind the money (19 Nov 2026, doc_audit.worklist)
   documents: {
+    pops: [
+      { id: "pop-1", amount_cents: 840000, date: "2026-09-25", payee: "R Engelbrecht", payer: "Our business", reference: "SKIPS",
+        filename: "POP 25 Sep.pdf", account: "…1576", supplier: { id: "s-skip", name: "Belekkie Skips", how: "the account paid into" },
+        options: [{ cents: 840000, bills: [
+          { id: "bill-a", number: "DIG-BILL-00196", supplier: "Belekkie Skips", date: "2026-09-10", cents: 560000, status: "draft", already_paid: false },
+          { id: "bill-b", number: "DIG-BILL-00197", supplier: "Belekkie Skips", date: "2026-09-12", cents: 280000, status: "paid", already_paid: true }] }] },
+      { id: "pop-2", amount_cents: 405000, date: "2026-07-24", payee: "E Mahlangu", payer: "Our business", reference: "22 PORTER",
+        filename: "POP 24 Jul.pdf", account: null, supplier: null, options: [] }],
     supplier_statements: [{
       supplier: "Glass Co Pty Ltd", supplier_id: "sup-glass", balance_cents: 3683207, owed_in_books_cents: 0, draft_bills_cents: 0,
       difference_cents: 3683207, missing_cents: 15300000,

@@ -156,7 +156,7 @@ test.describe("books review", () => {
 
   test("the documents tab counts what's open and lists each finding", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
-    await expect(page.getByRole("tab", { name: "Documents (15)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Documents (17)" })).toBeVisible();
     await page.getByRole("tab", { name: /^Documents/ }).click();
     const content = page.locator(".v2-content");
     await expect(content).toContainText("The total read as R2,500.00 isn't in the document itself.");
@@ -262,6 +262,24 @@ test.describe("books review", () => {
     await expect(content).toContainText("no statement on file for those months from FNB …4607");
     await page.getByRole("button", { name: "Copy a request for the missing invoices" }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("INV-0653, INV-1615");
+  });
+
+  test("a proof of payment is linked to the bills it paid, or noted as something else", async ({ page }) => {
+    await docs(page);
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Proofs of payment to link");
+    await expect(content).toContainText("Supplier Belekkie Skips, found by the account paid into");
+    await expect(content).toContainText("No supplier on file for this payee");
+    const linked = page.waitForRequest((r) => r.url().endsWith("/books-audit/pops/pop-1/link"));
+    await page.getByRole("button", { name: /^It paid DIG-BILL-00196/ }).click();
+    await expect(page.getByRole("dialog")).toContainText("already marked paid");
+    await page.getByRole("dialog").getByRole("button", { name: "Link" }).click();
+    expect((await linked).postDataJSON()).toEqual({ bill_ids: ["bill-a", "bill-b"] });
+    const noted = page.waitForRequest((r) => r.url().endsWith("/books-audit/pops/pop-2/dismiss"));
+    await page.locator("li", { hasText: "E Mahlangu" }).getByRole("button", { name: "Not a supplier's bill" }).click();
+    await page.getByRole("dialog").getByRole("textbox").fill("Wages for the week");
+    await page.getByRole("dialog").getByRole("button", { name: "OK" }).click();
+    expect((await noted).postDataJSON()).toEqual({ reason: "Wages for the week" });
   });
 
   test("several statements are compared in one go, each on its own", async ({ page }) => {

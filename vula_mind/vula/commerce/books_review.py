@@ -38,7 +38,7 @@ LINE_COLS = ("id,txn_date,description,amount_cents,direction,match_status,accoun
 EXPENSE_POSTED = ("submitted", "approved", "paid", "reimbursed")
 FIRST_DATE = date(2015, 1, 1)
 # the document groups that count as open (price_vat and access are for information)
-DOC_GROUPS = ("doc_figures", "not_booked", "our_invoices", "sales_not_in_invoices", "supplier_statements",
+DOC_GROUPS = ("doc_figures", "not_booked", "our_invoices", "sales_not_in_invoices", "supplier_statements", "pops",
               "bill_mismatch", "doc_duplicates",
               "bill_duplicates",
               "suppliers")

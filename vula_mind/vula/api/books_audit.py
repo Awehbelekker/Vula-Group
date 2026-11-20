@@ -177,6 +177,36 @@ async def add_own_invoice(tenant_id: str, doc_id: str, body: AddInvoiceBody, req
     return await _fix(doc_audit.add_to_invoices, tenant_id, doc_id, body.txn_id, actor=actor)
 
 
+class PopLinkBody(BaseModel):
+    bill_ids: List[str] = []
+
+
+class PopDismissBody(BaseModel):
+    reason: str = ""
+
+
+@router.post("/{tenant_id}/admin/books-audit/pops/{doc_id}/link")
+async def link_pop(tenant_id: str, doc_id: str, body: PopLinkBody, request: Request) -> dict:
+    """This proof of payment paid these bills (vula/commerce/pop_links.py, 20 Nov 2026)."""
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import pop_links
+    try:
+        return await pop_links.link(tenant_id, doc_id, body.bill_ids, actor=actor)
+    except pop_links.Refused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/books-audit/pops/{doc_id}/dismiss")
+async def dismiss_pop(tenant_id: str, doc_id: str, body: PopDismissBody, request: Request) -> dict:
+    """Not a payment of a supplier's bill — kept with what it was."""
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import pop_links
+    try:
+        return await asyncio.to_thread(pop_links.dismiss, tenant_id, doc_id, body.reason, actor=actor)
+    except pop_links.Refused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/{tenant_id}/admin/books-audit/lines/{txn_id}/pay-bill")
 async def pay_bill(tenant_id: str, txn_id: str, body: PayBillBody, request: Request) -> dict:
     _, actor = await _full(tenant_id, request)

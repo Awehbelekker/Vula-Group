@@ -5,6 +5,9 @@
  *                           what was read (the old values are kept), or say they're right
  *   On file, not booked     an invoice on file with no bill — book it, or say it isn't a bill (one addressed
  *                           to another business says so: book it only if the business paid it)
+ *   Proofs of payment    each proof of payment the business sent, with the supplier it went to (by the
+ *   to link              account paid into, or the payee's name) and the bill(s) it paid — link it
+ *                        (the payment is recorded once on the proof's date), or say what it was instead
  *   Payment certificates    a principal agent's certificate of what the client owes (20 Nov 2026, DIGG's
  *                           Vizion certificates) — filed as one, matched to the business's invoice and the
  *                           money received; payments naming a certificate that isn't on file
@@ -37,7 +40,7 @@ async function done(res, okText, failText) {
 }
 
 export const DOC_GROUPS = ["doc_figures", "not_booked", "our_invoices", "sales_not_in_invoices", "certificates",
-  "supplier_statements",
+  "supplier_statements", "pops",
   "bill_mismatch", "doc_duplicates", "bill_duplicates", "suppliers"];
 export const docCount = (open) => DOC_GROUPS.reduce((n, k) => n + (open?.[k] || 0), 0);
 
@@ -48,6 +51,7 @@ export default function DocumentsReview({ x, r, tenantId }) {
     <div className="vbr2-stack">
       <p className="vbr2-sub">Each money document was checked against its own file and against the books. Fix what's wrong here; every change is kept with who made it and why.</p>
       <Figures x={x} items={d.doc_figures || []} open={open} />
+      <Pops x={x} items={d.pops || []} open={open} />
       <SupplierStatements items={d.supplier_statements || []} open={open} />
       <Certificates x={x} m={d.certificates} open={open} />
       <SalesNotInInvoices x={x} items={d.sales_not_in_invoices || []} open={open} />
@@ -191,6 +195,54 @@ function NotBooked({ x, items, open }) {
           ))}
         </ul>
       ) : <p className="vbr2-text">Every invoice on file is in the books.</p>}
+    </Card>
+  );
+}
+
+// ── Proofs of payment to link (20 Nov 2026, vula/commerce/pop_links.py) ─────
+
+const billWords = (o) => o.bills.map((b) => `${b.number || "a bill"} (${b.date}, ${money(b.cents)}${b.already_paid ? ", already marked paid" : ""})`).join(" + ");
+
+function Pops({ x, items, open }) {
+  if (!items.length) return null;
+  async function link(p, o) {
+    const ok = await confirmDialog(`This ${money(p.amount_cents)} payment of ${p.date} paid ${billWords(o)}? `
+      + (o.bills.some((b) => !b.already_paid) ? `Its payment is recorded on ${p.date}.` : "Those are already marked paid; they're only linked."),
+    { title: "Link the proof of payment", confirmLabel: "Link" });
+    if (ok && await done(await x.popLink(p.id, o.bills.map((b) => b.id)), "Linked.", "That didn't save — try again.")) x.reload();
+  }
+  async function notABill(p) {
+    const why = await promptDialog("What was this payment, if not a supplier's bill? (e.g. wages, a deposit, a refund)",
+      { title: "Not a supplier's bill" });
+    if (why && await done(await x.popDismiss(p.id, why), "Noted.", "That didn't save — try again.")) x.reload();
+  }
+  const withOptions = items.filter((p) => p.options.length).length;
+  return (
+    <Card>
+      <h3 className="vbr2-h">Proofs of payment to link</h3>
+      <p className="vbr2-sub">Proofs of payment you sent, matched to the supplier by the account the money went into (or the payee's name) and to the bill(s) adding up to the amount. Linking records the bill's payment once, on the proof's date; when the bank line arrives it's tied to the same bill. {withOptions} of {items.length} have a bill that fits.</p>
+      <ul className="vbr2-list">
+        {items.map((p) => (
+          <li key={p.id} className="vbr2-row vbr2-wrap">
+            <span className="vbr2-text">
+              <b>{money(p.amount_cents)}</b> on {p.date || "?"} to <b>{p.payee || "?"}</b>{p.account ? ` (${p.account})` : ""}
+              <br /><span className="vbr2-muted">
+                {p.supplier ? `Supplier ${p.supplier.name}, found by ${p.supplier.how}` : "No supplier on file for this payee"}
+                {p.reference ? ` · ref ${p.reference}` : ""}
+                {p.supplier && !p.options.length ? " · no bill adds up to this amount" : ""}
+              </span>
+            </span>
+            <span className="vbr2-actions">
+              <Button size="sm" variant="ghost" onClick={() => open(p.id)} aria-label={`Open the proof of payment of ${p.date}`}>Open</Button>
+              {p.options.map((o) => (
+                <Button key={o.bills.map((b) => b.id).join("+")} size="sm" variant="secondary" onClick={() => link(p, o)}
+                  aria-label={`It paid ${billWords(o)}`}>{`Paid ${o.bills.map((b) => b.number || "a bill").join(" + ")}`}</Button>
+              ))}
+              <Button size="sm" variant="ghost" onClick={() => notABill(p)}>Not a supplier's bill</Button>
+            </span>
+          </li>
+        ))}
+      </ul>
     </Card>
   );
 }

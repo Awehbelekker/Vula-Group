@@ -513,6 +513,9 @@ function routes(role, modules = [], features = []) {
         r("POST", `${A}/books-audit/docs/${T}/not-a-bill`, own((m) => { drop("not_booked", (d) => d.id === m[2]);
           drop("our_invoices", (d) => d.id === m[2]); return { ok: true }; })),
         r("POST", `${A}/books-audit/docs/${T}/duplicate`, own(() => { drop("doc_duplicates", () => true); return { ok: true }; })),
+        r("POST", `${A}/books-audit/pops/${T}/link`, own((m, url, req) => { drop("pops", (d) => d.id === m[2]);
+          return { ok: true, bills: req.postDataJSON().bill_ids, recorded: 1, text: "Linked" }; })),
+        r("POST", `${A}/books-audit/pops/${T}/dismiss`, own((m) => { drop("pops", (d) => d.id === m[2]); return { ok: true }; })),
         r("POST", `${A}/books-audit/docs/${T}/certificate`, own((m) => {
           D().certificates.certificates = D().certificates.certificates.map((c) => (c.doc_id === m[2] ? { ...c, labelled: true, category: "Payment Certificate" } : c));
           return { ok: true, certificate: { number: 2 } }; })),
