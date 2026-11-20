@@ -154,6 +154,9 @@ def organise(tenant_id: str, year_start: Optional[str] = None) -> Dict[str, Any]
         label = (d.get("summary") if key == "bank" and d.get("summary") else
                  (d.get("summary") or d.get("filename") or cat)[:120] if key == "company" else
                  " ".join(x for x in (party if key != "bank" else "", pf._number(d)) if x) or cat)
+        acct = "".join(ch for ch in str(f.get("account_number") or "") if ch.isdigit())
+        if key == "company" and len(acct) >= 4:
+            label = f"Account …{acct[-4:]}: {label}"     # one bank letter per account; last 4 digits only
         folders[key].setdefault(group, []).append({
             "id": d["id"], "date": when, "label": statement_files.mask_name(label)[:120], "category": cat,
             "amount_cents": amount if key not in ("bank", "statements") else None,

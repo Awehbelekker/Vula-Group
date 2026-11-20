@@ -18,6 +18,13 @@ T = "t1"
     ("Mandla Designs - Resolution.pdf", "Written resolutions of the directors of Mandla Designs", cd.COMPANY),
     ("LOGS 2026.pdf", "A Letter of Good Standing certifying compliance with the Compensation Fund (COIDA)", cd.COMPLIANCE),
     ("BEE affidavit.pdf", "B-BBEE sworn affidavit, EME level 1", cd.COMPLIANCE),
+    ("Correspondence 20261120-0808.pdf", "A letter from First National Bank confirming the account details of "
+     "Mandla Designs (Pty) Ltd, including account type and branch", cd.COMPLIANCE),
+    ("Correspondence 20261120-0809.pdf", "A letter from First National Bank confirming the account details of "
+     "Mandla Designs. The letter also explains where to verify its authenticity; information on how to validate "
+     "the letter using FNB's digital channels.", cd.COMPLIANCE),
+    ("How to register.pdf", "Information on how to register a company with CIPC", None),
+    ("Letter.pdf", "The supplier confirms receipt of the order and the delivery date", None),
     ("How to request a tax type.pdf", "A step-by-step guide on how to request a tax type on SARS eFiling", None),
     ("Services List.pdf", "Company Partners provides various services, including company registration", None),
     ("Quote 12.pdf", "Quotation for aluminium windows", None)])
@@ -79,3 +86,19 @@ def test_the_accountant_s_folder_shows_them_in_every_year(db):
         groups = {g["name"]: [i["id"] for i in g["items"]] for g in company["groups"]}
         assert groups == {"Company registration (CIPC)": ["cor"], "SARS and tax": sorted(["cra", "vat"])} or \
             groups == {"Company registration (CIPC)": ["cor"], "SARS and tax": ["cra", "vat"]}
+
+
+def test_a_bank_letter_names_its_account_by_the_last_four_digits_only(db):
+    db.rows["vula_filed_documents"].append({
+        "id": "fnb", "tenant_id": T, "category": "Correspondence", "filename": "Correspondence 20261120-0808.pdf",
+        "summary": "A letter from First National Bank confirming the account details of Mandla Designs (Pty) Ltd. "
+                   "Information on how to validate the letter using FNB's digital channels.",
+        "status": "pending_project", "doc_status": "current", "fields": {"account_number": "62000006574"},
+        "file_url": "u/fnb.pdf", "mime": "application/pdf", "created_at": "2026-11-20T08:08:00Z",
+        "supplier_id": None, "commerce_invoice_id": None, "content_hash": "h-fnb", "project": None})
+    assert {p["id"]: p["ours"] for p in cd.proposals(T)}["fnb"] is True
+    cd.refile(T, ["fnb"])
+    tree = ff.organise(T, "2026-03-01")
+    company = next(f for f in tree["folders"] if f["key"] == "company")
+    item = next(i for g in company["groups"] for i in g["items"] if i["id"] == "fnb")
+    assert item["label"].startswith("Account …6574: ") and "62000006574" not in str(tree)

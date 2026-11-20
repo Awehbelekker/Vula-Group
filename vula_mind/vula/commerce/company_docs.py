@@ -56,12 +56,17 @@ _RULES = [
                             r"coida|compensation fund|letter of good standing|workmen'?s compensation|"
                             r"\buif\b|unemployment insurance|fica|"
                             r"bank (account )?confirmation( letter)?|account confirmation letter|"
-                            r"confirmation of (banking|bank account) details|proof of (bank|banking)( account| details)?|"
-                            r"bank letter)\b", re.I)),
+                            r"confirmation of (banking|bank account|account) details|proof of (bank|banking)( account| details)?|"
+                            r"bank letter|"
+                            # "A letter from First National Bank confirming the account details of …" (DIGG, 20 Nov)
+                            r"(bank|fnb|absa|nedbank|capitec|investec)\b.{0,60}\bconfirm(s|ing|ed)? (the |their |its )?"
+                            r"(bank )?account details)\b", re.I)),
 ]
 # words that make it about someone else's business or a sales pitch, not the business's own document
 _NOT_OURS = re.compile(r"\b(services? list|we (offer|provide)|provides? (various )?services|pricing|quotation|"
-                       r"how to|step-by-step guide|guide on)\b", re.I)
+                       r"step-by-step guide|guide (on|to)|explains how to|"
+                       # a guide, not "…information on how to verify its authenticity" (FNB letters, 20 Nov)
+                       r"how to (request|register|apply|submit|complete|file|obtain|get)\b)\b", re.I)
 
 
 def kind_of(filename: Optional[str], summary: Optional[str]) -> Optional[str]:
