@@ -77,7 +77,7 @@ export default function BooksReview({ tenantId }) {
   const n = (k) => (open[k] ? ` (${open[k]})` : "");
   const tabs = [
     { id: "overview", label: "Overview" },
-    { id: "lines", label: `Bank lines${(open.restore || 0) + (open.duplicates || 0) + (open.transfers || 0) + (open.to_categorise || 0) ? ` (${(open.restore || 0) + (open.duplicates || 0) + (open.transfers || 0) + (open.to_categorise || 0)})` : ""}` },
+    { id: "lines", label: `Bank lines${lineCount(open) ? ` (${lineCount(open)})` : ""}` },
     { id: "transit", label: `In transit${n("in_transit")}` },
     { id: "claims", label: `Staff claims${n("staff_claims")}` },
     { id: "paperwork", label: `Paperwork${(open.drafts || 0) + (open.odd_dates || 0) ? ` (${(open.drafts || 0) + (open.odd_dates || 0)})` : ""}` },
@@ -190,6 +190,9 @@ function LineTable({ rows, caption, select }) {
   return <DataTable columns={cols} rows={rows} caption={caption} stack />;
 }
 
+const lineCount = (open) => ["restore", "duplicates", "transfers", "to_categorise", "refile"]
+  .reduce((t, k) => t + (open[k] || 0), 0);
+
 function usePick(rows) {
   const [picked, setPicked] = useState(() => new Set(rows.map((r) => r.id)));
   return { picked, toggle: (id) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }) };
@@ -220,6 +223,14 @@ function Lines({ x, r }) {
   async function categorise(ln, code) {
     if (!code) return;
     if (await done(await x.categorise([ln.id], code), "Categorised.", "That didn't save — try again.")) x.reload();
+  }
+  const nameOf = (code) => (options.find((a) => a.code === code) || {}).name || code || "nothing";
+  async function refile(g, code) {
+    if (!code) return;
+    const what = `${g.count} line${g.count === 1 ? "" : "s"} for ${g.label}`;
+    if (!(await confirmDialog(`File ${what} as ${nameOf(code)}? Vula remembers this for the next one from them.`,
+      { confirmLabel: `File as ${nameOf(code)}` }))) return;
+    if (await done(await x.categorise(g.ids, code), "Re-filed.", "That didn't save — try again.")) x.reload();
   }
 
   return (
@@ -269,6 +280,30 @@ function Lines({ x, r }) {
             ))}
           </ul>
         ) : <p className="vbr2-text">Every line has a category.</p>}
+      </Card>
+      <Card>
+        <h3 className="vbr2-h">Filed by an old rule</h3>
+        <p className="vbr2-sub">Vula filed these by a single word in the bank's description (like "App" in "FNB App
+          Payment"), not by who was paid, and bank charges ended up under other accounts. Pick the right account once
+          per payee; Vula remembers it for their next payment.</p>
+        {(r.refile || []).length ? (
+          <ul className="vbr2-list">
+            {(r.refile || []).map((g) => (
+              <li key={g.key} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text">
+                  <b>{g.label}</b> · {g.count} line{g.count === 1 ? "" : "s"} · <b>{money(Math.abs(g.cents))}</b>
+                  <br /><span className="vbr2-muted">{g.why_text}. Now under {g.accounts.map((a) => nameOf(a.code)).join(", ")}
+                    {g.suggested ? ` — these are ${nameOf(g.suggested).toLowerCase()}` : ""}.</span>
+                </span>
+                <Select aria-label={`Account for ${g.label}`} defaultValue="" onChange={(e) => refile(g, e.target.value)}>
+                  <option value="">File them as…</option>
+                  {options.filter((a) => !a.directions || a.directions.includes(g.direction))
+                    .map((a) => <option key={a.code} value={a.code}>{a.name}</option>)}
+                </Select>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="vbr2-text">Nothing left that an old rule filed.</p>}
       </Card>
     </div>
   );

@@ -33,7 +33,7 @@ MAX_IDS = 500
 BANK = "commerce_bank_transactions"
 LINE_COLS = ("id,txn_date,description,amount_cents,direction,match_status,account_code,categorized_by,"
              "excluded_reason,bank_account,matched_invoice_id,matched_expense_id,matched_order_id,worker_id,"
-             "source_file")
+             "source_file,reference")
 EXPENSE_POSTED = ("submitted", "approved", "paid", "reimbursed")
 FIRST_DATE = date(2015, 1, 1)
 # the document groups that count as open (price_vat and access are for information)
@@ -173,6 +173,81 @@ def _section(rep: Dict[str, Any], key: str) -> Dict[str, Any]:
     return next((s for s in rep.get("sections") or [] if s.get("key") == key), {}) or {}
 
 
+def _known_payees(tenant_id: str) -> tuple:
+    """The payee and reference rules this business has (the only rules Vula reads since 20 Nov
+    2026), and the payees the owner decided on screen."""
+    db = _client()
+    try:
+        from vula.commerce.ledger import _all_pages
+        rules = _all_pages(lambda: db.table("commerce_txn_rules").select("signal,signal_type")
+                           .eq("tenant_id", tenant_id).in_("signal_type", ["merchant", "reference"]).order("signal"))
+    except Exception:  # noqa: BLE001
+        rules = []
+    try:
+        profs = (db.table("commerce_merchant_profiles").select("merchant_key,decided_by,account_code")
+                 .eq("tenant_id", tenant_id).execute().data or [])
+    except Exception:  # noqa: BLE001
+        profs = []
+    return ({str(r.get("signal") or "") for r in rules},
+            {str(p.get("merchant_key") or "") for p in profs if p.get("decided_by") == "owner" and p.get("account_code")})
+
+
+def refile_why(line: Dict[str, Any], known: set, decided: set) -> Optional[str]:
+    """Why a categorised line needs a person to look again, or None.
+
+    Money out only, never what the owner chose. A bank's own fee line filed anywhere but bank
+    charges; or a line filed by one of the old one-word rules ('app' → casual labour from "FNB App Payment To …") — filed as learned with
+    no payee or reference rule and no owner-decided payee behind it."""
+    from vula.commerce import accounting
+    from vula.commerce.merchants import merchant_key
+    if line.get("categorized_by") == "owner" or (line.get("direction") or "out") != "out":
+        return None     # the owner's own choice stands; money in is checked against invoices elsewhere
+    if accounting.is_bank_charge(line):
+        return None if line.get("account_code") == "bank_charges" else "bank_charge"
+    if line.get("categorized_by") not in ("learned", "rule") or not line.get("account_code"):
+        return None
+    key = merchant_key(line.get("description"))
+    ref = (line.get("reference") or "").strip().lower()
+    if (key and (key in known or key in decided)) or (len(ref) >= 3 and ref in known):
+        return None
+    return "one_word_rule"
+
+
+REFILE_TEXT = {"bank_charge": "A bank charge filed as something else",
+               "one_word_rule": "Filed by an old one-word rule, not by who was paid"}
+
+
+def refile_groups(lines: List[Dict[str, Any]], known: set, decided: set) -> List[Dict[str, Any]]:
+    """Lines to look at again, one group per payee (and direction and reason), largest first —
+    so a business picks the right account once per payee, not once per line."""
+    from vula.commerce.merchants import merchant_key
+    groups: Dict[tuple, Dict[str, Any]] = {}
+    for ln in lines:
+        why = refile_why(ln, known, decided)
+        if not why:
+            continue
+        payee = "bank charges" if why == "bank_charge" else (merchant_key(ln.get("description"))
+                                                            or (ln.get("description") or "").strip().lower())
+        k = (payee, ln.get("direction"), why)
+        g = groups.setdefault(k, {"key": "|".join(str(x) for x in k), "payee": payee, "direction": ln.get("direction"),
+                                  "why": why, "why_text": REFILE_TEXT[why],
+                                  "suggested": "bank_charges" if why == "bank_charge" else None,
+                                  "count": 0, "cents": 0, "accounts": {}, "ids": [], "lines": []})
+        g["count"] += 1
+        g["cents"] += int(ln.get("amount_cents") or 0)
+        acct = ln.get("account_code") or ""
+        g["accounts"][acct] = g["accounts"].get(acct, 0) + 1
+        if len(g["ids"]) < MAX_IDS:
+            g["ids"].append(ln["id"])
+        if len(g["lines"]) < 5:
+            g["lines"].append(_shown(ln))
+    out = sorted(groups.values(), key=lambda g: (-g["cents"], g["payee"]))
+    for g in out:
+        g["label"] = g["lines"][0]["description"] if g["lines"] else g["payee"]
+        g["accounts"] = [{"code": c, "lines": n} for c, n in sorted(g["accounts"].items(), key=lambda x: -x[1])]
+    return out
+
+
 def _candidates(doc: Dict[str, Any], free: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Bank lines that could be this document's payment: the same amount, the money going the right way,
     not tied to anything yet, from 10 days before the document to 180 after. Nearest first."""
@@ -233,6 +308,8 @@ def review(tenant_id: str) -> Dict[str, Any]:
     to_categorise = sorted((_shown(x) for x in free
                             if x.get("categorized_by") in ("default", "asked") or not x.get("account_code")),
                            key=lambda x: x["date"], reverse=True)[:MAX_IDS]
+    known, decided = _known_payees(tenant_id)
+    refile = refile_groups(free, known, decided)
     linked_docs = {str(x.get("matched_invoice_id") or x.get("matched_expense_id"))
                    for x in live if x.get("matched_invoice_id") or x.get("matched_expense_id")}
     in_transit = []
@@ -285,7 +362,7 @@ def review(tenant_id: str) -> Dict[str, Any]:
     problems = [{"key": s.get("key"), "title": s.get("title"), "status": s.get("status"), "headline": s.get("headline")}
                 for s in rep.get("sections") or []]
     open_now = {"restore": len(restore), "duplicates": len(dups), "transfers": len(transfers),
-                "to_categorise": len(to_categorise), "in_transit": len(in_transit), "staff_claims": len(claims),
+                "to_categorise": len(to_categorise), "refile": sum(g["count"] for g in refile), "in_transit": len(in_transit), "staff_claims": len(claims),
                 "drafts": len(drafts), "odd_dates": len(odd), "no_account": no_account,
                 **{k: len(docs.get(k) or []) for k in DOC_GROUPS}}
     return {"report": {"id": row.get("id"), "created_at": row.get("created_at"), "created_by": row.get("created_by"),
@@ -294,7 +371,7 @@ def review(tenant_id: str) -> Dict[str, Any]:
                        "signed_off_at": row.get("signed_off_at")},
             "checks": problems, "books": books, "open": open_now, "clean": not any(open_now.values()),
             "restore": restore, "duplicates": dups, "transfers": transfers, "to_categorise": to_categorise,
-            "in_transit": in_transit, "staff_claims": claims, "drafts": drafts, "odd_dates": odd,
+            "refile": refile, "in_transit": in_transit, "staff_claims": claims, "drafts": drafts, "odd_dates": odd,
             "no_account": no_account, "documents": docs}
 
 

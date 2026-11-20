@@ -72,6 +72,21 @@ test.describe("books review", () => {
     expect((await tr).postDataJSON().ids).toEqual(["t1", "t2"]);
   });
 
+  test("lines an old rule filed are re-filed once per payee", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await expect(page.getByRole("tab", { name: /^Bank lines/ })).toContainText("(15)");
+    await page.getByRole("tab", { name: /^Bank lines/ }).click();
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("FNB App Payment To Skipp Rubble Removal · 8 lines");
+    await expect(content).toContainText("these are bank charges");
+    const sent = page.waitForRequest((r) => r.url().endsWith("/bank/transactions/bulk-categorize"));
+    await page.getByLabel("Account for FNB App Payment To Skipp Rubble Removal").selectOption("cost_of_sales");
+    await page.getByRole("dialog").getByRole("button", { name: "File as Cost of sales" }).click();
+    expect((await sent).postDataJSON()).toEqual({ txn_ids: ["sk1", "sk2", "sk3", "sk4", "sk5", "sk6", "sk7", "sk8"],
+      account_code: "cost_of_sales" });
+    await expect(content).not.toContainText("Skipp Rubble Removal · 8 lines");
+  });
+
   test("a payment in transit is tied to its bank line", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
     await page.getByRole("tab", { name: /^In transit/ }).click();

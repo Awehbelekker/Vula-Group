@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 
 TXN_COLS = ("id,source_file,txn_date,description,amount_cents,direction,balance_cents,match_status,"
             "account_code,categorized_by,worker_id,matched_invoice_id,matched_expense_id,"
-            "matched_order_id,bank_account,payee,project,created_at")
+            "matched_order_id,bank_account,payee,project,created_at,reference")
 PAGE = 1000
 DOC_THRESHOLD_CENTS = 50_000            # a payment out over R500 should have a document behind it
 REVIEW_THRESHOLD_CENTS = 100_000        # a self-categorised line over R1,000 is worth the owner's look
@@ -379,6 +379,11 @@ def transfers(lines: List[Dict[str, Any]], acct_of: Dict[str, str]) -> List[Dict
 
 # ── the report ───────────────────────────────────────────────────────────────
 
+def _is_charge(line: Dict[str, Any]) -> bool:
+    from vula.commerce import accounting
+    return accounting.is_bank_charge(line)
+
+
 def _section(key: str, title: str, findings: List[Dict[str, Any]], headline: str,
              problem: bool = False) -> Dict[str, Any]:
     status = "ok" if not findings else ("problem" if problem else "attention")
@@ -529,8 +534,30 @@ def run(tenant_id: str, today: Optional[date] = None, documents: bool = True,
                       "cents": sum(int(ln["amount_cents"]) for ln in labour_nw), "rows": [ln["id"] for ln in labour_nw],
                       "text": (f"{len(labour_nw)} casual-labour payments ({_rands(sum(int(ln['amount_cents']) for ln in labour_nw))})"
                                " not tied to a worker — the accountant will ask who was paid.")})
+    # filed by an old one-word rule, or a bank charge filed as something else (20 Nov 2026)
+    refile: List[Dict[str, Any]] = []
+    try:
+        from vula.commerce import books_review
+        known, decided = books_review._known_payees(tenant_id)
+        refile = [ln for ln in live if ln["id"] not in in_transfer and books_review.refile_why(ln, known, decided)]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("books audit: refile check failed for %s: %s", tenant_id, exc)
+    charges = [ln for ln in refile if ln.get("account_code") != "bank_charges" and _is_charge(ln)]
+    words = [ln for ln in refile if not _is_charge(ln)]
+    for kind, rows, text in (
+            ("bank_charge_misfiled", charges, "bank charges filed as something else (mostly {top})"),
+            ("one_word_rule", words, "lines filed by an old one-word rule, not by who was paid (mostly {top})")):
+        if rows:
+            top = Counter(ln.get("account_code") or "nothing" for ln in rows).most_common(1)[0][0]
+            cents = sum(int(ln["amount_cents"]) for ln in rows)
+            f_cat.append({"kind": kind, "severity": "problem" if kind == "bank_charge_misfiled" else "attention",
+                          "count": len(rows), "cents": cents, "rows": [ln["id"] for ln in rows],
+                          "text": f"{len(rows)} {text.format(top=top)}, {_rands(cents)} — re-file them in Books "
+                                  "review › Bank lines, once per payee."})
     sections.append(_section("categories", "Categories to confirm", f_cat,
-                             f"{len(self_cat)} lines were categorised by Vula itself, not the owner."))
+                             f"{len(self_cat)} lines were categorised by Vula itself, not the owner"
+                             + (f"; {len(refile)} were filed by an old rule and need a look." if refile else "."),
+                             problem=bool(charges)))
 
     # documents behind transactions
     no_doc_out = [ln for ln in live if ln.get("direction") == "out" and ln["id"] not in in_transfer
