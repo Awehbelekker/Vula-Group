@@ -93,8 +93,9 @@ def _net(line: Dict[str, Any]) -> int:
 
 
 def _live(line: Dict[str, Any]) -> bool:
-    """Not set aside (a misread or superseded copy is 'ignored')."""
-    return line.get("match_status") != "ignored"
+    """Not set aside (a misread or superseded copy is 'ignored'), and a line of a bank statement — a proof
+    of payment staged on WhatsApp is never counted (ledger_events.is_pop)."""
+    return line.get("match_status") != "ignored" and (line.get("source_file") or "") != "whatsapp_pop"
 
 
 # ── statements and accounts ──────────────────────────────────────────────────
@@ -559,6 +560,7 @@ def run(tenant_id: str, today: Optional[date] = None, documents: bool = True,
     sections.append(_dates(tenant_id, lines, today))
     # vat
     sections.append(_vat(tenant_id, live, in_transfer, today))
+    sections.append(_pop_lines(tenant_id, lines))
     # the documents behind the money (19 Nov 2026, Phase 0b)
     if documents:
         try:
@@ -653,6 +655,50 @@ def _vat(tenant_id: str, live: List[Dict[str, Any]], in_transfer: set, today: da
     head = (f"{'Registered' if registered else 'Not registered' if registered is False else 'Registration unknown'}; "
             f"highest 12-month income from the bank: {_rands(peak)}.")
     return _section("vat", "VAT registration", f, head, problem=bool(f))
+
+
+def _pop_lines(tenant_id: str, lines: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Rows made from proofs of payment sent on WhatsApp (bank_rec.stage_pop_for_review). They are not
+    lines of a bank statement and are never counted (ledger_events.is_pop) — listed so the business sees
+    what they were, and one recorded as money IN that the business or one of its people paid is named
+    (20 Nov 2026, DIGG: two of the owner's own payments to R Engelbrecht staged as income)."""
+    pops = [ln for ln in lines if (ln.get("source_file") or "") == "whatsapp_pop"]
+    if not pops:
+        return _section("pop_lines", "Proofs of payment sent on WhatsApp", [],
+                        "No bank lines were made from proofs of payment.")
+    from vula.commerce import bank_rec
+    from vula.commerce.service import is_own_name
+    try:
+        docs = _rows("vula_filed_documents", "id,category,fields,status", tenant_id)
+    except Exception:  # noqa: BLE001
+        docs = []
+    pop_docs = [d for d in docs if d.get("category") == "Proof of Payment"]
+    own = bank_rec._own_names_now(tenant_id)
+    f: List[Dict[str, Any]] = []
+    for ln in sorted(pops, key=lambda r: str(r.get("txn_date"))):
+        cents = int(ln.get("amount_cents") or 0)
+        doc = next((d for d in pop_docs if int((d.get("fields") or {}).get("amount_cents") or 0) == cents
+                    and str((d.get("fields") or {}).get("date") or "")[:10] == str(ln.get("txn_date"))[:10]), None)
+        payer = str(((doc or {}).get("fields") or {}).get("payer") or "").strip()
+        member = bank_rec._team_member_paying(tenant_id, payer) if payer else None
+        by_us = bool(payer) and (member or is_own_name(payer, own))
+        wrong_way = ln.get("direction") == "in" and by_us
+        was = ("set aside" if ln.get("match_status") == "ignored" else
+               f"booked as {ln.get('account_code') or 'nothing yet'}")
+        text = (f"{ln.get('txn_date')}: {ln.get('description') or 'proof of payment'}, {_rands(cents)} "
+                f"{'in' if ln.get('direction') == 'in' else 'out'} ({was}) — a screenshot, not a bank line: "
+                "no longer counted; the bank statement's own line is.")
+        if wrong_way:
+            text += (f" It was recorded as money IN, but {member or payer} paid it"
+                     + (" personally — a question for the accountant (the owner's loan or a staff claim)."
+                        if member else "."))
+        f.append({"kind": "pop_line", "severity": "problem" if wrong_way else "attention", "rows": [ln["id"]],
+                  "doc": (doc or {}).get("id"), "payer": member or payer or None, "cents": cents, "text": text})
+    wrong = [x for x in f if x["severity"] == "problem"]
+    return _section("pop_lines", "Proofs of payment sent on WhatsApp", f,
+                    f"{len(f)} bank lines were made from proofs of payment; none is counted any more."
+                    + (f" {len(wrong)} of them were recorded as money in although the business or one of its people "
+                       "paid." if wrong else ""), problem=bool(wrong))
 
 
 def text_report(rep: Dict[str, Any]) -> str:

@@ -75,14 +75,15 @@ def _bank(tenant_id: str, since: Optional[str], until: Optional[str]) -> List[Di
         q = (_client().table("commerce_bank_transactions")
              .select("id,txn_date,description,payee,amount_cents,direction,account_code,"
                      "categorized_by,match_status,matched_invoice_id,matched_expense_id,"
-                     "matched_order_id,project,vat_cents")
+                     "matched_order_id,project,vat_cents,source_file")
              .eq("tenant_id", tenant_id))
         if since:
             q = q.gte("txn_date", since)
         if until:
             q = q.lte("txn_date", until)
         return q.order("txn_date")
-    return [r for r in _pages(make) if r.get("match_status") != "ignored"]
+    return [r for r in _pages(make) if r.get("match_status") != "ignored"
+            and (r.get("source_file") or "") != "whatsapp_pop"]     # a proof of payment isn't a bank line
 
 
 def _invoices(tenant_id: str, direction: str) -> List[Dict[str, Any]]:

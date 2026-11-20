@@ -364,8 +364,68 @@ def _open_supplier_bills(tenant_id: str) -> List[dict]:
     return [b for b in bills if (b.get("doc_type") or "invoice") == "invoice"]
 
 
+_TITLES = re.compile(r"\b(mr|mrs|ms|miss|dr|prof|mnr|mev|me)\b\.?", re.I)
+
+
+def _own_names_now(tenant_id: str) -> List[str]:
+    """Every name the business goes by, read now without awaiting (service.own_business_names is
+    async and this runs inside the WhatsApp handler): its cached list, else the tenant's display name
+    and its invoice settings' company and trading-as names, each "X t/a Y" split."""
+    import time as _t
+    from vula.commerce import service
+    names = [tenant_id]
+    try:
+        from vula.api.tenants import get_config as _get_tenant_config
+        names.append((_get_tenant_config(tenant_id) or {}).get("display_name") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    hit = service._OWN_CACHE.get(tenant_id)
+    if hit and _t.time() - hit[0] < 300:
+        return list(dict.fromkeys([n for n in names if n] + list(hit[1])))
+    try:
+        st = (_client().table("commerce_invoice_settings").select("company_name,trading_as")
+              .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0]
+        names += [st.get("company_name") or "", st.get("trading_as") or ""]
+    except Exception:  # noqa: BLE001
+        pass
+    out: List[str] = []
+    for n in names:
+        for part in [n, *re.split(r"\bt\s*/\s*a\b|\btrading as\b", n or "", flags=re.I)]:
+            part = (part or "").strip(" ,-")
+            if part and part not in out:
+                out.append(part)
+    return out
+
+
+def _person_tokens(name: str) -> List[str]:
+    return [t for t in re.findall(r"[a-z]+", _TITLES.sub(" ", (name or "").lower())) if t]
+
+
+def _same_person(payer: str, member: str) -> bool:
+    """'MRS J DOWNING' is team member 'Judy Downing': the same surname and the first initial."""
+    a, b = _person_tokens(payer), _person_tokens(member)
+    if len(a) < 2 or len(b) < 2 or a[-1] != b[-1] or len(a[-1]) < 3:
+        return False
+    return a[0][0] == b[0][0]
+
+
+def _team_member_paying(tenant_id: str, payer: str) -> Optional[str]:
+    """The team member who paid, when the payer names one."""
+    if not payer:
+        return None
+    try:
+        team = (_client().table("vula_team_members").select("name").eq("tenant_id", tenant_id)
+                .limit(500).execute().data or [])
+    except Exception:  # noqa: BLE001
+        return None
+    for m in team:
+        if m.get("name") and _same_person(payer, m["name"]):
+            return m["name"]
+    return None
+
+
 def classify_pop_direction(tenant_id: str, payee: Optional[str],
-                           amount_cents: Optional[int] = None) -> tuple:
+                           amount_cents: Optional[int] = None, payer: Optional[str] = None) -> tuple:
     """Which way did the money move? Returns (direction, confident, reason).
 
     2026-09-03: this path hardcoded direction="in", so a proof of payment the OWNER sent for a
@@ -379,16 +439,23 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str],
     paid to us is money in, paid to a supplier we know is money out. Anything unrecognised
     stays 'in' (the prior behaviour) but unconfident, so the review question still gets asked
     instead of a guess being applied."""
-    from vula.commerce.service import _same_business
-    payee = (payee or "").strip()
+    # 20 Nov 2026 (Ian, DIGG): two of Judy's own payments to R Engelbrecht ("MRS J DOWNING" paid) were
+    # staged as money IN — one booked as R2,500 of sales — because only the payee was looked at, against
+    # the display name only, and an unknown payee meant "in". Who PAID decides it too: the business or
+    # one of its people paying is money out.
+    from vula.commerce.service import _same_business, is_own_name
+    payee, payer = (payee or "").strip(), (payer or "").strip()
+    own = _own_names_now(tenant_id)
+    if payee and is_own_name(payee, own):
+        return "in", True, "paid to this business"
+    if payer and is_own_name(payer, own):
+        return "out", True, "paid by the business"
+    member = _team_member_paying(tenant_id, payer)
+    if member:
+        return "out", True, f"paid personally by {member}"
     if not payee:
         return "in", False, "no payee on the document"
-    try:
-        from vula.api.tenants import get_config as _get_tenant_config
-        tenant_name = (_get_tenant_config(tenant_id) or {}).get("display_name") or tenant_id
-    except Exception:
-        tenant_name = tenant_id
-    if _same_business(payee, tenant_name) or _same_business(payee, tenant_id):
+    if any(_same_business(payee, n) for n in own):
         return "in", True, "paid to this business"
     for name in _known_supplier_names(tenant_id):
         if name and _same_business(payee, name):
@@ -406,7 +473,7 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str],
 
 def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str],
                         reference: Optional[str], payee: Optional[str],
-                        sender_phone: Optional[str] = None) -> str:
+                        sender_phone: Optional[str] = None, paid_by: Optional[str] = None) -> str:
     """The owner paid a supplier and sent the confirmation. Stage it as money OUT against a
     bill, and ask before settling it — same never-auto-apply rule as the money-in side."""
     bills = _open_supplier_bills(tenant_id)
@@ -416,7 +483,8 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
     row = {
         "tenant_id": tenant_id,
         "txn_date": (txn_date or _now())[:10],
-        "description": "WhatsApp proof of payment" + (f" — {payee}" if payee else ""),
+        "description": ("WhatsApp proof of payment" + (f" — {payee}" if payee else "")
+                        + (f" (paid personally by {paid_by})" if paid_by else "")),
         "amount_cents": amount_cents,
         "direction": "out",
         "reference": reference,
@@ -438,17 +506,22 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
                            f"POP R{amount_cents / 100:,.2f} to {payee or 'supplier'}")
 
     amt = amount_cents / 100
+    if paid_by:
+        personal = (f"\n\nIt was paid by *{paid_by}* personally, not from the business account — "
+                    "I'll note it for your accountant (a claim or the owner's loan to the business).")
+    else:
+        personal = ""
     if cand:
-        return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
+        return (personal.strip() + "\n\n" if personal else "") + (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
                 f"bill *{cand.get('invoice_number') or cand.get('id')}*. Reply *yes* to mark it "
                 f"paid, or tell me the right bill number.")
     return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. I couldn't find a "
-            f"matching open bill — reply with the bill number if you have it, or 'skip'.")
+            f"matching open bill — reply with the bill number if you have it, or 'skip'.") + personal
 
 
 def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
                          reference: Optional[str] = None, payee: Optional[str] = None,
-                         sender_phone: Optional[str] = None) -> str:
+                         sender_phone: Optional[str] = None, payer: Optional[str] = None) -> str:
     """Stage a WhatsApp proof-of-payment screenshot into the SAME interactive review flow
     bank_review.py already uses for an unmatched bank-statement credit — never auto-mark-paid.
     Returns the WhatsApp reply to send: a specific "does this match X — reply yes" proposal when
@@ -462,11 +535,12 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
 
     A POP the owner sent for a bill THEY paid moves money the other way — see
     classify_pop_direction — and is staged against supplier bills instead."""
-    direction, _confident, reason = classify_pop_direction(tenant_id, payee, amount_cents)
+    direction, _confident, reason = classify_pop_direction(tenant_id, payee, amount_cents, payer=payer)
     if direction == "out":
-        log.info("pop for %s staged as money out (%s): %s", tenant_id, reason, payee)
+        log.info("pop for %s staged as money out (%s)", tenant_id, reason)
         return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee,
-                                   sender_phone=sender_phone)
+                                   sender_phone=sender_phone,
+                                   paid_by=reason[len("paid personally by "):] if reason.startswith("paid personally by ") else None)
     candidate = propose_pop_match(tenant_id, amount_cents, reference, payee, sender_phone)
     match_type, cand = candidate if candidate else (None, None)
     row = {

@@ -402,10 +402,12 @@ def _txns(tenant_id: str, since: Optional[str], until: Optional[str]) -> List[di
     if until:
         q = q.lte("txn_date", until)
     try:
-        return q.order("txn_date").limit(10000).execute().data or []
+        rows = q.order("txn_date").limit(10000).execute().data or []
     except Exception as exc:
         log.debug("ledger read skipped: %s", exc)
         return []
+    # a proof of payment is not a bank line (ledger_events.is_pop)
+    return [r for r in rows if (r.get("source_file") or "") != "whatsapp_pop"]
 
 
 def _v2(tenant_id: str) -> bool:
