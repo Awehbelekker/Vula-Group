@@ -65,6 +65,7 @@ def _load(tenant_id: str) -> Dict[str, Any]:
             "orders": _safe_rows("commerce_orders", tenant_id),
             "expenses": _safe_rows("commerce_expenses", tenant_id),
             "bank": _safe_rows("commerce_bank_transactions", tenant_id),
+            "line_docs": _safe_rows("commerce_bank_line_documents", tenant_id),
             "bank_accounts": _safe_rows("commerce_bank_accounts", tenant_id, "id,account_number"),
             "tap_payments": _safe_rows("kb_payments", tenant_id),
             "tap_lines": _safe_rows("kb_ledger_lines", tenant_id),
@@ -370,7 +371,15 @@ def plan(tenant_id: str, accrual_from: Optional[str] = None, *, audit: bool = Tr
     # line matched to its document; what's left is a payment with no bank line (or a bank line matched
     # to a document whose payment wasn't recorded) — often the same cost booked twice.
     linked: Dict[str, int] = {}
+    shares: Dict[str, List[Dict[str, Any]]] = {}      # one payment for several bills (migration 293)
+    for d in data.get("line_docs") or []:
+        shares.setdefault(str(d.get("txn_id")), []).append(d)
     for r in data["bank"]:
+        if ev.is_live(r) and shares.get(str(r.get("id"))):
+            sign = 1 if (r.get("direction") or "out") == "in" else -1
+            for d in shares[str(r["id"])]:
+                linked[str(d["invoice_id"])] = linked.get(str(d["invoice_id"]), 0) + sign * int(d.get("amount_cents") or 0)
+            continue
         if ev.is_live(r):
             for k in ("matched_invoice_id", "matched_order_id", "matched_expense_id"):
                 if r.get(k):

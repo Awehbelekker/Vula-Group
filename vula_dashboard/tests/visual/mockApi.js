@@ -513,7 +513,21 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/books-audit/statements/${T}`, () => F.booksStatementCheck),
     r("POST", `${A}/books-audit/statements/${T}/apply`, (m, url, req) => ({ ok: true, done: (req.postDataJSON() || {}).accept, skipped: [], not_saved: [] })),
     r("POST", `${A}/books-audit/statements`, () => ({ check_id: "chk-1", summary: { already_right: 40 } })),
-    r("POST", `${A}/bank/transactions/bulk-categorize`, () => { books.to_categorise = []; books.open.to_categorise = 0; return { ok: true, updated: 1 }; }),
+    r("POST", `${A}/books-audit/lines/${T}/pay-bill`, (m, url, req) => {
+      const id = url.pathname.split("/lines/")[1].split("/")[0];
+      books.bill_payments = (books.bill_payments || []).map((g) => ({ ...g, lines: g.lines.filter((l) => l.id !== id) }))
+        .filter((g) => g.lines.length);
+      books.open.bill_payments = books.bill_payments.reduce((t, g) => t + g.lines.length, 0);
+      return { ok: true, bills: (req.postDataJSON() || {}).bill_ids, bill_status: "paid", remembered: "Skipp Rubble" };
+    }),
+    r("POST", `${A}/bank/transactions/bulk-categorize`, (m, url, req) => {
+      const ids = (req.postDataJSON() || {}).txn_ids || [];
+      const left = (books.refile || []).filter((g) => !g.ids.some((i) => ids.includes(i)));
+      if (left.length !== (books.refile || []).length) {
+        books.refile = left; books.open.refile = left.reduce((t, g) => t + g.count, 0);
+      } else { books.to_categorise = []; books.open.to_categorise = 0; }
+      return { ok: true, updated: ids.length };
+    }),
     r("POST", `${A}/expenses/${T}/status`, () => { books.staff_claims = []; books.open.staff_claims = 0; return { ok: true }; }),
     // ── Estimating › Costing by trade ──
     r("GET", `${A}/buildups`, () => (tradeOn ? { buildups: tradeBuildups, can_confirm: role === "owner" } : tradeOff)),

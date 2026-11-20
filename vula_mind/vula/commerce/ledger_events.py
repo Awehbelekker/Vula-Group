@@ -530,8 +530,20 @@ def bank_line_lines(row: Dict[str, Any], *, bank_account_id: Optional[str] = Non
     return [bank] + [ln for ln in rest if ln["debit_cents"] or ln["credit_cents"]]
 
 
+# A proof of payment sent on WhatsApp is staged as a row in commerce_bank_transactions so its question can
+# be asked and answered (bank_rec.stage_pop_for_review, bank_review). It is someone's screenshot, not a
+# line on the bank's statement: it never counts in the books — the statement's own line does (20 Nov 2026,
+# DIGG: one of the owner's personal payments counted as R2,500 of sales).
+POP_SOURCE = "whatsapp_pop"
+
+
+def is_pop(row: Dict[str, Any]) -> bool:
+    return (row.get("source_file") or "") == POP_SOURCE
+
+
 def is_live(row: Dict[str, Any]) -> bool:
-    return (row.get("match_status") or "unmatched") in LIVE_STATUSES and int(row.get("amount_cents") or 0) > 0
+    return ((row.get("match_status") or "unmatched") in LIVE_STATUSES and int(row.get("amount_cents") or 0) > 0
+            and not is_pop(row))
 
 
 def bank_line(tenant_id: str, row: Dict[str, Any], accounts: Dict[str, str]) -> Optional[str]:

@@ -3655,7 +3655,7 @@ async def _handle_document_ingest_one(
                     from vula.commerce import bank_rec
                     reply = bank_rec.stage_pop_for_review(
                         tenant_id, round(total_r * 100), fin.get("date"),
-                        fin.get("reference"), fin.get("payee"), sender_phone=phone)
+                        fin.get("reference"), fin.get("payee"), sender_phone=phone, payer=fin.get("payer"))
                     scan_msg = "\n\n" + reply + await _payer_line(tenant_id, phone, {
                         "payer": fin.get("payer"), "payer_account": fin.get("payer_account")})
                 elif fin and dtp == "delivery_note":
@@ -3681,7 +3681,8 @@ async def _handle_document_ingest_one(
                 from vula.commerce import bank_rec
                 scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
                     tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
-                    fields.get("payee_name") or fields.get("payee"), sender_phone=phone)
+                    fields.get("payee_name") or fields.get("payee"), sender_phone=phone,
+                    payer=fields.get("payer") or fields.get("payer_name"))
                 scan_msg += await _payer_line(tenant_id, phone, fields)
             except Exception as exc:
                 logger.warning("POP match skipped for %s: %s", result.filename, exc)
@@ -7010,7 +7011,7 @@ async def _maybe_customer_pop(phone: str, media_id: str, tenant_id: str) -> bool
         from vula.commerce import bank_rec
         proposal = bank_rec.stage_pop_for_review(
             tenant_id, round(total_r * 100), fin.get("date"), fin.get("reference"),
-            fin.get("payee"), sender_phone=phone)
+            fin.get("payee"), sender_phone=phone, payer=fin.get("payer"))
         from vula.integrations.notify import notify_team
         note = f"📸 A customer ({phone}) sent a proof of payment.\n{proposal}"
         if not await notify_team(tenant_id, "payment_received", note):
