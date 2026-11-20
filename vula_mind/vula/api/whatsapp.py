@@ -5527,6 +5527,9 @@ _DOC_CATEGORIES = [
     # 20 Nov 2026: a principal agent's / QS's certificate of what the client owes the business for work done
     # (vula/commerce/certificates.py) — DIGG's were filed as supplier invoices. Never a bill.
     "Payment Certificate",
+    # 20 Nov 2026: the business's own company and tax documents (vula/commerce/company_docs.py) — CIPC
+    # registration, SARS letters and returns, B-BBEE/COIDA/UIF/FICA — kept for the accountant.
+    "Company Registration", "Tax / SARS", "Compliance Certificate",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
@@ -5891,6 +5894,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             from vula.commerce.certificates import CATEGORY as _CERT, looks_like as _is_cert
             if _is_cert(filename, summary, data.get("fields") or {}):
                 cat = _CERT          # its own title says so: never an invoice to book as a cost
+            from vula.commerce.company_docs import better as _company_better
+            cat = _company_better(cat, summary, filename, tenant_id) or cat   # SARS / CIPC / compliance, the business's own
             return {"category": cat, "summary": summary, "fields": data.get("fields") or {}}
 
         def _needs_escalation(result: Optional[dict]) -> bool:

@@ -177,6 +177,9 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/finance-folders.zip`, () => (booksViewer
       ? { __raw: { status: 200, contentType: "application/zip", body: "PK", headers: { "content-disposition": 'attachment; filename="Documents_2026-27_all.zip"' } } }
       : booksOff)),
+    r("GET", `${A}/company-docs/proposals`, () => (booksViewer && role !== "accountant" ? { documents: F.companyDocProposals } : booksOff)),
+    r("POST", `${A}/company-docs/refile`, (m, url, req) => ({ ok: true, refiled: (req.postDataJSON() || {}).ids || [], skipped: [] })),
+    r("POST", `^/ingest`, () => ({ status: "queued", filename: "doc.pdf", message: "processing" })),
     r("GET", `${A}/bank/accounts`, () => ({ accounts: F.bankAccountsList })),
     r("GET", `^/v1/accountant/clients`, () => ({ clients: F.accountantClients })),
     r("GET", `^/v1/documents/${T}/filed/([^/]+)/open`, (m) => ({ url: `https://x.supabase.co/storage/v1/object/sign/documents/demo/${m[2]}.pdf?token=t`, filename: `${m[2]}.pdf` })),

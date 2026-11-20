@@ -70,6 +70,24 @@ test.describe("for your accountant", () => {
     await expect(page.getByText("Only an owner or manager can see these folders")).toBeVisible();
   });
 
+  test("company and tax documents: upload under a kind, and file the ones already on file", async ({ page }) => {
+    await openFolders(page, VIEWPORTS.desktop, "light");
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Company and tax documents");
+    await expect(content).toContainText("00 Company and tax");
+    const own = page.getByLabel("File CRA01 - Harbour & Vine.pdf under SARS and tax");
+    const other = page.getByLabel("File Bank confirmation letter.pdf under Compliance (B-BBEE, COIDA, UIF, FICA)");
+    await expect(own).toBeChecked();
+    await expect(other).not.toBeChecked();                       // names another business: never pre-ticked
+    const filed = page.waitForRequest((r) => r.url().endsWith("/company-docs/refile"));
+    await page.getByRole("button", { name: "File 1 under Company and tax" }).click();
+    expect((await filed).postDataJSON()).toEqual({ ids: ["cp-1"] });
+    await page.getByLabel("What you're uploading").selectOption("Company Registration");
+    const up = page.waitForRequest((r) => r.url().endsWith("/ingest") && r.method() === "POST");
+    await page.getByLabel("Upload company documents").setInputFiles({ name: "COR14.3.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF") });
+    expect((await up).postData()).toContain("Company Registration");
+  });
+
   test("a bank account is named", async ({ page }) => {
     await openScreen(page, { name: "bank", role: "owner", nav: "Money", tab: "Bank & matching",
       ready: "ATLANTIC DAIRY COOP DEBIT ORDER" }, { viewport: VIEWPORTS.desktop, theme: "light" });

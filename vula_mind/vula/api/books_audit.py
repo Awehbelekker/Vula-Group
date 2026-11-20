@@ -413,3 +413,22 @@ async def link_own_invoice(tenant_id: str, doc_id: str, body: OfBody, request: R
     _, actor = await _full(tenant_id, request)
     from vula.commerce import doc_audit
     return await _fix(doc_audit.link_invoice, tenant_id, doc_id, body.of_id, actor=actor)
+
+
+class IdsBody(BaseModel):
+    ids: List[str]
+
+
+@router.get("/{tenant_id}/admin/company-docs/proposals")
+async def company_doc_proposals(tenant_id: str, request: Request) -> dict:
+    """Documents filed elsewhere whose own words say they're company or tax documents (a preview)."""
+    await _full(tenant_id, request)
+    from vula.commerce import company_docs
+    return {"documents": await asyncio.to_thread(company_docs.proposals, tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/company-docs/refile")
+async def company_doc_refile(tenant_id: str, body: IdsBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import company_docs
+    return await _fix(company_docs.refile, tenant_id, body.ids, actor=actor)

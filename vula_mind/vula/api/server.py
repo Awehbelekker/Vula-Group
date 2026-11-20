@@ -2456,7 +2456,7 @@ class ScrapeRequest(BaseModel):
 # ─── Document Ingestion ───────────────────────────────────────────────────────
 
 async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type: Optional[str],
-                                   project: Optional[str] = None) -> None:
+                                   project: Optional[str] = None, category_hint: Optional[str] = None) -> None:
     """Bring the dashboard upload dropzone up to the same standard as the email/WhatsApp
     intake channels: classify, extract structured fields, match a project, and — for a
     financial category — commit it into the books via the shared commit_inbound_document
@@ -2467,9 +2467,14 @@ async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type:
         analysis = await _analyze_document(tenant_id, result.filename, file_path)
         if not analysis:
             return
+        category = analysis["category"]
+        # uploaded under "Company and tax" (20 Nov 2026): filed there unless it's plainly a money document
+        from vula.commerce.company_docs import CATEGORIES as _COMPANY, LOOSE as _LOOSE
+        if category_hint in _COMPANY and (category in _LOOSE or category in _COMPANY):
+            category = category if category in _COMPANY else category_hint
         await _file_uploaded_document(
             tenant_id, "dashboard", result, file_path, mime_type,
-            analysis["category"], analysis.get("summary", ""), analysis.get("fields", {}),
+            category, analysis.get("summary", ""), analysis.get("fields", {}),
             source="dashboard", project=project,
         )
     except Exception as exc:
@@ -2485,6 +2490,7 @@ async def ingest_document(
     file: UploadFile = File(...),
     project: Optional[str] = Form(None),
     audience: Optional[str] = Form(None),
+    category_hint: Optional[str] = Form(None),
 ):
     """Upload a document and ingest it into the tenant knowledge base (async). `project`: sent
     from a project's page — the document is filed straight under that project. `audience`
@@ -2508,7 +2514,8 @@ async def ingest_document(
         result = await pipeline.ingest_file(file_path, audience=audience)
         log.info("Ingestion complete: %s → %d chunks (%s)", result.filename, result.chunks_stored, result.status)
         if result.status in ("success", "done"):
-            await _analyze_and_file_upload(tenant_id, result, file_path, mime_type, project=project)
+            await _analyze_and_file_upload(tenant_id, result, file_path, mime_type, project=project,
+                                           category_hint=category_hint)
 
     background_tasks.add_task(_ingest)
 

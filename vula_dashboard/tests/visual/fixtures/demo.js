@@ -1527,6 +1527,10 @@ export const financeFolders = {
     ],
   },
   folders: [
+    { key: "company", title: "00 Company and tax", count: 1, groups: [
+      { name: "SARS and tax", count: 1, items: [
+        { id: "co-1", date: "2025-05-02", label: "SARS notice of registration for VAT", category: "Tax / SARS",
+          amount_cents: null, filename: "VAT registration.pdf", file_url: ffUrl("co-1"), official: null }] }] },
     { key: "bank", title: "01 Bank statements", count: 2, groups: [
       { name: "Business cheque …7663", count: 2, items: [
         { id: "st-1", date: "2026-08-31", label: "FNB statement …7663, 1 Aug 2026 to 31 Aug 2026", category: "Bank Statement",
@@ -1549,6 +1553,11 @@ export const financeFolders = {
     { key: "legal", title: "07 Contracts, insurance and legal", count: 0, groups: [] },
   ],
 };
+export const companyDocProposals = [
+  { id: "cp-1", filename: "CRA01 - Harbour & Vine.pdf", category: "General Document", to: "Tax / SARS", to_name: "SARS and tax",
+    ours: true, summary: "A SARS CRA01 confirmation of business address", date: "2026-03-04" },
+  { id: "cp-2", filename: "Bank confirmation letter.pdf", category: "Correspondence", to: "Compliance Certificate",
+    to_name: "Compliance (B-BBEE, COIDA, UIF, FICA)", ours: false, summary: "A bank confirmation letter for a supplier", date: "2026-05-01" }];
 export const bankAccountsList = [
   { id: "ba-1", account: "…7663", bank: "FNB", name: "Business cheque", holder: null, project: null, lines: 146 },
   { id: "ba-2", account: "…4607", bank: "FNB", name: null, holder: null, project: null, lines: 493 },
