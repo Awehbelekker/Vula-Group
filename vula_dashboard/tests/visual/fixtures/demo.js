@@ -1404,7 +1404,7 @@ export const booksReview = {
     control: { debtors_tie: true, debtors_books_cents: 1800000, creditors_tie: true, creditors_books_cents: 0 },
     suspense: { lines: 1, cents: -56217 }, in_transit_cents: -2300000, owed_to_staff_cents: 400000 },
   open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 2, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
-    doc_figures: 2, not_booked: 1, our_invoices: 1, sales_not_in_invoices: 2, certificates: 3, bill_mismatch: 1,
+    doc_figures: 2, not_booked: 1, our_invoices: 1, sales_not_in_invoices: 2, certificates: 3, supplier_statements: 1, bill_mismatch: 1,
     doc_duplicates: 1, bill_duplicates: 1, suppliers: 2 },
   clean: false,
   restore: [brLine("r1", "2026-07-18", "POS Purchase Build It", 28500, "out", { status: "ignored", excluded_reason: "misread copy" }),
@@ -1439,6 +1439,15 @@ export const booksReview = {
   no_account: 0,
   // the documents behind the money (19 Nov 2026, doc_audit.worklist)
   documents: {
+    supplier_statements: [{
+      supplier: "Glass Co Pty Ltd", supplier_id: "sup-glass", balance_cents: 3683207, owed_in_books_cents: 0, draft_bills_cents: 0,
+      difference_cents: 3683207, missing_cents: 15300000,
+      statements: [{ doc_id: "st-1", account_name: "DIGG", balance_cents: 1888384 }, { doc_id: "st-2", account_name: "Aweh Be Lekker", balance_cents: 1794823 }],
+      open_invoices: [{ number: "INV-1615", open_cents: 1168599 }, { number: "INV-1881", open_cents: 789017 }],
+      missing: [{ number: "INV-0653", date: "2026-04-16", cents: 247314 }, { number: "INV-1615", date: "2026-09-17", cents: 1168599 }],
+      payments: [{ date: "2026-04-16", cents: 247314, line: null, gaps: ["FNB …4607"] }],
+      payments_not_found: [{ date: "2026-04-16", cents: 247314, line: null, gaps: ["FNB …4607"] }],
+      invoices: [], request: "Hi Glass Co Pty Ltd, could you please send us copies of these invoices: INV-0653, INV-1615. Thank you." }],
     certificates: {
       certificates: [
         { doc_id: "pc2", filename: "Payment Certificate No. 2.pdf", labelled: false, category: "Invoice", number: 2,

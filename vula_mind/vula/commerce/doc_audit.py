@@ -658,6 +658,24 @@ def sections(tenant_id: str, check_files: bool = True) -> List[Dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         log.warning("certificate check failed for %s: %s", tenant_id, exc)
 
+    try:     # suppliers' statements against the books (20 Nov 2026)
+        from vula.commerce import supplier_statements as ss
+        if check_files:
+            ss.read_statements(tenant_id)
+        c = ss.check(tenant_id)
+        f_ss = ss.findings(c)
+        if c["suppliers"] or f_ss:
+            off = [s for s in c["suppliers"] if s["missing"] or s["difference_cents"] or s["payments_not_found"]]
+            out.append(_section("supplier_statements", "Suppliers' statements against the books", f_ss,
+                                f"{len(c['suppliers'])} suppliers' statements read line by line; "
+                                + ("each agrees with the books." if not off else
+                                   f"{len(off)} don't agree — "
+                                   f"{sum(len(s['missing']) for s in off)} invoices on them aren't in Vula, "
+                                   f"{_rands(sum(s['difference_cents'] for s in off))} more owed than the books show."),
+                                problem=any(f["severity"] == "problem" for f in f_ss)))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("supplier statement check failed for %s: %s", tenant_id, exc)
+
     f_acc, people = access_findings(tenant_id)
     full = [p for p in people["people"] if p["full"]]
     sec = _section("access", "Who can see and change the books", f_acc,
@@ -713,7 +731,14 @@ def worklist(tenant_id: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("own-invoice worklist failed for %s: %s", tenant_id, exc)
         sales_on_file = []
-    return {"certificates": certs, "sales_not_in_invoices": sales_on_file,
+    try:
+        from vula.commerce import supplier_statements as ss
+        sup_st = [{**x, "request": ss.request_text(x)} for x in ss.check(tenant_id)["suppliers"]
+                  if x["missing"] or x["difference_cents"] or x["payments_not_found"]]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("supplier statement worklist failed for %s: %s", tenant_id, exc)
+        sup_st = []
+    return {"certificates": certs, "sales_not_in_invoices": sales_on_file, "supplier_statements": sup_st,
             "doc_figures": figures,
             "not_booked": [{**f["doc"], "text": f["text"]} for f in books if f["kind"] == "not_booked"],
             "our_invoices": [{**f["doc"], "text": f["text"], "twin": f.get("twin")} for f in books

@@ -156,7 +156,7 @@ test.describe("books review", () => {
 
   test("the documents tab counts what's open and lists each finding", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
-    await expect(page.getByRole("tab", { name: "Documents (14)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Documents (15)" })).toBeVisible();
     await page.getByRole("tab", { name: /^Documents/ }).click();
     const content = page.locator(".v2-content");
     await expect(content).toContainText("The total read as R2,500.00 isn't in the document itself.");
@@ -250,6 +250,18 @@ test.describe("books review", () => {
     await page.getByRole("button", { name: "Add to Invoices" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Add to Invoices" }).click();
     expect((await added).postDataJSON()).toEqual({ txn_id: "r2" });
+  });
+
+  test("a supplier's statements are checked against the books and the missing invoices can be asked for", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await docs(page);
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Suppliers' statements");
+    await expect(content).toContainText("owed on the statements R 36 832.07, in your books R 0.00");
+    await expect(content).toContainText("2 invoices on the statement aren't in Vula");
+    await expect(content).toContainText("no statement on file for those months from FNB …4607");
+    await page.getByRole("button", { name: "Copy a request for the missing invoices" }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("INV-0653, INV-1615");
   });
 
   test("several statements are compared in one go, each on its own", async ({ page }) => {

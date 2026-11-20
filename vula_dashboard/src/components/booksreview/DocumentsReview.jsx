@@ -37,6 +37,7 @@ async function done(res, okText, failText) {
 }
 
 export const DOC_GROUPS = ["doc_figures", "not_booked", "our_invoices", "sales_not_in_invoices", "certificates",
+  "supplier_statements",
   "bill_mismatch", "doc_duplicates", "bill_duplicates", "suppliers"];
 export const docCount = (open) => DOC_GROUPS.reduce((n, k) => n + (open?.[k] || 0), 0);
 
@@ -47,6 +48,7 @@ export default function DocumentsReview({ x, r, tenantId }) {
     <div className="vbr2-stack">
       <p className="vbr2-sub">Each money document was checked against its own file and against the books. Fix what's wrong here; every change is kept with who made it and why.</p>
       <Figures x={x} items={d.doc_figures || []} open={open} />
+      <SupplierStatements items={d.supplier_statements || []} open={open} />
       <Certificates x={x} m={d.certificates} open={open} />
       <SalesNotInInvoices x={x} items={d.sales_not_in_invoices || []} open={open} />
       <NotBooked x={x} items={d.not_booked || []} open={open} />
@@ -189,6 +191,57 @@ function NotBooked({ x, items, open }) {
           ))}
         </ul>
       ) : <p className="vbr2-text">Every invoice on file is in the books.</p>}
+    </Card>
+  );
+}
+
+// ── Suppliers' statements against the books ─────────────────────────────────
+
+function SupplierStatements({ items, open }) {
+  if (!items.length) return null;
+  async function copy(s) {
+    try {
+      await navigator.clipboard.writeText(s.request);
+      toast("Copied — paste it into a message or email to the supplier.");
+    } catch {
+      toast("Couldn't copy here — the request is shown under the button.", "danger");
+    }
+  }
+  return (
+    <Card>
+      <h3 className="vbr2-h">Suppliers' statements</h3>
+      <p className="vbr2-sub">Each supplier's statement, read line by line and checked against your books. Invoices on it that aren't in Vula need a copy from the supplier; payments not in your bank lines are usually on a statement Vula doesn't have yet.</p>
+      <ul className="vbr2-list">
+        {items.map((s) => (
+          <li key={s.supplier_id || s.supplier} className="vbr2-group">
+            <span className="vbr2-text"><b>{s.supplier}</b> · owed on the statement{s.statements.length > 1 ? "s" : ""} <b>{money(s.balance_cents)}</b>, in your books <b>{money(s.owed_in_books_cents)}</b>
+              {s.draft_bills_cents ? <span className="vbr2-muted"> (plus {money(s.draft_bills_cents)} in draft bills)</span> : null}</span>
+            <span className="vbr2-actions">
+              {s.statements.map((st) => (
+                <Button key={st.doc_id} size="sm" variant="ghost" onClick={() => open(st.doc_id)}
+                  aria-label={`Open the statement for ${st.account_name || s.supplier}`}>{`Statement${st.account_name ? ` (${st.account_name})` : ""}`}</Button>
+              ))}
+            </span>
+            {s.open_invoices.length ? (
+              <p className="vbr2-muted">Still owed: {s.open_invoices.map((i) => `${i.number} ${money(i.open_cents)}`).join(" · ")}</p>
+            ) : null}
+            {s.missing.length ? (
+              <>
+                <p className="vbr2-text">{s.missing.length} invoice{s.missing.length === 1 ? "" : "s"} on the statement aren't in Vula ({money(s.missing_cents)}).</p>
+                <details>
+                  <summary className="vbr2-muted">Which ones</summary>
+                  <p className="vbr2-muted">{s.missing.map((i) => `${i.number} (${i.date}) ${money(i.cents)}`).join(" · ")}</p>
+                </details>
+                <span className="vbr2-actions"><Button size="sm" variant="secondary" onClick={() => copy(s)}>Copy a request for the missing invoices</Button></span>
+              </>
+            ) : null}
+            {s.payments_not_found.length ? (
+              <p className="vbr2-muted">{s.payments_not_found.length} of {s.payments.length} payments on the statement aren't in your bank lines
+                {(() => { const g = [...new Set(s.payments_not_found.flatMap((p) => p.gaps || []))]; return g.length ? ` — no statement on file for those months from ${g.join(", ")}` : ""; })()}.</p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </Card>
   );
 }
