@@ -1404,7 +1404,8 @@ export const booksReview = {
     control: { debtors_tie: true, debtors_books_cents: 1800000, creditors_tie: true, creditors_books_cents: 0 },
     suspense: { lines: 1, cents: -56217 }, in_transit_cents: -2300000, owed_to_staff_cents: 400000 },
   open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 2, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
-    doc_figures: 2, not_booked: 1, our_invoices: 1, bill_mismatch: 1, doc_duplicates: 1, bill_duplicates: 1, suppliers: 2 },
+    doc_figures: 2, not_booked: 1, our_invoices: 1, sales_not_in_invoices: 2, certificates: 3, bill_mismatch: 1,
+    doc_duplicates: 1, bill_duplicates: 1, suppliers: 2 },
   clean: false,
   restore: [brLine("r1", "2026-07-18", "POS Purchase Build It", 28500, "out", { status: "ignored", excluded_reason: "misread copy" }),
     brLine("r2", "2026-07-18", "POS Purchase Cashbuild", 191389, "out", { status: "ignored" })],
@@ -1438,6 +1439,24 @@ export const booksReview = {
   no_account: 0,
   // the documents behind the money (19 Nov 2026, doc_audit.worklist)
   documents: {
+    certificates: {
+      certificates: [
+        { doc_id: "pc2", filename: "Payment Certificate No. 2.pdf", labelled: false, category: "Invoice", number: 2,
+          amount_cents: 24966844, date: "2026-07-01", invoice: { kind: "document", id: "doc-hpc02", number: "DIGG-2026-HPC02", in_invoices: false },
+          received: { id: "r2", date: "2026-07-03", cents: 24966844, description: "Magtape Credit Hpc-PC2 Digg" } },
+        { doc_id: "pc15", filename: "Payment Certificate No. 15.pdf", labelled: true, category: "Payment Certificate", number: 15,
+          amount_cents: 2226456, date: "2026-11-12", invoice: null, received: null }],
+      unmatched_receipts: [{ number: 5, id: "r5", date: "2026-07-24", cents: 38729760, description: "Magtape Credit Hpc-PC5", invoice: null }],
+    },
+    sales_not_in_invoices: [
+      { id: "doc-hpc02", category: "Invoice", filename: "DIGG_Invoice_HPC_PC No2.pdf", supplier: "AwehBelekker (Pty) Ltd t/a DIGG",
+        number: "DIGG-2026-HPC02", date: "2026-07-01", total_cents: 24966844, customer: "Oro Props (Pty) Ltd", in_invoices_as: [],
+        receipts: [{ id: "r2", date: "2026-07-03", amount_cents: 24966844, direction: "in", description: "Magtape Credit Hpc-PC2 Digg" }],
+        text: "Invoice from AwehBelekker (Pty) Ltd t/a DIGG DIGG-2026-HPC02 is the business's own invoice, on file but not in Invoices." },
+      { id: "doc-hpc14", category: "Invoice", filename: "DIGG 2026 HPC14.pdf", supplier: "AwehBelekker (Pty) Ltd t/a DIGG",
+        number: "DIGG-2026-HPC14", date: "2026-10-07", total_cents: 4902539, customer: "Cape Town High Performance Centre",
+        in_invoices_as: [], receipts: [], differs: { id: "b108", number: "DIG-BILL-00108", cents: 5637919, status: "draft" },
+        text: "Invoice DIGG-2026-HPC14 says R49,025.39, but it's in Invoices as DIG-BILL-00108 at R56,379.19 — 15% VAT added. Correct the invoice in Invoices to match." }],
     doc_figures: [
       { id: "doc-bb55", category: "Invoice", filename: "BB-55.pdf", supplier: "Build It Bellville", number: "BB-55", date: "2026-07-08",
         total_cents: 250000, vat_cents: null, subtotal_cents: null, project: "Bokaap", bill_id: "bill-bb55", problems: ["not_in_file"],

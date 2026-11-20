@@ -38,7 +38,8 @@ LINE_COLS = ("id,txn_date,description,amount_cents,direction,match_status,accoun
 EXPENSE_POSTED = ("submitted", "approved", "paid", "reimbursed")
 FIRST_DATE = date(2015, 1, 1)
 # the document groups that count as open (price_vat and access are for information)
-DOC_GROUPS = ("doc_figures", "not_booked", "our_invoices", "bill_mismatch", "doc_duplicates", "bill_duplicates",
+DOC_GROUPS = ("doc_figures", "not_booked", "our_invoices", "sales_not_in_invoices", "bill_mismatch", "doc_duplicates",
+              "bill_duplicates",
               "suppliers")
 
 
@@ -586,6 +587,16 @@ def _remember_payee(tenant_id: str, bill: Dict[str, Any], ln: Dict[str, Any]) ->
         return None
 
 
+def certificates_open(m: Optional[Dict[str, Any]]) -> int:
+    """Certificate items still to put right: filed as something else, no invoice for it, and payments
+    naming a certificate that isn't on file (one not yet paid is only information)."""
+    m = m or {}
+    rows = m.get("certificates") or []
+    return (sum(1 for r in rows if not r.get("labelled"))
+            + sum(1 for r in rows if r.get("amount_cents") and not r.get("invoice"))
+            + len(m.get("unmatched_receipts") or []))
+
+
 def _candidates(doc: Dict[str, Any], free: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Bank lines that could be this document's payment: the same amount, the money going the right way,
     not tied to anything yet, from 10 days before the document to 180 after. Nearest first."""
@@ -708,7 +719,8 @@ def review(tenant_id: str) -> Dict[str, Any]:
                 "to_categorise": len(to_categorise), "refile": sum(g["count"] for g in refile),
                 "bill_payments": len(paying), "in_transit": len(in_transit), "staff_claims": len(claims),
                 "drafts": len(drafts), "odd_dates": len(odd), "no_account": no_account,
-                **{k: len(docs.get(k) or []) for k in DOC_GROUPS}}
+                **{k: len(docs.get(k) or []) for k in DOC_GROUPS},
+                "certificates": certificates_open(docs.get("certificates"))}
     return {"report": {"id": row.get("id"), "created_at": row.get("created_at"), "created_by": row.get("created_by"),
                        "agreed_by": row.get("agreed_by"), "agreed_at": row.get("agreed_at"),
                        "agreed_note": row.get("agreed_note"), "signed_off_by": row.get("signed_off_by"),

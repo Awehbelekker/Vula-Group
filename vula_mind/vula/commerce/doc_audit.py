@@ -115,9 +115,12 @@ def live(doc: Dict[str, Any]) -> bool:
 
 
 def money_docs(tenant_id: str) -> List[Dict[str, Any]]:
+    """Money documents that count — never a payment certificate filed as an invoice (20 Nov 2026: DIGG's
+    Vizion certificates were "invoices" with Vizion as the supplier; vula/commerce/certificates.py)."""
+    from vula.commerce.certificates import is_certificate
     return [d for d in _pages(lambda: _client().table("vula_filed_documents").select(DOC_COLS)
                               .eq("tenant_id", tenant_id).in_("category", list(MONEY_CATS)).order("id"))
-            if live(d)]
+            if live(d) and not is_certificate(d)]
 
 
 def shown(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -640,6 +643,21 @@ def sections(tenant_id: str, check_files: bool = True) -> List[Dict[str, Any]]:
     out.append(_section("price_vat", "Prices with no VAT basis", f_pv,
                         "Every learned price says whether VAT was in it." if not f_pv else f_pv[0]["text"]))
 
+    try:     # payment certificates ↔ the business's invoices ↔ money received (20 Nov 2026)
+        from vula.commerce import certificates
+        m = certificates.match(tenant_id)
+        f_cert = certificates.findings(m)
+        if m["certificates"] or f_cert:
+            open_ = [f for f in f_cert if f["severity"] != "info"]
+            out.append(_section("certificates", "Payment certificates, invoices and money received", f_cert,
+                                f"{len(m['certificates'])} payment certificates on file"
+                                f" ({', '.join(str(n) for n in certificates.numbers_in(m['certificates']))}); "
+                                + ("each has its invoice and its payment." if not open_ else
+                                   f"{len(open_)} things to put right — "
+                                   f"{len(m['unmatched_receipts'])} payments name a certificate that isn't on file.")))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("certificate check failed for %s: %s", tenant_id, exc)
+
     f_acc, people = access_findings(tenant_id)
     full = [p for p in people["people"] if p["full"]]
     sec = _section("access", "Who can see and change the books", f_acc,
@@ -684,7 +702,19 @@ def worklist(tenant_id: str) -> Dict[str, Any]:
         price_vat = {k: pv[0][k] for k in ("count", "by_kind", "documents", "text")}
         price_vat["docs"] = price_vat_documents(tenant_id, pv[0].get("rows") or [])
     _, people = access_findings(tenant_id)
-    return {"doc_figures": figures,
+    try:
+        from vula.commerce import certificates
+        certs = certificates.match(tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("certificate worklist failed for %s: %s", tenant_id, exc)
+        certs = {"certificates": [], "unmatched_receipts": []}
+    try:
+        sales_on_file = sales_not_in_invoices(tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("own-invoice worklist failed for %s: %s", tenant_id, exc)
+        sales_on_file = []
+    return {"certificates": certs, "sales_not_in_invoices": sales_on_file,
+            "doc_figures": figures,
             "not_booked": [{**f["doc"], "text": f["text"]} for f in books if f["kind"] == "not_booked"],
             "our_invoices": [{**f["doc"], "text": f["text"], "twin": f.get("twin")} for f in books
                              if f["kind"] == "our_invoice"],
@@ -696,6 +726,178 @@ def worklist(tenant_id: str) -> Dict[str, Any]:
             "suppliers": [{k: v for k, v in f.items() if k not in ("severity",)} for f in sup],
             "price_vat": price_vat,
             "access": people}
+
+
+# ── the business's own invoices on file but not in Invoices (20 Nov 2026) ─────
+# DIGG's HPC invoices 02–04 (R625,272.65) were marked "a sale, in Invoices" — but were never added there,
+# so the money received for them had no invoice behind it for the accountant.
+
+SALE_DAYS = (-10, 120)            # money received from 10 days before the invoice to 120 after
+
+
+def _same_number(a: Any, b: Any) -> bool:
+    return bool(_alnum(a)) and _alnum(a) == _alnum(b)
+
+
+def sales_not_in_invoices(tenant_id: str) -> List[Dict[str, Any]]:
+    """Each own invoice on file that isn't in Invoices, with what in Invoices may already be it (same number,
+    or the same amount — or that amount with 15% VAT added — within 30 days) and the money received that may
+    be its payment (same amount to the cent or one cent, untied)."""
+    from vula.commerce import certificates
+    from vula.commerce.books_review import _shown as line_shown
+    every = certificates.own_invoices(tenant_id)
+    docs = [d for d in every if not d.get("commerce_invoice_id")]
+    sales = certificates._sales(tenant_id)
+    by_id = {str(i["id"]): i for i in sales}
+    differs = []
+    for d in every:     # in Invoices, but at a different amount from the invoice itself (HPC14: 15% VAT added)
+        i = by_id.get(str(d.get("commerce_invoice_id") or ""))
+        t = abs(_int((d.get("fields") or {}).get("total_cents")) or 0)
+        if i and abs(int(i.get("total_cents") or 0) - t) > certificates.TOLERANCE:
+            s = shown(d)
+            differs.append({**s, "differs": {"id": i["id"], "number": i.get("invoice_number"),
+                                             "cents": int(i.get("total_cents") or 0), "status": i.get("status")},
+                            "in_invoices_as": [], "receipts": [],
+                            "text": (f"{_label(s)} says {_rands(t)}, but it's in Invoices as {i.get('invoice_number')} at "
+                                     f"{_rands(i.get('total_cents'))}"
+                                     + (" — 15% VAT added" if abs(int(i.get('total_cents') or 0) - round(t * 1.15)) <= 1 else "")
+                                     + ". Correct the invoice in Invoices to match.")})
+    if not docs:
+        return differs
+    linked = {str(d.get("commerce_invoice_id")) for d in certificates._documents(tenant_id) if d.get("commerce_invoice_id")}
+    receipts = [r for r in certificates._receipts(tenant_id) if not line_shown(r)["matched"]]
+    out = []
+    for d in docs:
+        s = shown(d)
+        total, day = abs(s["total_cents"] or 0), certificates._day(s["date"])
+        maybe = []
+        for i in sales:
+            g = certificates._gap(day, certificates._day(i.get("issue_date")))
+            near = g is None or abs(g) <= 30
+            t = int(i.get("total_cents") or 0)
+            if _same_number(i.get("invoice_number"), s["number"]):
+                why = "same number"
+            elif near and abs(t - total) <= certificates.TOLERANCE:
+                why = "same amount"
+            elif near and abs(t - round(total * 1.15)) <= 1:
+                why = "this amount with 15% VAT added"
+            else:
+                continue
+            maybe.append({"id": i["id"], "number": i.get("invoice_number"), "cents": t, "status": i.get("status"),
+                          "date": str(i.get("issue_date") or "")[:10], "why": why,
+                          "linked_to_a_document": str(i["id"]) in linked})
+        cands = []
+        for r in receipts:
+            g = certificates._gap(day, certificates._day(r.get("txn_date")))
+            if abs(int(r.get("amount_cents") or 0) - total) <= certificates.TOLERANCE and (
+                    g is None or SALE_DAYS[0] <= g <= SALE_DAYS[1]):
+                cands.append((abs(g or 0), line_shown(r)))
+        cands.sort(key=lambda x: x[0])
+        out.append({**s, "in_invoices_as": maybe, "receipts": [c for _, c in cands[:3]],
+                    "text": (f"{_label(s)} for {_rands(s['total_cents'])}"
+                             f"{' to ' + s['customer'] if s.get('customer') else ''} is the business's own invoice, "
+                             "on file but not in Invoices.")})
+    return sorted(out + differs, key=lambda x: (x.get("date") or "", x.get("number") or ""))
+
+
+def link_invoice(tenant_id: str, doc_id: str, invoice_id: str, actor: Optional[dict] = None) -> Dict[str, Any]:
+    """The business's own invoice on file IS that invoice already in Invoices (same total): tie them, so it
+    isn't added twice. Nothing about the money changes."""
+    from vula.commerce import certificates
+    doc = _doc(tenant_id, doc_id)
+    if doc.get("commerce_invoice_id"):
+        raise _refused("That document is already tied to an invoice.")
+    inv = next((i for i in certificates._sales(tenant_id) if str(i["id"]) == str(invoice_id)), None)
+    if not inv:
+        raise _refused("That invoice isn't in this business's Invoices.")
+    total = abs(_int((doc.get("fields") or {}).get("total_cents")) or 0)
+    if abs(int(inv.get("total_cents") or 0) - total) > certificates.TOLERANCE:
+        raise _refused(f"{inv.get('invoice_number')} is {_rands(inv.get('total_cents'))} and the document says "
+                       f"{_rands(total)} — correct the invoice first.")
+    taken = (_client().table("vula_filed_documents").select("id").eq("tenant_id", tenant_id)
+             .eq("commerce_invoice_id", invoice_id).limit(1).execute().data or [])
+    if taken:
+        raise _refused(f"{inv.get('invoice_number')} is already tied to another document.")
+    back = _save_fields(tenant_id, doc_id, dict(doc.get("fields") or {}), commerce_invoice_id=invoice_id)
+    _audit(tenant_id, actor, "own_invoice_tied", doc_id=doc_id, invoice_id=invoice_id)
+    return {"ok": str(back.get("commerce_invoice_id")) == str(invoice_id), "invoice": inv.get("invoice_number")}
+
+
+def add_to_invoices(tenant_id: str, doc_id: str, txn_id: Optional[str] = None,
+                    actor: Optional[dict] = None) -> Dict[str, Any]:
+    """Put the business's own invoice on file into Invoices, at the figures on the document, under its own
+    number where that's free; with `txn_id`, that bank line (money received) is recorded as its payment on
+    the bank date and tied to it — so the sale isn't counted twice and the accountant sees an invoice behind it.
+    Refused while something in Invoices may already be it (fix or tie that first)."""
+    from vula.commerce import certificates, service
+    from vula.commerce.books_review import _lines, _live, _resync
+    from vula.commerce.books_review import _shown as line_shown
+    doc = _doc(tenant_id, doc_id)
+    f = doc.get("fields") or {}
+    if not live(doc) or doc.get("category") != "Invoice" or certificates.is_certificate(doc):
+        raise _refused("Only the business's own invoices on file can be added to Invoices.")
+    if not is_own(f, own_names(tenant_id)):
+        raise _refused("That invoice isn't the business's own — a supplier's invoice is booked as a bill.")
+    if doc.get("commerce_invoice_id"):
+        raise _refused("That invoice is already in Invoices.")
+    s = shown(doc)
+    total = abs(s["total_cents"] or 0)
+    if not total:
+        raise _refused("The invoice has no total — correct its figures first.")
+    if (f.get("_unverified_figures") or (f.get("_file_check") or {}).get("missing")) and not f.get("_confirmed"):
+        raise _refused("Its figures weren't found in the file — correct or confirm them first.")
+    pending = next((x for x in sales_not_in_invoices(tenant_id) if str(x["id"]) == str(doc_id)), None)
+    clash = [m for m in (pending or {}).get("in_invoices_as") or [] if not m["linked_to_a_document"]]
+    if clash:
+        m = clash[0]
+        raise _refused(f"{m['number']} in Invoices ({_rands(m['cents'])}, {m['why']}) may already be this invoice — "
+                       "fix or cancel it first, so the sale isn't counted twice.")
+    line = None
+    if txn_id:
+        rows = _lines(tenant_id, [txn_id])
+        if not rows or not _live(rows[0]) or rows[0].get("direction") != "in":
+            raise _refused("That bank line isn't money received that's in the books.")
+        line = rows[0]
+        if line_shown(line)["matched"]:
+            raise _refused("That bank line is already tied to something.")
+        if abs(int(line.get("amount_cents") or 0) - total) > certificates.TOLERANCE:
+            raise _refused("The money received isn't the invoice's total.")
+    created = asyncio.run(service.create_invoice(tenant_id, {
+        "doc_type": "invoice", "customer_name": s.get("customer") or "Client", "status": "sent",
+        "issue_date": s.get("date"), "due_date": str(f.get("due_date") or "")[:10] or None, "project": doc.get("project"),
+        "prices_include_vat": True,
+        "notes": f"The business's own invoice {s.get('number') or ''} on file ({doc.get('filename') or ''}).".strip(),
+        "line_items": [{"description": f"As invoiced — {s.get('number') or doc.get('filename') or 'invoice on file'}",
+                        "quantity": 1, "unit_price_cents": total}]}))
+    if int(created.get("total_cents") or 0) != total:
+        _client().table("commerce_invoices").update({"status": "cancelled", "cancel_reason": "total didn't match the file"}) \
+            .eq("tenant_id", tenant_id).eq("id", created["id"]).execute()
+        raise _refused("Invoices would have shown a different total from the document — nothing was added.")
+    number = s.get("number")
+    if number and not any(_same_number(x.get("invoice_number"), number) for x in certificates._sales(tenant_id)
+                          if str(x["id"]) != str(created["id"])):
+        try:
+            _client().table("commerce_invoices").update({"invoice_number": number}).eq("tenant_id", tenant_id) \
+                .eq("id", created["id"]).execute()
+        except Exception as exc:  # noqa: BLE001 — Vula's own number stays
+            log.debug("own invoice number not kept: %s", exc)
+    back = _save_fields(tenant_id, doc_id, dict(f), commerce_invoice_id=created["id"])
+    paid = None
+    if line:
+        on = str(line.get("txn_date"))[:10]
+        asyncio.run(service.record_invoice_payment(tenant_id, created["id"], int(line["amount_cents"]),
+                                                   payment_method="eft", note=f"Bank: {line.get('description') or ''}"[:200],
+                                                   paid_at=on))
+        _client().table("commerce_bank_transactions").update({"matched_invoice_id": created["id"], "match_status": "matched"}) \
+            .eq("tenant_id", tenant_id).eq("id", txn_id).execute()
+        _resync(tenant_id, [txn_id])
+        paid = on
+    inv = (_client().table("commerce_invoices").select("id,invoice_number,status,total_cents")
+           .eq("tenant_id", tenant_id).eq("id", created["id"]).limit(1).execute().data or [{}])[0]
+    ok = (str(back.get("commerce_invoice_id")) == str(created["id"]) and int(inv.get("total_cents") or 0) == total
+          and (not line or inv.get("status") == "paid"))
+    _audit(tenant_id, actor, "own_invoice_added", doc_id=doc_id, invoice_id=created["id"], cents=total, txn_id=txn_id)
+    return {"ok": ok, "invoice": inv, "paid_on": paid}
 
 
 # ── fixes (owner or manager; books_review's routes) ──────────────────────────

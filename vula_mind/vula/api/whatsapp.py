@@ -5524,6 +5524,9 @@ _DOC_CATEGORIES = [
     # 19 Nov 2026: a bank's own statement of one of the business's accounts — kept under its account
     # (vula/commerce/statement_files.py), never "Account Statement" (a supplier's statement of what is owed).
     "Bank Statement",
+    # 20 Nov 2026: a principal agent's / QS's certificate of what the client owes the business for work done
+    # (vula/commerce/certificates.py) — DIGG's were filed as supplier invoices. Never a bill.
+    "Payment Certificate",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
@@ -5821,6 +5824,15 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     'integer|null, "net_cents": integer|null, "transaction_count": integer|null} '
                     "— date is the settlement/payout date, net_cents the amount paid out, money "
                     "in CENTS. "
+                    "For Payment Certificate (a principal agent's / quantity surveyor's interim "
+                    "certificate of the amount the employer must pay the contractor — NOT an invoice), "
+                    'fields MUST use: {"certificate_number": integer|null, "date": "YYYY-MM-DD"|null, '
+                    '"valuation_date": "YYYY-MM-DD"|null, "issuer": string|null, "employer": string|null, '
+                    '"contractor": string|null, "project_name": string|null, "amount_certified_cents": '
+                    'integer|null, "gross_certified_cents": integer|null, "previous_certified_cents": '
+                    'integer|null, "retention_cents": integer|null, "payment_due_date": "YYYY-MM-DD"|null, '
+                    '"amounts_exclude_vat": boolean|null} — amount_certified_cents is the amount due '
+                    "on THIS certificate, money in CENTS. "
                     "For Delivery Note (goods delivered/collected, usually no prices), fields "
                     'MUST use: {"supplier": string|null, "date": "YYYY-MM-DD"|null, "reference": '
                     'string|null, "delivery_address": string|null, "line_items": [{"description": '
@@ -5876,6 +5888,9 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             # Cape" filed as General Document) — doc_quality.better_category, no extra call.
             from vula.commerce.doc_quality import better_category
             cat = better_category(cat, summary, filename)
+            from vula.commerce.certificates import CATEGORY as _CERT, looks_like as _is_cert
+            if _is_cert(filename, summary, data.get("fields") or {}):
+                cat = _CERT          # its own title says so: never an invoice to book as a cost
             return {"category": cat, "summary": summary, "fields": data.get("fields") or {}}
 
         def _needs_escalation(result: Optional[dict]) -> bool:

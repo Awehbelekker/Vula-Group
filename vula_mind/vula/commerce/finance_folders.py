@@ -38,7 +38,8 @@ log = logging.getLogger(__name__)
 # (key, title, categories, grouped by)
 FOLDERS: List[Tuple[str, str, frozenset, str]] = [
     ("bank", "01 Bank statements", frozenset({statement_files.CATEGORY}), "account"),
-    ("sales", "02 Sales invoices and credit notes", frozenset(), "month"),           # invoices the business issued
+    # invoices the business issued, and the payment certificates its invoices answer (20 Nov 2026)
+    ("sales", "02 Sales invoices and credit notes", frozenset({"Payment Certificate"}), "month"),
     ("bills", "03 Supplier invoices and delivery notes", frozenset({"Invoice", "Delivery Note", "Credit Note"}),
      "supplier"),
     ("pops", "04 Proofs of payment", frozenset({"Proof of Payment"}), "month"),

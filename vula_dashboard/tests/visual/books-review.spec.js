@@ -156,7 +156,7 @@ test.describe("books review", () => {
 
   test("the documents tab counts what's open and lists each finding", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
-    await expect(page.getByRole("tab", { name: "Documents (9)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Documents (14)" })).toBeVisible();
     await page.getByRole("tab", { name: /^Documents/ }).click();
     const content = page.locator(".v2-content");
     await expect(content).toContainText("The total read as R2,500.00 isn't in the document itself.");
@@ -226,10 +226,30 @@ test.describe("books review", () => {
     const own = page.locator("li", { hasText: "DIGG-2026-HPC02" });
     await expect(own.getByRole("button", { name: "Book it" })).toHaveCount(0);
     const noted = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-own/not-a-bill"));
-    await own.getByRole("button", { name: "It's in Invoices" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Yes, it's there" }).click();
+    await own.getByRole("button", { name: "It's a sale" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Yes, it's a sale" }).click();
     expect((await noted).postDataJSON().reason).toContain("Our own invoice to Vizion Developments");
     await expect(content).not.toContainText("Your own invoices on file");
+  });
+
+  test("payment certificates are filed as certificates and own invoices are added to Invoices, paid", async ({ page }) => {
+    await docs(page);
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Payment certificates");
+    await expect(content).toContainText("Your invoice DIGG-2026-HPC02 (on file, not in Invoices)");
+    await expect(content).toContainText("Certificate 5 · R 387 297.60 received 2026-07-24");
+    const filed = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/pc2/certificate"));
+    await page.getByRole("button", { name: "File as a certificate" }).click();
+    await filed;
+    await expect(page.getByRole("button", { name: "File as a certificate" })).toHaveCount(0);
+    await expect(content).toContainText("Your invoices not in Invoices");
+    await expect(content).toContainText("15% VAT added");
+    const hpc14 = page.locator("li", { hasText: "15% VAT added" });
+    await expect(hpc14.getByRole("button", { name: "Add to Invoices" })).toHaveCount(0);   // fix it in Invoices first
+    const added = page.waitForRequest((r) => r.url().endsWith("/books-audit/docs/doc-hpc02/add-to-invoices"));
+    await page.getByRole("button", { name: "Add to Invoices" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Add to Invoices" }).click();
+    expect((await added).postDataJSON()).toEqual({ txn_id: "r2" });
   });
 
   test("several statements are compared in one go, each on its own", async ({ page }) => {

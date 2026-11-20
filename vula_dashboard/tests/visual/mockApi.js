@@ -502,6 +502,12 @@ function routes(role, modules = [], features = []) {
         r("POST", `${A}/books-audit/docs/${T}/not-a-bill`, own((m) => { drop("not_booked", (d) => d.id === m[2]);
           drop("our_invoices", (d) => d.id === m[2]); return { ok: true }; })),
         r("POST", `${A}/books-audit/docs/${T}/duplicate`, own(() => { drop("doc_duplicates", () => true); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/certificate`, own((m) => {
+          D().certificates.certificates = D().certificates.certificates.map((c) => (c.doc_id === m[2] ? { ...c, labelled: true, category: "Payment Certificate" } : c));
+          return { ok: true, certificate: { number: 2 } }; })),
+        r("POST", `${A}/books-audit/docs/${T}/add-to-invoices`, own((m) => { drop("sales_not_in_invoices", (d) => d.id === m[2]);
+          return { ok: true, invoice: { id: "inv-new", invoice_number: "DIGG-2026-HPC02", status: "paid" }, paid_on: "2026-07-03" }; })),
+        r("POST", `${A}/books-audit/docs/${T}/link-invoice`, own((m) => { drop("sales_not_in_invoices", (d) => d.id === m[2]); return { ok: true }; })),
         r("POST", `${A}/books-audit/docs/${T}/vat-basis`, own((m, url, req) => ({ ok: true, prices: 12, basis: (req.postDataJSON() || {}).basis }))),
         r("POST", `${A}/books-audit/bills/${T}/cancel-duplicate`, own(() => { drop("bill_duplicates", () => true); return { ok: true }; })),
         r("POST", `${A}/books-audit/bills/${T}/match-document`, own(() => { drop("bill_mismatch", () => true); return { ok: true }; })),

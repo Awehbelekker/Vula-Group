@@ -5,8 +5,12 @@
  *                           what was read (the old values are kept), or say they're right
  *   On file, not booked     an invoice on file with no bill — book it, or say it isn't a bill (one addressed
  *                           to another business says so: book it only if the business paid it)
- *   Your own invoices       the business's own invoices to clients found among them — a sale, never a bill;
- *                           noted once checked in Invoices (never offered for booking)
+ *   Payment certificates    a principal agent's certificate of what the client owes (20 Nov 2026, DIGG's
+ *                           Vizion certificates) — filed as one, matched to the business's invoice and the
+ *                           money received; payments naming a certificate that isn't on file
+ *   Your invoices not in    the business's own invoices on file but not in Invoices — added (paid on the
+ *   Invoices                bank date, tied to the money received) or tied to the one already there
+ *   Your own invoices       the business's own invoices to clients found among them — a sale, never a bill
  *   Bills and documents     a bill booked at a different amount from its document — book it at the
  *                           document's figures (unpaid bills only)
  *   Twice                   the same document on file twice; the same bill in the books twice (a paid
@@ -32,7 +36,8 @@ async function done(res, okText, failText) {
   return false;
 }
 
-export const DOC_GROUPS = ["doc_figures", "not_booked", "our_invoices", "bill_mismatch", "doc_duplicates", "bill_duplicates", "suppliers"];
+export const DOC_GROUPS = ["doc_figures", "not_booked", "our_invoices", "sales_not_in_invoices", "certificates",
+  "bill_mismatch", "doc_duplicates", "bill_duplicates", "suppliers"];
 export const docCount = (open) => DOC_GROUPS.reduce((n, k) => n + (open?.[k] || 0), 0);
 
 export default function DocumentsReview({ x, r, tenantId }) {
@@ -42,6 +47,8 @@ export default function DocumentsReview({ x, r, tenantId }) {
     <div className="vbr2-stack">
       <p className="vbr2-sub">Each money document was checked against its own file and against the books. Fix what's wrong here; every change is kept with who made it and why.</p>
       <Figures x={x} items={d.doc_figures || []} open={open} />
+      <Certificates x={x} m={d.certificates} open={open} />
+      <SalesNotInInvoices x={x} items={d.sales_not_in_invoices || []} open={open} />
       <NotBooked x={x} items={d.not_booked || []} open={open} />
       <OurInvoices x={x} items={d.our_invoices || []} open={open} />
       <Mismatch x={x} items={d.bill_mismatch || []} open={open} />
@@ -186,24 +193,119 @@ function NotBooked({ x, items, open }) {
   );
 }
 
+// ── Payment certificates ─────────────────────────────────────────────────────
+
+function Certificates({ x, m, open }) {
+  const rows = m?.certificates || [];
+  const unmatched = m?.unmatched_receipts || [];
+  if (!rows.length && !unmatched.length) return null;
+  async function file(c) {
+    if (await done(await x.docCertificate(c.doc_id), `Certificate ${c.number ?? ""} filed as a payment certificate.`,
+      "That didn't save — try again.")) x.reload();
+  }
+  return (
+    <Card>
+      <h3 className="vbr2-h">Payment certificates</h3>
+      <p className="vbr2-sub">A payment certificate is the principal agent's statement of what the client owes you — not a bill. Each should have your invoice for the same amount and a payment received.</p>
+      <ul className="vbr2-list">
+        {rows.map((c) => (
+          <li key={c.doc_id} className="vbr2-row vbr2-wrap">
+            <span className="vbr2-text">
+              <b>Certificate {c.number ?? "?"}</b>{c.date ? ` (${c.date})` : ""} · {money(c.amount_cents)}
+              <br /><span className="vbr2-muted">
+                {c.invoice ? `Your invoice ${c.invoice.number || ""}${c.invoice.kind === "document" && !c.invoice.in_invoices ? " (on file, not in Invoices)" : ""}` : "No invoice for it yet"}
+                {" · "}{c.received ? `paid ${c.received.date} (${money(c.received.cents)})` : "not paid yet"}
+                {!c.labelled ? ` · filed as "${c.category}"` : ""}
+              </span>
+            </span>
+            <span className="vbr2-actions">
+              <Button size="sm" variant="ghost" onClick={() => open(c.doc_id)} aria-label={`Open certificate ${c.number ?? ""}`}>Open</Button>
+              {!c.labelled && <Button size="sm" variant="secondary" onClick={() => file(c)}>File as a certificate</Button>}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {unmatched.length ? (
+        <>
+          <h4 className="vbr2-h">Paid, but the certificate isn't on file</h4>
+          <p className="vbr2-sub">The bank reference names a certificate Vula doesn't have. Send Vula the certificate and your invoice for each.</p>
+          <ul className="vbr2-list">
+            {unmatched.map((u) => (
+              <li key={u.id} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text">Certificate {u.number} · {money(u.cents)} received {u.date}
+                  <br /><span className="vbr2-muted">{u.description}{u.invoice ? ` · your invoice ${u.invoice.number || ""} is on file` : ""}</span></span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </Card>
+  );
+}
+
+// ── Your own invoices that aren't in Invoices ────────────────────────────────
+
+function SalesNotInInvoices({ x, items, open }) {
+  const [paidBy, setPaidBy] = useState({});
+  if (!items.length) return null;
+  async function add(doc) {
+    const txn = paidBy[doc.id] ?? (doc.receipts?.[0]?.id || "");
+    const rec = (doc.receipts || []).find((r) => r.id === txn);
+    if (!(await confirmDialog(`Add ${label(doc)} (${money(doc.total_cents)}) to Invoices`
+      + (rec ? `, paid ${rec.date} by the bank line "${rec.description}"?` : ", not paid yet?"),
+    { confirmLabel: "Add to Invoices" }))) return;
+    if (await done(await x.docAddToInvoices(doc.id, txn || null), "Added to Invoices.", "That didn't save — try again.")) x.reload();
+  }
+  async function tie(doc, inv) {
+    if (await done(await x.docLinkInvoice(doc.id, inv.id), `Tied to ${inv.number}.`, "That didn't save — try again.")) x.reload();
+  }
+  return (
+    <Card>
+      <h3 className="vbr2-h">Your invoices not in Invoices</h3>
+      <p className="vbr2-sub">Invoices you sent that are on file but not in Money › Invoices, so the money received for them has no invoice behind it. Add each one — paid on the day the money came in — or tie it to the one already there.</p>
+      <ul className="vbr2-list">
+        {items.map((doc) => {
+          const same = (doc.in_invoices_as || []).filter((i) => Math.abs(i.cents - (doc.total_cents || 0)) <= 1 && !i.linked_to_a_document);
+          return (
+            <DocLine key={doc.id} doc={{ ...doc, supplier: doc.customer ? `you to ${doc.customer}` : "you" }} open={open}>
+              {doc.differs ? null : same.length ? same.map((i) => (
+                <Button key={i.id} size="sm" variant="secondary" onClick={() => tie(doc, i)}>{`It's ${i.number}`}</Button>
+              )) : (doc.in_invoices_as || []).length ? null : (
+                <>
+                  <Select aria-label={`Payment for ${label(doc)}`} value={paidBy[doc.id] ?? (doc.receipts?.[0]?.id || "")}
+                    onChange={(e) => setPaidBy((s) => ({ ...s, [doc.id]: e.target.value }))}>
+                    {(doc.receipts || []).map((r) => <option key={r.id} value={r.id}>{`Paid ${r.date} — ${money(r.amount_cents)}`}</option>)}
+                    <option value="">Not paid yet</option>
+                  </Select>
+                  <Button size="sm" variant="secondary" onClick={() => add(doc)}>Add to Invoices</Button>
+                </>
+              )}
+            </DocLine>
+          );
+        })}
+      </ul>
+    </Card>
+  );
+}
+
 // ── Your own invoices on file ────────────────────────────────────────────────
 
 function OurInvoices({ x, items, open }) {
   async function noted(doc) {
-    if (!(await confirmDialog(`${label(doc)} is your own invoice${doc.customer ? ` to ${doc.customer}` : ""}. Is it in Money › Invoices?`,
-      { confirmLabel: "Yes, it's there" }))) return;
-    if (await done(await x.docNotABill(doc.id, `Our own invoice${doc.customer ? ` to ${doc.customer}` : ""} — a sale, in Invoices`),
+    if (!(await confirmDialog(`${label(doc)} is your own invoice${doc.customer ? ` to ${doc.customer}` : ""} — a sale, not a bill?`,
+      { confirmLabel: "Yes, it's a sale" }))) return;
+    if (await done(await x.docNotABill(doc.id, `Our own invoice${doc.customer ? ` to ${doc.customer}` : ""} — a sale, not a bill`),
       "Noted.", "That didn't save — try again.")) x.reload();
   }
   if (!items.length) return null;
   return (
     <Card>
       <h3 className="vbr2-h">Your own invoices on file</h3>
-      <p className="vbr2-sub">These were filed like supplier invoices, but they're invoices you sent — sales, not costs. Vula never books them as bills. Check each is in Money › Invoices.</p>
+      <p className="vbr2-sub">These were filed like supplier invoices, but they're invoices you sent — sales, not costs. Vula never books them as bills. Any that aren't in Money › Invoices are listed under "Your invoices not in Invoices".</p>
       <ul className="vbr2-list">
         {items.map((doc) => (
           <DocLine key={doc.id} doc={doc} open={open}>
-            <Button size="sm" variant="secondary" onClick={() => noted(doc)}>It's in Invoices</Button>
+            <Button size="sm" variant="secondary" onClick={() => noted(doc)}>It's a sale</Button>
           </DocLine>
         ))}
       </ul>

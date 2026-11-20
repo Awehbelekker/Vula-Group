@@ -79,6 +79,9 @@ export function useBooksReview(tenantId) {
   const docConfirm = (id, note) => post(a(`/docs/${id}/confirm`), { note });
   const docBook = (id) => post(a(`/docs/${id}/book`));
   const docNotABill = (id, why) => post(a(`/docs/${id}/not-a-bill`), { reason: why });
+  const docCertificate = (id) => post(a(`/docs/${id}/certificate`));
+  const docAddToInvoices = (id, txnId) => post(a(`/docs/${id}/add-to-invoices`), { txn_id: txnId || null });
+  const docLinkInvoice = (id, invoiceId) => post(a(`/docs/${id}/link-invoice`), { of_id: invoiceId });
   const docDuplicate = (id, ofId) => post(a(`/docs/${id}/duplicate`), { of_id: ofId });
   const docVatBasis = (id, basis) => post(a(`/docs/${id}/vat-basis`), { basis });
   const billCancelDuplicate = (id, ofId, why) => post(a(`/bills/${id}/cancel-duplicate`), { of_id: ofId, reason: why });
@@ -95,5 +98,5 @@ export function useBooksReview(tenantId) {
 
   return { review, accounts, checks, state, reload, runCheck, restore, setAside, transfer, link, correctDate,
     agree, categorise, payBill, paidBack, recordDraft, cancelDraft, upload, check, apply, docFigures, docConfirm, docBook,
-    docNotABill, docDuplicate, docVatBasis, billCancelDuplicate, billMatchDocument, mergeSuppliers };
+    docNotABill, docCertificate, docAddToInvoices, docLinkInvoice, docDuplicate, docVatBasis, billCancelDuplicate, billMatchDocument, mergeSuppliers };
 }
