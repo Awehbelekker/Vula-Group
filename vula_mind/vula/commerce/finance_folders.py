@@ -37,8 +37,12 @@ log = logging.getLogger(__name__)
 
 # (key, title, categories, grouped by)
 FOLDERS: List[Tuple[str, str, frozenset, str]] = [
+    # the business's own company and tax documents — not of one year, shown in every year (20 Nov 2026)
+    ("company", "00 Company and tax", frozenset({"Company Registration", "Tax / SARS", "Compliance Certificate"}),
+     "category"),
     ("bank", "01 Bank statements", frozenset({statement_files.CATEGORY}), "account"),
-    ("sales", "02 Sales invoices and credit notes", frozenset(), "month"),           # invoices the business issued
+    # invoices the business issued, and the payment certificates its invoices answer (20 Nov 2026)
+    ("sales", "02 Sales invoices and credit notes", frozenset({"Payment Certificate"}), "month"),
     ("bills", "03 Supplier invoices and delivery notes", frozenset({"Invoice", "Delivery Note", "Credit Note"}),
      "supplier"),
     ("pops", "04 Proofs of payment", frozenset({"Proof of Payment"}), "month"),
@@ -129,7 +133,7 @@ def organise(tenant_id: str, year_start: Optional[str] = None) -> Dict[str, Any]
         if key is None:
             continue
         when = pf._date(d) or str(d.get("created_at") or "")[:10]
-        if not when or not (start.isoformat() <= when <= end.isoformat()):
+        if key != "company" and (not when or not (start.isoformat() <= when <= end.isoformat())):
             continue
         party = suppliers.label(d.get("supplier_id"), f.get("supplier") or f.get("supplier_name"))
         if key == "bills":
@@ -142,12 +146,17 @@ def organise(tenant_id: str, year_start: Optional[str] = None) -> Dict[str, Any]
         elif grouping == "supplier":
             group = party
         elif grouping == "category":
-            group = cat
+            from vula.commerce.company_docs import GROUP_NAMES
+            group = GROUP_NAMES.get(cat, cat)
         else:
             group = _month_name(when[:7])
         amount = pf._amount(d)
         label = (d.get("summary") if key == "bank" and d.get("summary") else
+                 (d.get("summary") or d.get("filename") or cat)[:120] if key == "company" else
                  " ".join(x for x in (party if key != "bank" else "", pf._number(d)) if x) or cat)
+        acct = "".join(ch for ch in str(f.get("account_number") or "") if ch.isdigit())
+        if key == "company" and len(acct) >= 4:
+            label = f"Account …{acct[-4:]}: {label}"     # one bank letter per account; last 4 digits only
         folders[key].setdefault(group, []).append({
             "id": d["id"], "date": when, "label": statement_files.mask_name(label)[:120], "category": cat,
             "amount_cents": amount if key not in ("bank", "statements") else None,

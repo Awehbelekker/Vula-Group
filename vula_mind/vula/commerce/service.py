@@ -3889,6 +3889,8 @@ def _document_amount(fields: Dict[str, Any]) -> Optional[float]:
         cents = fields.get("total_cents")
         if cents is None:
             cents = fields.get("amount_cents")
+        if cents is None:           # a payment certificate's amount due (vula/commerce/certificates.py)
+            cents = fields.get("amount_certified_cents")
         if cents is not None:
             try:
                 amount = round(cents / 100, 2)

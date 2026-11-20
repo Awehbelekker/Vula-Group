@@ -113,6 +113,10 @@ class PayBillBody(BaseModel):
     account_code: str
 
 
+class AddInvoiceBody(BaseModel):
+    txn_id: Optional[str] = None        # the money received that paid it, tied as its payment
+
+
 class DateBody(BaseModel):
     date: str
     reason: str
@@ -157,6 +161,20 @@ async def link_line(tenant_id: str, txn_id: str, body: LinkBody, request: Reques
     from vula.commerce import books_review
     return await _fix(books_review.link, tenant_id, txn_id, invoice_id=body.invoice_id,
                       expense_id=body.expense_id, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/certificate")
+async def label_certificate(tenant_id: str, doc_id: str, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import certificates
+    return await _fix(certificates.label, tenant_id, doc_id, actor=actor)
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/add-to-invoices")
+async def add_own_invoice(tenant_id: str, doc_id: str, body: AddInvoiceBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.add_to_invoices, tenant_id, doc_id, body.txn_id, actor=actor)
 
 
 @router.post("/{tenant_id}/admin/books-audit/lines/{txn_id}/pay-bill")
@@ -388,3 +406,29 @@ async def statement_coverage(tenant_id: str, request: Request, year: Optional[st
     except ValueError:
         raise HTTPException(status_code=400, detail="year is the first day of the financial year, e.g. 2026-03-01")
     return await asyncio.to_thread(statement_files.coverage, tenant_id, start)
+
+
+@router.post("/{tenant_id}/admin/books-audit/docs/{doc_id}/link-invoice")
+async def link_own_invoice(tenant_id: str, doc_id: str, body: OfBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import doc_audit
+    return await _fix(doc_audit.link_invoice, tenant_id, doc_id, body.of_id, actor=actor)
+
+
+class IdsBody(BaseModel):
+    ids: List[str]
+
+
+@router.get("/{tenant_id}/admin/company-docs/proposals")
+async def company_doc_proposals(tenant_id: str, request: Request) -> dict:
+    """Documents filed elsewhere whose own words say they're company or tax documents (a preview)."""
+    await _full(tenant_id, request)
+    from vula.commerce import company_docs
+    return {"documents": await asyncio.to_thread(company_docs.proposals, tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/company-docs/refile")
+async def company_doc_refile(tenant_id: str, body: IdsBody, request: Request) -> dict:
+    _, actor = await _full(tenant_id, request)
+    from vula.commerce import company_docs
+    return await _fix(company_docs.refile, tenant_id, body.ids, actor=actor)

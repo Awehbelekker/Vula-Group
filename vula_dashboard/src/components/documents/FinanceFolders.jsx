@@ -3,14 +3,18 @@
  * statement_files.py). The year's money documents in the folders an accountant expects — bank statements
  * per account (and the months still missing), sales invoices, supplier invoices by supplier, proofs of
  * payment, settlements, statements, contracts — worked out on the server from what each document is and
- * its own date. Download a folder or the whole year as a zip with an index. Owners and managers only.
+ * its own date. "00 Company and tax" (20 Nov 2026, vula/commerce/company_docs.py) holds the business's own
+ * CIPC, SARS and compliance documents in every year; owners and managers upload them here, and documents
+ * already on file that are one of these are offered to file there (a preview; the ones naming another
+ * business are never pre-ticked). Download a folder or the whole year as a zip with an index. Owners and managers only.
  * Every figure is the server's; this file only formats it.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, Download, FolderOpen, Landmark } from "lucide-react";
 import { VULA_API } from "../../lib/authFetch";
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, ErrorCard, Select, Skeleton, StatusChip, toast } from "../ui/index.jsx";
+import { Building2 } from "lucide-react";
 import { openDocument } from "../accountant/useAccountant";
 
 const money = (c) => formatMoney(c || 0, { cents: "always" });
@@ -94,6 +98,7 @@ export default function FinanceFolders({ tenantId, accountant = false }) {
         </EmptyState>)}
       {x.state === "ready" && x.tree && (
         <>
+          {!accountant && <CompanyDocs tenantId={tenantId} onDone={x.reload} />}
           <Coverage cover={x.tree.coverage} />
           {x.tree.folders.map((f) => <Folder key={f.key} f={f} busy={x.busy} onDownload={() => x.download(f.key)}
             onOpen={(id) => openDocument(tenantId, id)} />)}
@@ -159,6 +164,91 @@ function Folder({ f, busy, onDownload, onOpen }) {
                 </li>))}
             </ul>
           </div>)))}
+    </Card>
+  );
+}
+
+const KINDS = [
+  { id: "Tax / SARS", label: "SARS and tax (registration, tax compliance PIN, returns, letters)" },
+  { id: "Company Registration", label: "Company registration (CIPC: COR14.3, MOI, share certificates, resolutions)" },
+  { id: "Compliance Certificate", label: "Compliance (B-BBEE, COIDA letter of good standing, UIF, FICA)" },
+];
+
+/** Upload the business's own company and tax documents, and file the ones already on file. Owners/managers. */
+function CompanyDocs({ tenantId, onDone }) {
+  const [kind, setKind] = useState(KINDS[0].id);
+  const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState(null);
+  const [picked, setPicked] = useState(new Set());
+  const picker = useRef(null);
+  const load = useCallback(async () => {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/company-docs/proposals`).catch(() => null);
+    const d = r && r.ok ? await r.json().catch(() => null) : null;
+    const rows = d?.documents || [];
+    setFound(rows);
+    setPicked(new Set(rows.filter((p) => p.ours).map((p) => p.id)));
+  }, [tenantId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function upload(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    let ok = 0;
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append("tenant_id", tenantId); fd.append("file", f); fd.append("category_hint", kind);
+      const r = await fetch(`${VULA_API}/ingest`, { method: "POST", body: fd }).catch(() => null);
+      if (r && r.ok) ok += 1;
+    }
+    setBusy(false);
+    toast(ok === files.length ? `${ok} document${ok === 1 ? "" : "s"} uploaded — filed under Company and tax in a few minutes.`
+      : `${ok} of ${files.length} uploaded — try the rest again.`, ok === files.length ? "ok" : "danger");
+  }
+  async function file() {
+    const ids = [...picked];
+    if (!ids.length) return;
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/company-docs/refile`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).catch(() => null);
+    const d = r && r.ok ? await r.json().catch(() => ({})) : null;
+    if (!d) { toast("That didn't save — try again.", "danger"); return; }
+    toast(`${d.refiled.length} document${d.refiled.length === 1 ? "" : "s"} filed under Company and tax.`);
+    load(); onDone();
+  }
+  const toggle = (id) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  return (
+    <Card className="vdc-panel">
+      <h3 className="vdc-h"><Building2 size={18} aria-hidden="true" />Company and tax documents</h3>
+      <p className="vdc-sub">Your CIPC registration, SARS letters and returns, and compliance certificates — kept in "00 Company and tax", which your accountant sees in every year.</p>
+      <div className="vdc-row">
+        <label className="vdc-grow"><span className="vdc-sr">What you're uploading</span>
+          <Select aria-label="What you're uploading" value={kind} onChange={(e) => setKind(e.target.value)}>
+            {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+          </Select>
+        </label>
+        <Button variant="secondary" disabled={busy} onClick={() => picker.current?.click()}>
+          {busy ? "Uploading…" : "Upload documents"}
+        </Button>
+        <input ref={picker} type="file" multiple accept=".pdf,image/*" className="vdc-sr" aria-label="Upload company documents"
+          tabIndex={-1} disabled={busy} onChange={upload} />
+      </div>
+      {found && found.length > 0 && (
+        <>
+          <h4 className="vff-group-h">Already on file — file them here?</h4>
+          <p className="vdc-sub">These say they're company, tax or compliance documents. The ones that name another business aren't ticked — they're probably a supplier's or a client's.</p>
+          <ul className="vff-items">
+            {found.map((p) => (
+              <li key={p.id} className="vff-item">
+                <input type="checkbox" checked={picked.has(p.id)} onChange={() => toggle(p.id)}
+                  aria-label={`File ${p.filename} under ${p.to_name}`} />
+                <span className="vff-label">{p.filename}<br /><span className="vdc-sub">{p.to_name}{p.ours ? "" : " · names another business"}</span></span>
+              </li>))}
+          </ul>
+          <Button size="sm" variant="secondary" disabled={!picked.size} onClick={file}>
+            {`File ${picked.size} under Company and tax`}
+          </Button>
+        </>)}
     </Card>
   );
 }
