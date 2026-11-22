@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -195,8 +196,8 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
     since = (today - timedelta(days=days - 1)).isoformat()
 
     # Orders (revenue from the shop)
-    orders = (db.table("commerce_orders").select("total_cents,status,created_at,customer_name")
-              .eq("tenant_id", tenant_id).gte("created_at", since).execute().data or [])
+    orders = (all_rows(lambda: db.table("commerce_orders").select("total_cents,status,created_at,customer_name")
+              .eq("tenant_id", tenant_id).gte("created_at", since)))
     paid_orders = [o for o in orders if _PAID_ORDER(o.get("status"))]
     order_rev = _cents(paid_orders, "total_cents")
 
@@ -205,10 +206,10 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
     # netting credit notes out of receivables (they're money owed BACK to the customer, not
     # additional money owed to the tenant) were both missing here before this fix (2026-08-15),
     # same bug as admin_stats/admin_customer_detail in vula/api/commerce.py.
-    inv_all = (db.table("commerce_invoices")
+    inv_all = (all_rows(lambda: db.table("commerce_invoices")
                .select("total_cents,total_paid_cents,vat_cents,subtotal_cents,status,created_at,customer_name,direction,doc_type,"
                        "due_date,credited_invoice_id")
-               .eq("tenant_id", tenant_id).execute().data or [])
+               .eq("tenant_id", tenant_id)))
     out_inv = [i for i in inv_all if (i.get("direction") or "outbound") == "outbound"
               and i.get("doc_type") == "invoice"]
     # A credit note tied to an invoice (credit_invoice) is already in that invoice's total_paid_cents;
@@ -231,8 +232,8 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
 
     # Expenses (costs)
     try:
-        exp = (db.table("commerce_expenses").select("amount_cents,category,date")
-               .eq("tenant_id", tenant_id).gte("date", since).execute().data or [])
+        exp = (all_rows(lambda: db.table("commerce_expenses").select("amount_cents,category,date")
+               .eq("tenant_id", tenant_id).gte("date", since)))
     except Exception as exc:
         log.debug("finances: expenses read skipped: %s", exc)
         exp = []

@@ -22,7 +22,7 @@ TENANTS = [
 def shapes(monkeypatch):
     monkeypatch.setattr("vula.api.master.tenant_overview", lambda: {"tenants": [dict(t) for t in TENANTS]})
     q = MagicMock()
-    q.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+    q.select.return_value.eq.return_value.order.return_value.range.return_value.execute.return_value = MagicMock(
         data=[{"tenant_id": "digg-demo"}] * 3)
     monkeypatch.setattr(md, "_client", lambda: MagicMock(table=lambda _t: q))
     monkeypatch.setattr("vula.startup_checks.check_schema", lambda: [])

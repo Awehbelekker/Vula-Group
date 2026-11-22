@@ -15,6 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["qs"])
@@ -26,9 +27,9 @@ def _client():
 
 
 def _manual_rates(tenant_id: str, query: str = "") -> list[dict]:
-    rows = (_client().table("vula_qs_rates")
+    rows = (all_rows(lambda: _client().table("vula_qs_rates")
             .select("id,code,description,unit,rate,category,source,notes,updated_at")
-            .eq("tenant_id", tenant_id).order("description").limit(2000).execute().data or [])
+            .eq("tenant_id", tenant_id).order("description"), cap=2000))
     words = [w for w in _norm(query).split() if len(w) >= 2]
     if words:
         # every word of the question in the description or code — "brick wall" finds

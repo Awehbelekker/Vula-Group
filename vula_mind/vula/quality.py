@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,14 @@ def _pct(part: int, whole: int) -> Optional[int]:
 
 def _count(table: str, tenant_id: str, column: str, since: str, **eq) -> Optional[int]:
     try:
-        q = _client().table(table).select("id").eq("tenant_id", tenant_id).gte(column, since)
-        for k, v in eq.items():
-            q = q.eq(k, v)
-        return len(q.limit(5000).execute().data or [])
+        from vula.db_pages import all_rows
+
+        def q():
+            x = _client().table(table).select("id").eq("tenant_id", tenant_id).gte(column, since)
+            for k, v in eq.items():
+                x = x.eq(k, v)
+            return x
+        return len(all_rows(q, cap=5000))
     except Exception as exc:  # noqa: BLE001 — a table this database doesn't have yet
         logger.debug("quality: %s skipped: %s", table, exc)
         return None
@@ -77,9 +82,9 @@ def weekly(tenant_id: str, days: int = 7, now: Optional[datetime] = None) -> Dic
     now = now or datetime.now(timezone.utc)
     since = (now - timedelta(days=days)).isoformat()
     try:
-        rows = (_client().table("vula_turns").select("steps,replies")
+        rows = (all_rows(lambda: _client().table("vula_turns").select("steps,replies")
                 .eq("tenant_id", tenant_id).gte("started_at", since)
-                .order("started_at", desc=True).limit(3000).execute().data or [])
+                .order("started_at", desc=True), cap=3000))
         counts = summarise([r for r in rows if isinstance(r, dict)])
     except Exception as exc:  # noqa: BLE001
         logger.debug("quality: turns skipped (run migration 195?): %s", exc)

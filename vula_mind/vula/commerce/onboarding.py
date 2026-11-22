@@ -31,6 +31,7 @@ from typing import Optional
 
 import httpx
 from vula.meta_graph import graph_url
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +200,8 @@ def pending_invites(tenant_id: str, limit: int = 50) -> list[dict]:
 def onboarding_stats(tenant_id: str) -> dict:
     """Counts per onboarding_state for the dashboard progress panel."""
     try:
-        rows = (_client().table("commerce_contacts").select("onboarding_state,consent_status")
-                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+        rows = (all_rows(lambda: _client().table("commerce_contacts").select("onboarding_state,consent_status")
+                .eq("tenant_id", tenant_id), cap=5000))
     except Exception:
         rows = []
     from collections import Counter

@@ -122,8 +122,9 @@ def learn(tenant_id: str, description: Optional[str], project: Optional[str],
 
 def load_rules(tenant_id: str) -> List[Dict]:
     try:
-        rows = (_client().table(_TABLE).select("signal,signal_type,project,trade,hits")
-                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+        from vula.db_pages import all_rows
+        rows = all_rows(lambda: _client().table(_TABLE).select("signal,signal_type,project,trade,hits")
+                        .eq("tenant_id", tenant_id), cap=5000)
         return [r for r in rows if isinstance(r, dict)]
     except Exception as exc:
         log.debug("allocation rules read skipped: %s", exc)

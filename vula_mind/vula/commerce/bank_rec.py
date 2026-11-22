@@ -16,6 +16,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -689,11 +690,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
 
     # Outstanding invoices to match credits against.
     try:
-        invoices = (db.table("commerce_invoices")
+        invoices = (all_rows(lambda: db.table("commerce_invoices")
                     .select("id,invoice_number,customer_name,total_cents,total_paid_cents,status,doc_type,"
                             "direction,issue_date,created_at")
-                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"])
-                    .limit(2000).execute().data or [])
+                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"]), cap=2000))
         # 18 Nov 2026: a part-paid invoice is matched on what is still owed, not its full total.
         invoices = [{**i, "invoice_total_cents": i.get("total_cents"),
                      "total_cents": int(i.get("total_cents") or 0) - int(i.get("total_paid_cents") or 0)}
@@ -708,12 +708,11 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # sent/overdue filter above would never see them. 2026-09-03: without this, paying a
     # supplier confirmed the money left the bank while the bill stayed unpaid forever.
     try:
-        supplier_bills = (db.table("commerce_invoices")
+        supplier_bills = (all_rows(lambda: db.table("commerce_invoices")
                           .select("id,invoice_number,supplier,total_cents,status,doc_type,"
                                   "direction,vat_cents,paid_at,project,issue_date,created_at")
                           .eq("tenant_id", tenant_id).eq("direction", "inbound")
-                          .in_("status", ["draft", "sent", "overdue", "part_paid"])
-                          .limit(2000).execute().data or [])
+                          .in_("status", ["draft", "sent", "overdue", "part_paid"]), cap=2000))
         supplier_bills = [b for b in supplier_bills
                           if (b.get("doc_type") or "invoice") == "invoice"]
     except Exception as exc:
@@ -724,10 +723,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # alongside online/COD) — a customer's proof-of-payment email needs to reconcile against
     # THESE too, not just invoices.
     try:
-        orders = (db.table("commerce_orders")
+        orders = (all_rows(lambda: db.table("commerce_orders")
                   .select("id,display_id,customer_name,customer_phone,total_cents,status,created_at")
-                  .eq("tenant_id", tenant_id).eq("status", "pending_payment")
-                  .limit(2000).execute().data or [])
+                  .eq("tenant_id", tenant_id).eq("status", "pending_payment"), cap=2000))
     except Exception as exc:
         log.debug("reconcile: order load skipped: %s", exc)
         orders = []
@@ -784,15 +782,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # receipt/worker match) already allocated keep their allocation on upsert.
     protected: Dict[tuple, dict] = {}
     try:
-        for r in (db.table("commerce_bank_transactions")
+        for r in (all_rows(lambda: db.table("commerce_bank_transactions")
                   .select("txn_date,amount_cents,description,account_code,vat_cents,vat_treatment,categorized_by,project,trade")
                   .eq("tenant_id", tenant_id)
                   # 'merchant' joins these because it reflects a decided merchant profile —
                   # often the owner's own once-per-merchant answer — and must survive a
                   # statement being re-uploaded.
                   .in_("categorized_by",
-                       ["owner", "receipt", "labour", "asked", "skipped", "merchant"])
-                  .limit(2000).execute().data or []):
+                       ["owner", "receipt", "labour", "asked", "skipped", "merchant"]), cap=2000)):
             protected[(str(r.get("txn_date")), int(r.get("amount_cents") or 0),
                        (r.get("description") or ""))] = r
     except Exception:
@@ -803,10 +800,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # and by email) gave the R1,500 that paid INV-10 to the next open R1,500 invoice as well.
     settled: Dict[tuple, dict] = {}
     try:
-        for r in (db.table("commerce_bank_transactions")
+        for r in (all_rows(lambda: db.table("commerce_bank_transactions")
                   .select("txn_date,amount_cents,description,matched_invoice_id,matched_order_id,matched_expense_id")
-                  .eq("tenant_id", tenant_id).eq("match_status", "matched")
-                  .limit(5000).execute().data or []):
+                  .eq("tenant_id", tenant_id).eq("match_status", "matched"), cap=5000)):
             settled[(str(r.get("txn_date")), int(r.get("amount_cents") or 0),
                      (r.get("description") or ""))] = r
     except Exception:
@@ -1188,11 +1184,10 @@ def supersede_misread(tenant_id: str, txns: List[Dict[str, Any]]) -> Dict[str, A
         on_day.setdefault((t["date"], t["direction"]), []).append(t)
     db = _client()
     try:
-        rows = (db.table("commerce_bank_transactions")
+        rows = (all_rows(lambda: db.table("commerce_bank_transactions")
                 .select("id,txn_date,description,amount_cents,direction,match_status,project,trade,"
                         "matched_invoice_id,matched_order_id,matched_expense_id")
-                .eq("tenant_id", tenant_id).gte("txn_date", days[0]).lte("txn_date", days[-1])
-                .execute().data or [])
+                .eq("tenant_id", tenant_id).gte("txn_date", days[0]).lte("txn_date", days[-1])))
     except Exception as exc:
         log.debug("supersede read skipped: %s", exc)
         return {"superseded": 0}

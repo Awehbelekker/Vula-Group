@@ -35,6 +35,7 @@ import logging
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -292,8 +293,8 @@ def vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None
         return d and d >= sd and (not ud or d <= ud)
 
     try:
-        suppliers = {s["id"]: s for s in (_client().table("commerce_suppliers").select("id,name,tax_id")
-                                         .eq("tenant_id", tenant_id).limit(2000).execute().data or [])}
+        suppliers = {s["id"]: s for s in (all_rows(lambda: _client().table("commerce_suppliers").select("id,name,tax_id")
+                                         .eq("tenant_id", tenant_id), cap=2000))}
     except Exception:
         suppliers = {}
     months: Dict[str, Dict[str, int]] = defaultdict(lambda: {"input_claimable": 0, "input_no_vat_number": 0,

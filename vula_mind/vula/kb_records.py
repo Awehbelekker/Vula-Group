@@ -25,6 +25,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -272,10 +273,10 @@ def _bank(f: Dict[str, Any]) -> Optional[str]:
 
 def _fetch(tenant_id: str) -> List[Dict[str, Any]]:
     from vula.commerce import service
-    return (service._client().table("vula_filed_documents")
+    return (all_rows(lambda: service._client().table("vula_filed_documents")
             .select("doc_id,filename,category,fields,created_at")
             .eq("tenant_id", tenant_id).in_("category", list(MONEY_CATEGORIES))
-            .order("created_at", desc=True).limit(3000).execute().data or [])
+            .order("created_at", desc=True), cap=3000))
 
 
 async def answer(tenant_id: str, question: str, who: str = "", role: Optional[str] = None,

@@ -101,7 +101,7 @@ def test_project_financials_does_not_double_count_reconciled_pair():
          "amount": 12000.0, "project": "HPC_Bokaap"},
     ]
     mock_table = MagicMock()
-    mock_table.select.return_value.eq.return_value.limit.return_value.execute.return_value = \
+    mock_table.select.return_value.eq.return_value.order.return_value.range.return_value.execute.return_value = \
         MagicMock(data=rows)
     mock_table.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
     mock_db = MagicMock()

@@ -27,6 +27,7 @@ import zipfile
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -244,8 +245,8 @@ def save_voice_samples(tenant_id: str, samples: List[str]) -> int:
     if not samples:
         return 0
     try:
-        existing = {r["excerpt"] for r in (_client().table("vula_email_voice_samples")
-                    .select("excerpt").eq("tenant_id", tenant_id).limit(2000).execute().data or [])}
+        existing = {r["excerpt"] for r in (all_rows(lambda: _client().table("vula_email_voice_samples")
+                    .select("excerpt").eq("tenant_id", tenant_id), cap=2000))}
     except Exception:
         existing = set()
     rows = [{"id": str(uuid.uuid4()), "tenant_id": tenant_id, "excerpt": s, "created_at": _now()}

@@ -17,6 +17,7 @@ import html
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +35,7 @@ def _stuck_documents(db, tenant_ids: list) -> Dict[str, int]:
     """Documents filed but still waiting for someone to say which project they belong to."""
     out: Dict[str, int] = {}
     try:
-        rows = (db.table("vula_filed_documents").select("tenant_id").eq("status", "pending_project")
-                .limit(5000).execute().data or [])
+        rows = (all_rows(lambda: db.table("vula_filed_documents").select("tenant_id").eq("status", "pending_project"), cap=5000))
         for r in rows:
             if r.get("tenant_id") in tenant_ids:
                 out[r["tenant_id"]] = out.get(r["tenant_id"], 0) + 1

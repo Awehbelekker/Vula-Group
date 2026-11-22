@@ -52,7 +52,9 @@ def businesses() -> List[str]:
     """The businesses keeping the one trusted book."""
     from vula import features
     try:
-        rows = _client().table("vula_tenant_config").select("tenant_id,features").limit(2000).execute().data or []
+        from vula.db_pages import all_rows
+        rows = all_rows(lambda: _client().table("vula_tenant_config").select("tenant_id,features"),
+                        cap=2000, order="tenant_id")
     except Exception as exc:  # noqa: BLE001
         log.warning("books health: businesses not listed: %s", exc)
         return []

@@ -149,6 +149,7 @@ Money-document extraction in `_analyze_document` (`vula/api/whatsapp.py`) layers
 
 - **Tenant isolation** — explicit `tenant_id` scoping + RLS on every query and every new table.
 - **Financial integrity** — money is always **integer cents**, computed server-side, never by the LLM. Use the `calculate` tool / deterministic recompute for any arithmetic shown to a user.
+- **Read every row** — the database hands back at most 1 000 rows a request whatever `.limit(N)` says, and never says it cut the list. A query that means "all" (or more than 1 000) goes through `vula/db_pages.all_rows(lambda: query, cap=N)` (pages of 1 000, ordered by `id` — pass `order=` for a table without one). `tests/test_no_silent_row_cap.py` fails on any `.limit(N > 1000)`; `FakeSupabase.max_rows = 1000` tests a site past the cap (22 Nov 2026 sweep: 96 sites).
 - **POPIA** — implied opt-in on first contact; honour opt-out/suppression; local-first generation; telemetry carries type labels/hashes, never raw prompt or customer content.
 - **Verified, not reported** — state-changing actions are read back and confirmed, not assumed. Never claim an action succeeded without a tool call that performed it.
 - **WhatsApp constraints** — Meta only allows free-form text within 24h of the user's last inbound message; proactive sends need a Meta-approved template (`whatsapp_notify_template`). Paste raw URLs (no markdown link syntax) — WhatsApp doesn't render markdown.

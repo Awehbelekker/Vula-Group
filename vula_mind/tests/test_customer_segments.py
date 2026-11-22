@@ -95,11 +95,11 @@ async def test_aggregate_customers_pulls_preferred_language_from_newest_session(
     def _table(name):
         t = MagicMock()
         if name == "commerce_orders":
-            t.select.return_value.eq.return_value.order.return_value.limit.return_value \
+            t.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value \
                 .execute.return_value = MagicMock(data=[])
         elif name == "commerce_conversation_sessions":
             # Newest-first order — the first row for a phone should win.
-            t.select.return_value.eq.return_value.order.return_value.limit.return_value \
+            t.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value \
                 .execute.return_value = MagicMock(data=[
                     {"customer_phone": "27821234567", "customer_name": "Jane", "channel": "whatsapp",
                      "updated_at": "2026-07-20T00:00:00Z", "session_key": "27821234567",
@@ -109,7 +109,7 @@ async def test_aggregate_customers_pulls_preferred_language_from_newest_session(
                      "preferred_language": "en"},
                 ])
         elif name == "commerce_contacts":
-            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = \
+            t.select.return_value.eq.return_value.order.return_value.range.return_value.execute.return_value = \
                 MagicMock(data=[])
         return t
 

@@ -129,17 +129,21 @@ def labour_report(tenant_id: str, since: str = None, until: str = None,
                   project: str = None) -> dict:
     db = _client()
     workers = {w["id"]: w for w in list_workers(tenant_id, active_only=False)}
-    q = (db.table("commerce_bank_transactions")
-         .select("txn_date,amount_cents,description,worker_id,project")
-         .eq("tenant_id", tenant_id).not_.is_("worker_id", "null"))
-    if since:
-        q = q.gte("txn_date", since)
-    if until:
-        q = q.lte("txn_date", until)
-    if project:
-        q = q.eq("project", project)
+    from vula.db_pages import all_rows
+
+    def q():
+        x = (db.table("commerce_bank_transactions")
+             .select("txn_date,amount_cents,description,worker_id,project")
+             .eq("tenant_id", tenant_id).not_.is_("worker_id", "null"))
+        if since:
+            x = x.gte("txn_date", since)
+        if until:
+            x = x.lte("txn_date", until)
+        if project:
+            x = x.eq("project", project)
+        return x.order("txn_date", desc=True)
     try:
-        rows = q.order("txn_date", desc=True).limit(5000).execute().data or []
+        rows = all_rows(q, cap=5000)
     except Exception as exc:
         log.debug("labour_report skipped (run migration 059?): %s", exc)
         rows = []

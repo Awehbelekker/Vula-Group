@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from typing import Optional
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -325,8 +326,8 @@ def project_financials(tenant_id: str, project: str) -> dict:
     # Ledger (payments in/out) — reuse finance_summary's rows, loosely matched.
     ledger_rows = []
     try:
-        ledger_rows = (db.table("vula_project_finances").select("*")
-                       .eq("tenant_id", tenant_id).limit(2000).execute().data or [])
+        ledger_rows = (all_rows(lambda: db.table("vula_project_finances").select("*")
+                       .eq("tenant_id", tenant_id), cap=2000))
     except Exception:
         pass
     ledger = _match(ledger_rows)
@@ -338,9 +339,8 @@ def project_financials(tenant_id: str, project: str) -> dict:
     invoiced = invoiced_paid = quoted = 0.0
     inv_count = quote_count = 0
     try:
-        all_docs = (db.table("commerce_invoices")
-                   .select("total_cents,status,project,doc_type").eq("tenant_id", tenant_id)
-                   .limit(3000).execute().data or [])
+        all_docs = (all_rows(lambda: db.table("commerce_invoices")
+                   .select("total_cents,status,project,doc_type").eq("tenant_id", tenant_id), cap=3000))
         matched = _match(all_docs)
         invs = [i for i in matched if (i.get("doc_type") or "invoice") == "invoice"]
         inv_count = len(invs)
@@ -361,8 +361,8 @@ def project_financials(tenant_id: str, project: str) -> dict:
     # Expenses linked to the project.
     expenses = 0.0
     try:
-        exps = (db.table("commerce_expenses").select("amount_cents,project")
-                .eq("tenant_id", tenant_id).limit(3000).execute().data or [])
+        exps = (all_rows(lambda: db.table("commerce_expenses").select("amount_cents,project")
+                .eq("tenant_id", tenant_id), cap=3000))
         expenses = sum(int(e.get("amount_cents") or 0) for e in _match(exps)) / 100.0
     except Exception as exc:
         logger.debug("project expenses skipped (run migration 055?): %s", exc)
@@ -370,8 +370,8 @@ def project_financials(tenant_id: str, project: str) -> dict:
     # Casual labour paid on this project (bank debits categorised as casual_labour, tagged to it).
     labour = 0.0
     try:
-        lab = (db.table("commerce_bank_transactions").select("id,amount_cents,project,account_code")
-               .eq("tenant_id", tenant_id).in_("account_code", ["casual_labour", "subcontractors"]).limit(5000).execute().data or [])
+        lab = (all_rows(lambda: db.table("commerce_bank_transactions").select("id,amount_cents,project,account_code")
+               .eq("tenant_id", tenant_id).in_("account_code", ["casual_labour", "subcontractors"]), cap=5000))
         from vula.commerce.bank_splits import apply as _apply_splits      # migration 244
         lab = _apply_splits(tenant_id, lab)
         labour = sum(int(r.get("amount_cents") or 0) for r in _match(lab)) / 100.0

@@ -28,6 +28,7 @@ import re
 from datetime import date, datetime, timezone
 from itertools import combinations
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -108,9 +109,9 @@ def outgoing(tenant_id: str, pop: Dict[str, Any]) -> bool:
 
 def _suppliers(tenant_id: str) -> List[Dict[str, Any]]:
     try:
-        return (_client().table("commerce_suppliers")
+        return (all_rows(lambda: _client().table("commerce_suppliers")
                 .select("id,name,aliases,bank_account_name,bank_account_number")
-                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+                .eq("tenant_id", tenant_id), cap=5000))
     except Exception:  # noqa: BLE001
         return []
 

@@ -354,8 +354,9 @@ def backfill_vat_basis(limit_docs: int = 500) -> int:
     updated. Never raises."""
     try:
         db = _client()
-        rows = (db.table(_TABLE).select("tenant_id,doc_id").eq("vat_basis", "unknown")
-                .limit(5000).execute().data or [])
+        from vula.db_pages import all_rows
+        rows = all_rows(lambda: db.table(_TABLE).select("tenant_id,doc_id").eq("vat_basis", "unknown"),
+                        cap=5000)
     except Exception as exc:  # noqa: BLE001
         log.debug("vat basis backfill skipped (run migration 284?): %s", exc)
         return 0

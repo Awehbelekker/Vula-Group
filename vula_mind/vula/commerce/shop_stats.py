@@ -15,6 +15,7 @@ import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -73,8 +74,8 @@ def funnel(tenant_id: str, days: int = 7) -> Dict[str, Any]:
     misses: Counter = Counter()
     tracked = True
     try:
-        rows = (db.table("commerce_shop_events").select("kind,term").eq("tenant_id", tenant_id)
-                .gte("created_at", since).limit(20000).execute().data or [])
+        rows = (all_rows(lambda: db.table("commerce_shop_events").select("kind,term").eq("tenant_id", tenant_id)
+                .gte("created_at", since), cap=20000))
         for r in rows:
             counts[r["kind"]] += 1
             if r.get("term") and r["kind"] == "search":
@@ -85,8 +86,8 @@ def funnel(tenant_id: str, days: int = 7) -> Dict[str, Any]:
         tracked = False
         log.debug("shop funnel events unavailable for %s: %s", tenant_id, exc)
     try:
-        orders = (db.table("commerce_orders").select("status,total_cents,channel").eq("tenant_id", tenant_id)
-                  .gte("created_at", since).limit(5000).execute().data or [])
+        orders = (all_rows(lambda: db.table("commerce_orders").select("status,total_cents,channel").eq("tenant_id", tenant_id)
+                  .gte("created_at", since), cap=5000))
     except Exception:
         orders = []
     orders = [o for o in orders if o.get("channel") in ("whatsapp", "web")]
