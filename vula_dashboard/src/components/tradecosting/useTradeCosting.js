@@ -28,6 +28,8 @@ export function useTradeCosting(tenantId) {
   const [canConfirm, setCanConfirm] = useState(false);
   const [state, setState] = useState("loading");     // loading | ready | off | failed
   const [estimates, setEstimates] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
 
   const reload = useCallback(async () => {
     if (!tenantId) return;
@@ -38,8 +40,12 @@ export function useTradeCosting(tenantId) {
     setBuildups(res.data.buildups || []);
     setCanConfirm(!!res.data.can_confirm);
     setState("ready");
-    const est = await call(`${base(tenantId)}/estimates`);
+    const [est, sug, proj] = await Promise.all([
+      call(`${base(tenantId)}/estimates`), call(`${base(tenantId)}/buildup-suggestions`),
+      call(`${VULA_API}/v1/projects/${tenantId}`)]);
     if (est.ok) setEstimates(est.data.estimates || []);
+    if (sug.ok) setSuggestions(sug.data.suggestions || []);
+    if (proj.ok) setProjects((proj.data.projects || []).filter((p) => p.status !== "complete"));
   }, [tenantId]);
 
   useEffect(() => { reload(); }, [reload]);
@@ -48,6 +54,10 @@ export function useTradeCosting(tenantId) {
   const confirm = (id, changes) => post(`${base(tenantId)}/buildups/${id}/confirm`, { changes: changes || [] });
   const retire = (id) => post(`${base(tenantId)}/buildups/${id}/retire`);
   const estimate = (body) => post(`${base(tenantId)}/estimates`, body);
+  // phase 4: the estimate beside what was paid on its project, and what Vula suggests from it
+  const actuals = (id) => call(`${base(tenantId)}/estimates/${id}/actuals`);
+  const learn = (id) => post(`${base(tenantId)}/estimates/${id}/learn`);
+  const decide = (id, decision) => post(`${base(tenantId)}/buildup-suggestions/${id}/${decision}`);
 
   /** Save an estimate's Excel breakdown. Resolves to "ok", "forbidden" or "failed". */
   async function download(id) {
@@ -61,5 +71,6 @@ export function useTradeCosting(tenantId) {
     return "ok";
   }
 
-  return { buildups, canConfirm, state, estimates, reload, research, confirm, retire, estimate, download };
+  return { buildups, canConfirm, state, estimates, projects, suggestions, reload, research, confirm, retire,
+    estimate, download, actuals, learn, decide };
 }

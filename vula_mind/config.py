@@ -40,12 +40,21 @@ class Settings(BaseSettings):
     # Models the local box should hold; any missing is downloaded through the tunnel after boot
     # (vula/local_models.py). Comma-separated Ollama names; blank = never pull. Never deletes.
     local_models_ensure: str = ""
-    model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
+    # OpenRouter vision model for Smart Scanner when the local reader can't. 16 Nov 2026, Ian: was
+    # google/gemini-2.5-flash, which has had no endpoint under zero retention (openrouter_zdr) since
+    # every cloud call got it on 13 Nov — every cloud scan failed. Claude Sonnet 5 reads images and
+    # is served under zero retention on this account.
+    model_vision: str = "anthropic/claude-sonnet-5"
     model_image: str = "google/gemini-2.5-flash-image"  # OpenRouter image GENERATION (AI product photos)
     # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
     # the ollama.vula-ai.com tunnel, then this cheap cloud model, then escalate to the 70B.
     model_worker_cheap_local: str = "llama3.1:8b"          # free, on the local GPU via the tunnel
-    model_worker_cheap: str = "google/gemini-2.5-flash"    # cloud fallback when the tunnel is down
+    # cloud model for the cheap tier (document analysis, BOQ lines, programmes…). 16 Nov 2026: was
+    # gemini-2.5-flash — no endpoint under zero retention since 13 Nov. Then Ian, "keep the costs
+    # down": Llama 3.3 70B (answers under zero retention, ~1/30th of Sonnet's price), with Sonnet
+    # next in cloud_model_fallbacks when Llama errors or its provider can't take the prompt. Money
+    # figures are still checked in code (scan_quality_ok, ungrounded_figures) and escalate.
+    model_worker_cheap: str = "meta-llama/llama-3.3-70b-instruct"
     # Context window of the local model, in tokens. Set it ON THE OLLAMA BOX
     # (OLLAMA_CONTEXT_LENGTH=8192), not per call: Ollama reloads a model whenever the requested
     # context size changes, so callers asking for different sizes make it thrash. 2026-09-23
@@ -128,6 +137,21 @@ class Settings(BaseSettings):
     # in the conversation — an active client keeps their history. 12 Nov 2026, owner's decision:
     # 24 months. 0 keeps them indefinitely.
     conversation_retention_days: int = 730     # commerce_conversation_*, commerce_client_summaries
+    chat_attachment_retention_days: int = 1    # files attached to the dashboard chat (vula/chat_attachments.py)
+    # 18 Nov 2026 (pre-launch audit: "no retention rule yet for …"). What a person said or was sent
+    # goes after a year (two for the chat history and mailbox contacts, like conversations);
+    # technical records sooner. Business records (filed documents, invoices, consent proof, audit
+    # trails, AI usage for billing, emails sent to a project's client) are never swept.
+    outbound_retention_days: int = 365          # vula_wa_outbound (WhatsApp messages Vula sent: previews, status)
+    escalation_retention_days: int = 365        # vula_escalations (customer questions handed to the team)
+    chat_message_retention_days: int = 730      # vula_chat_messages
+    email_followup_retention_days: int = 365    # vula_email_followups (email previews waiting on a reply)
+    email_contact_retention_days: int = 730     # vula_email_contacts, by last_seen
+    email_voice_sample_retention_days: int = 365  # vula_email_voice_samples (excerpts the voice was learned from)
+    telemetry_retention_days: int = 365         # vula_reasoning_telemetry (routing decisions; no content)
+    health_event_retention_days: int = 180      # vula_health_events, vula_eval_reports
+    webhook_retention_days: int = 90            # vula_webhook_failures, kb_webhook_events
+    automation_log_retention_days: int = 365    # commerce_automation_log
     data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
     reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
@@ -290,6 +314,11 @@ class Settings(BaseSettings):
     # Set OPENROUTER_API_KEY to enable cloud inference via OpenRouter.
     # When set, the server uses OpenRouter for generation and embeddings.
     openrouter_api_key: str = ""
+    # Web search (16 Nov 2026): DuckDuckGo's HTML page returns nothing to Railway's servers, so
+    # research, build-ups and market prices found nothing. With a key, searches go to Serper
+    # (Google results; only the query words are sent). Without one, DuckDuckGo as before.
+    serper_api_key: str = ""
+    search_country: str = "za"
 
     # ── Voice-note transcription (WhatsApp audio → text) ───────────────────────
     # OpenAI-compatible /audio/transcriptions endpoint. Local-first: point
@@ -330,7 +359,8 @@ class Settings(BaseSettings):
     # Crisis support (vula/safety.py): a message suggesting self-harm gets South Africa's crisis
     # lines and the business is asked to check in — before any assistant reply. On by default.
     crisis_support_enabled: bool = True
-    cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash"
+    # 16 Nov 2026: gemini-2.5-flash dropped — it has no endpoint under zero retention.
+    cloud_model_fallbacks: str = "meta-llama/llama-3.3-70b-instruct,anthropic/claude-sonnet-5"
     # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
     # grades. Empty = rules only.
     benchmark_judge_model: str = "openrouter/anthropic/claude-sonnet-5"
@@ -561,6 +591,9 @@ class Settings(BaseSettings):
     open_chat_enabled: bool = False
     # Trade costing (vula/commerce/buildups.py): build-ups researched once, confirmed once, looked up.
     trade_costing_enabled: bool = False
+    # One trusted book (Phase 1 of Xero-quality books, migration 288): per business via
+    # vula_tenant_config.features, never on for everyone before each business's audit is signed off.
+    books_v2_enabled: bool = False
     open_chat_per_hour: int = 60          # messages per person per hour in the open chat
     research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
     # Cut the research prompt to fit the local model so Vula's own model writes it; off = the
@@ -620,6 +653,13 @@ class Settings(BaseSettings):
     from_email: str = "Vula Group <hello@vula.ai>"
     team_email: str = ""                # team notifications (Richard/Judy)
 
+    # ── Two-step sign-in (18 Nov 2026, vula/api/master_auth.py) ──────────────
+    # A login that has set up an authenticator app must give its code: a session without it
+    # (Supabase "aal1") is refused by every route, whatever this says. These roles must also set
+    # one up before Vula lets them in (comma-separated vula_tenant_users roles, e.g.
+    # "master,owner"). Empty = nobody is made to; turn it on once those logins have one.
+    mfa_required_roles: str = ""
+
     # ── Error monitoring (Sentry) ────────────────────────────────────────────
     # Empty (the default) keeps today's behaviour: errors only reach Railway's log stream, no
     # exception-level alerting. Set to enable — see vula/api/server.py's init for the PII-scrubbing
@@ -674,9 +714,20 @@ class Settings(BaseSettings):
         return warnings
 
 
+# Variable names saved with a stray space in Railway (18 Nov 2026: "XERO_CLIENT_SECRET " — the
+# setting read empty, so Xero couldn't connect). Read from the misspelt name when the right one is
+# unset; the variable should still be renamed in Railway.
+_SPACED_NAMES = {"xero_client_secret": "XERO_CLIENT_SECRET "}
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    import os
+    s = Settings()
+    for field, spaced in _SPACED_NAMES.items():
+        if not getattr(s, field) and os.environ.get(spaced):
+            setattr(s, field, os.environ[spaced].strip())
+    return s
 
 
 settings = get_settings()

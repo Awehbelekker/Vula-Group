@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react'
 import {
   ArrowLeft, ArrowRightLeft, Bell, Bike, Brain, CalendarCheck, ChevronRight, ClipboardList, Clock, Cloud, Contact, CreditCard, Globe, ImageUp, Inbox, LayoutGrid,
-  ListChecks, Mail, MapPin, Menu, MessageCircle, Moon, Palette, Plus, Search, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, Wallet, X,
+  ListChecks, Mail, MapPin, Menu, MessageCircle, Moon, Palette, Plus, Search, ShieldCheck, ShoppingBag, ShoppingCart, Smartphone, Sparkles, Sun, SunMoon, Wallet, X,
 } from 'lucide-react'
 import { Button, Card, Field, FloatingToolbar, IconButton, Input, PageHeader, Select, Skeleton, StatusChip, Textarea } from '../ui/index.jsx'
 import { CORNER_STYLES, DEFAULT_BRAND, DENSITIES, FONT_PAIRINGS, LOGO_SIZES, NAV_STYLES, THEME_EVENT, getThemeMode, setThemeMode } from '../../theme/tokens'
@@ -25,6 +25,7 @@ import EmailConnectV2 from './connect/EmailConnectV2'
 import ConnectionsHealth from './connect/ConnectionsHealth'
 import BuyingV2 from './connect/BuyingV2'
 import AiUsage from './AiUsage'
+import TwoStep from './TwoStep'
 import XeroMoveV2 from './connect/XeroMoveV2'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
 import ProfileDrafts from '../ProfileDrafts.jsx'
@@ -59,6 +60,9 @@ const GROUPS = [
     { id: 'microsoft', label: 'Microsoft (OneDrive & Outlook)', Icon: LayoutGrid, hint: 'Connect Microsoft 365 so Vula can find & file OneDrive documents and draft Outlook replies (draft-only).' },
     { id: 'email', label: 'Email (IMAP / SMTP)', Icon: Mail, hint: 'Connect any mailbox without OAuth — GoDaddy Workspace, cPanel, Zoho. Search it, file attachments to the knowledge base, draft replies.' },
     { id: 'clickup', label: 'ClickUp', Icon: ListChecks, hint: 'Connect ClickUp to create, list and update tasks — and set reminders — straight from WhatsApp.' },
+  ] },
+  { label: 'Your sign-in', items: [
+    { id: 'twostep', label: 'Two-step sign-in', Icon: ShieldCheck, hint: 'A 6-digit code from an app on your phone as well as your password, so nobody who learns your password can sign in as you. For your own login.' },
   ] },
   { label: 'On this device', items: [
     { id: 'notifications', label: 'Notifications', Icon: Bell, hint: 'Your Vula alerts — new paid orders, customers waiting, approvals — as notifications on this phone or computer, as well as on WhatsApp.' },
@@ -120,6 +124,7 @@ function Section({ id, tenantId, tenantName, adminEmail, onOpen }) {
     case 'delivery': return <Delivery tenantId={tenantId} />
     case 'learned': return <Learned tenantId={tenantId} />
     case 'ai': return <AiUsage tenantId={tenantId} />
+    case 'twostep': return <TwoStep />
     // the connections: the same flows as the current panels (settings/connect/ hooks), redesigned
     case 'payments': return <YocoConnectV2 tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
     case 'shopify': return <StoreConnectV2 key="shopify" store="shopify" tenantId={tenantId} adminEmail={adminEmail} />

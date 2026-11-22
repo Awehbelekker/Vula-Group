@@ -135,6 +135,7 @@ def workbook(business: str, title: str, text: str, accent: Optional[str] = None,
     from openpyxl.comments import Comment
     from openpyxl.styles import Font
     from vula.commerce import xlsx as X
+    from vula.commerce.xlsx_check import safe_text
     found = tables(text)
     srcs = sources(text)
     if not found and not srcs:
@@ -168,7 +169,8 @@ def workbook(business: str, title: str, text: str, accent: Optional[str] = None,
                 for r_i, row in enumerate(t["rows"], start=5):
                     for c_i, cell in enumerate(row, start=1):
                         v, fmt, note = value(cell)
-                        c = ws.cell(row=r_i, column=c_i, value=v)
+                        c = ws.cell(row=r_i, column=c_i)
+                        safe_text(c, v)
                         if fmt:
                             c.number_format = fmt
                             want[f"{ws.title}!{c.coordinate}"] = v
@@ -179,15 +181,18 @@ def workbook(business: str, title: str, text: str, accent: Optional[str] = None,
             ws = sheet("Answer")
             X._table(ws, 4, ["Answer"], [100])
             for r_i, ln in enumerate([ln for ln in _body_without_sources(text).splitlines() if ln.strip()], start=5):
-                ws.cell(row=r_i, column=1, value=_clean(ln))
+                safe_text(ws.cell(row=r_i, column=1), _clean(ln))
         if srcs:
             ws = sheet("Sources")
             X._table(ws, 4, ["#", "Source", "Link"], [6, 60, 60])
             for r_i, s in enumerate(srcs, start=5):
                 ws.cell(row=r_i, column=1, value=f"[{s['n']}]")
-                ws.cell(row=r_i, column=2, value=s["title"])
+                safe_text(ws.cell(row=r_i, column=2), s["title"])
                 if s["url"]:
-                    link = ws.cell(row=r_i, column=3, value=s["url"])
+                    link = ws.cell(row=r_i, column=3)
+                    safe_text(link, s["url"])
+                    if not re.match(r"https?://", s["url"], re.I):
+                        continue  # a link only to a web page, never javascript:/file:
                     link.hyperlink = s["url"]
                     link.font = Font(color="FF0563C1", underline="single")
     finally:

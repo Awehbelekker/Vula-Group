@@ -108,8 +108,14 @@ def _with_lines(row: Dict[str, Any], origin: str) -> Dict[str, Any]:
     if origin == "shared":                       # never say which business it came from
         for k in _PRIVATE:
             out.pop(k, None)
+        # a figure from that business's own documents is shared as a quantity only: no file name,
+        # no note (it may quote their document)
+        own = {str(x.get("n")) for x in (out.get("sources") or []) if x.get("own")}
+        out["sources"] = [x for x in (out.get("sources") or []) if not x.get("own")]
         for line in out["lines"]:
             line.pop("tenant_id", None)
+            if str(line.get("source_ref") or "") in own:
+                line["source_ref"], line["note"] = "a Vula business's records", None
     return out
 
 
@@ -304,15 +310,18 @@ def describe(b: Dict[str, Any]) -> str:
     for ln in b.get("lines") or []:
         waste = _num(ln.get("waste_pct")) or Decimal(0)
         src = srcs.get(str(ln.get("source_ref") or "").strip("[]"))
-        where = f" [{src.get('title') or src.get('url')}]" if src else (
-            " (set by owner)" if ln.get("source_ref") == "confirmed by owner" else "")
+        where = (f" [your {src.get('title')}]" if src.get("own") else f" [{src.get('title') or src.get('url')}]") if src else (
+            " (set by owner)" if ln.get("source_ref") == "confirmed by owner" else
+            " (from a Vula business's records)" if ln.get("source_ref") == "a Vula business's records" else "")
         out.append(f"• {ln['label']}: {_show(ln['qty_per_unit'])} {ln['unit']}"
                    + (f" + {_show(waste)}% waste" if waste else "") + where)
-    unknown = [u.get("label") or u.get("key") for u in (b.get("unknown") or [])]
+    unknown = [(u.get("label") or u.get("key")) + (f" ({u['why']})" if u.get("why") else "")
+               for u in (b.get("unknown") or [])]
     if unknown:
-        out.append("Not found in the sources, needs a figure: " + ", ".join(unknown))
+        out.append("Needs a figure (nothing usable in the sources): " + "; ".join(unknown))
     if b.get("sources"):
-        out.append("Sources: " + " ".join(f"[{s.get('n')}] {s.get('url')}" for s in b["sources"]))
+        out.append("Sources: " + " ".join(f"[{s.get('n')}] " + (f"your {s.get('title')}" if s.get("own") else str(s.get("url")))
+                                          for s in b["sources"]))
     return "\n".join(out)
 
 
@@ -348,17 +357,158 @@ def numbers_in(text: str) -> set:
     return out
 
 
-def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict[str, str]]):
+# ── what a quantity is per (16 Nov 2026) ──────────────────────────────────────
+# DIGG's first live build-up kept "3 bags per 1,000 bricks" as 3 bags per m² (ten times the
+# cement) and "R220/m²" labour as a quantity of 220. The number was printed on the page, but not
+# per m² and not a quantity. Now: a price is never a quantity; "per 1,000 bricks" is converted with
+# the bricks per m² (when that is known, itself from a source); anything else not per the item's
+# own unit is set aside as needing a figure, with the reason.
+_PRICE_UNIT = re.compile(r"(?<![a-z])(r|zar|rands?)(?![a-z])|\bprice\b|\bcost\b", re.I)
+_BRICK_BASIS = re.compile(r"^(?:(\d[\d ,]*)|(thousand|1k|hundred))?\s*(?:no\.?\s*)?(bricks?|br|blocks?|units?)\b", re.I)
+
+
+def _basis(unit_text: str, per_text: str, own_unit: str):
+    """(unit of the quantity, basis) — basis None (per the item's own unit), ("bricks", n),
+    ("price", text) or ("other", text)."""
+    from vula.takeoff.market_checks import norm_unit
+    raw = f"{unit_text or ''}".strip()
+    if _PRICE_UNIT.search(raw) or _PRICE_UNIT.search(per_text or ""):
+        return raw, ("price", raw)
+    parts = re.split(r"\s*(?:\bper\b|/)\s*", raw, maxsplit=1)
+    unit, per = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
+    per = (per_text or "").strip() or per
+    if not per or norm_unit(per) == norm_unit(own_unit) or norm_unit(per.removeprefix("1 ")) == norm_unit(own_unit):
+        return unit, None
+    m = _BRICK_BASIS.match(per)
+    if m:
+        n = Decimal(1000) if (m.group(2) or "").lower() in ("thousand", "1k") else \
+            Decimal(100) if (m.group(2) or "").lower() == "hundred" else \
+            (_num(re.sub(r"[ ,]", "", m.group(1))) if m.group(1) else Decimal(1))
+        if n and n > 0:
+            return unit, ("bricks", n)
+    return unit, ("other", per)
+
+
+# 16 Nov 2026, second live run: "Brickforce 1 m" and "Labour 1 hour" were kept because a "1" was
+# printed somewhere on the page. A figure now counts only when it is printed NEAR the component's
+# own words (its search words or label), within NEAR_CHARS on either side.
+NEAR_CHARS = 100
+_LABOUR_WORDS = ("labour", "labor", "hour", "man-hour", "manhour", "artisan", "bricklayer", "plasterer",
+                 "tiler", "worker", "productivity")
+_GENERIC = {"with", "over", "from", "openings", "course", "units", "unit", "materials", "general"}
+
+
+def _component_words(comp: str, label: str) -> List[str]:
+    """The component's own words: its search phrases whole ("brick force", not "brick"), its label,
+    and the label's distinctive single words."""
+    words = set()
+    for term in trade_checklists.search_terms(comp, label) + [label or "", comp.replace("_", " ")]:
+        t = re.sub(r"[()]", " ", (term or "").lower())
+        t = re.sub(r"\s+", " ", t).strip()
+        if len(t) >= 4:
+            words.add(t[:-1] if t.endswith("s") and len(t) > 4 else t)
+    for w in re.findall(r"[a-z]+", (label or "").lower()):
+        if len(w) >= 5 and w not in _GENERIC:
+            words.add(w[:-1] if w.endswith("s") else w)
+    if comp == "labour" or "labour" in (label or "").lower():
+        words.update(_LABOUR_WORDS)
+    return sorted(words)
+
+
+_UNIT_AFTER = re.compile(r"^\s*(m2|m²|sqm|sq\.?\s?m|square\s+met)", re.I)
+
+
+def _distance(low: str, words: List[str], start: int, end: int) -> int:
+    best = 10 ** 9
+    for w in words:
+        for m in re.finditer(re.escape(w), low):
+            d = start - m.end() if m.end() <= start else (m.start() - end if m.start() >= end else 0)
+            best = min(best, d)
+    return best
+
+
+def printed_near(text: str, qty: Decimal, words: List[str], others: Iterable[str] = ()) -> bool:
+    """Is `qty` printed in `text` within NEAR_CHARS of one of `words`, nearer to them than to any
+    other component's words (`others`), and as a quantity — not the base of a rate ("per 1 m²",
+    "1 m² of wall")? 16 Nov 2026: "1 bricklayer" counted as "brickforce 1 m"."""
+    low = (text or "").lower()
+    others = [o for o in others if o not in words]
+    for m in _NUM_RE.finditer(text or ""):
+        if not ({qty.normalize()} & numbers_in(m.group(0))):
+            continue
+        before, after = low[max(0, m.start() - 6): m.start()], (text or "")[m.end(): m.end() + 14]
+        if "per" in before or _UNIT_AFTER.match(after):
+            continue
+        # only the clause the number is in: up to the nearest sentence end, semicolon or line
+        lo = max([low.rfind(sep, 0, m.start()) for sep in (". ", ";", "\n", "|")] + [-1]) + 1
+        ends = [i for i in (low.find(sep, m.end()) for sep in (". ", ";", "\n", "|")) if i >= 0]
+        hi = min(ends) if ends else len(low)
+        clause = low[lo:hi]
+        a, z = m.start() - lo, m.end() - lo
+        mine = _distance(clause, words, a, z)
+        if mine <= NEAR_CHARS and mine <= _distance(clause, others, a, z):
+            return True
+    return False
+
+
+def _others(checklist: List[Dict[str, str]], comp: str) -> List[str]:
+    return sorted({w for c in checklist if c["key"] != comp for w in _component_words(c["key"], c["label"])})
+
+
+def _alternate(line: Dict[str, Any], it: Dict[str, Any], pages: List[Dict[str, Any]], own_unit: str,
+               used: set, others: Iterable[str] = ()) -> None:
+    """A second source's figure for a component already kept: when it is checked (printed there,
+    per the item's own unit) and different, it goes in the note — "your spec: 108; guide: 104" —
+    so whoever confirms sees both."""
+    try:
+        n = int(str(it.get("source")).strip("[] "))
+    except ValueError:
+        return
+    if not 1 <= n <= len(pages) or str(n) == str(line.get("source_ref")):
+        return
+    qty = _num(it.get("qty_per_unit"))
+    if qty is None or qty <= 0 or not printed_near(pages[n - 1].get("text") or "", qty,
+                                                    _component_words(line["component"], line.get("label") or ""),
+                                                    others):
+        return
+    _unit, basis = _basis(str(it.get("unit") or ""), str(it.get("per") or ""), own_unit)
+    if basis is not None or qty == line["qty_per_unit"]:
+        return
+    page = pages[n - 1]
+    who = f"your {page.get('title')}" if page.get("own") else (page.get("title") or f"source {n}")
+    extra = f"also {_show(qty)} {line['unit']} per {own_unit} in {who} [{n}]"
+    line["note"] = ((line.get("note") + "; ") if line.get("note") else "") + extra
+    line["note"] = line["note"][:300]
+    used.add(n)
+
+
+def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict[str, str]],
+                   own_unit: str = "m2"):
     """(lines, unknown, used page numbers). A line is kept only when its quantity is printed on
-    the page it cites; a stated waste % must be printed there too (else 0, with a note)."""
+    the page it cites and is a quantity per the item's own unit (see _basis); a stated waste %
+    must be printed there too (else 0, with a note). What's set aside is listed with why."""
     keys = {c["key"]: c for c in checklist}
     lines: Dict[str, Dict[str, Any]] = {}
+    why: Dict[str, str] = {}
+    pending: List[tuple] = []          # per-brick figures, converted once bricks per unit is known
     used: set = set()
-    for it in items if isinstance(items, list) else []:
-        if not isinstance(it, dict):
-            continue
+    items = items if isinstance(items, list) else []
+    # bricks per unit first, so a "per 1,000 bricks" figure can be converted
+    def _own(i: Dict[str, Any]) -> int:
+        try:
+            n = int(str(i.get("source")).strip("[] "))
+            return 0 if 1 <= n <= len(pages) and pages[n - 1].get("own") else 1
+        except ValueError:
+            return 1
+    # bricks per unit first; within each, the business's own documents before the web
+    items = sorted([i for i in items if isinstance(i, dict)],
+                   key=lambda i: (0 if _norm(i.get("component")).replace(" ", "_") == "units" else 1, _own(i)))
+    for it in items:
         comp = _norm(it.get("component")).replace(" ", "_")
-        if comp not in keys or comp in lines:
+        if comp not in keys:
+            continue
+        if comp in lines:
+            _alternate(lines[comp], it, pages, own_unit, used, _others(checklist, comp))
             continue
         try:
             n = int(str(it.get("source")).strip("[] "))
@@ -367,20 +517,100 @@ def grounded_lines(items: Any, pages: List[Dict[str, str]], checklist: List[Dict
         if not 1 <= n <= len(pages):
             continue
         qty = _num(it.get("qty_per_unit"))
-        printed = numbers_in(pages[n - 1].get("text") or "")
-        if qty is None or qty <= 0 or qty.normalize() not in printed:
+        page_text = pages[n - 1].get("text") or ""
+        printed = numbers_in(page_text)
+        if qty is None or qty <= 0 or not printed_near(page_text, qty, _component_words(comp, keys[comp]["label"]),
+                                                       _others(checklist, comp)):
             continue
         waste = _num(it.get("waste_pct"))
         note = str(it.get("note") or "")[:200]
         if waste is not None and waste > 0 and waste.normalize() not in printed:
             waste, note = None, (note + " (waste not stated in the source)").strip()
-        lines[comp] = {"component": comp, "label": keys[comp]["label"], "kind": keys[comp]["kind"],
-                       "qty_per_unit": qty, "unit": str(it.get("unit") or keys[comp]["unit"])[:20],
-                       "waste_pct": waste or 0, "note": note or None, "source_ref": str(n)}
+        unit, basis = _basis(str(it.get("unit") or ""), str(it.get("per") or ""), own_unit)
+        shown = f"{_show(qty)} {it.get('unit') or ''}".strip() + (f" per {it.get('per')}" if it.get("per") else "")
+        if basis and basis[0] == "price":
+            why[comp] = f"the source gives a price ({shown}), not a quantity"
+            continue
+        if basis and basis[0] == "other":
+            why[comp] = f"the source gives it per {basis[1]}, not per {own_unit}"
+            continue
+        from vula.takeoff.market_checks import _UNIT_ALIASES, norm_unit
+        canon = norm_unit(unit)
+        line = {"component": comp, "label": keys[comp]["label"], "kind": keys[comp]["kind"],
+                "qty_per_unit": qty,
+                "unit": (canon if canon in set(_UNIT_ALIASES.values()) else (unit or keys[comp]["unit"]))[:20],
+                "waste_pct": waste or 0, "note": note or None, "source_ref": str(n)}
+        if basis and basis[0] == "bricks":
+            pending.append((comp, line, basis[1], shown, n))
+            continue
+        lines[comp] = line
         used.add(n)
-    unknown = [{"key": c["key"], "label": c["label"]} for c in checklist if c["key"] not in lines]
+    bricks = lines.get("units")
+    for comp, line, per_n, shown, n in pending:
+        if comp in lines:
+            continue
+        if not bricks:
+            why[comp] = f"the source gives it per {_show(per_n)} bricks ({shown}); needs the bricks per {own_unit}"
+            continue
+        per_unit = (line["qty_per_unit"] * bricks["qty_per_unit"] / per_n).quantize(Decimal("0.0001"))
+        line["qty_per_unit"] = per_unit
+        line["note"] = (f"{shown} × {_show(bricks['qty_per_unit'])} bricks per {own_unit}"
+                        + (f"; {line['note']}" if line.get("note") else ""))[:300]
+        lines[comp] = line
+        used.add(n)
+    unknown = [{"key": c["key"], "label": c["label"], **({"why": why[c["key"]]} if c["key"] in why else {})}
+               for c in checklist if c["key"] not in lines]
     ordered = [lines[c["key"]] for c in checklist if c["key"] in lines]
     return ordered, unknown, used
+
+
+PAGES = 8                 # pages read for one build-up (Ask anything research reads 6)
+PAGE_TEXT = 20000         # characters kept per page — figures are often deep in a guide
+PROMPT_OVERHEAD_CHARS = 3000
+EXCERPT_AROUND = 220
+
+
+def excerpt(text: str, words: Iterable[str], room: int) -> str:
+    """The parts of `text` around the components' words, in page order, up to `room` characters
+    ("…" between parts); the page's start when no word is there."""
+    low = (text or "").lower()
+    spans: List[List[int]] = []
+    for w in words:
+        for m in re.finditer(re.escape(w), low):
+            spans.append([max(0, m.start() - EXCERPT_AROUND), min(len(text), m.end() + EXCERPT_AROUND)])
+    if not spans:
+        return (text or "")[:room]
+    spans.sort()
+    merged = [spans[0]]
+    for a, z in spans[1:]:
+        if a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], z)
+        else:
+            merged.append([a, z])
+    out, used = [], 0
+    for a, z in merged:
+        part = text[a:z].strip()
+        if used + len(part) > room:
+            part = part[: max(0, room - used)]
+        if part:
+            out.append(part)
+            used += len(part) + 3
+        if used >= room:
+            break
+    return " … ".join(out)
+
+
+def search_queries(checklist: List[Dict[str, str]], what: str, unit: str) -> List[str]:
+    """The web searches for a build-up, made in code from the item and its trade's components —
+    never a client, project or person. 16 Nov 2026: one broad planned search left most components
+    unsearched. One overall, then the main materials and labour, each per unit of the item."""
+    unit_words = {"m2": "per m2", "m": "per metre", "m3": "per m3", "each": "each"}.get(unit, f"per {unit}")
+    qs = [f"{what} quantities {unit_words} South Africa"]
+    materials = [c for c in checklist if c["kind"] == "material"][:3]
+    for c in materials + [c for c in checklist if c["kind"] == "labour"][:1]:
+        term = trade_checklists.search_terms(c["key"], c["label"])[0]
+        qs.append(f"{term} {unit_words} {what}" if c["kind"] == "material" else f"labour hours {unit_words} {what}")
+    return list(dict.fromkeys(q[:120] for q in qs))[:5]
 
 
 def _parse(text: str) -> Any:
@@ -401,33 +631,60 @@ async def research(tenant_id: str, item: str, spec: Optional[Dict[str, Any]] = N
     what = f"{item}" + (f" ({spec_text(spec)})" if spec else "")
     question = (f"Quantities of materials and labour per {unit} for {what} in South Africa: "
                 + ", ".join(c["label"] for c in checklist))
-    queries = await web.plan_queries(question)
-    pages = await web.read_pages(await web._search(queries))
+    # the business's own documents first (its specs, BOQs, past jobs — 16 Nov 2026, Ian: "is it
+    # comparing with data from KB"), then the web. Same checks for both.
+    docs = [{"title": d.get("title") or "document", "text": d.get("text") or "", "url": None, "own": True}
+            for d in await web.own_documents(tenant_id, question)]
+    queries = search_queries(checklist, what, unit)
+    pages = docs + await web.read_pages(await web._search(queries), limit=PAGES, max_chars=PAGE_TEXT)
     if not pages:
         raise BuildupError("I couldn't read any sources for that just now — try again later.")
-    numbered = "\n\n".join(f"[{i}] {p.get('title') or ''} ({p.get('url')})\n{(p.get('text') or '')[:3000]}"
-                           for i, p in enumerate(pages, 1))
+    # the parts of each page about the components (the checks below still read the whole page),
+    # cut to fit Vula's own model so it tries first (16 Nov 2026: 8 pages of 3 000 characters went
+    # over its window and straight to the cloud)
+    from core.llm_router import local_prompt_cap_tokens
+    every = sorted({w for c in checklist for w in _component_words(c["key"], c["label"])})
+    room = max(600, (local_prompt_cap_tokens() * 4 - PROMPT_OVERHEAD_CHARS) // max(1, len(pages)))
+    numbered = "\n\n".join(
+        (f"[{i}] YOUR DOCUMENT: {p.get('title')}" if p.get("own") else f"[{i}] {p.get('title') or ''} ({p.get('url')})")
+        + f"\n{excerpt(p.get('text') or '', every, room)}" for i, p in enumerate(pages, 1))
     comps = "\n".join(f"- {c['key']}: {c['label']} (usually per {c['unit']})" for c in checklist)
     messages = [{"role": "user", "content": (
         f"From the numbered sources below, give the quantities of each component needed for ONE "
         f"{unit} of: {what}.\nComponents:\n{comps}\n\n"
         "Rules: use only quantities printed in a source and copy the number exactly as printed; "
-        "cite the source number; leave out a component no source gives a figure for. Answer with "
-        'a JSON array only: [{"component": "units", "qty_per_unit": 104, "unit": "each", '
+        "cite the source number; leave out a component no source gives a figure for. "
+        f'"unit" is what is counted (each, bag, m3, kg, hour, day); "per" is what the figure is per '
+        f'exactly as the source says it: "{unit}" when it is per {unit}, or e.g. "1000 bricks". '
+        "Sources marked YOUR DOCUMENT are the business's own records: prefer their figure, and when "
+        "another source gives a different figure for the same component, add it as a second entry. "
+        "Quantities only: labour as hours or days, never a rand amount. For bricks, look for the "
+        f"number of bricks per {unit} (brick calculators and guides print it). Answer with "
+        f'a JSON array only: [{{"component": "units", "qty_per_unit": 104, "unit": "each", "per": "{unit}", '
         '"waste_pct": 5, "source": 2, "note": "NFX bricks, 10 mm joints"}]\n\n'
         f"Sources:\n{numbered}")}]
 
     def checks_out(text: str) -> bool:
-        return bool(grounded_lines(_parse(text), pages, checklist)[0])
+        """The local model's answer is kept only when it found the main component and a few
+        others; a thin one goes to the cloud model (16 Nov 2026: two weak lines were accepted)."""
+        parsed = _parse(text)
+        got = {ln["component"] for ln in grounded_lines(parsed, pages, checklist, unit)[0]}
+        ok = checklist[0]["key"] in got and len(got) >= min(3, len(checklist))
+        if not ok:   # counts only, never the text (telemetry rule)
+            log.info("build-up local answer set aside: %d lines, %d checked out, main component %s",
+                     len(parsed), len(got), "found" if checklist[0]["key"] in got else "missing")
+        return ok
 
     raw = await web._complete("buildup_research", messages, max_tokens=1200, timeout_s=90.0, accept=checks_out)
-    lines, unknown, used = grounded_lines(_parse(raw), pages, checklist)
+    lines, unknown, used = grounded_lines(_parse(raw), pages, checklist, unit)
     if not lines:
         raise BuildupError("I couldn't find quantities I could check in the sources for that — "
                            "an owner or manager can enter the build-up instead.")
-    sources = [{"n": i, "title": (pages[i - 1].get("title") or "")[:140], "url": pages[i - 1].get("url")}
-               for i in sorted(used)]
-    log.info("build-up researched for %s (%s): %d grounded, %d unknown", tenant_id, trade, len(lines), len(unknown))
+    sources = [{"n": i, "title": (pages[i - 1].get("title") or "")[:140], "url": pages[i - 1].get("url"),
+                **({"own": True} if pages[i - 1].get("own") else {})} for i in sorted(used)]
+    own_n = {str(x["n"]) for x in sources if x.get("own")}
+    log.info("build-up researched for %s (%s): %d grounded (%d from own documents), %d unknown",
+             tenant_id, trade, len(lines), sum(1 for ln in lines if str(ln.get("source_ref")) in own_n), len(unknown))
     return save_proposed(tenant_id, trade=trade, item=item, spec=spec, unit=unit, lines=lines,
                          sources=sources, unknown=unknown, created_by=created_by)
 

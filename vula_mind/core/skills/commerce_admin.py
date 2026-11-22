@@ -32,6 +32,7 @@ from config import settings
 from core.llm_router import (
     generation_kwargs, is_local_model, resolve_generation_route, escalate_to_cloud,
     substitute_if_degenerate, looks_degenerate, next_cloud_model,
+    with_prompt_cache, cached_prompt_tokens,
 )
 from core.prompt_safety import fence
 from vula.storage_links import SHARE_TTL, signed
@@ -106,6 +107,30 @@ def _checked(result: Dict[str, Any], text: str) -> Dict[str, Any]:
     result["verified"] = True
     result["reply_verbatim"] = text
     return result
+
+
+# 16 Nov 2026 (accuracy): a tool that fails must not turn into an answer from general knowledge.
+# The 07:21 build-up research failed in the cloud; the raw OpenRouter error went to the model,
+# which wrote its own account of it. The person is told plainly that the step failed and nothing
+# was checked, and the model is told not to fill the gap.
+TOOL_FAILED_NOTE = ("This step failed, so nothing was looked up or checked. Tell the person plainly "
+                    "that it didn't work and they can try again later. Do not answer from general "
+                    "knowledge instead, and do not give any figure in its place.")
+_TECHNICAL_MODULES = ("litellm", "openai", "httpx", "httpcore", "asyncio", "anyio", "postgrest", "supabase")
+
+
+def _tool_failed(exc: BaseException) -> Dict[str, Any]:
+    """A failed tool's result: a person-readable reason (a technical failure is not passed on
+    as raw provider text) plus TOOL_FAILED_NOTE."""
+    technical = (type(exc).__module__.split(".")[0] in _TECHNICAL_MODULES
+                 or isinstance(exc, (TimeoutError, ConnectionError)))
+    reason = "a technical problem on Vula's side" if technical else str(exc)
+    return {"error": reason, "failed": True, "note": TOOL_FAILED_NOTE}
+
+
+BUILDUP_FAILED = ("⚠️ I couldn't check sources just now (a technical problem on Vula's side), so I "
+                  "haven't saved a build-up and nothing was guessed. Please try again in a while, or "
+                  "an owner or manager can enter the figures.")
 
 
 def _not_confirmed(message: str) -> Dict[str, Any]:
@@ -260,6 +285,27 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "category": {"type": "string", "description": "Optional filter, e.g. 'Invoice', "
                         "'Proof of Payment', 'Quote / Estimate', 'Bill of Quantities (BOQ)'."}},
             "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "send_document",
+        "description": "Send one of the business's own filed documents to someone — a client, a "
+                       "supplier, or an email address / WhatsApp number — when asked: 'send our bank "
+                       "letter to Atlantis Foods', 'email the tax clearance to accounts@x.co.za', "
+                       "'forward the proof of payment for R5,600 to Belekkie Skips'. Name the document in "
+                       "`document` in the person's words (or give doc_id from find_document). Without "
+                       "confirm=true it returns a preview; show it and wait for a yes. If it returns "
+                       "status: need_info (which document, which account, who, or their email), that "
+                       "message IS your reply. Never say it was sent unless the result says sent.",
+        "parameters": {"type": "object", "properties": {
+            "document": {"type": "string", "description": "What to send, in the person's words, e.g. "
+                         "'bank letter for the 6574 account', 'tax clearance', 'COR14.3'."},
+            "doc_id": {"type": "string", "description": "A document id from find_document, when known."},
+            "to": {"type": "string", "description": "Who: a client or supplier name, an email address "
+                   "or a WhatsApp number."},
+            "channel": {"type": "string", "enum": ["email", "whatsapp"]},
+            "note": {"type": "string", "description": "An optional short line to go with it."},
+            "confirm": {"type": "boolean"}},
+            "required": ["to"]},
     }},
     {"type": "function", "function": {
         "name": "email_thread_summary",
@@ -1388,7 +1434,34 @@ BUILDUP_TOOLS = [
             "exclusions": {"type": "array", "items": {"type": "string"},
                            "description": "what the person said is not included, e.g. ['painting']"},
             "title": {"type": "string"},
+            "project": {"type": "string", "description": "the project it's for, when the person says so — "
+                                                         "so it can later be compared with what was paid"},
         }, "required": ["items"]}}},
+    # phase 4 (15 Nov 2026): what the job actually cost against its estimate (vula/commerce/actuals.py)
+    {"type": "function", "function": {
+        "name": "compare_estimate",
+        "description": "Compare a kept estimate with what was actually paid on its project (filed "
+                       "invoices, expenses, labour) — per component: estimated vs bought quantity "
+                       "and cost. With finished=true (only when an owner or manager says the work "
+                       "is finished, or the project is complete) Vula keeps suggested build-up "
+                       "changes for them to accept or dismiss. Use for 'how did the Bokaap walls "
+                       "compare with the estimate', 'the walls are done — what did we learn'.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "the project the estimate is for"},
+            "estimate_id": {"type": "string"},
+            "finished": {"type": "boolean", "description": "the person says this work is finished"},
+        }}}},
+    {"type": "function", "function": {
+        "name": "buildup_suggestion",
+        "description": "Build-up changes Vula suggested from finished jobs: list them, or accept / "
+                       "dismiss one. Accepting saves a new version of the build-up with that one "
+                       "change. Show the suggestion first; call with confirm=true only after the "
+                       "owner or manager says yes.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "accept", "dismiss"]},
+            "suggestion_id": {"type": "string"},
+            "confirm": {"type": "boolean"},
+        }, "required": ["action"]}}},
 ]
 
 FORM_TOOLS = [
@@ -2084,7 +2157,8 @@ _TOOL_SCOPE: Dict[str, str] = {
     "project_profit": "finances", "price_advice": "finances", "boq_template": "finances", "share_project": "finances", "project_bill_file": "finances",
     # every document of a project, statements and proofs of payment included: owner and managers
     # only — no tab id grants it, so a restricted staff member never gets the tool.
-    "project_file": "owner_only", "confirm_buildup": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
+    "send_document": "documents",
+    "project_file": "owner_only", "confirm_buildup": "owner_only", "compare_estimate": "owner_only", "estimate_cost": "tradecosting", "buildup_suggestion": "owner_only", "timesheet_summary": "finances", "client_paid_direct": "finances", "tax_estimate": "finances",
     "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
     "set_vat_registration": "finances",
     # 2026-10-27: the P&L / balance sheet, finance settings and payment reminders had no scope,
@@ -2187,7 +2261,12 @@ _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "reco
                             # cancel/refund change what the customer was promised; the staff tools
                             # message the team; a discount code changes prices.
                             "order_payment", "create_manual_order", "create_discount_code",
-                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking"}
+                            "update_order_status", "staff_notice", "staff_poll", "cancel_booking",
+                            # 17 Nov 2026 audit: a confirmed build-up sets the quantities of every
+                            # estimate (and other businesses' when shared) — shown before it's kept
+                            "confirm_buildup", "buildup_suggestion",
+                            # 20 Nov 2026: a document leaves the business — shown before it goes
+                            "send_document"}
                            | frozenset().union(*(a.ADMIN_PREVIEW_FIRST for a in _ADDONS)))
 
 
@@ -2255,6 +2334,26 @@ def _team_tools(tenant_id: str, role: Optional[str], message: str, phone: Option
     return employees.without_switched_off(tools, {k for k, v in settings.items() if v["enabled"]})
 
 
+def _trade_costing_pick(tenant_id: str, message: str, enabled: set, off: set):
+    """(operations, its trade-costing task) for a costing message where the business has
+    trade_costing on (16 Nov 2026), else None. The keyword front desk sent "Estimate the cost of a
+    6 x 4 m wall" to sales' quote task, which has none of the costing tools, and most other costing
+    messages to the whole team. Uses the same detector as the WhatsApp costing turn."""
+    if "operations" not in enabled or "trade-costing" in (off or set()):
+        return None
+    try:
+        from vula import features
+        from vula.commerce.trade_checklists import is_costing_request
+        if not (features.on(tenant_id, "trade_costing") and is_costing_request(message or "")):
+            return None
+        from core.skills import employees
+        emp = employees.BY_ID.get("operations")
+        task = next((t for t in (emp.tasks if emp else ()) if t.id == "trade-costing"), None)
+        return (emp, task) if emp and task else None
+    except Exception:  # noqa: BLE001 — the keyword front desk decides instead
+        return None
+
+
 def _pick_employee(tenant_id: str, message: str, tools: List[Dict[str, Any]]):
     """(tools, employee or None, prompt note) — the front desk. Best-effort: on any error the
     whole team keeps today's tools."""
@@ -2264,10 +2363,17 @@ def _pick_employee(tenant_id: str, message: str, tools: List[Dict[str, Any]]):
         enabled = {k for k, v in settings.items() if v["enabled"]}
         team = employees.without_switched_off(tools, enabled)
         emp = employees.pick(message, enabled)
+        tsets = employees.task_settings(tenant_id)
+        costing = _trade_costing_pick(tenant_id, message, enabled, employees.tasks_off(tsets, "operations"))
+        if costing is not None:
+            emp, task = costing
+            _turn_note("employee", name=emp.id, task=task.id)
+            task_note = (tsets.get((emp.id, task.id)) or {}).get("instructions", "")
+            return (employees.narrow(team, emp, task), emp,
+                    employees.job_block(emp, settings[emp.id]["instructions"], task, task_note))
         if emp is None:
             _turn_note("employee", name="team")
             return team, None, ""
-        tsets = employees.task_settings(tenant_id)
         task = employees.pick_task(emp, message, employees.tasks_off(tsets, emp.id))
         _turn_note("employee", name=emp.id, task=task.id if task else None)
         task_note = (tsets.get((emp.id, task.id)) or {}).get("instructions", "") if task else ""
@@ -2455,6 +2561,7 @@ class CommerceAdminSkill(BaseSkill):
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
                "message": inp.question, "session_id": inp.metadata.get("session_id"),
+               "person_key": inp.metadata.get("person_key"),
                # files a tool made this turn (custom_sheet): shared with the caller's metadata so the
                # dashboard chat can offer them as downloads, whichever way the turn ends
                "files": inp.metadata.setdefault("files_out", [])}
@@ -2798,7 +2905,9 @@ class CommerceAdminSkill(BaseSkill):
         retried_garbled = False
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(
-                model=model, messages=messages, tools=tools, tool_choice="auto",
+                # the same tools + system prompt on every step: cached on a Claude route
+                # (16 Nov 2026, cost); unchanged for any other model
+                model=model, messages=with_prompt_cache(messages, model), tools=tools, tool_choice="auto",
                 temperature=0.2, max_tokens=900, api_key=api_key, api_base=api_base,
                 # Unconditional — dropped silently wherever unsupported (cloud routes, older
                 # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
@@ -2806,6 +2915,9 @@ class CommerceAdminSkill(BaseSkill):
                 # loop otherwise force-escalates to cloud above.
                 logprobs=True, top_logprobs=1, **generation_kwargs(model),
             )
+            cached = cached_prompt_tokens(resp)
+            if cached:   # counts only
+                logger.info("commerce_admin: %d prompt tokens read from cache", cached)
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
 
@@ -3313,6 +3425,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "finance_settings":   return await self._finance_settings(tid, args)
             if name == "confirm_expense":    return await self._confirm_expense(tid, args)
             if name == "find_document":      return await self._find_document(tid, args)
+            if name == "send_document":      return await self._send_document(tid, args, ctx)
             if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
@@ -3328,6 +3441,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name in ("trade_buildup", "confirm_buildup"): return await self._buildup(name, tid, args, ctx)
             if name == "estimate_cost":       return await self._estimate_cost(tid, args, ctx)
+            if name in ("compare_estimate", "buildup_suggestion"): return await self._actuals(name, tid, args, ctx)
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")), args.get("channel"))
             if name == "payment_link":       return await self._payment_link(tid, args)
@@ -3467,7 +3581,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
-            return {"error": str(exc)}
+            return _tool_failed(exc)
         return {"error": f"unknown tool {name}"}
 
     def _rands(self, c: int) -> str:
@@ -3925,7 +4039,8 @@ class CommerceAdminSkill(BaseSkill):
             est = await est_mod.estimate(tid, list(args.get("items") or []),
                                          exclusions=list(args.get("exclusions") or []), research=True,
                                          created_by=phone or str(ctx.get("person_key") or ""),
-                                         title=str(args.get("title") or ""))
+                                         title=str(args.get("title") or ""),
+                                         project=str(args.get("project") or "") or None)
         except est_mod.EstimateError as exc:
             return {"status": "need_info", "message": str(exc)}
         text = est_mod.summary(est)
@@ -3957,6 +4072,67 @@ class CommerceAdminSkill(BaseSkill):
             except Exception as exc:  # noqa: BLE001 — the estimate itself still stands
                 logger.warning("estimate sheet skipped for %s: %s", tid, exc)
         return {"reply_verbatim": text, "estimate_id": est.get("id"), "total_cents": est["total_cents"]}
+
+    async def _actuals(self, name: str, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """compare_estimate / buildup_suggestion (vula/commerce/actuals.py). Replies built in code;
+        deciding needs full access (owner or manager), checked here as well as by owner_only."""
+        import asyncio
+        from vula.commerce import actuals, buildups
+        person = str(ctx.get("phone") or ctx.get("person_key") or "")
+        lead = _ctx_access(tid, ctx) is None
+        try:
+            if name == "compare_estimate":
+                est = None
+                if args.get("estimate_id"):
+                    est = await asyncio.to_thread(actuals.get_estimate, tid, str(args["estimate_id"]))
+                elif args.get("project"):
+                    from vula.commerce.estimate import EstimateError, registered_project
+                    try:
+                        proj = await asyncio.to_thread(registered_project, tid, str(args["project"]))
+                    except EstimateError as exc:
+                        return {"error": str(exc)}
+                    rows = (service._client().table("vula_estimates").select("*").eq("tenant_id", tid)
+                            .eq("project", proj).order("created_at", desc=True).limit(1).execute().data or [])
+                    est = rows[0] if rows else None
+                if not est:
+                    return {"error": "I can't find an estimate for that. Make one with the project named, "
+                                     "then I can compare it with what was paid."}
+                finished = bool(args.get("finished")) or await asyncio.to_thread(
+                    actuals.is_finished, tid, est.get("project") or "")
+                if finished and lead:
+                    res = await actuals.learn(tid, est["id"], person=person, full_access=True, notify=False)
+                    cmp = await asyncio.to_thread(actuals.compare, tid, est)
+                    text = actuals.summary(cmp, actuals.proposals(cmp), finished=True)
+                    if res["suggestions"]:
+                        text += "\n\nWaiting for your decision:\n" + "\n".join(
+                            f"{i}. {s['text']}" for i, s in enumerate(res["suggestions"], 1))
+                        text += "\nSay which to accept or dismiss — nothing changes until you do."
+                    return {"reply_verbatim": text,
+                            "suggestions": [{"id": s["id"], "text": s["text"]} for s in res["suggestions"]]}
+                cmp = await asyncio.to_thread(actuals.compare, tid, est)
+                return {"reply_verbatim": actuals.summary(cmp, actuals.proposals(cmp), finished=False)}
+            action = str(args.get("action") or "list")
+            if action == "list" or not args.get("suggestion_id"):
+                rows = await asyncio.to_thread(actuals.list_suggestions, tid)
+                if not rows:
+                    return {"suggestions": [], "message": "No build-up changes are waiting for a decision."}
+                return {"suggestions": [{"id": r["id"], "text": r["text"]} for r in rows]}
+            sid = str(args["suggestion_id"])
+            if not args.get("confirm"):
+                rows = [r for r in await asyncio.to_thread(actuals.list_suggestions, tid) if r["id"] == sid]
+                if not rows:
+                    return {"error": "I can't find that suggestion — it may already be decided."}
+                return {"preview": True, "text": rows[0]["text"],
+                        "message": f"Confirm to {action} it (call again with confirm=true)."}
+            if action == "accept":
+                b = await asyncio.to_thread(actuals.accept, tid, sid, person=person, full_access=lead)
+                return _checked({"accepted": True, "buildup_id": b["id"], "version": b.get("version")},
+                                "✅ Changed — Vula will use this build-up from now on:\n" + buildups.describe(b))
+            ok = await asyncio.to_thread(actuals.dismiss, tid, sid, person=person, full_access=lead)
+            return {"dismissed": ok, "message": "Dismissed — it won't be suggested again for this estimate."
+                    if ok else "That didn't save — please try again."}
+        except actuals.ActualsError as exc:
+            return {"error": str(exc)}
 
     async def _buildup(self, name: str, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         """trade_buildup / confirm_buildup (vula/commerce/buildups.py). Confirming needs full access
@@ -3994,6 +4170,9 @@ class CommerceAdminSkill(BaseSkill):
                             + buildups.describe(b))
         except buildups.BuildupError as exc:
             return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — research reaches the web and cloud models
+            logger.warning("build-up tool %s failed: %s", name, type(exc).__name__)
+            return {**_tool_failed(exc), "reply_verbatim": BUILDUP_FAILED}
 
     async def _apply_voice_persona(self, tid: str, persona_prompt: str,
                                    confirm: bool = False) -> Dict[str, Any]:
@@ -4081,6 +4260,38 @@ class CommerceAdminSkill(BaseSkill):
                 + (f" (incl. {_r(vat)} VAT)" if vat else "") + ".\n"
                 "Say 'send it' to WhatsApp it to the customer."))
         return result
+
+    async def _send_document(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """send_document (20 Nov 2026, vula/commerce/doc_send.py): find the document, preview, then send.
+        Every word of the reply is built in code; a refusal says why and nothing is sent."""
+        from vula.commerce import doc_send
+        doc_id = (args.get("doc_id") or "").strip()
+        if not doc_id:
+            found = await doc_send.find_any(tid, args.get("document") or "")
+            docs = found["documents"]
+            if not docs:
+                what = found.get("kind") or (args.get("document") or "that document")
+                return {"status": "need_info", "message": f"I couldn't find our {what} on file. Upload it "
+                        "(Documents › For your accountant › Company and tax documents) or tell me which one."}
+            if len(docs) > 1:
+                opts = "; ".join(f"{d['document']}" + (f", {d['date']}" if d.get("date") else "") for d in docs[:6])
+                return {"status": "need_info", "message": f"Which one? {opts}.", "documents": docs[:6]}
+            doc_id = docs[0]["id"]
+        actor = {"phone": ctx.get("phone"), "name": ctx.get("caller_name") or ctx.get("name"),
+                 "email": ctx.get("email") or ctx.get("person_key")}
+        try:
+            out = await doc_send.send(tid, doc_id, args.get("to") or "", channel=args.get("channel"),
+                                      note=args.get("note") or "", confirm=bool(args.get("confirm")),
+                                      actor=actor, full_access=_ctx_access(tid, ctx) is None,
+                                      requester_phone=(ctx.get("phone") or "")
+                                      if re.fullmatch(r"\+?\d{9,15}", ctx.get("phone") or "") else "")
+        except doc_send.Refused as exc:
+            return _not_confirmed(str(exc))
+        if out.get("status") == "need_info":
+            return out
+        if out.get("preview"):
+            return {**out, "doc_id": doc_id}
+        return out
 
     async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False,
                             channel: Optional[str] = None) -> Dict[str, Any]:

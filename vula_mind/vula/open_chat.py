@@ -34,13 +34,29 @@ _RECORDS = re.compile(
     r"\bowes?\s+us\b", re.I)
 
 
-def needs_records(text: str) -> bool:
+def needs_records(text: str, tenant_id: str = "") -> bool:
     """True when the message asks about, or for an action on, this business's own records — the
-    business assistant answers it. False for a general question, an idea, a draft or a plan."""
+    business assistant answers it. False for a general question, an idea, a draft or a plan.
+    16 Nov 2026: where the business has costing by trade on, a build-up or estimate question
+    (trade_checklists.is_costing_request) goes to the business assistant, which has the tools."""
     from core.skills.base import looks_like_tenant_data_question
     t = text or ""
-    return bool(_ACTION.search(t) or _RECORDS.search(t)
-                or looks_like_tenant_data_question(t, require_possessive=True))
+    if _ACTION.search(t) or _RECORDS.search(t) or looks_like_tenant_data_question(t, require_possessive=True):
+        return True
+    try:
+        from vula.commerce.doc_send import is_send_request
+        if is_send_request(t):                 # "send our bank letter to …" (20 Nov 2026)
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    if tenant_id:
+        try:
+            from vula import features
+            from vula.commerce.trade_checklists import is_costing_request
+            return features.on(tenant_id, "trade_costing") and is_costing_request(t)
+        except Exception:  # noqa: BLE001
+            return False
+    return False
 
 
 _SENT: Dict[str, Deque[float]] = {}

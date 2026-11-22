@@ -35,7 +35,9 @@ def test_one_failing_rule_never_stops_the_others(monkeypatch):
 def test_the_registered_rules():
     assert [r.name for r in retention.RULES] == [
         "takeoff_plans", "whatsapp_dedupe", "whatsapp_logins", "app_errors", "website_leads",
-        "conversation_turns", "conversations"]
+        "conversation_turns", "conversations", "chat_attachments",
+        "whatsapp_sent", "escalations", "chat_messages", "email_followups", "email_contacts",
+        "email_voice_samples", "routing_telemetry", "health_checks", "webhooks", "automation_log"]
 
 
 def test_the_agreed_periods():
@@ -94,3 +96,43 @@ def test_the_server_runs_one_sweep_not_a_loop_per_feature():
     from vula.api import server
     src = inspect.getsource(server)
     assert "_retention_loop()" in src and "_takeoff_retention_loop" not in src
+
+
+def test_the_18_nov_periods():
+    """Pre-launch audit, 18 Nov 2026: what people said or were sent a year (two for chat history
+    and mailbox contacts), technical records sooner."""
+    from config import Settings
+    s = Settings()
+    assert (s.outbound_retention_days, s.escalation_retention_days, s.chat_message_retention_days,
+            s.email_followup_retention_days, s.email_contact_retention_days,
+            s.email_voice_sample_retention_days, s.telemetry_retention_days,
+            s.health_event_retention_days, s.webhook_retention_days,
+            s.automation_log_retention_days) == (365, 365, 730, 365, 730, 365, 365, 180, 90, 365)
+
+
+def test_each_18_nov_rule_deletes_its_own_tables_by_their_own_date(monkeypatch):
+    log = []
+    monkeypatch.setattr("vula.commerce.service._client",
+                        lambda: type("C", (), {"table": lambda self, t: _Del(log, t)})())
+    by = {r.name: r for r in retention.RULES}
+    for name in ("whatsapp_sent", "escalations", "chat_messages", "email_followups", "email_contacts",
+                 "email_voice_samples", "routing_telemetry", "health_checks", "webhooks", "automation_log"):
+        assert all(v == 2 for v in by[name].purge(30).values())
+    cols = {(t, c[0][1]) for t, c in log}
+    assert cols == {
+        ("vula_wa_outbound", "created_at"), ("vula_escalations", "created_at"),
+        ("vula_chat_messages", "created_at"), ("vula_email_followups", "created_at"),
+        ("vula_email_contacts", "last_seen"), ("vula_email_voice_samples", "created_at"),
+        ("vula_reasoning_telemetry", "created_at"), ("vula_health_events", "created_at"),
+        ("vula_eval_reports", "created_at"), ("vula_webhook_failures", "created_at"),
+        ("kb_webhook_events", "received_at"), ("commerce_automation_log", "fired_at")}
+
+
+def test_business_records_are_never_swept():
+    """Filed documents, invoices, consent proof, audit trails, AI usage for billing and emails sent
+    to a project's client have no rule here."""
+    import inspect
+    src = inspect.getsource(retention)
+    for table in ("vula_filed_documents", "commerce_invoices", "commerce_consent_log", "vula_admin_audit",
+                  "vula_merchant_audit", "vula_ai_usage", "vula_project_client_emails", "journal_entries"):
+        assert f'"{table}"' not in src

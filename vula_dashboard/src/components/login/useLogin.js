@@ -4,8 +4,10 @@
  * email + password, Google, magic link, password reset, invite/recovery set-password, and the
  * self-serve "set up your workspace" step for a signed-in user with no tenant yet.
  */
-import { useState, useEffect } from 'react'
+import { pickAssignment } from '../../lib/assignment'
+import { useState, useEffect, useRef } from 'react'
 import { supabase, supabaseConfigured } from '../../lib/supabase'
+import { finishSetup, giveCode, startSetup, twoStepNeeded } from '../../lib/mfa'
 import { useAuthStore } from '../../store/auth'
 import { resolveTenantFromHost } from '../../theme/tenantThemes'
 import { applyBrand } from '../../theme/tokens'
@@ -17,13 +19,13 @@ import { VULA_API } from '../../lib/authFetch'
 const HOST_HINT = resolveTenantFromHost()
 
 export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}) {
-  const [mode, setMode] = useState('login')      // 'login' | 'reset_request' | 'set_password' | 'signup' | 'setup_workspace'
+  const [mode, setMode] = useState('login')      // 'login' | 'reset_request' | 'set_password' | 'signup' | 'setup_workspace' | 'two_step_code' | 'two_step_setup'
   const [email, setEmail] = useState(knownEmail)   // who was signed in, when the sign-in ran out
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
-  const [info, setInfo] = useState(notice)       // e.g. "You've been signed out on this phone…"
+  const [info, setInfo] = useState(notice)       // e.g. "You've been signed out on this device…"
   const [loading, setLoading] = useState(false)
   const [loginBrand, setLoginBrand] = useState(null)
   const { login } = useAuthStore()
@@ -34,6 +36,15 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
   const [businessName, setBusinessName] = useState('')
   const [businessType, setBusinessType] = useState('other')
   const [businessTypes, setBusinessTypes] = useState([])
+
+  // Two-step sign-in (18 Nov 2026, lib/mfa.js): after the password / Google / WhatsApp step, a
+  // login with an authenticator app gives its 6-digit code here; a role that must have one sets
+  // it up here (QR code). Vula's server refuses the session until then.
+  const [twoStepCode, setTwoStepCode] = useState('')
+  const [twoStepSetup, setTwoStepSetup] = useState(null)    // { factorId, qr, secret }
+  const pendingEntry = useRef(null)                          // { user, assignment, needed } waiting on it
+  const entered = useRef(false)
+  const setupStarted = useRef(false)
 
   useEffect(() => {
     fetch(`${VULA_API}/v1/tenants/registry`)
@@ -63,12 +74,12 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
   // too (Google OAuth, password, magic link all funnel through this same function), so instead
   // of throwing, offer them the chance to create their own workspace right here.
   async function resolveAndLogin(user) {
-    const { data: assignment, error: dbErr } = await supabase
+    const { data: rows, error: dbErr } = await supabase
       .from('vula_tenant_users')
       .select('tenant_id, role')
       .eq('user_id', user.id)
-      .limit(1)
-      .single()
+      .limit(50)
+    const assignment = pickAssignment(rows || [])
     if (dbErr || !assignment) {
       setPendingUser(user)
       setBusinessName('')
@@ -76,12 +87,83 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
       setMode('setup_workspace')
       return
     }
+    const needed = await twoStepNeeded(assignment.role)
+    if (needed) {
+      // the auth listener fires again (token refresh…): don't wipe a code being typed
+      if (pendingEntry.current?.needed === needed) return
+      pendingEntry.current = { user, assignment, needed }
+      setPendingUser(user)
+      setError('')
+      setTwoStepCode('')
+      if (needed === 'code') {
+        setInfo('')
+        setMode('two_step_code')
+      } else {
+        setInfo('Your role needs two-step sign-in. Set it up once with an authenticator app — it takes a minute.')
+        setMode('two_step_setup')
+        if (!setupStarted.current) {
+          setupStarted.current = true
+          try { setTwoStepSetup(await startSetup()) } catch (err) {
+            setupStarted.current = false
+            setError(err.message || "Couldn't start the set-up. Try again.")
+          }
+        }
+      }
+      return
+    }
+    enter(user, assignment)
+  }
+
+  function enter(user, assignment) {
+    if (entered.current) return            // the auth listener and the form can both get here
+    entered.current = true
     login(
       { id: user.id, email: user.email, name: user.user_metadata?.full_name || (user.email || '').split('@')[0] },
       assignment.tenant_id,
       assignment.role,
     )
     onSuccess?.()
+  }
+
+  // ── Two-step sign-in: the code from the app ─────────────────────────────────
+  async function handleTwoStepCode(e) {
+    e?.preventDefault?.()
+    setError(''); setLoading(true)
+    try {
+      await giveCode(twoStepCode)
+      const p = pendingEntry.current
+      if (p) enter(p.user, p.assignment)
+    } catch (err) {
+      setError(err.message || "That code didn't work.")
+      setTwoStepCode('')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Two-step sign-in: first set-up (scan the QR, type the first code) ────────
+  async function handleTwoStepSetup(e) {
+    e?.preventDefault?.()
+    if (!twoStepSetup) return
+    setError(''); setLoading(true)
+    try {
+      await finishSetup(twoStepSetup.factorId, twoStepCode)
+      const p = pendingEntry.current
+      if (p) enter(p.user, p.assignment)
+    } catch (err) {
+      setError(err.message || "That code didn't work.")
+      setTwoStepCode('')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function cancelTwoStep() {
+    pendingEntry.current = null
+    setupStarted.current = false
+    setTwoStepSetup(null); setTwoStepCode(''); setError(''); setInfo('')
+    await supabase.auth.signOut().catch(() => {})
+    setMode('login')
   }
 
   // On mount: recovery/invite token → set-password; otherwise an existing session
@@ -236,23 +318,18 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
 
       // Now get tenant assignment
       const user = data.user
-      const { data: assignment, error: dbErr } = await supabase
+      const { data: rows, error: dbErr } = await supabase
         .from('vula_tenant_users')
         .select('tenant_id, role')
         .eq('user_id', user.id)
-        .limit(1)
-        .single()
+        .limit(50)
+      const assignment = pickAssignment(rows || [])
 
       if (dbErr || !assignment) {
         throw new Error('Password set! Now sign in with your new password.')
       }
 
-      login(
-        { id: user.id, email: user.email, name: user.user_metadata?.full_name || user.email.split('@')[0] },
-        assignment.tenant_id,
-        assignment.role,
-      )
-      onSuccess?.()
+      await resolveAndLogin(user)
     } catch (err) {
       // If error mentions signing in, switch back to login with a success message
       if (err.message?.includes('sign in')) {
@@ -272,5 +349,6 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
     pendingUser, businessName, setBusinessName, businessType, setBusinessType, businessTypes,
     resolveAndLogin, handleSignIn, handleSignUp, handleSetupWorkspace, handleGoogle,
     handleMagicLink, handleResetRequest, handleSetPassword,
+    twoStepCode, setTwoStepCode, twoStepSetup, handleTwoStepCode, handleTwoStepSetup, cancelTwoStep,
   }
 }

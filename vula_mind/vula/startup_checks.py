@@ -197,6 +197,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("271", "vula_material_rates", "checked"),
     ("272", "vula_buildup_lines", None),
     ("273", "vula_estimates", None),
+    ("274", "vula_buildup_suggestions", None),
     ("275", "vula_tenant_config", "owner_briefs"),
     ("276", "vula_meetings", None),
     ("277", "vula_checkins", None),
@@ -206,6 +207,16 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("281", "vula_meetings", "with_brief"),
     ("282", "vula_meetings", "external_id"),
     ("283", "vula_member_calendars", None),
+    ("284", "vula_price_observations", "vat_basis"),
+    ("286", "vula_project_client_emails", None),
+    ("287", "vula_statement_checks", None),
+    ("287", "commerce_bank_transactions", "excluded_reason"),
+    ("288", "journal_bank_links", None),
+    ("288", "journal_lines", "basis"),
+    ("288", "journal_entries", "version"),
+    ("291", "vula_books_audits", "agreed_by"),
+    ("292", "vula_team_members", "expires_on"),
+    ("293", "commerce_bank_line_documents", None),
 ]
 
 

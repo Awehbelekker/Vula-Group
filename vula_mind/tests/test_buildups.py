@@ -35,15 +35,27 @@ def _answer(*rows):
                        for c, q, u, w, s in rows])
 
 
-def _patch_web(monkeypatch, answer, pages=PAGES):
+def _patch_web(monkeypatch, answer, pages=PAGES, docs=()):
     seen = {}
+
+    async def own(tenant_id, question):
+        seen["own_tenant"] = tenant_id
+        return list(docs)
+    monkeypatch.setattr("vula.research.own_documents", own)
 
     async def plan(question, history=""):
         seen["question"] = question
         return ["220 mm brick wall quantities per m2"]
     monkeypatch.setattr("vula.research.plan_queries", plan)
-    monkeypatch.setattr("vula.research._search", AsyncMock(return_value=[{"title": "x", "url": "u"}]))
-    monkeypatch.setattr("vula.research.read_pages", AsyncMock(return_value=pages))
+    async def search(queries):
+        seen["queries"] = list(queries)
+        return [{"title": "x", "url": "u"}]
+    monkeypatch.setattr("vula.research._search", search)
+
+    async def read(hits, limit=6, max_chars=3500):
+        seen["limit"], seen["max_chars"] = limit, max_chars
+        return list(pages)
+    monkeypatch.setattr("vula.research.read_pages", read)
 
     async def complete(task, messages, **kw):
         seen["task"], seen["accept"] = task, kw.get("accept")
@@ -101,20 +113,180 @@ def test_only_quantities_printed_on_the_cited_page_are_kept():
 
 # ── research ─────────────────────────────────────────────────────────────────
 
+# 16 Nov 2026, DIGG's first live build-up: "3 bags per 1,000 bricks" was kept as 3 bags per m²
+# (ten times the cement) and "R220/m²" labour as a quantity of 220.
+LIVE_PAGES = [{"title": "Brick calculator", "url": "https://calc.example",
+               "text": "A one-brick (220 mm) wall needs 104 bricks per m2. Mortar: 3 bags of cement and "
+                       "0.6 m3 sand per 1000 bricks."},
+              {"title": "Artisan labour costs", "url": "https://labour.example",
+               "text": "Double-skin wall R220/m², labour only, materials extra."}]
+LIVE_ITEMS = [{"component": "mortar_cement", "qty_per_unit": 3, "unit": "bags per thousand bricks", "source": 1},
+              {"component": "mortar_sand", "qty_per_unit": 0.6, "unit": "m³", "per": "1000 bricks", "source": 1},
+              {"component": "labour", "qty_per_unit": 220, "unit": "R/m²", "source": 2}]
+
+
+def test_a_figure_per_1000_bricks_is_converted_with_the_bricks_per_m2():
+    checklist = trade_checklists.checklist_for("Masonry")
+    items = LIVE_ITEMS + [{"component": "units", "qty_per_unit": 104, "unit": "each", "per": "m2", "source": 1}]
+    lines, unknown, used = buildups.grounded_lines(items, LIVE_PAGES, checklist, "m2")
+    by = {ln["component"]: ln for ln in lines}
+    assert by["units"]["qty_per_unit"] == 104
+    # 3 bags / 1000 bricks x 104 bricks per m2 = 0.312 bags per m2; 0.6 m3 / 1000 x 104 = 0.0624 m3
+    assert by["mortar_cement"]["qty_per_unit"] == Decimal("0.3120") and by["mortar_cement"]["unit"] == "bag"
+    assert by["mortar_sand"]["qty_per_unit"] == Decimal("0.0624") and by["mortar_sand"]["unit"] == "m3"
+    assert "× 104 bricks per m2" in by["mortar_cement"]["note"]
+    assert used == {1}
+
+
+def test_without_bricks_per_m2_they_need_a_figure_and_a_price_is_never_a_quantity():
+    checklist = trade_checklists.checklist_for("Masonry")
+    lines, unknown, used = buildups.grounded_lines(LIVE_ITEMS, LIVE_PAGES, checklist, "m2")
+    assert lines == []
+    why = {u["key"]: u.get("why") for u in unknown}
+    assert "per 1000 bricks" in why["mortar_cement"] and "needs the bricks per m2" in why["mortar_cement"]
+    assert "a price" in why["labour"] and "not a quantity" in why["labour"]
+
+
+def test_a_figure_per_something_else_is_set_aside():
+    checklist = trade_checklists.checklist_for("Masonry")
+    pages = [{"text": "Use 2 wall ties per 900 mm of height."}]
+    lines, unknown, _ = buildups.grounded_lines(
+        [{"component": "wall_ties", "qty_per_unit": 2, "unit": "each", "per": "900 mm of height", "source": 1}],
+        pages, checklist, "m2")
+    assert lines == [] and "per 900 mm of height, not per m2" in {u["key"]: u.get("why") for u in unknown}["wall_ties"]
+
+
+# 16 Nov 2026 (Ian: "is it comparing with data from KB"): the business's own documents are read
+# first, with the same checks, and a different web figure is shown beside theirs.
+DIGG_DOCS = [{"title": "HPC Bokaap specification.pdf",
+              "text": "Brickwork: one-brick walls in NFX bricks, 108 bricks per m2, 10 mm joints, class II mortar."}]
+
+
+@pytest.mark.asyncio
+async def test_research_reads_the_business_own_documents_first(db, monkeypatch):
+    seen = _patch_web(monkeypatch, _answer(("units", 108, "each", None, 1), ("units", 104, "each", 5, 2),
+                                           ("mortar_sand", 0.15, "m3", None, 3)), docs=DIGG_DOCS)
+    b = await buildups.research(T, "One-brick wall", WALL, created_by="27820000000")
+    assert seen["own_tenant"] == T
+    by = {ln["component"]: ln for ln in b["lines"]}
+    assert Decimal(str(by["units"]["qty_per_unit"])) == 108 and by["units"]["source_ref"] == "1"
+    assert "also 104 each per m2 in Brickwork quantities guide [2]" in by["units"]["note"]
+    src = {x["n"]: x for x in b["sources"]}
+    assert src[1]["own"] is True and src[1]["title"] == "HPC Bokaap specification.pdf" and src[1]["url"] is None
+    assert set(src) == {1, 2, 3}
+    text = buildups.describe(b)
+    assert "Bricks or blocks: 108 each [your HPC Bokaap specification.pdf]" in text
+    assert "[1] your HPC Bokaap specification.pdf" in text
+
+
+@pytest.mark.asyncio
+async def test_a_figure_from_their_documents_is_shared_as_a_quantity_only(db, monkeypatch):
+    _patch_web(monkeypatch, _answer(("units", 108, "each", None, 1), ("mortar_sand", 0.15, "m3", None, 3)),
+               docs=DIGG_DOCS)
+    b = await buildups.research(T, "One-brick wall", WALL)
+    buildups.confirm(T, b["id"], person="judy", full_access=True)
+    other = buildups.find("another-builder", "One-brick wall", WALL)
+    assert other["origin"] == "shared"
+    units = next(ln for ln in other["lines"] if ln["component"] == "units")
+    assert Decimal(str(units["qty_per_unit"])) == 108
+    assert units["source_ref"] == "a Vula business's records" and units["note"] is None
+    assert all(not x.get("own") for x in other["sources"])
+    text = buildups.describe(other)
+    assert "HPC Bokaap" not in text and "from a Vula business's records" in text
+
+
+# 16 Nov 2026, second live run: "Brickforce 1 m" and "Labour 1 hour" were kept off a page that only
+# had a "1" somewhere near them.
+SCRIBD = [{"title": "Brickwork cost analysis per m2", "url": "https://scribd.example",
+           "text": "Brickwork cost analysis. 1 m2 of wall. Brickforce every 4th course, 2.7 m per m2. "
+                   "Labour: 1 bricklayer and 1 assistant, 0.8 hours per m2"}]
+
+
+def test_a_figure_counts_only_beside_its_own_words_in_its_own_clause():
+    checklist = trade_checklists.checklist_for("Masonry")
+    items = [{"component": "brickforce", "qty_per_unit": 1, "unit": "m", "per": "m2", "source": 1},
+             {"component": "labour", "qty_per_unit": 1, "unit": "hour", "per": "m2", "source": 1}]
+    lines, unknown, _ = buildups.grounded_lines(items, SCRIBD, checklist, "m2")
+    assert {ln["component"] for ln in lines} == {"labour"}          # "1 bricklayer" is labour, not brickforce
+    items = [{"component": "brickforce", "qty_per_unit": 2.7, "unit": "m", "per": "m2", "source": 1},
+             {"component": "labour", "qty_per_unit": 0.8, "unit": "hour", "per": "m2", "source": 1}]
+    lines, _, _ = buildups.grounded_lines(items, SCRIBD, checklist, "m2")
+    got = {ln["component"]: ln["qty_per_unit"] for ln in lines}
+    assert got == {"brickforce": Decimal("2.7"), "labour": Decimal("0.8")}
+
+
+def test_the_base_of_a_rate_is_not_a_quantity():
+    checklist = trade_checklists.checklist_for("Masonry")
+    pages = [{"text": "Cost of brickwork for 1 m2 of wall, per 1 m2: bricks and mortar."}]
+    lines, _, _ = buildups.grounded_lines(
+        [{"component": "units", "qty_per_unit": 1, "unit": "each", "per": "m2", "source": 1}], pages, checklist, "m2")
+    assert lines == []
+
+
+def test_the_model_sees_the_parts_about_the_components_even_deep_in_a_page():
+    checklist = trade_checklists.checklist_for("Masonry")
+    every = sorted({w for c in checklist for w in buildups._component_words(c["key"], c["label"])})
+    page = "About us. " * 600 + "A one-brick wall needs 104 bricks per m2. " + "Filler text. " * 400 + \
+        "Brickforce every 4th course, 2.7 m per m2."
+    part = buildups.excerpt(page, every, 1500)
+    assert len(part) <= 1600 and len(part) < len(page) / 5
+    assert "104 bricks per m2" in part and "2.7 m per m2" in part
+    assert buildups.excerpt("nothing relevant here", every, 10) == "nothing re"
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_fits_vulas_own_model(db, monkeypatch):
+    long_pages = [{"title": f"Guide {i}", "url": f"https://g{i}.example",
+                   "text": "Intro. " * 2000 + "A one-brick wall needs 104 bricks per m2. " + "More. " * 1000}
+                  for i in range(8)]
+    seen = _patch_web(monkeypatch, _answer(("units", 104, "each", 5, 1)), pages=long_pages)
+    sent = {}
+
+    async def complete(task, messages, **kw):
+        sent["chars"] = sum(len(m["content"]) for m in messages)
+        seen["accept"] = kw.get("accept")
+        return _answer(("units", 104, "each", 5, 1))
+    monkeypatch.setattr("vula.research._complete", complete)
+    monkeypatch.setattr("core.llm_router.local_prompt_cap_tokens", lambda: 8000)
+    await buildups.research(T, "One-brick wall", WALL)
+    assert sent["chars"] <= 8000 * 4 + 2000          # fits the local window (≈ 4 characters a token)
+
+
+@pytest.mark.asyncio
+async def test_a_thin_local_answer_goes_to_the_stronger_model(db, monkeypatch):
+    seen = _patch_web(monkeypatch, _answer(("units", 104, "each", 5, 1), ("mortar_cement", 1.5, "bag", None, 1),
+                                           ("mortar_sand", 0.15, "m3", None, 2)))
+    await buildups.research(T, "One-brick wall", WALL)
+    accept = seen["accept"]
+    assert accept(_answer(("units", 104, "each", 5, 1), ("mortar_cement", 1.5, "bag", None, 1),
+                          ("mortar_sand", 0.15, "m3", None, 2))) is True
+    # two lines, or no bricks: not enough to keep the local answer
+    assert accept(_answer(("units", 104, "each", 5, 1), ("mortar_sand", 0.15, "m3", None, 2))) is False
+    assert accept(_answer(("mortar_cement", 1.5, "bag", None, 1), ("mortar_sand", 0.15, "m3", None, 2),
+                          ("brickforce", 4.2, "m", None, 2))) is False
+
+
 @pytest.mark.asyncio
 async def test_research_saves_a_proposed_build_up_with_sources_and_unknowns(db, monkeypatch):
     seen = _patch_web(monkeypatch, _answer(("units", 104, "each", 5, 1), ("mortar_sand", 0.15, "m3", None, 2),
                                            ("brickforce", 3.3, "m", None, 2)))
     b = await buildups.research(T, "One-brick wall", WALL, created_by="27820000000")
-    assert seen["task"] == "buildup_research" and "Judy" not in seen["question"]
-    assert "per m2 for One-brick wall (220 mm)" in seen["question"]
+    assert seen["task"] == "buildup_research"
+    # searches made in code from the item and its components: one overall, then each main
+    # material and the labour — never a person, client or project
+    assert seen["queries"] == ["One-brick wall (220 mm) quantities per m2 South Africa",
+                               "brick per m2 One-brick wall (220 mm)", "cement per m2 One-brick wall (220 mm)",
+                               "building sand per m2 One-brick wall (220 mm)",
+                               "labour hours per m2 One-brick wall (220 mm)"]
+    assert seen["limit"] == buildups.PAGES and seen["max_chars"] == buildups.PAGE_TEXT
+    assert not any("27820000000" in q for q in seen["queries"])
     assert b["status"] == "proposed" and b["origin"] == "proposed" and b["trade"] == "Masonry"
     assert [ln["component"] for ln in b["lines"]] == ["units", "mortar_sand"]
     assert {"brickforce", "mortar_cement", "labour"} <= {u["key"] for u in b["unknown"]}
     assert [s["n"] for s in b["sources"]] == [1, 2]
     text = buildups.describe(b)
     assert "Bricks or blocks: 104 each + 5% waste [Brickwork quantities guide]" in text
-    assert "needs a figure" in text and "waiting for an owner or manager" in text
+    assert "Needs a figure" in text and "waiting for an owner or manager" in text
     # the local model's answer is only accepted when something in it checks out
     assert seen["accept"](_answer(("units", 999, "each", 0, 1))) is False
 

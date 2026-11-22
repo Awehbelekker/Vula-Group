@@ -130,7 +130,7 @@ async def test_a_pdf_pop_is_offered_against_the_supplier_bill(tmp_path):
                                    doc_id="d1", chunks_stored=1))
         await _handle_document_ingest(PHONE, "m1", "Payment Notification (16).pdf", "application/pdf",
                                       route_tenant_id=TID)
-    stage.assert_called_once_with(TID, 239717, "2026-10-05", "Digg", "Ste", sender_phone=PHONE)
+    stage.assert_called_once_with(TID, 239717, "2026-10-05", "Digg", "Ste", sender_phone=PHONE, payer=None)
     final = mock_reply.call_args_list[-1].args[1]
     assert final.startswith("📸") and "Reply *yes* to mark it paid" in final
     assert "Which project" not in final            # one question at a time

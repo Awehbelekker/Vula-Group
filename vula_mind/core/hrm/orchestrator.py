@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -255,6 +256,74 @@ def route_context(previous: Optional[dict], tenant_id: Optional[str] = None):
         _ROUTE_CONTEXT.reset(token)
 
 
+_LIVE_INFO_RE = re.compile(r"\b(today|tonight|now|current(ly)?|latest|news|this week|this month|live|"
+                           r"exchange rate|weather|tender|price of .* (now|today))\b", re.I)
+_NAME_STOP = frozenset("""what which where when who whom whose does have there their they this that these those
+with from about into your ours ours offer offers come comes versions version price prices list cover
+covers much many sell sells give tell show please could would should range types kind kinds""".split())
+
+
+def _name_terms(prompt: str) -> list:
+    """The words of a question most likely to name a product, brand or company: capitalised words
+    (not the first), then long uncommon words. At most three."""
+    words = re.findall(r"[A-Za-z][A-Za-z\-]{2,}", prompt or "")
+    caps = [w for i, w in enumerate(words) if i > 0 and w[0].isupper() and w.lower() not in _NAME_STOP]
+    longs = [w for w in words if len(w) >= 7 and w.lower() not in _NAME_STOP and w not in caps]
+    out = []
+    for w in caps + longs:
+        if w.lower() not in (x.lower() for x in out):
+            out.append(w)
+    return out[:3]
+
+
+_SHORT_STOP = frozenset("the and are for you our any how can was has had its not but all get".split())
+
+
+def _content_words(prompt: str) -> set:
+    """The question's own words that can tell documents apart ("gym" counts)."""
+    return {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", prompt or "")
+            if w.lower() not in _NAME_STOP and w.lower() not in _SHORT_STOP}
+
+
+def own_documents_named(tenant_id: str, prompt: str, limit: int = 2) -> list:
+    """The business's own filed documents whose summary names something the question names
+    (`_name_terms`), best first: [{doc_id, filename, summary}]. Ranked by how many of the question's
+    words the summary and file name hold, so "What gym flooring does Sports Flooring Warehouse
+    offer?" puts the SFW gym catalogue ahead of the SFW court catalogue (17 Nov 2026 answer check).
+    [] for a question asking for live information. This tenant only. Never raises."""
+    if not tenant_id or _LIVE_INFO_RE.search(prompt or ""):
+        return []
+    terms = _name_terms(prompt)
+    if not terms:
+        return []
+    found: dict = {}
+    try:
+        from vula.commerce import service
+        db = service._client()
+        for t in terms:
+            for r in (db.table("vula_filed_documents").select("id,doc_id,filename,summary")
+                      .eq("tenant_id", tenant_id).ilike("summary", f"%{t}%").limit(10).execute().data or []):
+                found.setdefault(r.get("id"), r)
+    except Exception as exc:  # noqa: BLE001 — the classifier's choice stands
+        log.debug("own-documents check skipped: %s", exc)
+        return []
+    words = _content_words(prompt)
+
+    def score(r: dict) -> int:
+        text = f"{r.get('summary') or ''} {r.get('filename') or ''}".lower()
+        return sum(1 for w in words if w in text)
+
+    ranked = sorted(found.values(), key=score, reverse=True)
+    return [{"doc_id": r.get("doc_id"), "filename": r.get("filename"), "summary": r.get("summary")}
+            for r in ranked[:limit]]
+
+
+def named_in_own_documents(tenant_id: str, prompt: str) -> bool:
+    """True when the question names something that appears in the business's own filed documents
+    (their summary) and doesn't ask for live information. Never raises."""
+    return bool(own_documents_named(tenant_id, prompt, limit=1))
+
+
 class HRMOrchestrator:
     def __init__(
         self,
@@ -415,6 +484,14 @@ class HRMOrchestrator:
         # a document-grounded skill). Fails open to "reasoning" on any error or disagreement.
         if settings.skill_llm_fallback_enabled:
             classified = self._llm_classify_skill(prompt)
+            # 16 Nov 2026 (answer checks): "Which versions of Taralay Millenium are there?" and
+            # "What gym flooring does Sports Flooring Warehouse offer?" went to web_search (a
+            # named company) though Gerflor's own catalogues hold the answers — the web said
+            # access denied, or listed the supplier's public site. A question naming something
+            # in the business's own filed documents, and not asking for live information, is
+            # answered from those documents.
+            if classified == "web_search" and tenant_id and named_in_own_documents(tenant_id, prompt):
+                return "reasoning", "own_documents"
             if classified:
                 return classified, "llm_fallback"
         # 2026-09-22 real incident (DIGG, knowledge-mode tenant): "I want a breakdown on what

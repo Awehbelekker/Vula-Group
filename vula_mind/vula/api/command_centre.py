@@ -61,7 +61,7 @@ _TOOL_LABELS = {
     "record_payment": "recorded a payment", "send_broadcast": "sent a broadcast",
     "draft_storefront_page": "drafted a storefront page", "add_storefront_section": "added to the storefront",
     "create_automation_rule": "set up an automation", "create_invoice": "drafted an invoice or quote",
-    "send_invoice": "sent an invoice", "convert_quote_to_invoice": "turned a quote into an invoice",
+    "send_invoice": "sent an invoice", "send_document": "sent a document", "convert_quote_to_invoice": "turned a quote into an invoice",
     "update_quote_status": "updated a quote", "update_order_status": "updated an order",
     "create_booking": "made a booking", "add_expense": "logged an expense",
     "create_manual_order": "created an order", "create_product": "added a product",
@@ -430,13 +430,14 @@ def compute_home(db, tenant_id: str, scope: dict, now: Optional[datetime] = None
 
     if scope_allows(scope, MONEY_TABS):
         def _bank():
-            rows = (db.table("commerce_bank_transactions").select("amount_cents,direction,match_status,txn_date")
+            rows = (db.table("commerce_bank_transactions").select("amount_cents,direction,match_status,txn_date,source_file")
                     .eq("tenant_id", tenant_id).gte("txn_date", month0.astimezone(SAST).date().isoformat())
                     .limit(10000).execute().data or [])
             any_bank = rows or db.table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
             if not any_bank:
                 return None
-            live = [r for r in rows if r.get("match_status") != "ignored"]
+            live = [r for r in rows if r.get("match_status") != "ignored"
+                    and (r.get("source_file") or "") != "whatsapp_pop"]     # a proof of payment isn't a bank line
             unmatched = _count(db.table("commerce_bank_transactions").select("id", count="exact").eq("tenant_id", tenant_id)
                                .in_("match_status", ["unmatched", "asked"]).limit(1))
             return {"money_in": {"cents": sum(abs(int(r.get("amount_cents") or 0)) for r in live if r.get("direction") == "in"),

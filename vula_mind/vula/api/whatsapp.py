@@ -2458,6 +2458,17 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
             return
         # Admin agent failed → fall through to the normal KB/RAG flow below.
 
+    # ── Costing by trade on a knowledge line (16 Nov 2026) ── the team's build-up and estimate
+    # questions go to the business assistant, which has the costing tools; the knowledge
+    # assistant below would answer them from general knowledge.
+    if tenant_id and await _trade_costing_turn(phone, text, tenant_id):
+        return
+
+    # ── "Send our bank letter to …" on a knowledge line (20 Nov 2026) ── the team's requests to
+    # send one of the business's documents go to the business assistant, which has send_document.
+    if tenant_id and await _doc_send_turn(phone, text, tenant_id):
+        return
+
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
         await _handle_task_complete(phone, tenant_id)
@@ -3099,7 +3110,7 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
     if not _looks_like_statement(text):
         return False
     from vula.commerce import bank_rec
-    rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
+    rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name, source="whatsapp")
     if rec.get("not_bank_statement"):
         return False                  # a supplier's statement of account → filed as a document
     if rec.get("private"):
@@ -3646,7 +3657,7 @@ async def _handle_document_ingest_one(
                     from vula.commerce import bank_rec
                     reply = bank_rec.stage_pop_for_review(
                         tenant_id, round(total_r * 100), fin.get("date"),
-                        fin.get("reference"), fin.get("payee"), sender_phone=phone)
+                        fin.get("reference"), fin.get("payee"), sender_phone=phone, payer=fin.get("payer"))
                     scan_msg = "\n\n" + reply + await _payer_line(tenant_id, phone, {
                         "payer": fin.get("payer"), "payer_account": fin.get("payer_account")})
                 elif fin and dtp == "delivery_note":
@@ -3672,7 +3683,8 @@ async def _handle_document_ingest_one(
                 from vula.commerce import bank_rec
                 scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
                     tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
-                    fields.get("payee_name") or fields.get("payee"), sender_phone=phone)
+                    fields.get("payee_name") or fields.get("payee"), sender_phone=phone,
+                    payer=fields.get("payer") or fields.get("payer_name"))
                 scan_msg += await _payer_line(tenant_id, phone, fields)
             except Exception as exc:
                 logger.warning("POP match skipped for %s: %s", result.filename, exc)
@@ -4072,6 +4084,7 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
         db.table("commerce_expenses").update(
             {"paid_with": paid_with, "reimbursable": reimbursable, "updated_at": service._now()}
         ).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
+        expenses.books_refresh(tenant_id, claim_id)      # who paid decides where it's owed
         if paid_with == "company_card":
             return (f"👍 Noted — that *R{amt:,.2f}* was paid by the company. "
                     "I'll match it against the bank statement.")
@@ -4686,6 +4699,8 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
                 service._client().table("commerce_expenses").update(
                     {"paid_with": paid_with, "reimbursable": not is_company,
                      "updated_at": service._now()}).eq("id", claim["id"]).execute()
+                from vula.commerce import expenses as _exp
+                _exp.books_refresh(tenant_id, claim["id"])
                 from vula import open_questions
                 open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 amt = int(claim.get("amount_cents") or 0) / 100
@@ -5186,6 +5201,8 @@ async def _join_to_first_page(tenant_id, phone, result, local_path, mime_type, c
                         .eq("id", exp["id"]).limit(1).execute().data or [{}])[0]
                 if int(back.get("amount_cents") or 0) == total:
                     note += f" The expense is updated to the full R{total / 100:,.2f}."
+                    from vula.commerce import expenses as _exp
+                    _exp.books_refresh(tenant_id, exp["id"])
             return note, row
         if category in _FINANCIAL_DOC_CATEGORIES:
             commit_fields = {k: v for k, v in merged.items() if not k.startswith("_")}
@@ -5506,6 +5523,15 @@ _DOC_CATEGORIES = [
     # delivery note, a supplier's statement or an insurance schedule in (vula/commerce/doc_quality.py).
     "Delivery Note", "Account Statement", "Insurance", "Legal / Property",
     "Brochure / Product Info", "Correspondence",
+    # 19 Nov 2026: a bank's own statement of one of the business's accounts — kept under its account
+    # (vula/commerce/statement_files.py), never "Account Statement" (a supplier's statement of what is owed).
+    "Bank Statement",
+    # 20 Nov 2026: a principal agent's / QS's certificate of what the client owes the business for work done
+    # (vula/commerce/certificates.py) — DIGG's were filed as supplier invoices. Never a bill.
+    "Payment Certificate",
+    # 20 Nov 2026: the business's own company and tax documents (vula/commerce/company_docs.py) — CIPC
+    # registration, SARS letters and returns, B-BBEE/COIDA/UIF/FICA — kept for the accountant.
+    "Company Registration", "Tax / SARS", "Compliance Certificate",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
@@ -5803,6 +5829,15 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     'integer|null, "net_cents": integer|null, "transaction_count": integer|null} '
                     "— date is the settlement/payout date, net_cents the amount paid out, money "
                     "in CENTS. "
+                    "For Payment Certificate (a principal agent's / quantity surveyor's interim "
+                    "certificate of the amount the employer must pay the contractor — NOT an invoice), "
+                    'fields MUST use: {"certificate_number": integer|null, "date": "YYYY-MM-DD"|null, '
+                    '"valuation_date": "YYYY-MM-DD"|null, "issuer": string|null, "employer": string|null, '
+                    '"contractor": string|null, "project_name": string|null, "amount_certified_cents": '
+                    'integer|null, "gross_certified_cents": integer|null, "previous_certified_cents": '
+                    'integer|null, "retention_cents": integer|null, "payment_due_date": "YYYY-MM-DD"|null, '
+                    '"amounts_exclude_vat": boolean|null} — amount_certified_cents is the amount due '
+                    "on THIS certificate, money in CENTS. "
                     "For Delivery Note (goods delivered/collected, usually no prices), fields "
                     'MUST use: {"supplier": string|null, "date": "YYYY-MM-DD"|null, "reference": '
                     'string|null, "delivery_address": string|null, "line_items": [{"description": '
@@ -5858,6 +5893,11 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             # Cape" filed as General Document) — doc_quality.better_category, no extra call.
             from vula.commerce.doc_quality import better_category
             cat = better_category(cat, summary, filename)
+            from vula.commerce.certificates import CATEGORY as _CERT, looks_like as _is_cert
+            if _is_cert(filename, summary, data.get("fields") or {}):
+                cat = _CERT          # its own title says so: never an invoice to book as a cost
+            from vula.commerce.company_docs import better as _company_better
+            cat = _company_better(cat, summary, filename, tenant_id) or cat   # SARS / CIPC / compliance, the business's own
             return {"category": cat, "summary": summary, "fields": data.get("fields") or {}}
 
         def _needs_escalation(result: Optional[dict]) -> bool:
@@ -5886,7 +5926,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 return True
             return False
 
-        # Cheap pass first (free local via tunnel / gemini-flash).
+        # Cheap pass first (the cheap-tier cloud model, settings.model_worker_cheap).
         result = None
         try:
             resp = await litellm.acompletion(model=model, messages=_msgs, temperature=0.1,
@@ -5899,10 +5939,10 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         # weak/arithmetically-inconsistent extraction — not just on the model's own say-so.
         first_read = result
         if _needs_escalation(result):
-            cloud = resolve_cloud_route()
+            cloud = resolve_cloud_route("document_analysis")
             if cloud:
                 try:
-                    logger.info("Doc analyze: cheap weak — escalating %s to 70B", filename)
+                    logger.info("Doc analyze: cheap weak — escalating %s to %s", filename, cloud[0])
                     _cm, _ck, _cb = cloud
                     resp = await litellm.acompletion(model=_cm, messages=_msgs, temperature=0.1,
                         max_tokens=1400, api_key=_ck, api_base=_cb)
@@ -6993,7 +7033,7 @@ async def _maybe_customer_pop(phone: str, media_id: str, tenant_id: str) -> bool
         from vula.commerce import bank_rec
         proposal = bank_rec.stage_pop_for_review(
             tenant_id, round(total_r * 100), fin.get("date"), fin.get("reference"),
-            fin.get("payee"), sender_phone=phone)
+            fin.get("payee"), sender_phone=phone, payer=fin.get("payer"))
         from vula.integrations.notify import notify_team
         note = f"📸 A customer ({phone}) sent a proof of payment.\n{proposal}"
         if not await notify_team(tenant_id, "payment_received", note):
@@ -8621,7 +8661,8 @@ async def _alert_off_whatsapp(tenant_id: str, subject: str, body: str) -> bool:
 
 async def send_template_message(tenant_id: str, to: str, name: str, params: list,
                                 header_image_url: Optional[str] = None,
-                                lang: Optional[str] = None) -> Optional[str]:
+                                lang: Optional[str] = None,
+                                header_document: Optional[dict] = None) -> Optional[str]:
     """send_template with an optional image header, returning Meta's message id (wamid) so the
     delivered / read ticks can be matched back (staff notices, vula/staff_notices.py). None when
     it couldn't be sent — logged, never silent."""
@@ -8637,6 +8678,11 @@ async def send_template_message(tenant_id: str, to: str, name: str, params: list
     if header_image_url:
         components.append({"type": "header", "parameters": [
             {"type": "image", "image": {"link": header_image_url}}]})
+    elif header_document and header_document.get("link"):
+        # a DOCUMENT header (vula_document_share, 20 Nov 2026): Meta fetches the file from the link
+        components.append({"type": "header", "parameters": [
+            {"type": "document", "document": {"link": header_document["link"],
+                                              "filename": header_document.get("filename") or "document.pdf"}}]})
     if params:
         components.append({"type": "body", "parameters": [
             {"type": "text", "text": str(p)[:1000]} for p in params]})
@@ -9968,6 +10014,72 @@ async def check_and_nudge_due_reminders() -> int:
             except Exception as exc:
                 logger.debug("marking reminder %s as nudged failed: %s", r.get("id"), exc)
     return sent
+
+
+# (tenant, phone digits) → until when a short reply still belongs to the costing conversation
+# ("yes", "220 mm, both sides" after Vula asked). In memory: after a restart the reply goes to
+# the knowledge assistant, which is no worse than before.
+_TRADE_FOLLOWUP: Dict[tuple, float] = {}
+TRADE_FOLLOWUP_SECONDS = 30 * 60
+TRADE_FOLLOWUP_MAX_WORDS = 15
+
+
+async def _trade_costing_turn(phone: str, text: str, tenant_id: str) -> bool:
+    """On a knowledge-mode line, a team member's costing message (trade_checklists.
+    is_costing_request), or a short reply within 30 minutes of one, goes to the business
+    assistant (trade_buildup / estimate_cost / compare_estimate). Only where the business has
+    `trade_costing` on, only for its own team. True when it was answered."""
+    try:
+        from vula import features
+        if not features.on(tenant_id, "trade_costing"):
+            return False
+        from vula.commerce.trade_checklists import is_costing_request
+        from vula import team_index
+        key = (tenant_id, team_index.digits_za(phone))
+        now = time.time()
+        followup = _TRADE_FOLLOWUP.get(key, 0) > now and len((text or "").split()) <= TRADE_FOLLOWUP_MAX_WORDS
+        if not (followup or is_costing_request(text)):
+            _TRADE_FOLLOWUP.pop(key, None)
+            return False
+        _name, role = _caller_identity(tenant_id, phone)
+        if not _is_insider(role):
+            return False
+    except Exception as exc:  # noqa: BLE001 — fall through to the knowledge assistant
+        logger.debug("trade costing routing skipped: %s", exc)
+        return False
+    if await _run_commerce_admin(phone, text, tenant_id):
+        _TRADE_FOLLOWUP[key] = time.time() + TRADE_FOLLOWUP_SECONDS
+        return True
+    return False
+
+
+_DOC_SEND_FOLLOWUP: Dict[tuple, float] = {}
+
+
+async def _doc_send_turn(phone: str, text: str, tenant_id: str) -> bool:
+    """On a knowledge-mode line, a team member asking Vula to send one of the business's documents
+    (doc_send.is_send_request), or a short reply within 30 minutes of one ("the 6574 one", "yes"),
+    goes to the business assistant's send_document. Only for the business's own team. True when
+    it was answered."""
+    try:
+        from vula.commerce.doc_send import is_send_request
+        from vula import team_index
+        key = (tenant_id, team_index.digits_za(phone))
+        followup = (_DOC_SEND_FOLLOWUP.get(key, 0) > time.time()
+                    and len((text or "").split()) <= TRADE_FOLLOWUP_MAX_WORDS)
+        if not (followup or is_send_request(text)):
+            _DOC_SEND_FOLLOWUP.pop(key, None)
+            return False
+        _name, role = _caller_identity(tenant_id, phone)
+        if not _is_insider(role):
+            return False
+    except Exception as exc:  # noqa: BLE001 — fall through to the knowledge assistant
+        logger.debug("document send routing skipped: %s", exc)
+        return False
+    if await _run_commerce_admin(phone, text, tenant_id):
+        _DOC_SEND_FOLLOWUP[key] = time.time() + TRADE_FOLLOWUP_SECONDS
+        return True
+    return False
 
 
 async def _sender_is_sales_rep(phone: str, tenant_id: str) -> bool:

@@ -188,13 +188,16 @@ def _date(ts: Any) -> str:
     return f"{dt.day} {dt:%b %Y}"
 
 
-def block(row: Dict[str, Any]) -> str:
-    """A note for a prompt (Ask anything without the research toggle), fenced and dated."""
+def block(row: Dict[str, Any], person_key: str = "") -> str:
+    """A note for a prompt (Ask anything without the research toggle), fenced and dated. The
+    question as it was asked is shown only to the person who asked it (17 Nov 2026 audit)."""
     from urllib.parse import urlparse
     from core.prompt_safety import fence
     hosts = ", ".join(dict.fromkeys(urlparse(s.get("url") or "").netloc for s in row.get("sources") or []))
+    mine = bool(person_key) and row.get("created_by") == person_key
+    asked = f"Question then: {row.get('question')}\n" if mine else ""
     return fence("EARLIER_RESEARCH", f"Researched on {_date(row.get('created_at'))} (sources: {hosts}).\n"
-                 f"Question then: {row.get('question')}\nWhat was found:\n{row.get('answer')}")
+                 f"{asked}What was found:\n{row.get('answer')}")
 
 
 def set_shared(tenant_id: str, person_key: str, note_id: str, shared: bool) -> Optional[Dict[str, Any]]:
@@ -213,7 +216,9 @@ def prune(tenant_id: str) -> None:
     """Drop notes that expired more than a month ago."""
     try:
         cutoff = (_now() - timedelta(days=PRUNE_AFTER_DAYS)).isoformat()
-        (_client().table(TABLE).delete().eq("tenant_id", tenant_id).lt("expires_at", cutoff).execute())
+        rows = (_client().table(TABLE).delete().eq("tenant_id", tenant_id).lt("expires_at", cutoff)
+                .execute().data or [])
+        _drop_index(tenant_id, rows)     # 17 Nov 2026 audit: the question text stayed in the index
     except Exception as exc:  # noqa: BLE001
         logger.debug("research notes prune skipped: %s", exc)
 
@@ -224,6 +229,12 @@ def erase_for(tenant_id: str, person_key: str) -> int:
         return 0
     rows = (_client().table(TABLE).delete().eq("tenant_id", tenant_id).eq("created_by", person_key)
             .execute().data or [])
+    _drop_index(tenant_id, rows)
+    return len(rows)
+
+
+def _drop_index(tenant_id: str, rows: List[Dict[str, Any]]) -> None:
+    """Remove the notes' entries (their question text) from the knowledge base too."""
     for r in rows:
         try:
             import asyncio
@@ -236,7 +247,6 @@ def erase_for(tenant_id: str, person_key: str) -> int:
                 asyncio.run(coro)
         except Exception as exc:  # noqa: BLE001 — the row (the truth) is gone; the index entry finds nothing
             logger.debug("research note index entry not removed: %s", exc)
-    return len(rows)
 
 
 def export_for(tenant_id: str, person_key: str) -> List[Dict[str, Any]]:

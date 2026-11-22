@@ -839,7 +839,121 @@ async def master_health():
 
     out["migration_state"] = _probe_migrations(db)
 
+    # 16 Nov 2026: each cloud model answering + web search finding results (vula/ai_health.py)
+    try:
+        from vula import ai_health
+        out["ai_health"] = ai_health.status()
+    except Exception as exc:
+        out["ai_health"] = {"error": str(exc), "checks": [], "failing": []}
+    # 18 Nov 2026: the one trusted book checked daily per business (vula/books_health.py)
+    try:
+        from vula import books_health
+        out["books_health"] = books_health.status()
+    except Exception as exc:
+        out["books_health"] = {"error": str(exc), "checks": [], "failing": []}
+
     return out
+
+
+@router.post("/answer-checks/run")
+async def master_answer_checks_run():
+    """Run the answer checks now (a few minutes; real questions, read-only). Returns at once —
+    the result shows in Master › Health when it's done."""
+    import asyncio
+    from evals import answer_checks
+    task = asyncio.get_running_loop().create_task(answer_checks.run_and_store("manual"))
+    _ANSWER_CHECK_TASKS.add(task)                 # keep a reference until it finishes
+    task.add_done_callback(_ANSWER_CHECK_TASKS.discard)
+    return {"started": True}
+
+
+_ANSWER_CHECK_TASKS: set = set()
+
+
+@router.post("/ai-health/run")
+async def master_ai_health_run():
+    """Run the AI health check now (each cloud model + web search) and return the result."""
+    from vula import ai_health
+    await ai_health.tick()
+    return ai_health.status()
+
+
+# ── the one trusted book (18 Nov 2026, Phase 1 PR 3: vula/commerce/books_rebuild.py) ──
+
+def _who(identity: dict) -> str:
+    return str((identity or {}).get("email") or (identity or {}).get("user_id") or "master")
+
+
+@router.post("/books/{tenant_id}/audit/{audit_id}/sign-off")
+async def master_books_audit_sign_off(tenant_id: str, audit_id: str, body: dict,
+                                      identity: dict = Depends(require_master)) -> dict:
+    """Ian and the business agree the books audit is clean enough to rebuild the books from.
+    `with` names who at the business agreed (kept with the sign-off)."""
+    import asyncio
+    from datetime import datetime, timezone
+    from vula.commerce import service
+    who = _who(identity) + (f" with {str(body.get('with'))[:80]}" if body.get("with") else "")
+
+    def _do():
+        db = service._client()
+        rows = (db.table("vula_books_audits").select("id,agreed_by").eq("tenant_id", tenant_id).eq("id", audit_id)
+                .limit(1).execute().data or [])
+        if not rows:
+            return None
+        if not rows[0].get("agreed_by"):
+            return {"not_agreed": True}
+        db.table("vula_books_audits").update({"signed_off_by": who,
+                                              "signed_off_at": datetime.now(timezone.utc).isoformat()}) \
+            .eq("tenant_id", tenant_id).eq("id", audit_id).execute()
+        return (db.table("vula_books_audits").select("id,signed_off_by,signed_off_at").eq("tenant_id", tenant_id)
+                .eq("id", audit_id).limit(1).execute().data or [None])[0]
+    got = await asyncio.to_thread(_do)
+    if not got:
+        raise HTTPException(status_code=404, detail="no such audit for this business")
+    if got.get("not_agreed"):
+        raise HTTPException(status_code=409, detail="The business hasn't agreed this audit yet (Books review › Agree).")
+    return {"ok": bool(got.get("signed_off_by")), **got}
+
+
+@router.post("/books/{tenant_id}/rebuild")
+async def master_books_rebuild(tenant_id: str, body: dict, identity: dict = Depends(require_master)) -> dict:
+    """The dry run by default (writes nothing): what the one book would hold, both views, debtors and
+    creditors, suspense, money in transit, the bank reconciliation per account, the audit's warnings
+    and a plan_hash. With commit=true and that plan_hash: rebuild for real (signed-off audit only)."""
+    import asyncio
+    from vula.commerce import books_rebuild
+    accrual_from = (body.get("accrual_from") or "")[:10] or None
+    if body.get("commit"):
+        return await asyncio.to_thread(books_rebuild.commit, tenant_id, accrual_from=accrual_from or "",
+                                       plan_hash_=str(body.get("plan_hash") or ""), person=_who(identity), master=True)
+    report = await asyncio.to_thread(books_rebuild.plan, tenant_id, accrual_from)
+    return books_rebuild.public(report)
+
+
+@router.get("/books/{tenant_id}/rebuild/latest")
+async def master_books_rebuild_latest(tenant_id: str) -> dict:
+    """The report kept from the last committed rebuild."""
+    from vula.commerce import service
+    rows = (service._client().table("commerce_books_settings").select("accrual_from,backfill_report,updated_at")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    return rows[0] if rows else {"backfill_report": None}
+
+
+@router.post("/books/{tenant_id}/statement-files/backfill")
+async def master_statement_files_backfill(tenant_id: str) -> dict:
+    """File every bank statement already behind a business's bank lines under its account (the originals
+    still on the server and copies filed under another name); says which are gone for good
+    (vula/commerce/statement_files.py). Writes documents, so it runs only when asked."""
+    from vula.commerce import statement_files
+    return await statement_files.backfill(tenant_id)
+
+
+@router.post("/books-health/run")
+async def master_books_health_run() -> dict:
+    """Run the books health checks now (every business on the one book) and return the result."""
+    from vula import books_health
+    await books_health.tick(run_checks=True)
+    return books_health.status()
 
 
 # Recent migrations this session added — a cheap existence probe since there's no formal
@@ -1254,7 +1368,7 @@ async def master_run_qdrant_backup(identity: dict = Depends(require_master)) -> 
 
 EVAL_CANDIDATES = [
     "openrouter/meta-llama/llama-3.3-70b-instruct",   # today's model_worker_cloud — the baseline
-    "openrouter/google/gemini-2.5-flash",             # today's model_worker_cheap
+    "openrouter/google/gemini-2.5-flash",             # model_worker_cheap until 16 Nov (no zero-retention endpoint)
     "openrouter/anthropic/claude-haiku-4.5",
     "openrouter/anthropic/claude-sonnet-5",
     "openrouter/openai/gpt-5-mini",

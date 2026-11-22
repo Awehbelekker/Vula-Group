@@ -1,9 +1,9 @@
 """
 core/skills/web_search.py
 
-Real web search skill. Does an actual web search (DuckDuckGo HTML — no API
-key), fetches the top results, and synthesises a grounded answer with the
-cloud LLM. Falls back to the structured scrapers for tenders/company lookups.
+Real web search skill. Does an actual web search (Serper — Google results — when
+SERPER_API_KEY is set, else DuckDuckGo HTML), fetches the top results, and synthesises a
+grounded answer with the cloud LLM. Falls back to the structured scrapers for tenders/company lookups.
 
 Flow:
   1. SA-tender query  → search etenders + general, list opportunities
@@ -30,8 +30,86 @@ _HEADERS = {
 }
 
 
+SERPER_URL = "https://google.serper.dev/search"
+
+# Searches made and how many found nothing, since vula/ai_health.py last read them (16 Nov 2026:
+# DuckDuckGo found nothing for days and nobody knew). Counts only, never queries.
+_stats = {"searches": 0, "empty": 0}
+
+
+def take_stats() -> dict:
+    """The counts since the last call, then reset."""
+    out = dict(_stats)
+    _stats.update(searches=0, empty=0)
+    return out
+
+
+_Q_EMAIL = re.compile(r"\S+@\S+")
+_Q_LONG_NUMBER = re.compile(r"\+?\d[\d\s-]{6,}\d")                    # phone, account, ID numbers
+_Q_MONEY = re.compile(r"(?i)\bR\s?\d[\d\s,]*(?:\.\d{1,2})?(?:\s?(?:k|m|mil|million))?\b")
+_Q_TITLED_NAME = re.compile(r"\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Mnr|Mev)\.?\s+[A-Z][\w'-]+(?:\s+[A-Z][\w'-]+)?")
+
+
+def scrub_query(query: str) -> str:
+    """What leaves Vula in a web search (17 Nov 2026 audit): the words of the question without
+    email addresses, phone/account/ID numbers, rand amounts or a titled person's name. The search
+    providers (Serper, DuckDuckGo) are outside the EU and South Africa."""
+    q = _Q_TITLED_NAME.sub(" ", _Q_MONEY.sub(" ", _Q_LONG_NUMBER.sub(" ", _Q_EMAIL.sub(" ", query or ""))))
+    return " ".join(q.split())[:200]
+
+
 async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
-    """DuckDuckGo HTML search — returns [{title, url, snippet}]. No API key."""
+    """Web search — [{title, url, snippet?}]. Every caller in Vula comes through here (research,
+    build-ups, market prices, the web_search skill…). 16 Nov 2026: DuckDuckGo's HTML page gave
+    Railway's servers a page with no results and no error, so research never found anything in
+    production. With SERPER_API_KEY set the search goes to Serper (Google results, country
+    `search_country`); DuckDuckGo stays the fallback when there's no key or Serper finds nothing.
+    Logs say which provider and how many results — never the query (it's the person's words)."""
+    from config import settings
+    _stats["searches"] += 1
+    query = scrub_query(query)
+    if not query:
+        _stats["empty"] += 1
+        return []
+    if getattr(settings, "serper_api_key", ""):
+        hits = await _serper_search(query, limit)
+        logger.info("web search: serper %d results", len(hits))
+        if hits:
+            return hits
+    hits = await _ddg_html(query, limit)
+    logger.info("web search: duckduckgo %d results", len(hits))
+    if not hits:
+        _stats["empty"] += 1
+    return hits
+
+
+async def _serper_search(query: str, limit: int = 5) -> list[dict]:
+    """Serper (Google results). Only the query words are sent. Never raises; [] on any failure."""
+    from config import settings
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(SERPER_URL, headers={"X-API-KEY": settings.serper_api_key,
+                                                          "Content-Type": "application/json"},
+                                     json={"q": query, "gl": settings.search_country or "za",
+                                           "num": max(1, min(int(limit), 10))})
+        if resp.status_code != 200:
+            logger.warning("web search: serper answered %s", resp.status_code)
+            return []
+        out = []
+        for r in (resp.json() or {}).get("organic") or []:
+            url, title = r.get("link") or "", (r.get("title") or "").strip()
+            if url.startswith("http") and title:
+                out.append({"title": title, "url": url, "snippet": r.get("snippet") or ""})
+            if len(out) >= limit:
+                break
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("web search: serper failed (%s)", type(exc).__name__)
+        return []
+
+
+async def _ddg_html(query: str, limit: int = 5) -> list[dict]:
+    """DuckDuckGo HTML search — returns [{title, url}]. No API key."""
     results: list[dict] = []
     try:
         async with httpx.AsyncClient(timeout=12.0, headers=_HEADERS, follow_redirects=True) as client:
@@ -40,6 +118,9 @@ async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
                 data={"q": query},
             )
             html = resp.text
+        if 'class="result__a"' not in html:
+            # the bot page DuckDuckGo gives some servers: no results and no error
+            logger.warning("web search: duckduckgo gave a page with no results (HTTP %s)", resp.status_code)
         # Parse result blocks
         for m in re.finditer(
             r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html, re.S

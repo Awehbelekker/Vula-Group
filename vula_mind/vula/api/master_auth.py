@@ -33,8 +33,58 @@ _CACHE_TTL = 60.0
 _MAX_CACHE = 200
 
 
+def _token_claims(token: str) -> dict:
+    """The JWT's payload, read without checking the signature: only ever called after Supabase
+    has confirmed the token (so it's Supabase's own), to read its `aal`."""
+    import base64
+    try:
+        part = token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def required_roles() -> set[str]:
+    """Roles that must have two-step sign-in set up (settings.mfa_required_roles)."""
+    return {r.strip().lower() for r in (settings.mfa_required_roles or "").split(",") if r.strip()}
+
+
+def has_two_step(user: dict) -> bool:
+    """The login has a verified authenticator app (Supabase's user record lists it)."""
+    return any((f or {}).get("status") == "verified" for f in (user.get("factors") or []))
+
+
+def two_step_missing(user: dict, token: str) -> Optional[str]:
+    """Why this session can't be used yet, or None. 18 Nov 2026 (pre-launch audit: nobody had
+    two-step sign-in). 'code' — the login has an authenticator app but this session didn't give
+    its code (aal1), so a stolen password alone gets nothing. 'setup' — the login's role must
+    have one (settings.mfa_required_roles) and it hasn't been set up."""
+    if has_two_step(user):
+        return None if _token_claims(token).get("aal") == "aal2" else "code"
+    need = required_roles()
+    if need and user.get("id") and (_role_for_user(user["id"]) or "").lower() in need:
+        return "setup"
+    # 19 Nov 2026 (Ian): an accountant sees a business's bank lines and documents — two-step
+    # sign-in is always required for that login, whatever MFA_REQUIRED_ROLES says.
+    if user.get("id") and _is_accountant(user["id"]):
+        return "setup"
+    return None
+
+
+def _is_accountant(user_id: str) -> bool:
+    try:
+        from vula.commerce import service as cs
+        rows = (cs._client().table("vula_tenant_users").select("role").eq("user_id", user_id)
+                .eq("role", "accountant").limit(1).execute().data or [])
+        return bool(rows)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("accountant check failed for %s: %s", user_id, exc)
+        return False
+
+
 async def _verify_jwt(token: str) -> Optional[dict]:
-    """Ask Supabase Auth who this JWT belongs to. None if invalid/expired/unreachable."""
+    """Ask Supabase Auth who this JWT belongs to. None if invalid/expired/unreachable, or when the
+    session still needs two-step sign-in (two_step_missing) — every route refuses it then."""
     key = settings.supabase_service_role_key or settings.supabase_service_key
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -44,10 +94,15 @@ async def _verify_jwt(token: str) -> Optional[dict]:
             )
         if resp.status_code != 200:
             return None
-        return resp.json()
+        user = resp.json()
     except Exception as exc:
         log.warning("JWT verification call failed: %s", exc)
         return None
+    missing = two_step_missing(user, token)
+    if missing:
+        log.info("sign-in refused until two-step is %s", "given" if missing == "code" else "set up")
+        return None
+    return user
 
 
 def _role_for_user(user_id: str) -> Optional[str]:

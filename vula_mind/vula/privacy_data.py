@@ -133,6 +133,13 @@ def _erase_research_notes(tenant_id: str, variants: List[str]) -> int:
     return research_memory.erase_for(tenant_id, _member_key(tenant_id, variants))
 
 
+def _erase_chat_attachments(tenant_id: str, variants: List[str]) -> int:
+    """Files a team member attached to the dashboard chat, and their read text (migration-free:
+    they live on the volume, vula/chat_attachments.py)."""
+    from vula import chat_attachments
+    return chat_attachments.erase(tenant_id, _member_thread(tenant_id, variants))
+
+
 def _erase_private_notes(tenant_id: str, variants: List[str]) -> int:
     from vula import personal_memory
     return personal_memory.erase_for_phone(tenant_id, variants)
@@ -185,7 +192,8 @@ def _by_phone(table: str, column: str = "phone") -> Callable[[str, List[str]], i
 
 # (label, step). Order matters only for readability; each step stands alone.
 # 13 Nov 2026 audit: six stores that hold what was sent to or about the person were missing.
-# Left out on purpose: bookings (the business's own appointment record) and vula_wa_prompt_state
+# Left out on purpose: bookings (the business's own appointment record), emails sent to a project's
+# client (vula_project_client_emails: kept like an invoice, owner's decision 18 Nov 2026) and vula_wa_prompt_state
 # (no tenant_id, so deleting by number would reach the person's state with other businesses).
 ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("chat_messages", _erase_chat_messages),
@@ -197,6 +205,7 @@ ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("client_note", _erase_client_note),
     ("private_notes", _erase_private_notes),
     ("research_notes", _erase_research_notes),
+    ("chat_attachments", _erase_chat_attachments),
     ("property_enquiries", _erase_property_enquiries),
     ("buyer_wish", _erase_buyer_wish),
     ("listings_sent", _erase_listings_sent),

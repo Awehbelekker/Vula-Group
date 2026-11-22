@@ -75,14 +75,15 @@ def _bank(tenant_id: str, since: Optional[str], until: Optional[str]) -> List[Di
         q = (_client().table("commerce_bank_transactions")
              .select("id,txn_date,description,payee,amount_cents,direction,account_code,"
                      "categorized_by,match_status,matched_invoice_id,matched_expense_id,"
-                     "matched_order_id,project,vat_cents")
+                     "matched_order_id,project,vat_cents,source_file")
              .eq("tenant_id", tenant_id))
         if since:
             q = q.gte("txn_date", since)
         if until:
             q = q.lte("txn_date", until)
         return q.order("txn_date")
-    return [r for r in _pages(make) if r.get("match_status") != "ignored"]
+    return [r for r in _pages(make) if r.get("match_status") != "ignored"
+            and (r.get("source_file") or "") != "whatsapp_pop"]     # a proof of payment isn't a bank line
 
 
 def _invoices(tenant_id: str, direction: str) -> List[Dict[str, Any]]:
@@ -312,16 +313,34 @@ def vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None
         else:
             months[m]["input_no_vat_number"] += v
             bills_without_number += 1
-    # Sales: the bank's money in on sales (what was actually received), else the tenant's own
-    # invoices. Registered: output VAT is inside what was received (15/115). Unregistered: VAT
-    # would have been charged ON TOP (15%) — the business keeps its price and adds VAT.
-    bank_sales = [t for t in _bank(tenant_id, since, until)
-                  if t.get("direction") == "in" and t.get("account_code") == "sales"]
-    for t in bank_sales:
-        m = str(t.get("txn_date"))[:7]
-        c = int(t.get("amount_cents") or 0)
-        months[m]["sales"] += c
-        months[m]["output"] += int(round(c * 15 / 115)) if registered else int(round(c * 0.15))
+    from vula.commerce import ledger_v2
+    books = ledger_v2.is_on(tenant_id)
+    if books:
+        # The one book: VAT and sales as the journal holds them, on the business's VAT basis. Input
+        # VAT there already includes bills whose supplier has no VAT number (flagged below).
+        from vula.commerce import books_reports
+        view = books_reports.vat_basis(tenant_id)
+        if registered:
+            for m in months.values():
+                m["input_claimable"] = 0
+            for r in books_reports.vat(tenant_id, since, until, view).get("by_month") or []:
+                months[r["month"]]["output"] += r["output_cents"]
+                months[r["month"]]["input_claimable"] += r["input_cents"]
+        for m, c in books_reports.sales_by_month(tenant_id, since, until, view).items():
+            months[m]["sales"] += c
+            if not registered:
+                months[m]["output"] += int(round(c * 0.15))
+    else:
+        # Sales: the bank's money in on sales (what was actually received), else the tenant's own
+        # invoices. Registered: output VAT is inside what was received (15/115). Unregistered: VAT
+        # would have been charged ON TOP (15%) — the business keeps its price and adds VAT.
+        bank_sales = [t for t in _bank(tenant_id, since, until)
+                      if t.get("direction") == "in" and t.get("account_code") == "sales"]
+        for t in bank_sales:
+            m = str(t.get("txn_date"))[:7]
+            c = int(t.get("amount_cents") or 0)
+            months[m]["sales"] += c
+            months[m]["output"] += int(round(c * 15 / 115)) if registered else int(round(c * 0.15))
     rows = []
     for m in sorted(months):
         x = months[m]
@@ -337,9 +356,14 @@ def vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None
         "bills_without_vat": bills_no_vat,
     }
     # 12-month sales against the compulsory registration threshold.
-    yr = [t for t in _bank(tenant_id, (date.today() - timedelta(days=365)).isoformat(), None)
-          if t.get("direction") == "in" and t.get("account_code") == "sales"]
-    sales_12m = sum(int(t.get("amount_cents") or 0) for t in yr)
+    year_ago = (date.today() - timedelta(days=365)).isoformat()
+    if books:
+        sales_12m = sum(books_reports.sales_by_month(tenant_id, year_ago, None, "accrual").values())
+        out["source"] = books_reports.SOURCE
+    else:
+        yr = [t for t in _bank(tenant_id, year_ago, None)
+              if t.get("direction") == "in" and t.get("account_code") == "sales"]
+        sales_12m = sum(int(t.get("amount_cents") or 0) for t in yr)
     # The compulsory threshold in force today (R2.3m from 1 Apr 2026 — vula/commerce/tax.py);
     # the config value is only an override.
     from vula.commerce.tax import vat_threshold
@@ -355,7 +379,10 @@ def vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None
                        f"{_r(out['sales_cents'])} of sales and could claim {_r(out['input_claimable_cents'])} "
                        f"from suppliers' tax invoices — net {_r(abs(out['net_cents']))} "
                        f"{'to SARS' if out['net_cents'] >= 0 else 'back from SARS'}.")
-    if out["input_no_vat_number_cents"]:
+    if out["input_no_vat_number_cents"] and books and registered:
+        out["text"] += (f" {_r(out['input_no_vat_number_cents'])} of that VAT is on bills whose supplier has no "
+                        "VAT number on file — add it, or the claim may be refused.")
+    elif out["input_no_vat_number_cents"]:
         out["text"] += (f" Another {_r(out['input_no_vat_number_cents'])} of VAT is on bills whose supplier "
                         "has no VAT number on file — add it to claim it.")
     if out["over_threshold"]:

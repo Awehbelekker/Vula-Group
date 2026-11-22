@@ -22,8 +22,12 @@ TOOL_CHOICE = [c for c in yaml.safe_load((EVALS / "tool_choice.yaml").read_text(
 @pytest.fixture()
 def all_modules():
     # every module on, and buying switched on (it is off until an owner turns it on)
+    # trade costing on too (16 Nov 2026), so its tools must belong to an employee as well
+    from vula import features as _features
+    real_on = _features.on
     with patch("vula.api.tenants.enabled_modules", lambda t: []), \
-            patch("vula.commerce.buying.enabled", lambda t: True):
+            patch("vula.commerce.buying.enabled", lambda t: True), \
+            patch("vula.features.on", lambda t, name: True if name == "trade_costing" else real_on(t, name)):
         yield
 
 
@@ -60,7 +64,7 @@ def test_every_tool_belongs_to_an_employee(all_modules):
 def test_every_listed_tool_exists():
     real = {t["function"]["name"] for t in ca._ALL_TOOL_SPECS} | {
         t["function"]["name"] for t in ca.PROJECT_TOOLS + ca.DECISION_TOOLS + ca.MANUFACTURING_TOOLS
-        + ca.AUTOMATION_TOOLS + ca.PRODUCT_DOC_TOOLS + ca.REMINDER_TOOLS + ca.SHEET_TOOLS} | {"hand_over"}
+        + ca.AUTOMATION_TOOLS + ca.PRODUCT_DOC_TOOLS + ca.REMINDER_TOOLS + ca.SHEET_TOOLS + ca.BUILDUP_TOOLS} | {"hand_over"}
     for e in em.TEAM:
         assert e.tools - real == set(), e.id
     assert em.SHARED_TOOLS - real == set()
@@ -228,6 +232,7 @@ def test_the_team_loads_from_the_file_tree():
     assert {t.id for t in em.BY_ID["bookkeeper"].tasks} == {
         "project-bill", "payment-chase", "slips-and-expenses", "month-end", "bank-and-payments", "fix-a-record",
         "custom-sheet", "project-file"}
+    assert "trade-costing" in {t.id for t in em.BY_ID["operations"].tasks}
 
 
 def test_every_task_has_a_prompt_cases_and_only_its_employees_tools():
@@ -337,3 +342,36 @@ def test_a_sheet_of_another_tasks_data_keeps_the_whole_job_and_the_sheet_builder
     full = ca._tools_for("eval-tenant", role="owner", message=msg)
     for e in em.TEAM:
         assert "custom_sheet" in {t["function"]["name"] for t in em.narrow(full, e)}
+
+
+# ── costing building work by trade (16 Nov 2026) ─────────────────────────────
+
+COSTING = ["Estimate the cost of a 6 x 4 m one brick wall, plastered both sides",
+           "research the build-up for a 220 mm one-brick wall",
+           "How much to build a 6x4 wall plastered not painted?",
+           "What goes into a m2 of plaster?",
+           "Compare the HPC Bokaap estimate with what we paid"]
+
+
+@pytest.mark.parametrize("message", COSTING)
+def test_a_costing_message_reaches_the_costing_task_with_its_tools(message, all_modules, fake_db):
+    full = ca._tools_for("eval-tenant", role="owner", message=message)
+    tools, emp, note = ca._pick_employee("eval-tenant", message, full)
+    names = {t["function"]["name"] for t in tools}
+    assert emp.id == "operations" and "THE TASK — costing building work by trade" in note
+    assert {"trade_buildup", "estimate_cost", "compare_estimate"} <= names
+    assert "create_invoice" not in names                 # not sales' quote tools
+
+
+def test_without_trade_costing_the_front_desk_is_unchanged(fake_db):
+    with patch("vula.api.tenants.enabled_modules", lambda t: []), \
+            patch("vula.features.on", lambda t, name: False):
+        full = ca._tools_for("eval-tenant", role="owner", message=COSTING[0])
+        _tools, emp, _note = ca._pick_employee("eval-tenant", COSTING[0], full)
+    assert emp is not None and emp.id == "sales"         # "estimate" is still a quote word there
+
+
+def test_a_quote_for_a_customer_still_goes_to_sales(all_modules, fake_db):
+    full = ca._tools_for("eval-tenant", role="owner", message="Make a quotation for Sam: 2 round basins")
+    _tools, emp, _note = ca._pick_employee("eval-tenant", "Make a quotation for Sam: 2 round basins", full)
+    assert emp.id == "sales"

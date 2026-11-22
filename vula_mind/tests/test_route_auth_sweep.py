@@ -135,6 +135,9 @@ PUBLIC = {
     ("GET", "/v1/auth/wa/status"): "log in with WhatsApp — polled with the browser's own secret",
     ("POST", "/v1/auth/wa/code"): "log in with WhatsApp — sends a code; same answer for any number",
     ("POST", "/v1/auth/wa/code/verify"): "log in with WhatsApp — checks the code with the browser's secret",
+    ("GET", "/v1/auth/two-step-policy"): "the login screen asks which roles must set up two-step sign-in — role names only",
+    ("GET", "/v1/accountant/clients"): "an accountant's own businesses — checks the login itself (401 without one, 403 "
+                                       "unless it is an accountant's), lists only that login's rows",
     ("POST", "/v1/website/leads"): "vula-ai.com sign-up form — rate-limited, honeypot, nothing returned",
     ("POST", "/v1/app-errors"): "the dashboard's crash reports — limited per address, scrubbed, business only if the session proves it",
     ("GET", "/v1/commerce/{tenant_id}/manifest.webmanifest"): "the installed app's name/colour/icons — public brand fields only",

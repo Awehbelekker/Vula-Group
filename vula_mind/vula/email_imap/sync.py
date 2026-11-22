@@ -950,7 +950,8 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         if att["name"].lower().endswith(".pdf") and ("statement" in blob or "capitec" in blob):
             # Old mail (quiet): the lines are saved and categorised, nothing is marked paid — a
             # 2024 statement must not settle today's invoices (13 Nov 2026 audit).
-            rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"], settle=not quiet)
+            rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"], settle=not quiet,
+                                                  source="email")
             bank_statement = not rec.get("not_bank_statement") and not rec.get("error")
             if rec.get("private"):
                 # One member's own account: filed for them alone, not the business (vula/private_docs.py).

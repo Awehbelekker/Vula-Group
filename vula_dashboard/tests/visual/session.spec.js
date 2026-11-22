@@ -43,7 +43,7 @@ test("a sign-in that ran out goes back to the login page, says so, and keeps uns
   // Vula turns the Home figures away: sign in required
   await page.route(/\/v1\/commerce\/[^/]+\/admin\/home$/, (r) => r.fulfill(json({ detail: "Sign in required." }, 401)));
   await page.goto("/");
-  await expect(page.getByRole("status").filter({ hasText: "You've been signed out on this phone" })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("status").filter({ hasText: "You've been signed out on this device" })).toBeVisible({ timeout: 10000 });
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await expect(page.getByLabel("Email", { exact: true })).toHaveValue(OWNER);
   // the same person signing back in still has their count
@@ -78,7 +78,7 @@ test("a refresh token Supabase refuses (400) goes back to the login page: DIGG's
   await page.route(/\/v1\/(commerce|team|documents)\/[^/]+\/(admin\/)?[^?]*/, (r) => r.fulfill(json({ detail: "Sign in required." }, 401)));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible({ timeout: 10000 });
-  await expect(page.getByRole("status").filter({ hasText: "You've been signed out on this phone" })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "You've been signed out on this device" })).toBeVisible();
   await expect(page.getByLabel("Email", { exact: true })).toHaveValue(OWNER);
   expect(errors).toEqual([]);
 });
@@ -116,6 +116,6 @@ test("connecting a mailbox while signed out says so, then goes to the login page
   await openEmailSettings(page);
   await page.getByRole("button", { name: "Connect mailbox" }).click();
   // never "check the password": the login page, saying why
-  await expect(page.getByRole("status").filter({ hasText: "You've been signed out on this phone" })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("status").filter({ hasText: "You've been signed out on this device" })).toBeVisible({ timeout: 10000 });
   expect(errors).toEqual([]);
 });

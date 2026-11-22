@@ -38,6 +38,8 @@ _UNIT_ALIASES = {
 def norm_unit(unit: Any) -> str:
     u = re.sub(r"\s+", " ", str(unit or "").strip().lower()).strip(". ")
     u = u.removeprefix("per ").removeprefix("/")
+    if u not in _UNIT_ALIASES and len(u) > 3 and u.endswith("s") and u[:-1] in _UNIT_ALIASES:
+        u = u[:-1]                       # "bags", "hours", "bricks", "rolls" (16 Nov 2026)
     return _UNIT_ALIASES.get(u, u)
 
 

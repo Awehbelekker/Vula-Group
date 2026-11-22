@@ -36,8 +36,16 @@ function routes(role, modules = [], features = []) {
   let tradeBuildups = F.tradeBuildups.map((b) => ({ ...b, lines: b.lines.map((l) => ({ ...l })) }));
   const tradeEstimates = [];
   const tradeOn = features.includes("trade_costing");
+  const trade = { finished: false, suggestions: [] };
   const tradeOff = { __raw: { status: 403, contentType: "application/json",
     body: '{"detail":"Costing by trade isn\'t switched on for this business."}' } };
+  // Books review: a copy per page, so a fix in one test never shows in the next.
+  const books = JSON.parse(JSON.stringify(F.booksReview));
+  const booksOff = { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Only an owner or manager can audit the books."}' } };
+  const booksOwner = role === "owner";
+  // 19 Nov 2026: an accountant's view-only login reads the books check, folders and coverage too
+  const booksViewer = booksOwner || role === "accountant";
+  const accountants = F.accountantsList.map((a) => ({ ...a }));
   let aiUsage = { ...F.aiUsage, requested: [] };          // per page: a top-up requested here shows here only     // per page: a scan started here shows here only
   // The first-run welcome (Welcome.jsx): hidden unless a spec sets F.firstRun.show before opening.
   let welcome = { show: !!F.firstRun.show, closed: null, website: {}, siteRunning: false };
@@ -125,14 +133,23 @@ function routes(role, modules = [], features = []) {
       const rows = F.expenses.filter((e) => (!st || e.status === st) && (!reimb || e.reimbursable));
       return { expenses: rows, ...F.expenseLists };
     }),
-    r("GET", `${A}/reports/pnl`, () => F.reportPnl),
-    r("GET", `${A}/reports/vat`, () => F.reportVat),
+    // books_v2 (the one book): reports come from the journal and say which view (18 Nov 2026)
+    r("GET", `${A}/reports/pnl`, (m, url) => (features.includes("books_v2")
+      ? (url.searchParams.get("basis") === "cash" ? F.reportPnlCash : F.reportPnlJournal) : F.reportPnl)),
+    r("GET", `${A}/reports/vat`, () => (features.includes("books_v2") ? F.reportVatJournal : F.reportVat)),
+    r("GET", `${A}/reports/ledger.csv`, () => ({ __raw: { status: 200, contentType: "text/csv", body: "Date,Entry\n" } })),
+    r("GET", `${A}/reports/statements\\.pdf`, () => ({ __raw: { status: 200, contentType: "application/pdf", body: "%PDF-1.4\n" } })),
+    r("GET", `${A}/bank/transactions\\.csv`, () => ({ __raw: { status: 200, contentType: "text/csv", body: "Date,Account\n" } })),
     r("GET", `^/v1/payments/${T}/providers`, () => F.paymentProviders),
     r("GET", `${A}/discount-codes`, () => ({ discount_codes: F.discountCodes })),
     r("GET", `${A}/delivery-list`, () => F.deliveryList),
     r("GET", `^/v1/subscriptions/${T}`, () => ({ subscriptions: F.recurringSubs })),
     r("GET", `${A}/finances/insights`, () => F.financeInsights),
-    r("GET", `${A}/reports/trial-balance`, () => F.trialBalance),
+    r("GET", `${A}/reports/aged-creditors`, () => ({ as_at: "2026-10-17", total_cents: 1_275_050, count: 2,
+      aging: { current: 412_850, days_1_30: 862_200, days_31_60: 0, days_61_90: 0, days_90_plus: 0 }, suppliers: [] })),
+    r("GET", `${A}/reports/trial-balance`, (m, url) => (features.includes("books_v2")
+      ? { ...F.trialBalance, source: "journal", basis: url.searchParams.get("basis") || "accrual", balanced: true }
+      : F.trialBalance)),
     r("GET", `${A}/reports/vat-scenario`, () => ({ detail: "not in the demo" })),
     r("GET", `${A}/reports`, () => F.salesReport),
     r("GET", `${A}/crosscheck`, () => F.crossCheck),
@@ -156,6 +173,35 @@ function routes(role, modules = [], features = []) {
       return { invoices: rows, count: rows.length };
     }),
     r("GET", `${A}/bank/reconciliation`, () => F.bankSummary),
+    // 19 Nov 2026: the accountant's folders and named bank accounts (owner/manager only)
+    r("GET", `${A}/finance-folders`, () => (booksViewer
+      ? (role === "accountant" ? F.financeFoldersForAccountant() : F.financeFolders) : booksOff)),
+    r("GET", `${A}/finance-folders.zip`, () => (booksViewer
+      ? { __raw: { status: 200, contentType: "application/zip", body: "PK", headers: { "content-disposition": 'attachment; filename="Documents_2026-27_all.zip"' } } }
+      : booksOff)),
+    r("GET", `${A}/company-docs/proposals`, () => (booksViewer && role !== "accountant" ? { documents: F.companyDocProposals } : booksOff)),
+    r("POST", `${A}/company-docs/refile`, (m, url, req) => ({ ok: true, refiled: (req.postDataJSON() || {}).ids || [], skipped: [] })),
+    r("POST", `^/ingest`, () => ({ status: "queued", filename: "doc.pdf", message: "processing" })),
+    r("GET", `${A}/bank/accounts`, () => ({ accounts: F.bankAccountsList })),
+    r("GET", `^/v1/accountant/clients`, () => ({ clients: F.accountantClients })),
+    r("POST", `^/v1/documents/${T}/filed/([^/]+)/send`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      if (!b.confirm) return { preview: true, via: "email", to: `${b.to} (accounts@example.com)`,
+        message: `I'll send our bank confirmation letter (account …6574) to ${b.to} (accounts@example.com) by email.` };
+      return { sent: true, via: "email", reply_verbatim: `Sent our bank confirmation letter (account …6574) to ${b.to} by email (from your mailbox).` };
+    }),
+    r("GET", `^/v1/documents/${T}/filed/([^/]+)/open`, (m) => ({ url: `https://x.supabase.co/storage/v1/object/sign/documents/demo/${m[2]}.pdf?token=t`, filename: `${m[2]}.pdf` })),
+    r("GET", `^/v1/users/${T}/accountants/activity`, () => ({ events: F.accountantActivity })),
+    r("GET", `^/v1/users/${T}/accountants`, () => ({ accountants: accountants.filter((a) => a.active !== false) })),
+    r("POST", `^/v1/users/${T}/accountants`, () => {
+      accountants.push({ id: "acc-2", name: "New Accountant", email: "new@firm.example.test", active: true, expires_on: null, last_seen: null });
+      return { email: "new@firm.example.test", temp_password: F.DEMO_ONE_TIME, created: true,
+        note: "They sign in at the dashboard with this email and the one-time password, then set up two-step sign-in." };
+    }),
+    r("DELETE", `^/v1/users/${T}/accountants/([^/]+)`, (m) => {
+      const a = accountants.find((x) => x.id === m[2]); if (a) a.active = false; return { id: m[2], revoked: true };
+    }),
+    r("POST", `${A}/bank/accounts/([^/]+)`, () => ({ ok: true, account: "…7663", project: null, lines_moved: 0 })),
     r("GET", `${A}/bank/transactions/groups`, () => ({ groups: F.bankGroups })),
     r("GET", `${A}/bank/transactions/([^/]+)/candidates`, () => ({ candidates: F.bankCandidates })),
     r("GET", `${A}/bank/transactions`, (m, url) => {
@@ -426,6 +472,83 @@ function routes(role, modules = [], features = []) {
     r("POST", `${A}/setup/preview-answer`, (m, url, req) => ({ answer: "We're open Mon–Fri 07:30–17:00 and Sat 08:00–14:00. Closed Sundays.", sources: "Business profile — for customers", grounded: true, q: req.postDataJSON()?.question })),
     r("GET", `${A}/setup/owner`, () => F.ownerSetup),
     r("GET", `${A}/plan`, () => F.myPlan),
+    // ── Money › Books review ──
+    r("GET", `${A}/books-audit/review`, () => (booksViewer ? books : booksOff)),
+    r("GET", `${A}/books-audit/latest`, () => (booksViewer ? F.booksAuditLatest : booksOff)),
+    r("GET", `${A}/bank-statements/coverage`, () => (booksViewer ? F.financeFolders.coverage : booksOff)),
+    r("POST", `${A}/books-audit/run`, () => (booksOwner ? { id: "audit-2", summary: {} } : booksOff)),
+    r("POST", `${A}/books-audit/lines/restore`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      books.restore = books.restore.filter((x) => !b.ids.includes(x.id));
+      books.open.restore = books.restore.length;
+      return { ok: true, done: b.ids };
+    }),
+    r("POST", `${A}/books-audit/lines/set-aside`, (m, url, req) => {
+      const b = req.postDataJSON() || {};
+      books.duplicates = books.duplicates.filter((g) => !g.lines.some((x) => b.ids.includes(x.id)));
+      books.open.duplicates = books.duplicates.length;
+      return { ok: true, done: b.ids };
+    }),
+    r("POST", `${A}/books-audit/lines/transfer`, () => { books.transfers = []; books.open.transfers = 0; return { ok: true }; }),
+    r("POST", `${A}/books-audit/lines/${T}/link`, (m) => {
+      books.in_transit = []; books.open.in_transit = 0;
+      return { ok: true, line: { id: m[2] }, linked_to: "DIG-INV-00035" };
+    }),
+    r("POST", `${A}/books-audit/documents/${T}/${T}/date`, () => { books.odd_dates = []; books.open.odd_dates = 0; return { ok: true }; }),
+    r("POST", `${A}/books-audit/${T}/agree`, (m, url, req) => {
+      books.report.agreed_by = "owner"; books.report.agreed_at = "2026-11-18T10:00:00Z";
+      books.report.agreed_note = (req.postDataJSON() || {}).note;
+      return { ok: true, agreed_by: "owner" };
+    }),
+    // the documents behind the money (19 Nov 2026)
+    ...(() => {
+      const D = () => books.documents;
+      const drop = (group, pred) => { D()[group] = D()[group].filter((x) => !pred(x)); books.open[group] = D()[group].length; };
+      const own = (fn) => (m, url, req) => (booksOwner ? fn(m, url, req) : booksOff);
+      return [
+        r("POST", `${A}/books-audit/docs/${T}/figures`, own((m) => { drop("doc_figures", (d) => d.id === m[2]);
+          return { ok: true, changed: [], doc: { id: m[2] }, bill_differs: { id: "bill-bb55" } }; })),
+        r("POST", `${A}/books-audit/docs/${T}/confirm`, own((m) => { drop("doc_figures", (d) => d.id === m[2]); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/book`, own((m) => { drop("not_booked", (d) => d.id === m[2]); return { ok: true, bill_id: "bill-new" }; })),
+        r("POST", `${A}/books-audit/docs/${T}/not-a-bill`, own((m) => { drop("not_booked", (d) => d.id === m[2]);
+          drop("our_invoices", (d) => d.id === m[2]); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/duplicate`, own(() => { drop("doc_duplicates", () => true); return { ok: true }; })),
+        r("POST", `${A}/books-audit/pops/${T}/link`, own((m, url, req) => { drop("pops", (d) => d.id === m[2]);
+          return { ok: true, bills: req.postDataJSON().bill_ids, recorded: 1, text: "Linked" }; })),
+        r("POST", `${A}/books-audit/pops/${T}/dismiss`, own((m) => { drop("pops", (d) => d.id === m[2]); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/certificate`, own((m) => {
+          D().certificates.certificates = D().certificates.certificates.map((c) => (c.doc_id === m[2] ? { ...c, labelled: true, category: "Payment Certificate" } : c));
+          return { ok: true, certificate: { number: 2 } }; })),
+        r("POST", `${A}/books-audit/docs/${T}/add-to-invoices`, own((m) => { drop("sales_not_in_invoices", (d) => d.id === m[2]);
+          return { ok: true, invoice: { id: "inv-new", invoice_number: "DIGG-2026-HPC02", status: "paid" }, paid_on: "2026-07-03" }; })),
+        r("POST", `${A}/books-audit/docs/${T}/link-invoice`, own((m) => { drop("sales_not_in_invoices", (d) => d.id === m[2]); return { ok: true }; })),
+        r("POST", `${A}/books-audit/docs/${T}/vat-basis`, own((m, url, req) => ({ ok: true, prices: 12, basis: (req.postDataJSON() || {}).basis }))),
+        r("POST", `${A}/books-audit/bills/${T}/cancel-duplicate`, own(() => { drop("bill_duplicates", () => true); return { ok: true }; })),
+        r("POST", `${A}/books-audit/bills/${T}/match-document`, own(() => { drop("bill_mismatch", () => true); return { ok: true }; })),
+        r("POST", `${A}/suppliers/merge`, own(() => { drop("suppliers", (f) => f.kind === "supplier_duplicate");
+          return { ok: true, merged: 1, message: "Merged." }; })),
+      ];
+    })(),
+    r("GET", `${A}/books-audit/statements`, () => ({ checks: F.booksStatementChecks })),
+    r("GET", `${A}/books-audit/statements/${T}`, () => F.booksStatementCheck),
+    r("POST", `${A}/books-audit/statements/${T}/apply`, (m, url, req) => ({ ok: true, done: (req.postDataJSON() || {}).accept, skipped: [], not_saved: [] })),
+    r("POST", `${A}/books-audit/statements`, () => ({ check_id: "chk-1", summary: { already_right: 40 } })),
+    r("POST", `${A}/books-audit/lines/${T}/pay-bill`, (m, url, req) => {
+      const id = url.pathname.split("/lines/")[1].split("/")[0];
+      books.bill_payments = (books.bill_payments || []).map((g) => ({ ...g, lines: g.lines.filter((l) => l.id !== id) }))
+        .filter((g) => g.lines.length);
+      books.open.bill_payments = books.bill_payments.reduce((t, g) => t + g.lines.length, 0);
+      return { ok: true, bills: (req.postDataJSON() || {}).bill_ids, bill_status: "paid", remembered: "Skipp Rubble" };
+    }),
+    r("POST", `${A}/bank/transactions/bulk-categorize`, (m, url, req) => {
+      const ids = (req.postDataJSON() || {}).txn_ids || [];
+      const left = (books.refile || []).filter((g) => !g.ids.some((i) => ids.includes(i)));
+      if (left.length !== (books.refile || []).length) {
+        books.refile = left; books.open.refile = left.reduce((t, g) => t + g.count, 0);
+      } else { books.to_categorise = []; books.open.to_categorise = 0; }
+      return { ok: true, updated: ids.length };
+    }),
+    r("POST", `${A}/expenses/${T}/status`, () => { books.staff_claims = []; books.open.staff_claims = 0; return { ok: true }; }),
     // ── Estimating › Costing by trade ──
     r("GET", `${A}/buildups`, () => (tradeOn ? { buildups: tradeBuildups, can_confirm: role === "owner" } : tradeOff)),
     r("POST", `${A}/buildups/research`, (m, url, req) => {
@@ -453,9 +576,30 @@ function routes(role, modules = [], features = []) {
       headers: { "content-disposition": 'attachment; filename="Estimate_2026-11-15.xlsx"', "access-control-expose-headers": "Content-Disposition" } } })),
     r("POST", `${A}/estimates`, (m, url, req) => {
       if (!tradeOn) return tradeOff;
+      const body = req.postDataJSON() || {};
       tradeEstimates.unshift({ id: F.tradeEstimate.id, title: F.tradeEstimate.title, total_cents: F.tradeEstimate.total_cents,
-        created_at: "2026-11-15T07:00:00Z", request: req.postDataJSON() });
-      return { estimate: F.tradeEstimate, text: "Estimate: …" };
+        created_at: "2026-11-15T07:00:00Z", project: body.project || null, request: body });
+      return { estimate: { ...F.tradeEstimate, project: body.project || null }, text: "Estimate: …" };
+    }),
+    r("GET", `${A}/estimates/${T}/actuals`, () => ({ ...F.tradeActuals, finished: trade.finished, suggestions: trade.suggestions })),
+    r("POST", `${A}/estimates/${T}/learn`, () => {
+      if (role !== "owner") return { __raw: { status: 403, contentType: "application/json", body: '{"detail":"Only an owner or manager can say the work is finished."}' } };
+      trade.finished = true;
+      const isNew = !trade.suggestions.length;
+      if (isNew) trade.suggestions = [{ ...F.tradeSuggestion }];
+      return { ...F.tradeActuals, suggestions: trade.suggestions, new: isNew ? 1 : 0 };
+    }),
+    r("GET", `${A}/buildup-suggestions`, () => (tradeOn ? { suggestions: trade.suggestions.filter((s) => s.status === "pending") } : tradeOff)),
+    r("POST", `${A}/buildup-suggestions/${T}/(accept|dismiss)`, (m) => {
+      const s = trade.suggestions.find((x) => x.id === m[2]);
+      if (!s || s.status !== "pending") return { __raw: { status: 400, contentType: "application/json", body: '{"detail":"That suggestion was already decided."}' } };
+      s.status = m[3] === "accept" ? "accepted" : "dismissed";
+      if (m[3] === "accept") {
+        tradeBuildups = tradeBuildups.map((b) => (b.id !== s.buildup_id ? b : { ...b, version: b.version + 1,
+          lines: b.lines.map((l) => (l.component === s.component ? { ...l, waste_pct: s.suggested_value } : l)) }));
+        return { buildup: tradeBuildups.find((b) => b.id === s.buildup_id) };
+      }
+      return { dismissed: true };
     }),
     r("GET", `${A}/estimates`, () => (tradeOn ? { estimates: tradeEstimates } : tradeOff)),
     r("GET", `${A}/ai/usage`, () => aiUsage),
@@ -585,6 +729,8 @@ export async function seedSession(page, { role = "owner", theme = "light" } = {}
       role: "staff", access: F.teamMeFor("staff").access, full: false },
     rep: { user: { id: "u-rep", email: "rep@harbourvine.example.test", name: "Demo Rep" }, tenantId: F.TENANT_ID,
       role: "staff", access: F.teamMeFor("rep").access, full: false, teamRole: "sales_rep", teamPhone: "+27820000009" },
+    accountant: { user: { id: "u-acc", email: "books@ledgerline.example.test", name: "Demo Accountant" }, tenantId: F.TENANT_ID,
+      role: "accountant", access: [], full: false },
   };
   const auth = who[role] || who.owner;
   await page.addInitScript(([a, t, masterTenant]) => {

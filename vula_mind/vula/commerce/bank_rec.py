@@ -364,8 +364,68 @@ def _open_supplier_bills(tenant_id: str) -> List[dict]:
     return [b for b in bills if (b.get("doc_type") or "invoice") == "invoice"]
 
 
+_TITLES = re.compile(r"\b(mr|mrs|ms|miss|dr|prof|mnr|mev|me)\b\.?", re.I)
+
+
+def _own_names_now(tenant_id: str) -> List[str]:
+    """Every name the business goes by, read now without awaiting (service.own_business_names is
+    async and this runs inside the WhatsApp handler): its cached list, else the tenant's display name
+    and its invoice settings' company and trading-as names, each "X t/a Y" split."""
+    import time as _t
+    from vula.commerce import service
+    names = [tenant_id]
+    try:
+        from vula.api.tenants import get_config as _get_tenant_config
+        names.append((_get_tenant_config(tenant_id) or {}).get("display_name") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    hit = service._OWN_CACHE.get(tenant_id)
+    if hit and _t.time() - hit[0] < 300:
+        return list(dict.fromkeys([n for n in names if n] + list(hit[1])))
+    try:
+        st = (_client().table("commerce_invoice_settings").select("company_name,trading_as")
+              .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0]
+        names += [st.get("company_name") or "", st.get("trading_as") or ""]
+    except Exception:  # noqa: BLE001
+        pass
+    out: List[str] = []
+    for n in names:
+        for part in [n, *re.split(r"\bt\s*/\s*a\b|\btrading as\b", n or "", flags=re.I)]:
+            part = (part or "").strip(" ,-")
+            if part and part not in out:
+                out.append(part)
+    return out
+
+
+def _person_tokens(name: str) -> List[str]:
+    return [t for t in re.findall(r"[a-z]+", _TITLES.sub(" ", (name or "").lower())) if t]
+
+
+def _same_person(payer: str, member: str) -> bool:
+    """'MRS J DOWNING' is team member 'Judy Downing': the same surname and the first initial."""
+    a, b = _person_tokens(payer), _person_tokens(member)
+    if len(a) < 2 or len(b) < 2 or a[-1] != b[-1] or len(a[-1]) < 3:
+        return False
+    return a[0][0] == b[0][0]
+
+
+def _team_member_paying(tenant_id: str, payer: str) -> Optional[str]:
+    """The team member who paid, when the payer names one."""
+    if not payer:
+        return None
+    try:
+        team = (_client().table("vula_team_members").select("name").eq("tenant_id", tenant_id)
+                .limit(500).execute().data or [])
+    except Exception:  # noqa: BLE001
+        return None
+    for m in team:
+        if m.get("name") and _same_person(payer, m["name"]):
+            return m["name"]
+    return None
+
+
 def classify_pop_direction(tenant_id: str, payee: Optional[str],
-                           amount_cents: Optional[int] = None) -> tuple:
+                           amount_cents: Optional[int] = None, payer: Optional[str] = None) -> tuple:
     """Which way did the money move? Returns (direction, confident, reason).
 
     2026-09-03: this path hardcoded direction="in", so a proof of payment the OWNER sent for a
@@ -379,16 +439,23 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str],
     paid to us is money in, paid to a supplier we know is money out. Anything unrecognised
     stays 'in' (the prior behaviour) but unconfident, so the review question still gets asked
     instead of a guess being applied."""
-    from vula.commerce.service import _same_business
-    payee = (payee or "").strip()
+    # 20 Nov 2026 (Ian, DIGG): two of Judy's own payments to R Engelbrecht ("MRS J DOWNING" paid) were
+    # staged as money IN — one booked as R2,500 of sales — because only the payee was looked at, against
+    # the display name only, and an unknown payee meant "in". Who PAID decides it too: the business or
+    # one of its people paying is money out.
+    from vula.commerce.service import _same_business, is_own_name
+    payee, payer = (payee or "").strip(), (payer or "").strip()
+    own = _own_names_now(tenant_id)
+    if payee and is_own_name(payee, own):
+        return "in", True, "paid to this business"
+    if payer and is_own_name(payer, own):
+        return "out", True, "paid by the business"
+    member = _team_member_paying(tenant_id, payer)
+    if member:
+        return "out", True, f"paid personally by {member}"
     if not payee:
         return "in", False, "no payee on the document"
-    try:
-        from vula.api.tenants import get_config as _get_tenant_config
-        tenant_name = (_get_tenant_config(tenant_id) or {}).get("display_name") or tenant_id
-    except Exception:
-        tenant_name = tenant_id
-    if _same_business(payee, tenant_name) or _same_business(payee, tenant_id):
+    if any(_same_business(payee, n) for n in own):
         return "in", True, "paid to this business"
     for name in _known_supplier_names(tenant_id):
         if name and _same_business(payee, name):
@@ -406,7 +473,7 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str],
 
 def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str],
                         reference: Optional[str], payee: Optional[str],
-                        sender_phone: Optional[str] = None) -> str:
+                        sender_phone: Optional[str] = None, paid_by: Optional[str] = None) -> str:
     """The owner paid a supplier and sent the confirmation. Stage it as money OUT against a
     bill, and ask before settling it — same never-auto-apply rule as the money-in side."""
     bills = _open_supplier_bills(tenant_id)
@@ -416,7 +483,8 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
     row = {
         "tenant_id": tenant_id,
         "txn_date": (txn_date or _now())[:10],
-        "description": "WhatsApp proof of payment" + (f" — {payee}" if payee else ""),
+        "description": ("WhatsApp proof of payment" + (f" — {payee}" if payee else "")
+                        + (f" (paid personally by {paid_by})" if paid_by else "")),
         "amount_cents": amount_cents,
         "direction": "out",
         "reference": reference,
@@ -438,17 +506,22 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
                            f"POP R{amount_cents / 100:,.2f} to {payee or 'supplier'}")
 
     amt = amount_cents / 100
+    if paid_by:
+        personal = (f"\n\nIt was paid by *{paid_by}* personally, not from the business account — "
+                    "I'll note it for your accountant (a claim or the owner's loan to the business).")
+    else:
+        personal = ""
     if cand:
-        return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
+        return (personal.strip() + "\n\n" if personal else "") + (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
                 f"bill *{cand.get('invoice_number') or cand.get('id')}*. Reply *yes* to mark it "
                 f"paid, or tell me the right bill number.")
     return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. I couldn't find a "
-            f"matching open bill — reply with the bill number if you have it, or 'skip'.")
+            f"matching open bill — reply with the bill number if you have it, or 'skip'.") + personal
 
 
 def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
                          reference: Optional[str] = None, payee: Optional[str] = None,
-                         sender_phone: Optional[str] = None) -> str:
+                         sender_phone: Optional[str] = None, payer: Optional[str] = None) -> str:
     """Stage a WhatsApp proof-of-payment screenshot into the SAME interactive review flow
     bank_review.py already uses for an unmatched bank-statement credit — never auto-mark-paid.
     Returns the WhatsApp reply to send: a specific "does this match X — reply yes" proposal when
@@ -462,11 +535,12 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
 
     A POP the owner sent for a bill THEY paid moves money the other way — see
     classify_pop_direction — and is staged against supplier bills instead."""
-    direction, _confident, reason = classify_pop_direction(tenant_id, payee, amount_cents)
+    direction, _confident, reason = classify_pop_direction(tenant_id, payee, amount_cents, payer=payer)
     if direction == "out":
-        log.info("pop for %s staged as money out (%s): %s", tenant_id, reason, payee)
+        log.info("pop for %s staged as money out (%s)", tenant_id, reason)
         return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee,
-                                   sender_phone=sender_phone)
+                                   sender_phone=sender_phone,
+                                   paid_by=reason[len("paid personally by "):] if reason.startswith("paid personally by ") else None)
     candidate = propose_pop_match(tenant_id, amount_cents, reference, payee, sender_phone)
     match_type, cand = candidate if candidate else (None, None)
     row = {
@@ -525,16 +599,24 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     acc_map = {a["code"]: a for a in accounts}
     try:
         vat_reg = bool((await service.get_invoice_settings(tenant_id) or {}).get("vat_registered", False))
-    except Exception:
-        vat_reg = True
+    except Exception as exc:
+        # 18 Nov 2026: fail closed. Claiming VAT for a business that isn't registered is the worse
+        # mistake; a registered business's lines are re-allocated when the setting reads again.
+        log.warning("reconcile: VAT setting not read for %s, treating as not registered: %s", tenant_id, exc)
+        vat_reg = False
 
     # Outstanding invoices to match credits against.
     try:
         invoices = (db.table("commerce_invoices")
-                    .select("id,invoice_number,customer_name,total_cents,status,doc_type,issue_date,created_at")
-                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"])
+                    .select("id,invoice_number,customer_name,total_cents,total_paid_cents,status,doc_type,"
+                            "direction,issue_date,created_at")
+                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"])
                     .limit(2000).execute().data or [])
-        invoices = [i for i in invoices if (i.get("doc_type") or "invoice") == "invoice"]
+        # 18 Nov 2026: a part-paid invoice is matched on what is still owed, not its full total.
+        invoices = [{**i, "invoice_total_cents": i.get("total_cents"),
+                     "total_cents": int(i.get("total_cents") or 0) - int(i.get("total_paid_cents") or 0)}
+                    for i in invoices if (i.get("doc_type") or "invoice") == "invoice"
+                    and (i.get("direction") or "outbound") == "outbound"]
     except Exception as exc:
         log.debug("reconcile: invoice load skipped: %s", exc)
         invoices = []
@@ -664,9 +746,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     used_invoice_ids: set = set()
     used_order_ids: set = set()
     used_bill_ids: set = set()
+    saved_ids: List[str] = []
     for idx, t in enumerate(txns):
         status, inv_id, order_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None, None
         bill_project = None
+        # 18 Nov 2026: what this line settles is decided here but done only after the line itself
+        # is saved — before, an invoice could be marked paid while its bank line failed to save.
+        settle: Optional[tuple] = None
+        paid_on = str(t.get("date") or "")[:10] or None
         already = settled.get((str(t.get("date")), int(t["amount_cents"]), (t.get("description") or "")))
         if already:
             # Seen and settled before: keep that match, settle nothing new.
@@ -688,29 +775,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             candidates = [i for i in invoices if i["id"] not in used_invoice_ids]
             m = _match_invoice(t, candidates)
             if m:
-                try:
-                    await service.update_invoice_status(tenant_id, m["id"], "paid")
-                    inv_id, status = m["id"], "matched"
-                    used_invoice_ids.add(m["id"])
-                    matched_invoices += 1
-                except Exception as exc:
-                    log.warning("mark invoice paid failed: %s", exc)
+                inv_id, status, settle = m["id"], "matched", ("invoice", m)
+                used_invoice_ids.add(m["id"])
             else:
                 order_candidates = [o for o in orders if o["id"] not in used_order_ids]
                 om = _match_order(t, order_candidates)
                 if om:
-                    try:
-                        await service.update_order_status(om["id"], "paid")
-                        order_id, status = om["id"], "matched"
-                        used_order_ids.add(om["id"])
-                        matched_orders += 1
-                        from vula.api.yoco import _notify_order_paid
-                        await _notify_order_paid(
-                            tenant_id, om.get("display_id") or om["id"], om["id"],
-                            om.get("customer_phone"), om.get("customer_name") or "",
-                            int(om.get("total_cents") or 0))
-                    except Exception as exc:
-                        log.warning("mark order paid failed: %s", exc)
+                    order_id, status, settle = om["id"], "matched", ("order", om)
+                    used_order_ids.add(om["id"])
                 else:
                     unmatched_in += 1
         else:
@@ -721,14 +793,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             else:
                 exp = _match_card_expense(t)
                 if exp:
-                    exp_id, status = exp["id"], "matched"
+                    exp_id, status, settle = exp["id"], "matched", ("expense", exp)
                     used_exp_ids.add(exp["id"])
                     matched_expenses += 1
-                    try:     # the statement confirms the card purchase actually cleared
-                        db.table("commerce_expenses").update(
-                            {"status": "paid", "updated_at": _now()}).eq("id", exp["id"]).execute()
-                    except Exception:
-                        pass
                 else:
                     # Last fallback: an outgoing payment settling a SUPPLIER'S INVOICE. Placed
                     # after worker and card-expense matching so nothing that already matches
@@ -737,16 +804,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                     bill_candidates = [b for b in supplier_bills if b["id"] not in used_bill_ids]
                     bm = _match_supplier_bill(t, bill_candidates)
                     if bm:
-                        try:
-                            await service.update_invoice_status(tenant_id, bm["id"], "paid")
-                            inv_id, status = bm["id"], "matched"
-                            # the payment is for the bill's project (job costing)
-                            bill_project = bm.get("project")
-                            used_bill_ids.add(bm["id"])
-                            matched_bills += 1
-                        except Exception as exc:
-                            log.warning("mark supplier bill paid failed: %s", exc)
-                            unmatched_out += 1
+                        inv_id, status, settle = bm["id"], "matched", ("bill", bm)
+                        # the payment is for the bill's project (job costing)
+                        bill_project = bm.get("project")
+                        used_bill_ids.add(bm["id"])
                     else:
                         unmatched_out += 1
 
@@ -823,8 +884,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             row["project"] = canon[project]
         if trade:
             row["trade"] = trade
+        stored = None
         try:
-            db.table("commerce_bank_transactions").upsert(
+            stored = db.table("commerce_bank_transactions").upsert(
                 row, on_conflict="tenant_id,txn_date,amount_cents,description").execute()
             saved += 1
         except Exception:
@@ -834,11 +896,45 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                      "project", "matched_order_id", "trade", "bank_account", "project_source"):
                 row.pop(k, None)
             try:
-                db.table("commerce_bank_transactions").upsert(
+                stored = db.table("commerce_bank_transactions").upsert(
                     row, on_conflict="tenant_id,txn_date,amount_cents,description").execute()
                 saved += 1
             except Exception as exc2:
-                log.debug("bank txn upsert skipped (run migration 057?): %s", exc2)
+                log.warning("bank line not saved, so nothing it matched was settled: %s", exc2)
+        txn_id = ((getattr(stored, "data", None) or [{}])[0] or {}).get("id")
+        if txn_id:
+            saved_ids.append(str(txn_id))
+        if settle and stored is None:
+            # The line isn't in Vula, so it settles nothing (the next reading will try again).
+            matched_expenses -= settle[0] == "expense"
+            unmatched_in += settle[0] in ("invoice", "order")
+            unmatched_out += settle[0] in ("bill", "expense")
+            settle = None
+        if settle:
+            kind, target = settle
+            ok = await _settle(tenant_id, kind, target, paid_on, db)
+            if ok:
+                matched_invoices += kind == "invoice"
+                matched_orders += kind == "order"
+                matched_bills += kind == "bill"
+            else:
+                unmatched_in += kind in ("invoice", "order")
+                unmatched_out += kind == "bill"
+                if txn_id:     # the match didn't happen: the line says so
+                    try:
+                        db.table("commerce_bank_transactions").update(
+                            {"match_status": "unmatched", "matched_invoice_id": None,
+                             "matched_order_id": None, "matched_expense_id": None}) \
+                            .eq("tenant_id", tenant_id).eq("id", txn_id).execute()
+                    except Exception as exc3:  # noqa: BLE001
+                        log.warning("bank line %s still says matched after a failed settle: %s", txn_id, exc3)
+
+    try:     # the one trusted book: each saved line posted as it now stands
+        from vula.commerce import ledger_events
+        if saved_ids and ledger_events.on(tenant_id):
+            ledger_events.sync_bank_lines(tenant_id, saved_ids)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bank lines not posted to the books for %s: %s", tenant_id, exc)
 
     return {"parsed": len(txns), "saved": saved, "auto_settled": auto_settle,
             "matched_invoices": matched_invoices,
@@ -847,6 +943,31 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             "needs_input": needs_input, "card_settlements": card_settlements,
             "named_projects": named_counts,
             "unmatched_credits": unmatched_in, "unmatched_debits": unmatched_out}
+
+
+async def _settle(tenant_id: str, kind: str, target: Dict[str, Any], paid_on: Optional[str], db) -> bool:
+    """Settle what a saved bank line matched, dated the day the money moved. False when it failed."""
+    from vula.commerce import service
+    try:
+        if kind in ("invoice", "bill"):
+            await service.update_invoice_status(tenant_id, target["id"], "paid", paid_at=paid_on)
+        elif kind == "order":
+            await service.update_order_status(target["id"], "paid")
+            try:
+                from vula.api.yoco import _notify_order_paid
+                await _notify_order_paid(
+                    tenant_id, target.get("display_id") or target["id"], target["id"],
+                    target.get("customer_phone"), target.get("customer_name") or "",
+                    int(target.get("total_cents") or 0))
+            except Exception as exc:  # noqa: BLE001  (the order is paid; only the message failed)
+                log.warning("order paid message not sent: %s", exc)
+        elif kind == "expense":     # the statement confirms the card purchase actually cleared
+            db.table("commerce_expenses").update(
+                {"status": "paid", "updated_at": _now()}).eq("id", target["id"]).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("mark %s paid failed: %s", kind, exc)
+        return kind == "expense"     # as before: the card expense line stays matched
 
 
 def _load_settlements(db, tenant_id: str) -> List[Dict[str, Any]]:
@@ -1075,9 +1196,18 @@ def _statement_account(tenant_id: str, text: str, txns: List[Dict[str, Any]]) ->
     return number
 
 
+async def _keep_file(tenant_id: str, pdf_path: Path, source_file: str, source: str, text: str,
+                     txns: List[Dict[str, Any]], password: Optional[str]) -> None:
+    """The statement PDF itself is kept, under its bank account (vula/commerce/statement_files.py) —
+    until 19 Nov 2026 a statement from WhatsApp or the dashboard was read and then thrown away."""
+    from vula.commerce import statement_files
+    await statement_files.keep(tenant_id, Path(pdf_path), filename=source_file or Path(pdf_path).name,
+                               source=source or "dashboard", text=text, txns=txns, password=password)
+
+
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,
                            source_file: str = "", trusted: bool = False,
-                           settle: bool = True) -> Dict[str, Any]:
+                           settle: bool = True, source: str = "") -> Dict[str, Any]:
     """Full pipeline: decrypt (stored ID password if not given) → parse → reconcile.
     `trusted`: the owner uploaded it as their bank statement (dashboard) — skip the check that
     an automatically-detected PDF (email/WhatsApp) really is their own bank statement.
@@ -1105,6 +1235,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         result["extraction_reconciled"] = True
         result["parser"] = "fnb"
         log.info("bank statement (FNB, exact) reconciled for %s: %s", tenant_id, result)
+        await _keep_file(tenant_id, pdf_path, source_file, source, fnb_text, txns, pwd)
         return result
     try:
         text = extract_pdf_text(Path(pdf_path), pwd)
@@ -1144,6 +1275,7 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     result["extraction_reconciled"] = reconciled
     result["bank_account"] = acct
     log.info("bank statement reconciled for %s: %s", tenant_id, result)
+    await _keep_file(tenant_id, pdf_path, source_file, source, text, txns, pwd)
     return result
 
 

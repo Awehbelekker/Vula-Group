@@ -391,7 +391,8 @@ export const filedDocs = [
   doc(8, "Westbank-bakery-delivery-note.pdf", "Delivery Note", 6, { summary: "Flour, rye and seeds — 14 items" }),
   doc(7, "Catering-quote-Bay-Events.pdf", "Quote / Estimate", 7, { summary: "Platter for 60, 24 Oct", customer_phone: "+27820000106" }),
   doc(6, "Supplier-price-list-Oct-2026.xlsx", "Supplier Price List", 9, { summary: "Cheese & charcuterie — 46 lines" }),
-  doc(5, "Health-certificate-2026.pdf", "Compliance", 14, { summary: "Certificate of acceptability, valid to Aug 2027" }),
+  doc(5, "Health-certificate-2026.pdf", "Compliance", 14, { summary: "Certificate of acceptability, valid to Aug 2027",
+    file_url: "https://x.supabase.co/storage/v1/object/sign/documents/demo/doc-005.pdf?token=t" }),
   doc(4, "Insurance-schedule-2026.pdf", "Insurance", 20),
   doc(3, "Bank-statement-Sep-2026.pdf", "Account Statement", 16, { summary: "September statement — 312 lines" }),
   doc(2, "Shopfront-lease-addendum.docx", "Legal / Property", 30),
@@ -674,6 +675,24 @@ export const reportPnl = {
   expenses: [{ account: "Cost of sales", amount_cents: 7_412_000 }, { account: "Rent", amount_cents: 1_850_000 },
     { account: "Casual labour", amount_cents: 1_920_000 }, { account: "Motor vehicle", amount_cents: 642_800 }, { account: "Bank charges", amount_cents: 1_540_000 }],
 };
+// The one book (books_v2): the same business, read from its journal on each view.
+export const reportPnlJournal = { source: "journal", basis: "accrual",
+  total_income_cents: 19_210_000, total_expense_cents: 12_910_400, net_profit_cents: 6_299_600,
+  income: [{ account: "Sales", code: "sales", amount_cents: 19_210_000 }],
+  expenses: [{ account: "Cost of sales", code: "cost_of_sales", amount_cents: 8_120_000 },
+    { account: "Casual labour", code: "casual_labour", amount_cents: 2_150_000 },
+    { account: "Rent", code: "rent", amount_cents: 1_850_000 }, { account: "Bank charges", code: "bank_charges", amount_cents: 790_400 }],
+};
+export const reportPnlCash = { ...reportPnlJournal, basis: "cash",
+  total_income_cents: 17_540_000, total_expense_cents: 11_460_400, net_profit_cents: 6_079_600,
+  income: [{ account: "Sales", code: "sales", amount_cents: 17_540_000 }],
+  expenses: [{ account: "Cost of sales", code: "cost_of_sales", amount_cents: 6_670_000 },
+    { account: "Casual labour", code: "casual_labour", amount_cents: 2_150_000 },
+    { account: "Rent", code: "rent", amount_cents: 1_850_000 }, { account: "Bank charges", code: "bank_charges", amount_cents: 790_400 }],
+};
+export const reportVatJournal = { source: "journal", basis: "accrual", vat_registered: true,
+  output_vat_cents: 2_881_500, input_vat_cents: 1_336_560, net_vat_cents: 1_544_940, vat_payable_cents: 1_544_940,
+  note: "Net VAT payable to SARS (positive) or refundable (negative), from your books (invoice basis)." };
 export const reportVat = { vat_registered: true, output_vat_cents: 2_444_674, input_vat_cents: 1_198_210, net_vat_cents: 1_246_464,
   note: "From bank lines with VAT recorded — check against your invoices before filing." };
 
@@ -1300,11 +1319,13 @@ export const assistantChat = { openChat: false };
 // ── Estimating › Costing by trade (15 Nov 2026; vula/api/trade_costing.py) ──────────────────
 export const tradeBuildups = [
   { id: "bu-wall", trade: "Masonry", item: "one-brick wall", unit: "m2", spec: { thickness: "220 mm" }, status: "confirmed",
-    version: 2, origin: "own", sources: [{ n: 1, title: "Brickwork quantities guide", url: "https://bricks.example/guide" }],
-    unknown: [{ key: "wall_ties", label: "Wall ties" }],
+    version: 2, origin: "own", sources: [{ n: 1, title: "Brickwork quantities guide", url: "https://bricks.example/guide" },
+      { n: 2, title: "HPC Bokaap specification.pdf", url: null, own: true }],
+    unknown: [{ key: "wall_ties", label: "Wall ties", why: "the source gives it per 900 mm of height, not per m2" }],
     lines: [
       { component: "units", label: "Bricks or blocks", kind: "material", qty_per_unit: "104.0000", unit: "each", waste_pct: "5.00", source_ref: "1" },
-      { component: "mortar_cement", label: "Mortar cement", kind: "material", qty_per_unit: "0.5000", unit: "bag", waste_pct: "0.00", source_ref: "1" },
+      { component: "mortar_cement", label: "Mortar cement", kind: "material", qty_per_unit: "0.5000", unit: "bag", waste_pct: "0.00", source_ref: "2",
+        note: "also 0.3 bag per m2 in Brickwork quantities guide [1]" },
       { component: "labour", label: "Labour", kind: "labour", qty_per_unit: "1.5000", unit: "hour", waste_pct: "0.00", source_ref: "confirmed by owner" },
     ] },
   { id: "bu-plaster", trade: "Plastering", item: "plaster to brick walls", unit: "m2", spec: {}, status: "proposed",
@@ -1340,3 +1361,237 @@ export const tradeEstimate = {
       ] },
   ],
 };
+
+// Trade costing phase 4 (15 Nov 2026): the estimate beside what was paid on its project.
+export const tradeActuals = {
+  comparison: {
+    estimate_id: "est-1", title: "one-brick wall 24.000 m2; plaster to brick walls 48.000 m2", project: "Bay Events catering",
+    estimated_cents: 1422001, paid_cents: 1310900, not_in_estimate_cents: 300000,
+    groups: [
+      { key: "material:brick", label: "Bricks or blocks", kind: "material", unit: "each", items: ["one-brick wall"],
+        estimated_qty: "2620.8", bought_qty: "3100", gap_pct: "18.3", estimated_cents: 783619, paid_cents: 926900, shared: false,
+        lines: [{ description: "Clay stock brick", supplier: "Cashbuild", date: "2026-11-10", counted: "3100", how: "" }], not_comparable: [] },
+      { key: "material:cement", label: "Cement (mortar)", kind: "material", unit: "bag", items: ["one-brick wall", "plaster to brick walls"],
+        estimated_qty: "17.76", bought_qty: "20", gap_pct: "12.6", estimated_cents: 204222, paid_cents: 229980, shared: true,
+        lines: [{ description: "PPC cement 50kg", supplier: "Cashbuild", date: "2026-11-10", counted: "20", how: "" }], not_comparable: [] },
+      { key: "labour:labour", label: "Labour", kind: "labour", unit: "hour", items: ["one-brick wall", "plaster to brick walls"],
+        estimated_qty: "60", bought_qty: null, gap_pct: null, estimated_cents: 300000, paid_cents: 154020, shared: true,
+        lines: [], not_comparable: [{ description: "Labour brickwork", supplier: "Sipho", date: "2026-11-12", why: "bought per sum, the build-up counts per hour" }] },
+    ],
+    unclear: [{ description: "River sand", could_be: ["Mortar (building) sand", "Plaster sand"] }],
+    not_in_estimate: [{ description: "Y12 rebar 6m" }],
+  },
+  proposals: [{ group: "material:brick", verdict: "suggest", field: "waste_pct", current_value: "5", suggested_value: "24" }],
+};
+export const tradeSuggestion = {
+  id: "sg-1", estimate_id: "est-1", buildup_id: "bu-wall", item: "one-brick wall", component: "units", label: "Bricks or blocks",
+  field: "waste_pct", current_value: "5", suggested_value: "24", status: "pending",
+  text: "one-brick wall — Bricks or blocks: waste 5% → 24% (estimated 2620.8 each, bought 3100)",
+};
+
+// ── Money › Books review (18 Nov 2026; vula/commerce/books_review.py) ──
+const brLine = (id, date, description, cents, direction = "out", extra = {}) => ({
+  id, date, description, amount_cents: cents, direction, status: "unmatched", account_code: "cost_of_sales",
+  categorized_by: "owner", excluded_reason: null, bank_account: "…5678", matched: false, ...extra });
+export const booksReview = {
+  report: { id: "audit-1", created_at: "2026-11-18T09:00:00Z", created_by: "owner", agreed_by: null, agreed_at: null,
+    agreed_note: null, signed_off_by: null, signed_off_at: null },
+  checks: [
+    { key: "restore", title: "Lines set aside by mistake", status: "problem", headline: "2 real lines were set aside" },
+    { key: "transfers", title: "Money between your own accounts", status: "problem", headline: "1 transfer is booked as income and a cost" },
+    { key: "vat", title: "VAT registration", status: "attention", headline: "Income over 12 months is above R1 million" },
+  ],
+  books: { trial_balance: { after: { accrual: { balanced: true }, cash: { balanced: true } } },
+    control: { debtors_tie: true, debtors_books_cents: 1800000, creditors_tie: true, creditors_books_cents: 0 },
+    suspense: { lines: 1, cents: -56217 }, in_transit_cents: -2300000, owed_to_staff_cents: 400000 },
+  open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 2, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
+    doc_figures: 2, not_booked: 1, our_invoices: 1, sales_not_in_invoices: 2, certificates: 3, supplier_statements: 1, pops: 2, bill_mismatch: 1,
+    doc_duplicates: 1, bill_duplicates: 1, suppliers: 2 },
+  clean: false,
+  restore: [brLine("r1", "2026-07-18", "POS Purchase Build It", 28500, "out", { status: "ignored", excluded_reason: "misread copy" }),
+    brLine("r2", "2026-07-18", "POS Purchase Cashbuild", 191389, "out", { status: "ignored" })],
+  duplicates: [{ lines: [brLine("d1", "2026-08-02", "FNB App Payment Nelitho", 300000), brLine("d2", "2026-08-02", "FNB App Payment Nelitho", 300000)], extra_cents: 300000 }],
+  transfers: [{ lines: [brLine("t1", "2026-09-01", "Transfer to savings", 500000), brLine("t2", "2026-09-01", "Transfer from cheque", 500000, "in")], cents: 500000 }],
+  to_categorise: [brLine("u1", "2026-10-03", "Magtape Credit Smit", 56217, "in", { categorized_by: "default", account_code: null })],
+  bill_payments: [{ key: "sup-belekkie", supplier: "Belekkie Skips (R Engelbrecht)", cents: 1400000, lines: [
+    { ...brLine("p1", "2026-07-14", "Payshap Account Off-Us Skipp Rubble Remova", 560000, "out", { account_code: "casual_labour", categorized_by: "learned" }),
+      options: [{ cents: 560000, bills: [{ id: "bill-196", number: "DIG-BILL-00196", supplier: "R Engelbrecht", date: "2026-07-13",
+        owed_cents: 560000, status: "draft", already_paid: false, project: "HPC Bokaap" }] }] },
+    { ...brLine("p8", "2026-09-25", "FNB App Payment To Skipp Rubble Removal", 840000, "out", { account_code: "casual_labour", categorized_by: "learned" }),
+      options: [{ cents: 840000, bills: [
+        { id: "bill-81", number: "DIG-BILL-00081", supplier: "R Engelbrecht", date: "2026-09-22", owed_cents: 560000, status: "draft", already_paid: false, project: "HPC Bokaap" },
+        { id: "bill-97", number: "DIG-BILL-00197", supplier: "R Engelbrecht", date: "2026-09-22", owed_cents: 280000, status: "paid", already_paid: true, project: "Belladonna" }] }] }] }],
+  refile: [
+    { key: "skipp rubble|out|one_word_rule", payee: "skipp rubble", label: "FNB App Payment To Skipp Rubble Removal",
+      direction: "out", why: "one_word_rule", why_text: "Filed by an old one-word rule, not by who was paid", suggested: null,
+      count: 8, cents: 2990000, accounts: [{ code: "casual_labour", lines: 8 }], ids: ["sk1", "sk2", "sk3", "sk4", "sk5", "sk6", "sk7", "sk8"],
+      lines: [brLine("sk1", "2026-07-28", "FNB App Payment To Skipp Rubble Removal", 320000, "out", { account_code: "casual_labour", categorized_by: "learned" })] },
+    { key: "bank charges|out|bank_charge", payee: "bank charges", label: "FNB bank charges", direction: "out", why: "bank_charge",
+      why_text: "A bank charge filed as something else", suggested: "bank_charges", count: 2, cents: 4700,
+      accounts: [{ code: "casual_labour", lines: 2 }], ids: ["bc1", "bc2"],
+      lines: [brLine("bc1", "2026-07-31", "FNB bank charges", 3500, "out", { account_code: "casual_labour", categorized_by: "learned" })] }],
+  in_transit: [{ kind: "bill", id: "bill-35", label: "DIG-INV-00035", date: "2026-06-23", recorded_cents: -4993381, bank_cents: 0,
+    open_cents: -4993381, candidates: [brLine("p1", "2026-07-02", "Payshap Solid Cape", 4993381)] }],
+  staff_claims: [{ id: "claim-1", date: "2026-10-12", description: "Fuel for site visit", amount_cents: 400000, status: "submitted",
+    paid_by_name: "Judy", paid_with: "personal", reimbursable: true }],
+  drafts: [{ id: "draft-1", invoice_number: "DIG-BILL-00139", direction: "inbound", supplier: "PUDLO S.A", issue_date: "2026-10-15",
+    total_cents: 1422845, status: "draft", doc_type: "invoice" }],
+  odd_dates: [{ kind: "expense", id: "exp-old", date: "2015-10-26", what: "Expense: tax invoice from Pudlo S.A" }],
+  no_account: 0,
+  // the documents behind the money (19 Nov 2026, doc_audit.worklist)
+  documents: {
+    pops: [
+      { id: "pop-1", amount_cents: 840000, date: "2026-09-25", payee: "R Engelbrecht", payer: "Our business", reference: "SKIPS",
+        filename: "POP 25 Sep.pdf", account: "…1576", supplier: { id: "s-skip", name: "Belekkie Skips", how: "the account paid into" },
+        options: [{ cents: 840000, bills: [
+          { id: "bill-a", number: "DIG-BILL-00196", supplier: "Belekkie Skips", date: "2026-09-10", cents: 560000, status: "draft", already_paid: false },
+          { id: "bill-b", number: "DIG-BILL-00197", supplier: "Belekkie Skips", date: "2026-09-12", cents: 280000, status: "paid", already_paid: true }] }] },
+      { id: "pop-2", amount_cents: 405000, date: "2026-07-24", payee: "E Mahlangu", payer: "Our business", reference: "22 PORTER",
+        filename: "POP 24 Jul.pdf", account: null, supplier: null, options: [] }],
+    supplier_statements: [{
+      supplier: "Glass Co Pty Ltd", supplier_id: "sup-glass", balance_cents: 3683207, owed_in_books_cents: 0, draft_bills_cents: 0,
+      difference_cents: 3683207, missing_cents: 15300000,
+      statements: [{ doc_id: "st-1", account_name: "DIGG", balance_cents: 1888384 }, { doc_id: "st-2", account_name: "Aweh Be Lekker", balance_cents: 1794823 }],
+      open_invoices: [{ number: "INV-1615", open_cents: 1168599 }, { number: "INV-1881", open_cents: 789017 }],
+      missing: [{ number: "INV-0653", date: "2026-04-16", cents: 247314 }, { number: "INV-1615", date: "2026-09-17", cents: 1168599 }],
+      payments: [{ date: "2026-04-16", cents: 247314, line: null, gaps: ["FNB …4607"] }],
+      payments_not_found: [{ date: "2026-04-16", cents: 247314, line: null, gaps: ["FNB …4607"] }],
+      invoices: [], request: "Hi Glass Co Pty Ltd, could you please send us copies of these invoices: INV-0653, INV-1615. Thank you." }],
+    certificates: {
+      certificates: [
+        { doc_id: "pc2", filename: "Payment Certificate No. 2.pdf", labelled: false, category: "Invoice", number: 2,
+          amount_cents: 24966844, date: "2026-07-01", invoice: { kind: "document", id: "doc-hpc02", number: "DIGG-2026-HPC02", in_invoices: false },
+          received: { id: "r2", date: "2026-07-03", cents: 24966844, description: "Magtape Credit Hpc-PC2 Digg" } },
+        { doc_id: "pc15", filename: "Payment Certificate No. 15.pdf", labelled: true, category: "Payment Certificate", number: 15,
+          amount_cents: 2226456, date: "2026-11-12", invoice: null, received: null }],
+      unmatched_receipts: [{ number: 5, id: "r5", date: "2026-07-24", cents: 38729760, description: "Magtape Credit Hpc-PC5", invoice: null }],
+    },
+    sales_not_in_invoices: [
+      { id: "doc-hpc02", category: "Invoice", filename: "DIGG_Invoice_HPC_PC No2.pdf", supplier: "AwehBelekker (Pty) Ltd t/a DIGG",
+        number: "DIGG-2026-HPC02", date: "2026-07-01", total_cents: 24966844, customer: "Oro Props (Pty) Ltd", in_invoices_as: [],
+        receipts: [{ id: "r2", date: "2026-07-03", amount_cents: 24966844, direction: "in", description: "Magtape Credit Hpc-PC2 Digg" }],
+        text: "Invoice from AwehBelekker (Pty) Ltd t/a DIGG DIGG-2026-HPC02 is the business's own invoice, on file but not in Invoices." },
+      { id: "doc-hpc14", category: "Invoice", filename: "DIGG 2026 HPC14.pdf", supplier: "AwehBelekker (Pty) Ltd t/a DIGG",
+        number: "DIGG-2026-HPC14", date: "2026-10-07", total_cents: 4902539, customer: "Cape Town High Performance Centre",
+        in_invoices_as: [], receipts: [], differs: { id: "b108", number: "DIG-BILL-00108", cents: 5637919, status: "draft" },
+        text: "Invoice DIGG-2026-HPC14 says R49,025.39, but it's in Invoices as DIG-BILL-00108 at R56,379.19 — 15% VAT added. Correct the invoice in Invoices to match." }],
+    doc_figures: [
+      { id: "doc-bb55", category: "Invoice", filename: "BB-55.pdf", supplier: "Build It Bellville", number: "BB-55", date: "2026-07-08",
+        total_cents: 250000, vat_cents: null, subtotal_cents: null, project: "Bokaap", bill_id: "bill-bb55", problems: ["not_in_file"],
+        severity: "problem", text: "Invoice from Build It Bellville BB-55 (2026-07-08): The total read as R2,500.00 isn't in the document itself." },
+      { id: "doc-sph", category: "Invoice", filename: "113631.jpg", supplier: "Sea Point Hire", number: "113631", date: "2026-07-08",
+        total_cents: 200000, vat_cents: 30000, subtotal_cents: 200000, project: "Bokaap", bill_id: null, problems: ["totals"],
+        severity: "attention", text: "Invoice from Sea Point Hire 113631 (2026-07-08): Subtotal R2,000.00 + VAT R300.00 doesn't make the total R2,000.00." }],
+    not_booked: [{ id: "doc-ste", category: "Invoice", filename: "STE00866.pdf", supplier: "STE Scaffolding", number: "STE00866",
+      date: "2026-07-01", total_cents: 80000, project: "Bokaap", bill_id: null,
+      text: "Invoice from STE Scaffolding STE00866 (2026-07-01) for R800.00 is on file but not in the books." },
+      { id: "doc-teck", category: "Invoice", filename: "51934.pdf", supplier: "Teck Flooring Pty Ltd", number: "51934",
+        date: "2026-07-15", total_cents: 27843245, project: null, bill_id: null, customer: "Enziglo (Pty) Ltd", addressed_to_other: true,
+        text: "Invoice from Teck Flooring Pty Ltd 51934 (2026-07-15) for R278,432.45 is on file but not in the books. It's addressed to Enziglo (Pty) Ltd, not the business — book it only if the business paid it." }],
+    our_invoices: [{ id: "doc-own", category: "Invoice", filename: "DIGG-2026-HPC02.pdf", supplier: "AwehBelekker (Pty) Ltd t/a DIGG",
+      number: "DIGG-2026-HPC02", date: "2026-07-01", total_cents: 24966844, customer: "Vizion Developments", bill_id: null,
+      text: "Invoice from AwehBelekker (Pty) Ltd t/a DIGG DIGG-2026-HPC02 (2026-07-01) for R249,668.44 is the business's own invoice to Vizion Developments — a sale, not a bill. Check it's in Invoices; it is never booked as a cost here." }],
+    bill_mismatch: [{ kind: "bill_amount", text: "Bill BB-55 from Build It: Booked at R2,500.00, the document says R2,300.00.",
+      bill: { id: "bill-bb55", number: "BB-55", supplier: "Build It", date: "2026-07-08", status: "sent", total_cents: 250000, paid_cents: 0 },
+      doc: { id: "doc-bb55", category: "Invoice" } }],
+    doc_duplicates: [{ keep: "doc-q1", text: "Invoice from Solid Cape INV-7001 (2026-07-08) for R1,150.00 is on file 2 times.",
+      docs: [{ id: "doc-q1", category: "Invoice", supplier: "Solid Cape", number: "INV-7001", date: "2026-07-08", total_cents: 115000 },
+        { id: "doc-q2", category: "Invoice", supplier: "Solid Cape", number: "INV-7001", date: "2026-07-08", total_cents: 115000 }] }],
+    bill_duplicates: [{ keep: "bill-hpc1", extra_cents: 640000,
+      text: "Bill HPC-9 from HPC Doors for R6,400.00 is in the books 2 times — a cost counted 2 times.",
+      bills: [{ id: "bill-hpc1", number: "HPC-9", supplier: "HPC Doors", date: "2026-07-08", status: "paid", total_cents: 640000, paid_cents: 640000 },
+        { id: "bill-hpc2", number: "HPC-9", supplier: "HPC Doors", date: "2026-07-20", status: "sent", total_cents: 640000, paid_cents: 0 }] }],
+    suppliers: [
+      { kind: "supplier_duplicate", keep: "sup-1", rows: ["sup-1", "sup-2"], why: ["tax_id"], text: "One supplier on file as Solid Cape (Pty) Ltd / SOLID CAPE.",
+        suppliers: [{ id: "sup-1", name: "Solid Cape (Pty) Ltd", tax_id: "4123456789" }, { id: "sup-2", name: "SOLID CAPE", tax_id: "4123456789" }] },
+      { kind: "vat_number_invalid", rows: ["sup-3"], text: "Gardens Handiman's VAT number 12345 isn't a valid South African one (10 digits starting with 4).",
+        supplier: { id: "sup-3", name: "Gardens Handiman", tax_id: "12345" } }],
+    price_vat: { count: 476, by_kind: { quote: 196, boq: 146, invoice: 134 }, documents: 40,
+      text: "476 learned prices from 40 documents don't say whether VAT was in them (196 from quotes, 146 from boqs, 134 from invoices) — estimates mark them; say per document.",
+      docs: [{ id: "doc-pudlo", category: "Quote / Estimate", filename: "Pudlo quote.pdf", supplier: "PUDLO S.A", date: "2026-10-15" }] },
+    access: { logins: { owner: 2, staff: 2 }, people: [
+      { name: "Judy", role: "owner", active: true, full: true, why: "owner or manager", expires_on: null },
+      { name: "Richard", role: "staff", active: true, full: true, why: "no sections chosen, so everything", expires_on: null },
+      { name: "Ann", role: "accountant", active: true, full: false, why: null, expires_on: "2027-03-31" }] },
+  },
+};
+export const booksStatementChecks = [{ id: "chk-1", filename: "FNB official Sep.pdf", account: "…5678", bank: "FNB",
+  period_from: "2026-09-01", period_to: "2026-09-30", summary: { already_right: 40 }, status: "proposed", created_at: "2026-11-18T09:10:00Z" }];
+export const booksStatementCheck = { ...booksStatementChecks[0], actions: [
+  { id: "a1", kind: "restore", row_id: "r1", cents: 28500, reason: "on the statement; set aside by mistake" },
+  { id: "a2", kind: "add", reason: "on the statement, not in Vula", line: { date: "2026-09-25", description: "POS Purchase Build It City", amount_cents: 99050, direction: "out" } },
+  { id: "a3", kind: "review", row_id: "r6", cents: 7000, reason: "not on the statement, but tied to a worker" },
+] };
+
+// ── Documents › For your accountant + named bank accounts (19 Nov 2026) ──────────────────────────
+const ffUrl = (n) => `https://x.supabase.co/storage/v1/object/sign/documents/demo/${n}.pdf?token=t`;
+export const financeFolders = {
+  from: "2026-03-01", to: "2027-02-28",
+  coverage: {
+    from: "2026-03-01", to: "2026-10-17", lines_on_no_account: 12,
+    accounts: [
+      { id: "ba-1", account: "Business cheque …7663", missing: ["2026-07", "2026-10"],
+        months: [{ month: "2026-09", statement: true, official: true, lines: 41 }] },
+      { id: "ba-2", account: "FNB …4607", missing: [], months: [] },
+    ],
+  },
+  folders: [
+    { key: "company", title: "00 Company and tax", count: 1, groups: [
+      { name: "SARS and tax", count: 1, items: [
+        { id: "co-1", date: "2025-05-02", label: "SARS notice of registration for VAT", category: "Tax / SARS",
+          amount_cents: null, filename: "VAT registration.pdf", file_url: ffUrl("co-1"), official: null }] }] },
+    { key: "bank", title: "01 Bank statements", count: 2, groups: [
+      { name: "Business cheque …7663", count: 2, items: [
+        { id: "st-1", date: "2026-08-31", label: "FNB statement …7663, 1 Aug 2026 to 31 Aug 2026", category: "Bank Statement",
+          amount_cents: null, filename: "…7663_Aug.pdf", file_url: ffUrl("st-1"), official: false },
+        { id: "st-2", date: "2026-09-30", label: "FNB statement …7663, 1 Sep 2026 to 30 Sep 2026", category: "Bank Statement",
+          amount_cents: null, filename: "FNB Sep.pdf", file_url: ffUrl("st-2"), official: true }] }] },
+    { key: "sales", title: "02 Sales invoices and credit notes", count: 1, groups: [
+      { name: "2026-09 September", count: 1, items: [
+        { id: "si-1", date: "2026-09-12", label: "INV-0041", category: "Invoice", amount_cents: 864_200, filename: "INV-0041.pdf",
+          file_url: ffUrl("si-1"), official: null }] }] },
+    { key: "bills", title: "03 Supplier invoices and delivery notes", count: 2, groups: [
+      { name: "Atlantic Dairy Co-op", count: 2, items: [
+        { id: "b-1", date: "2026-09-03", label: "Atlantic Dairy Co-op BILL-0031", category: "Invoice", amount_cents: 864_200,
+          filename: "Atlantic-Dairy-invoice-BILL-0031.pdf", file_url: ffUrl("b-1"), official: null },
+        { id: "b-2", date: "2026-09-20", label: "Atlantic Dairy Co-op BILL-0034", category: "Invoice", amount_cents: 412_850,
+          filename: "BILL-0034.pdf", file_url: ffUrl("b-2"), official: null }] }] },
+    { key: "pops", title: "04 Proofs of payment", count: 0, groups: [] },
+    { key: "settlements", title: "05 Card machine and payment settlements", count: 0, groups: [] },
+    { key: "statements", title: "06 Statements from suppliers and customers", count: 0, groups: [] },
+    { key: "legal", title: "07 Contracts, insurance and legal", count: 0, groups: [] },
+  ],
+};
+export const companyDocProposals = [
+  { id: "cp-1", filename: "CRA01 - Harbour & Vine.pdf", category: "General Document", to: "Tax / SARS", to_name: "SARS and tax",
+    ours: true, summary: "A SARS CRA01 confirmation of business address", date: "2026-03-04" },
+  { id: "cp-2", filename: "Bank confirmation letter.pdf", category: "Correspondence", to: "Compliance Certificate",
+    to_name: "Compliance (B-BBEE, COIDA, UIF, FICA)", ours: false, summary: "A bank confirmation letter for a supplier", date: "2026-05-01" }];
+export const bankAccountsList = [
+  { id: "ba-1", account: "…7663", bank: "FNB", name: "Business cheque", holder: null, project: null, lines: 146 },
+  { id: "ba-2", account: "…4607", bank: "FNB", name: null, holder: null, project: null, lines: 493 },
+];
+
+// ── The accountant's login (19 Nov 2026) ──────────────────────────────────────────────────────────
+// what the invite returns to show once (a made-up demo value, not a credential)
+export const DEMO_ONE_TIME = ["demo", "one", "time"].join("-");
+export const accountantClients = [{ tenant_id: TENANT_ID, name: "Harbour & Vine" }, { tenant_id: "atlas-build", name: "Atlas Build" }];
+export const financeFoldersForAccountant = () => {
+  const t = JSON.parse(JSON.stringify(financeFolders));
+  t.folders.forEach((f) => f.groups.forEach((g) => g.items.forEach((it) => { it.file_url = null; it.open = true; })));
+  return t;
+};
+export const booksAuditLatest = { id: "audit-1", created_at: "2026-11-18T09:00:00Z", agreed_by: "owner@harbourvine.example.test",
+  agreed_at: "2026-11-18T15:00:00Z", agreed_note: "Two drafts from Atlantic Dairy are being checked with the supplier.", signed_off_by: null };
+export const accountantsList = [
+  { id: "acc-1", name: "Lerato Ledgerline", email: "books@ledgerline.example.test", active: true, expires_on: "2027-02-28",
+    last_seen: "2026-11-18T10:12:00Z", created_at: "2026-11-10T08:00:00Z" },
+];
+export const accountantActivity = [
+  { id: 1, created_at: "2026-11-18T10:12:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_downloaded",
+    detail: { page: "reports/ledger.csv", what: "General ledger (CSV)" } },
+  { id: 2, created_at: "2026-11-18T10:05:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_opened",
+    detail: { page: "filed/:id/open", what: "A document", document: "FNB …7663 Sep.pdf" } },
+  { id: 3, created_at: "2026-11-18T10:01:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_viewed",
+    detail: { page: "reports/pnl", what: "Profit and loss" } },
+];

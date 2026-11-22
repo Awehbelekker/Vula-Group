@@ -129,7 +129,7 @@ async def test_handle_client_answer_yes_confirms_proposed_invoice():
         reply = await handle_client_answer("off-the-hook", "yes")
     assert "OTH-0042" in reply
     assert "marked paid" in reply
-    mock_update.assert_awaited_once_with("off-the-hook", "inv1", "paid")
+    mock_update.assert_awaited_once_with("off-the-hook", "inv1", "paid", paid_at="2026-08-15")
 
 
 @pytest.mark.asyncio
@@ -230,7 +230,7 @@ async def test_a_reply_goes_to_the_more_recently_asked_supplier_bill_question():
         from vula.commerce.bank_review import handle_client_answer
         reply = await handle_client_answer("off-the-hook", "yes")
     assert "BILL-0007" in reply
-    mock_update.assert_awaited_once_with("off-the-hook", "bill-1", "paid")
+    mock_update.assert_awaited_once_with("off-the-hook", "bill-1", "paid", paid_at=None)
     mock_order.assert_not_awaited()
 
 

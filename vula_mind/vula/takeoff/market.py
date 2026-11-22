@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -62,6 +63,30 @@ def _shape(row: Dict[str, Any], kind: str, refreshed: bool) -> Dict[str, Any]:
     }
 
 
+# 17 Nov 2026 audit: how many web searches one request may still make (None = no limit). An
+# estimate sets it (vula/commerce/estimate.py) so 300 lines can't mean 300 paid searches.
+_web_left: ContextVar[Optional[List[int]]] = ContextVar("market_web_left", default=None)
+
+
+def limit_web(n: int):
+    """Allow at most n price searches in this request; returns the token for reset_web."""
+    return _web_left.set([max(0, int(n))])
+
+
+def reset_web(token) -> None:
+    _web_left.reset(token)
+
+
+def _take_web() -> bool:
+    left = _web_left.get()
+    if left is None:
+        return True
+    if left[0] <= 0:
+        return False
+    left[0] -= 1
+    return True
+
+
 def lookup(description: str, unit: Optional[str] = None, kind: str = "material",
            db: Any = None) -> Optional[Dict[str, Any]]:
     """The newest checked price whose label has every word of `description` (and the unit, when
@@ -86,6 +111,10 @@ async def research_price(description: str, unit: Optional[str] = None, db: Any =
     are ever in the search — only the material."""
     from vula import research
     from vula.takeoff.construction_rates_scraper import RateExtractor, RatesDatabase
+    from vula.takeoff.market_checks import band_for
+    if not _take_web():
+        log.info("market price research skipped: this request's searches are used up")
+        return 0
     db = db or RatesDatabase()
     item = " ".join(_words(description)) or description
     queries = [f"{item} price South Africa", f"buy {item} South Africa"]
@@ -99,9 +128,17 @@ async def research_price(description: str, unit: Optional[str] = None, db: Any =
                   + (f" (sold per {unit})" if unit else "") + ".")
         cat = await extractor._extract_one(page.get("url") or "", supplier, prompt, page.get("text") or "")
         for rate in cat.rates:
-            if rate.checked:
-                db.upsert(rate)
-                saved += 1
+            if not rate.checked:
+                continue
+            # 17 Nov 2026 audit: these prices are shared by every business, and any page can rank
+            # in a search. Keep one only where Vula knows what's plausible for it (a family with a
+            # band for its unit), and under its own site, so a page can't replace a known
+            # supplier's price.
+            if band_for(getattr(rate, "family", "") or None, rate.unit) is None:
+                continue
+            rate.key = f"{str(rate.key)[:40]}@{supplier}"[:120]
+            db.upsert(rate)
+            saved += 1
     log.info("market price research for %r: %d page(s) read, %d checked price(s) saved",
              item, len(pages), saved)
     return saved

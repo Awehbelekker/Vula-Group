@@ -85,6 +85,7 @@ from vula.api.chat import router as chat_router
 from vula.api.field_ops import router as field_ops_router
 from vula.api.clickup import router as clickup_router
 from vula.api.documents import router as documents_router
+from vula.api.accountant import router as accountant_router
 from vula.api.projects import router as projects_router
 from vula.api.team import router as team_router
 from vula.api.payments import router as payments_router
@@ -1602,6 +1603,47 @@ async def _local_llm_watch_loop() -> None:
     await run_forever()
 
 
+async def _price_vat_backfill_on_boot() -> None:
+    """Once after boot: fill in whether VAT was included on prices learned before migration 284
+    (16 Nov 2026), from each document's own figures. Idempotent — only rows still 'unknown'."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(180)
+    try:
+        from vula.commerce.price_book import backfill_vat_basis
+        await _asyncio.to_thread(backfill_vat_basis)
+    except Exception as exc:
+        log.warning("price VAT basis backfill failed: %s", exc)
+
+
+async def _answer_checks_loop() -> None:
+    """After each deploy (and weekly): real questions to real businesses whose right answer is in
+    their own records, checked in code (16 Nov 2026). See evals/answer_checks.py."""
+    from evals.answer_checks import run_forever
+    await run_forever()
+
+
+async def _ai_health_loop() -> None:
+    """Every 6 h: each cloud model answers under zero retention and web search finds results
+    (16 Nov 2026 — a dead Gemini and an empty DuckDuckGo went unnoticed for days). See
+    vula/ai_health.py."""
+    from vula.ai_health import run_forever
+    await run_forever()
+
+
+async def _books_health_loop() -> None:
+    """Hourly: failed postings tried again; daily: every business on the one trusted book checked
+    (balanced, complete, bank reconciled, debtors/creditors tied) — loudly. See vula/books_health.py."""
+    from vula.books_health import run_forever
+    await run_forever()
+
+
+async def _statement_backfill_loop() -> None:
+    """Every ten minutes: a business that asked for it (features.statement_backfill) gets the bank
+    statements behind its lines filed under their accounts, once. See vula/commerce/statement_files.py."""
+    from vula.commerce.statement_files import run_forever
+    await run_forever()
+
+
 async def _qdrant_migrate_loop() -> None:
     """Copy the knowledge base to a new Qdrant cluster when QDRANT_MIGRATE_TO_BASE is set
     (2026-11-13, moving it to the EU). See vula/integrations/qdrant_migrate.py."""
@@ -1781,6 +1823,15 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Local Ollama tunnel down → WhatsApp the platform operator (2026-10-19).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_llm_watch_loop()))
+    # Cloud models + web search answering, loudly when not (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_ai_health_loop()))
+    # The one trusted book: retries hourly, checks daily (2026-11-18).
+    _scheduled_job_tasks.append(_asyncio.create_task(_books_health_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_statement_backfill_loop()))
+    # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
+    # Right answers from each business's own records, after every deploy (2026-11-16).
+    _scheduled_job_tasks.append(_asyncio.create_task(_answer_checks_loop()))
     # Missing local models (LOCAL_MODELS_ENSURE) → Ollama downloads them (2026-11-12).
     _scheduled_job_tasks.append(_asyncio.create_task(_local_models_loop()))
     # Knowledge base → new Qdrant cluster, once per boot while QDRANT_MIGRATE_TO_BASE is set.
@@ -1935,6 +1986,12 @@ import time as _time
 _request_stats: dict = {"total": 0, "errors": 0, "latencies_ms": []}
 
 
+_SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
 @app.middleware("http")
 async def request_middleware(request: Request, call_next):
     """Structured request logging with correlation ID, timing, and error tracking."""
@@ -1968,6 +2025,11 @@ async def request_middleware(request: Request, call_next):
 
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Latency-Ms"] = str(latency_ms)
+    # 18 Nov 2026 (pre-launch audit, "HSTS not set explicitly"): browsers keep to HTTPS for this
+    # host for a year and never guess a response's type. No frame rule here: some API pages are
+    # shown inside the storefronts.
+    for k, v in _SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
     return response
 
 
@@ -2047,6 +2109,15 @@ _SECTION_RULES = [
     # 2026-11-10: showing a document on a client link although it names another project — what the
     # client sees: owner and managers only (vula/commerce/project_share_docs.other_projects)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/documents/[^/]+/client-link/?$"), frozenset()),
+    # 2026-11-16: emailing a project's client from the business's mailbox, and the record of what was
+    # sent — speaks for the business: owner and managers only (vula/commerce/project_emails.py)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/projects/client-emails/?$"), frozenset()),
+    # 17 Nov 2026 audit: costing by trade prices an estimate from what the business paid its
+    # suppliers and workers — Money access or the Costing by trade tab; what a job actually cost,
+    # line by line (supplier, unit price, pay rates), owner and managers only, like compare_estimate.
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:estimates|buildup-suggestions)(?:/|$)"),
+     _MONEY_TABS | {"tradecosting"}),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/estimates/[^/]+/(?:actuals|learn)/?$"), frozenset()),
     # 2026-11-05: what the business buys, its limits and approvers — Money access (vula/api/buying_api.py)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/buying(?:/|$)"), _MONEY_TABS),
     # 2026-11-05: moving the books from Xero — the whole ledger, Money access (vula/api/xero.py)
@@ -2057,6 +2128,61 @@ _SECTION_RULES = [
     ({"POST", "PUT", "PATCH", "DELETE"},
      re.compile(r"^/v1/team/[^/]+(?!/notices/[^/]+/ack/?$)(?:/|$)"), frozenset()),
 ]
+
+# 19 Nov 2026 — the accountant's login (vula/api/tenant_auth.py ACCOUNTANT): deny by default. On a
+# business it is the accountant for, a login may only READ these (tenant in group 1); anything else
+# — every write, the inbox, customers, products, the team, settings — is refused before any other
+# rule. Every allowed read is put on the business's record (vula/accountant_activity.py).
+_ACCOUNTANT_READS = [re.compile(p) for p in (
+    r"^/v1/commerce/([^/]+)/admin/reports/[^/]+/?$",
+    r"^/v1/commerce/([^/]+)/admin/accounts/?$",
+    r"^/v1/commerce/([^/]+)/admin/bank/(?:transactions|transactions\.csv|reconciliation|accounts)/?$",
+    r"^/v1/commerce/([^/]+)/admin/invoices/?$",
+    r"^/v1/commerce/([^/]+)/admin/invoices/[^/]+/pdf/?$",
+    r"^/v1/commerce/([^/]+)/admin/expenses/?$",
+    r"^/v1/commerce/([^/]+)/admin/finances/insights/?$",
+    r"^/v1/commerce/([^/]+)/admin/finance-folders(?:\.zip)?/?$",
+    r"^/v1/commerce/([^/]+)/admin/bank-statements/coverage/?$",
+    r"^/v1/commerce/([^/]+)/admin/books-audit/(?:latest|review)/?$",
+    r"^/v1/documents/([^/]+)/filed/?$",
+    r"^/v1/documents/([^/]+)/filed/[^/]+/open/?$",
+    r"^/v1/team/([^/]+)/me/?$",
+    r"^/v1/tenants/([^/]+)/?$",
+    r"^/v1/commerce/([^/]+)/brand/?$",          # the business's name, logo and colours (public anyway)
+)]
+# What an accountant-only login may call that names no business.
+_ACCOUNTANT_GLOBAL = [re.compile(p) for p in (r"^/v1/accountant/clients/?$", r"^/v1/auth/", r"^/status/?$")]
+_ANY_TENANT = re.compile(r"^/v1/(?:commerce|documents|team|users|tenants|payments|bookings|tap|subscriptions|"
+                         r"recurring-bills|projects|connections|qs/rates|field/[^/]+|email/[^/]+|clickup/[^/]+|"
+                         r"whatsapp/[^/]+|push|yoco/[^/]+|google|microsoft|dynamics365|chat|conversations|me)/"
+                         r"([^/]+)")
+
+
+async def _accountant_check(method: str, path: str, auth_header: str, query: str = ""):
+    """None when the caller isn't an accountant here or may read this; else the 403 to return."""
+    from fastapi.responses import JSONResponse
+    from vula.api.tenant_auth import accountant_login
+    acc = await accountant_login(auth_header)
+    if not acc:
+        return None
+    refused = JSONResponse({"detail": "An accountant's login can view the books, but not change "
+                                      "anything or open this part of the workspace."}, status_code=403)
+    for rx in _ACCOUNTANT_READS:
+        m = rx.match(path)
+        if m and m.group(1) in acc["tenants"]:
+            if method not in ("GET", "HEAD"):
+                return refused
+            if not path.rstrip("/").endswith("/open"):        # the open route records which document
+                from vula import accountant_activity
+                accountant_activity.record(m.group(1), acc, path, query)
+            return None
+    named = _ANY_TENANT.match(path)
+    if named and named.group(1) in acc["tenants"]:
+        return refused                      # a business it's the accountant for: only the reads above
+    if acc["only"] and not (method in ("GET", "HEAD") and any(rx.match(path) for rx in _ACCOUNTANT_GLOBAL)):
+        return refused                      # an accountant-only login: nothing else anywhere
+    return None
+
 
 # Cross-tenant listings / platform-wide actions: master only.
 _MASTER_ONLY = [
@@ -2103,18 +2229,22 @@ async def tenant_admin_guard(request, call_next):
     if settings.enforce_tenant_auth and request.method != "OPTIONS":
         path = request.url.path
         blocked = await _guard_check(request.method, path, request.headers.get("authorization", ""),
-                                     request.headers.get("x-api-key", ""))
+                                     request.headers.get("x-api-key", ""), request.url.query)
         if blocked is not None:
             return blocked
     return await call_next(request)
 
 
-async def _guard_check(method: str, path: str, auth_header: str, api_key: str = ""):
+async def _guard_check(method: str, path: str, auth_header: str, api_key: str = "", query: str = ""):
     """None when the request may proceed, else the 401/403 JSONResponse to return. The shared
     server API key (X-API-Key — n8n / server-to-server jobs, same as require_auth) passes."""
     from fastapi.responses import JSONResponse
     if api_key and settings.api_key and hmac.compare_digest(api_key, settings.api_key):
         return None
+    if auth_header:
+        refused = await _accountant_check(method, path, auth_header, query)
+        if refused is not None:
+            return refused
     for m_, rx in _MASTER_ONLY:
         if method == m_ and rx.match(path):
             if not auth_header:
@@ -2168,6 +2298,7 @@ app.include_router(chat_router, prefix="/v1")
 app.include_router(field_ops_router, prefix="/v1/field", dependencies=[Depends(require_auth)])
 app.include_router(clickup_router, prefix="/v1/clickup")
 app.include_router(documents_router, prefix="/v1/documents")
+app.include_router(accountant_router, prefix="/v1/accountant")   # an accountant's clients
 app.include_router(projects_router, prefix="/v1/projects")
 from vula.api.staff_notices import router as staff_notices_router  # noqa: E402
 app.include_router(staff_notices_router, prefix="/v1/team")   # before team's /{tenant}/{member_id}
@@ -2195,6 +2326,9 @@ app.include_router(me_router, prefix="/v1/commerce")
 from vula.api.trade_costing import router as trade_costing_router  # noqa: E402
 # Build-ups for costing by trade — /v1/commerce/{tenant}/admin/buildups… (same tenant guard).
 app.include_router(trade_costing_router, prefix="/v1/commerce")
+from vula.api.books_audit import router as books_audit_router  # noqa: E402
+# The books audit and official-statement checks — /v1/commerce/{tenant}/admin/books-audit… (owner/manager).
+app.include_router(books_audit_router, prefix="/v1/commerce")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
@@ -2348,7 +2482,7 @@ class ScrapeRequest(BaseModel):
 # ─── Document Ingestion ───────────────────────────────────────────────────────
 
 async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type: Optional[str],
-                                   project: Optional[str] = None) -> None:
+                                   project: Optional[str] = None, category_hint: Optional[str] = None) -> None:
     """Bring the dashboard upload dropzone up to the same standard as the email/WhatsApp
     intake channels: classify, extract structured fields, match a project, and — for a
     financial category — commit it into the books via the shared commit_inbound_document
@@ -2359,9 +2493,14 @@ async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type:
         analysis = await _analyze_document(tenant_id, result.filename, file_path)
         if not analysis:
             return
+        category = analysis["category"]
+        # uploaded under "Company and tax" (20 Nov 2026): filed there unless it's plainly a money document
+        from vula.commerce.company_docs import CATEGORIES as _COMPANY, LOOSE as _LOOSE
+        if category_hint in _COMPANY and (category in _LOOSE or category in _COMPANY):
+            category = category if category in _COMPANY else category_hint
         await _file_uploaded_document(
             tenant_id, "dashboard", result, file_path, mime_type,
-            analysis["category"], analysis.get("summary", ""), analysis.get("fields", {}),
+            category, analysis.get("summary", ""), analysis.get("fields", {}),
             source="dashboard", project=project,
         )
     except Exception as exc:
@@ -2377,6 +2516,7 @@ async def ingest_document(
     file: UploadFile = File(...),
     project: Optional[str] = Form(None),
     audience: Optional[str] = Form(None),
+    category_hint: Optional[str] = Form(None),
 ):
     """Upload a document and ingest it into the tenant knowledge base (async). `project`: sent
     from a project's page — the document is filed straight under that project. `audience`
@@ -2400,7 +2540,8 @@ async def ingest_document(
         result = await pipeline.ingest_file(file_path, audience=audience)
         log.info("Ingestion complete: %s → %d chunks (%s)", result.filename, result.chunks_stored, result.status)
         if result.status in ("success", "done"):
-            await _analyze_and_file_upload(tenant_id, result, file_path, mime_type, project=project)
+            await _analyze_and_file_upload(tenant_id, result, file_path, mime_type, project=project,
+                                           category_hint=category_hint)
 
     background_tasks.add_task(_ingest)
 

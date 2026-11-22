@@ -69,7 +69,8 @@ def _image_mime(content: bytes) -> str:
     return "image/jpeg"
 
 
-async def _upload_media_handle(url: str, token: str) -> tuple[Optional[str], Optional[str]]:
+async def _upload_media_handle(url: str, token: str,
+                               content: Optional[bytes] = None) -> tuple[Optional[str], Optional[str]]:
     """Meta's resumable Upload API: download the sample media, upload it to Meta, return the
     'handle' a template's HEADER example needs. Sending a real template message later takes a
     plain image URL directly — this handle is ONLY required at template-creation time, for the
@@ -80,8 +81,9 @@ async def _upload_media_handle(url: str, token: str) -> tuple[Optional[str], Opt
         return None, "VULA_FB_APP_ID is not configured on the server."
     try:
         # The sample image URL is the business's, so the safe fetch (9 Nov 2026 audit H1).
-        from vula.commerce.reference_url import safe_fetch_bytes
-        content = await safe_fetch_bytes(url, max_bytes=16 * 1024 * 1024, timeout=30.0)
+        if content is None:
+            from vula.commerce.reference_url import safe_fetch_bytes
+            content = await safe_fetch_bytes(url, max_bytes=16 * 1024 * 1024, timeout=30.0)
         mime = _image_mime(content)
         async with httpx.AsyncClient(timeout=30.0) as client:
 
@@ -134,7 +136,7 @@ async def create_template(
     category: str = "UTILITY", language: str = "en",
     example_params: Optional[List[str]] = None, created_by: Optional[str] = None,
     header_type: Optional[str] = None, header_example_url: Optional[str] = None,
-    buttons: Optional[List[dict]] = None,
+    buttons: Optional[List[dict]] = None, header_example_bytes: Optional[bytes] = None,
 ) -> Dict[str, Any]:
     """Submit a new template to Meta for review, and record it locally for tenant grouping.
     `name` must be unique per WABA (Meta convention: lowercase_snake_case). Returns Meta's
@@ -157,8 +159,9 @@ async def create_template(
 
     components: List[dict] = []
 
-    if header_type and header_example_url:
-        handle, upload_err = await _upload_media_handle(header_example_url, creds["token"])
+    if header_type and (header_example_url or header_example_bytes):
+        handle, upload_err = await _upload_media_handle(header_example_url or "", creds["token"],
+                                                        content=header_example_bytes)
         if not handle:
             return {"error": upload_err or "Could not upload the header sample image."}
         components.append({"type": "HEADER", "format": header_type.upper(),
@@ -633,4 +636,27 @@ async def submit_standard(tenant_id: str) -> Dict[str, Any]:
                                             buttons=promo["buttons"], created_by="standard set")
                 (failed.append({"name": promo["name"], "error": res["error"]}) if res.get("error")
                  else submitted.append(promo["name"]))
+    # A filed document sent outside the 24-hour window (vula/commerce/doc_send.py, 20 Nov 2026):
+    # shared across the WhatsApp account like vula_notification, with a DOCUMENT header.
+    from vula.commerce import doc_send
+    if doc_send.TEMPLATE in existing:
+        already.append(doc_send.TEMPLATE)
+    else:
+        res = await create_template(tenant_id, doc_send.TEMPLATE, doc_send.TEMPLATE_BODY, category="UTILITY",
+                                    example_params=doc_send.TEMPLATE_EXAMPLE, header_type="DOCUMENT",
+                                    header_example_bytes=sample_document_pdf(), created_by="standard set")
+        (failed.append({"name": doc_send.TEMPLATE, "error": res["error"]}) if res.get("error")
+         else submitted.append(doc_send.TEMPLATE))
     return {"submitted": submitted, "already_there": already, "failed": failed}
+
+
+def sample_document_pdf() -> bytes:
+    """A one-page sample PDF for Meta to review the document template against — no business's data."""
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 96), "Sample document", fontsize=20)
+    page.insert_text((72, 130), "This is an example of a document a business sends with Vula.", fontsize=11)
+    data = doc.tobytes()
+    doc.close()
+    return data

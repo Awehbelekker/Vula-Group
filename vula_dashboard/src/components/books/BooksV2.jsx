@@ -5,19 +5,32 @@
  */
 import { CalendarDays, Download } from "lucide-react";
 import { formatMoney } from "../../lib/money";
-import { Button, Card, Field, Input, PageHeader, StatCard } from "../ui/index.jsx";
+import { Button, Card, Field, Input, PageHeader, PillTabs, StatCard } from "../ui/index.jsx";
 import { useBooks } from "./useBooks";
 import "./books.css";
 
 const money = (c) => formatMoney(c || 0, { cents: "always" });
+const VIEWS = [{ id: "accrual", label: "Accrual" }, { id: "cash", label: "Cash" }];
+const VIEW_SUB = {
+  accrual: "Sales when they're invoiced and costs when the bill is recorded.",
+  cash: "Sales and costs when the money moved.",
+};
 
 export default function BooksV2({ tenantId }) {
   const b = useBooks(tenantId);
   const { pnl, vat } = b;
   return (
     <div className="vbk2">
-      <PageHeader sub="Your books, built from the reconciled bank statement. Export the ledger for your accountant to file."
+      <PageHeader sub={b.fromBooks
+          ? "From your books — every sale, bill, expense and bank line in one journal. Export the ledger for your accountant to file."
+          : "Your books, built from the reconciled bank statement. Export the ledger for your accountant to file."}
         actions={<Button Icon={Download} onClick={b.exportLedger}>Export for accountant (CSV)</Button>} />
+      {b.fromBooks && (
+        <div className="vbk2-view">
+          <PillTabs label="View" tabs={VIEWS} active={b.basis} onChange={b.setBasis} />
+          <p className="vbk2-sub">{VIEW_SUB[b.basis]}</p>
+        </div>
+      )}
       <Card className="vbk2-range">
         <Field label="From"><Input type="date" value={b.since} onChange={(e) => b.setSince(e.target.value)} /></Field>
         <Field label="To"><Input type="date" value={b.until} onChange={(e) => b.setUntil(e.target.value)} /></Field>

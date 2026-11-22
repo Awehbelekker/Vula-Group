@@ -5,6 +5,7 @@ import VulaPrivacy from "./components/VulaPrivacy";
 const VulaPageRender = lazy(() => import("./components/VulaPageRender"));
 const VulaInvoiceApproval = lazy(() => import("./components/VulaInvoiceApproval"));
 const VulaUiKit = lazy(() => import("./components/VulaUiKit")); // #/ui-kit, master only (UX redesign)
+const AccountantWorkspace = lazy(() => import("./components/accountant/AccountantWorkspace")); // an accountant's view-only login (19 Nov 2026)
 const ShareSheet = lazy(() => import("./components/share/ShareSheet")); // #/share, from the phone's Share sheet
 import { useAuthStore } from "./store/auth";
 import { lazyScreen, ScreenSuspense } from "./lib/lazyScreen.jsx";
@@ -33,6 +34,7 @@ import { ArrowLeft, Eye } from "lucide-react";
 import VulaLogo from "./components/brand/VulaLogo.jsx";
 const VulaSubscriptions = lazyScreen(() => import("./components/VulaSubscriptions"));
 const VulaTraining = lazyScreen(() => import("./components/VulaTraining"));
+const TwoStep = lazyScreen(() => import("./components/settings/TwoStep"));
 const VulaFieldOps = lazyScreen(() => import("./components/VulaFieldOps"));
 const VulaDraft = lazyScreen(() => import("./components/VulaDraft"));
 const VulaAgent = lazyScreen(() => import("./components/VulaAgent"));
@@ -93,6 +95,7 @@ const TABS = [
   { id: "docs", label: "Documents", component: VulaDocuments },
   { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
   { id: "training", label: "Training KB", component: VulaTraining },
+  { id: "twostep", label: "Two-step sign-in", component: TwoStep },
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },
   { id: "reports", label: "Reports", component: VulaReports },
@@ -169,11 +172,11 @@ export default function App() {
     const onUnauthorized = async () => {
       if (checking) return;
       checking = true;
-      try { if ((await stillSignedIn()) === false) await expire(); } finally { checking = false; }
+      try { if ((await stillSignedIn(role)) === false) await expire(); } finally { checking = false; }
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
-  }, [user, expire]);
+  }, [user, role, expire]);
 
   // DB-driven tenant switcher: every configured tenant, not a hardcoded pair. Read again when
   // Master creates a business ("vula-tenants-changed", master/useMasterTenants.js): it loaded
@@ -283,7 +286,7 @@ export default function App() {
   // Real Inbox badge (P0.4): count of open escalations waiting on a human — polled per
   // effective tenant, for whichever shell (owner/staff or master-open-as-tenant) is live.
   useEffect(() => {
-    if (!user || role === "master" && activeTab !== "merchant") return;
+    if (!user || role === "accountant" || (role === "master" && activeTab !== "merchant")) return;
     const tid = (role === "master") ? masterTenant : ownTenant;
     if (!tid) return;
     const API = VULA_API;
@@ -364,7 +367,7 @@ export default function App() {
   // Show login if not authenticated
   if (!user) {
     return <VulaLogin onSuccess={() => {}} email={signedOutEmail || ""}
-      notice={signedOutEmail ? "You've been signed out on this phone. Sign in again to carry on." : ""} />;
+      notice={signedOutEmail ? "You've been signed out on this device. Sign in again to carry on." : ""} />;
   }
 
   // #/ui-kit — every shared component on demo data (2026-10-17, UX redesign). Master only: it
@@ -373,6 +376,26 @@ export default function App() {
     return (
       <Suspense fallback={<div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>}>
         <VulaUiKit />
+      </Suspense>
+    );
+  }
+
+  // ── An accountant's login: their own view-only workspace (19 Nov 2026) ─────────
+  // Not the business's menu — the server refuses everything but reading the books for this role
+  // (vula_mind/vula/api/server.py _ACCOUNTANT_READS), and every view is on the business's record.
+  if (role === "accountant") {
+    if (!ownTenant) {
+      return (
+        <div style={{ padding: 32, color: "var(--text)", maxWidth: 480, margin: "10vh auto" }}>
+          <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>No business has given you access yet</h2>
+          <p style={{ fontSize: 14, color: "var(--muted)", lineHeight: 1.5 }}>Ask your client to invite you under Team › Accountant.</p>
+          <button onClick={logout} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>Sign out</button>
+        </div>
+      );
+    }
+    return (
+      <Suspense fallback={<div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>}>
+        <AccountantWorkspace key={ownTenant} tenantId={ownTenant} />
       </Suspense>
     );
   }

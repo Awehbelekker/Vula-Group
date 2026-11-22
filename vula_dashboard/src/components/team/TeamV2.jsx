@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Cake, History, KeyRound, Plus, RotateCcw, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
 import { MERCHANT_GROUPS, withV2Moves } from "../../navConfig.jsx";
 import { Button, Card, EmptyState, Field, Input, PageHeader, SectionTabs, Select, StatusChip } from "../ui/index.jsx";
+import AccountantCard from "./AccountantCard";
 import EmployeesV2 from "./EmployeesV2";
 import NoticesV2 from "./NoticesV2";
 import ActivityV2 from "./ActivityV2";
@@ -255,6 +256,8 @@ function People({ tenantId }) {
           </Card>
         );
       })}
+
+      <AccountantCard tenantId={tenantId} />
 
       {/* ── Audit log (migration 107) ── */}
       <Card className="vtm-block">

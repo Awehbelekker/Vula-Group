@@ -56,9 +56,11 @@ _CITE = re.compile(r"\[(\d{1,2}|D\d{1,2})\]")
 
 
 def clean_query(q: str) -> str:
-    """A search query with emails and phone/account-like numbers removed, short."""
+    """A search query without emails, phone/account-like numbers, rand amounts or a titled
+    person's name (core/skills/web_search.scrub_query), short."""
+    from core.skills.web_search import scrub_query
     q = _NUMBER.sub(" ", _EMAIL.sub(" ", q or ""))
-    return " ".join(q.split())[:160]
+    return scrub_query(q)[:160]
 
 
 def _parse_queries(raw: str, question: str) -> List[str]:
@@ -88,9 +90,13 @@ async def _complete(task_type: str, messages: List[Dict[str, str]], max_tokens: 
     model, key, base = await resolve_generation_route(task_type=task_type, messages=messages, run_id=run_id)
 
     async def go(m, k, b, t):
+        # logprobs only for Vula's own model (they feed its confidence check). 16 Nov 2026: asked of
+        # a cloud model, OpenRouter offers only providers that return them — under zero data
+        # retention none served Gemini ("no endpoint") and Llama landed on a 4 096-token provider.
+        extra = {"logprobs": True, "top_logprobs": 1} if is_local_model(m) else {}
         resp = await asyncio.wait_for(litellm.acompletion(
             model=m, messages=messages, temperature=0.2, max_tokens=max_tokens, api_key=k, api_base=b,
-            logprobs=True, top_logprobs=1), timeout=t)
+            **extra), timeout=t)
         text = re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content or "", flags=re.S).strip()
         return resp, text
 
@@ -151,7 +157,7 @@ async def _search(queries: List[str]) -> List[Dict[str, str]]:
     return hits
 
 
-async def _read(hit: Dict[str, str]) -> Optional[Dict[str, str]]:
+async def _read(hit: Dict[str, str], max_chars: int = PAGE_CHARS) -> Optional[Dict[str, str]]:
     from vula.commerce.reference_url import _extract_title_and_text, safe_fetch_bytes
     try:
         raw = await safe_fetch_bytes(hit["url"], PAGE_BYTES)
@@ -162,19 +168,21 @@ async def _read(hit: Dict[str, str]) -> Optional[Dict[str, str]]:
     text = " ".join((text or "").split())
     if len(text) < 200:
         return None
-    return {"title": (title or hit["title"]).strip()[:140], "url": hit["url"], "text": text[:PAGE_CHARS]}
+    return {"title": (title or hit["title"]).strip()[:140], "url": hit["url"], "text": text[:max_chars]}
 
 
-async def read_pages(hits: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Read pages in parallel until MAX_PAGES are readable or the time budget is spent."""
-    tasks = [asyncio.ensure_future(_read(h)) for h in hits[:MAX_PAGES * 2]]
+async def read_pages(hits: List[Dict[str, str]], limit: int = MAX_PAGES,
+                     max_chars: int = PAGE_CHARS) -> List[Dict[str, str]]:
+    """Read pages in parallel until `limit` (MAX_PAGES) are readable or the time budget is spent;
+    each page's text up to `max_chars`."""
+    tasks = [asyncio.ensure_future(_read(h, max_chars)) for h in hits[:limit * 2]]
     if not tasks:
         return []
     done, pending = await asyncio.wait(tasks, timeout=FETCH_BUDGET_S)
     for t in pending:
         t.cancel()
     pages = [t.result() for t in tasks if t in done and not t.cancelled() and t.exception() is None and t.result()]
-    return pages[:MAX_PAGES]
+    return pages[:limit]
 
 
 async def own_documents(tenant_id: str, question: str) -> List[Dict[str, str]]:
@@ -313,9 +321,14 @@ async def run(tenant_id: str, question: str, history: str = "", metadata: Option
         return {**base, "answer": CAPPED}
     out = {**base, **finish(answer, pages, docs)}
     if not with_file:
-        out["note_id"] = await research_memory.save(tenant_id, person_key, question, out, shared=not private,
+        # 17 Nov 2026 audit: an answer written with the person's own thread or private notes in
+        # front of it can carry what they said there, so it's kept for them only. They can still
+        # share it themselves (research_memory.set_shared).
+        from vula import personal_memory
+        share = not private and not use_history and not personal_memory.current_block()
+        out["note_id"] = await research_memory.save(tenant_id, person_key, question, out, shared=share,
                                                     replaces=(earlier or {}).get("id"))
-        out["shared"] = bool(out["note_id"]) and not private
+        out["shared"] = bool(out["note_id"]) and share
     _emit(tenant_id, "research_reply", {"queries": len(queries), "pages": len(pages), "docs": len(docs),
                                         "cited": len(out["sources"]), "unchecked": len(out["unchecked"]),
                                         "kept": bool(out.get("note_id")), "fresh": bool(fresh)})

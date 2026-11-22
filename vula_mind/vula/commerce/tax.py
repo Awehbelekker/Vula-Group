@@ -148,7 +148,12 @@ def vat_category(tenant_id: str) -> Optional[str]:
 
 def year_figures(tenant_id: str, start: date, end: date) -> Dict[str, Any]:
     """Income and deductible expenses from the bank lines between start and end, with the dates
-    the statements cover. Drawings, transfers and VAT accounts aren't income or expenses."""
+    the statements cover. Drawings, transfers and VAT accounts aren't income or expenses. A business
+    on the one book: from its journal (accrual view) instead."""
+    from vula.commerce import ledger_v2
+    if ledger_v2.is_on(tenant_id):
+        from vula.commerce import books_reports
+        return books_reports.year_figures(tenant_id, start, end)
     from vula.commerce.accounting import _txns, ensure_chart
     try:
         chart = {a["code"]: a for a in ensure_chart(tenant_id)}

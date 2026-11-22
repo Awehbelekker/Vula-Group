@@ -25,7 +25,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 import httpx
 
@@ -159,8 +159,18 @@ _NO_RETRY = {"BadRequestError", "AuthenticationError", "PermissionDeniedError", 
 _RETRY = {"APIError", "TimeoutError"}
 
 
+def _context_too_long(exc: BaseException) -> bool:
+    """A provider refused the prompt as too long for it. OpenRouter picks the provider, and one may
+    take far less than the model's listed window (16 Nov 2026: Llama 3.3 70B on SambaNova, 4 096
+    tokens, for a 6 268-token build-up prompt), so a different model can answer."""
+    text = str(exc).lower()
+    return any(s in text for s in ("context_length_exceeded", "max_len exceeded", "maximum context length"))
+
+
 def _worth_another_model(exc: BaseException) -> bool:
     names = {c.__name__ for c in type(exc).__mro__}
+    if _context_too_long(exc):
+        return True
     return not (names & _NO_RETRY) and bool(names & _RETRY)
 
 
@@ -173,11 +183,17 @@ def _has_image(messages) -> bool:
     return False
 
 
+VISION_FALLBACK = "anthropic/claude-sonnet-5"
+
+
 def cloud_fallback_chain(model: str, messages=None) -> list:
     """The openrouter/ models to try in order, starting with `model`. An image call only falls
     back to the vision model: the text models in the list can't read the picture."""
     if _has_image(messages):
-        extra = [settings.model_vision]
+        # 16 Nov 2026: a Railway MODEL_VISION still naming a model with no zero-retention endpoint
+        # (Gemini) left every cloud scan with nothing to fall back to. A model known to read
+        # images under zero retention always follows.
+        extra = [settings.model_vision, VISION_FALLBACK]
     else:
         extra = [m.strip() for m in (settings.cloud_model_fallbacks or "").split(",") if m.strip()]
     chain = [model]
@@ -226,8 +242,29 @@ def next_cloud_model(requested: str, answered_by: Optional[str] = None, *,
     return chain[idx + 1] if idx + 1 < len(chain) else None
 
 
+import contextvars as _contextvars
+
+# 16 Nov 2026 (vula/ai_health.py): a health probe must reach the model it names. The fallback
+# chain below hid a dead Gemini for 3 days — every call "worked" on Llama.
+_NO_FALLBACK: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("vula_no_cloud_fallback", default=False)
+
+
+class no_cloud_fallback:
+    """`with no_cloud_fallback(): await litellm.acompletion(...)` — only the named model is tried,
+    even one currently skipped as unavailable."""
+    def __enter__(self):
+        self._token = _NO_FALLBACK.set(True)
+        return self
+
+    def __exit__(self, *exc):
+        _NO_FALLBACK.reset(self._token)
+        return False
+
+
 async def _with_cloud_fallback(call, kwargs: dict):
     with_tools = bool(kwargs.get("tools"))
+    if _NO_FALLBACK.get():
+        return await call(**kwargs)
     full = cloud_fallback_chain(kwargs["model"], kwargs.get("messages"))
     chain = [m for m in full if not _skipped(m, with_tools)] or full
     for i, model in enumerate(chain):
@@ -596,14 +633,47 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
     return {**local_generation_kwargs(model), **cloud_generation_kwargs(model)}
 
 
+# Anthropic caches a prompt prefix of at least ~1 024 tokens; below that a breakpoint does nothing.
+PROMPT_CACHE_MIN_CHARS = 4000
+
+
+def with_prompt_cache(messages: List[Dict[str, Any]], model: str) -> List[Dict[str, Any]]:
+    """Mark the system prompt for Anthropic's prompt cache on a Claude route (16 Nov 2026, Ian:
+    keep costs down). The business assistant re-sends the same ~9 000 tokens (tools + system
+    prompt) on every step of its tool loop and every turn; a cached read costs about a tenth of
+    normal input. Anthropic orders tools before the system prompt, so one breakpoint on the system
+    message covers both. Writing the cache costs a quarter more once, so this is only for callers
+    that repeat the same prefix within minutes. Any other model, or a short or non-text system
+    prompt, gets the messages back unchanged."""
+    if "anthropic/" not in (model or "") or not messages or messages[0].get("role") != "system":
+        return messages
+    content = messages[0].get("content")
+    if not isinstance(content, str) or len(content) < PROMPT_CACHE_MIN_CHARS:
+        return messages
+    first = {**messages[0], "content": [{"type": "text", "text": content,
+                                          "cache_control": {"type": "ephemeral"}}]}
+    return [first, *messages[1:]]
+
+
+def cached_prompt_tokens(resp: Any) -> int:
+    """Prompt tokens the provider read from its cache for this response (0 when none/unknown)."""
+    try:
+        details = getattr(resp.usage, "prompt_tokens_details", None)
+        return int(getattr(details, "cached_tokens", 0) or 0)
+    except Exception:
+        return 0
+
+
 # Built-in cloud models for some task types, used when CLOUD_MODEL_BY_TASK has no entry for
 # them (an entry there still wins). 13 Nov 2026, Ian: research writes a long, cited answer from
-# several pages — Gemini 2.5 Flash, not the general fallback model.
-_TASK_CLOUD_DEFAULTS = {"research": "google/gemini-2.5-flash", "research_plan": "google/gemini-2.5-flash",
+# several pages — a stronger model than the general fallback. 16 Nov 2026, Ian: Claude Sonnet 5,
+# not Gemini 2.5 Flash, which has had no endpoint under zero retention since 13 Nov (every one of
+# these calls failed over to Llama, which twice landed on a 4 096-token provider).
+_TASK_CLOUD_DEFAULTS = {"research": "anthropic/claude-sonnet-5", "research_plan": "anthropic/claude-sonnet-5",
                         # reading prices off a supplier page (vula/takeoff, 14 Nov 2026)
-                        "rates_extract": "google/gemini-2.5-flash",
+                        "rates_extract": "anthropic/claude-sonnet-5",
                         # a trade build-up from cited pages (vula/commerce/buildups.py, 14 Nov 2026)
-                        "buildup_research": "google/gemini-2.5-flash"}
+                        "buildup_research": "anthropic/claude-sonnet-5"}
 
 
 def cloud_model_for(task_type: Optional[str]) -> str:
@@ -719,7 +789,8 @@ async def resolve_generation_route(
 # falling back to cloud. The dashboard's open chat (13 Nov 2026) is optional extra thinking,
 # not a business operation, so a cap holds for it absolutely.
 # Research mode (vula/research.py) is the same optional extra, so it holds too.
-CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research"})
+# 17 Nov 2026 audit: researching a build-up and reading prices off web pages are optional extras too.
+CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research", "buildup_research", "rates_extract"})
 
 
 class SpendCapReached(RuntimeError):
@@ -838,7 +909,7 @@ async def resolve_cheap_route(model: Optional[str] = None,
                               task_type: str = "cheap_tier") -> Tuple[str, Optional[str], str]:
     """Cheap tier for mechanical work (doc analysis, classification, extraction).
 
-    Cloud cheap model (gemini-flash, ~1/15th of the 70B), then the 70B as a last resort.
+    Cloud cheap-tier model (settings.model_worker_cheap), then the fallbacks.
     The local GPU tunnel is intentionally NOT used (it sits behind Cloudflare bot-protection
     and is world-open); revisit once it's secured with a service token. Callers should
     validate the output and escalate to `resolve_cloud_route()` on failure/low confidence.
@@ -851,10 +922,20 @@ async def resolve_cheap_route(model: Optional[str] = None,
     return f"openrouter/{backend}", settings.openrouter_api_key, OPENROUTER_BASE
 
 
-def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
-    """Force the strong 70B cloud model — for user-facing answers and cheap-tier escalation."""
+def resolve_cloud_route(task_type: str = "cheap_tier_escalation") -> Optional[Tuple[str, Optional[str], str]]:
+    """A stronger cloud model than the cheap tier — the escalation when a cheap-tier read fails its
+    checks. 16 Nov 2026: with the cheap tier on Llama 3.3 70B (model_worker_cloud), escalating to
+    model_worker_cloud would ask the same model again, so it's the first different model in
+    cloud_model_fallbacks instead (Claude Sonnet 5)."""
     if settings.openrouter_api_key:
-        return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
+        strong = settings.model_worker_cloud
+        if strong == settings.model_worker_cheap:
+            strong = next((m.removeprefix("openrouter/") for m in cloud_fallback_chain(f"openrouter/{strong}")
+                           if m.removeprefix("openrouter/") != settings.model_worker_cheap), strong)
+        # 17 Nov 2026 audit: logged as its own decision, so the record names the model that read it
+        _log_decision(run_id=uuid.uuid4().hex, task=task_type, outcome="cloud", escalated=True,
+                      backend=f"openrouter/{strong}", reason="cheap_tier_escalation")
+        return f"openrouter/{strong}", settings.openrouter_api_key, OPENROUTER_BASE
     return None
 
 

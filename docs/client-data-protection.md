@@ -1,12 +1,12 @@
 # How Vula protects your business data
 
-*Last checked: 13 November 2026, against the live system.*
+*Last checked: 17 November 2026, against the live system.*
 
 Vula runs your business on WhatsApp and a web dashboard: orders, invoices, documents, projects and customer conversations. This page sets out how that information is kept separate, private and accurate. Every statement here was checked against the running system and its code on the date above. Where something is still being finished, we say so.
 
 ## 1. Your data is kept apart from every other business
 
-- Every record carries your business's identity. Every database table enforces that at the database level (row-level security), on all 227 tables.
+- Every record carries your business's identity. Every database table enforces that at the database level (row-level security), on all 236 tables.
 - Your documents and knowledge sit in a collection of their own, searched only for your business.
 - Each business has its own WhatsApp number, branding and connected accounts.
 - Automated tests run on every change to the system. They check that one business can't read or change another's records.
@@ -14,7 +14,11 @@ Vula runs your business on WhatsApp and a web dashboard: orders, invoices, docum
 ## 2. Only the right people see the right things
 
 - Your team members get access only to the sections you give them. Removing someone from your team also removes their sign-in.
+- Every login can turn on two-step sign-in (Settings › Two-step sign-in): a 6-digit code from an app on their phone as well as their password. Once it's on, Vula's server refuses any session that didn't give the code.
 - A staff member's own conversations with Vula, and their private notes, are visible to them only. A bank account marked private to one person stays out of the business's books and searches.
+- When Vula researches something for a staff member, the answer is shared with their colleagues only if it was written without their own conversation or private notes in front of it. A colleague never sees the question as it was asked.
+- What each job actually cost (supplier prices and pay rates) is visible to owners and managers only.
+- When a business confirms a build-up (how much material and labour goes into one unit of building work), the quantities are shared with other Vula businesses. No names, documents, prices or notes go with them.
 - Links you share with a client open only that client's project. They are long random codes that expire after 180 days, and you can switch them off at any time. Documents that mention another of your projects are left out of what the client sees and downloads.
 
 ## 3. Where your data is kept
@@ -26,14 +30,16 @@ Vula runs your business on WhatsApp and a web dashboard: orders, invoices, docum
 | Your documents' searchable text (knowledge base) | Qdrant Cloud: **being moved from Brazil (São Paulo) to Germany (Frankfurt)** |
 | Vula's own AI server | South Africa |
 | WhatsApp messages | Meta (WhatsApp Business Platform) |
+| Web searches for research and market prices | Serper (United States), with names, amounts, numbers and email addresses removed first |
 
 Countries in the European Union protect personal information to a standard at least equal to POPIA. That is the basis on which South African law allows information to be stored there.
 
 ## 4. How AI uses your information
 
-- Vula answers from your own records and documents first. Most of its AI work runs on its own server in South Africa; in the last 24 hours before this check, about 70% of requests ran there.
+- Vula answers from your own records and documents first. Most of its AI work runs on its own server in South Africa; in the last 24 hours before this check, about 64% of requests ran there.
 - Some work goes to cloud AI models: when the local server is busy or unavailable, for reading scanned documents, and for some complex tasks. Every one of those requests is recorded with the reason it went to the cloud.
-- Every cloud request asks the AI providers to keep nothing and train on nothing (zero data retention).
+- Every cloud request asks the AI providers to keep nothing and train on nothing (zero data retention). Cloud requests go through OpenRouter to Anthropic (Claude) and to hosts of Meta's Llama models. Every 6 hours Vula checks that each cloud model it uses is available under zero retention.
+- When Vula searches the web, it removes email addresses, phone and account numbers, rand amounts and people's names (where they appear with a title such as Mr or Mrs) from the search first.
 - Vula does not use your business's information to train AI models.
 
 ## 5. Your money figures are worked out by the system, not guessed by AI
@@ -59,8 +65,13 @@ Countries in the European Union protect personal information to a standard at le
   - message logs: 1 year;
   - unconverted leads: 1 year;
   - error reports: 90 days;
-  - sign-in codes: 30 days.
-- Accounting records are kept for 5 years, as tax law requires.
+  - sign-in codes: 30 days;
+  - files attached to the dashboard chat (read, not filed): 1 day;
+  - records of WhatsApp messages sent, customer questions passed to your team, emails waiting on a
+    reply, and the extracts Vula learned your writing style from: 1 year;
+  - dashboard chat history and contacts found in your mailbox: 2 years after the last contact;
+  - system records (AI routing, health checks, delivery notices): 90 days to 1 year.
+- Accounting records are kept for 5 years, as tax law requires. Emails your business sends a client from its project page are kept the same way, as a record of what was sent.
 - When you connect a mailbox, Vula never reads folders named as personal, such as Personal, Private, Medical or Family.
 
 ## 8. Backups
@@ -72,12 +83,12 @@ Countries in the European Union protect personal information to a standard at le
 ## 9. How it's checked
 
 - More than 8,000 automated tests run on every change, along with checks that every table is protected and that no secrets are in the apps. Nothing reaches the live system until they pass.
-- The whole system was audited before launch on 9 and 13 November 2026. Every serious problem found in the code was fixed and tested.
+- The whole system was audited before launch on 9, 13 and 17 November 2026. Every serious problem found in the code was fixed and tested.
 
 ## Still being finished
 
 - Moving the knowledge base to Frankfurt (see section 3).
-- Two-step sign-in for dashboard logins.
+- Turning on two-step sign-in for every owner login (it's available to every login now; see section 2).
 - A published PAIA manual and a named Information Officer.
 - Round-the-clock error alerts to the Vula team.
 

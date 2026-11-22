@@ -627,7 +627,33 @@ def set_status(tenant_id: str, expense_id: str, status: str) -> dict:
     row = (res.data or [{}])[0]
     if status == "paid":
         post_to_ledger(tenant_id, row)
+    if status == "reimbursed" and row.get("id"):
+        try:     # the one trusted book: what was owed to staff is paid
+            from vula.commerce import ledger_events
+            if ledger_events.on(tenant_id):
+                ledger_events.expense_reimbursed(tenant_id, row)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("reimbursement not posted for %s: %s", expense_id, exc)
     return row
+
+
+def books_refresh(tenant_id: str, expense_id: Optional[str]) -> None:
+    """books_v2: an expense already in the books was changed (account, amount, who paid) — post
+    it again as it now stands (a reversal + the next version; nothing when it says the same)."""
+    if not expense_id:
+        return
+    try:
+        from vula.commerce import ledger_events, ledger_v2
+        if not ledger_events.on(tenant_id) or not ledger_v2.live_entry(tenant_id, "expense", str(expense_id)):
+            return
+        row = (_client().table("commerce_expenses").select("*").eq("tenant_id", tenant_id)
+               .eq("id", expense_id).limit(1).execute().data or [None])[0]
+        if row and (row.get("status") or "") in ("cancelled", "rejected"):
+            ledger_events.expense_removed(tenant_id, row, reason=f"expense {row.get('status')}")
+        elif row:
+            ledger_events.expense(tenant_id, row)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("expense %s not re-posted: %s", expense_id, exc)
 
 
 def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,
@@ -693,6 +719,8 @@ def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,
             learn_filing_rule(tenant_id, {"supplier": row["supplier"]}, project)
         except Exception:
             pass
+    if account_code:
+        books_refresh(tenant_id, expense_id)
     return (res.data or [{}])[0]
 
 

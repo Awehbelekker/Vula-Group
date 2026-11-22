@@ -177,14 +177,15 @@ async def test_research_needs_ask_anything_and_has_its_own_hourly_limit():
     open_chat.clear()
 
 
-# ── local first, Gemini Flash when it has to go to the cloud ─────────────────────────────────
+# ── local first, Claude Sonnet 5 when it has to go to the cloud ──────────────────────────────
+# (16 Nov 2026: Gemini 2.5 Flash has no endpoint under zero retention)
 
-def test_research_uses_gemini_flash_in_the_cloud_unless_the_map_names_another():
+def test_research_uses_sonnet_in_the_cloud_unless_the_map_names_another():
     from config import settings
     from core.llm_router import cloud_model_for
     with patch.object(settings, "cloud_model_by_task", ""):
-        assert cloud_model_for("research") == "google/gemini-2.5-flash"
-        assert cloud_model_for("research_plan") == "google/gemini-2.5-flash"
+        for task in ("research", "research_plan", "rates_extract", "buildup_research"):
+            assert cloud_model_for(task) == "anthropic/claude-sonnet-5"
         assert cloud_model_for("reasoning") == settings.model_worker_cloud
     with patch.object(settings, "cloud_model_by_task", '{"research": "x/other"}'):
         assert cloud_model_for("research") == "x/other"
@@ -235,3 +236,30 @@ async def test_a_local_answer_that_cites_nothing_goes_to_the_cloud_logged():
             assert await research._complete("research", [{"role": "user", "content": "q"}], 100, 5,
                                              accept=lambda a: research.cites_something(a, 1, 0)) == "Cited [1]."
         assert calls == ["ollama_chat/llama3.1:8b"] and not esc.called
+
+
+@pytest.mark.asyncio
+async def test_only_vulas_own_model_is_asked_for_logprobs():
+    """16 Nov 2026: asking the cloud model for logprobs left OpenRouter (zero data retention) with
+    no provider for Gemini and a 4 096-token one for Llama — build-up research failed outright."""
+    seen = {}
+
+    async def acompletion(**kw):
+        seen[kw["model"]] = "logprobs" in kw
+        text = "Prices vary a lot." if kw["model"].startswith("ollama") else "R 1 450 at the Surf Shop [1]."
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+    esc = MagicMock(return_value=("openrouter/google/gemini-2.5-flash", "k", "b"))
+    with patch("core.llm_router.resolve_generation_route", AsyncMock(return_value=("ollama_chat/llama3.1:8b", None, "b"))), \
+         patch("core.llm_router.escalate_to_cloud", esc), \
+         patch("core.llm_router.looks_unreliable", return_value=False), \
+         patch("litellm.acompletion", acompletion):
+        await research._complete("research", [{"role": "user", "content": "q"}], 100, 5,
+                                 accept=lambda a: research.cites_something(a, 1, 0))
+    assert seen == {"ollama_chat/llama3.1:8b": True, "openrouter/google/gemini-2.5-flash": False}
+    # and a request sent straight to the cloud (too big for the local window) carries none either
+    seen.clear()
+    with patch("core.llm_router.resolve_generation_route",
+               AsyncMock(return_value=("openrouter/google/gemini-2.5-flash", "k", "b"))), \
+         patch("litellm.acompletion", acompletion):
+        await research._complete("buildup_research", [{"role": "user", "content": "q"}], 100, 5)
+    assert seen == {"openrouter/google/gemini-2.5-flash": False}

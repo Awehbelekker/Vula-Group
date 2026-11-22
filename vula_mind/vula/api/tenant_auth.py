@@ -140,6 +140,32 @@ def _member_for_wa_login(email: str, team_rows: list[dict]) -> dict | None:
     return next((r for r in team_rows if target and digits_za(r.get("whatsapp") or "") == target), None)
 
 
+# ── The accountant's login (19 Nov 2026, Phase 3 of Xero-quality books) ─────────────────────
+# An outside accountant the owner invites: sees the books, reports, bank lines, invoices and the
+# finance documents, changes nothing, takes no paid seat (plan_limits counts owner/staff only), never
+# reaches the WhatsApp admin agent, and every view and download is on record (server.py's guard).
+# Keyed on the LOGIN row (role 'accountant', migration 292), so neither a missing team row nor an
+# empty access list can ever widen it.
+ACCOUNTANT = "accountant"
+ACCOUNTANT_TABS = ["books", "bank", "finances", "invoices", "expenses", "documents"]
+
+
+def _expired(member: dict | None) -> bool:
+    from datetime import date
+    end = (member or {}).get("expires_on")
+    try:
+        return bool(end) and date.fromisoformat(str(end)[:10]) < date.today()
+    except ValueError:
+        return True
+
+
+def accountant_scope(member: dict | None) -> dict:
+    """Read-only, never full; nothing at all without an active, unexpired team row."""
+    ok = member is not None and member.get("active") is not False and not _expired(member)
+    return {"full": False, "access": list(ACCOUNTANT_TABS) if ok else [], "role": ACCOUNTANT,
+            "read_only": True, "member": member}
+
+
 def scope_from_rows(tenant_id: str, email: str, login_rows: list[dict],
                     team_rows: list[dict]) -> dict:
     """Pure rule (tested directly): the member's {full, access, role, team row fields}."""
@@ -148,6 +174,8 @@ def scope_from_rows(tenant_id: str, email: str, login_rows: list[dict],
     login_role = next((r.get("role") for r in login_rows if r.get("tenant_id") == tenant_id), None)
     e = (email or "").strip().lower()
     member = next((m for m in team_rows if e and (m.get("email") or "").strip().lower() == e), None)
+    if login_role == ACCOUNTANT:
+        return accountant_scope(member)
     if member is None:
         member = _member_for_wa_login(e, team_rows)
     if login_role == "owner":
@@ -178,8 +206,13 @@ async def member_scope(authorization: str, tenant_id: str) -> dict | None:
         db = cs._client()
         login_rows = (db.table("vula_tenant_users").select("tenant_id,role")
                       .eq("user_id", user.get("id")).limit(10).execute().data or [])
-        team_rows = (db.table("vula_team_members").select("id,email,role,access,notify,name,whatsapp,active")
-                     .eq("tenant_id", tenant_id).execute().data or [])
+        try:
+            team_rows = (db.table("vula_team_members")
+                         .select("id,email,role,access,notify,name,whatsapp,active,expires_on,can_adjust")
+                         .eq("tenant_id", tenant_id).execute().data or [])
+        except Exception:  # noqa: BLE001 — before migration 292
+            team_rows = (db.table("vula_team_members").select("id,email,role,access,notify,name,whatsapp,active")
+                         .eq("tenant_id", tenant_id).execute().data or [])
     except Exception as exc:
         # Fail closed and don't cache: a DB blip must never widen access, and the next request
         # retries the lookup.
@@ -212,3 +245,43 @@ async def require_tenant_admin(tenant: str, authorization: str = Header(default=
         raise HTTPException(status_code=403,
                             detail="Only the owner or a manager can change the team and logins.")
     return identity
+
+
+# ── Which businesses a login is an accountant for (the guard's deny-by-default) ────────────────
+_ACC_CACHE: dict[str, tuple[float, dict | None]] = {}
+
+
+async def accountant_login(authorization: str) -> dict | None:
+    """{"user_id", "email", "tenants": {...}, "only": bool} when this login is an accountant for at
+    least one business ("only": it is nothing else anywhere), else None. Cached 60 s per token."""
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    now = time.monotonic()
+    hit = _ACC_CACHE.get(token)
+    if hit and hit[0] > now:
+        return hit[1]
+    from vula.api.master_auth import _verify_jwt
+    user = await _verify_jwt(token) or {}
+    out = None
+    if user.get("id"):
+        try:
+            from vula.commerce import service as cs
+            rows = (cs._client().table("vula_tenant_users").select("tenant_id,role")
+                    .eq("user_id", user["id"]).limit(200).execute().data or [])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("accountant login lookup failed: %s", exc)
+            rows = []
+        tenants = {r["tenant_id"] for r in rows if r.get("role") == ACCOUNTANT}
+        if tenants:
+            out = {"user_id": user["id"], "email": user.get("email"), "tenants": tenants,
+                   "only": all(r.get("role") == ACCOUNTANT for r in rows)}
+    if len(_ACC_CACHE) > _MAX_CACHE:
+        _ACC_CACHE.clear()
+    _ACC_CACHE[token] = (now + _CACHE_TTL, out)
+    return out
+
+
+async def is_accountant_on(authorization: str, tenant_id: str) -> dict | None:
+    acc = await accountant_login(authorization)
+    return acc if acc and tenant_id in acc["tenants"] else None

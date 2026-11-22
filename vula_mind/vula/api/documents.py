@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from vula.api.master_auth import authorized_tenant, require_auth
@@ -34,6 +34,7 @@ async def list_filed(
     customer_phone: Optional[str] = None, category: Optional[str] = None,
     since: Optional[str] = None, until: Optional[str] = None, search: Optional[str] = None,
     filed_by: Optional[str] = None, limit: int = 100, offset: int = 0,
+    authorization: str = Header(default=""),
 ) -> dict:
     """Filed documents for a tenant (newest first) — real filters (customer/category/date-range/
     text search), not just project, and real pagination (limit/offset, not a flat 500-row cap) so
@@ -70,8 +71,71 @@ async def list_filed(
     except Exception as exc:
         log.warning("documents list failed (run migration 015/109?): %s", exc)
         rows, total = [], 0
+    from vula.api.tenant_auth import is_accountant_on
+    if await is_accountant_on(authorization, tenant_id):
+        # 19 Nov 2026: no signed links for an accountant — each document is opened through
+        # /filed/{id}/open, which puts it on the business's record (vula/accountant_activity.py)
+        for r in rows:
+            r["file_url"] = None
+            r["open"] = True
+        return {"tenant_id": tenant_id, "documents": rows, "count": len(rows), "total": total}
     from vula.storage_links import sign_row
     return {"tenant_id": tenant_id, "documents": sign_row(rows), "count": len(rows), "total": total}
+
+
+@router.get("/{tenant_id}/filed/{doc_id}/open")
+async def open_filed(tenant_id: str, doc_id: str, authorization: str = Header(default="")) -> dict:
+    """A link to one filed document, good for an hour (the tenant guard has already checked the
+    caller belongs here). An accountant's open is put on the business's record."""
+    try:
+        rows = (_client().table("vula_filed_documents").select("id,filename,file_url,category")
+                .eq("tenant_id", tenant_id).eq("id", doc_id).limit(1).execute().data or [])
+    except Exception:
+        rows = []
+    if not rows or not rows[0].get("file_url"):
+        raise HTTPException(status_code=404, detail="That document has no file on record.")
+    from vula.storage_links import DASHBOARD_TTL, signed
+    from vula.api.tenant_auth import is_accountant_on
+    acc = await is_accountant_on(authorization, tenant_id)
+    if acc:
+        from vula import accountant_activity
+        from vula.commerce.statement_files import mask_name
+        accountant_activity.record(tenant_id, acc, f"/v1/documents/{tenant_id}/filed/{doc_id}/open",
+                                   target=mask_name(rows[0].get("filename") or "")[:120])
+    return {"url": signed(rows[0]["file_url"], DASHBOARD_TTL), "filename": rows[0].get("filename")}
+
+
+class SendBody(BaseModel):
+    to: str
+    channel: Optional[str] = None
+    note: Optional[str] = None
+    confirm: bool = False
+
+
+@router.post("/{tenant_id}/filed/{doc_id}/send")
+async def send_filed(tenant_id: str, doc_id: str, body: SendBody, request: Request) -> dict:
+    """Send one filed document to a client, a supplier, an email address or a WhatsApp number
+    (vula/commerce/doc_send.py, 20 Nov 2026). confirm=false is the preview; nothing leaves until
+    confirm=true. Owner, manager, or a member with Documents; an accountant never (read-only)."""
+    from vula.api.tenant_auth import ACCOUNTANT, member_scope, scope_allows
+    from vula.commerce import doc_send
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    if (scope or {}).get("role") == ACCOUNTANT or not scope_allows(scope, frozenset({"documents"})):
+        raise HTTPException(status_code=403, detail="Only the business's own team can send its documents.")
+    try:
+        out = await doc_send.send(tenant_id, doc_id, body.to, channel=body.channel, note=body.note or "",
+                                  confirm=body.confirm, actor={"email": (scope or {}).get("email")},
+                                  full_access=scope_allows(scope, frozenset()))
+    except doc_send.Refused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if out.get("status") == "need_info":
+        raise HTTPException(status_code=422, detail=out["message"])
+    if out.get("sent"):
+        try:
+            out["sends"] = doc_send.sends(doc_send._doc(tenant_id, doc_id))
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 
 
 @router.get("/{tenant_id}/health")

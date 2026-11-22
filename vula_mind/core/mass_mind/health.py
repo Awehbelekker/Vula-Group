@@ -25,7 +25,12 @@ logger = logging.getLogger(__name__)
 
 # What a caller is allowed to record — a fixed, reviewed vocabulary, not an arbitrary string,
 # so a typo'd kind can't silently create a permanent blind spot in the rollup.
-KINDS = ("stale_escalation_abandoned", "stale_handoff_auto_resumed")
+KINDS = ("stale_escalation_abandoned", "stale_handoff_auto_resumed",
+         # vula/ai_health.py (16 Nov 2026): one row per check per run, tenant_id 'platform' —
+         # each cloud model answering under zero retention, and web search finding results
+         "ai_check",
+         # vula/books_health.py (18 Nov 2026): one row per check per business on the one trusted book
+         "books_check")
 
 # In-process de-dup so a real, ongoing incident pings the platform operator once per cooldown,
 # not once per _mass_mind_health_watch_loop tick (server.py, hourly) for as long as it lasts.

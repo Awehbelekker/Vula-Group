@@ -15,6 +15,7 @@ nothing is left out silently. Reviewed by the business's QS before relying on it
 """
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional, Tuple
 
 Component = Tuple[str, str, str, str]          # key, label, kind, usual unit
@@ -250,3 +251,34 @@ def trade_of_item(item: str) -> Optional[str]:
     except Exception:  # noqa: BLE001
         return None
     return t if t in CHECKLISTS else None
+
+
+# ── is this a costing question? ──────────────────────────────────────────────
+# 16 Nov 2026: on a knowledge-mode WhatsApp line (DIGG) the team's messages go to the knowledge
+# assistant, which has none of the costing tools — "research the build-up for a 220 mm one-brick
+# wall" went to web search and came back from general knowledge. A message this recognises goes
+# to the business assistant instead (vula/api/whatsapp.py). Deliberately narrow: a building-work
+# word must be there, so "estimate" alone (fees, timelines) isn't caught.
+_WORK = (r"(walls?|brick\w*|block\w*|plaster\w*|render\w*|screed\w*|slabs?|concrete|tiles?|tiling|"
+         r"floors?|roofs?|roofing|paving|ceilings?|foundations?|footings?|skim\w*|paint\w*|"
+         r"waterproof\w*|masonry|m2|m²|m3|m³|square met\w+)")
+_COSTING = [
+    re.compile(r"\bbuild[\s-]?ups?\b", re.I),
+    re.compile(r"\bwhat goes into\b", re.I),
+    re.compile(r"\b(cost|price|estimate|quote)\w*\b.{0,60}\b(to|of|for)\b.{0,40}\b(build|plaster|tile|lay|pour|"
+               r"screed|construct|brick)\w*", re.I),
+    re.compile(r"\bhow much\b.{0,40}\b(to|would it|will it|does it)\b.{0,30}\b(build|plaster|tile|lay|pour|screed|"
+               r"construct|brick)\w*", re.I),
+    re.compile(r"\b(estimate|cost|price)\w*\b.{0,50}\b" + _WORK + r"\b", re.I),
+    re.compile(r"\b" + _WORK + r"\b.{0,50}\b(cost|price)\w*", re.I),
+    re.compile(r"\bcompare\b.{0,40}\bestimate\b|\bestimate\b.{0,40}\b(against|vs|versus)\b.{0,20}\b(paid|actual)",
+               re.I),
+    re.compile(r"\bsuggested?\b.{0,20}\bchanges?\b|\bsuggestions?\b.{0,20}\bbuild[\s-]?ups?\b", re.I),
+]
+
+
+def is_costing_request(text: str) -> bool:
+    """Does this message ask for a build-up, an estimate of building work, or how an estimate
+    compared with what was paid?"""
+    t = (text or "").strip()
+    return bool(t) and any(p.search(t) for p in _COSTING)

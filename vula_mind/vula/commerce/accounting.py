@@ -141,6 +141,9 @@ def learn_category_rule(tenant_id: str, txn: dict, account_code: str) -> None:
     """
     if not account_code:
         return
+    from vula.commerce.ledger_events import is_pop
+    if is_pop(txn):     # a WhatsApp screenshot is not the bank's line: it teaches nothing (20 Nov 2026)
+        return
     db = _client()
     for stype, val in _learning_signals(txn):
         try:
@@ -165,25 +168,37 @@ def lookup_learned_category(tenant_id: str, txn: dict) -> Optional[str]:
     Ranking by `hits` ALONE let a generic token outrank a real merchant match: off-the-hook's
     'received' -> owner_drawings rule had the highest hit count of any rule, and 'received'
     appears on all 404 of its "Payment Received: ..." credits. Merchant and reference signals —
-    the ones that actually identify a counterparty — now win outright, and bare description
-    tokens are consulted only when neither exists (old rules written before 2026-09-06).
+    the ones that actually identify a counterparty — are the ONLY ones read.
+
+    20 Nov 2026: the old one-word rules (written before 2026-09-06) used to be consulted when no
+    payee rule matched. On DIGG 'app' -> casual_labour (from "FNB App Payment To …") and 'fnb'
+    -> casual_labour then filed 462 lines (R1.22M) — skip hire, ceilings and 233 FNB bank charges
+    among them — as casual labour. A word is not a payee: a line no payee or reference rule
+    knows goes to the model like any new line. The old rows stay in the table, never read.
     """
-    strong = [v for _, v in _learning_signals(txn)]
-    weak = [v for _, v in _signals_from_txn(txn) if v not in strong]
-    for sigs, types in ((strong, ("merchant", "reference")), (weak, None)):
-        if not sigs:
-            continue
-        try:
-            q = (_client().table("commerce_txn_rules").select("account_code,hits,signal_type")
-                 .eq("tenant_id", tenant_id).in_("signal", sigs))
-            if types:
-                q = q.in_("signal_type", list(types))
-            rows = q.order("hits", desc=True).limit(1).execute().data or []
-        except Exception:
-            return None
-        if rows:
-            return rows[0]["account_code"]
-    return None
+    sigs = [v for _, v in _learning_signals(txn)]
+    if not sigs:
+        return None
+    try:
+        rows = (_client().table("commerce_txn_rules").select("account_code,hits,signal_type")
+                .eq("tenant_id", tenant_id).in_("signal", sigs)
+                .in_("signal_type", ["merchant", "reference"])
+                .order("hits", desc=True).limit(1).execute().data or [])
+    except Exception:
+        return None
+    return rows[0]["account_code"] if rows else None
+
+
+_BANK_CHARGE = re.compile(
+    r"^\s*(?:fnb\s+)?(?:bank charges?|service fees?|other fees?|monthly (?:account )?fees?|fees?)"
+    r"(?:\s*\(\d+\))?\s*$", re.IGNORECASE)
+
+
+def is_bank_charge(txn: dict) -> bool:
+    """A bank's own fee line, known from its words alone — FNB's reader labels a fee row with no
+    description "FNB bank charges" ("(2)" for a repeat on the same day). Money out only: a fee
+    refund is not a fee."""
+    return (txn.get("direction") or "out") == "out" and bool(_BANK_CHARGE.match(txn.get("description") or ""))
 
 
 # ── AI categorisation + VAT ───────────────────────────────────────────────────
@@ -235,8 +250,8 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
     from core.llm_router import resolve_generation_route, escalate_to_cloud
 
     accounts = accounts if accounts is not None else ensure_chart(tenant_id)
-    inc = [a for a in accounts if a.get("type") == "income"]
-    exp = [a for a in accounts if a.get("type") in ("expense", "equity")]
+    inc = [a for a in accounts if usable_for(a, "in")]
+    exp = [a for a in accounts if usable_for(a, "out")]
     results: List[Optional[Dict[str, Any]]] = [None] * len(txns)
 
     # A decided merchant profile outranks everything: it is the owner's own answer, or research
@@ -254,7 +269,11 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
         return {a["code"] for a in (inc if t.get("direction") == "in" else exp)}
 
     pending: List[int] = []
+    charges = "bank_charges" in {a["code"] for a in exp}
     for i, t in enumerate(txns):
+        if charges and is_bank_charge(t):     # decided by its words, before any rule or model
+            results[i] = {"account_code": "bank_charges", "source": "rule"}
+            continue
         prof = by_merchant.get(i)
         if prof and prof["account_code"] in _allowed_codes(t):
             results[i] = prof
@@ -286,7 +305,9 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
             prompt = (
                 "You are the bookkeeper for a small South African business. Assign ONE account code "
                 "to each numbered bank transaction below.\n"
-                "Money [in] (credits) MUST use an income code:\n" + inc_listing + "\n"
+                "Money [in] (credits) MUST use one of these (income, or — only where listed — "
+                "money the owner put in or lent, or a transfer from the business's own other account):\n"
+                + inc_listing + "\n"
                 "Money [out] (debits) MUST use an expense code, or owner_drawings for the owner's "
                 "personal/family spend from the business account:\n" + exp_listing + "\n"
                 "Hints: 'Payment Received' / 'Card Machine Sales' = customers paying → sales. "
@@ -320,6 +341,46 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
     return results     # type: ignore[return-value]
 
 
+# 18 Nov 2026 (one trusted book): money coming in isn't always a sale — the owner putting money in
+# or lending it, a transfer from the business's own other account, or a card-machine payout of
+# sales already recorded. These codes exist only for a business on the trusted book
+# (ledger_v2.LEDGER_CHART); the accounts the books keep for themselves are never offered.
+MONEY_IN_CODES = frozenset({"owner_capital", "owner_loan", "transfer_clearing", "clearing"})
+MONEY_OUT_CODES = frozenset({"owner_loan", "transfer_clearing"})
+NEVER_PICKED = frozenset({"suspense", "opening_balance_equity", "staff_reimbursements", "tips_payable",
+                          "bank_cash", "cash_on_hand", "accounts_receivable", "accounts_payable",
+                          "vat_output", "vat_input"})
+
+
+def usable_for(account: Optional[dict], direction: str) -> bool:
+    """Can a bank line going this way ('in'/'out') be categorised to this account?"""
+    if not account:
+        return False
+    code, kind = account.get("code"), account.get("type")
+    if code in NEVER_PICKED:
+        return False
+    if direction == "in":
+        return kind == "income" or code in MONEY_IN_CODES
+    return (kind in ("expense", "equity") and code not in ("owner_capital", "clearing")) or code in MONEY_OUT_CODES
+
+
+def refused_for(account: Optional[dict], direction: str) -> Optional[str]:
+    """Why a person can't put a bank line on this account, or None. Lenient on purpose: money in
+    to a cost account is a supplier's refund, so only what would break the books is refused."""
+    if not account:
+        return "unknown account_code"
+    code = account.get("code")
+    if code in NEVER_PICKED:
+        return f"{account.get('name') or code} is kept by the books themselves and can't be chosen."
+    if direction == "out" and code in ("clearing", "owner_capital"):
+        return f"{account.get('name') or code} is for money coming in only."
+    return None
+
+
+def directions_for(account: Optional[dict]) -> List[str]:
+    return [d for d in ("in", "out") if usable_for(account, d)]
+
+
 def _default_code(txn: dict, accounts: List[dict]) -> str:
     codes = {a["code"] for a in accounts}
     if txn.get("direction") == "in":
@@ -330,11 +391,16 @@ def _default_code(txn: dict, accounts: List[dict]) -> str:
 async def categorize(tenant_id: str, txn: dict, accounts: Optional[List[dict]] = None) -> Dict[str, Any]:
     """Allocate a transaction to an account: learned rule → AI → sensible default."""
     accounts = accounts if accounts is not None else ensure_chart(tenant_id)
+    direction = txn.get("direction") or "out"
+    # 18 Nov 2026: the single-line path now keeps to the line's direction, like the batch one.
+    usable = [a for a in accounts if usable_for(a, direction)] or accounts
+    if is_bank_charge(txn) and any(a["code"] == "bank_charges" for a in usable):
+        return {"account_code": "bank_charges", "source": "rule"}
     learned = lookup_learned_category(tenant_id, txn)
-    if learned and any(a["code"] == learned for a in accounts):
+    if learned and any(a["code"] == learned for a in usable):
         return {"account_code": learned, "source": "learned"}
-    ai = await _ai_categorize(txn, accounts)
-    if ai:
+    ai = await _ai_categorize(txn, usable)
+    if ai and any(a["code"] == ai for a in usable):
         return {"account_code": ai, "source": "ai"}
     return {"account_code": _default_code(txn, accounts), "source": "default"}
 
@@ -357,13 +423,27 @@ def _txns(tenant_id: str, since: Optional[str], until: Optional[str]) -> List[di
     if until:
         q = q.lte("txn_date", until)
     try:
-        return q.order("txn_date").limit(10000).execute().data or []
+        rows = q.order("txn_date").limit(10000).execute().data or []
     except Exception as exc:
         log.debug("ledger read skipped: %s", exc)
         return []
+    # a proof of payment is not a bank line (ledger_events.is_pop)
+    return [r for r in rows if (r.get("source_file") or "") != "whatsapp_pop"]
 
 
-def pnl(tenant_id: str, since: str = None, until: str = None) -> dict:
+def _v2(tenant_id: str) -> bool:
+    """The business keeps the one trusted book: its reports read the journal (books_reports)."""
+    from vula.commerce import ledger_v2
+    return ledger_v2.is_on(tenant_id)
+
+
+def pnl(tenant_id: str, since: str = None, until: str = None, basis: Optional[str] = None) -> dict:
+    if _v2(tenant_id):
+        from vula.commerce import reports
+        p = reports.profit_and_loss(tenant_id, since, until, basis)
+        rows = lambda key: [{"account": r["name"], "code": r["code"], "amount_cents": r["cents"]}  # noqa: E731
+                            for r in sorted(p[key], key=lambda r: -r["cents"])]
+        return {**p, "income": rows("income"), "expenses": rows("expenses")}
     accounts = {a["code"]: a for a in ensure_chart(tenant_id)}
     rows = _txns(tenant_id, since, until)
     income, expense = {}, {}
@@ -390,11 +470,17 @@ def is_vat_registered(tenant_id: str) -> bool:
         rows = (_client().table("commerce_invoice_settings").select("vat_registered")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
         return bool(rows[0].get("vat_registered", False)) if rows else False   # migration 253
-    except Exception:
-        return True
+    except Exception as exc:
+        # 18 Nov 2026: fail closed — never claim or charge VAT for a business we can't confirm is
+        # registered. Said out loud so a registered business's missing VAT is noticed.
+        log.warning("VAT registration not read for %s, treating as not registered: %s", tenant_id, exc)
+        return False
 
 
-def vat_return(tenant_id: str, since: str = None, until: str = None) -> dict:
+def vat_return(tenant_id: str, since: str = None, until: str = None, basis: Optional[str] = None) -> dict:
+    if _v2(tenant_id):
+        from vula.commerce import books_reports
+        return books_reports.vat(tenant_id, since, until, basis)
     if not is_vat_registered(tenant_id):
         return {"vat_registered": False}
     accounts = {a["code"]: a for a in ensure_chart(tenant_id)}
@@ -413,7 +499,11 @@ def vat_return(tenant_id: str, since: str = None, until: str = None) -> dict:
             "note": "Net VAT payable to SARS (positive) or refundable (negative). Cash-basis from the bank ledger."}
 
 
-def general_ledger(tenant_id: str, since: str = None, until: str = None) -> List[dict]:
+def general_ledger(tenant_id: str, since: str = None, until: str = None, basis: Optional[str] = None) -> List[dict]:
+    """Bank lines; for a business on the one book, one row per journal line in the view."""
+    if _v2(tenant_id):
+        from vula.commerce import books_reports
+        return books_reports.general_ledger(tenant_id, since, until, books_reports.basis_of(basis))
     accounts = {a["code"]: a for a in ensure_chart(tenant_id)}
     out = []
     for r in _txns(tenant_id, since, until):

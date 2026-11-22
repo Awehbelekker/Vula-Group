@@ -56,7 +56,7 @@ def active_members(tenant_id: str) -> List[Dict[str, Any]]:
         except Exception as exc:
             if not extra:
                 raise
-            logger.debug("team read without %s (run migrations 262/279?): %s", extra, exc)
+            logger.debug("team read without %s (run migrations 262/280?): %s", extra, exc)
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     with _LOCK:
         _CACHE[tenant_id] = (now, rows)
