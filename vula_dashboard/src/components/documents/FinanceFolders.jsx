@@ -10,7 +10,7 @@
  * Every figure is the server's; this file only formats it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronRight, Download, FolderOpen, Landmark } from "lucide-react";
+import { ChevronRight, Download, FileSpreadsheet, FolderOpen, Landmark } from "lucide-react";
 import { VULA_API } from "../../lib/authFetch";
 import { formatMoney } from "../../lib/money";
 import { Button, Card, EmptyState, ErrorCard, Select, Skeleton, StatusChip, toast } from "../ui/index.jsx";
@@ -22,9 +22,73 @@ const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
 const monthName = (ym) => { const [y, m] = String(ym).split("-"); return `${MONTHS[Number(m) - 1] || m} ${y}`; };
 
 /** The financial years to offer: this one (from 1 March) and the two before it. */
-function years(today = new Date()) {
+export function years(today = new Date()) {
   const y = today.getMonth() >= 2 ? today.getFullYear() : today.getFullYear() - 1;
   return [0, 1, 2].map((n) => ({ id: `${y - n}-03-01`, label: `March ${y - n} – February ${y - n + 1}` }));
+}
+
+/** Fetch a file with the signed-in token (not a plain link) and save it under the server's name.
+ *  The server checks every pack before sending it; a refusal's reason is shown as is. */
+export async function saveFrom(url, fallbackName) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(typeof d.detail === "string" ? d.detail : "Couldn't make the download — please try again.");
+    }
+    const name = (r.headers.get("content-disposition") || "").match(/filename="([^"]+)"/)?.[1] || fallbackName;
+    const href = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = href; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+    const failed = Number(r.headers.get("x-files-failed") || 0);
+    if (failed) toast(`${failed} file${failed === 1 ? "" : "s"} couldn't be fetched — the index lists them.`, "warn");
+    return true;
+  } catch (e) {
+    toast(e.message, "danger");
+    return false;
+  }
+}
+
+/** The year-end pack (22 Nov 2026, vula_mind/vula/commerce/year_end_pack.py): one financial year as an
+ *  accountant compiles the annual financial statements from it — the workbook alone, or with the
+ *  ledger and bank lines as CSV and every document of the year. Built and checked on the server. */
+export function YearEndPack({ tenantId, year: fixedYear, accountant = false }) {
+  const options = years();
+  const [own, setOwn] = useState(options[0].id);
+  const [busy, setBusy] = useState("");
+  const year = fixedYear || own;
+  const get = async (kind) => {
+    setBusy(kind);
+    await saveFrom(`${VULA_API}/v1/commerce/${tenantId}/admin/finance-folders/year-end-pack.${kind}?year=${year}`,
+      `Year-end_pack.${kind}`);
+    setBusy("");
+  };
+  return (
+    <Card className="vdc-panel vff-pack">
+      <h3 className="vdc-h"><FileSpreadsheet size={18} aria-hidden="true" />Year-end pack</h3>
+      <p className="vdc-sub">
+        {accountant ? "The year as you'd compile the financial statements from it" : "Everything your accountant needs for the year"}:
+        trial balance, profit and loss by month, balance sheet, general ledger, VAT, what was owed at year end,
+        the bank reconciliation per account, the statements on file and what's still open in the books review.
+        Every figure is checked before it's sent.
+      </p>
+      <div className="vdc-row">
+        {!fixedYear && (
+          <label className="vdc-grow"><span className="vdc-sr">Year for the pack</span>
+            <Select aria-label="Year for the pack" value={own} onChange={(e) => setOwn(e.target.value)}>
+              {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </Select>
+          </label>)}
+        <Button Icon={Download} disabled={!!busy} onClick={() => get("xlsx")}>
+          {busy === "xlsx" ? "Making the workbook…" : "Workbook (Excel)"}
+        </Button>
+        <Button Icon={Download} variant="secondary" disabled={!!busy} onClick={() => get("zip")}>
+          {busy === "zip" ? "Making the pack…" : "With every document (zip)"}
+        </Button>
+      </div>
+    </Card>
+  );
 }
 
 export function useFinanceFolders(tenantId) {
@@ -45,28 +109,11 @@ export function useFinanceFolders(tenantId) {
   }, [tenantId, year]);
   useEffect(() => { load(); }, [load]);
 
-  // fetched (not a plain link) so the signed-in token goes with it
   const download = async (folder) => {
     setBusy(folder || "all");
-    try {
-      const q = new URLSearchParams({ year }); if (folder) q.set("folder", folder);
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/finance-folders.zip?${q}`);
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        throw new Error(typeof d.detail === "string" ? d.detail : "Couldn't make the download — please try again.");
-      }
-      const name = (r.headers.get("content-disposition") || "").match(/filename="([^"]+)"/)?.[1] || "Documents.zip";
-      const url = URL.createObjectURL(await r.blob());
-      const a = document.createElement("a");
-      a.href = url; a.download = name; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      const failed = Number(r.headers.get("x-files-failed") || 0);
-      if (failed) toast(`${failed} file${failed === 1 ? "" : "s"} couldn't be fetched — the index lists them.`, "warn");
-    } catch (e) {
-      toast(e.message, "danger");
-    } finally {
-      setBusy("");
-    }
+    const q = new URLSearchParams({ year }); if (folder) q.set("folder", folder);
+    await saveFrom(`${VULA_API}/v1/commerce/${tenantId}/admin/finance-folders.zip?${q}`, "Documents.zip");
+    setBusy("");
   };
 
   return { options, year, setYear, tree, state, busy, reload: load, download };
@@ -98,6 +145,7 @@ export default function FinanceFolders({ tenantId, accountant = false }) {
         </EmptyState>)}
       {x.state === "ready" && x.tree && (
         <>
+          <YearEndPack tenantId={tenantId} year={x.year} accountant={accountant} />
           {!accountant && <CompanyDocs tenantId={tenantId} onDone={x.reload} />}
           <Coverage cover={x.tree.coverage} />
           {x.tree.folders.map((f) => <Folder key={f.key} f={f} busy={x.busy} onDownload={() => x.download(f.key)}

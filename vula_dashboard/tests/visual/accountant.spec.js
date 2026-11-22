@@ -61,6 +61,17 @@ test.describe("the accountant's workspace", () => {
     await expect(page.getByText("Missing Jul 2026, Oct 2026")).toBeVisible();
   });
 
+  test("the year-end pack is on the overview, for the year chosen", async ({ page }) => {
+    await openWorkspace(page, VIEWPORTS.desktop);
+    await expect(page.getByRole("heading", { name: "Year-end pack" })).toBeVisible();
+    const pick = page.getByLabel("Year for the pack");
+    const last = await pick.locator("option").nth(1).getAttribute("value");
+    await pick.selectOption(last);
+    const xlsx = page.waitForRequest((r) => r.url().includes("/finance-folders/year-end-pack.xlsx"));
+    await page.getByRole("button", { name: "Workbook (Excel)" }).click();
+    expect(new URL((await xlsx).url()).searchParams.get("year")).toBe(last);
+  });
+
   test("a document is opened through the server, and the ledger downloads", async ({ page }) => {
     await openWorkspace(page, VIEWPORTS.desktop);
     await page.getByRole("tab", { name: "Documents" }).click();

@@ -179,6 +179,12 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/finance-folders.zip`, () => (booksViewer
       ? { __raw: { status: 200, contentType: "application/zip", body: "PK", headers: { "content-disposition": 'attachment; filename="Documents_2026-27_all.zip"' } } }
       : booksOff)),
+    // 22 Nov 2026: the year-end pack (owner/manager or the accountant)
+    r("GET", `${A}/finance-folders/year-end-pack\\.(xlsx|zip)`, (m) => { const kind = m[m.length - 1]; return booksViewer
+      ? { __raw: { status: 200, contentType: kind === "zip" ? "application/zip" : "application/octet-stream", body: "PK",
+          headers: { "content-disposition": `attachment; filename="Year-end_pack_2026-27.${kind}"`,
+            "x-files-failed": kind === "zip" ? "1" : "0", "access-control-expose-headers": "content-disposition, x-files-failed" } } }
+      : booksOff; }),
     r("GET", `${A}/company-docs/proposals`, () => (booksViewer && role !== "accountant" ? { documents: F.companyDocProposals } : booksOff)),
     r("POST", `${A}/company-docs/refile`, (m, url, req) => ({ ok: true, refiled: (req.postDataJSON() || {}).ids || [], skipped: [] })),
     r("POST", `^/ingest`, () => ({ status: "queued", filename: "doc.pdf", message: "processing" })),

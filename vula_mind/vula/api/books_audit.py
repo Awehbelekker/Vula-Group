@@ -31,6 +31,10 @@ full access (an owner or manager) — the bank data behind the books is the busi
   POST …/books-audit/bills/{id}/cancel-duplicate {of_id, reason}  the second copy of a bill (never a paid one)
   POST …/books-audit/bills/{id}/match-document   {reason}     an unpaid bill booked at its document's figures
   Duplicate suppliers are merged with the existing POST /admin/suppliers/merge.
+
+22 Nov 2026, the year-end pack (vula/commerce/year_end_pack.py), owner/manager or the accountant:
+  GET  …/finance-folders/year-end-pack.xlsx?year=   the year-end workbook
+  GET  …/finance-folders/year-end-pack.zip?year=    the workbook, CSVs, statements PDF and documents
 """
 from __future__ import annotations
 
@@ -423,6 +427,43 @@ async def finance_folders_zip(tenant_id: str, request: Request, year: Optional[s
     return Response(content=data, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{ff.zip_filename(manifest)}"',
                              "X-Files-Failed": str(len(manifest["files_failed"]))})
+
+
+async def _year_end(tenant_id: str, request: Request, year: Optional[str], kind: str):
+    scope = await _viewer(tenant_id, request)
+    from fastapi.responses import Response
+    from vula.commerce import year_end_pack as yep
+    who = (scope or {}).get("email") or ""
+    try:
+        if kind == "xlsx":
+            data, manifest = await asyncio.to_thread(yep.build_workbook, tenant_id, year, who)
+        else:
+            data, manifest = await asyncio.to_thread(yep.build_pack, tenant_id, year, who)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) if "year" in str(exc) else
+                            "year is the first day of the financial year, e.g. 2026-03-01")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=f"The pack wasn't sent because it didn't check out: {exc}")
+    media = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if kind == "xlsx"
+             else "application/zip")
+    return Response(content=data, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{yep.filename(manifest, kind)}"',
+                             "X-Files-Failed": str(len(manifest.get("files_failed") or []))})
+
+
+@router.get("/{tenant_id}/admin/finance-folders/year-end-pack.xlsx")
+async def year_end_workbook(tenant_id: str, request: Request, year: Optional[str] = None):
+    """The year-end workbook (22 Nov 2026): cover, trial balance, P&L by month, balance sheet, general
+    ledger, VAT, aged debtors and creditors at year end, bank reconciliation, statements on file, open
+    items and the documents index — every amount read back first. Owner/manager or the accountant."""
+    return await _year_end(tenant_id, request, year, "xlsx")
+
+
+@router.get("/{tenant_id}/admin/finance-folders/year-end-pack.zip")
+async def year_end_pack_zip(tenant_id: str, request: Request, year: Optional[str] = None):
+    """The workbook with the ledger and bank lines as CSV, the statements PDF (the one book only) and
+    every document of the year in its folder, in one zip read back before it's sent."""
+    return await _year_end(tenant_id, request, year, "zip")
 
 
 @router.get("/{tenant_id}/admin/bank-statements/coverage")

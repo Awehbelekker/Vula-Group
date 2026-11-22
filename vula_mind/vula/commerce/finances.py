@@ -76,53 +76,115 @@ def _aging_buckets(out_inv: List[dict], today, owed=None,
     return buckets
 
 
-def aged_creditors(tenant_id: str, as_at: Optional[str] = None) -> Dict[str, Any]:
-    """What the business still owes its suppliers, by how far past due each bill is (every business).
+_BUCKETS = ("current", "days_1_30", "days_31_60", "days_61_90", "days_90_plus")
 
-    A bill counts once it's recorded (not a draft, not cancelled, not paid); what's owed is its total
-    less the payments on record against it, not a stored running total (DIGG had bills marked paid
-    with no payment). For a business on the one book the total is set beside the creditors account."""
+
+def _bucket(days_over: Optional[int]) -> str:
+    if days_over is None or days_over <= 0:
+        return "current"
+    return ("days_1_30" if days_over <= 30 else "days_31_60" if days_over <= 60
+            else "days_61_90" if days_over <= 90 else "days_90_plus")
+
+
+def _day(v: Any) -> Optional[str]:
+    s = str(v or "")[:10]
+    return s if len(s) == 10 else None
+
+
+def aged_as_at(tenant_id: str, as_at: Optional[str] = None, direction: str = "outbound") -> Dict[str, Any]:
+    """What was still owed on a date — by customers (`outbound`, debtors) or to suppliers (`inbound`,
+    creditors) — by how far past due each document was on that date (22 Nov 2026, the year-end pack).
+
+    A document counts when it was issued on or before the date and isn't a draft or cancelled. What was
+    owed is its total less the payments (and credit notes) on record dated on or before the date; a
+    document marked paid with less than its total on record counts the rest as paid on its paid date.
+    So a payment made after year end leaves the document owed at year end, as it was."""
+    if direction not in ("outbound", "inbound"):
+        raise ValueError("direction is outbound or inbound")
     db = _client()
-    today = datetime.fromisoformat(as_at[:10]).date() if as_at else datetime.now(timezone.utc).date()
+    day = datetime.fromisoformat(as_at[:10]).date() if as_at else datetime.now(timezone.utc).date()
+    cut = day.isoformat()
+    empty = {"as_at": cut, "direction": direction, "total_cents": 0, "count": 0,
+             "aging": {k: 0 for k in _BUCKETS}, "parties": [], "items": []}
     try:
-        bills = (db.table("commerce_invoices")
-                 .select("id,number,supplier_id,customer_name,total_cents,status,issue_date,due_date,direction,doc_type")
-                 .eq("tenant_id", tenant_id).eq("direction", "inbound").execute().data or [])
+        from vula.commerce.ledger import _all_pages
+        docs = _all_pages(lambda: db.table("commerce_invoices")
+                          .select("id,invoice_number,supplier,supplier_id,customer_name,total_cents,status,"
+                                  "issue_date,due_date,paid_at,created_at,direction,doc_type")
+                          .eq("tenant_id", tenant_id).eq("direction", direction).order("id"))
     except Exception as exc:  # noqa: BLE001
-        log.warning("aged creditors skipped for %s: %s", tenant_id, exc)
-        return {"as_at": today.isoformat(), "total_cents": 0, "count": 0, "aging": _aging_buckets([], today),
-                "suppliers": []}
-    bills = [b for b in bills if (b.get("doc_type") or "invoice") == "invoice"
-             and b.get("status") not in ("draft", "cancelled", "paid", "void")
-             and (not b.get("issue_date") or str(b["issue_date"])[:10] <= today.isoformat())]
+        log.warning("aged %s skipped for %s: %s", direction, tenant_id, exc)
+        return empty
+    docs = [d for d in docs if (d.get("doc_type") or "invoice") == "invoice"
+            and d.get("status") not in ("draft", "cancelled", "void")
+            and (_day(d.get("issue_date")) or _day(d.get("created_at")) or cut) <= cut]
     paid: Dict[str, int] = {}
-    ids = [b["id"] for b in bills]
+    ids = [d["id"] for d in docs]
     for i in range(0, len(ids), 150):
         try:
-            for p in (db.table("commerce_invoice_payments").select("invoice_id,amount_cents")
+            for p in (db.table("commerce_invoice_payments").select("invoice_id,amount_cents,paid_at,created_at")
                       .eq("tenant_id", tenant_id).in_("invoice_id", ids[i:i + 150]).execute().data or []):
-                paid[p["invoice_id"]] = paid.get(p["invoice_id"], 0) + int(p.get("amount_cents") or 0)
+                if (_day(p.get("paid_at")) or _day(p.get("created_at")) or cut) <= cut:
+                    paid[p["invoice_id"]] = paid.get(p["invoice_id"], 0) + int(p.get("amount_cents") or 0)
         except Exception:  # noqa: BLE001
             pass
-    owed = lambda b: max(0, int(b.get("total_cents") or 0) - paid.get(b["id"], 0))  # noqa: E731
-    open_bills = [b for b in bills if owed(b) > 0]
-    try:
-        names = {x["id"]: x.get("name") for x in (db.table("commerce_suppliers").select("id,name")
-                                                  .eq("tenant_id", tenant_id).execute().data or [])}
-    except Exception:  # noqa: BLE001
-        names = {}
-    per: Dict[str, int] = {}
-    for b in open_bills:
-        n = names.get(b.get("supplier_id")) or b.get("customer_name") or "Supplier not named"
-        per[n] = per.get(n, 0) + owed(b)
-    out = {"as_at": today.isoformat(), "total_cents": sum(per.values()), "count": len(open_bills),
-           "aging": _aging_buckets(open_bills, today, owed=owed, statuses=tuple({b.get("status") for b in open_bills})),
-           "suppliers": [{"name": k, "owed_cents": v} for k, v in sorted(per.items(), key=lambda kv: -kv[1])][:20]}
+    names: Dict[str, str] = {}
+    if direction == "inbound":
+        try:
+            names = {x["id"]: x.get("name") for x in (db.table("commerce_suppliers").select("id,name")
+                                                      .eq("tenant_id", tenant_id).execute().data or [])}
+        except Exception:  # noqa: BLE001
+            names = {}
+    aging = {k: 0 for k in _BUCKETS}
+    per: Dict[str, Dict[str, int]] = {}
+    items = []
+    for d in docs:
+        total = int(d.get("total_cents") or 0)
+        owed = total - paid.get(d["id"], 0)
+        if d.get("status") == "paid" and (_day(d.get("paid_at")) or cut) <= cut:
+            owed = 0                                    # marked paid by then: the rest was paid too
+        if owed <= 0:
+            continue
+        due = _day(d.get("due_date"))
+        days_over = (day - datetime.fromisoformat(due).date()).days if due else None
+        name = ((names.get(d.get("supplier_id")) or d.get("supplier") or d.get("customer_name") or "Supplier not named")
+                if direction == "inbound" else (d.get("customer_name") or "Customer not named"))
+        aging[_bucket(days_over)] += owed
+        p = per.setdefault(name, {"owed_cents": 0, "count": 0})
+        p["owed_cents"] += owed
+        p["count"] += 1
+        items.append({"id": d["id"], "number": d.get("invoice_number") or "", "name": name,
+                      "issue_date": _day(d.get("issue_date")), "due_date": due,
+                      "days_over": max(days_over, 0) if days_over is not None else None,
+                      "total_cents": total, "owed_cents": owed})
+    items.sort(key=lambda x: (x["name"].lower(), x["issue_date"] or "", x["number"]))
+    out = {"as_at": cut, "direction": direction, "total_cents": sum(x["owed_cents"] for x in items),
+           "count": len(items), "aging": aging,
+           "parties": [{"name": k, **v} for k, v in sorted(per.items(), key=lambda kv: -kv[1]["owed_cents"])],
+           "items": items}
     from vula.commerce import ledger_v2
     if ledger_v2.is_on(tenant_id):
         from vula.commerce import books_reports
-        out["control_cents"] = books_reports.control(tenant_id, "accounts_payable", today.isoformat())
+        code = "accounts_payable" if direction == "inbound" else "accounts_receivable"
+        out["control_cents"] = books_reports.control(tenant_id, code, cut)
         out["ties"] = out["control_cents"] == out["total_cents"]
+    return out
+
+
+def aged_creditors(tenant_id: str, as_at: Optional[str] = None) -> Dict[str, Any]:
+    """What the business still owes its suppliers, by how far past due each bill is (every business).
+
+    A bill counts once it's recorded (not a draft, not cancelled); what's owed is its total less the
+    payments on record against it, not a stored running total (DIGG had bills marked paid with no
+    payment). For a business on the one book the total is set beside the creditors account.
+    22 Nov 2026: read through aged_as_at — the old query named a column that doesn't exist
+    (`number`), so it found nothing in production."""
+    a = aged_as_at(tenant_id, as_at, "inbound")
+    out = {"as_at": a["as_at"], "total_cents": a["total_cents"], "count": a["count"], "aging": a["aging"],
+           "suppliers": [{"name": p["name"], "owed_cents": p["owed_cents"]} for p in a["parties"]][:20]}
+    for k in ("control_cents", "ties"):
+        if k in a:
+            out[k] = a[k]
     return out
 
 
