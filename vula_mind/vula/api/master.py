@@ -21,6 +21,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from vula.api.master_auth import require_master
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -107,8 +108,7 @@ def _tenant_signals(db, tenant_ids: list) -> dict:
     except Exception as exc:
         log.debug("tenant signals: whatsapp skipped: %s", exc)
     try:
-        for r in (db.table("vula_escalations").select("tenant_id").eq("status", "open")
-                  .limit(2000).execute().data or []):
+        for r in (all_rows(lambda: db.table("vula_escalations").select("tenant_id").eq("status", "open"), cap=2000)):
             if r.get("tenant_id") in out:
                 out[r["tenant_id"]]["open_escalations"] = out[r["tenant_id"]].get("open_escalations", 0) + 1
     except Exception as exc:
@@ -757,9 +757,9 @@ async def master_health():
 
     try:
         since = (now - timedelta(hours=24)).isoformat()
-        rows = (db.table("vula_reasoning_telemetry")
+        rows = (all_rows(lambda: db.table("vula_reasoning_telemetry")
                 .select("system,outcome,escalated,reason")
-                .gte("created_at", since).limit(2000).execute().data or [])
+                .gte("created_at", since), cap=2000))
         router_rows = [r for r in rows if r.get("system") == "vula-llm-router"]
         local = sum(1 for r in router_rows if r.get("outcome") == "local")
         cloud = sum(1 for r in router_rows if r.get("outcome") == "cloud")
@@ -804,11 +804,10 @@ async def master_health():
         # now carry verification_policy="adversarial" by class default, so this should be
         # accumulating — a low count or a high checker_error rate here IS the finding.
         since30 = (now - timedelta(days=30)).isoformat()
-        vrows = (db.table("vula_reasoning_telemetry")
+        vrows = (all_rows(lambda: db.table("vula_reasoning_telemetry")
                  .select("verifier,outcome,escalated,created_at")
                  .eq("system", "verified-reasoning")
-                 .gte("created_at", since30).order("created_at", desc=True).limit(2000)
-                 .execute().data or [])
+                 .gte("created_at", since30).order("created_at", desc=True), cap=2000))
         by_verifier: dict[str, dict] = {}
         for r in vrows:
             v = r.get("verifier") or "unknown"

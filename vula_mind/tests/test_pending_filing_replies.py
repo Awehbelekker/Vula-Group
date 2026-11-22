@@ -123,6 +123,8 @@ def test_a_site_contractor_never_decides_the_project(monkeypatch):
     q.select.return_value = q
     q.eq.return_value = q
     q.limit.return_value = q
+    q.order.return_value = q
+    q.range.return_value = q
     q.execute.return_value = MagicMock(data=[{"name": "Edison", "assignee_name": "Edison"}])
     monkeypatch.setattr(doc_filing, "_client", lambda: MagicMock(table=lambda _t: q))
     monkeypatch.setattr(doc_filing, "_own_names", lambda _t: ["DIGG"])

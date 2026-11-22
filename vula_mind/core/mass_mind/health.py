@@ -20,6 +20,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,8 @@ def systemic_incidents(hours: float = 24.0, min_tenants: int = 3) -> List[Dict[s
     applied) so a caller can call this unconditionally on a schedule."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     try:
-        rows = (_client().table("vula_health_events").select("tenant_id,kind")
-                .gte("created_at", cutoff).limit(5000).execute().data or [])
+        rows = (all_rows(lambda: _client().table("vula_health_events").select("tenant_id,kind")
+                .gte("created_at", cutoff), cap=5000))
     except Exception as exc:
         logger.debug("systemic incident scan skipped (run migration 160?): %s", exc)
         return []

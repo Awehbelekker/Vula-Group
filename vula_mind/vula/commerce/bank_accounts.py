@@ -19,6 +19,7 @@ import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -134,8 +135,8 @@ def list_accounts(tenant_id: str) -> List[Dict[str, Any]]:
         if r.get("private_to"):
             continue                          # one member's own account: not listed for the business
         try:
-            n = len(db.table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id)
-                    .eq("bank_account", r["account_number"]).execute().data or [])
+            n = len(all_rows(lambda: db.table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id)
+                    .eq("bank_account", r["account_number"])))
         except Exception:
             n = None
         out.append({"id": r["id"], "account": f"…{last4(r['account_number'])}", "bank": r.get("bank"),
@@ -164,8 +165,8 @@ def set_project(tenant_id: str, account_id: str, project: Optional[str],
     if name is not None:
         patch["name"] = name.strip() or None
     db.table("commerce_bank_accounts").update(patch).eq("id", account_id).eq("tenant_id", tenant_id).execute()
-    lines = (db.table("commerce_bank_transactions").select("id,project,project_source")
-             .eq("tenant_id", tenant_id).eq("bank_account", acct["account_number"]).execute().data or [])
+    lines = (all_rows(lambda: db.table("commerce_bank_transactions").select("id,project,project_source")
+             .eq("tenant_id", tenant_id).eq("bank_account", acct["account_number"])))
     moved = 0
     for ln in lines:
         if ln.get("project_source") == "owner":
@@ -222,8 +223,8 @@ def backfill_from_files(tenant_id: str) -> Dict[str, Any]:
     from vula.commerce.bank_rec import extract_pdf_text, get_statement_password
     db = _client()
     try:
-        rows = (db.table("commerce_bank_transactions").select("source_file").eq("tenant_id", tenant_id)
-                .is_("bank_account", "null").limit(5000).execute().data or [])
+        rows = (all_rows(lambda: db.table("commerce_bank_transactions").select("source_file").eq("tenant_id", tenant_id)
+                .is_("bank_account", "null"), cap=5000))
     except Exception:
         return {"error": "lookup failed"}
     files = sorted({r["source_file"] for r in rows if r.get("source_file")})

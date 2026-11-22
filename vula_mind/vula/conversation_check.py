@@ -23,6 +23,7 @@ import logging
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -140,8 +141,8 @@ def _staff_session_ids(session_ids: set) -> Optional[set]:
 def _escalations(day: date) -> Dict[str, int]:
     lo, hi = _day_bounds(day)
     try:
-        rows = (_client().table("vula_escalations").select("tenant_id")
-                .gte("created_at", lo).lt("created_at", hi).limit(5000).execute().data or [])
+        rows = (all_rows(lambda: _client().table("vula_escalations").select("tenant_id")
+                .gte("created_at", lo).lt("created_at", hi), cap=5000))
     except Exception as exc:
         log.debug("conversation check: escalations skipped: %s", exc)
         return {}

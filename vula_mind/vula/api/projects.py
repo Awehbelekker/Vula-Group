@@ -18,6 +18,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["projects"])
@@ -96,8 +97,8 @@ async def backfill_finances(tenant: str) -> dict:
     Idempotent — useful for docs filed before the ledger existed."""
     from vula.integrations.finances import post_finance_from_doc
     try:
-        docs = (_client().table("vula_filed_documents").select("project,fields,doc_id,filename,summary,category")
-                .eq("tenant_id", tenant).eq("status", "filed").execute().data or [])
+        docs = (all_rows(lambda: _client().table("vula_filed_documents").select("project,fields,doc_id,filename,summary,category")
+                .eq("tenant_id", tenant).eq("status", "filed")))
     except Exception as exc:
         return {"error": str(exc)}
     posted = 0
@@ -193,7 +194,7 @@ async def project_labels(tenant: str) -> dict:
     for table, col in (("vula_filed_documents", "project"), ("vula_project_finances", "project"),
                        ("vula_project_threads", "project")):
         try:
-            for r in (db.table(table).select(col).eq("tenant_id", tenant).limit(2000).execute().data or []):
+            for r in all_rows(lambda t=table, c=col: db.table(t).select(c).eq("tenant_id", tenant), cap=2000, order=col):
                 if r.get(col):
                     labels.add(r[col])
         except Exception:
@@ -558,8 +559,8 @@ async def project_overview(tenant_id: str, project_id: str) -> dict:
 
     def _docs(name: str) -> dict:
         try:
-            rows = (c.table("vula_filed_documents").select("category").eq("tenant_id", tenant_id)
-                    .eq("project", name).limit(5000).execute().data or [])
+            rows = (all_rows(lambda: c.table("vula_filed_documents").select("category").eq("tenant_id", tenant_id)
+                    .eq("project", name), cap=5000))
         except Exception:
             rows = []
         out: dict = {}

@@ -18,6 +18,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +129,9 @@ async def retitle_tenant(tenant_id: str, apply: bool = False, limit: int = 300) 
     whose name is only a category and a timestamp. Money documents are skipped. Only the
     filename changes — the document, its knowledge-base chunks and its doc_id are untouched."""
     from vula.commerce import service
-    rows = (service._client().table("vula_filed_documents")
+    rows = (all_rows(lambda: service._client().table("vula_filed_documents")
             .select("id,filename,category,summary,created_at")
-            .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(2000)
-            .execute().data or [])
+            .eq("tenant_id", tenant_id).order("created_at", desc=True), cap=2000))
     todo = [r for r in rows if generic_name(r.get("filename") or "")
             and not is_money_category(r.get("category") or "")][:limit]
     proposals: List[Dict[str, Any]] = []

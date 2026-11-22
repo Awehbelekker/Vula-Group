@@ -59,7 +59,7 @@ def test_reread_picks_documents_missing_any_required_detail_and_tries_each_once(
         {"id": "c", "category": "Invoice", "filename": "y.pdf", "file_url": "u", "fields": {"_reread_at": "2026-10-01"}},
     ]
     chain = MagicMock()
-    for m in ("table", "select", "eq", "in_", "order", "limit"):
+    for m in ("table", "select", "eq", "in_", "order", "limit", "range"):
         getattr(chain, m).return_value = chain
     chain.execute.return_value.data = rows
     with patch.object(reread.service, "_client", return_value=chain):

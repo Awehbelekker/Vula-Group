@@ -3467,8 +3467,8 @@ async def admin_bank_reconciliation(tenant_id: str):
     """Summary: money in/out from statements, match counts, and invoices sent-vs-paid."""
     db = service._client()
     try:
-        rows = (db.table("commerce_bank_transactions").select("amount_cents,direction,match_status,categorized_by")
-                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+        rows = (all_rows(lambda: db.table("commerce_bank_transactions").select("amount_cents,direction,match_status,categorized_by")
+                .eq("tenant_id", tenant_id), cap=5000))
     except Exception as exc:
         return {"error": f"{exc} (run migration 057?)"}
     money_in = sum(int(r.get("amount_cents") or 0) for r in rows if r.get("direction") == "in")
@@ -3478,8 +3478,8 @@ async def admin_bank_reconciliation(tenant_id: str):
     unmatched_out = len([r for r in rows if r.get("direction") == "out" and r.get("match_status") == "unmatched"])
     needs_input = len([r for r in rows if r.get("categorized_by") in ("default", "asked")])   # Vula unsure → owner allocates
     try:
-        inv = (db.table("commerce_invoices").select("status,total_cents,doc_type")
-               .eq("tenant_id", tenant_id).limit(3000).execute().data or [])
+        inv = (all_rows(lambda: db.table("commerce_invoices").select("status,total_cents,doc_type")
+               .eq("tenant_id", tenant_id), cap=3000))
         inv = [i for i in inv if (i.get("doc_type") or "invoice") == "invoice"]
     except Exception:
         inv = []
@@ -3913,15 +3913,19 @@ async def admin_dismiss_by_filter(tenant_id: str, body: DismissByFilterIn):
     """
     db = service._client()
     try:
-        q = (db.table("commerce_bank_transactions").select("id,amount_cents,direction")
-             .eq("tenant_id", tenant_id).in_("match_status", ["unmatched", "asked"]))
-        if body.direction in ("in", "out"):
-            q = q.eq("direction", body.direction)
-        if body.account_code:
-            q = q.eq("account_code", body.account_code)
-        if body.before_date:
-            q = q.lt("txn_date", body.before_date)
-        rows = q.limit(5000).execute().data or []
+        from vula.db_pages import all_rows
+
+        def q():
+            x = (db.table("commerce_bank_transactions").select("id,amount_cents,direction")
+                 .eq("tenant_id", tenant_id).in_("match_status", ["unmatched", "asked"]))
+            if body.direction in ("in", "out"):
+                x = x.eq("direction", body.direction)
+            if body.account_code:
+                x = x.eq("account_code", body.account_code)
+            if body.before_date:
+                x = x.lt("txn_date", body.before_date)
+            return x
+        rows = all_rows(q, cap=5000)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"lookup failed: {exc}")
 
@@ -4960,8 +4964,8 @@ async def admin_import_undo(tenant_id: str):
     from vula.commerce.importer import IMPORT_TAG
     db = service._client()
     try:
-        rows = (db.table("commerce_orders").select("id").eq("tenant_id", tenant_id)
-                .like("delivery_notes", f"{IMPORT_TAG}%").limit(5000).execute().data or [])
+        rows = (all_rows(lambda: db.table("commerce_orders").select("id").eq("tenant_id", tenant_id)
+                .like("delivery_notes", f"{IMPORT_TAG}%"), cap=5000))
         ids = [r["id"] for r in rows]
         for oid in ids:
             db.table("commerce_order_items").delete().eq("order_id", oid).execute()
@@ -4980,9 +4984,9 @@ async def admin_stats(tenant_id: str):
     db = service._client()
     today = datetime.now(timezone.utc).date().isoformat()
 
-    all_orders = db.table("commerce_orders").select(
+    all_orders = all_rows(lambda: db.table("commerce_orders").select(
         "id,total_cents,status,created_at"
-    ).eq("tenant_id", tenant_id).execute().data or []
+    ).eq("tenant_id", tenant_id))
 
     paid = [o for o in all_orders if o["status"] not in ("pending_payment", "cancelled", "refunded")]
     today_paid = [o for o in paid if o["created_at"][:10] == today]
@@ -4994,9 +4998,9 @@ async def admin_stats(tenant_id: str):
     # (2026-08-15), an unaccepted quote counted as "owed to you", and every credit note made
     # the figure go UP instead of down.
     try:
-        inv_result = db.table("commerce_invoices").select(
+        inv_result = all_rows(lambda: db.table("commerce_invoices").select(
             "total_cents,status,doc_type"
-        ).eq("tenant_id", tenant_id).execute().data or []
+        ).eq("tenant_id", tenant_id))
         credited = sum(i["total_cents"] for i in inv_result if i.get("doc_type") == "credit_note")
         invoice_outstanding = sum(i["total_cents"] for i in inv_result
                                   if i.get("doc_type") == "invoice" and i["status"] in ("sent",)) - credited
@@ -5023,10 +5027,9 @@ async def admin_stats(tenant_id: str):
     bank_series, bank_in_7d, bank_in_30d, bank_last = [], 0, 0, None
     try:
         since = (today_d - _td(days=30)).isoformat()
-        rows = (db.table("commerce_bank_transactions")
+        rows = (all_rows(lambda: db.table("commerce_bank_transactions")
                 .select("txn_date,amount_cents,category,match_status")
-                .eq("tenant_id", tenant_id).eq("direction", "in").gte("txn_date", since)
-                .limit(5000).execute().data or [])
+                .eq("tenant_id", tenant_id).eq("direction", "in").gte("txn_date", since), cap=5000))
         rows = [r for r in rows if r.get("match_status") != "ignored"
                 and (r.get("category") or "") not in ("other_income", "transfer", "loan", "owner_contribution")]
         by_day: dict = {}
@@ -5116,8 +5119,8 @@ async def admin_reports(tenant_id: str, days: int = 30):
     db = service._client()
     today = datetime.now(timezone.utc).date()
     since = (today - _td(days=days - 1)).isoformat()
-    orders = (db.table("commerce_orders").select("id,total_cents,status,created_at")
-              .eq("tenant_id", tenant_id).gte("created_at", since).execute().data or [])
+    orders = (all_rows(lambda: db.table("commerce_orders").select("id,total_cents,status,created_at")
+              .eq("tenant_id", tenant_id).gte("created_at", since)))
     paid = [o for o in orders if o["status"] not in ("pending_payment", "cancelled", "refunded")]
 
     trend = []
@@ -5269,9 +5272,9 @@ async def admin_customer_statement(tenant_id: str, phone: str):
     asks for as a 'statement of account'."""
     import re as _re
     digits = _re.sub(r"\D", "", phone or "")
-    rows = (service._client().table("commerce_invoices").select("*")
+    rows = (all_rows(lambda: service._client().table("commerce_invoices").select("*")
             .eq("tenant_id", tenant_id).eq("direction", "outbound")
-            .order("created_at").execute().data or [])
+            .order("created_at")))
     mine = [r for r in rows if _re.sub(r"\D", "", r.get("customer_phone") or "") == digits]
     invoiced = sum(r.get("total_cents") or 0 for r in mine if r.get("doc_type") == "invoice")
     paid = sum(r.get("total_cents") or 0 for r in mine if r.get("doc_type") == "invoice" and r.get("status") == "paid")
@@ -6373,9 +6376,8 @@ async def admin_broadcast_analytics(tenant_id: str, days: int = Query(90)):
     attributed_orders, attributed_revenue_cents = 0, 0
     if broadcast_ids:
         try:
-            orders = (db.table("commerce_orders").select("total_cents,status,attributed_broadcast_id")
-                      .eq("tenant_id", tenant_id).in_("attributed_broadcast_id", broadcast_ids)
-                      .limit(2000).execute().data or [])
+            orders = (all_rows(lambda: db.table("commerce_orders").select("total_cents,status,attributed_broadcast_id")
+                      .eq("tenant_id", tenant_id).in_("attributed_broadcast_id", broadcast_ids), cap=2000))
             counted = [o for o in orders if o.get("status") not in ("pending_payment", "cancelled", "refunded")]
             attributed_orders = len(counted)
             attributed_revenue_cents = sum(int(o.get("total_cents") or 0) for o in counted)
@@ -7676,14 +7678,10 @@ async def _aggregate_customers(tenant_id: str, use_cache: bool = True) -> dict[s
     customers: dict[str, dict] = {}
 
     # Orders → spend & recency (cap to recent so it stays fast as history grows)
-    orders = (
-        db.table("commerce_orders")
+    orders = all_rows(lambda: db.table("commerce_orders")
         .select("customer_phone,customer_name,total_cents,status,created_at")
         .eq("tenant_id", tenant_id)
-        .order("created_at", desc=True)
-        .limit(3000)
-        .execute()
-    ).data or []
+        .order("created_at", desc=True), cap=3000)
     for o in orders:
         key = _norm_phone(o.get("customer_phone"))
         if not key:
@@ -7703,14 +7701,10 @@ async def _aggregate_customers(tenant_id: str, use_cache: bool = True) -> dict[s
             c["last_order_at"] = ca
 
     # Conversation sessions → contacts who messaged in (cap to recent)
-    sessions = (
-        db.table("commerce_conversation_sessions")
+    sessions = all_rows(lambda: db.table("commerce_conversation_sessions")
         .select("customer_phone,customer_name,channel,updated_at,session_key,preferred_language")
         .eq("tenant_id", tenant_id)
-        .order("updated_at", desc=True)
-        .limit(5000)
-        .execute()
-    ).data or []
+        .order("updated_at", desc=True), cap=5000)
     for s in sessions:
         key = _norm_phone(s.get("customer_phone") or s.get("session_key"))
         if not key or not key.isdigit():
@@ -7734,11 +7728,9 @@ async def _aggregate_customers(tenant_id: str, use_cache: bool = True) -> dict[s
     # Imported contact book (existing clients) → merged in, deduped by phone. Guarded so a
     # missing table (migration 046 not yet run) never breaks the Customers tab or broadcasts.
     try:
-        contacts = (
-            db.table("commerce_contacts")
+        contacts = all_rows(lambda: db.table("commerce_contacts")
             .select("phone,name,email,area,product,tags,consent_status")
-            .eq("tenant_id", tenant_id).limit(20000).execute()
-        ).data or []
+            .eq("tenant_id", tenant_id), cap=20000)
     except Exception as exc:
         log.debug("contacts merge skipped (run migration 046?): %s", exc)
         contacts = []
@@ -8234,6 +8226,7 @@ _SCAN_PROMPTS = {
 # so every existing call site below is unchanged.
 from vula.commerce.extraction_quality import scan_quality_ok as _scan_quality_ok
 from core.verification import strip_caveat
+from vula.db_pages import all_rows
 
 
 def _parse_scan_json(content: str) -> dict:
@@ -8452,37 +8445,33 @@ async def admin_expenses_due(
     today = str(date.today())
 
     # Overdue expenses
-    overdue = db.table("commerce_expenses").select("*") \
-        .eq("tenant_id", tenant_id) \
-        .eq("status", "pending") \
-        .lt("due_date", today) \
-        .not_.is_("due_date", "null") \
-        .order("due_date").execute()
+    overdue_list = all_rows(lambda: db.table("commerce_expenses").select("*")
+                            .eq("tenant_id", tenant_id)
+                            .eq("status", "pending")
+                            .lt("due_date", today)
+                            .not_.is_("due_date", "null")
+                            .order("due_date"))
 
     # Due soon
-    upcoming = db.table("commerce_expenses").select("*") \
-        .eq("tenant_id", tenant_id) \
-        .eq("status", "pending") \
-        .gte("due_date", today) \
-        .lte("due_date", cutoff) \
-        .not_.is_("due_date", "null") \
-        .order("due_date").execute()
+    upcoming_list = all_rows(lambda: db.table("commerce_expenses").select("*")
+                             .eq("tenant_id", tenant_id)
+                             .eq("status", "pending")
+                             .gte("due_date", today)
+                             .lte("due_date", cutoff)
+                             .not_.is_("due_date", "null")
+                             .order("due_date"))
 
     # Inbound invoices due
     # Bills only: a supplier's quote is a price, not money owed (2026-10-06: 85 DIGG supplier
     # quotes, R12.8M, all carried a due date and would have shown here as bills due).
-    inv_due = db.table("commerce_invoices").select("*") \
-        .eq("tenant_id", tenant_id) \
-        .eq("direction", "inbound") \
-        .eq("doc_type", "invoice") \
-        .in_("status", ["draft", "sent"]) \
-        .lte("due_date", cutoff) \
-        .not_.is_("due_date", "null") \
-        .order("due_date").execute()
-
-    overdue_list = overdue.data or []
-    upcoming_list = upcoming.data or []
-    inv_list = inv_due.data or []
+    inv_list = all_rows(lambda: db.table("commerce_invoices").select("*")
+                        .eq("tenant_id", tenant_id)
+                        .eq("direction", "inbound")
+                        .eq("doc_type", "invoice")
+                        .in_("status", ["draft", "sent"])
+                        .lte("due_date", cutoff)
+                        .not_.is_("due_date", "null")
+                        .order("due_date"))
 
     total_overdue = sum(r["amount_cents"] for r in overdue_list)
     total_upcoming = sum(r["amount_cents"] for r in upcoming_list)
@@ -9216,9 +9205,8 @@ async def admin_cs_metrics(tenant_id: str):
 
     convos = 0
     try:
-        convos = len((db.table("commerce_conversation_sessions").select("id")
-                      .eq("tenant_id", tenant_id).gte("updated_at", cutoff.isoformat())
-                      .limit(5000).execute().data or []))
+        convos = len((all_rows(lambda: db.table("commerce_conversation_sessions").select("id")
+                      .eq("tenant_id", tenant_id).gte("updated_at", cutoff.isoformat()), cap=5000)))
     except Exception:
         pass
 
@@ -9226,10 +9214,9 @@ async def admin_cs_metrics(tenant_id: str):
     local = cloud = 0
     try:
         # this tenant's own routing decisions (2026-10-17: was platform-wide, shown as theirs)
-        for r in (db.table("vula_reasoning_telemetry").select("outcome")
+        for r in (all_rows(lambda: db.table("vula_reasoning_telemetry").select("outcome")
                   .eq("system", "vula-llm-router").eq("tenant_id", tenant_id)
-                  .gte("created_at", cutoff.isoformat())
-                  .limit(5000).execute().data or []):
+                  .gte("created_at", cutoff.isoformat()), cap=5000)):
             if r.get("outcome") == "local":
                 local += 1
             elif r.get("outcome") == "cloud":

@@ -101,6 +101,7 @@ _ROUTE_PURPOSE: dict[str, str] = {}
 
 # Last agent confidence for the current request (set in _rag_reply, read for escalation).
 import contextvars as _contextvars
+from vula.db_pages import all_rows
 _LAST_CONF = _contextvars.ContextVar("vula_last_conf", default=1.0)
 # The customer forwarded this message (WhatsApp's context.forwarded flag) — read by
 # _run_commerce_assistant so a forwarded post never fills a cart.
@@ -1669,10 +1670,9 @@ async def _handle_merchant_account_reply(phone: str, reply_id: str, tenant_id: s
     # Back-apply to everything from this merchant the owner hasn't already allocated by hand.
     updated = 0
     try:
-        rows = (cs._client().table("commerce_bank_transactions").select("*")
+        rows = (all_rows(lambda: cs._client().table("commerce_bank_transactions").select("*")
                 .eq("tenant_id", tenant_id).eq("direction", "out")
-                .in_("categorized_by", ["ai", "default", "learned", "asked", "merchant"])
-                .limit(2000).execute().data or [])
+                .in_("categorized_by", ["ai", "default", "learned", "asked", "merchant"]), cap=2000))
         vat_reg = accounting.is_vat_registered(tenant_id)
         acc = next((a for a in accounting.ensure_chart(tenant_id) if a["code"] == choice), None)
         for r in rows:

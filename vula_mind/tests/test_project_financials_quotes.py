@@ -31,13 +31,13 @@ def _mock_db():
     def table(name):
         t = MagicMock()
         if name == "commerce_invoices":
-            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = \
+            t.select.return_value.eq.return_value.order.return_value.range.return_value.execute.return_value = \
                 MagicMock(data=DOCS)
         else:
             t.select.return_value = _empty_execute()
             t.select.return_value.eq.return_value = _empty_execute()
             t.select.return_value.eq.return_value.eq.return_value = _empty_execute()
-            t.select.return_value.eq.return_value.limit.return_value = _empty_execute()
+            t.select.return_value.eq.return_value.order.return_value.range.return_value = _empty_execute()
         return t
 
     mock_db = MagicMock()

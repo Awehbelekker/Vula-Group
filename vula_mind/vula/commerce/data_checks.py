@@ -30,6 +30,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -359,8 +360,7 @@ def sweep(tenant_id: str) -> Dict[str, Any]:
     try:
         import asyncio
         from vula.commerce import service, supplier_identity as si
-        suppliers = (_client().table("commerce_suppliers").select("*").eq("tenant_id", tenant_id)
-                     .limit(2000).execute().data or [])
+        suppliers = (all_rows(lambda: _client().table("commerce_suppliers").select("*").eq("tenant_id", tenant_id), cap=2000))
         # sweep() runs in a worker thread (the API calls it with asyncio.to_thread), so it has its own loop
         own_names, own_numbers = asyncio.run(service.own_business_names(tenant_id))
         others, own_acc = si.split_own(suppliers, own_names, own_numbers)

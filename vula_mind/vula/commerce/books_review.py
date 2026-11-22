@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -392,8 +393,7 @@ def _supplier_ids(tenant_id: str) -> Dict[str, str]:
     """A supplier's name or alias (lower case) → its record id, so a bill that only names its supplier
     ("R Engelbrecht", no supplier_id) is still that supplier's (Belekkie Skips, alias R Engelbrecht)."""
     try:
-        rows = (_client().table("commerce_suppliers").select("id,name,aliases").eq("tenant_id", tenant_id)
-                .limit(5000).execute().data or [])
+        rows = (all_rows(lambda: _client().table("commerce_suppliers").select("id,name,aliases").eq("tenant_id", tenant_id), cap=5000))
     except Exception:  # noqa: BLE001
         return {}
     out: Dict[str, str] = {}

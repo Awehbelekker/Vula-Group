@@ -44,7 +44,7 @@ async def test_own_orders_scoped_to_matching_phone_only():
          "total_cents": 2000, "status": "paid", "created_at": "2026-09-02T00:00:00Z"},
     ]
     mock_db = MagicMock()
-    mock_db.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=rows)
+    mock_db.table.return_value.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value.execute.return_value = MagicMock(data=rows)
     with patch("vula.commerce.service._client", return_value=mock_db):
         orders = await data_export._own_orders(TID, PHONE)
 

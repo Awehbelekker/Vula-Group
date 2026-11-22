@@ -27,6 +27,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -193,8 +194,7 @@ def suggest_projects(tenant_id: str, labels: List[str]) -> Dict[str, Optional[st
                   .limit(500).execute().data or []):
             if r.get("name"):
                 known[r["name"]] = known.get(r["name"], 0) + 1000
-        for r in (db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id)
-                  .limit(5000).execute().data or []):
+        for r in (all_rows(lambda: db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id), cap=5000)):
             if r.get("project"):
                 known[r["project"]] = known.get(r["project"], 0) + 1
     except Exception as exc:

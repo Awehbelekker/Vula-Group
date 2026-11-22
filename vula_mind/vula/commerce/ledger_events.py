@@ -593,10 +593,14 @@ def sync_bank_lines_where(tenant_id: str, **match: Any) -> Dict[str, int]:
     if not on(tenant_id):
         return {"posted": 0, "removed": 0, "failed": 0}
     try:
-        q = _client().table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id)
-        for k, v in match.items():
-            q = q.eq(k, v)
-        ids = [r["id"] for r in (q.limit(5000).execute().data or [])]
+        from vula.db_pages import all_rows
+
+        def q():
+            x = _client().table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id)
+            for k, v in match.items():
+                x = x.eq(k, v)
+            return x
+        ids = [r["id"] for r in all_rows(q)]
     except Exception as exc:  # noqa: BLE001
         log.warning("ledger: bank lines not listed for %s: %s", tenant_id, exc)
         return {"posted": 0, "removed": 0, "failed": 1}

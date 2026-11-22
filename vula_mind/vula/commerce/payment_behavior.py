@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 MIN_SAMPLE = 2
 
@@ -70,10 +71,9 @@ async def tenant_watch_list(tenant_id: str, limit: int = 10) -> Dict[str, Any]:
     from vula.commerce import service
     db = service._client()
     try:
-        rows = (db.table("commerce_invoices")
+        rows = (all_rows(lambda: db.table("commerce_invoices")
                 .select("customer_phone,customer_name,status,due_date,paid_at,total_cents,doc_type")
-                .eq("tenant_id", tenant_id).eq("status", "paid").eq("doc_type", "invoice")
-                .limit(5000).execute().data or [])
+                .eq("tenant_id", tenant_id).eq("status", "paid").eq("doc_type", "invoice"), cap=5000))
     except Exception:
         rows = []
 

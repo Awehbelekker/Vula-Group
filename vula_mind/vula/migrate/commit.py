@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from vula.migrate import plan, runs
 from vula.xero.client import cents, xdate
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -534,8 +535,7 @@ async def run_commit(tenant_id: str, run_id: str, client=None, *, disconnect: bo
 
 def _existing_numbers(tenant_id: str) -> set:
     """Document numbers Vula already uses, except the ones this move made (a re-run keeps its own)."""
-    rows = (_db().table("commerce_invoices").select("invoice_number,source").eq("tenant_id", tenant_id)
-            .execute().data or [])
+    rows = (all_rows(lambda: _db().table("commerce_invoices").select("invoice_number,source").eq("tenant_id", tenant_id)))
     return {(r.get("invoice_number") or "").lower() for r in rows if r.get("source") not in (OPEN, HISTORY)}
 
 

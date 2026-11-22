@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,10 @@ async def _own_orders(tenant_id: str, phone: str) -> List[Dict[str, Any]]:
         return []
     try:
         from vula.commerce.service import _client
-        rows = (_client().table("commerce_orders")
+        rows = (all_rows(lambda: _client().table("commerce_orders")
                 .select("display_id,total_cents,status,created_at,customer_phone,customer_email")
                 .eq("tenant_id", tenant_id)
-                .order("created_at", desc=True).limit(2000).execute().data or [])
+                .order("created_at", desc=True), cap=2000))
     except Exception as exc:
         logger.warning("data export: orders lookup failed (tenant=%s): %s", tenant_id, exc)
         return []
@@ -61,11 +62,11 @@ async def _own_invoices(tenant_id: str, phone: str) -> List[Dict[str, Any]]:
         return []
     try:
         from vula.commerce.service import _client
-        rows = (_client().table("commerce_invoices")
+        rows = (all_rows(lambda: _client().table("commerce_invoices")
                 .select("invoice_number,doc_type,total_cents,status,created_at,"
                         "customer_phone,customer_email")
                 .eq("tenant_id", tenant_id)
-                .order("created_at", desc=True).limit(2000).execute().data or [])
+                .order("created_at", desc=True), cap=2000))
     except Exception as exc:
         logger.warning("data export: invoices lookup failed (tenant=%s): %s", tenant_id, exc)
         return []

@@ -25,6 +25,7 @@ import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -170,14 +171,14 @@ async def backfill(tenant_id: str) -> Dict[str, Any]:
     from config import settings
     from vula import storage_links
     db = _client()
-    names = sorted({r["source_file"] for r in (db.table("commerce_bank_transactions").select("source_file")
-                                                .eq("tenant_id", tenant_id).limit(20000).execute().data or [])
+    names = sorted({r["source_file"] for r in (all_rows(lambda: db.table("commerce_bank_transactions").select("source_file")
+                                                .eq("tenant_id", tenant_id), cap=20000))
                     if r.get("source_file") and r["source_file"] not in ("whatsapp_pop", "pasted-statement")})
     root = settings.upload_dir / tenant_id
     kept, relabelled, missing = 0, 0, []
     import tempfile
-    filed = (db.table("vula_filed_documents").select("id,filename,category,summary,file_url,fields")
-             .eq("tenant_id", tenant_id).execute().data or [])
+    filed = (all_rows(lambda: db.table("vula_filed_documents").select("id,filename,category,summary,file_url,fields")
+             .eq("tenant_id", tenant_id)))
     by_name = {}
     for d in filed:
         by_name.setdefault(d.get("filename"), d)
