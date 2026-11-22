@@ -228,7 +228,7 @@ async def me(tenant: str, email: str = "", authorization: str = Header(default="
 
 
 _EVENTS = ("which_project", "followup_digest", "payment_received", "new_invoice", "new_order",
-          "low_stock", "help_request", "procurement_done", "project_margin")
+          "low_stock", "help_request", "procurement_done", "project_margin", "pop_to_link")
 
 
 @router.get("/{tenant}/audit")

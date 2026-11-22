@@ -29,6 +29,7 @@ EVENTS = (
     "property_enquiry",      # someone asked about / wants to view a listing (vula/listings/)
     "ai_allowance",          # 80% / all of this month's AI allowance used (vula/ai_allowance.py)
     "buildup_suggestion",    # a finished job came out far from its build-up (vula/commerce/actuals.py)
+    "pop_to_link",           # a proof of payment by email may pay a supplier's bill (vula/commerce/pop_links.py)
 )
 
 # Alerts that must reach SOMEONE (2026-10-26). An ordinary event nobody subscribed to goes to no
