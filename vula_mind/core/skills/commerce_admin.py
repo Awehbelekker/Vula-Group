@@ -3109,7 +3109,7 @@ class CommerceAdminSkill(BaseSkill):
             return _not_confirmed("I couldn't send the notice. Not sent.")
         if not t["sent"]:
             return _not_confirmed("The notice didn't reach anyone — the staff notice template may "
-                                  "not be approved yet (Settings › WhatsApp templates). Not sent.")
+                                  "not be approved yet (Marketing › Templates). Not sent.")
         msg = f"✅ Sent to {t['sent']} of {len(people)} staff."
         if t["failed"]:
             msg += f" {t['failed']} couldn't be reached."
@@ -3158,7 +3158,7 @@ class CommerceAdminSkill(BaseSkill):
             return _not_confirmed("I couldn't send the poll. Not sent.")
         if not res.get("reached"):
             return _not_confirmed("The poll didn't reach anyone — the staff poll template may not "
-                                  "be approved yet (Settings › WhatsApp templates). Not sent.")
+                                  "be approved yet (Marketing › Templates). Not sent.")
         return _checked({"poll_id": poll["id"], "reached": res["reached"]},
                         f"✅ Poll sent to {res['reached']} of {len(people)} staff. I'll send you the "
                         "result when it closes — or ask me 'how's the poll going?'.")
@@ -5153,7 +5153,7 @@ class CommerceAdminSkill(BaseSkill):
                     "template_status": res.get("template_status"),
                     "message": ("Confirm to send (confirm=true), or test=true to send it to yourself first."
                                 if ready else "The promotion template isn't approved by Meta yet — "
-                                "submit the standard templates in Settings › WhatsApp templates.")}
+                                "submit the standard templates in Marketing › Templates.")}
         if test:
             ok = bool(res.get("sent"))
             return _checked({"test_sent": ok}, ("📲 Test sent to you — check how it looks, then say \"send it\"."
