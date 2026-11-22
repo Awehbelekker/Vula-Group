@@ -395,6 +395,67 @@ async def _apply_supplier_bill_match(tenant_id: str, txn: dict, bill: dict) -> s
     return f"✅ R{amt:,.2f} → {label} — marked paid."
 
 
+_NONE = re.compile(r"^\s*(none|no bill|not a bill|not a supplier'?s? bill|no invoice)\b[\s:—–-]*(.*)$", re.I)
+_NUM = re.compile(r"^\s*(?:option\s*|number\s*|no\.?\s*)?(\d{1,2})\s*[.)]?\s*$", re.I)
+
+
+async def _link_pop_bills(tenant_id: str, txn: dict, bill_ids: List[str]) -> str:
+    """The proof of payment paid these bills (22 Nov 2026, vula/commerce/pop_links.py): each open bill's
+    payment recorded once on the proof's date, a paid one only tied, the filed proof linked — the same
+    as Books review › Proofs of payment to link. The reply is built here from what was saved."""
+    from vula import open_questions
+    from vula.commerce import pop_links, service
+    doc_id = txn.get("pop_doc_id")
+    amount = int(txn.get("amount_cents") or 0)
+    day = _bank_date(txn)
+    try:
+        if doc_id:
+            out = await pop_links.link(tenant_id, doc_id, bill_ids, actor={"name": "WhatsApp reply"},
+                                       amount_cents=amount, paid_on=day)
+            nums, recorded = out["bills"], out["recorded"]
+            ok = out.get("ok")
+        else:                     # a row staged before its document was attached: record the payments
+            got = {str(b["id"]): b for b in (_client().table("commerce_invoices")
+                   .select("id,invoice_number,status,total_cents,total_paid_cents,direction")
+                   .eq("tenant_id", tenant_id).in_("id", bill_ids).execute().data or [])}
+            bills = [got.get(str(i)) for i in bill_ids]
+            if any(b is None or b.get("direction") != "inbound" for b in bills):
+                return "🤔 That bill isn't there any more — reply with the bill number, or 'skip'."
+            shares = {str(b["id"]): pop_links._due(b) for b in bills}
+            if sum(shares.values()) != amount:
+                return (f"🤔 Those bills come to R{sum(shares.values()) / 100:,.2f}, not R{amount / 100:,.2f} — "
+                        "reply with the right bill number, or 'skip'.")
+            recorded = 0
+            for b in bills:
+                if b.get("status") != "paid":
+                    await service.record_invoice_payment(tenant_id, b["id"], shares[str(b["id"])],
+                                                         payment_method="eft", paid_at=day,
+                                                         note=f"Proof of payment {day or ''}".strip())
+                    recorded += 1
+            nums = [b.get("invoice_number") or b["id"] for b in bills]
+            after = (_client().table("commerce_invoices").select("id,status").eq("tenant_id", tenant_id)
+                     .in_("id", bill_ids).execute().data or [])
+            ok = len(after) == len(bill_ids) and all(r.get("status") == "paid" for r in after)
+    except pop_links.Refused as exc:
+        return f"🤔 {exc} Reply with the right bill number, or 'skip'."
+    main = bill_ids[0]
+    try:
+        _client().table("commerce_bank_transactions").update(
+            {"matched_invoice_id": main, "match_status": "matched"}).eq("id", txn["id"]).execute()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("supplier pop txn update failed: %s", exc)
+    _books_sync(tenant_id, txn["id"])
+    open_questions.close_for(tenant_id, txn["id"], status="answered")
+    label = " + ".join(f"*{n}*" for n in nums)
+    if not ok:
+        from vula.api.tenants import dashboard_link
+        return (f"⚠️ I linked the proof to {label}, but couldn't confirm every bill shows paid. Please check "
+                f"under Books review › Documents: {dashboard_link(tenant_id, 'booksreview')}")
+    what = (f"payment of R{amount / 100:,.2f} recorded" + (f" on {day}" if day else "")) if recorded else "already marked paid"
+    return (f"✅ Linked to {label} — {what}. When the bank statement line comes in, it's tied to the "
+            f"same bill{'s' if len(nums) > 1 else ''}.")
+
+
 async def _handle_supplier_pop_answer(tenant_id: str, text: str, txn: dict) -> Optional[str]:
     """Reply handler for the money-OUT proof-of-payment question. Kept separate from the
     money-in flow below so that flow's behaviour is untouched: nothing but a supplier POP
@@ -413,8 +474,49 @@ async def _handle_supplier_pop_answer(tenant_id: str, text: str, txn: dict) -> O
         open_questions.close_for(tenant_id, txn["id"])
         return "⏭ Skipped — the payment is recorded but not linked to a bill."
 
+    # The numbered question (22 Nov 2026): the options offered when it was asked.
+    options = [[str(i) for i in o] for o in (txn.get("pop_options") or []) if o]
+    none = _NONE.match(text)
+    if none:
+        why = (none.group(2) or "").strip() or "not a supplier's bill (said on WhatsApp)"
+        if txn.get("pop_doc_id"):
+            from vula.commerce import pop_links
+            try:
+                pop_links.dismiss(tenant_id, txn["pop_doc_id"], why, actor={"name": "WhatsApp reply"})
+            except pop_links.Refused as exc:
+                log.info("pop dismiss refused: %s", exc)
+        db.table("commerce_bank_transactions").update(
+            {"match_status": "ignored"}).eq("id", txn["id"]).execute()
+        open_questions.close_for(tenant_id, txn["id"], status="answered")
+        return f"👍 Noted — not a supplier's bill ({why}). It stays filed for your accountant."
+    if options:
+        num = _NUM.match(text)
+        if num:
+            n = int(num.group(1))
+            if 1 <= n <= len(options):
+                return await _link_pop_bills(tenant_id, txn, options[n - 1])
+            return (f"🤔 Reply with a number from 1 to {len(options)}, a bill number, *none*, or *skip*.")
+        if low in ("yes", "y", "confirm", "confirmed", "correct") and len(options) == 1:
+            return await _link_pop_bills(tenant_id, txn, options[0])
+        if low in ("yes", "y", "confirm", "confirmed", "correct"):
+            return f"🤔 Which one? Reply with a number from 1 to {len(options)}."
+
     from vula.commerce.bank_rec import _open_supplier_bills, _match_supplier_bill, _tok
     bills = _open_supplier_bills(tenant_id)
+    if options:                 # a bill number: the option holding it, else that bill if it is the amount
+        named = next((b for b in bills if (b.get("invoice_number") or "").lower() == low), None)
+        if named is None:
+            try:
+                named = next(iter(_client().table("commerce_invoices").select("id,invoice_number")
+                                  .eq("tenant_id", tenant_id).eq("direction", "inbound")
+                                  .ilike("invoice_number", text.strip()).limit(1).execute().data or []), None)
+            except Exception:  # noqa: BLE001
+                named = None
+        if named:
+            hold = [o for o in options if str(named["id"]) in o]
+            if hold:
+                return await _link_pop_bills(tenant_id, txn, min(hold, key=len))
+            return await _link_pop_bills(tenant_id, txn, [str(named["id"])])
     if low in ("yes", "y", "confirm", "confirmed", "correct"):
         mid = txn.get("proposed_match_id") if txn.get("proposed_match_type") == "supplier_bill" else None
         match = next((b for b in bills if b.get("id") == mid), None) if mid else None
