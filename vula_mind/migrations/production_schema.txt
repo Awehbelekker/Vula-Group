@@ -62,7 +62,7 @@ commerce_recurring_bills: account_code:text, amount_cents:int4, cadence:text, ca
 commerce_recurring_invoices: active:bool, cadence:text, created_at:timestamptz, customer_address:text, customer_email:text, customer_name:text, customer_phone:text, id:uuid, label:text, last_invoice_id:uuid, last_run_at:timestamptz, line_items:jsonb, next_run_at:date, tenant_id:text, updated_at:timestamptz, vat_rate:numeric
 commerce_reviews: comment:text, created_at:timestamptz, customer_name:text, customer_phone:text, id:uuid, order_id:uuid, product_id:uuid, rating:int4, source:text, tenant_id:text
 commerce_saved_copy: body:text, created_at:timestamptz, id:uuid, kind:text, tenant_id:text, tone:text, topic:text
-commerce_scheduled_job_config: day_of_week:int4, enabled:bool, hour:int4, id:uuid, interval_minutes:int4, job_type:text, last_fired_at:timestamptz, minute:int4, template_name:text, tenant_id:text, updated_at:timestamptz
+commerce_scheduled_job_config: day_of_week:int4, enabled:bool, hour:int4, id:uuid, interval_minutes:int4, job_type:text, last_fired_at:timestamptz, minute:int4, settings:jsonb, template_name:text, tenant_id:text, updated_at:timestamptz
 commerce_segments: created_at:timestamptz, created_by:text, criteria:jsonb, id:uuid, name:text, tenant_id:text
 commerce_services: active:bool, created_at:timestamptz, description:text, duration_min:int4, id:uuid, name:text, price_cents:int4, sort:int4, tenant_id:text
 commerce_shop_events: created_at:timestamptz, id:int8, kind:text, tenant_id:text, term:text

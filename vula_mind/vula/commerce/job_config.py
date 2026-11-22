@@ -83,11 +83,53 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
     "stale_handoff_resume": {
         "label": "Stale handoff auto-resume", "kind": "interval",
         "interval_minutes": 15, "template_suffix": "stale_handoff_resume",
-        "description": "A conversation an owner paused for human handoff: after 30 minutes "
-                       "with the customer waiting, the owner is reminded; after 2+ hours of "
-                       "silence the bot resumes and apologises to the customer, so they "
-                       "aren't left permanently waiting — the owner is pinged first, best-effort."},
+        "description": "A conversation someone took over from Vula: when the customer has waited "
+                       "the reminder time, the person handling it is reminded (with buttons to "
+                       "send a holding reply, give it back to Vula or pass it on); after the "
+                       "give-back time with no reply, Vula answers again and apologises to the "
+                       "customer, so nobody is left waiting.",
+        # 22 Nov 2026 (migration 295): each business sets its own times in the Scheduling tab.
+        # name → (default, lowest, highest, what the field means)
+        "settings": {
+            "remind_after_minutes": (30, 5, 240, "Remind the person handling the chat after (minutes)"),
+            "resume_after_minutes": (120, 15, 1440, "Give the chat back to Vula after (minutes)"),
+        }},
 }
+
+
+def settings_for(job_type: str, stored: Optional[dict]) -> Dict[str, int]:
+    """A job's own numbers: the stored value where it is a whole number in range, else the
+    default. A job with no settings gives {}."""
+    spec = JOB_TYPES.get(job_type, {}).get("settings") or {}
+    stored = stored if isinstance(stored, dict) else {}
+    out: Dict[str, int] = {}
+    for name, (default, lo, hi, _label) in spec.items():
+        v = stored.get(name)
+        out[name] = v if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi else default
+    return out
+
+
+def check_settings(job_type: str, patch: Any, current: Optional[dict] = None) -> Dict[str, int]:
+    """The job's settings after this change (`current` with `patch` over it), checked: known
+    names, whole numbers in range, and for the handoff watch the give-back time after the
+    reminder. Raises ValueError with what's wrong, for the person."""
+    spec = JOB_TYPES.get(job_type, {}).get("settings") or {}
+    if not spec:
+        raise ValueError("This job has no settings.")
+    if not isinstance(patch, dict):
+        raise ValueError("settings must be an object.")
+    out: Dict[str, int] = {}
+    for name, value in patch.items():
+        if name not in spec:
+            raise ValueError(f"Unknown setting '{name}'.")
+        _default, lo, hi, label = spec[name]
+        if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+            raise ValueError(f"{label}: a whole number from {lo} to {hi}.")
+        out[name] = value
+    merged = {**settings_for(job_type, current), **out}
+    if job_type == "stale_handoff_resume" and merged["resume_after_minutes"] <= merged["remind_after_minutes"]:
+        raise ValueError("Give the chat back to Vula later than the reminder.")
+    return merged
 
 SAST = timezone(timedelta(hours=2))
 
@@ -157,6 +199,10 @@ def effective_config(tenant_id: str, job_type: str, row: Optional[dict]) -> Dict
     if d["kind"] == "interval":
         cfg["interval_minutes"] = (row.get("interval_minutes")
                                    if row.get("interval_minutes") else d["interval_minutes"])
+    if d.get("settings"):
+        cfg["settings"] = settings_for(job_type, row.get("settings"))
+        cfg["settings_fields"] = [{"name": n, "label": lbl, "min": lo, "max": hi, "default": dv}
+                                  for n, (dv, lo, hi, lbl) in d["settings"].items()]
     return cfg
 
 
@@ -176,7 +222,8 @@ def upsert_config(tenant_id: str, job_type: str, patch: dict) -> Dict[str, Any]:
     """Store an override for one job. Only whitelisted fields; None clears back to default."""
     if job_type not in JOB_TYPES:
         return {"error": f"unknown job_type '{job_type}'"}
-    allowed = {"enabled", "template_name", "hour", "minute", "day_of_week", "interval_minutes"}
+    allowed = {"enabled", "template_name", "hour", "minute", "day_of_week", "interval_minutes",
+               "settings"}
     row = {k: patch[k] for k in allowed if k in patch}
     row.update({"tenant_id": tenant_id, "job_type": job_type,
                 "updated_at": datetime.now(timezone.utc).isoformat()})

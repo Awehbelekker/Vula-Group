@@ -7353,6 +7353,13 @@ async def admin_upsert_scheduled_job(tenant_id: str, body: dict):
             if not (lo <= v <= hi):
                 raise HTTPException(status_code=400, detail=f"{field} must be {lo}–{hi}")
             patch[field] = v
+    if b.get("settings") is not None:
+        # a job's own numbers (the handoff watch's reminder and give-back times, migration 295)
+        try:
+            current = job_config.get_configs(tenant_id).get(job_type, {}).get("settings")
+            patch["settings"] = job_config.check_settings(job_type, b["settings"], current)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     if not patch:
         raise HTTPException(status_code=400, detail="nothing to update")
     result = job_config.upsert_config(tenant_id, job_type, patch)
