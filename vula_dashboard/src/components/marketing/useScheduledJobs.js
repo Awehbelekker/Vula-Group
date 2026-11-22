@@ -48,7 +48,7 @@ export function useJobForm(job, onSave) {
   const [minute, setMinute] = useState(job.minute ?? 0);
   const [dow, setDow] = useState(job.day_of_week ?? 4);
   const [interval, setIntervalMin] = useState(job.interval_minutes ?? 30);
-  // A job's own numbers (22 Nov 2026, migration 294): the handoff watch's reminder and
+  // A job's own numbers (22 Nov 2026, migration 295): the handoff watch's reminder and
   // give-back times. The server checks the range and that the give-back comes after the reminder.
   const [settings, setSettings] = useState(() => ({ ...(job.settings || {}) }));
   const setSetting = (name, value) => setSettings(s => ({ ...s, [name]: value }));

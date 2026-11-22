@@ -3451,6 +3451,7 @@ async def _handle_document_ingest_one(
         # NULL: the claim is created here, BEFORE the storage upload below produces a real URL,
         # and nothing ever linked them back — confirmed live 2026-08-26 against real claims).
         expense_claim_img_ref = None
+        pop_txn_id = None   # a proof of payment staged for its numbered question (bank_rec.stage_pop)
         first_page = None        # the filed document this one is a later page of, if any
         if role == "admin" and local_path.suffix.lower() == ".pdf":
             try:
@@ -3665,9 +3666,10 @@ async def _handle_document_ingest_one(
                                      "please check it in the Expenses tab.")
                 elif fin and dtp == "payment_confirmation" and total_r > 0:
                     from vula.commerce import bank_rec
-                    reply = bank_rec.stage_pop_for_review(
+                    reply, pop_txn_id = bank_rec.stage_pop(
                         tenant_id, round(total_r * 100), fin.get("date"),
-                        fin.get("reference"), fin.get("payee"), sender_phone=phone, payer=fin.get("payer"))
+                        fin.get("reference"), fin.get("payee"), sender_phone=phone, payer=fin.get("payer"),
+                        payee_account=fin.get("payee_account_number") or fin.get("payee_account"))
                     scan_msg = "\n\n" + reply + await _payer_line(tenant_id, phone, {
                         "payer": fin.get("payer"), "payer_account": fin.get("payer_account")})
                 elif fin and dtp == "delivery_note":
@@ -3691,10 +3693,13 @@ async def _handle_document_ingest_one(
         if not scan_msg and doc_category == "Proof of Payment" and pop_cents:
             try:
                 from vula.commerce import bank_rec
-                scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
+                pop_reply, pop_txn_id = bank_rec.stage_pop(
                     tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
                     fields.get("payee_name") or fields.get("payee"), sender_phone=phone,
-                    payer=fields.get("payer") or fields.get("payer_name"))
+                    payer=fields.get("payer") or fields.get("payer_name"),
+                    payee_account=(fields.get("payee_account_number")
+                                   or (fields.get("payee_details") or {}).get("account_no_last_digits")))
+                scan_msg = "\n\n" + pop_reply
                 scan_msg += await _payer_line(tenant_id, phone, fields)
             except Exception as exc:
                 logger.warning("POP match skipped for %s: %s", result.filename, exc)
@@ -3722,6 +3727,9 @@ async def _handle_document_ingest_one(
                 doc_category, summary, fields, already_committed=already_committed,
                 project=named_project, doc_text=doc_text,
             )
+        if pop_txn_id and filed_row:     # the answer links the filed proof itself (22 Nov 2026, pop_links)
+            from vula.commerce import bank_rec as _br
+            _br.attach_pop_doc(tenant_id, pop_txn_id, (filed_row or {}).get("id"))
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
 

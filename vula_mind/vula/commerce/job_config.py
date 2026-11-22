@@ -88,7 +88,7 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
                        "send a holding reply, give it back to Vula or pass it on); after the "
                        "give-back time with no reply, Vula answers again and apologises to the "
                        "customer, so nobody is left waiting.",
-        # 22 Nov 2026 (migration 294): each business sets its own times in the Scheduling tab.
+        # 22 Nov 2026 (migration 295): each business sets its own times in the Scheduling tab.
         # name → (default, lowest, highest, what the field means)
         "settings": {
             "remind_after_minutes": (30, 5, 240, "Remind the person handling the chat after (minutes)"),

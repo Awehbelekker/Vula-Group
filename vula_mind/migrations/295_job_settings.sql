@@ -1,4 +1,4 @@
--- 294_job_settings.sql — per-business settings on a scheduled job.
+-- 295_job_settings.sql — per-business settings on a scheduled job.
 --
 -- 22 Nov 2026 (conversation intelligence, step 1: docs/plans/conversation-intelligence.md). The
 -- handoff watch reminded the person handling a paused chat after 30 minutes and gave the chat back

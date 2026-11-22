@@ -7354,7 +7354,7 @@ async def admin_upsert_scheduled_job(tenant_id: str, body: dict):
                 raise HTTPException(status_code=400, detail=f"{field} must be {lo}–{hi}")
             patch[field] = v
     if b.get("settings") is not None:
-        # a job's own numbers (the handoff watch's reminder and give-back times, migration 294)
+        # a job's own numbers (the handoff watch's reminder and give-back times, migration 295)
         try:
             current = job_config.get_configs(tenant_id).get(job_type, {}).get("settings")
             patch["settings"] = job_config.check_settings(job_type, b["settings"], current)

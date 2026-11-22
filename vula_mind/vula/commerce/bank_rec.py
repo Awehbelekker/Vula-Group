@@ -471,15 +471,50 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str],
     return "in", False, "unrecognised payee"
 
 
+def _pop_options(tenant_id: str, amount_cents: int, txn_date: Optional[str], payee: Optional[str],
+                 payee_account: Optional[str]) -> tuple:
+    """(supplier, [[bill, …], …]) — the bill or 2–3 bills of the supplier this proof went to that add up
+    exactly (vula/commerce/pop_links.py: the account paid into, else the payee's name). Empty when the
+    supplier can't be told or nothing adds up."""
+    try:
+        from datetime import date as _date
+        from vula.commerce import pop_links
+        pop = {"amount_cents": amount_cents, "date": (txn_date or _now())[:10], "payee": payee or "",
+               "account": re.sub(r"\D", "", str(payee_account or ""))}
+        sup = pop_links.supplier_for(tenant_id, pop)
+        if not sup:
+            return None, []
+        bills = pop_links._supplier_bills(tenant_id, sup, pop_links._linked_bills(pop_links._pops(tenant_id)))
+        return sup, pop_links._options(int(amount_cents), _date.fromisoformat(pop["date"]), bills)
+    except Exception as exc:  # noqa: BLE001 — fall back to the single guess
+        log.debug("pop options skipped for %s: %s", tenant_id, exc)
+        return None, []
+
+
+def _bill_words(bills: List[Dict[str, Any]]) -> str:
+    from vula.commerce.pop_links import _due
+    nums = " + ".join(f"*{b.get('invoice_number') or 'a bill'}*" for b in bills)
+    if len(bills) == 1:
+        b = bills[0]
+        return f"{nums} ({str(b.get('issue_date') or '')[:10]})"
+    return f"{nums} (" + " + ".join(f"R{_due(b) / 100:,.2f}" for b in bills) + ")"
+
+
 def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str],
                         reference: Optional[str], payee: Optional[str],
-                        sender_phone: Optional[str] = None, paid_by: Optional[str] = None) -> str:
-    """The owner paid a supplier and sent the confirmation. Stage it as money OUT against a
-    bill, and ask before settling it — same never-auto-apply rule as the money-in side."""
-    bills = _open_supplier_bills(tenant_id)
-    cand = _match_supplier_bill(
-        {"amount_cents": amount_cents, "description": payee or "", "reference": reference or ""},
-        bills)
+                        sender_phone: Optional[str] = None, paid_by: Optional[str] = None,
+                        payee_account: Optional[str] = None) -> tuple:
+    """The owner paid a supplier and sent the confirmation. Stage it as money OUT and ask which bill(s)
+    it paid — numbered, from the supplier's bills that add up exactly (22 Nov 2026, pop_links) — and
+    settle only on the answer. Returns (message, txn id)."""
+    sup, options = _pop_options(tenant_id, amount_cents, txn_date, payee, payee_account)
+    cand = None
+    if not options:
+        bills = _open_supplier_bills(tenant_id)
+        cand = _match_supplier_bill(
+            {"amount_cents": amount_cents, "description": payee or "", "reference": reference or ""},
+            bills)
+    first = options[0][0] if options else cand
     row = {
         "tenant_id": tenant_id,
         "txn_date": (txn_date or _now())[:10],
@@ -491,15 +526,27 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
         "match_status": "asked",
         "asked_at": _now(),
         "source_file": "whatsapp_pop",
-        "proposed_match_type": "supplier_bill" if cand else None,
-        "proposed_match_id": (cand or {}).get("id"),
+        "proposed_match_type": "supplier_bill" if first else None,
+        "proposed_match_id": (first or {}).get("id"),
     }
+    if options:
+        row["pop_options"] = [[str(b["id"]) for b in o] for o in options]
     txn_id = None
     try:
         ins = _client().table("commerce_bank_transactions").insert(row).execute()
         txn_id = ((getattr(ins, "data", None) or [{}])[0] or {}).get("id")
     except Exception as exc:
-        log.debug("supplier pop staging insert failed (run migration 132?): %s", exc)
+        if options:     # before migration 294: ask the old way
+            log.warning("supplier pop options not kept (run migration 294?): %s", exc)
+            row.pop("pop_options", None)
+            options = []
+            try:
+                ins = _client().table("commerce_bank_transactions").insert(row).execute()
+                txn_id = ((getattr(ins, "data", None) or [{}])[0] or {}).get("id")
+            except Exception as exc2:  # noqa: BLE001
+                log.debug("supplier pop staging insert failed: %s", exc2)
+        else:
+            log.debug("supplier pop staging insert failed (run migration 132?): %s", exc)
     if txn_id and sender_phone:
         from vula import open_questions
         open_questions.ask(tenant_id, sender_phone, "pop_match", txn_id,
@@ -511,17 +558,49 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
                     "I'll note it for your accountant (a claim or the owner's loan to the business).")
     else:
         personal = ""
+    lead = personal.strip() + "\n\n" if personal else ""
+    to = f"*{payee}*" + (f" ({sup['name']}, found by {sup['how']})"
+                         if sup and sup.get("name") and str(sup["name"]).lower() != str(payee or "").lower() else "")
+    if options and len(options) == 1:
+        return (lead + f"📸 Got the payment confirmation — R{amt:,.2f} to {to}. That looks like "
+                f"{_bill_words(options[0])}. Reply *yes* to link it and record the payment, *none* if it "
+                f"isn't a supplier's bill, or tell me the right bill number."), txn_id
+    if options:
+        lines = "\n".join(f"{i}) {_bill_words(o)}" for i, o in enumerate(options, 1))
+        return (lead + f"📸 Got the payment confirmation — R{amt:,.2f} to {to}. Which bill(s) did it pay?\n"
+                f"{lines}\nReply with the number, a bill number, *none* (not a supplier's bill), or *skip*."), txn_id
     if cand:
-        return (personal.strip() + "\n\n" if personal else "") + (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
+        return lead + (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
                 f"bill *{cand.get('invoice_number') or cand.get('id')}*. Reply *yes* to mark it "
-                f"paid, or tell me the right bill number.")
+                f"paid, or tell me the right bill number."), txn_id
     return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. I couldn't find a "
-            f"matching open bill — reply with the bill number if you have it, or 'skip'.") + personal
+            f"matching open bill — reply with the bill number if you have it, or 'skip'.") + personal, txn_id
+
+
+def attach_pop_doc(tenant_id: str, txn_id: Optional[str], doc_id: Optional[str]) -> None:
+    """The filed proof of payment behind a staged row, so the answer links the document itself."""
+    if not (txn_id and doc_id):
+        return
+    try:
+        _client().table("commerce_bank_transactions").update({"pop_doc_id": str(doc_id)}) \
+            .eq("tenant_id", tenant_id).eq("id", txn_id).execute()
+    except Exception as exc:  # noqa: BLE001 — before migration 294
+        log.debug("pop document not attached (run migration 294?): %s", exc)
 
 
 def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
                          reference: Optional[str] = None, payee: Optional[str] = None,
-                         sender_phone: Optional[str] = None, payer: Optional[str] = None) -> str:
+                         sender_phone: Optional[str] = None, payer: Optional[str] = None,
+                         payee_account: Optional[str] = None) -> str:
+    """The reply to send (see stage_pop)."""
+    return stage_pop(tenant_id, amount_cents, txn_date, reference, payee, sender_phone=sender_phone,
+                     payer=payer, payee_account=payee_account)[0]
+
+
+def stage_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
+              reference: Optional[str] = None, payee: Optional[str] = None,
+              sender_phone: Optional[str] = None, payer: Optional[str] = None,
+              payee_account: Optional[str] = None) -> tuple:
     """Stage a WhatsApp proof-of-payment screenshot into the SAME interactive review flow
     bank_review.py already uses for an unmatched bank-statement credit — never auto-mark-paid.
     Returns the WhatsApp reply to send: a specific "does this match X — reply yes" proposal when
@@ -540,7 +619,8 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
         log.info("pop for %s staged as money out (%s)", tenant_id, reason)
         return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee,
                                    sender_phone=sender_phone,
-                                   paid_by=reason[len("paid personally by "):] if reason.startswith("paid personally by ") else None)
+                                   paid_by=reason[len("paid personally by "):] if reason.startswith("paid personally by ") else None,
+                                   payee_account=payee_account)
     candidate = propose_pop_match(tenant_id, amount_cents, reference, payee, sender_phone)
     match_type, cand = candidate if candidate else (None, None)
     row = {
@@ -556,8 +636,10 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
         "proposed_match_type": match_type,
         "proposed_match_id": (cand or {}).get("id"),
     }
+    txn_id = None
     try:
-        _client().table("commerce_bank_transactions").insert(row).execute()
+        ins = _client().table("commerce_bank_transactions").insert(row).execute()
+        txn_id = ((getattr(ins, "data", None) or [{}])[0] or {}).get("id")
     except Exception as exc:
         log.debug("pop staging insert failed (run migration 132?): %s", exc)
 
@@ -569,17 +651,17 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
     if not _confident and payee and not match_type:
         return (f"📸 Got the payment confirmation for R{amt:,.2f} — *{payee}*. Did you pay "
                 f"them, or is this someone paying you? Reply *I paid* if it went out, or "
-                f"the order/invoice number if it came in.")
+                f"the order/invoice number if it came in."), txn_id
     if match_type == "invoice":
         return (f"📸 Got your payment screenshot — R{amt:,.2f}. Looks like it matches invoice "
                 f"*{cand.get('invoice_number')}* ({cand.get('customer_name') or 'customer'}). "
-                f"Reply *yes* to confirm, or tell me the right order/invoice number.")
+                f"Reply *yes* to confirm, or tell me the right order/invoice number."), txn_id
     if match_type == "order":
         return (f"📸 Got your payment screenshot — R{amt:,.2f}. Looks like it matches order "
                 f"*{cand.get('display_id')}* ({cand.get('customer_name') or 'customer'}). "
-                f"Reply *yes* to confirm, or tell me the right order/invoice number.")
+                f"Reply *yes* to confirm, or tell me the right order/invoice number."), txn_id
     return (f"📸 Got your payment screenshot for R{amt:,.2f} — which order or invoice is this "
-            f"for? Reply with the number (e.g. OFF-00006) or the customer's name.")
+            f"for? Reply with the number (e.g. OFF-00006) or the customer's name."), txn_id
 
 
 async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str = "",

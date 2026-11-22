@@ -1309,7 +1309,7 @@ async def _stale_handoff_scheduler_loop() -> None:
                     continue
                 try:
                     # Reminder, then give back + apology (vula/handoff_watch.py), at the business's
-                    # own times (Scheduling tab, migration 294; 30 min and 2 h by default). Whoever
+                    # own times (Scheduling tab, migration 295; 30 min and 2 h by default). Whoever
                     # the conversation is assigned to in the inbox, else the default helper.
                     times = cfg.get("settings") or {}
                     await handoff_watch.sweep(

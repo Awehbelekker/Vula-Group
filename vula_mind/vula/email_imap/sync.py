@@ -910,6 +910,30 @@ def _already_filed(db, tenant_id: str, att: dict) -> bool:
         return False
 
 
+async def _pop_to_link_notice(tenant_id: str, filed_row: dict) -> None:
+    """One notice per proof of payment by email that may pay a supplier's bill (event pop_to_link)."""
+    try:
+        from vula.commerce import pop_links
+        from vula.integrations.notify import notify_team
+        doc = filed_row if filed_row.get("fields") is not None else {**filed_row, "fields": {}}
+        p = pop_links.read({**doc, "category": pop_links.CATEGORY})
+        if not (p["amount_cents"] and pop_links.outgoing(tenant_id, p)):
+            return
+        sup = pop_links.supplier_for(tenant_id, p)
+        opts = pop_links.options(tenant_id, p, supplier=sup) if sup else []
+        if not opts:
+            return
+        bills = " + ".join(str(b.get("number") or "a bill") for b in opts[0]["bills"])
+        more = f" (or {len(opts) - 1} other match{'es' if len(opts) > 2 else ''})" if len(opts) > 1 else ""
+        await notify_team(tenant_id, "pop_to_link",
+                          f"📧 A proof of payment came in by email — R{p['amount_cents'] / 100:,.2f} to "
+                          f"{p['payee'] or sup['name']} ({sup['name']}). It may pay {bills}{more}. Link it in "
+                          f"Books review › Documents › Proofs of payment to link.",
+                          idem_key=f"pop_to_link:{filed_row['id']}")
+    except Exception as exc:  # noqa: BLE001 — a notice never stops the filing
+        logger.debug("pop-to-link notice skipped: %s", exc)
+
+
 async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: str = None,
                            quiet: bool = False) -> None:
     """Ingest an attachment into the KB + record it in the Documents library. The AI
@@ -1096,6 +1120,11 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             clickup_list_id=match.get("clickup_list_id") if match else None,
             status="pending_project" if ask else "filed",
         )
+
+        # A proof of payment the business sent (22 Nov 2026): say which bill(s) it may pay, to link in
+        # Books review — never linked by itself (vula/commerce/pop_links.py).
+        if category == "Proof of Payment" and (filed_row or {}).get("id"):
+            await _pop_to_link_notice(tenant_id, filed_row)
 
         # Post to the project finance ledger if it carries an amount.
         if confident and match:

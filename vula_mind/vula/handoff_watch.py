@@ -14,7 +14,7 @@ window fails, and the customer must still be answered next time they write.
 
 22 Nov 2026 (conversation intelligence, step 1 — docs/plans/conversation-intelligence.md):
 - each business sets both times in the Scheduling tab (job_config "stale_handoff_resume",
-  settings remind_after_minutes / resume_after_minutes, migration 294; 30 and 120 by default);
+  settings remind_after_minutes / resume_after_minutes, migration 295; 30 and 120 by default);
 - the reminder quotes what the customer asked and carries three buttons — Send holding reply,
   Give back to Vula, Pass to someone (a tap list of the team). Only an active team member of that
   business can use them, each press is recorded in vula_merchant_audit, and a press on a chat

@@ -243,13 +243,18 @@ def _who(actor: Optional[dict]) -> str:
     return (actor or {}).get("email") or (actor or {}).get("name") or "owner"
 
 
-async def link(tenant_id: str, doc_id: str, bill_ids: Any, actor: Optional[dict] = None) -> Dict[str, Any]:
+async def link(tenant_id: str, doc_id: str, bill_ids: Any, actor: Optional[dict] = None,
+               amount_cents: Optional[int] = None, paid_on: Optional[str] = None) -> Dict[str, Any]:
     """This proof paid those bills (one, or up to three of one supplier, adding up exactly to it). Each
-    open bill's payment is recorded once, dated the proof's date; a bill already paid is only tied."""
+    open bill's payment is recorded once, dated the proof's date; a bill already paid is only tied.
+    `amount_cents`/`paid_on` (the WhatsApp question's own figures) are used only where the filed
+    document's fields didn't read them."""
     from vula.commerce import service
     from vula.commerce.doc_audit import _save_fields
     doc = _doc(tenant_id, doc_id)
     p = read(doc)
+    p["amount_cents"] = p["amount_cents"] or amount_cents
+    p["date"] = p["date"] or (str(paid_on)[:10] if paid_on else None)
     if p["link"]:
         raise Refused("That proof of payment is already linked.")
     ids = [str(i) for i in dict.fromkeys([bill_ids] if isinstance(bill_ids, str) else (bill_ids or [])) if i]

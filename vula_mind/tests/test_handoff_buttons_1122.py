@@ -1,7 +1,7 @@
 """Conversation intelligence, step 1 (22 Nov 2026, docs/plans/conversation-intelligence.md).
 
 - Each business sets the handoff watch's times (remind after, give back after) in the Scheduling
-  tab (job settings, migration 294), checked and kept in range.
+  tab (job settings, migration 295), checked and kept in range.
 - The reminder quotes the customer and carries three buttons: Send holding reply, Give back to
   Vula, Pass to someone. Only an active team member of that business can use them, each use is
   audited, and a chat that is no longer paused or waiting is never acted on twice.

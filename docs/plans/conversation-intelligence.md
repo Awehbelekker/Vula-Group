@@ -38,7 +38,7 @@ belongs.
   learns the answer.
 
 **Step 1 (this PR, before launch):**
-- Per-business timings in the Scheduling tab (remind after, give back after), migration 294.
+- Per-business timings in the Scheduling tab (remind after, give back after), migration 295.
 - Buttons on the reminder: *Send holding reply*, *Give back to Vula*, *Pass to someone*. Only a
   team member of that business can press them.
 - The AI check also runs for mixed-language messages (English with isiXhosa, isiZulu or other
