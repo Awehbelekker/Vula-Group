@@ -1063,6 +1063,12 @@ export const scheduledJobs = {
     { job_type: "delivery_briefing", label: "Delivery briefing", description: "Tomorrow's deliveries, to the owner every evening.", kind: "daily", enabled: true, hour: 18, minute: 0, template_name: null, last_fired_at: "2026-10-16T16:00:00Z" },
     { job_type: "weekly_specials", label: "Weekly specials reminder", description: "Reminds you to send this week's specials.", kind: "weekly", enabled: true, hour: 9, minute: 30, day_of_week: 3, template_name: "weekly_specials" },
     { job_type: "unpaid_chase", label: "Unpaid-order chase", description: "Nudges customers with an unpaid order.", kind: "interval", enabled: false, interval_minutes: 60, template_name: null },
+    { job_type: "stale_handoff_resume", label: "Stale handoff auto-resume", description: "A chat someone took over: remind them, then give it back to Vula.", kind: "interval", enabled: true, interval_minutes: 15, template_name: null,
+      settings: { remind_after_minutes: 30, resume_after_minutes: 120 },
+      settings_fields: [
+        { name: "remind_after_minutes", label: "Remind the person handling the chat after (minutes)", min: 5, max: 240, default: 30 },
+        { name: "resume_after_minutes", label: "Give the chat back to Vula after (minutes)", min: 15, max: 1440, default: 120 },
+      ] },
   ],
 };
 export const marketingSaved = [{ id: "ms-1", kind: "promo", topic: "Braai packs", body: "Braai season is here! Our braai packs are R399 this weekend only." }];

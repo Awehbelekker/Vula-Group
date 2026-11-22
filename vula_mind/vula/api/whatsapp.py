@@ -1033,6 +1033,13 @@ async def receive_message(
                                 _msg = await _wa_login.handle_button(phone, reply_id)
                                 if _msg:
                                     await _send_reply(phone, _msg, route_tenant or "")
+                            elif phone and reply_id.startswith("handoff:") and route_tenant:
+                                # The handoff reminder's buttons and its Pass to someone list
+                                # (vula/handoff_watch.py) — team members only, no LLM.
+                                from vula import handoff_watch as _hw
+                                _msg = await _hw.handle_button(route_tenant, phone, reply_id)
+                                if _msg:
+                                    await _send_reply(phone, _msg, route_tenant)
                             elif phone and reply_id.startswith("kb:") and route_tenant:
                                 # Tap-to-pay buttons/lists (tip choice, Pay now, Change tip) — no LLM.
                                 from vula.tap.api import try_handle_interactive

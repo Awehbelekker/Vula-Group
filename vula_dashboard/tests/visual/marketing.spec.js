@@ -233,6 +233,14 @@ test.describe("redesign: marketing tabs", () => {
     await chase.getByRole("button", { name: "Save Unpaid-order chase" }).click();
     await expect.poll(() => jobs.length).toBe(2);
     expect(jobs[1]).toEqual({ job_type: "unpaid_chase", enabled: true, template_name: null, interval_minutes: 120 });
+    // 22 Nov 2026: the handoff watch's own times (migration 294)
+    const handoff = page.getByRole("group", { name: "Stale handoff auto-resume" });
+    await handoff.getByLabel("Remind the person handling the chat after (minutes)").fill("10");
+    await handoff.getByLabel("Give the chat back to Vula after (minutes)").fill("45");
+    await handoff.getByRole("button", { name: "Save Stale handoff auto-resume" }).click();
+    await expect.poll(() => jobs.length).toBe(3);
+    expect(jobs[2]).toEqual({ job_type: "stale_handoff_resume", enabled: true, template_name: null, interval_minutes: 15,
+      settings: { remind_after_minutes: 10, resume_after_minutes: 45 } });
 
     await page.getByRole("tab", { name: "Campaigns" }).click();
     const gen = capture(page, "POST", /\/marketing\/generate$/);

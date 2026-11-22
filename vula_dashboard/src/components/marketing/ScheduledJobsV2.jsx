@@ -5,7 +5,7 @@
  */
 import { CheckCircle2, Clock } from 'lucide-react'
 import { SA_TZ } from '../../lib/dates'
-import { Button, Card, EmptyState, Field, Select, Skeleton, StatusChip } from '../ui/index.jsx'
+import { Button, Card, EmptyState, Field, Input, Select, Skeleton, StatusChip } from '../ui/index.jsx'
 import { DAYS, pad, useJobForm, useScheduledJobs } from './useScheduledJobs'
 import './marketing.css'
 
@@ -57,6 +57,11 @@ function Job({ job, templates, onSave }) {
             <Select value={f.interval} onChange={e => f.setIntervalMin(e.target.value)}>
               {[15, 30, 60, 120, 240].map(m => <option key={m} value={m}>{m} min</option>)}</Select>
           </Field>)}
+        {(job.settings_fields || []).map(fl => (
+          <Field key={fl.name} label={fl.label} hint={`${fl.min}–${fl.max}, default ${fl.default}`}>
+            <Input type="number" inputMode="numeric" min={fl.min} max={fl.max} step={1} required
+              value={f.settings[fl.name] ?? fl.default} onChange={e => f.setSetting(fl.name, e.target.value)} />
+          </Field>))}
         <Field label="Template">
           <Select className="vmk-mono" value={f.tpl} onChange={e => f.setTpl(e.target.value)}>
             <option value="">Default template</option>

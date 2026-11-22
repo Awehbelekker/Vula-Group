@@ -1288,6 +1288,7 @@ async def _stale_handoff_scheduler_loop() -> None:
     auto-resume doesn't depend on any outbound send succeeding, so it's the actual guarantee
     here, the ping is the insurance on top."""
     import asyncio as _asyncio
+    from datetime import timedelta as _td
     from vula.commerce import job_config
     from vula import handoff_watch
     from vula.escalation import _pick_helper
@@ -1307,10 +1308,15 @@ async def _stale_handoff_scheduler_loop() -> None:
                 if not job_config.claim_run(tenant_id, "stale_handoff_resume", cfg):
                     continue
                 try:
-                    # 30-min reminder, 2 h resume + apology (vula/handoff_watch.py). Whoever the
-                    # conversation is assigned to in the inbox, else the tenant's default helper.
-                    await handoff_watch.sweep(tenant_id, helper_for=lambda sess, t=tenant_id: (
-                        _assigned_member(t, sess.get("assigned_to")) or _pick_helper(t)))
+                    # Reminder, then give back + apology (vula/handoff_watch.py), at the business's
+                    # own times (Scheduling tab, migration 294; 30 min and 2 h by default). Whoever
+                    # the conversation is assigned to in the inbox, else the default helper.
+                    times = cfg.get("settings") or {}
+                    await handoff_watch.sweep(
+                        tenant_id, helper_for=lambda sess, t=tenant_id: (
+                            _assigned_member(t, sess.get("assigned_to")) or _pick_helper(t)),
+                        remind_after=_td(minutes=int(times.get("remind_after_minutes") or 30)),
+                        resume_after=_td(minutes=int(times.get("resume_after_minutes") or 120)))
                 except Exception as exc:
                     log.warning("stale handoff resume failed for %s: %s", tenant_id, exc)
         except Exception as exc:

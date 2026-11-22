@@ -134,11 +134,13 @@ _CLASSIFY_LANGS = {"zu", "xh", "st", "nso", "tn", "ts", "ve", "ss", "nr"}
 
 
 def needs_classifier(text: str) -> bool:
-    """True when the customer wrote in a language the phrase lists only partly cover."""
+    """True when the customer wrote in a language the phrase lists only partly cover — on its
+    own or mixed with English or Afrikaans (22 Nov 2026: a code-switched complaint, mostly
+    English words with "ndicaphukile" in it, read as English and skipped the check)."""
     if not settings.escalation_classifier_enabled:
         return False
-    from core.lang import detect_language
-    return detect_language(text) in _CLASSIFY_LANGS
+    from core.lang import detect_language, languages_present
+    return detect_language(text) in _CLASSIFY_LANGS or bool(languages_present(text) & _CLASSIFY_LANGS)
 
 
 _CLASSIFY_CACHE: dict = {}          # text hash → (time, verdict): one call per message, not two
