@@ -415,15 +415,22 @@ def vat_for(account: Optional[dict], amount_cents: int, vat_registered: bool) ->
 # ── Reports (cash-basis, off the reconciled ledger) ───────────────────────────
 
 def _txns(tenant_id: str, since: Optional[str], until: Optional[str]) -> List[dict]:
-    q = _client().table("commerce_bank_transactions").select(
-        "txn_date,description,amount_cents,direction,vat_cents,account_code,match_status,reference,source_file"
-    ).eq("tenant_id", tenant_id).neq("match_status", "ignored")
-    if since:
-        q = q.gte("txn_date", since)
-    if until:
-        q = q.lte("txn_date", until)
+    """The period's bank lines in the books, oldest first — read page by page: the database hands back
+    at most 1 000 rows a request, so a year of DIGG's lines (1 346) came back as 998 and the year's
+    P&L, VAT and ledger were short (22 Nov 2026, found by the year-end pack's add-up check)."""
+    from vula.commerce.ledger import _all_pages
+
+    def q():
+        x = _client().table("commerce_bank_transactions").select(
+            "id,txn_date,description,amount_cents,direction,vat_cents,account_code,match_status,reference,source_file"
+        ).eq("tenant_id", tenant_id).neq("match_status", "ignored")
+        if since:
+            x = x.gte("txn_date", since)
+        if until:
+            x = x.lte("txn_date", until)
+        return x.order("txn_date").order("id")
     try:
-        rows = q.order("txn_date").limit(10000).execute().data or []
+        rows = _all_pages(q)
     except Exception as exc:
         log.debug("ledger read skipped: %s", exc)
         return []

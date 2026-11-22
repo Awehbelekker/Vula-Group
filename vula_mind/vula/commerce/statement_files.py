@@ -256,9 +256,11 @@ def coverage(tenant_id: str, start: Optional[date] = None, end: Optional[date] =
                             .eq("tenant_id", tenant_id).execute().data or []) if not a.get("private_to")]
     docs = (db.table("vula_filed_documents").select("id,fields").eq("tenant_id", tenant_id)
             .eq("category", CATEGORY).execute().data or [])
-    lines = (db.table("commerce_bank_transactions").select("bank_account,txn_date,match_status")
-             .eq("tenant_id", tenant_id).gte("txn_date", start.isoformat()).lte("txn_date", end.isoformat())
-             .limit(50000).execute().data or [])
+    from vula.commerce.ledger import _all_pages      # page by page: a request returns at most 1 000 rows
+    lines = _all_pages(lambda: db.table("commerce_bank_transactions").select("id,bank_account,txn_date,match_status,source_file")
+                       .eq("tenant_id", tenant_id).gte("txn_date", start.isoformat()).lte("txn_date", end.isoformat())
+                       .order("id"))
+    lines = [ln for ln in lines if (ln.get("source_file") or "") != "whatsapp_pop"]   # a proof of payment isn't a bank line
     out = []
     for a in accounts:
         have: Dict[str, Dict[str, bool]] = {}

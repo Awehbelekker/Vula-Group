@@ -17,7 +17,7 @@ import { formatMoney } from "../../lib/money";
 import {
   Button, Card, DataTable, EmptyState, ErrorCard, Field, Input, PillTabs, Select, Skeleton, StatusChip,
 } from "../ui/index.jsx";
-import FinanceFolders from "../documents/FinanceFolders";
+import FinanceFolders, { YearEndPack } from "../documents/FinanceFolders";
 import { useBankLines, useClients, useInvoiceList, useOverview, useReports } from "./useAccountant";
 import "./accountant.css";
 
@@ -106,6 +106,7 @@ function Overview({ tenantId, onTab }) {
         {cover?.lines_on_no_account > 0 && <p className="vac-sub">{cover.lines_on_no_account} bank lines don't say which account they're from yet.</p>}
         <div className="vac-row"><Button variant="secondary" onClick={() => onTab("documents")}>See the documents</Button></div>
       </Card>
+      <YearEndPack tenantId={tenantId} accountant />
     </div>
   );
 }

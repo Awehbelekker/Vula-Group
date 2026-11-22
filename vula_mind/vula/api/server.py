@@ -1955,7 +1955,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     # A downloaded file's name (the dashboard chat's "Download as spreadsheet", 13 Nov 2026).
-    expose_headers=["Content-Disposition"],
+    # X-Files-Failed: how many files a documents zip couldn't fetch (the index lists them) — the
+    # dashboard warns about it, which it can only do when the browser lets it read the header
+    expose_headers=["Content-Disposition", "X-Files-Failed"],
     allow_credentials=True,
 )
 
@@ -2119,7 +2121,7 @@ _ACCOUNTANT_READS = [re.compile(p) for p in (
     r"^/v1/commerce/([^/]+)/admin/invoices/[^/]+/pdf/?$",
     r"^/v1/commerce/([^/]+)/admin/expenses/?$",
     r"^/v1/commerce/([^/]+)/admin/finances/insights/?$",
-    r"^/v1/commerce/([^/]+)/admin/finance-folders(?:\.zip)?/?$",
+    r"^/v1/commerce/([^/]+)/admin/finance-folders(?:\.zip|/year-end-pack\.(?:zip|xlsx))?/?$",
     r"^/v1/commerce/([^/]+)/admin/bank-statements/coverage/?$",
     r"^/v1/commerce/([^/]+)/admin/books-audit/(?:latest|review)/?$",
     r"^/v1/documents/([^/]+)/filed/?$",

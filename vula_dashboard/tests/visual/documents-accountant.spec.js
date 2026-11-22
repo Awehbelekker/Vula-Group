@@ -60,6 +60,19 @@ test.describe("for your accountant", () => {
     expect(new URL((await all).url()).searchParams.get("folder")).toBeNull();
   });
 
+  test("the year-end pack downloads as a workbook, or with every document", async ({ page }) => {
+    await openFolders(page, VIEWPORTS.desktop, "light");
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Year-end pack");
+    const xlsx = page.waitForRequest((r) => r.url().includes("/finance-folders/year-end-pack.xlsx"));
+    await page.getByRole("button", { name: "Workbook (Excel)" }).click();
+    expect(new URL((await xlsx).url()).searchParams.get("year")).toMatch(/^\d{4}-03-01$/);
+    const zip = page.waitForRequest((r) => r.url().includes("/finance-folders/year-end-pack.zip"));
+    await page.getByRole("button", { name: "With every document (zip)" }).click();
+    await zip;
+    await expect(page.getByText("1 file couldn't be fetched — the index lists them.")).toBeVisible();
+  });
+
   test("a login that isn't an owner or manager is told the folders are theirs", async ({ page }) => {
     await openScreen(page, DOCS(), { viewport: VIEWPORTS.desktop, theme: "light" });
     // the server refuses anyone else (vula/api/books_audit.py _full); a later route wins over the mocks

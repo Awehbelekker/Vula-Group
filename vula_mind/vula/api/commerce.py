@@ -3598,52 +3598,10 @@ async def admin_bank_transactions_csv(tenant_id: str, account_id: Optional[str] 
                                       since: Optional[str] = None, until: Optional[str] = None):
     """Every bank line (one account, or all) as a spreadsheet — set-aside lines included and marked,
     account numbers by their last 4 digits only (20 Nov 2026: the accountant's login)."""
-    import csv, io
     from fastapi.responses import Response
-    db = service._client()
-    accounts = {a["account_number"]: a for a in (db.table("commerce_bank_accounts")
-                .select("id,account_number,name,private_to").eq("tenant_id", tenant_id).execute().data or [])
-                if a.get("account_number")}
-    private = {n for n, a in accounts.items() if a.get("private_to")}
-    rows, start = [], 0
-    while True:
-        q = db.table("commerce_bank_transactions").select(
-            "txn_date,description,direction,amount_cents,balance_cents,account_code,match_status,"
-            "categorized_by,reference,bank_account,project,source_file").eq("tenant_id", tenant_id)
-        if account_id:
-            num = next((n for n, a in accounts.items() if a["id"] == account_id), None)
-            if not num:
-                rows = []
-                break
-            q = q.eq("bank_account", num)
-        if since:
-            q = q.gte("txn_date", since[:10])
-        if until:
-            q = q.lte("txn_date", until[:10])
-        page = q.order("txn_date").order("id").range(start, start + 999).execute().data or []
-        rows += page
-        if len(page) < 1000:
-            break
-        start += 1000
-    rows = [r for r in rows if r.get("bank_account") not in private
-            and (r.get("source_file") or "") != "whatsapp_pop"]
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["Date", "Account", "Description", "Money in (R)", "Money out (R)", "Balance (R)", "Category",
-                "Status", "Filed by", "Reference", "Project", "Statement file"])
-    for r in rows:
-        amt = (r.get("amount_cents") or 0) / 100
-        acct = r.get("bank_account") or ""
-        w.writerow([r.get("txn_date"), f"…{acct[-4:]}" if acct else "",
-                    r.get("description") or "", f"{amt:.2f}" if r.get("direction") == "in" else "",
-                    f"{amt:.2f}" if r.get("direction") == "out" else "",
-                    f"{r['balance_cents'] / 100:.2f}" if r.get("balance_cents") is not None else "",
-                    r.get("account_code") or "",
-                    "set aside" if r.get("match_status") == "ignored" else (r.get("match_status") or ""),
-                    r.get("categorized_by") or "", r.get("reference") or "", r.get("project") or "",
-                    r.get("source_file") or ""])
-    name = f"bank-lines-{tenant_id}{'-' + account_id[:8] if account_id else ''}.csv"
-    return Response(content=buf.getvalue(), media_type="text/csv",
+    from vula.commerce import exports
+    text, name = exports.bank_lines_csv(tenant_id, account_id, since, until)
+    return Response(content=text, media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
@@ -4022,39 +3980,15 @@ async def admin_report_ledger(tenant_id: str, since: Optional[str] = None, until
     return {"ledger": accounting.general_ledger(tenant_id, since, until, _report_basis(basis))}
 
 
-_JOURNAL_CSV = ["Date", "Entry", "Description", "Account code", "Account", "Debit (R)", "Credit (R)",
-                "Source", "Source id", "Document", "Bank line", "Bank account", "Reverses", "View"]
-
-
 @router.get("/{tenant_id}/admin/reports/ledger.csv")
 async def admin_report_ledger_csv(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None,
                                   basis: Optional[str] = None):
     """General ledger as CSV — the audit trail her accountant can file from. A business on the one
     book gets one row per journal line (debit/credit, with its source document and bank line)."""
-    import csv, io
     from fastapi.responses import Response
-    from vula.commerce import accounting, ledger_v2
-    view = _report_basis(basis)
-    rows = accounting.general_ledger(tenant_id, since, until, view)
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    if ledger_v2.is_on(tenant_id):
-        w.writerow(_JOURNAL_CSV)
-        for r in rows:
-            w.writerow([r["date"], f"{r['entry_id']} v{r['version']}", r["description"], r["account_code"],
-                        r["account"], f"{r['debit_cents'] / 100:.2f}", f"{r['credit_cents'] / 100:.2f}",
-                        r.get("source_type") or "", r.get("source_id") or "", r.get("doc_id") or "",
-                        r.get("bank_txn_id") or "", r.get("bank_account") or "", r.get("reverses_entry_id") or "",
-                        r.get("view") or ""])
-        name = f"ledger-{tenant_id}-{view or 'accrual'}.csv"
-    else:
-        w.writerow(["Date", "Description", "Account", "Direction", "Amount (R)", "VAT (R)", "Reference", "Source"])
-        for r in rows:
-            w.writerow([r.get("date"), r.get("description"), r.get("account"), r.get("direction"),
-                        f"{(r.get('amount_cents') or 0)/100:.2f}", f"{(r.get('vat_cents') or 0)/100:.2f}",
-                        r.get("reference") or "", r.get("source") or ""])
-        name = f"ledger-{tenant_id}.csv"
-    return Response(content=buf.getvalue(), media_type="text/csv",
+    from vula.commerce import exports
+    text, name = exports.ledger_csv(tenant_id, since, until, _report_basis(basis))
+    return Response(content=text, media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
