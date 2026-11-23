@@ -67,6 +67,7 @@ const VulaTeam = lazyScreen(() => import('./VulaTeam'))
 const VulaProjectWorkspace = lazyScreen(() => import('./VulaProjectWorkspace'))
 const VulaFieldOps = lazyScreen(() => import('./VulaFieldOps'))
 const VulaReports = lazyScreen(() => import('./VulaReports'))
+const ReviewsV2 = lazyScreen(() => import('./reviews/ReviewsV2'))
 
 const VulaClientOnboarding = lazyScreen(() => import('./VulaClientOnboarding'))
 
@@ -265,6 +266,8 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
       {active === 'costing' && <VulaCosting tenantId={tenantId} />}
       {active === 'suppliers' && (<SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
       {active === 'import' && <VulaImport tenantId={tenantId} />}
+      {active === 'reviews' && <ReviewsV2 tenantId={tenantId} />}
+      {active === 'salesreports' && <VulaReports tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )

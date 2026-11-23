@@ -9636,10 +9636,9 @@ async def _record_rating(phone: str, tenant_id: str, order: dict, rating: int) -
         }).execute()
         db.table("commerce_orders").update({"review_rating": rating}).eq("id", order["id"]).execute()
         commerce_service._rating_cache.pop(tenant_id, None)
-        thanks = ("Thank you so much for the 5 stars! 🌟 See you next order."
-                  if rating == 5 else
-                  f"Thanks for the feedback ({rating}/5)."
-                  + (" We'd love to make it right — the owner will follow up with you." if rating <= 3 else ""))
+        from vula.commerce import reviews as _reviews
+        # a happy customer also gets the business's own Google review link, when it set one
+        thanks = _reviews.thanks_text(rating, _reviews.google_link(tenant_id) if rating >= _reviews.HAPPY else "")
         await _send_reply(phone, thanks, tenant_id)
         if rating <= 3:
             try:

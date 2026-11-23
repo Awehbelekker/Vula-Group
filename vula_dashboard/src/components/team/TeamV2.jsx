@@ -233,7 +233,11 @@ function People({ tenantId }) {
             <WhatsAppNumber key={m.whatsapp || ""} m={m} patch={t.patch} />
 
             <h3 className="vtm-h3">Can access
-              {isFull && <StatusChip tone="ok"><ShieldCheck size={13} aria-hidden="true" />Full access{isOwnerOrManager ? " (owner / manager)" : " — tick a module to restrict"}</StatusChip>}
+              {isFull && (isOwnerOrManager
+                ? <StatusChip tone="ok"><ShieldCheck size={13} aria-hidden="true" />Full access (owner / manager)</StatusChip>
+                // saved before 23 Nov 2026 with nothing ticked, which meant everything: tick what they should use
+                : <StatusChip tone="warn">Full access by default — tick only what they should use</StatusChip>)}
+              {!isFull && !(m.access || []).some((k) => k !== "overview") && <StatusChip>Nothing yet — tick what they can use</StatusChip>}
             </h3>
             {groups.map((g) => (
               <div key={g.label} className="vtm-group" role="group" aria-label={`${g.label} access for ${m.name || m.whatsapp}`}>

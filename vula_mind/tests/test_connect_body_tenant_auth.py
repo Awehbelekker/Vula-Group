@@ -18,6 +18,12 @@ async def test_body_tenant_check(monkeypatch):
             await tenant_auth.check_body_tenant("t1", "Bearer x")
     assert (e1.value.status_code, e2.value.status_code) == (401, 403)
     with patch.object(tenant_auth, "is_tenant_member", AsyncMock(return_value=True)):
-        await tenant_auth.check_body_tenant("t1", "Bearer x")
+        with patch.object(tenant_auth, "member_scope", AsyncMock(return_value={"full": True, "access": []})):
+            await tenant_auth.check_body_tenant("t1", "Bearer x")
+        # 23 Nov 2026: a member who isn't an owner or manager can't connect a number, mailbox or keys
+        with patch.object(tenant_auth, "member_scope", AsyncMock(return_value={"full": False, "access": ["orders"]})):
+            with pytest.raises(HTTPException) as e3:
+                await tenant_auth.check_body_tenant("t1", "Bearer x")
+        assert e3.value.status_code == 403
     monkeypatch.setattr("config.settings.enforce_tenant_auth", False)
     await tenant_auth.check_body_tenant("t1", "")   # switch off -> unchanged behaviour

@@ -12,6 +12,7 @@ import { formatMoney } from "../../lib/money";
 import {
   Button, Card, DataTable, EmptyState, Field, FilterBar, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatusChip, Textarea,
 } from "../ui/index.jsx";
+import CatalogueSync from "./CatalogueSync";
 import "./products.css";
 
 function Row({ p, api, onEdit }) {
@@ -88,6 +89,7 @@ export default function ProductsV2({ api, EditPanel }) {
       <PageHeader sub="Everything you sell, by category. Prices save as you leave the box."
         actions={<>
           <Button size="sm" variant="secondary" Icon={Tags} onClick={() => api.setShowCats((s) => !s)}>Categories</Button>
+          <CatalogueSync tenantId={api.tenantId} />
           <Button size="sm" variant="secondary" Icon={Download} onClick={api.exportCsv} disabled={!api.products.length}>Export CSV</Button>
           <Button size="sm" variant="secondary" Icon={Upload} onClick={() => api.fileInputRef.current?.click()}>Import CSV</Button>
           <input ref={api.fileInputRef} type="file" accept=".csv,text/csv" onChange={api.onImportFile} hidden tabIndex={-1} aria-hidden="true" />

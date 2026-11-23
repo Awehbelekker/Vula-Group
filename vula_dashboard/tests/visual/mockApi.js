@@ -142,6 +142,15 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/bank/transactions\\.csv`, () => ({ __raw: { status: 200, contentType: "text/csv", body: "Date,Account\n" } })),
     r("GET", `^/v1/payments/${T}/providers`, () => F.paymentProviders),
     r("GET", `${A}/discount-codes`, () => ({ discount_codes: F.discountCodes })),
+    r("GET", `${A}/reviews`, () => F.reviews),
+    r("POST", `${A}/reviews/settings`, (m, url, req) => {
+      const u = (req.postDataJSON() || {}).google_review_url || "";
+      return u && !/^https:\/\/(g\.page|search\.google\.com|maps\.app\.goo\.gl)\//.test(u)
+        ? { __raw: { status: 400, contentType: "application/json", body: JSON.stringify({ detail: "That isn't a Google review link." }) } }
+        : { ok: true, google_review_url: u };
+    }),
+    r("GET", `${A}/meta-catalog`, () => ({ connected: true })),
+    r("POST", `${A}/meta-catalog/sync`, () => ({ ok: true, synced: 8, message: "8 products sent to your WhatsApp catalogue. WhatsApp can take a few minutes to show them." })),
     r("GET", `${A}/delivery-list`, () => F.deliveryList),
     r("GET", `^/v1/subscriptions/${T}`, () => ({ subscriptions: F.recurringSubs })),
     r("GET", `${A}/finances/insights`, () => F.financeInsights),

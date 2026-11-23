@@ -14,6 +14,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -121,35 +122,114 @@ class ReviewIn(BaseModel):
 
 @router.post("/{tenant_id}/reviews")
 async def create_review(tenant_id: str, body: ReviewIn):
+    """A rating from the order's own customer, once per order (23 Nov 2026: this public route
+    took a rating from anyone for any business, with or without an order — fake stars on the
+    storefront. Ratings now need the order and its customer's phone)."""
     if not 1 <= body.rating <= 5:
         raise HTTPException(status_code=400, detail="rating must be 1–5")
-    row = {k: v for k, v in body.model_dump().items() if v is not None}
-    row["tenant_id"] = tenant_id
-    service._client().table("commerce_reviews").insert(row).execute()
+    phone = _norm_phone(body.customer_phone)[-9:]
+    if not body.order_id or not phone:
+        raise HTTPException(status_code=400, detail="A rating needs the order and the customer's phone.")
+    db = service._client()
+    try:
+        o = (db.table("commerce_orders").select("id,customer_phone,customer_name,review_rating")
+             .eq("id", body.order_id).eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    except Exception:
+        o = []
+    if not o or _norm_phone(o[0].get("customer_phone"))[-9:] != phone:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if o[0].get("review_rating") is not None:
+        raise HTTPException(status_code=409, detail="This order has already been rated.")
+    row = {"tenant_id": tenant_id, "order_id": body.order_id, "rating": body.rating,
+           "customer_phone": o[0].get("customer_phone"),
+           "customer_name": o[0].get("customer_name") or body.customer_name,
+           "source": (body.source or "whatsapp")[:20]}
+    if body.comment:
+        row["comment"] = body.comment.strip()[:1000]
+    if body.product_id:
+        row["product_id"] = body.product_id
+    db.table("commerce_reviews").insert(row).execute()
+    db.table("commerce_orders").update({"review_rating": body.rating}).eq("id", body.order_id) \
+        .eq("tenant_id", tenant_id).is_("review_rating", "null").execute()
     service._rating_cache.pop(tenant_id, None)  # bust cache so stars update
-    if body.order_id:
-        # Public endpoint: only the order's own customer may rate it, and only once — anyone
-        # knowing an order id could otherwise overwrite its rating.
-        try:
-            o = (service._client().table("commerce_orders").select("customer_phone,review_rating")
-                 .eq("id", body.order_id).eq("tenant_id", tenant_id).limit(1).execute().data or [])
-            same = o and _norm_phone(body.customer_phone)[-9:] and \
-                _norm_phone(o[0].get("customer_phone"))[-9:] == _norm_phone(body.customer_phone)[-9:]
-            if same and o[0].get("review_rating") is None:
-                service._client().table("commerce_orders").update(
-                    {"review_rating": body.rating}).eq("id", body.order_id).eq("tenant_id", tenant_id) \
-                    .is_("review_rating", "null").execute()
-        except Exception:
-            pass
     return {"ok": True}
 
 
 @router.get("/{tenant_id}/admin/reviews")
 async def admin_list_reviews(tenant_id: str, limit: int = Query(100, ge=1, le=500)):
-    rows = (service._client().table("commerce_reviews").select("*")
-            .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(limit).execute().data or [])
-    avg = round(sum(r["rating"] for r in rows) / len(rows), 2) if rows else None
-    return {"reviews": rows, "count": len(rows), "average": avg}
+    """Sell › Reviews: every rating counted, the latest listed, and the Google review link."""
+    from vula.commerce import reviews
+    return await asyncio.to_thread(reviews.summary, tenant_id, limit)
+
+
+class ReviewSettingsIn(BaseModel):
+    google_review_url: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/reviews/settings")
+async def admin_review_settings(tenant_id: str, body: ReviewSettingsIn, request: Request):
+    """The Google review link sent to happy customers — owner and managers only (server
+    _SECTION_RULES): it goes out on the business's WhatsApp number."""
+    from vula.commerce import reviews
+    from vula.api.merchant_audit import audit
+    try:
+        url = await asyncio.to_thread(reviews.set_google_link, tenant_id, body.google_review_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    audit(tenant_id, {"email": _actor(request)}, "google_review_link_set", url=url)
+    return {"ok": True, "google_review_url": url}
+
+
+# ── The WhatsApp catalogue (Meta Commerce Manager), from the business's own screen ──────────
+# 23 Nov 2026: only Master could push it (vula/api/master.py master_meta_catalog). The business
+# can now send its products again after editing them; connecting a catalogue stays with Vula
+# (it needs set-up on Meta's side), so the catalogue's ID is never set here.
+
+_CATALOG_LAST: dict = {}       # tenant -> when it was last sent (a send is up to thousands of items)
+_CATALOG_GAP_S = 120
+
+
+@router.get("/{tenant_id}/admin/meta-catalog")
+async def admin_meta_catalog_status(tenant_id: str):
+    from vula.commerce import meta_catalog
+    try:
+        connected = bool((meta_catalog._config(tenant_id).get("meta_catalog_id") or "").strip())
+    except Exception:
+        connected = False
+    return {"connected": connected}
+
+
+@router.post("/{tenant_id}/admin/meta-catalog/sync")
+async def admin_meta_catalog_sync(tenant_id: str, request: Request):
+    """Send every active product to the business's WhatsApp catalogue — owner and managers only."""
+    import time as _time
+    from vula.commerce import meta_catalog
+    from vula.api.merchant_audit import audit
+    now = _time.monotonic()
+    if now - _CATALOG_LAST.get(tenant_id, -1e9) < _CATALOG_GAP_S:
+        raise HTTPException(status_code=429, detail="Your products were just sent. Try again in a couple of minutes.")
+    _CATALOG_LAST[tenant_id] = now
+    res = await meta_catalog.sync(tenant_id)
+    status = res.get("status")
+    audit(tenant_id, {"email": _actor(request)}, "meta_catalog_synced", status=status,
+          synced=res.get("synced"))
+    if status == "success":
+        return {"ok": True, "synced": res.get("synced", 0),
+                "message": f"{res.get('synced', 0)} products sent to your WhatsApp catalogue. "
+                           "WhatsApp can take a few minutes to show them."}
+    if status != "no_products":
+        _CATALOG_LAST.pop(tenant_id, None)
+    log.warning("meta catalogue sync for %s: %s %s", tenant_id, status, res.get("error") or "")
+    messages = {
+        "no_catalog_id": "Your WhatsApp catalogue isn't connected yet. Ask Vula support to connect it.",
+        "no_credentials": "Your WhatsApp number isn't connected to Vula yet.",
+        "no_products": "There are no active products to send.",
+    }
+    return {"ok": False, "status": status,
+            "message": messages.get(status, "WhatsApp didn't accept the update. Ask Vula support to check "
+                                            "the catalogue connection.")}
 
 
 # ── CMS pages (Puck self-serve page builder, P3) ─────────────────────────────
@@ -2343,8 +2423,15 @@ async def admin_agent_activity(tenant_id: str, limit: int = 60):
 # not a new auth boundary (route-level access is still tenant_admin_guard, same as every other
 # /admin/ route).
 
+_WIDE_CONTACTS = frozenset({"customers", "contacts", "inbox"})
+
+
 @router.get("/{tenant_id}/admin/contacts")
-async def admin_list_contacts(tenant_id: str, created_by: str = "", search: str = ""):
+async def admin_list_contacts(tenant_id: str, created_by: str = "", search: str = "",
+                              request: Request = None):  # type: ignore[assignment]
+    mine = await _only_mine(tenant_id, request, _WIDE_CONTACTS)
+    if mine is not None:
+        created_by = mine
     q = (service._client().table("commerce_contacts").select("*").eq("tenant_id", tenant_id))
     if created_by:
         q = q.eq("created_by", created_by)
@@ -2365,7 +2452,7 @@ class ContactIn(BaseModel):
 
 
 @router.post("/{tenant_id}/admin/contacts")
-async def admin_upsert_contact(tenant_id: str, body: ContactIn):
+async def admin_upsert_contact(tenant_id: str, body: ContactIn, request: Request = None):  # type: ignore[assignment]
     from uuid import uuid4
     name = (body.name or "").strip()
     if not name:
@@ -2375,17 +2462,31 @@ async def admin_upsert_contact(tenant_id: str, body: ContactIn):
         phone = "27" + phone[1:]
     if not phone:
         phone = f"nophone-{uuid4().hex[:10]}"
+    mine = await _only_mine(tenant_id, request, _WIDE_CONTACTS)
+    created_by = body.created_by or None
+    if mine is not None:
+        created_by = None if mine == _NOBODY else mine
+        # one row per (business, phone): a rep saving a number another rep already has would
+        # overwrite their contact
+        held = (service._client().table("commerce_contacts").select("created_by")
+                .eq("tenant_id", tenant_id).eq("phone", phone).limit(1).execute().data or [])
+        if held and held[0].get("created_by") and held[0]["created_by"] != created_by:
+            raise HTTPException(status_code=409, detail="A colleague already has this contact.")
     row = {"tenant_id": tenant_id, "phone": phone, "name": name,
            "email": body.email or None, "company": body.company or None,
            "title": body.title or None, "notes": body.notes or None,
-           "source": "dashboard", "created_by": body.created_by or None}
+           "source": "dashboard", "created_by": created_by}
     res = (service._client().table("commerce_contacts")
            .upsert(row, on_conflict="tenant_id,phone").execute())
     return {"saved": True, "contact": (res.data or [row])[0]}
 
 
 @router.get("/{tenant_id}/admin/reminders")
-async def admin_list_reminders(tenant_id: str, created_by: str = "", status: str = "open"):
+async def admin_list_reminders(tenant_id: str, created_by: str = "", status: str = "open",
+                               request: Request = None):  # type: ignore[assignment]
+    mine = await _only_mine(tenant_id, request, frozenset({"followups"}))
+    if mine is not None:
+        created_by = mine
     q = (service._client().table("vula_reminders").select("id,text,due_at,status,created_at")
          .eq("tenant_id", tenant_id))
     if created_by:
@@ -2417,10 +2518,31 @@ def _rep_digits(p: Optional[str]) -> str:
     return "27" + d[1:] if d.startswith("0") else d
 
 
+_NOBODY = "-"   # matches no number: a "my" list for a login with no WhatsApp number on its team row
+
+
+async def _only_mine(tenant_id: str, request: Optional[Request], wide: frozenset) -> Optional[str]:
+    """None when the caller may see everyone's rows (owner, manager, or a login with one of the
+    `wide` tabs), else the caller's own WhatsApp number to filter by (23 Nov 2026 audit: "My
+    contacts", "My reminders", "My expenses" and the rep's day took the number from the browser,
+    and an empty number returned every rep's records)."""
+    if request is None:
+        return None
+    from vula.api.tenant_auth import member_scope, scope_allows
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    if scope is None or scope_allows(scope, wide):
+        return None
+    return _rep_digits((scope.get("member") or {}).get("whatsapp")) or _NOBODY
+
+
 @router.get("/{tenant_id}/admin/rep/today")
-async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None):
+async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None,
+                          request: Request = None):  # type: ignore[assignment]
     from vula.bookings import service as bk
     rep = _rep_digits(rep_phone) or None
+    mine = await _only_mine(tenant_id, request, frozenset({"bookings"}))
+    if mine is not None:
+        rep = mine
     day = await bk.list_day(tenant_id, date, booked_by=rep)
     notes = []
     try:
@@ -4806,8 +4928,13 @@ class ExpenseAssignIn(BaseModel):
 async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
                               reimbursable: Optional[bool] = None, project: Optional[str] = None,
                               since: Optional[str] = None, until: Optional[str] = None,
-                              paid_by: Optional[str] = None):
+                              paid_by: Optional[str] = None,
+                              request: Request = None):  # type: ignore[assignment]
     from vula.commerce import expenses, accounting
+    from vula.api.server import _MONEY_TABS
+    mine = await _only_mine(tenant_id, request, _MONEY_TABS)
+    if mine is not None:          # a rep's own expenses tab: theirs only
+        paid_by = mine
     # Real chart-of-accounts categories for the dashboard's category dropdown — deliberately
     # curated/finite (not free text), unlike `project` which is inherently open-ended. Expense
     # accounts only; an expense is never income.
