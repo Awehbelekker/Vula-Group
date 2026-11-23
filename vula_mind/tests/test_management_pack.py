@@ -367,6 +367,34 @@ def test_the_switch_decides_who_gets_it(db, send, monkeypatch):
     monkeypatch.setattr(features, "on", lambda tid, name: False)
     assert asyncio.run(ms.tick(when)) == 0 and not send["doc"].await_count
     monkeypatch.setattr(features, "on", lambda tid, name: name == "management_accounts" and tid == T)
+    db.rows["vula_tenant_config"][0]["features"] = {"management_accounts": True, ms.SINCE: "2026-10-01"}
     assert asyncio.run(ms.tick(datetime(2026, 11, 4, 9, 0, tzinfo=SAST))) == 0          # not the 5th yet
     assert asyncio.run(ms.tick(when)) == 2
     assert asyncio.run(ms.tick(datetime(2026, 11, 5, 10, 0, tzinfo=SAST))) == 0        # an hour later: done
+
+
+def test_switched_on_mid_month_starts_with_the_month_then_running(db, send, monkeypatch):
+    """23 Nov 2026: switched on for DIGG on the 23rd, the old rule ("any later day of the month") would have
+    sent October's pack at once. The day it's first seen on is kept; only months ending after it are sent."""
+    from vula.api import tenants
+    monkeypatch.setattr(tenants, "is_active", lambda tid: True)
+    monkeypatch.setattr(features, "on", lambda tid, name: name == "management_accounts" and tid == T)
+    db.rows["vula_tenant_config"][0]["features"] = {"management_accounts": True, "open_chat": True}
+    assert asyncio.run(ms.tick(datetime(2026, 11, 23, 10, 0, tzinfo=SAST))) == 0        # October: not sent
+    feats = db.rows["vula_tenant_config"][0]["features"]
+    assert feats[ms.SINCE] == "2026-11-23" and feats["open_chat"] is True                # kept, others untouched
+    assert not send["doc"].await_count and not send["mail"].await_count
+    assert asyncio.run(ms.tick(datetime(2026, 11, 30, 10, 0, tzinfo=SAST))) == 0        # still October's turn
+    assert ms._since(T, date(2026, 12, 5)) == date(2026, 11, 23)                          # recorded once
+    db.rows["commerce_bank_transactions"].append(
+        {"id": "nov1", "tenant_id": T, "txn_date": "2026-11-10", "direction": "in", "amount_cents": 1000,
+         "account_code": "sales", "match_status": "unmatched", "balance_cents": 331000, "bank_account": NUMBER,
+         "source_file": "nov.pdf", "description": "sale", "reference": "", "vat_cents": 0})
+    monkeypatch.setattr(mp, "_today", lambda: date(2026, 12, 5))
+    assert asyncio.run(ms.tick(datetime(2026, 12, 5, 8, 0, tzinfo=SAST))) == 2          # November: both owners
+    assert {a["detail"]["month"] for a in db.rows["vula_merchant_audit"] if a["action"] == ms.ACTION} == {"2026-11"}
+
+
+def test_master_can_still_send_an_earlier_month(db, send):
+    db.rows["vula_tenant_config"][0]["features"] = {"management_accounts": True, ms.SINCE: "2026-11-23"}
+    assert len(asyncio.run(ms.send_month(T, "2026-10"))["sent"]) == 2
