@@ -11,7 +11,7 @@ import { timeAgo, useOAuthConnect } from './useOAuthConnect'
 
 const PROVIDERS = {
   google: { label: 'Google', popupName: 'google-oauth', what: 'Google account', reach: 'find & file Drive documents and draft Gmail replies' },
-  microsoft: { label: 'Microsoft', popupName: 'ms-oauth', what: 'Microsoft 365', reach: 'find & file OneDrive documents and draft Outlook replies' },
+  microsoft: { label: 'Microsoft', popupName: 'ms-oauth', what: 'Microsoft 365', reach: 'find & file OneDrive documents, draft Outlook replies and see your Outlook meetings' },
 }
 
 export default function OAuthConnectV2({ provider, tenantId, tenantName }) {
@@ -28,7 +28,12 @@ export default function OAuthConnectV2({ provider, tenantId, tenantName }) {
     : ['Sync', `Last synced ${timeAgo(a.last_synced_at)}`])
   return (
     <ConnectCard status={x.status} error={x.error}
-      rows={connected ? [['Account', a.email || '—'], ['Email', 'Draft-only (you approve & send)'], sync] : []}>
+      rows={connected ? [['Account', a.email || '—'], ['Email', 'Draft-only (you approve & send)'],
+        // Outlook calendar (12 Nov 2026): connections from before need a reconnect for it.
+        ...(provider === 'microsoft' ? [a.has_calendar
+          ? ['Calendar', 'Meetings come into your Vula diary. Reminders only if you ask on WhatsApp.']
+          : ['Calendar', 'Not yet — tap Reconnect to let Vula see your meetings', 'warn']] : []),
+        sync] : []}>
       {!oneTap ? (
         <p className="vcn-warn-box" role="status">
           {P.label} can't be connected with one tap yet — Vula's {P.label} app is still being set up. Vula's team has been told; you don't need to do anything.

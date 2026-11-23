@@ -1130,15 +1130,12 @@ async def receive_message(
                                              f"delivery radius)")
                             except Exception as _exc:
                                 logger.debug("pin coverage check skipped: %s", _exc)
-                            if route_mode == "commerce":
-                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message",
-                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
-                            elif route_mode == "knowledge":
-                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message",
-                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
-                            else:
-                                _run_bg(_handle_message(phone, text, msg_id), label="text_message",
-                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
+                            # 12 Nov 2026: a team member's pin may be a check-in at a meeting
+                            # (vula/checkins.py); anything else goes the usual way, unchanged.
+                            _run_bg(_handle_location(phone, text, msg_id, route_mode, route_tenant,
+                                                     float(lat), float(lng), label, msg.get("timestamp")),
+                                    label="location_message",
+                                    turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
 
                     elif msg_type == "document":
                         doc = msg.get("document") or {}
@@ -9161,7 +9158,9 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
         # that reaches nobody. Returns False regardless: the message the caller asked to send
         # did NOT go, and callers that check must not be told otherwise.
         if "131047" in (body or "") and tenant_id:
-            await _send_notify_template(creds, number, tenant_id)
+            WINDOW_CLOSED.set(True)               # vula/proactive.py sends its own template instead
+            if NOTIFY_FALLBACK.get():
+                await _send_notify_template(creds, number, tenant_id)
         return False
     except Exception as exc:
         # str() of an httpx timeout is empty — name the exception so the log says what happened
@@ -9171,6 +9170,14 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
 
 
 _UNSENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+# 12 Nov 2026 (vula/proactive.py): a message the person asked for that WhatsApp refuses for being
+# outside the 24-hour window goes out as its own template (the brief's summary, the meeting's time
+# and place) rather than the generic "you have an update" nudge. proactive.send turns the generic
+# fallback off for its call and reads whether the window was the reason.
+import contextvars as _contextvars                                         # noqa: E402
+NOTIFY_FALLBACK: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("notify_fallback", default=True)
+WINDOW_CLOSED: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar("window_closed", default=False)
 
 
 async def _post_unsent_retry(client, req, attempts: int = 3):
@@ -9959,6 +9966,31 @@ async def check_and_nudge_quiet_team_members() -> int:
     return sent
 
 
+async def _handle_location(phone: str, text: str, msg_id: str, route_mode: Optional[str],
+                           route_tenant: Optional[str], lat: float, lng: float, place: str,
+                           wa_timestamp: Any) -> None:
+    """A shared location pin: a team member's check-in at a meeting when it is one
+    (vula/checkins.py — "arrived" in the last 30 minutes, or a meeting starting about now),
+    otherwise the same text routing every pin had before."""
+    if route_tenant:
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            from vula import checkins
+            sent_at = _dt.fromtimestamp(int(wa_timestamp), tz=_tz.utc) if str(wa_timestamp or "").isdigit() else None
+            reply = await checkins.from_pin(route_tenant, phone, lat, lng, place, sent_at)
+            if reply:
+                await _send_reply(phone, reply, route_tenant)
+                return
+        except Exception as exc:
+            logger.warning("check-in from pin failed, routing as usual: %s", exc)
+    if route_mode == "commerce":
+        await _handle_commerce_message(phone, text, msg_id, route_tenant)
+    elif route_mode == "knowledge":
+        await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
+    else:
+        await _handle_message(phone, text, msg_id)
+
+
 async def check_and_nudge_due_reminders() -> int:
     """Send a WhatsApp nudge for every reminder (migration 117) whose due_at has passed and
     hasn't been nudged yet. Free text via _send_reply, not a template — reminders are set by
@@ -9984,7 +10016,10 @@ async def check_and_nudge_due_reminders() -> int:
         tenant_id, phone, text = r.get("tenant_id"), r.get("created_by"), r.get("text")
         if not (tenant_id and phone and text):
             continue
-        ok = await _send_reply(phone, f"⏰ Reminder: {text}", tenant_id)
+        # Outside the 24-hour window its own template carries the reminder (vula/proactive.py).
+        from vula import proactive
+        ok = await proactive.send(tenant_id, phone, f"⏰ Reminder: {text}", suffix="reminder", params=[text],
+                                  idem_key=f"reminder:{r['id']}")
         if ok:
             sent += 1
             try:

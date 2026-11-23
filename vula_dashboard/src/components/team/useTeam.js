@@ -10,7 +10,7 @@ import { REP_DEFAULT_ACCESS, MERCHANT_GROUPS } from "../../navConfig.jsx";
 import { VULA_API } from "../../lib/authFetch";
 
 // Sales rep ("My Work") tabs — a sales_rep login gets these by default (see createLogin).
-export const REP_MODULES = [["rep-contacts", "My Contacts"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
+export const REP_MODULES = [["rep-contacts", "My Contacts"], ["rep-chats", "My chats"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
   ["rep-documents", "My Documents"], ["rep-reminders", "My Reminders"], ["rep-expenses", "My Expenses"], ["rep-crm", "My Dynamics 365"]];
 
 // Access modules map 1:1 to dashboard tab ids — generated from the sidebar (navConfig) so a
@@ -39,6 +39,7 @@ export const EVENTS = [
   ["procurement_done", "Procurement done"],
   ["invoice_overdue_escalated", "Overdue invoice escalations (14+ days)"],
   ["project_margin", "Project check (weekly: jobs below their fee)"],
+  ["chat_assigned", "A customer chat is assigned to me"],
   ["pop_to_link", "Proofs of payment to link to a bill"],
 ];
 export const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
@@ -60,11 +61,17 @@ export const AUDIT_LABELS = {
   accountant_downloaded: "(accountant) downloaded",
 };
 
+// Preset teams (vula/team_presets.py): a team gives a person the tabs that job needs. Notifications
+// stay each person's own choice. Labels only here — the server holds the tabs for each team.
+export const TEAMS = [["sales", "Sales"], ["admin", "Admin / office"], ["bookkeeping", "Bookkeeping"],
+  ["operations", "Operations / stock"], ["marketing", "Marketing"], ["field", "Field / site"]];
+export const TEAM_LABELS = Object.fromEntries(TEAMS);
+
 export const toggle = (arr, key) => (arr || []).includes(key) ? arr.filter((k) => k !== key) : [...(arr || []), key];
 
 export function useTeam(tenantId) {
   const [members, setMembers] = useState([]);
-  const [form, setForm] = useState({ name: "", whatsapp: "", role: "staff" });
+  const [form, setForm] = useState({ name: "", whatsapp: "", role: "staff", team: "" });
   const [logins, setLogins] = useState([]);
   const [loginForm, setLoginForm] = useState({ email: "", role: "staff", whatsapp: "" });
   const [tempPw, setTempPw] = useState("");
@@ -132,9 +139,10 @@ export function useTeam(tenantId) {
     if (!form.name && !form.whatsapp) return;
     await fetch(`${VULA_API}/v1/team/${tenantId}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, access: [], notify: ["which_project", "followup_digest"] }),
+      // no notifications until they choose; a team gives that team's tabs (12 Nov 2026)
+      body: JSON.stringify({ ...form, team: form.team || null, access: [], notify: [] }),
     });
-    setForm({ name: "", whatsapp: "", role: "staff" }); load();
+    setForm({ name: "", whatsapp: "", role: "staff", team: "" }); load();
   };
   const patch = async (id, body) => {
     const d = await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
