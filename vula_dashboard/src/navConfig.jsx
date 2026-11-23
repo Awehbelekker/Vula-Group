@@ -5,7 +5,7 @@
  */
 import {
   Building2, KanbanSquare,
-  Activity, Banknote, Bike, CalendarCheck, Bot, BookOpen, Boxes, ClipboardCheck, BrainCircuit, BrickWall, Briefcase, Calculator,
+  Activity, Banknote, Bike, CalendarCheck, Bot, BookOpen, Boxes, ClipboardCheck, ChartPie, BrainCircuit, BrickWall, Briefcase, Calculator,
   CalendarDays, ClipboardList, Clock, Contact, CreditCard, Download, Factory, FileSignature,
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
   Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
@@ -24,7 +24,7 @@ export const NAV_ICONS = {
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
   sell: Store, orders: Package, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag,
   subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, listings: Building2, suppliers: Truck, import: Download,
-  money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen, booksreview: ClipboardCheck,
+  money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen, management: ChartPie, booksreview: ClipboardCheck,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
   people: Users, pipeline: KanbanSquare, customers: Users, contacts: Contact, followups: MailCheck,
   "marketing-hub": Sparkles, onboarding: PartyPopper, broadcast: Megaphone, "email-campaigns": Mail,
@@ -94,6 +94,7 @@ export const MERCHANT_GROUPS = [
       { id: "expenses", icon: "💸", label: "Expenses" },
       { id: "bank", icon: "🏦", label: "Bank & matching" },
       { id: "books", icon: "📒", label: "Accounts" },
+      { id: "management", icon: "📊", label: "Management accounts" },
       { id: "booksreview", icon: "🔎", label: "Books review" },
       { id: "payments", icon: "💳", label: "Payments" },
       { id: "taptopay", icon: "📲", label: "Tap to Pay" },
@@ -233,7 +234,7 @@ export const MASTER_GROUPS = MASTER_ZONES.flatMap((z) => z.groups);
 // This is now the ONLY copy, so it can't drift again by construction.
 // Tabs every business gets whatever it does. 2026-09-29 (UI review): QS Rates and Labour used
 // to be here, so a seafood shop saw construction tools; they now need projects/estimating.
-const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'pages', 'marketing', 'bank', 'books', 'booksreview', 'expenses', 'import', 'wa-templates', 'scheduling']);
+const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'pages', 'marketing', 'bank', 'books', 'management', 'booksreview', 'expenses', 'import', 'wa-templates', 'scheduling']);
 // Sales rep ("My Work") tabs: for a rep's own login (its `access` list) or a rep business —
 // not for every owner, who used to see a "Dynamics 365" tab whatever their business.
 const REP_TABS = new Set(['rep-contacts', 'rep-chats', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-expense-sheet', 'rep-crm']);

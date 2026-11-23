@@ -1606,3 +1606,66 @@ export const accountantActivity = [
   { id: 3, created_at: "2026-11-18T10:01:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_viewed",
     detail: { page: "reports/pnl", what: "Profit and loss" } },
 ];
+
+
+// 23 Nov 2026: Money › Management accounts (vula_mind/vula/commerce/management_pack.py) — made up.
+const MA_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+  "October", "November", "December"];
+export const managementPack = (month = "2026-10") => {
+  const [y, m] = month.split("-").map(Number);
+  const label = (yy, mm) => `${MA_MONTHS[mm - 1]} ${yy}`;
+  const [py, pm] = m === 1 ? [y - 1, 12] : [y, m - 1];
+  const first = month === "2026-08";
+  return {
+    business: "Mandla Designs", source: "bank", vat_registered: false,
+    period: { month, this: { from: `${month}-01`, to: `${month}-31`, label: label(y, m) }, ended: true,
+      first_trading_day: "2026-08-03", first_month: "2026-08",
+      previous: first ? null : { from: `${py}-${String(pm).padStart(2, "0")}-01`, to: "", label: label(py, pm) },
+      last_year: null, ytd: { from: "2026-08-03", to: `${month}-31`, label: "3 Aug 2026 to 31 Oct 2026" },
+      year_start: "2026-03-01", first_year: false, one_book: false },
+    pnl: {
+      columns: first ? ["this", "ytd"] : ["this", "previous", "ytd"],
+      income: [{ account: "Sales / income", code: null, direct: false, amounts: { this: 250000, previous: 200000, ytd: 750000 } },
+        { account: "Other income", code: null, direct: false, amounts: { this: 5000, previous: 0, ytd: 5000 } }],
+      expenses: [{ account: "Casual labour", code: null, direct: true, amounts: { this: 120000, previous: 150000, ytd: 370000 } },
+        { account: "Rent", code: null, direct: false, amounts: { this: 20000, previous: 0, ytd: 40000 } },
+        { account: "Fuel", code: null, direct: false, amounts: { this: 10000, previous: 0, ytd: 10000 } },
+        { account: "Cost of sales / stock", code: null, direct: true, amounts: { this: 0, previous: 50000, ytd: 50000 } }],
+      totals: {
+        this: { income_cents: 255000, direct_cents: 120000, gross_cents: 135000, expense_cents: 150000, overheads_cents: 30000, net_cents: 105000 },
+        ...(first ? {} : { previous: { income_cents: 200000, direct_cents: 200000, gross_cents: 0, expense_cents: 200000, overheads_cents: 0, net_cents: 0 } }),
+        ytd: { income_cents: 755000, direct_cents: 420000, gross_cents: 335000, expense_cents: 470000, overheads_cents: 50000, net_cents: 285000 },
+      },
+    },
+    cash: { accounts: [{ account: "Cheque …5678", lines: 4, opening_cents: 230000, in_cents: 250000, out_cents: 150000,
+      closing_cents: 330000, as_at: "2026-10-28", adds_up: true }],
+    unassigned: { lines: 1, in_cents: 5000, out_cents: 0 }, closing_cents: 330000, in_cents: 255000, out_cents: 150000 },
+    owed: {
+      customers: { total_cents: 50000, count: 1, over_60_cents: 0,
+        aging: { current: 0, days_1_30: 50000, days_31_60: 0, days_61_90: 0, days_90_plus: 0 },
+        top: [{ name: "Atlantis Foods", owed_cents: 50000 }] },
+      suppliers: { total_cents: 40000, count: 1, over_60_cents: 40000,
+        aging: { current: 0, days_1_30: 0, days_31_60: 0, days_61_90: 40000, days_90_plus: 0 },
+        top: [{ name: "Build It", owed_cents: 40000 }] },
+    },
+    vat: null,
+    kpis: { gross_margin_pct: 52.9, net_margin_pct: 41.2, debtor_days: 6, debtor_days_window: 92,
+      average_monthly_cash_cents: 95000, months_averaged: 3, cash_runway_months: null },
+    statements_missing: ["Cheque …5678"], statements_waiting: [],
+    books_check: { run: false, agreed: false, signed_off: false },
+    notes: ["Sales R2,550.00 — up 27.5% on September.", "Profit for October: R1,050.00.",
+      "Largest cost: Casual labour R1,200.00 (80% of costs).", "Customers owe R500.00.",
+      "You owe suppliers R400.00, R400.00 of it over 60 days past due.",
+      "No statement on file for Cheque …5678 in October — these figures may be short.",
+      "No comparison with October last year — the business wasn't trading yet (its books start 3 Aug 2026).",
+      "Figures are from the bank statements (money in and out, by category); the books check isn't agreed yet."],
+  };
+};
+
+export const financialPosition = {
+  as_at: "2026-11-23", source: "bank", month: "November 2026",
+  bank: { total_cents: 330000, accounts: [{ account: "Cheque …5678", closing_cents: 330000, as_at: "2026-11-20" }],
+    lines_on_no_account: 0 },
+  owed_to_you_cents: 50000, you_owe_cents: 40000, sales_month_cents: 120000, profit_month_cents: 45000,
+  vat_month_cents: null,
+};

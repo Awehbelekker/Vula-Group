@@ -22,6 +22,7 @@ import GettingStarted from "./GettingStarted.jsx";
 import Welcome from "./Welcome.jsx";
 import DataHealth from "./DataHealth.jsx";
 import ProjectsOverview from "./projects/ProjectsOverview";
+import FinancialPosition from "./management/FinancialPosition.jsx";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -121,6 +122,8 @@ export default function VulaHomeV2({ tenantId, onNavigate }) {
             </>)}
         </>)}
 
+      {home && view === "back" && (b.money_in || b.invoices_overdue) && (
+        <FinancialPosition tenantId={tenantId} onOpen={() => onNavigate?.("money", "management")} />)}
       {home && view === "back" && (
         <div style={grid}>
           {b.money_in && <Tile label="Money in this month" value={formatMoney(b.money_in.cents)} sub="from the bank" onClick={go(b.money_in.link)} />}

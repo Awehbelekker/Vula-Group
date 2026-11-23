@@ -40,6 +40,8 @@ FEATURES: Dict[str, tuple] = {
                   "Ask anything: an open chat in the dashboard on Vula's own AI (local first)"),
     "trade_costing": ("trade_costing_enabled",
                       "Costing by trade: build-ups researched once, confirmed by an owner or manager, then looked up"),
+    "management_accounts": ("management_accounts_enabled",
+                            "Management accounts sent to the owners on WhatsApp (email if not) around the 5th"),
     "books_v2": ("books_v2_enabled",
                  "One trusted book: every money event posts to the ledger (accrual, with a cash view) — "
                  "only after the business's books audit is signed off"),
