@@ -2,8 +2,8 @@
 
 Ian: "do a full audit of Vula and make sure we are not missing anything else". Read only. Each
 section was read end to end, and the worst claims were re-checked in the code before going in
-here (marked ✔). Sell and Marketing are in `capabilities-2026-11-23.md`; the WhatsApp side and
-the commerce checkout are in `../vula-commerce-audit.md`.
+here (marked ✔). Sell and Marketing are in `capabilities-2026-11-23.md`; the WhatsApp side is §5
+below; the shop, checkout and storefront are in `../vula-commerce-audit.md`.
 
 **Verdict:**
 - **The engine is deep.** The dashboard, by contrast, often fails silently, hides what the server
