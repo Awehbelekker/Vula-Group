@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -305,8 +306,8 @@ def still_referenced(tenant_id: str, ids: List[str]) -> set:
     left: set = set()
     for table, col, _uuid in REFERENCES:
         try:
-            rows = (db.table(table).select(col).eq("tenant_id", tenant_id).in_(col, ids)
-                    .limit(1000).execute().data or [])
+            rows = all_rows(lambda t=table, c=col: db.table(t).select(c).eq("tenant_id", tenant_id).in_(c, ids),
+                            order=col)
             left |= {str(r.get(col)) for r in rows if r.get(col)}
         except Exception as exc:  # noqa: BLE001
             log.debug("supplier reference check: %s.%s skipped: %s", table, col, exc)

@@ -18,6 +18,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,9 @@ def rollup(days: float = 30.0, min_sample: int = MIN_SAMPLE) -> int:
     tick, never breaks the loop that calls this."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
-        rows = (_client().table("vula_reflections")
+        rows = (all_rows(lambda: _client().table("vula_reflections")
                 .select("tenant_id,primary_skill,winning_tier,outcome_score")
-                .gte("created_at", cutoff).limit(20000).execute().data or [])
+                .gte("created_at", cutoff), cap=20000))
     except Exception as exc:
         logger.debug("pattern rollup read skipped (run migration 159?): %s", exc)
         return 0

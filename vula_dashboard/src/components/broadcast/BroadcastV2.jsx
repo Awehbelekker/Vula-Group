@@ -72,7 +72,7 @@ function PicturePromoV2({ tenantId }) {
             <p className="vbc-body" role="status">
               Reaches <b>{reach}</b> customer{reach === 1 ? '' : 's'}
               {p.preview.suppressed_count ? ` (${p.preview.suppressed_count} opted out, left out)` : ''}.
-              {p.preview.template_status !== 'APPROVED' && <> The promotion template is <b>{String(p.preview.template_status || '').toLowerCase()}</b>. Submit the standard templates under Settings › WhatsApp templates; Meta usually approves within a day.</>}
+              {p.preview.template_status !== 'APPROVED' && <> The promotion template is <b>{String(p.preview.template_status || '').toLowerCase()}</b>. Submit the standard templates under Marketing › Templates; Meta usually approves within a day.</>}
             </p>)}
           <form className="vbc-row vbc-bottom" onSubmit={e => { e.preventDefault(); p.doTest() }}>
             <Field label="Test to your number" style={{ flex: '1 1 160px', minWidth: 0 }}>

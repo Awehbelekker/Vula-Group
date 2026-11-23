@@ -139,3 +139,58 @@ def check(rows: Iterable[Dict[str, Any]], entries: Iterable[Dict[str, Any]],
                            "out_cents": -sum(_signed(r) for r in unassigned if _signed(r) < 0)},
             "live_lines_without_entry": [r["id"] for r in no_entry][:200],
             "set_aside_lines_still_posted": [r["id"] for r in set_aside_posted][:200]}
+
+
+def as_at(rows: Iterable[Dict[str, Any]], live_entries: Dict[Any, Dict[str, Any]], until: str,
+          account_ids: Dict[str, str]) -> Dict[str, Any]:
+    """`check` at a date (a year end), for a business on the one book: the bank lines and the live
+    journal (books_rebuild.live_journal's live entries) up to that date only."""
+    rows = [r for r in rows if str(r.get("txn_date"))[:10] <= until]
+    entries = []
+    for (stype, sid), e in live_entries.items():
+        if str(e.get("entry_date"))[:10] > until:
+            continue
+        entries.append({"source_type": stype, "source_id": sid, "entry_date": str(e.get("entry_date"))[:10],
+                        "lines": e.get("lines") or [], "bank_txn_id": sid if stype == "bank_line" else None})
+    return check(rows, entries, account_ids)
+
+
+def statement_check(rows: Iterable[Dict[str, Any]], since: str, until: str) -> Dict[str, Any]:
+    """Per bank account, for a business not on the one book yet (22 Nov 2026, the year-end pack): do the
+    statement lines in the books for the period add up? The balance before the first live line, plus
+    every live line's movement, must equal the last line's balance; a line whose balance isn't the one
+    before it plus its own movement is a break (a line missing, set aside by mistake, or misread).
+    Lines on no account number are counted, never reconciled."""
+    live = [r for r in rows if ev.is_live(r) and since <= str(r.get("txn_date"))[:10] <= until]
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for r in live:
+        groups.setdefault(_key(r), []).append(r)
+    accounts = []
+    for acct, lines in sorted(groups.items()):
+        if acct == UNASSIGNED:
+            continue
+        ordered = order_lines(lines)
+        first, last = ordered[0], ordered[-1]
+        has_balances = all(r.get("balance_cents") is not None for r in ordered)
+        moved_in = sum(_signed(r) for r in ordered if _signed(r) > 0)
+        moved_out = -sum(_signed(r) for r in ordered if _signed(r) < 0)
+        breaks = 0
+        if has_balances:
+            for a, b in zip(ordered, ordered[1:]):
+                if int(a["balance_cents"]) + _signed(b) != int(b["balance_cents"]):
+                    breaks += 1
+        opening = int(first["balance_cents"]) - _signed(first) if first.get("balance_cents") is not None else None
+        closing = int(last["balance_cents"]) if last.get("balance_cents") is not None else None
+        books = None if opening is None else opening + moved_in - moved_out
+        accounts.append({"account": f"…{acct[-4:]}", "number": acct, "lines": len(lines),
+                         "from": str(first.get("txn_date"))[:10], "until": str(last.get("txn_date"))[:10],
+                         "opening_cents": opening, "in_cents": moved_in, "out_cents": moved_out,
+                         "statement_cents": closing, "books_cents": books,
+                         "difference_cents": None if books is None or closing is None else books - closing,
+                         "breaks": breaks if has_balances else None,
+                         "reconciles": books is not None and closing is not None and books == closing and not breaks})
+    unassigned = groups.get(UNASSIGNED, [])
+    return {"accounts": accounts,
+            "all_reconcile": bool(accounts) and all(a["reconciles"] for a in accounts) and not unassigned,
+            "unassigned": {"lines": len(unassigned), "in_cents": sum(_signed(r) for r in unassigned if _signed(r) > 0),
+                           "out_cents": -sum(_signed(r) for r in unassigned if _signed(r) < 0)}}

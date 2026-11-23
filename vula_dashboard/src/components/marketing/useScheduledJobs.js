@@ -48,6 +48,10 @@ export function useJobForm(job, onSave) {
   const [minute, setMinute] = useState(job.minute ?? 0);
   const [dow, setDow] = useState(job.day_of_week ?? 4);
   const [interval, setIntervalMin] = useState(job.interval_minutes ?? 30);
+  // A job's own numbers (22 Nov 2026, migration 295): the handoff watch's reminder and
+  // give-back times. The server checks the range and that the give-back comes after the reminder.
+  const [settings, setSettings] = useState(() => ({ ...(job.settings || {}) }));
+  const setSetting = (name, value) => setSettings(s => ({ ...s, [name]: value }));
   const [saving, setSaving] = useState(false);
 
   const timed = job.kind === "daily" || job.kind === "weekly";
@@ -58,9 +62,13 @@ export function useJobForm(job, onSave) {
     if (timed) { patch.hour = Number(hour); patch.minute = Number(minute); }
     if (job.kind === "weekly") patch.day_of_week = Number(dow);
     if (job.kind === "interval") patch.interval_minutes = Number(interval);
+    if ((job.settings_fields || []).length) {
+      patch.settings = Object.fromEntries(job.settings_fields.map(fl => [fl.name, Math.round(Number(settings[fl.name]))]));
+    }
     await onSave(patch);
     setSaving(false);
   };
 
-  return { enabled, setEnabled, tpl, setTpl, hour, setHour, minute, setMinute, dow, setDow, interval, setIntervalMin, saving, timed, submit };
+  return { enabled, setEnabled, tpl, setTpl, hour, setHour, minute, setMinute, dow, setDow, interval, setIntervalMin,
+    settings, setSetting, saving, timed, submit };
 }

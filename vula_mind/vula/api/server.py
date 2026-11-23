@@ -1309,6 +1309,7 @@ async def _stale_handoff_scheduler_loop() -> None:
     auto-resume doesn't depend on any outbound send succeeding, so it's the actual guarantee
     here, the ping is the insurance on top."""
     import asyncio as _asyncio
+    from datetime import timedelta as _td
     from vula.commerce import job_config
     from vula import handoff_watch
     from vula.escalation import _pick_helper
@@ -1328,10 +1329,15 @@ async def _stale_handoff_scheduler_loop() -> None:
                 if not job_config.claim_run(tenant_id, "stale_handoff_resume", cfg):
                     continue
                 try:
-                    # 30-min reminder, 2 h resume + apology (vula/handoff_watch.py). Whoever the
-                    # conversation is assigned to in the inbox, else the tenant's default helper.
-                    await handoff_watch.sweep(tenant_id, helper_for=lambda sess, t=tenant_id: (
-                        _assigned_member(t, sess.get("assigned_to")) or _pick_helper(t)))
+                    # Reminder, then give back + apology (vula/handoff_watch.py), at the business's
+                    # own times (Scheduling tab, migration 295; 30 min and 2 h by default). Whoever
+                    # the conversation is assigned to in the inbox, else the default helper.
+                    times = cfg.get("settings") or {}
+                    await handoff_watch.sweep(
+                        tenant_id, helper_for=lambda sess, t=tenant_id: (
+                            _assigned_member(t, sess.get("assigned_to")) or _pick_helper(t)),
+                        remind_after=_td(minutes=int(times.get("remind_after_minutes") or 30)),
+                        resume_after=_td(minutes=int(times.get("resume_after_minutes") or 120)))
                 except Exception as exc:
                     log.warning("stale handoff resume failed for %s: %s", tenant_id, exc)
         except Exception as exc:
@@ -1977,7 +1983,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     # A downloaded file's name (the dashboard chat's "Download as spreadsheet", 13 Nov 2026).
-    expose_headers=["Content-Disposition"],
+    # X-Files-Failed: how many files a documents zip couldn't fetch (the index lists them) — the
+    # dashboard warns about it, which it can only do when the browser lets it read the header
+    expose_headers=["Content-Disposition", "X-Files-Failed"],
     allow_credentials=True,
 )
 
@@ -2141,7 +2149,7 @@ _ACCOUNTANT_READS = [re.compile(p) for p in (
     r"^/v1/commerce/([^/]+)/admin/invoices/[^/]+/pdf/?$",
     r"^/v1/commerce/([^/]+)/admin/expenses/?$",
     r"^/v1/commerce/([^/]+)/admin/finances/insights/?$",
-    r"^/v1/commerce/([^/]+)/admin/finance-folders(?:\.zip)?/?$",
+    r"^/v1/commerce/([^/]+)/admin/finance-folders(?:\.zip|/year-end-pack\.(?:zip|xlsx))?/?$",
     r"^/v1/commerce/([^/]+)/admin/bank-statements/coverage/?$",
     r"^/v1/commerce/([^/]+)/admin/books-audit/(?:latest|review)/?$",
     r"^/v1/documents/([^/]+)/filed/?$",

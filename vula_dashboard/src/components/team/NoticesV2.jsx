@@ -162,7 +162,7 @@ export default function NoticesV2({ tenantId }) {
     <div>
       <Card className="vtm-block">
         <h2 className="vtm-h"><Megaphone size={18} aria-hidden="true" />New notice</h2>
-        <p className="vtm-sub">Goes to your team on WhatsApp. People who haven't messaged in the last day get it as your approved staff notice template (Settings › WhatsApp templates › Submit standard templates).</p>
+        <p className="vtm-sub">Goes to your team on WhatsApp. People who haven't messaged in the last day get it as your approved staff notice template (Marketing › Templates › Submit standard templates).</p>
         <div className="vtm-form">
           <Field label="Title"><Input value={form.title} maxLength={120} placeholder="Office closed Friday" onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
           <Field label="Who gets it">

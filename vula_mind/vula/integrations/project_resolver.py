@@ -26,6 +26,7 @@ import threading
 from collections import Counter
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -302,10 +303,9 @@ def _month_project(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str,
         return _MONTH_CACHE[ck]
     out = None
     try:
-        rows = (_client().table("commerce_bank_transactions").select("project,amount_cents,match_status")
+        rows = (all_rows(lambda: _client().table("commerce_bank_transactions").select("project,amount_cents,match_status")
                 .eq("tenant_id", tenant_id).eq("direction", "out")
-                .gte("txn_date", f"{month}-01").lte("txn_date", f"{month}-31")
-                .limit(2000).execute().data or [])
+                .gte("txn_date", f"{month}-01").lte("txn_date", f"{month}-31"), cap=2000))
         spend: Counter = Counter()
         for r in rows:
             if r.get("project") and r.get("match_status") != "ignored":

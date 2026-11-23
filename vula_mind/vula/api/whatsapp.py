@@ -101,6 +101,7 @@ _ROUTE_PURPOSE: dict[str, str] = {}
 
 # Last agent confidence for the current request (set in _rag_reply, read for escalation).
 import contextvars as _contextvars
+from vula.db_pages import all_rows
 _LAST_CONF = _contextvars.ContextVar("vula_last_conf", default=1.0)
 # The customer forwarded this message (WhatsApp's context.forwarded flag) — read by
 # _run_commerce_assistant so a forwarded post never fills a cart.
@@ -1033,6 +1034,13 @@ async def receive_message(
                                 _msg = await _wa_login.handle_button(phone, reply_id)
                                 if _msg:
                                     await _send_reply(phone, _msg, route_tenant or "")
+                            elif phone and reply_id.startswith("handoff:") and route_tenant:
+                                # The handoff reminder's buttons and its Pass to someone list
+                                # (vula/handoff_watch.py) — team members only, no LLM.
+                                from vula import handoff_watch as _hw
+                                _msg = await _hw.handle_button(route_tenant, phone, reply_id)
+                                if _msg:
+                                    await _send_reply(phone, _msg, route_tenant)
                             elif phone and reply_id.startswith("kb:") and route_tenant:
                                 # Tap-to-pay buttons/lists (tip choice, Pay now, Change tip) — no LLM.
                                 from vula.tap.api import try_handle_interactive
@@ -1659,10 +1667,9 @@ async def _handle_merchant_account_reply(phone: str, reply_id: str, tenant_id: s
     # Back-apply to everything from this merchant the owner hasn't already allocated by hand.
     updated = 0
     try:
-        rows = (cs._client().table("commerce_bank_transactions").select("*")
+        rows = (all_rows(lambda: cs._client().table("commerce_bank_transactions").select("*")
                 .eq("tenant_id", tenant_id).eq("direction", "out")
-                .in_("categorized_by", ["ai", "default", "learned", "asked", "merchant"])
-                .limit(2000).execute().data or [])
+                .in_("categorized_by", ["ai", "default", "learned", "asked", "merchant"]), cap=2000))
         vat_reg = accounting.is_vat_registered(tenant_id)
         acc = next((a for a in accounting.ensure_chart(tenant_id) if a["code"] == choice), None)
         for r in rows:
@@ -3441,6 +3448,7 @@ async def _handle_document_ingest_one(
         # NULL: the claim is created here, BEFORE the storage upload below produces a real URL,
         # and nothing ever linked them back — confirmed live 2026-08-26 against real claims).
         expense_claim_img_ref = None
+        pop_txn_id = None   # a proof of payment staged for its numbered question (bank_rec.stage_pop)
         first_page = None        # the filed document this one is a later page of, if any
         if role == "admin" and local_path.suffix.lower() == ".pdf":
             try:
@@ -3655,9 +3663,10 @@ async def _handle_document_ingest_one(
                                      "please check it in the Expenses tab.")
                 elif fin and dtp == "payment_confirmation" and total_r > 0:
                     from vula.commerce import bank_rec
-                    reply = bank_rec.stage_pop_for_review(
+                    reply, pop_txn_id = bank_rec.stage_pop(
                         tenant_id, round(total_r * 100), fin.get("date"),
-                        fin.get("reference"), fin.get("payee"), sender_phone=phone, payer=fin.get("payer"))
+                        fin.get("reference"), fin.get("payee"), sender_phone=phone, payer=fin.get("payer"),
+                        payee_account=fin.get("payee_account_number") or fin.get("payee_account"))
                     scan_msg = "\n\n" + reply + await _payer_line(tenant_id, phone, {
                         "payer": fin.get("payer"), "payer_account": fin.get("payer_account")})
                 elif fin and dtp == "delivery_note":
@@ -3681,10 +3690,13 @@ async def _handle_document_ingest_one(
         if not scan_msg and doc_category == "Proof of Payment" and pop_cents:
             try:
                 from vula.commerce import bank_rec
-                scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
+                pop_reply, pop_txn_id = bank_rec.stage_pop(
                     tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
                     fields.get("payee_name") or fields.get("payee"), sender_phone=phone,
-                    payer=fields.get("payer") or fields.get("payer_name"))
+                    payer=fields.get("payer") or fields.get("payer_name"),
+                    payee_account=(fields.get("payee_account_number")
+                                   or (fields.get("payee_details") or {}).get("account_no_last_digits")))
+                scan_msg = "\n\n" + pop_reply
                 scan_msg += await _payer_line(tenant_id, phone, fields)
             except Exception as exc:
                 logger.warning("POP match skipped for %s: %s", result.filename, exc)
@@ -3712,6 +3724,9 @@ async def _handle_document_ingest_one(
                 doc_category, summary, fields, already_committed=already_committed,
                 project=named_project, doc_text=doc_text,
             )
+        if pop_txn_id and filed_row:     # the answer links the filed proof itself (22 Nov 2026, pop_links)
+            from vula.commerce import bank_rec as _br
+            _br.attach_pop_doc(tenant_id, pop_txn_id, (filed_row or {}).get("id"))
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
 

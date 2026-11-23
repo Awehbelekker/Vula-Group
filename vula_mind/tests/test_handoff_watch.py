@@ -56,7 +56,7 @@ def test_reminder_once_after_30_minutes_when_the_customer_is_waiting(world):
     world["sessions"] = [_session("s1", 35)]
     assert _sweep()["reminded"] == 1
     to, text = world["sent"][0]
-    assert to == HELPER["whatsapp"] and "Rudi has been waiting 35 min" in text
+    assert to == HELPER["whatsapp"] and "Rudi has waited 35 min" in text
     assert "17:25" in text                 # 13:25 UTC + 2 h = 15:25 UTC = 17:25 SAST
     assert world["resumed"] == []
     assert _sweep()["reminded"] == 0       # once per waiting message

@@ -85,6 +85,18 @@ def detect_language(text: Optional[str]) -> Optional[str]:
     return best if score >= 1 else None
 
 
+def languages_present(text: Optional[str]) -> set:
+    """Every language with at least one marker word in the text, English included — for mixed
+    messages ("Is the board in stock? Ndifuna eyesibini, ndicaphukile"), where detect_language
+    picks the language with the most markers and the others are lost. Markers of one or two
+    letters ("ke", "ha", "aa") don't count here: they turn up in English too.
+    22 Nov 2026 (conversation intelligence, step 1)."""
+    if not text:
+        return set()
+    words = {w for w in re.findall(r"[a-zà-ÿ']+", text.lower()) if len(w) > 2}
+    return {code for code, markers in _MARKERS_WITH_EN.items() if words & markers}
+
+
 # Of the 11 SA official languages, Whisper only handles English + Afrikaans as speech.
 # A voice note Whisper labels as anything else is unreliable → ask the customer to type.
 VOICE_LANGS = {"en", "af"}

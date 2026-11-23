@@ -179,6 +179,12 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/finance-folders.zip`, () => (booksViewer
       ? { __raw: { status: 200, contentType: "application/zip", body: "PK", headers: { "content-disposition": 'attachment; filename="Documents_2026-27_all.zip"' } } }
       : booksOff)),
+    // 22 Nov 2026: the year-end pack (owner/manager or the accountant)
+    r("GET", `${A}/finance-folders/year-end-pack\\.(xlsx|zip)`, (m) => { const kind = m[m.length - 1]; return booksViewer
+      ? { __raw: { status: 200, contentType: kind === "zip" ? "application/zip" : "application/octet-stream", body: "PK",
+          headers: { "content-disposition": `attachment; filename="Year-end_pack_2026-27.${kind}"`,
+            "x-files-failed": kind === "zip" ? "1" : "0", "access-control-expose-headers": "content-disposition, x-files-failed" } } }
+      : booksOff; }),
     r("GET", `${A}/company-docs/proposals`, () => (booksViewer && role !== "accountant" ? { documents: F.companyDocProposals } : booksOff)),
     r("POST", `${A}/company-docs/refile`, (m, url, req) => ({ ok: true, refiled: (req.postDataJSON() || {}).ids || [], skipped: [] })),
     r("POST", `^/ingest`, () => ({ status: "queued", filename: "doc.pdf", message: "processing" })),
@@ -533,6 +539,13 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/books-audit/statements/${T}`, () => F.booksStatementCheck),
     r("POST", `${A}/books-audit/statements/${T}/apply`, (m, url, req) => ({ ok: true, done: (req.postDataJSON() || {}).accept, skipped: [], not_saved: [] })),
     r("POST", `${A}/books-audit/statements`, () => ({ check_id: "chk-1", summary: { already_right: 40 } })),
+    r("POST", `${A}/books-audit/lines/${T}/pay-invoices`, (m, url, req) => {
+      const id = url.pathname.split("/lines/")[1].split("/")[0];
+      books.invoice_payments = (books.invoice_payments || []).map((g) => ({ ...g, lines: g.lines.filter((l) => l.id !== id) }))
+        .filter((g) => g.lines.length);
+      books.open.invoice_payments = books.invoice_payments.reduce((t, g) => t + g.lines.length, 0);
+      return { ok: true, invoices: (req.postDataJSON() || {}).invoice_ids };
+    }),
     r("POST", `${A}/books-audit/lines/${T}/pay-bill`, (m, url, req) => {
       const id = url.pathname.split("/lines/")[1].split("/")[0];
       books.bill_payments = (books.bill_payments || []).map((g) => ({ ...g, lines: g.lines.filter((l) => l.id !== id) }))

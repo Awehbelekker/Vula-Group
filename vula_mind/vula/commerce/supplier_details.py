@@ -19,6 +19,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +128,9 @@ def backfill(tenant_id: str, apply: bool = True, own_names: Optional[list] = Non
     db = service._client()
     sups = {s["id"]: dict(s) for s in (db.table("commerce_suppliers").select("*")
                                         .eq("tenant_id", tenant_id).execute().data or [])}
-    rows = (db.table("vula_filed_documents").select("id,supplier_id,fields,created_at,category")
+    rows = (all_rows(lambda: db.table("vula_filed_documents").select("id,supplier_id,fields,created_at,category")
             .eq("tenant_id", tenant_id).in_("category", ["Invoice", "Quote / Estimate"])
-            .order("created_at", desc=True).limit(5000).execute().data or [])
+            .order("created_at", desc=True), cap=5000))
     # The business's own "supplier" records (its own invoices filed as bills) get nothing.
     mine = {i for i, sup in sups.items() if own_names and service.is_own_name(sup.get("name") or "", own_names)}
     rows = [r for r in rows if r.get("supplier_id") in sups and r.get("supplier_id") not in mine]

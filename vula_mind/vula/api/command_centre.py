@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from vula.api.tenant_auth import member_scope, scope_allows
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["command-centre"])
@@ -389,9 +390,8 @@ def compute_home(db, tenant_id: str, scope: dict, now: Optional[datetime] = None
 
     if scope_allows(scope, ORDERS):
         def _orders():
-            rows = (db.table("commerce_orders").select("total_cents,status,created_at")
-                    .eq("tenant_id", tenant_id).gte("created_at", _iso(now - timedelta(days=400)))
-                    .limit(10000).execute().data or [])
+            rows = (all_rows(lambda: db.table("commerce_orders").select("total_cents,status,created_at")
+                    .eq("tenant_id", tenant_id).gte("created_at", _iso(now - timedelta(days=400))), cap=10000))
             if not rows:
                 return None
             open_n = sum(1 for o in rows if o.get("status") in ("pending_payment", "paid", "confirmed", "packing"))
@@ -412,9 +412,9 @@ def compute_home(db, tenant_id: str, scope: dict, now: Optional[datetime] = None
         front.update(_safe(_chats) or {})
 
         def _reply():
-            rows = (db.table("commerce_conversation_messages").select("session_id,role,created_at")
+            rows = (all_rows(lambda: db.table("commerce_conversation_messages").select("session_id,role,created_at")
                     .eq("tenant_id", tenant_id).gte("created_at", _iso(week0)).in_("role", ["user", "assistant", "agent"])
-                    .order("session_id").order("created_at").limit(5000).execute().data or [])
+                    .order("session_id").order("created_at"), cap=5000))
             secs = first_reply_seconds(rows)
             return None if secs is None else {"first_reply": {"seconds": secs, "link": {"section": "inbox"}}}
         front.update(_safe(_reply) or {})
@@ -430,9 +430,8 @@ def compute_home(db, tenant_id: str, scope: dict, now: Optional[datetime] = None
 
     if scope_allows(scope, MONEY_TABS):
         def _bank():
-            rows = (db.table("commerce_bank_transactions").select("amount_cents,direction,match_status,txn_date,source_file")
-                    .eq("tenant_id", tenant_id).gte("txn_date", month0.astimezone(SAST).date().isoformat())
-                    .limit(10000).execute().data or [])
+            rows = (all_rows(lambda: db.table("commerce_bank_transactions").select("amount_cents,direction,match_status,txn_date,source_file")
+                    .eq("tenant_id", tenant_id).gte("txn_date", month0.astimezone(SAST).date().isoformat()), cap=10000))
             any_bank = rows or db.table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
             if not any_bank:
                 return None
@@ -449,9 +448,8 @@ def compute_home(db, tenant_id: str, scope: dict, now: Optional[datetime] = None
 
         def _invoices():
             today = now.astimezone(SAST).date().isoformat()
-            rows = (db.table("commerce_invoices").select("total_cents,status,due_date,doc_type,direction")
-                    .eq("tenant_id", tenant_id).eq("doc_type", "invoice").in_("status", ["sent", "overdue", "part_paid"])
-                    .limit(5000).execute().data or [])
+            rows = (all_rows(lambda: db.table("commerce_invoices").select("total_cents,status,due_date,doc_type,direction")
+                    .eq("tenant_id", tenant_id).eq("doc_type", "invoice").in_("status", ["sent", "overdue", "part_paid"]), cap=5000))
             out = [r for r in rows if (r.get("direction") or "outbound") == "outbound"
                    and (r.get("status") == "overdue" or (r.get("due_date") and str(r["due_date"]) < today))]
             return {"invoices_overdue": {"value": len(out), "cents": sum(int(r.get("total_cents") or 0) for r in out),
@@ -461,11 +459,13 @@ def compute_home(db, tenant_id: str, scope: dict, now: Optional[datetime] = None
         def _bills():
             today = now.astimezone(SAST).date()
             soon = (today + timedelta(days=7)).isoformat()
-            exp = (db.table("commerce_expenses").select("amount_cents,due_date").eq("tenant_id", tenant_id)
-                   .eq("status", "pending").lte("due_date", soon).not_.is_("due_date", "null").limit(2000).execute().data or [])
-            inv = (db.table("commerce_invoices").select("total_cents,due_date,doc_type").eq("tenant_id", tenant_id)
-                   .eq("direction", "inbound").neq("doc_type", "quote").not_.in_("status", ["paid", "cancelled"])
-                   .lte("due_date", soon).not_.is_("due_date", "null").limit(2000).execute().data or [])
+            exp = all_rows(lambda: db.table("commerce_expenses").select("amount_cents,due_date").eq("tenant_id", tenant_id)
+                           .eq("status", "pending").lte("due_date", soon).not_.is_("due_date", "null"),
+                           cap=2000)
+            inv = all_rows(lambda: db.table("commerce_invoices").select("total_cents,due_date,doc_type")
+                           .eq("tenant_id", tenant_id).eq("direction", "inbound").neq("doc_type", "quote")
+                           .not_.in_("status", ["paid", "cancelled"]).lte("due_date", soon)
+                           .not_.is_("due_date", "null"), cap=2000)
             rows = [int(r.get("amount_cents") or 0) for r in exp] + [int(r.get("total_cents") or 0) for r in inv]
             return {"bills_due": {"value": len(rows), "cents": sum(rows), "link": {"section": "money", "tab": "budget"}}}
         back.update(_safe(_bills) or {})
@@ -480,8 +480,8 @@ def compute_home(db, tenant_id: str, scope: dict, now: Optional[datetime] = None
     if scope_allows(scope, STOCK):
         def _stock():
             # same rule as service.get_low_stock_products (the current Home): in stock, under 5
-            rows = (db.table("commerce_products").select("id,stock_quantity,in_stock").eq("tenant_id", tenant_id)
-                    .not_.is_("stock_quantity", "null").limit(5000).execute().data or [])
+            rows = all_rows(lambda: db.table("commerce_products").select("id,stock_quantity,in_stock")
+                            .eq("tenant_id", tenant_id).not_.is_("stock_quantity", "null"), cap=5000)
             if not rows:
                 return None
             low = sum(1 for r in rows if r.get("in_stock") and (r.get("stock_quantity") or 0) < 5)

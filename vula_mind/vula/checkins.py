@@ -26,6 +26,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from vula.db_pages import all_rows
 from vula.when import SAST, now_sast
 
 log = logging.getLogger(__name__)
@@ -177,12 +178,14 @@ def reply_text(meeting: Optional[Dict[str, Any]], hint: Optional[str], at: datet
 
 def for_period(tenant_id: str, since: datetime, until: datetime, phones: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     try:
-        q = (_client().table(TABLE).select("id,person,meeting_id,with_hint,place,distance_m,at,lat,lng")
-             .eq("tenant_id", tenant_id).eq("status", "checked_in")
-             .gte("at", since.isoformat()).lt("at", until.isoformat()))
-        if phones is not None:
-            q = q.in_("person", [digits(p) for p in phones])
-        return q.order("at").limit(1000).execute().data or []
+        def q():
+            query = (_client().table(TABLE).select("id,person,meeting_id,with_hint,place,distance_m,at,lat,lng")
+                     .eq("tenant_id", tenant_id).eq("status", "checked_in")
+                     .gte("at", since.isoformat()).lt("at", until.isoformat()))
+            if phones is not None:
+                query = query.in_("person", [digits(p) for p in phones])
+            return query.order("at")
+        return all_rows(q)
     except Exception as exc:
         log.debug("check-ins read skipped: %s", exc)
         return []

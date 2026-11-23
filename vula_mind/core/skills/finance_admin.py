@@ -77,11 +77,15 @@ def _bank_in_out(tenant_id: str, start: Optional[str], end: Optional[str]) -> Op
     tenant has no bank lines at all; a zero result with lines on file says where they end."""
     try:
         from vula.commerce import service
-        q = (service._client().table("commerce_bank_transactions")
-             .select("txn_date,amount_cents,direction").eq("tenant_id", tenant_id))
-        if start:
-            q = q.gte("txn_date", start).lt("txn_date", end)
-        rows = q.limit(10000).execute().data or []
+        from vula.db_pages import all_rows
+
+        def q():
+            x = (service._client().table("commerce_bank_transactions")
+                 .select("id,txn_date,amount_cents,direction").eq("tenant_id", tenant_id))
+            if start:
+                x = x.gte("txn_date", start).lt("txn_date", end)
+            return x
+        rows = all_rows(q, cap=10000)
         latest = None
         if not rows:
             last = (service._client().table("commerce_bank_transactions").select("txn_date")

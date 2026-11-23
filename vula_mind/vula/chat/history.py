@@ -73,10 +73,11 @@ class ChatHistoryDB:
         and groups client-side — bounded by `scan_limit`, same trade-off the health/usage
         aggregations in vula/api/master.py already make elsewhere in this codebase."""
         try:
-            rows = (_client().table(_TABLE)
-                    .select("phone,role,text,created_at")
-                    .eq("tenant_id", tenant_id)
-                    .order("created_at", desc=True).limit(2000).execute().data or [])
+            from vula.db_pages import all_rows
+            rows = all_rows(lambda: _client().table(_TABLE)
+                            .select("phone,role,text,created_at")
+                            .eq("tenant_id", tenant_id)
+                            .order("created_at", desc=True), cap=2000)
         except Exception as exc:
             logger.debug("chat list_threads skipped: %s", exc)
             return []

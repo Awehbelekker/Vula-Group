@@ -31,6 +31,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -364,9 +365,9 @@ def weekly_report(days: int = 7, now: Optional[datetime] = None) -> Dict[str, An
     "which one?" left unanswered, and nothing found. Staff questions only (that's all there is)."""
     now = now or datetime.now(timezone.utc)
     since = (now - timedelta(days=days)).isoformat()
-    rows = (_client().table("vula_kb_turns")
+    rows = (all_rows(lambda: _client().table("vula_kb_turns")
             .select("tenant_id,question,outcome,picked_doc,feedback,candidates,answer_docs,created_at")
-            .gte("created_at", since).order("created_at", desc=True).limit(5000).execute().data or [])
+            .gte("created_at", since).order("created_at", desc=True), cap=5000))
     by: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         by.setdefault(r["tenant_id"], []).append(r)

@@ -27,7 +27,7 @@ def _mock_db(logs, orders=None):
         .limit.return_value.execute.return_value = MagicMock(data=logs)
 
     orders_table = MagicMock()
-    orders_table.select.return_value.eq.return_value.in_.return_value.limit.return_value \
+    orders_table.select.return_value.eq.return_value.in_.return_value.order.return_value.range.return_value \
         .execute.return_value = MagicMock(data=orders or [])
 
     def _table(name):

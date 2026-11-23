@@ -40,6 +40,7 @@ export const EVENTS = [
   ["invoice_overdue_escalated", "Overdue invoice escalations (14+ days)"],
   ["project_margin", "Project check (weekly: jobs below their fee)"],
   ["chat_assigned", "A customer chat is assigned to me"],
+  ["pop_to_link", "Proofs of payment to link to a bill"],
 ];
 export const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
 // Friendly display label per role — the stored value stays the plain enum (used by the

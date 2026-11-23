@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Optional
 
 from vula.owner_advisor import SAST
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -95,10 +96,10 @@ def build(tenant_id: str, today: date, now: Optional[datetime] = None) -> Dict[s
                         .eq("tenant_id", tenant_id).gte("paid_at", y0).lt("paid_at", today.isoformat())
                         .limit(500).execute().data or [])
             if p.get("payment_method") != "credit_note"]     # a credit isn't money in
-    open_rows = (db.table("commerce_invoices")
+    open_rows = (all_rows(lambda: db.table("commerce_invoices")
                  .select("id,invoice_number,customer_name,total_cents,total_paid_cents,due_date,status")
                  .eq("tenant_id", tenant_id).eq("direction", "outbound").eq("doc_type", "invoice")
-                 .in_("status", ["sent", "overdue", "part_paid"]).limit(1000).execute().data or [])
+                 .in_("status", ["sent", "overdue", "part_paid"])))
     ids = list({p["invoice_id"] for p in paid if p.get("invoice_id")})
     names = {}
     if ids:

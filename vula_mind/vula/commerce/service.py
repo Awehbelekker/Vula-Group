@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
 from supabase import create_client, Client
+from vula.db_pages import all_rows
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +129,8 @@ def product_order_counts(tenant_id: str) -> dict:
         return hit[1]
     counts: dict = {}
     try:
-        orders = (_client().table("commerce_orders").select("id")
-                  .eq("tenant_id", tenant_id).in_("status", list(_PAID_ORDER_STATUSES))
-                  .limit(2000).execute().data or [])
+        orders = (all_rows(lambda: _client().table("commerce_orders").select("id")
+                  .eq("tenant_id", tenant_id).in_("status", list(_PAID_ORDER_STATUSES)), cap=2000))
         ids = [o["id"] for o in orders]
         if ids:
             items = (_client().table("commerce_order_items").select("order_id,product_id")
@@ -155,8 +155,8 @@ def product_ratings(tenant_id: str) -> dict:
         return hit[1]
     out: dict = {}
     try:
-        rows = (_client().table("commerce_reviews").select("product_id,rating")
-                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+        rows = (all_rows(lambda: _client().table("commerce_reviews").select("product_id,rating")
+                .eq("tenant_id", tenant_id), cap=5000))
         agg: dict = {}
         for r in rows:
             pid = r.get("product_id")
@@ -2929,8 +2929,8 @@ def canonical_project(tenant_id: str, name: Optional[str]) -> Optional[str]:
             if key in (project_key(r.get("name")), project_key(r.get("number")),
                        *(project_key(a) for a in r.get("aliases") or [])):
                 return r["name"]
-        used = (db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id)
-                .ilike("project", key.split()[0] + "%").limit(2000).execute().data or [])
+        used = (all_rows(lambda: db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id)
+                .ilike("project", key.split()[0] + "%"), cap=2000))
         counts: Dict[str, int] = {}
         for r in used:
             p = r.get("project")
@@ -4567,10 +4567,10 @@ def _known_parties(tenant_id: str) -> List[str]:
     register — the candidates _bridge_party can resolve a nickname to. Fail-open: []."""
     names: Dict[str, str] = {}
     try:
-        rows = (_client().table("vula_filed_documents")
+        rows = (all_rows(lambda: _client().table("vula_filed_documents")
                 .select("supplier:fields->>supplier,payee:fields->>payee_name,"
                         "customer:fields->>customer")
-                .eq("tenant_id", tenant_id).limit(2000).execute().data or [])
+                .eq("tenant_id", tenant_id), cap=2000))
         for r in rows:
             for v in r.values():
                 if v and _norm_name(v):

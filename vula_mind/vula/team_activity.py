@@ -26,6 +26,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from vula.db_pages import all_rows
 from vula.when import SAST, now_sast
 
 log = logging.getLogger(__name__)
@@ -141,27 +142,27 @@ def collect(tenant_id: str, since: datetime, until: datetime,
         return query
 
     out = {
-        "meetings": _rows(lambda: q("vula_meetings", "id,created_by,with_name,address,starts_at,status",
+        "meetings": _rows(lambda: all_rows(lambda: q("vula_meetings", "id,created_by,with_name,address,starts_at,status",
                                     "created_by", "starts_at").neq("status", "cancelled")
-                          .order("starts_at").limit(1000).execute().data),
-        "bookings": _rows(lambda: q("commerce_bookings", "id,booked_by,customer_name,service_name,start_at,status",
+                          .order("starts_at"))),
+        "bookings": _rows(lambda: all_rows(lambda: q("commerce_bookings", "id,booked_by,customer_name,service_name,start_at,status",
                                     "booked_by", "start_at").neq("status", "cancelled")
-                          .order("start_at").limit(1000).execute().data),
-        "notes": _rows(lambda: q("vula_filed_documents", "id,filed_by,summary,fields,created_at",
+                          .order("start_at"))),
+        "notes": _rows(lambda: all_rows(lambda: q("vula_filed_documents", "id,filed_by,summary,fields,created_at",
                                  "filed_by", "created_at").eq("category", "meeting_notes")
-                       .order("created_at").limit(1000).execute().data),
-        "done": _rows(lambda: q("vula_reminders", "id,created_by,text,due_at,completed_at,status",
-                                "created_by", "completed_at").eq("status", "done").limit(1000).execute().data),
-        "contacts": _rows(lambda: q("commerce_contacts", "id,created_by,name,created_at",
-                                    "created_by", "created_at").limit(1000).execute().data),
+                       .order("created_at"))),
+        "done": _rows(lambda: all_rows(lambda: q("vula_reminders", "id,created_by,text,due_at,completed_at,status",
+                                "created_by", "completed_at").eq("status", "done"))),
+        "contacts": _rows(lambda: all_rows(lambda: q("commerce_contacts", "id,created_by,name,created_at",
+                                    "created_by", "created_at"))),
     }
     # Follow-ups still open whose due time has passed (as of now, or the period's end if earlier).
     cut = min(until, now_sast()).isoformat()
-    oq = (db.table("vula_reminders").select("id,created_by,text,due_at,status").eq("tenant_id", tenant_id)
-          .eq("status", "open").lt("due_at", cut))
-    if phones is not None:
-        oq = oq.in_("created_by", phones)
-    out["overdue"] = _rows(lambda: oq.order("due_at").limit(1000).execute().data)
+    def oq():
+        query = (db.table("vula_reminders").select("id,created_by,text,due_at,status").eq("tenant_id", tenant_id)
+                 .eq("status", "open").lt("due_at", cut))
+        return query.in_("created_by", phones) if phones is not None else query
+    out["overdue"] = _rows(lambda: all_rows(lambda: oq().order("due_at")))
     # Call-sheet entries written in the period (sheets from a little before, since an open sheet
     # collects a whole week).
     sq = (db.table("vula_call_sheets").select("rep_whatsapp,entries,created_at").eq("tenant_id", tenant_id)
@@ -179,14 +180,14 @@ def collect(tenant_id: str, since: datetime, until: datetime,
     out["checkins"] = checkins.for_period(tenant_id, since, until, phones)
     # Quotes, invoices and orders a team member made (created_by, migration 278 — set from the
     # WhatsApp sender or the signed-in dashboard member; a customer's own checkout has none).
-    docs = _rows(lambda: q("commerce_invoices", "id,created_by,doc_type,direction,total_cents,status,issue_date",
-                           "created_by", "issue_date").limit(2000).execute().data)
+    docs = _rows(lambda: all_rows(lambda: q("commerce_invoices", "id,created_by,doc_type,direction,total_cents,status,issue_date",
+                           "created_by", "issue_date")))
     docs = [r for r in docs if r.get("created_by") and r.get("direction") != "inbound"
             and (r.get("status") or "") not in ("cancelled", "void")]
     out["quotes"] = [r for r in docs if r.get("doc_type") == "quote"]
     out["invoices"] = [r for r in docs if r.get("doc_type") == "invoice"]
-    out["orders"] = [r for r in _rows(lambda: q("commerce_orders", "id,created_by,total_cents,status,created_at",
-                                                "created_by", "created_at").limit(2000).execute().data)
+    out["orders"] = [r for r in _rows(lambda: all_rows(lambda: q("commerce_orders", "id,created_by,total_cents,status,created_at",
+                                                "created_by", "created_at")))
                      if r.get("created_by") and (r.get("status") or "") not in ("cancelled", "abandoned")]
     return out
 

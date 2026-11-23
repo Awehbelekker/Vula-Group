@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from vula.commerce import service
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -57,10 +58,10 @@ def candidates(tenant_id: str, limit: int = 200, fresh_only: bool = False) -> Li
     whose line items fall short of the total — a missed line (6 Oct, Gardens Handiman). fresh_only
     skips one already re-read (fields._reread_at) — the daily automatic pass tries each once."""
     from vula.commerce.doc_quality import REQUIRED
-    rows = (service._client().table("vula_filed_documents")
+    rows = (all_rows(lambda: service._client().table("vula_filed_documents")
             .select("id,category,filename,file_url,fields,summary,doc_id,project,created_at")
             .eq("tenant_id", tenant_id).in_("category", ["Email attachment", *REQUIRED])
-            .order("created_at", desc=True).limit(2000).execute().data or [])
+            .order("created_at", desc=True), cap=2000))
     out = [r for r in rows
            if r.get("file_url") and (r.get("filename") or "").lower().endswith(".pdf")
            and (r.get("category") == "Email attachment" or _missing(r) or _lines_short(r))
@@ -343,8 +344,8 @@ def _stock_sheet_candidates(tenant_id: str) -> List[dict]:
         except Exception as exc:
             log.debug("stock sheet candidates skipped: %s", exc)
     try:
-        have = {r.get("doc_id") for r in (db.table("vula_stock_sheets").select("doc_id")
-                                          .eq("tenant_id", tenant_id).limit(1000).execute().data or [])}
+        have = {r.get("doc_id") for r in all_rows(lambda: db.table("vula_stock_sheets").select("doc_id")
+                                                  .eq("tenant_id", tenant_id), order="doc_id")}
     except Exception:
         have = set()
     out, seen = [], set()
@@ -460,10 +461,10 @@ FILL_IF_MISSING = ("tax_id", "due_date")
 
 
 def enrich_candidates(tenant_id: str, limit: int = 100) -> List[dict]:
-    rows = (service._client().table("vula_filed_documents")
+    rows = (all_rows(lambda: service._client().table("vula_filed_documents")
             .select("id,category,filename,file_url,fields,summary,doc_id,created_at")
             .eq("tenant_id", tenant_id).in_("category", list(_MONEY))
-            .order("created_at", desc=True).limit(3000).execute().data or [])
+            .order("created_at", desc=True), cap=3000))
     return [r for r in rows
             if r.get("file_url") and (r.get("filename") or "").lower().endswith(".pdf")
             and not (r.get("fields") or {}).get("_enriched_at")][:limit]

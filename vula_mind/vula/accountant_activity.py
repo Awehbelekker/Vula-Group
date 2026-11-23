@@ -35,7 +35,8 @@ PAGES = {
     "bank/transactions": "Bank lines", "bank/reconciliation": "Bank reconciliation",
     "bank/accounts": "Bank accounts", "invoices": "Invoices", "invoices/:id/pdf": "Invoice PDF",
     "expenses": "Expenses", "finances/insights": "Finances", "finance-folders": "Folders for the accountant",
-    "finance-folders.zip": "Folders (zip)", "bank-statements/coverage": "Bank statements on file",
+    "finance-folders.zip": "Folders (zip)", "finance-folders/year-end-pack.xlsx": "Year-end workbook",
+    "finance-folders/year-end-pack.zip": "Year-end pack (zip)", "bank-statements/coverage": "Bank statements on file",
     "books-audit/latest": "Books check", "books-audit/review": "Books review",
     "filed": "Documents", "filed/:id/open": "A document",
 }

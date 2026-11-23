@@ -180,7 +180,7 @@ async def send(tenant_id: str, message: str, *, product_hint: Optional[str] = No
     if not dry_run and status != "APPROVED":
         return {**out, "error": (
             "The picture promotion template isn't approved by Meta yet "
-            f"({status.lower()}) — Settings › WhatsApp templates › Submit standard templates, then "
+            f"({status.lower()}) — Marketing › Templates › Submit standard templates, then "
             "it's usually approved within a day.")}
     from fastapi import HTTPException
     from vula.api.commerce import admin_send_broadcast

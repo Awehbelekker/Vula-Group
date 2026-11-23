@@ -28,6 +28,7 @@ import re
 from datetime import date, datetime, timezone
 from itertools import combinations
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -108,9 +109,9 @@ def outgoing(tenant_id: str, pop: Dict[str, Any]) -> bool:
 
 def _suppliers(tenant_id: str) -> List[Dict[str, Any]]:
     try:
-        return (_client().table("commerce_suppliers")
+        return (all_rows(lambda: _client().table("commerce_suppliers")
                 .select("id,name,aliases,bank_account_name,bank_account_number")
-                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+                .eq("tenant_id", tenant_id), cap=5000))
     except Exception:  # noqa: BLE001
         return []
 
@@ -243,13 +244,18 @@ def _who(actor: Optional[dict]) -> str:
     return (actor or {}).get("email") or (actor or {}).get("name") or "owner"
 
 
-async def link(tenant_id: str, doc_id: str, bill_ids: Any, actor: Optional[dict] = None) -> Dict[str, Any]:
+async def link(tenant_id: str, doc_id: str, bill_ids: Any, actor: Optional[dict] = None,
+               amount_cents: Optional[int] = None, paid_on: Optional[str] = None) -> Dict[str, Any]:
     """This proof paid those bills (one, or up to three of one supplier, adding up exactly to it). Each
-    open bill's payment is recorded once, dated the proof's date; a bill already paid is only tied."""
+    open bill's payment is recorded once, dated the proof's date; a bill already paid is only tied.
+    `amount_cents`/`paid_on` (the WhatsApp question's own figures) are used only where the filed
+    document's fields didn't read them."""
     from vula.commerce import service
     from vula.commerce.doc_audit import _save_fields
     doc = _doc(tenant_id, doc_id)
     p = read(doc)
+    p["amount_cents"] = p["amount_cents"] or amount_cents
+    p["date"] = p["date"] or (str(paid_on)[:10] if paid_on else None)
     if p["link"]:
         raise Refused("That proof of payment is already linked.")
     ids = [str(i) for i in dict.fromkeys([bill_ids] if isinstance(bill_ids, str) else (bill_ids or [])) if i]

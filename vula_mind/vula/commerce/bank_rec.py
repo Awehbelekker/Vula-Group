@@ -16,6 +16,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -471,15 +472,50 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str],
     return "in", False, "unrecognised payee"
 
 
+def _pop_options(tenant_id: str, amount_cents: int, txn_date: Optional[str], payee: Optional[str],
+                 payee_account: Optional[str]) -> tuple:
+    """(supplier, [[bill, …], …]) — the bill or 2–3 bills of the supplier this proof went to that add up
+    exactly (vula/commerce/pop_links.py: the account paid into, else the payee's name). Empty when the
+    supplier can't be told or nothing adds up."""
+    try:
+        from datetime import date as _date
+        from vula.commerce import pop_links
+        pop = {"amount_cents": amount_cents, "date": (txn_date or _now())[:10], "payee": payee or "",
+               "account": re.sub(r"\D", "", str(payee_account or ""))}
+        sup = pop_links.supplier_for(tenant_id, pop)
+        if not sup:
+            return None, []
+        bills = pop_links._supplier_bills(tenant_id, sup, pop_links._linked_bills(pop_links._pops(tenant_id)))
+        return sup, pop_links._options(int(amount_cents), _date.fromisoformat(pop["date"]), bills)
+    except Exception as exc:  # noqa: BLE001 — fall back to the single guess
+        log.debug("pop options skipped for %s: %s", tenant_id, exc)
+        return None, []
+
+
+def _bill_words(bills: List[Dict[str, Any]]) -> str:
+    from vula.commerce.pop_links import _due
+    nums = " + ".join(f"*{b.get('invoice_number') or 'a bill'}*" for b in bills)
+    if len(bills) == 1:
+        b = bills[0]
+        return f"{nums} ({str(b.get('issue_date') or '')[:10]})"
+    return f"{nums} (" + " + ".join(f"R{_due(b) / 100:,.2f}" for b in bills) + ")"
+
+
 def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str],
                         reference: Optional[str], payee: Optional[str],
-                        sender_phone: Optional[str] = None, paid_by: Optional[str] = None) -> str:
-    """The owner paid a supplier and sent the confirmation. Stage it as money OUT against a
-    bill, and ask before settling it — same never-auto-apply rule as the money-in side."""
-    bills = _open_supplier_bills(tenant_id)
-    cand = _match_supplier_bill(
-        {"amount_cents": amount_cents, "description": payee or "", "reference": reference or ""},
-        bills)
+                        sender_phone: Optional[str] = None, paid_by: Optional[str] = None,
+                        payee_account: Optional[str] = None) -> tuple:
+    """The owner paid a supplier and sent the confirmation. Stage it as money OUT and ask which bill(s)
+    it paid — numbered, from the supplier's bills that add up exactly (22 Nov 2026, pop_links) — and
+    settle only on the answer. Returns (message, txn id)."""
+    sup, options = _pop_options(tenant_id, amount_cents, txn_date, payee, payee_account)
+    cand = None
+    if not options:
+        bills = _open_supplier_bills(tenant_id)
+        cand = _match_supplier_bill(
+            {"amount_cents": amount_cents, "description": payee or "", "reference": reference or ""},
+            bills)
+    first = options[0][0] if options else cand
     row = {
         "tenant_id": tenant_id,
         "txn_date": (txn_date or _now())[:10],
@@ -491,15 +527,27 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
         "match_status": "asked",
         "asked_at": _now(),
         "source_file": "whatsapp_pop",
-        "proposed_match_type": "supplier_bill" if cand else None,
-        "proposed_match_id": (cand or {}).get("id"),
+        "proposed_match_type": "supplier_bill" if first else None,
+        "proposed_match_id": (first or {}).get("id"),
     }
+    if options:
+        row["pop_options"] = [[str(b["id"]) for b in o] for o in options]
     txn_id = None
     try:
         ins = _client().table("commerce_bank_transactions").insert(row).execute()
         txn_id = ((getattr(ins, "data", None) or [{}])[0] or {}).get("id")
     except Exception as exc:
-        log.debug("supplier pop staging insert failed (run migration 132?): %s", exc)
+        if options:     # before migration 294: ask the old way
+            log.warning("supplier pop options not kept (run migration 294?): %s", exc)
+            row.pop("pop_options", None)
+            options = []
+            try:
+                ins = _client().table("commerce_bank_transactions").insert(row).execute()
+                txn_id = ((getattr(ins, "data", None) or [{}])[0] or {}).get("id")
+            except Exception as exc2:  # noqa: BLE001
+                log.debug("supplier pop staging insert failed: %s", exc2)
+        else:
+            log.debug("supplier pop staging insert failed (run migration 132?): %s", exc)
     if txn_id and sender_phone:
         from vula import open_questions
         open_questions.ask(tenant_id, sender_phone, "pop_match", txn_id,
@@ -511,17 +559,49 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
                     "I'll note it for your accountant (a claim or the owner's loan to the business).")
     else:
         personal = ""
+    lead = personal.strip() + "\n\n" if personal else ""
+    to = f"*{payee}*" + (f" ({sup['name']}, found by {sup['how']})"
+                         if sup and sup.get("name") and str(sup["name"]).lower() != str(payee or "").lower() else "")
+    if options and len(options) == 1:
+        return (lead + f"📸 Got the payment confirmation — R{amt:,.2f} to {to}. That looks like "
+                f"{_bill_words(options[0])}. Reply *yes* to link it and record the payment, *none* if it "
+                f"isn't a supplier's bill, or tell me the right bill number."), txn_id
+    if options:
+        lines = "\n".join(f"{i}) {_bill_words(o)}" for i, o in enumerate(options, 1))
+        return (lead + f"📸 Got the payment confirmation — R{amt:,.2f} to {to}. Which bill(s) did it pay?\n"
+                f"{lines}\nReply with the number, a bill number, *none* (not a supplier's bill), or *skip*."), txn_id
     if cand:
-        return (personal.strip() + "\n\n" if personal else "") + (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
+        return lead + (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
                 f"bill *{cand.get('invoice_number') or cand.get('id')}*. Reply *yes* to mark it "
-                f"paid, or tell me the right bill number.")
+                f"paid, or tell me the right bill number."), txn_id
     return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. I couldn't find a "
-            f"matching open bill — reply with the bill number if you have it, or 'skip'.") + personal
+            f"matching open bill — reply with the bill number if you have it, or 'skip'.") + personal, txn_id
+
+
+def attach_pop_doc(tenant_id: str, txn_id: Optional[str], doc_id: Optional[str]) -> None:
+    """The filed proof of payment behind a staged row, so the answer links the document itself."""
+    if not (txn_id and doc_id):
+        return
+    try:
+        _client().table("commerce_bank_transactions").update({"pop_doc_id": str(doc_id)}) \
+            .eq("tenant_id", tenant_id).eq("id", txn_id).execute()
+    except Exception as exc:  # noqa: BLE001 — before migration 294
+        log.debug("pop document not attached (run migration 294?): %s", exc)
 
 
 def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
                          reference: Optional[str] = None, payee: Optional[str] = None,
-                         sender_phone: Optional[str] = None, payer: Optional[str] = None) -> str:
+                         sender_phone: Optional[str] = None, payer: Optional[str] = None,
+                         payee_account: Optional[str] = None) -> str:
+    """The reply to send (see stage_pop)."""
+    return stage_pop(tenant_id, amount_cents, txn_date, reference, payee, sender_phone=sender_phone,
+                     payer=payer, payee_account=payee_account)[0]
+
+
+def stage_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
+              reference: Optional[str] = None, payee: Optional[str] = None,
+              sender_phone: Optional[str] = None, payer: Optional[str] = None,
+              payee_account: Optional[str] = None) -> tuple:
     """Stage a WhatsApp proof-of-payment screenshot into the SAME interactive review flow
     bank_review.py already uses for an unmatched bank-statement credit — never auto-mark-paid.
     Returns the WhatsApp reply to send: a specific "does this match X — reply yes" proposal when
@@ -540,7 +620,8 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
         log.info("pop for %s staged as money out (%s)", tenant_id, reason)
         return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee,
                                    sender_phone=sender_phone,
-                                   paid_by=reason[len("paid personally by "):] if reason.startswith("paid personally by ") else None)
+                                   paid_by=reason[len("paid personally by "):] if reason.startswith("paid personally by ") else None,
+                                   payee_account=payee_account)
     candidate = propose_pop_match(tenant_id, amount_cents, reference, payee, sender_phone)
     match_type, cand = candidate if candidate else (None, None)
     row = {
@@ -556,8 +637,10 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
         "proposed_match_type": match_type,
         "proposed_match_id": (cand or {}).get("id"),
     }
+    txn_id = None
     try:
-        _client().table("commerce_bank_transactions").insert(row).execute()
+        ins = _client().table("commerce_bank_transactions").insert(row).execute()
+        txn_id = ((getattr(ins, "data", None) or [{}])[0] or {}).get("id")
     except Exception as exc:
         log.debug("pop staging insert failed (run migration 132?): %s", exc)
 
@@ -569,17 +652,17 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
     if not _confident and payee and not match_type:
         return (f"📸 Got the payment confirmation for R{amt:,.2f} — *{payee}*. Did you pay "
                 f"them, or is this someone paying you? Reply *I paid* if it went out, or "
-                f"the order/invoice number if it came in.")
+                f"the order/invoice number if it came in."), txn_id
     if match_type == "invoice":
         return (f"📸 Got your payment screenshot — R{amt:,.2f}. Looks like it matches invoice "
                 f"*{cand.get('invoice_number')}* ({cand.get('customer_name') or 'customer'}). "
-                f"Reply *yes* to confirm, or tell me the right order/invoice number.")
+                f"Reply *yes* to confirm, or tell me the right order/invoice number."), txn_id
     if match_type == "order":
         return (f"📸 Got your payment screenshot — R{amt:,.2f}. Looks like it matches order "
                 f"*{cand.get('display_id')}* ({cand.get('customer_name') or 'customer'}). "
-                f"Reply *yes* to confirm, or tell me the right order/invoice number.")
+                f"Reply *yes* to confirm, or tell me the right order/invoice number."), txn_id
     return (f"📸 Got your payment screenshot for R{amt:,.2f} — which order or invoice is this "
-            f"for? Reply with the number (e.g. OFF-00006) or the customer's name.")
+            f"for? Reply with the number (e.g. OFF-00006) or the customer's name."), txn_id
 
 
 async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str = "",
@@ -607,11 +690,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
 
     # Outstanding invoices to match credits against.
     try:
-        invoices = (db.table("commerce_invoices")
+        invoices = (all_rows(lambda: db.table("commerce_invoices")
                     .select("id,invoice_number,customer_name,total_cents,total_paid_cents,status,doc_type,"
                             "direction,issue_date,created_at")
-                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"])
-                    .limit(2000).execute().data or [])
+                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"]), cap=2000))
         # 18 Nov 2026: a part-paid invoice is matched on what is still owed, not its full total.
         invoices = [{**i, "invoice_total_cents": i.get("total_cents"),
                      "total_cents": int(i.get("total_cents") or 0) - int(i.get("total_paid_cents") or 0)}
@@ -626,12 +708,11 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # sent/overdue filter above would never see them. 2026-09-03: without this, paying a
     # supplier confirmed the money left the bank while the bill stayed unpaid forever.
     try:
-        supplier_bills = (db.table("commerce_invoices")
+        supplier_bills = (all_rows(lambda: db.table("commerce_invoices")
                           .select("id,invoice_number,supplier,total_cents,status,doc_type,"
                                   "direction,vat_cents,paid_at,project,issue_date,created_at")
                           .eq("tenant_id", tenant_id).eq("direction", "inbound")
-                          .in_("status", ["draft", "sent", "overdue", "part_paid"])
-                          .limit(2000).execute().data or [])
+                          .in_("status", ["draft", "sent", "overdue", "part_paid"]), cap=2000))
         supplier_bills = [b for b in supplier_bills
                           if (b.get("doc_type") or "invoice") == "invoice"]
     except Exception as exc:
@@ -642,10 +723,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # alongside online/COD) — a customer's proof-of-payment email needs to reconcile against
     # THESE too, not just invoices.
     try:
-        orders = (db.table("commerce_orders")
+        orders = (all_rows(lambda: db.table("commerce_orders")
                   .select("id,display_id,customer_name,customer_phone,total_cents,status,created_at")
-                  .eq("tenant_id", tenant_id).eq("status", "pending_payment")
-                  .limit(2000).execute().data or [])
+                  .eq("tenant_id", tenant_id).eq("status", "pending_payment"), cap=2000))
     except Exception as exc:
         log.debug("reconcile: order load skipped: %s", exc)
         orders = []
@@ -665,10 +745,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # link them (single source of truth, no double-count) and let the RECEIPT's category win
     # (the slip knows what was bought; the statement line usually doesn't).
     try:
-        card_exps = (db.table("commerce_expenses")
+        card_exps = (all_rows(lambda: db.table("commerce_expenses")
                      .select("id,date,amount_cents,account_code,supplier")
                      .eq("tenant_id", tenant_id).eq("paid_with", "company_card")
-                     .in_("status", ["submitted", "approved"]).limit(1000).execute().data or [])
+                     .in_("status", ["submitted", "approved"])))
     except Exception:
         card_exps = []
     used_exp_ids: set = set()
@@ -702,15 +782,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # receipt/worker match) already allocated keep their allocation on upsert.
     protected: Dict[tuple, dict] = {}
     try:
-        for r in (db.table("commerce_bank_transactions")
+        for r in (all_rows(lambda: db.table("commerce_bank_transactions")
                   .select("txn_date,amount_cents,description,account_code,vat_cents,vat_treatment,categorized_by,project,trade")
                   .eq("tenant_id", tenant_id)
                   # 'merchant' joins these because it reflects a decided merchant profile —
                   # often the owner's own once-per-merchant answer — and must survive a
                   # statement being re-uploaded.
                   .in_("categorized_by",
-                       ["owner", "receipt", "labour", "asked", "skipped", "merchant"])
-                  .limit(2000).execute().data or []):
+                       ["owner", "receipt", "labour", "asked", "skipped", "merchant"]), cap=2000)):
             protected[(str(r.get("txn_date")), int(r.get("amount_cents") or 0),
                        (r.get("description") or ""))] = r
     except Exception:
@@ -721,10 +800,9 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # and by email) gave the R1,500 that paid INV-10 to the next open R1,500 invoice as well.
     settled: Dict[tuple, dict] = {}
     try:
-        for r in (db.table("commerce_bank_transactions")
+        for r in (all_rows(lambda: db.table("commerce_bank_transactions")
                   .select("txn_date,amount_cents,description,matched_invoice_id,matched_order_id,matched_expense_id")
-                  .eq("tenant_id", tenant_id).eq("match_status", "matched")
-                  .limit(5000).execute().data or []):
+                  .eq("tenant_id", tenant_id).eq("match_status", "matched"), cap=5000)):
             settled[(str(r.get("txn_date")), int(r.get("amount_cents") or 0),
                      (r.get("description") or ""))] = r
     except Exception:
@@ -974,10 +1052,9 @@ def _load_settlements(db, tenant_id: str) -> List[Dict[str, Any]]:
     """Filed settlement summaries from the last ~4 months with a verified net payout."""
     from datetime import date, timedelta
     try:
-        rows = (db.table("vula_filed_documents").select("id,fields,created_at")
+        rows = (all_rows(lambda: db.table("vula_filed_documents").select("id,fields,created_at")
                 .eq("tenant_id", tenant_id).eq("category", "Settlement Statement")
-                .gte("created_at", (date.today() - timedelta(days=120)).isoformat())
-                .limit(1000).execute().data or [])
+                .gte("created_at", (date.today() - timedelta(days=120)).isoformat())))
     except Exception as exc:
         log.debug("reconcile: settlement load skipped: %s", exc)
         return []
@@ -1106,11 +1183,10 @@ def supersede_misread(tenant_id: str, txns: List[Dict[str, Any]]) -> Dict[str, A
         on_day.setdefault((t["date"], t["direction"]), []).append(t)
     db = _client()
     try:
-        rows = (db.table("commerce_bank_transactions")
+        rows = (all_rows(lambda: db.table("commerce_bank_transactions")
                 .select("id,txn_date,description,amount_cents,direction,match_status,project,trade,"
                         "matched_invoice_id,matched_order_id,matched_expense_id")
-                .eq("tenant_id", tenant_id).gte("txn_date", days[0]).lte("txn_date", days[-1])
-                .execute().data or [])
+                .eq("tenant_id", tenant_id).gte("txn_date", days[0]).lte("txn_date", days[-1])))
     except Exception as exc:
         log.debug("supersede read skipped: %s", exc)
         return {"superseded": 0}

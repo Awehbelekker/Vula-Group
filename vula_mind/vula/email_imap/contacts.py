@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Dict, List
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -86,9 +87,9 @@ def search_contacts(tenant_id: str, query: str, limit: int = 5) -> List[Dict[str
     if not q or not tenant_id:
         return []
     try:
-        rows = (_client().table("vula_email_contacts")
+        rows = (all_rows(lambda: _client().table("vula_email_contacts")
                 .select("name,email,domain,kind,message_count,last_seen")
-                .eq("tenant_id", tenant_id).limit(2000).execute().data or [])
+                .eq("tenant_id", tenant_id), cap=2000))
     except Exception as exc:
         log.debug("contact search skipped (run migration 024?): %s", exc)
         return []

@@ -333,6 +333,7 @@ def costing(tenant_id: str, since: Optional[str] = None, txns: Optional[List[Dic
 
 
 import re as _re
+from vula.db_pages import all_rows
 
 # 2026-09-29, Judy (digg-demo) at 09:03: "What data are you using to reference cost" reached the
 # general knowledge skill, which can't see her costing and could only guess. Where the numbers
@@ -550,9 +551,8 @@ def _boq_quantities(tenant_id: str) -> Dict[str, Dict[str, float]]:
     from vula.commerce import price_book
     from vula.commerce.service import project_key
     try:
-        docs = (_client().table("vula_filed_documents").select("project,fields")
-                .eq("tenant_id", tenant_id).eq("category", "Bill of Quantities (BOQ)")
-                .execute().data or [])
+        docs = (all_rows(lambda: _client().table("vula_filed_documents").select("project,fields")
+                .eq("tenant_id", tenant_id).eq("category", "Bill of Quantities (BOQ)")))
     except Exception as exc:
         log.debug("BOQ quantities unavailable: %s", exc)
         return {}

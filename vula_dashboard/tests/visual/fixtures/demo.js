@@ -1063,6 +1063,12 @@ export const scheduledJobs = {
     { job_type: "delivery_briefing", label: "Delivery briefing", description: "Tomorrow's deliveries, to the owner every evening.", kind: "daily", enabled: true, hour: 18, minute: 0, template_name: null, last_fired_at: "2026-10-16T16:00:00Z" },
     { job_type: "weekly_specials", label: "Weekly specials reminder", description: "Reminds you to send this week's specials.", kind: "weekly", enabled: true, hour: 9, minute: 30, day_of_week: 3, template_name: "weekly_specials" },
     { job_type: "unpaid_chase", label: "Unpaid-order chase", description: "Nudges customers with an unpaid order.", kind: "interval", enabled: false, interval_minutes: 60, template_name: null },
+    { job_type: "stale_handoff_resume", label: "Stale handoff auto-resume", description: "A chat someone took over: remind them, then give it back to Vula.", kind: "interval", enabled: true, interval_minutes: 15, template_name: null,
+      settings: { remind_after_minutes: 30, resume_after_minutes: 120 },
+      settings_fields: [
+        { name: "remind_after_minutes", label: "Remind the person handling the chat after (minutes)", min: 5, max: 240, default: 30 },
+        { name: "resume_after_minutes", label: "Give the chat back to Vula after (minutes)", min: 15, max: 1440, default: 120 },
+      ] },
   ],
 };
 export const marketingSaved = [{ id: "ms-1", kind: "promo", topic: "Braai packs", body: "Braai season is here! Our braai packs are R399 this weekend only." }];
@@ -1404,7 +1410,7 @@ export const booksReview = {
   books: { trial_balance: { after: { accrual: { balanced: true }, cash: { balanced: true } } },
     control: { debtors_tie: true, debtors_books_cents: 1800000, creditors_tie: true, creditors_books_cents: 0 },
     suspense: { lines: 1, cents: -56217 }, in_transit_cents: -2300000, owed_to_staff_cents: 400000 },
-  open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 2, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
+  open: { restore: 2, duplicates: 1, transfers: 1, to_categorise: 1, refile: 10, bill_payments: 2, invoice_payments: 1, in_transit: 1, staff_claims: 1, drafts: 1, odd_dates: 1, no_account: 0,
     doc_figures: 2, not_booked: 1, our_invoices: 1, sales_not_in_invoices: 2, certificates: 3, supplier_statements: 1, pops: 2, bill_mismatch: 1,
     doc_duplicates: 1, bill_duplicates: 1, suppliers: 2 },
   clean: false,
@@ -1421,6 +1427,11 @@ export const booksReview = {
       options: [{ cents: 840000, bills: [
         { id: "bill-81", number: "DIG-BILL-00081", supplier: "R Engelbrecht", date: "2026-09-22", owed_cents: 560000, status: "draft", already_paid: false, project: "HPC Bokaap" },
         { id: "bill-97", number: "DIG-BILL-00197", supplier: "R Engelbrecht", date: "2026-09-22", owed_cents: 280000, status: "paid", already_paid: true, project: "Belladonna" }] }] }] }],
+  invoice_payments: [{ key: "atlantis distributors seafood", customer: "Atlantis Seafood Distributors", cents: 1725000, lines: [
+    { ...brLine("ci1", "2026-10-02", "Magtape Credit Atlantis Seafood Distribu", 1725000, "in", { account_code: "sales", categorized_by: "default" }),
+      options: [{ cents: 1725000, invoices: [
+        { id: "inv-101", number: "MD-INV-0101", customer: "Atlantis Seafood Distributors", date: "2026-09-01", owed_cents: 1150000, status: "sent", draft: false, already_paid: false },
+        { id: "inv-102", number: "MD-INV-0102", customer: "Atlantis Seafood Distributors", date: "2026-09-15", owed_cents: 575000, status: "draft", draft: true, already_paid: false }] }] }] }],
   refile: [
     { key: "skipp rubble|out|one_word_rule", payee: "skipp rubble", label: "FNB App Payment To Skipp Rubble Removal",
       direction: "out", why: "one_word_rule", why_text: "Filed by an old one-word rule, not by who was paid", suggested: null,

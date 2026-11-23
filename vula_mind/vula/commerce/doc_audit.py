@@ -36,6 +36,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -1192,8 +1193,8 @@ def set_vat_basis(tenant_id: str, doc_id: str, basis: str, actor: Optional[dict]
     _save_fields(tenant_id, doc_id, f)
     _client().table("vula_price_observations").update({"vat_basis": basis}).eq("tenant_id", tenant_id) \
         .eq("doc_id", str(doc_id)).execute()
-    left = (_client().table("vula_price_observations").select("id,vat_basis").eq("tenant_id", tenant_id)
-            .eq("doc_id", str(doc_id)).limit(1000).execute().data or [])
+    left = (all_rows(lambda: _client().table("vula_price_observations").select("id,vat_basis").eq("tenant_id", tenant_id)
+            .eq("doc_id", str(doc_id))))
     ok = all(r.get("vat_basis") == basis for r in left)
     _audit(tenant_id, actor, "document_vat_basis_set", doc_id=doc_id, was=was, now=basis, prices=len(left))
     return {"ok": ok, "prices": len(left), "basis": basis}

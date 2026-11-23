@@ -25,6 +25,7 @@ import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -170,14 +171,14 @@ async def backfill(tenant_id: str) -> Dict[str, Any]:
     from config import settings
     from vula import storage_links
     db = _client()
-    names = sorted({r["source_file"] for r in (db.table("commerce_bank_transactions").select("source_file")
-                                                .eq("tenant_id", tenant_id).limit(20000).execute().data or [])
+    names = sorted({r["source_file"] for r in (all_rows(lambda: db.table("commerce_bank_transactions").select("source_file")
+                                                .eq("tenant_id", tenant_id), cap=20000))
                     if r.get("source_file") and r["source_file"] not in ("whatsapp_pop", "pasted-statement")})
     root = settings.upload_dir / tenant_id
     kept, relabelled, missing = 0, 0, []
     import tempfile
-    filed = (db.table("vula_filed_documents").select("id,filename,category,summary,file_url,fields")
-             .eq("tenant_id", tenant_id).execute().data or [])
+    filed = (all_rows(lambda: db.table("vula_filed_documents").select("id,filename,category,summary,file_url,fields")
+             .eq("tenant_id", tenant_id)))
     by_name = {}
     for d in filed:
         by_name.setdefault(d.get("filename"), d)
@@ -256,9 +257,11 @@ def coverage(tenant_id: str, start: Optional[date] = None, end: Optional[date] =
                             .eq("tenant_id", tenant_id).execute().data or []) if not a.get("private_to")]
     docs = (db.table("vula_filed_documents").select("id,fields").eq("tenant_id", tenant_id)
             .eq("category", CATEGORY).execute().data or [])
-    lines = (db.table("commerce_bank_transactions").select("bank_account,txn_date,match_status")
-             .eq("tenant_id", tenant_id).gte("txn_date", start.isoformat()).lte("txn_date", end.isoformat())
-             .limit(50000).execute().data or [])
+    from vula.commerce.ledger import _all_pages      # page by page: a request returns at most 1 000 rows
+    lines = _all_pages(lambda: db.table("commerce_bank_transactions").select("id,bank_account,txn_date,match_status,source_file")
+                       .eq("tenant_id", tenant_id).gte("txn_date", start.isoformat()).lte("txn_date", end.isoformat())
+                       .order("id"))
+    lines = [ln for ln in lines if (ln.get("source_file") or "") != "whatsapp_pop"]   # a proof of payment isn't a bank line
     out = []
     for a in accounts:
         have: Dict[str, Dict[str, bool]] = {}

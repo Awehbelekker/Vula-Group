@@ -21,6 +21,7 @@ import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 SAST = timezone(timedelta(hours=2))
@@ -63,11 +64,10 @@ def spending_jumps(tenant_id: str, today: date) -> List[Dict[str, Any]]:
     the 90 days before that. Needs bank lines in both windows (statements arrive irregularly)."""
     start = today - timedelta(days=120)
     try:
-        rows = (_client().table("commerce_bank_transactions")
+        rows = (all_rows(lambda: _client().table("commerce_bank_transactions")
                 .select("txn_date,amount_cents,account_code")
                 .eq("tenant_id", tenant_id).eq("direction", "out")
-                .gte("txn_date", start.isoformat()).lte("txn_date", today.isoformat())
-                .limit(5000).execute().data or [])
+                .gte("txn_date", start.isoformat()).lte("txn_date", today.isoformat()), cap=5000))
     except Exception as exc:
         log.debug("advisor: bank skipped: %s", exc)
         return []
@@ -98,10 +98,9 @@ def spending_jumps(tenant_id: str, today: date) -> List[Dict[str, Any]]:
 
 def low_stock(tenant_id: str) -> List[Dict[str, Any]]:
     try:
-        rows = (_client().table("commerce_products")
-                .select("name,stock_quantity,reorder_threshold,archived")
-                .eq("tenant_id", tenant_id).not_.is_("stock_quantity", "null")
-                .limit(1000).execute().data or [])
+        rows = all_rows(lambda: _client().table("commerce_products")
+                        .select("name,stock_quantity,reorder_threshold,archived")
+                        .eq("tenant_id", tenant_id).not_.is_("stock_quantity", "null"))
     except Exception as exc:
         log.debug("advisor: stock skipped: %s", exc)
         return []

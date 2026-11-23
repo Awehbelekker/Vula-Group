@@ -389,16 +389,10 @@ def reverse_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
           source_type="expense_reversal", source_id=expense.get("id"), lines=lines)
 
 
-def _all_pages(make_query, page: int = 1000) -> List[Dict[str, Any]]:
-    """Run a PostgREST query page by page (it caps each response at 1000 rows)."""
-    out: List[Dict[str, Any]] = []
-    start = 0
-    while True:
-        rows = make_query().range(start, start + page - 1).execute().data or []
-        out.extend(rows)
-        if len(rows) < page:
-            return out
-        start += page
+def _all_pages(make_query, page: int = 1000, cap: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Run a PostgREST query page by page (it caps each response at 1000 rows) — vula.db_pages."""
+    from vula.db_pages import all_rows
+    return all_rows(make_query, cap=cap, order=None, page=page)   # its callers order their own queries
 
 
 def trial_balance(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None,

@@ -61,9 +61,11 @@ def _client():
     return c()
 
 
-def year_bounds(year_start: Optional[str] = None) -> Tuple[date, date]:
-    """The financial year that starts on `year_start` (default: the one today falls in, 1 March)."""
-    s = date.fromisoformat(year_start[:10]) if year_start else statement_files.year_start()
+def year_bounds(year_start: Optional[str] = None, year_end_month: int = 2) -> Tuple[date, date]:
+    """The financial year that starts on `year_start` (default: the one today falls in — 1 March for a
+    February year end)."""
+    s = (date.fromisoformat(year_start[:10]) if year_start
+         else statement_files.year_start(year_end_month=year_end_month))
     return s, date(s.year + 1, s.month, 1) - timedelta(days=1)
 
 
@@ -217,18 +219,8 @@ def _index(business: str, rows: List[Dict[str, Any]], tree: Dict[str, Any]) -> T
     return buf.getvalue(), {f"E{r}": sum(x["amount_cents"] or 0 for x in rows)}
 
 
-def build_zip(tenant_id: str, year_start: Optional[str] = None, folder: Optional[str] = None,
-              fetch: Optional[Callable[[str], bytes]] = None) -> Tuple[bytes, Dict[str, Any]]:
-    """The year's money documents (or one folder) as a zip with Index.xlsx. RuntimeError when the
-    index or the zip doesn't read back; LookupError when there's nothing to put in it."""
-    from vula.commerce.xlsx_check import mismatches
-    if folder and folder not in TITLES:
-        raise ValueError("unknown folder")
-    if fetch is None:
-        from vula.storage_links import fetch_sync as fetch
-    tree = organise(tenant_id, year_start)
-    business = _business(tenant_id)
-    root = pf._clean(f"{business or 'Documents'} - year {tree['from'][:4]}-{tree['to'][2:4]}", 80)
+def document_rows(tree: Dict[str, Any], root: str, folder: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Each document of the year (or one folder) with its path in a zip under `root`."""
     rows, used = [], set()
     for f in tree["folders"]:
         if folder and f["key"] != folder:
@@ -245,8 +237,15 @@ def build_zip(tenant_id: str, year_start: Optional[str] = None, folder: Optional
                 rows.append({"folder": f["title"], "group": g["name"], "date": it["date"], "label": it["label"],
                              "amount_cents": it["amount_cents"], "filename": it["filename"],
                              "file_url": it["file_url"], "path": path if it["file_url"] else None})
-    if not rows:
-        raise LookupError("no documents for that year")
+    return rows
+
+
+def fetch_files(rows: List[Dict[str, Any]], fetch: Optional[Callable[[str], bytes]] = None
+                ) -> Tuple[List[Tuple[Dict[str, Any], Optional[bytes], Optional[str]]], List[str]]:
+    """Every row's file, 6 at a time. A file that can't be fetched is listed (its row's path set to
+    None, so the index says so), never silently dropped. RuntimeError when the files are too big."""
+    if fetch is None:
+        from vula.storage_links import fetch_sync as fetch
 
     def get(row):
         try:
@@ -263,6 +262,23 @@ def build_zip(tenant_id: str, year_start: Optional[str] = None, folder: Optional
     total = sum(len(d) for _r, d, _e in got if d)
     if total > MAX_ZIP_BYTES:
         raise RuntimeError(f"the files come to {total // (1024 * 1024)} MB — download one folder at a time")
+    return got, failed
+
+
+def build_zip(tenant_id: str, year_start: Optional[str] = None, folder: Optional[str] = None,
+              fetch: Optional[Callable[[str], bytes]] = None) -> Tuple[bytes, Dict[str, Any]]:
+    """The year's money documents (or one folder) as a zip with Index.xlsx. RuntimeError when the
+    index or the zip doesn't read back; LookupError when there's nothing to put in it."""
+    from vula.commerce.xlsx_check import mismatches
+    if folder and folder not in TITLES:
+        raise ValueError("unknown folder")
+    tree = organise(tenant_id, year_start)
+    business = _business(tenant_id)
+    root = pf._clean(f"{business or 'Documents'} - year {tree['from'][:4]}-{tree['to'][2:4]}", 80)
+    rows = document_rows(tree, root, folder)
+    if not rows:
+        raise LookupError("no documents for that year")
+    got, failed = fetch_files(rows, fetch)
     index, want = _index(business, rows, tree)
     if mismatches(index, want):
         raise RuntimeError("the index didn't add up to the documents")

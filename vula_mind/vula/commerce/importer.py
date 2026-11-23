@@ -14,6 +14,7 @@ import logging
 import re
 import uuid
 from typing import Any, Dict, List
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -193,8 +194,8 @@ def commit_invoices(tenant_id: str, invoices: List[Dict[str, Any]]) -> Dict[str,
     db = _client()
     try:
         existing = {(r.get("invoice_number") or "").strip().lower()
-                    for r in (db.table("commerce_invoices").select("invoice_number")
-                              .eq("tenant_id", tenant_id).limit(5000).execute().data or [])}
+                    for r in (all_rows(lambda: db.table("commerce_invoices").select("invoice_number")
+                              .eq("tenant_id", tenant_id), cap=5000))}
     except Exception:
         existing = set()
     created, skipped = 0, 0
@@ -261,8 +262,7 @@ async def commit_orders(tenant_id: str, orders: List[Dict[str, Any]]) -> Dict[st
     prefix = tenant_id.upper()[:3]
     seq = 0
     try:
-        for r in (db.table("commerce_orders").select("display_id").eq("tenant_id", tenant_id)
-                  .limit(10000).execute().data or []):
+        for r in (all_rows(lambda: db.table("commerce_orders").select("display_id").eq("tenant_id", tenant_id), cap=10000)):
             m = re.search(r"(\d+)$", r.get("display_id") or "")
             if m:
                 seq = max(seq, int(m.group(1)))

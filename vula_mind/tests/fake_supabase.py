@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import uuid
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 class _Result:
@@ -22,7 +22,7 @@ class _Query:
         self._db, self._table = db, table
         self._filters: List[Callable[[dict], bool]] = []
         self._op, self._payload = "select", None
-        self._order, self._limit = None, None
+        self._order, self._limit, self._offset = None, None, 0
         self._single = False
 
     # ── operations ──
@@ -109,7 +109,7 @@ class _Query:
         return self
 
     def range(self, lo, hi):
-        self._limit = hi - lo + 1
+        self._offset, self._limit = lo, hi - lo + 1
         return self
 
     # ── run ──
@@ -144,8 +144,11 @@ class _Query:
         if self._order:
             col, desc = self._order
             hit = sorted(hit, key=lambda r: str(r.get(col) or ""), reverse=desc)
+        hit = hit[self._offset:]
         if self._limit is not None:
             hit = hit[: self._limit]
+        if self._db.max_rows is not None:          # PostgREST hands back at most this many rows a request
+            hit = hit[: self._db.max_rows]
         if self._single:
             return _Result(dict(hit[0]) if hit else None)
         return _Result([dict(r) for r in hit])
@@ -164,6 +167,7 @@ class FakeSupabase:
         self.rows: Dict[str, List[dict]] = {k: [dict(r) for r in v] for k, v in (rows or {}).items()}
         self.fail: set = set()      # table names whose queries raise
         self.primary_keys: Dict[str, List[str]] = {}   # table -> key columns, for a bare upsert
+        self.max_rows: Optional[int] = None    # set 1000 to cap each response as the real server does
 
     def table(self, name: str) -> _Query:
         return _Query(self, name)

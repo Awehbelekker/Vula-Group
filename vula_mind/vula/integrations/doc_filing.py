@@ -254,10 +254,12 @@ def site_crew_names(tenant_id: str) -> set:
     for table, col, extra in (("vula_field_contractors", "name", None),
                               ("vula_field_tasks", "assignee_name", ("source", "programme"))):
         try:
-            q = _client().table(table).select(col).eq("tenant_id", tenant_id)
-            if extra:
-                q = q.eq(*extra)
-            for r in q.limit(2000).execute().data or []:
+            from vula.db_pages import all_rows
+
+            def q(t=table, c=col, e=extra):
+                x = _client().table(t).select(c).eq("tenant_id", tenant_id)
+                return x.eq(*e) if e else x
+            for r in all_rows(q, cap=2000, order=col):
                 first = str((r if isinstance(r, dict) else {}).get(col) or "").strip().lower().split(" ")[:1]
                 if first and len(first[0]) >= 3 and first[0] not in ("team", "tiling", "site", "general"):
                     names.add(first[0])

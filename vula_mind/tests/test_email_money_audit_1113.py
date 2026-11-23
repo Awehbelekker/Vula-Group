@@ -51,16 +51,16 @@ async def test_a_re_read_line_keeps_its_match_and_settles_nothing_else():
     db = MagicMock()
     db.table.side_effect = table
     inv = MagicMock()
-    inv.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
+    inv.select.return_value.eq.return_value.in_.return_value.order.return_value.range.return_value.execute.return_value.data = [
         {"id": "INV-14", "invoice_number": "INV-14", "customer_name": "Acme", "total_cents": 150000,
          "status": "sent", "doc_type": "invoice", "issue_date": "2026-09-20"}]
-    inv.select.return_value.eq.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = []
+    inv.select.return_value.eq.return_value.eq.return_value.in_.return_value.order.return_value.range.return_value.execute.return_value.data = []
     tables["commerce_invoices"] = inv
     btx = MagicMock()
-    btx.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+    btx.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value.execute.return_value.data = [
         {"txn_date": "2026-10-03", "amount_cents": 150000, "description": "ACME PAYMENT",
          "matched_invoice_id": "INV-10", "matched_order_id": None, "matched_expense_id": None}]
-    btx.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = []
+    btx.select.return_value.eq.return_value.in_.return_value.order.return_value.range.return_value.execute.return_value.data = []
     tables["commerce_bank_transactions"] = btx
     upd = AsyncMock()
     with (

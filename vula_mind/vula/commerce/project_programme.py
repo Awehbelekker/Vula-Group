@@ -31,6 +31,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -816,8 +817,8 @@ def find_baseline_documents(tenant_id: str, project: str, ref: str) -> List[Dict
     project's own first (its words in the filename), newest first."""
     rev = _rev_number(ref)
     try:
-        rows = (_client().table("vula_filed_documents").select("id,filename,project,category,fields,created_at")
-                .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(2000).execute().data or [])
+        rows = (all_rows(lambda: _client().table("vula_filed_documents").select("id,filename,project,category,fields,created_at")
+                .eq("tenant_id", tenant_id).order("created_at", desc=True), cap=2000))
     except Exception as exc:
         log.debug("baseline candidates read skipped: %s", exc)
         return []

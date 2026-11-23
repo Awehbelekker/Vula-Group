@@ -1833,6 +1833,7 @@ _MFG_TOOL_NAMES = {t["function"]["name"] for t in MANUFACTURING_TOOLS}
 # module config, and its keyword matcher would narrow other tenants' tools on everyday words
 # ("sold out"). An add-on's tools are offered only when its module is explicitly on.
 from core.skills import listing_tools as _lt, pipeline_tools as _pt  # noqa: E402
+from vula.db_pages import all_rows
 _ADDONS = (_lt, _pt)
 _ADDON_FOR_TOOL = {n: a for a in _ADDONS for n in a.ADMIN_TOOL_NAMES}
 
@@ -3209,7 +3210,7 @@ class CommerceAdminSkill(BaseSkill):
             return _not_confirmed("I couldn't send the notice. Not sent.")
         if not t["sent"]:
             return _not_confirmed("The notice didn't reach anyone — the staff notice template may "
-                                  "not be approved yet (Settings › WhatsApp templates). Not sent.")
+                                  "not be approved yet (Marketing › Templates). Not sent.")
         msg = f"✅ Sent to {t['sent']} of {len(people)} staff."
         if t["failed"]:
             msg += f" {t['failed']} couldn't be reached."
@@ -3387,7 +3388,7 @@ class CommerceAdminSkill(BaseSkill):
             return _not_confirmed("I couldn't send the poll. Not sent.")
         if not res.get("reached"):
             return _not_confirmed("The poll didn't reach anyone — the staff poll template may not "
-                                  "be approved yet (Settings › WhatsApp templates). Not sent.")
+                                  "be approved yet (Marketing › Templates). Not sent.")
         return _checked({"poll_id": poll["id"], "reached": res["reached"]},
                         f"✅ Poll sent to {res['reached']} of {len(people)} staff. I'll send you the "
                         "result when it closes — or ask me 'how's the poll going?'.")
@@ -5402,7 +5403,7 @@ class CommerceAdminSkill(BaseSkill):
                     "template_status": res.get("template_status"),
                     "message": ("Confirm to send (confirm=true), or test=true to send it to yourself first."
                                 if ready else "The promotion template isn't approved by Meta yet — "
-                                "submit the standard templates in Settings › WhatsApp templates.")}
+                                "submit the standard templates in Marketing › Templates.")}
         if test:
             ok = bool(res.get("sent"))
             return _checked({"test_sent": ok}, ("📲 Test sent to you — check how it looks, then say \"send it\"."
@@ -6525,17 +6526,20 @@ class CommerceAdminSkill(BaseSkill):
             # Invoices and bills only — quotes are prices, not money owed either way
             # (2026-10-06: STE's R41,752.47 scaffolding SALE quote, one of 85 DIGG supplier
             # quotes worth R12.8M, was being counted as "still owed by us").
-            q = db.table("commerce_invoices").select(
-                "direction,status,total_cents,supplier,created_at,doc_type").eq(
-                "tenant_id", tid).eq("doc_type", "invoice")
-            if since:
-                q = q.gte("created_at", since)
-            invoices = q.limit(2000).execute().data or []
-            eq = db.table("commerce_expenses").select(
-                "amount_cents,status,category,created_at").eq("tenant_id", tid)
-            if since:
-                eq = eq.gte("created_at", since)
-            expenses = eq.limit(2000).execute().data or []
+            from vula.db_pages import all_rows
+
+            def inv_q():
+                q = db.table("commerce_invoices").select(
+                    "direction,status,total_cents,supplier,created_at,doc_type").eq(
+                    "tenant_id", tid).eq("doc_type", "invoice")
+                return (q.gte("created_at", since) if since else q)
+
+            def exp_q():
+                q = db.table("commerce_expenses").select(
+                    "amount_cents,status,category,created_at").eq("tenant_id", tid)
+                return (q.gte("created_at", since) if since else q)
+            invoices = all_rows(inv_q, cap=2000)
+            expenses = all_rows(exp_q, cap=2000)
         except Exception as exc:
             logger.warning("cash_summary read failed for %s: %s", tid, exc)
             return {"error": "Couldn't read the books just now."}
@@ -6699,10 +6703,9 @@ class CommerceAdminSkill(BaseSkill):
         if not words:
             return {"error": "Name the product or range, e.g. 'Mipolam Affinity data sheet'."}
         try:
-            rows = (service._client().table("vula_filed_documents")
+            rows = (all_rows(lambda: service._client().table("vula_filed_documents")
                     .select("filename,category,summary,file_url,created_at")
-                    .eq("tenant_id", tid).order("created_at", desc=True).limit(1500)
-                    .execute().data or [])
+                    .eq("tenant_id", tid).order("created_at", desc=True), cap=1500))
         except Exception as exc:
             logger.warning("find_product_document failed for %s: %s", tid, exc)
             return {"error": "Couldn't search documents right now."}
