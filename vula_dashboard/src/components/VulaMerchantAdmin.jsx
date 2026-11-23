@@ -87,6 +87,7 @@ const VulaPayments = lazyScreen(() => import('./VulaPayments'))
 const VulaTapToPay = lazyScreen(() => import('./VulaTapToPay'))
 import { VULA_API } from '../lib/authFetch'
 import { NEXT_STATUSES, ORDER_DELETABLE, ORDER_FILTERS, useOrders } from './orders/useOrders'
+const OrderCourier = lazyScreen(() => import('./couriers/OrderCourier'))   // the order drawer's Courier panel
 const OrdersV2 = lazyScreen(() => import('./orders/OrdersV2'))
 const ProductsV2 = lazyScreen(() => import('./products/ProductsV2'))
 
@@ -812,6 +813,7 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
               </div>
 
               <OrderPaymentRequest tenantId={tenantId} order={order} fmt={fmt} />
+              <Suspense fallback={null}><OrderCourier tenantId={tenantId} order={order} /></Suspense>
 
               {/* Timeline — how this order actually happened (UI overhaul P3) */}
               {(depth?.timeline || []).length > 0 && (

@@ -41,9 +41,11 @@ tools:
 - estimate_cost
 - compare_estimate
 - buildup_suggestion
+- book_courier
 - booking_availability
 - cancel_booking
 - cost_sheet
+- courier_status
 - costing_settings
 - create_automation_rule
 - create_booking
