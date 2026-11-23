@@ -123,6 +123,16 @@ def test_a_new_product_keeps_its_own_category(db, given, kept):
 
 # ── Field Ops sign-off ───────────────────────────────────────────────────────
 
+def _field_client():
+    """The field routes on their own (as tests/test_field_ops.py does): the server's API-key /
+    sign-in dependency is tested elsewhere."""
+    from fastapi import FastAPI
+    from vula.api.field_ops import router
+    app = FastAPI()
+    app.include_router(router, prefix="/v1/field")
+    return TestClient(app)
+
+
 class _FieldDb:
     def __init__(self, status="awaiting_sign_off"):
         self.task = SimpleNamespace(id="t1", tenant_id=T, title="Tile the bathroom", status=status,
@@ -155,7 +165,7 @@ def test_a_task_can_be_signed_off_from_the_dashboard(monkeypatch, status, body, 
     fdb = _FieldDb(status)
     monkeypatch.setattr(field_ops, "get_field_ops_db", lambda: fdb)
     monkeypatch.setattr(field_ops, "_send_reply", AsyncMock(return_value=True))
-    r = TestClient(server.app).post("/v1/field/task/t1/sign-off", json=body)
+    r = _field_client().post("/v1/field/task/t1/sign-off", json=body)
     assert r.status_code == code, r.text
     if code == 200:
         assert fdb.signed.status == body["decision"] and r.json()["whatsapp_sent"] is True
@@ -166,5 +176,5 @@ def test_a_chase_names_its_task_in_the_path(monkeypatch):
     fdb = _FieldDb("in_progress")
     monkeypatch.setattr(field_ops, "get_field_ops_db", lambda: fdb)
     monkeypatch.setattr(field_ops, "_send_wa_template", AsyncMock(return_value=True))
-    r = TestClient(server.app).post("/v1/field/task/t1/complete-request", json={})
+    r = _field_client().post("/v1/field/task/t1/complete-request", json={})
     assert r.status_code == 200 and r.json()["whatsapp_sent"] is True
