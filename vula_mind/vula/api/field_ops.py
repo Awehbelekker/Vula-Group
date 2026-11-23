@@ -72,8 +72,13 @@ class TaskAssignIn(BaseModel):
 
 
 class CompleteRequestIn(BaseModel):
-    task_id: str
+    task_id: str = ""                # the path names the task; kept for older callers
     custom_message: str = ""
+
+
+class TaskSignOffIn(BaseModel):
+    decision: str                    # "approved" | "rejected"
+    notes: str = ""
 
 
 class WalkthroughStartIn(BaseModel):
@@ -236,6 +241,42 @@ async def request_completion(task_id: str, body: CompleteRequestIn, request: Req
         sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
                                        "digg_task_chase", contractor.name, task.title)
     return {"task_id": task_id, "contractor_name": contractor.name, "whatsapp_sent": sent}
+
+
+@router.post("/task/{task_id}/sign-off")
+async def sign_off_task(task_id: str, body: TaskSignOffIn, request: Request,
+                        tenant_id: Optional[str] = None) -> dict:
+    """Approve or reject a task awaiting sign-off from the dashboard (23 Nov 2026 audit: the
+    dashboard sent the task's id to the walkthrough route, which found no walkthrough and refused,
+    every time). The person who signed is the signed-in login, read back from the sign-off."""
+    if body.decision not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="Decision must be approved or rejected.")
+    if body.decision == "rejected" and not (body.notes or "").strip():
+        raise HTTPException(status_code=400, detail="Say what needs fixing when rejecting.")
+    db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
+    task = db.get_task(task_id)
+    if not _theirs(task, tenant_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "awaiting_sign_off":
+        raise HTTPException(status_code=409, detail="This task isn't waiting for sign-off.")
+    from vula.api.commerce import _actor
+    who = _actor(request)
+    db.record_sign_off(task_id, who, body.decision, (body.notes or "").strip())
+    back = db.get_sign_off(task_id)
+    if not back or back.status != body.decision:
+        raise HTTPException(status_code=502, detail="The sign-off didn't save. Try again.")
+    sent = False
+    if task.assigned_to:
+        contractor = db.get_contractor(task.assigned_to)
+        if contractor:
+            if body.decision == "approved":
+                sent = await _send_reply(contractor.phone, f"✅ Signed off: {task.title}. Thank you!",
+                                         contractor.tenant_id)
+            else:
+                sent = await _send_reply(contractor.phone, f"↩️ {task.title} needs more work: {body.notes.strip()}",
+                                         contractor.tenant_id)
+    return {"task_id": task_id, "decision": body.decision, "approver": who, "whatsapp_sent": bool(sent)}
 
 
 @router.get("/task/{task_id}")

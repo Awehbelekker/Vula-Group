@@ -76,6 +76,15 @@ below; the shop, checkout and storefront are in `../vula-commerce-audit.md`.
 | B14 | Follow-ups "Dismiss" actually snoozes forever (snoozed items are never fetched again). | `FollowupsV2.jsx:182`, `useFollowups.js:207` |
 | B15 | Finances crashes on an error answer; project budgets, contracts and claims are stored as float rand, not cents. | `FinancesV2.jsx:59, 191`, `api/projects.py:89-124` |
 
+**Done 23 Nov (PR "Trust fixes", `tests/test_trust_1123.py`):**
+- B1, B2: no longer VAT-registered by default; a 0% invoice stays 0%.
+- B3, B4: renaming a page keeps its content, and Make live keeps the preview until the live page
+  has it.
+- B5: Inbox and escalation replies keep the text and say so when they fail.
+- B6: invoice create, recurring and settings saves.
+- B7: Field Ops sign-off has its own route, and chase names its task.
+- B8: a new product keeps the business's own category, and a failed add says so.
+
 **Root cause, across the whole dashboard:**
 - **The shared `authFetch` treats any error other than 401/403 as success** ✔ (`lib/authFetch.js:14-22`).
 - **162 saves don't check whether the server accepted them**, across 52 files: 90 with no check at
@@ -261,6 +270,10 @@ below; the shop, checkout and storefront are in `../vula-commerce-audit.md`.
 - **A customer's uploaded document is filed as if the business uploaded it.**
 - **Owners don't reliably reach their own assistant** on a knowledge line. Only reps go straight
   there; owners need a costing or send-a-document phrasing.
+
+**Done 23 Nov:**
+- STOP is read back before "Done"; a failure tells the customer to try again and alerts the team.
+- Only a message offering goods counts as a supplier's, and the team is told about it.
 
 **The business assistant (staff)**
 - **WhatsApp only:**

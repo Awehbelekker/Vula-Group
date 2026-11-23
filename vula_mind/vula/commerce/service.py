@@ -3720,7 +3720,7 @@ async def process_due_recurring() -> int:
                 "doc_type": "invoice",
                 "customer_name": r.get("customer_name"), "customer_email": r.get("customer_email"),
                 "customer_phone": r.get("customer_phone"), "customer_address": r.get("customer_address"),
-                "line_items": r.get("line_items") or [], "vat_rate": float(r.get("vat_rate") or 15),
+                "line_items": r.get("line_items") or [], "vat_rate": float(r["vat_rate"]) if r.get("vat_rate") is not None else 15.0,  # 0% stays 0%
                 "status": "draft",
                 "issue_date": today,
                 "notes": (r.get("label") and f"Recurring: {r['label']}") or None,

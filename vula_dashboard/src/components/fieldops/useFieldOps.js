@@ -24,7 +24,10 @@ export async function api(method, path, body) {
     ? `${VULA_API}${path}${path.includes("?") ? "&" : "?"}tenant_id=${encodeURIComponent(_fieldTenant)}`
     : `${VULA_API}${path}`;
   const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(typeof d.detail === "string" ? d.detail : "That didn't go through. Try again.");
+  }
   return r.json();
 }
 
@@ -150,8 +153,12 @@ export function useTaskRow({ task, projectId, onRefresh, tenantId }) {
     e?.stopPropagation();
     setRequesting(true);
     try {
-      await api("POST", `/v1/field/task/${task.id}/complete-request`, {});
-    } finally { setRequesting(false); }
+      // 23 Nov 2026 audit: the body was empty and the server needs the task, so every chase failed
+      const d = await api("POST", `/v1/field/task/${task.id}/complete-request`, { task_id: task.id });
+      toast(d.whatsapp_sent ? `Chased ${d.contractor_name || "the contractor"} on WhatsApp.`
+        : "The chase didn't reach WhatsApp. Try calling them.", d.whatsapp_sent ? "ok" : "danger");
+    } catch (err) { toast(err.message, "danger"); }
+    finally { setRequesting(false); }
   };
   return { requesting, setRequesting, expanded, setExpanded, detail, setDetail, loading, setLoading, loadDetail, requestComplete };
 }
@@ -163,13 +170,9 @@ export function useSignOff({ taskId, onRefresh }) {
   const sign = async (decision) => {
     setBusy(true);
     try {
-      // For sign-off we use a contractor phone as approver phone (simulating manager)
-      // In a real scenario, this would be the logged-in user's verified phone.
-      await api("POST", `/v1/field/walkthrough/${taskId}/approve`, {
-        approver_phone: "system-admin", // Placeholder
-        decision,
-        notes,
-      });
+      // 23 Nov 2026 audit: this posted the task's id to the walkthrough route, which refused
+      // every time. The server records the signed-in login as the person who signed.
+      await api("POST", `/v1/field/task/${taskId}/sign-off`, { decision, notes });
       onRefresh();
     } catch (e) { toast(e.message); }
     finally { setBusy(false); }

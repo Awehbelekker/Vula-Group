@@ -83,11 +83,15 @@ test.describe("redesign: construction (Operate)", () => {
     await page.getByRole("combobox", { name: "Project", exact: true }).selectOption("pj-1");
     await page.getByRole("button", { name: "Chase Install roof trusses on WhatsApp" }).click();
     await expect.poll(() => posts.map((p) => p.path)).toContain("/v1/field/task/ft-1/complete-request");
+    // 23 Nov 2026 audit: the chase names its task (an empty body was refused every time)
+    expect(posts.find((p) => p.path.endsWith("/task/ft-1/complete-request")).body).toEqual({ task_id: "ft-1" });
+    await expect(page.getByText("Chased Sipho on WhatsApp.")).toBeVisible();
     await page.getByRole("button", { name: /First-fix electrics/ }).click();
     const sign = page.getByRole("group", { name: "Sign off First-fix electrics" });
     await sign.getByLabel("Review notes").fill("Neat work");
     await sign.getByRole("button", { name: "Approve" }).click();
-    await expect.poll(() => posts.find((p) => p.path.endsWith("/walkthrough/ft-2/approve"))?.body).toEqual({ approver_phone: "system-admin", decision: "approved", notes: "Neat work" });
+    // the task's own sign-off route (it went to the walkthrough route, which refused every time)
+    await expect.poll(() => posts.find((p) => p.path.endsWith("/task/ft-2/sign-off"))?.body).toEqual({ decision: "approved", notes: "Neat work" });
 
     await page.getByRole("tab", { name: "Assign a task" }).click();
     const assign = page.getByRole("group", { name: "Assign a task" });

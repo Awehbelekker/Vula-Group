@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
-import { SectionTabs, confirmDialog } from './ui/index.jsx'
+import { SectionTabs, confirmDialog, toast } from './ui/index.jsx'
 import { lazyScreen, ScreenSuspense } from '../lib/lazyScreen.jsx'
 import { toQty } from './stock/useStock'
 import { useSectionTabs } from '../hooks/useSectionTabs'
@@ -927,16 +927,23 @@ function ProductsTab({ tenantId }) {
     const cents = Math.round(parseFloat(form.price) * 100)
     if (!form.name.trim() || isNaN(cents) || cents <= 0) return
     setAdding(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`, {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: form.name.trim(), price_cents: cents, category: form.category,
         sold_by: form.sold_by, description: form.description.trim(), in_stock: true,
       }),
-    })
+    }).catch(() => null)
+    setAdding(false)
+    if (!r || !r.ok) {
+      // 23 Nov 2026 audit: the form closed and cleared even when the product wasn't saved
+      const d = r ? await r.json().catch(() => ({})) : {}
+      toast(d.detail || "That product didn't save. What you typed is still there — try again.", 'danger')
+      return
+    }
+    toast(`${form.name.trim()} added.`)
     setForm({ name: '', price: '', category: 'extras', sold_by: 'pack', description: '' })
     setShowAdd(false)
-    setAdding(false)
     await load()
   }
 
