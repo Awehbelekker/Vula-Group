@@ -153,6 +153,13 @@ _ORDER_RE = re.compile(
 
 # Supplier-intake forms for tenants that had one before vula_tenant_config.supplier_intake_url
 # existed — the config value wins when set.
+# A message offering goods to the business (supplier intake), not a customer asking what's on sale.
+_SUPPLIER_OFFER_RE = re.compile(
+    r"\b(?:i|we)\s+(?:am\s+|are\s+|can\s+|could\s+|(?:would\s+like|want|wish)\s+to\s+)?(?:a\s+)?"
+    r"(?:supplier|supply|sell|catch|farm|grow|manufacture|distribute)\w*\b"
+    r"|\bsupplier\b|\bverskaf\w*\b|\bfish for you\b|\bwant to (?:supply|sell to) you\b"
+    r"|\bbecome (?:a|your) supplier\b"
+)
 _SUPPLIER_INTAKE_URLS = {"off-the-hook": "https://offthehook.co.za/suppliers"}
 
 
@@ -6639,12 +6646,27 @@ async def _handle_opt_out(phone: str, tenant_id: Optional[str]) -> None:
     DELETE records, so broadcasts/campaigns/automations already honour it."""
     logger.info("Opt-out request from %s (tenant=%s)", phone, tenant_id)
     paused = 0
+    kept = True
     if tenant_id:
         try:
             from vula.api.commerce import record_opt_out
-            record_opt_out(tenant_id, phone, source="stop_keyword")
+            kept = record_opt_out(tenant_id, phone, source="stop_keyword")
         except Exception as exc:
             logger.warning("opt-out suppression failed for %s: %s", phone, exc)
+            kept = False
+        if not kept:
+            # never "Done" when it wasn't saved: the customer would keep getting marketing (POPIA)
+            try:
+                from vula.integrations.notify import notify_team
+                await notify_team(tenant_id, "help_request",
+                                  f"⚠️ A customer ({phone}) asked to STOP messages and it didn't save. "
+                                  "Please make sure they get no more marketing.")
+            except Exception:
+                pass
+            await _send_reply(phone, "Sorry — I couldn't save that just now. Please reply STOP again "
+                                     "in a minute. The team has been told, and won't send you "
+                                     "marketing meanwhile.", tenant_id)
+            return
         try:
             from vula.commerce import subscriptions
             paused = await subscriptions.pause_for_phone(tenant_id, phone)
@@ -9515,9 +9537,9 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     _customer_asking_re = re.compile(
         r"\byou\s+(?:guys\s+)?(?:sell|supply|have|stock)\b|\bsupply\s+(?:me|us)\b|\bsell\s+(?:me|us|to me)\b"
     )
-    supplier_keywords = {"supply", "sell", "catch", "supplier", "verskaf", "fish for you"}
-    if (not _customer_asking_re.search(text_lower)
-            and any(re.search(rf"\b{re.escape(k)}\b", text_lower) for k in supplier_keywords)):
+    # 23 Nov 2026 audit: "catch", "sell" and "supply" alone sent customers asking "what's the catch
+    # today?" to the supplier reply. Only a message that says it is offering goods counts.
+    if not _customer_asking_re.search(text_lower) and _SUPPLIER_OFFER_RE.search(text_lower):
         # Each shop's own intake form (vula_tenant_config.supplier_intake_url) — this reply
         # used to send every commerce tenant's would-be suppliers to Off the Hook's form.
         from vula.api import tenants as _tenants
@@ -9529,18 +9551,19 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
                "I've passed your details to the team. ")
             + "Our team will review it and get back to you."
         )
-        await _send_reply(phone, reply, tenant_id)
-        # Log lead to Supabase (assuming table exists or using a generic log)
+        # The team is told (supplier_leads had no migration and nobody read it); "passed your
+        # details to the team" only when that worked.
+        told = False
         try:
-            from vula.commerce import service as commerce_service
-            commerce_service._client().table("supplier_leads").insert({
-                "tenant_id": tenant_id,
-                "phone": phone,
-                "raw_text": text,
-                "source": "whatsapp"
-            }).execute()
-        except Exception:
-            pass
+            from vula.integrations.notify import notify_team
+            told = (await notify_team(tenant_id, "help_request",
+                                      f"📦 A possible supplier ({phone}) messaged: {text[:300]}")) > 0
+        except Exception as exc:
+            logger.warning("supplier lead notify failed: %s", exc)
+        if not intake and not told:
+            reply = ("Thanks for reaching out! We're always looking for quality suppliers. "
+                     "Please send your company name, what you supply and your prices, and we'll be in touch.")
+        await _send_reply(phone, reply, tenant_id)
         return
 
     # Owner-configurable conversation flow — does this NEW message match a trigger phrase?

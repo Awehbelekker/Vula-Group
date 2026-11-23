@@ -446,6 +446,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   if (showCreate) {
     return <InvoiceCreate
       tenantId={tenantId}
+      vatRegistered={!!settings?.vat_registered}
       products={products}
       docType={showCreate}
       editingInvoice={editingInvoice}
@@ -455,7 +456,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }
 
   if (showRecurring) {
-    return <RecurringManager tenantId={tenantId} onCancel={() => setShowRecurring(false)} />
+    return <RecurringManager tenantId={tenantId} vatRegistered={!!settings?.vat_registered} onCancel={() => setShowRecurring(false)} />
   }
 
   if (creditingInvoice) {
@@ -483,7 +484,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
 
 // ── Create invoice form ─────────────────────────────────────────────────────
 
-function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, onCancel }) {
+function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, onCancel, vatRegistered }) {
   const [customer, setCustomer] = useState(editingInvoice
     ? { name: editingInvoice.customer_name || '', phone: editingInvoice.customer_phone || '',
         email: editingInvoice.customer_email || '', address: editingInvoice.customer_address || '' }
@@ -497,7 +498,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
     : [{ description: '', quantity: 1, unit: '', unit_price: '', discount: '', section: '' }])
   const [dueDate, setDueDate] = useState(editingInvoice?.due_date || '')
   const [validUntil, setValidUntil] = useState(editingInvoice?.valid_until || '')
-  const [vatRate, setVatRate] = useState(editingInvoice?.vat_rate ?? 15)
+  const [vatRate, setVatRate] = useState(editingInvoice?.vat_rate ?? (vatRegistered ? 15 : 0))
   const [discountPct, setDiscountPct] = useState(editingInvoice?.discount_pct ? String(editingInvoice.discount_pct) : '')   // invoice-level discount %
   const [deposit, setDeposit] = useState(editingInvoice?.deposit_cents ? (editingInvoice.deposit_cents / 100).toFixed(2) : '')           // deposit already paid (rands)
   const [requiresApproval, setRequiresApproval] = useState(!!editingInvoice?.requires_approval)
@@ -638,7 +639,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
       onDone()
       return
     }
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices`, {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         doc_type: docType,
@@ -653,8 +654,11 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
         valid_until: validUntil || null,
         status: 'draft',
       }),
-    })
+    }).catch(() => null)
+    const d = r ? await r.json().catch(() => ({})) : {}
     setSaving(false)
+    // 23 Nov 2026 audit: the form closed whether or not it saved, and the typed lines were lost
+    if (!r || !r.ok || d.error) { toast(d.detail || d.error || `Could not save this ${docType}. Nothing was lost — try again.`, 'danger'); return }
     onDone()
   }
 
@@ -785,7 +789,7 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
       section: r.section || undefined,
     }
   })
-  const vatRate = parseFloat(invoice.vat_rate) || 15
+  const vatRate = invoice.vat_rate != null && invoice.vat_rate !== '' ? parseFloat(invoice.vat_rate) || 0 : 15
   const subtotal = creditItems.reduce((sum, i) => sum + i.total_cents, 0)
   const vat = Math.round(subtotal * vatRate / 100)
   const total = subtotal + vat
@@ -949,7 +953,7 @@ const TEMPLATES = [
   { id: 'branded', name: 'Branded', desc: 'Logo-forward: centred logo, accent rules, your brand front-and-centre.', accent: 'var(--accent)' },
 ]
 
-function RecurringManager({ tenantId, onCancel }) {
+function RecurringManager({ tenantId, onCancel, vatRegistered }) {
   const [list, setList] = useState([])
   const [form, setForm] = useState({ label: '', customer_name: '', customer_phone: '', customer_email: '', cadence: 'monthly', next_run_at: todaySA() })
   const [items, setItems] = useState([{ description: '', quantity: 1, unit_price: '' }])
@@ -966,8 +970,11 @@ function RecurringManager({ tenantId, onCancel }) {
     if (!form.customer_name) return
     setSaving(true)
     const lineItems = items.map(it => { const c = Math.round((parseFloat(it.unit_price) || 0) * 100); return { description: it.description, quantity: parseFloat(it.quantity) || 0, unit_price_cents: c, total_cents: Math.round(c * (parseFloat(it.quantity) || 0)) } })
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/recurring-invoices`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, line_items: lineItems, vat_rate: 15 }) })
-    setSaving(false); setForm({ ...form, label: '', customer_name: '', customer_phone: '', customer_email: '' }); setItems([{ description: '', quantity: 1, unit_price: '' }]); load()
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/recurring-invoices`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, line_items: lineItems, vat_rate: vatRegistered ? 15 : 0 }) }).catch(() => null)
+    const d = r ? await r.json().catch(() => ({})) : {}
+    setSaving(false)
+    if (!r || !r.ok || d.error) { toast(d.detail || d.error || 'Could not save the recurring invoice. Try again.', 'danger'); return }
+    setForm({ ...form, label: '', customer_name: '', customer_phone: '', customer_email: '' }); setItems([{ description: '', quantity: 1, unit_price: '' }]); load()
   }
   async function del(id) { await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/recurring-invoices/${id}`, { method: 'DELETE' }); load() }
 
@@ -976,7 +983,7 @@ function RecurringManager({ tenantId, onCancel }) {
       <div style={s.topBar}><button onClick={onCancel} style={s.backBtn}>← Back</button><h3 style={s.formTitle}>Recurring invoices</h3></div>
       <p style={s.muted}>Vula auto-generates these as <b>draft</b> invoices on the chosen cadence — you review and send.</p>
       <div style={s.formSection}>
-        <input placeholder="Label (e.g. Monthly retainer — Sporty)" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} style={s.fInput} />
+        <input placeholder="Label (e.g. Monthly retainer)" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} style={s.fInput} />
         <input placeholder="Customer name" value={form.customer_name} onChange={e => setForm({ ...form, customer_name: e.target.value })} style={s.fInput} />
         <div style={s.fRow}>
           <input placeholder="Phone" value={form.customer_phone} onChange={e => setForm({ ...form, customer_phone: e.target.value })} style={s.fInput} />
@@ -1017,7 +1024,7 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
     company_email:      settings?.company_email || '',
     company_phone:      settings?.company_phone || '',
     company_reg:        settings?.company_reg || '',
-    vat_registered:     settings?.vat_registered ?? true,
+    vat_registered:     settings?.vat_registered ?? false,   // 23 Nov 2026: never registered by default
     prices_include_vat: settings?.prices_include_vat ?? false,
     vat_number:         settings?.vat_number || '',
     registered_address: settings?.registered_address || '',
@@ -1131,15 +1138,18 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
 
   async function save() {
     setSaving(true)
-    try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, onboarded: true }),
-      })
-    } finally {
-      setSaving(false)
-      onDone()
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...form, onboarded: true }),
+    }).catch(() => null)
+    const d = r ? await r.json().catch(() => ({})) : {}
+    setSaving(false)
+    if (!r || !r.ok || d.error) {
+      toast(r && r.status === 403 ? 'Only the owner or a manager can change the invoice settings.'
+        : d.detail || d.error || "Your invoice settings didn't save. Try again.", 'danger')
+      return
     }
+    onDone()
   }
 
   return (
@@ -1335,7 +1345,7 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
           {form.signature_url && <img src={signaturePreview || form.signature_url} alt="signature" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
           {form.signature_url && <button type="button" onClick={() => { set('signature_url', ''); setSignaturePreview('') }} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18 }}>×</button>}
         </div>
-        <input placeholder="Name/title shown under the signature (e.g. Judy Downing, Director)" value={form.signature_name}
+        <input placeholder="Name/title shown under the signature (e.g. Thandi Mokoena, Director)" value={form.signature_name}
           onChange={e => set('signature_name', e.target.value)} style={s.fInput} />
       </div>
 

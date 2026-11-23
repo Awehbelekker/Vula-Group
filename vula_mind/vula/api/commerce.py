@@ -237,7 +237,7 @@ async def admin_meta_catalog_sync(tenant_id: str, request: Request):
 
 class PageIn(BaseModel):
     title: Optional[str] = None
-    puck_data: dict = {}
+    puck_data: Optional[dict] = None   # left out = keep the page's content (a rename sends none)
     seo: Optional[dict] = None
     status: str = "draft"          # draft | published
 
@@ -362,6 +362,14 @@ async def upsert_page(tenant_id: str, slug: str, body: PageIn):
         existing = (db.table("vula_pages").select("*")
                     .eq("tenant_id", tenant_id).eq("slug", slug).limit(1).execute().data or [])
         if existing:
+            # 23 Nov 2026 audit: renaming a page sent only its title and status, and the update
+            # replaced the content and SEO with {} — the page was wiped. What isn't sent is kept.
+            if body.puck_data is None:
+                row["puck_data"] = existing[0].get("puck_data") or {}
+            if body.seo is None:
+                row["seo"] = existing[0].get("seo") or {}
+            if body.title is None:
+                row["title"] = existing[0].get("title")
             if (body.status or "draft") == "published":
                 try:
                     prev = existing[0]
@@ -1077,6 +1085,24 @@ async def admin_delete_category(tenant_id: str, key: str):
     return {"deleted": key}
 
 
+_BUILT_IN_CATEGORIES = {"fresh_fish", "fresh_chicken", "frozen_chicken", "frozen_seafood", "extras"}
+
+
+def _known_category(tenant_id: str, category: Optional[str]) -> str:
+    """The category as given when it's one of the business's own (or a built-in), else "extras"."""
+    cat = (category or "").strip()
+    if not cat:
+        return "extras"
+    if cat in _BUILT_IN_CATEGORIES:
+        return cat
+    try:
+        hit = (service._client().table("commerce_categories").select("key")
+               .eq("tenant_id", tenant_id).eq("key", cat).limit(1).execute().data or [])
+    except Exception:
+        hit = []
+    return cat if hit else "extras"
+
+
 @router.post("/{tenant_id}/admin/products")
 async def admin_create_product(tenant_id: str, body: dict):
     """Create a new product. Auto-generates a slug from the name."""
@@ -1098,9 +1124,9 @@ async def admin_create_product(tenant_id: str, body: dict):
     while slug in existing:
         slug = f"{base}-{n}"; n += 1
 
-    # Enforce the DB CHECK constraints.
-    VALID_CATEGORIES = {"fresh_fish", "fresh_chicken", "frozen_chicken", "frozen_seafood", "extras"}
-    category = body.get("category") if body.get("category") in VALID_CATEGORIES else "extras"
+    # The business's own categories (migration 073 replaced the old CHECK). 23 Nov 2026 audit: any
+    # category other than Off the Hook's five fish ones was quietly changed to "extras" on create.
+    category = _known_category(tenant_id, body.get("category"))
     sold_by = body.get("sold_by") if body.get("sold_by") in ("kg", "pack") else "pack"
 
     payload = {
@@ -6735,18 +6761,25 @@ def record_opt_in(tenant_id: str, phone: str, source: str = "start_keyword") -> 
     _log_consent_event(tenant_id, p, "opted_in", source)
 
 
-def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> None:
-    """Persist a do-not-contact suppression (kept even after PII deletion)."""
+def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> bool:
+    """Persist a do-not-contact suppression (kept even after PII deletion). True only when it is
+    read back as opted out (23 Nov 2026 audit: a failed save was logged quietly and the customer
+    was told "Done", then kept getting marketing — POPIA)."""
     p = _norm_phone(phone)
     if not tenant_id or not p:
-        return
+        return False
     try:
-        service._client().table("commerce_consent").upsert({
+        db = service._client()
+        db.table("commerce_consent").upsert({
             "tenant_id": tenant_id, "phone": p, "status": "opted_out",
             "source": source, "updated_at": "now()"}, on_conflict="tenant_id,phone").execute()
+        back = (db.table("commerce_consent").select("status").eq("tenant_id", tenant_id)
+                .eq("phone", p).limit(1).execute().data or [])
         _log_consent_event(tenant_id, p, "opted_out", source)
+        return bool(back) and back[0].get("status") == "opted_out"
     except Exception as exc:
-        log.debug("opt-out record skipped: %s", exc)
+        log.error("OPT-OUT NOT SAVED (tenant=%s): %s", tenant_id, exc)
+        return False
 
 
 def record_message_status(wamid: str, status: str, error: Optional[str] = None) -> None:

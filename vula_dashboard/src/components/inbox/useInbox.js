@@ -4,7 +4,7 @@
  * (list 15s, thread 8s), same writes. Moved out of VulaInbox.jsx unchanged.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { promptDialog } from '../ui/index.jsx'
+import { promptDialog, toast } from '../ui/index.jsx'
 import { VULA_API } from '../../lib/authFetch'
 
 /** "now", "5m", "3h", "2d" (agoSuffix adds " ago" and says "just now"). */
@@ -61,24 +61,26 @@ export function useEscalation(tenantId, esc, onDone) {
     const text = answer.trim()
     if (!text || busy) return
     setBusy(true)
-    try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/answer`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer: text }),
-      })
-      onDone()
-    } catch {}
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/answer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer: text }),
+    }).catch(() => null)
     setBusy(false)
+    if (!r || !r.ok) {
+      const d = r ? await r.json().catch(() => ({})) : {}
+      toast(d.detail || "That answer didn't send. It's still in the box — try again.", 'danger')
+      return
+    }
+    onDone()
   }
 
   async function dismiss() {
     if (busy) return
     setBusy(true)
-    try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/dismiss`, { method: 'POST' })
-      onDone()
-    } catch {}
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/dismiss`, { method: 'POST' }).catch(() => null)
     setBusy(false)
+    if (!r || !r.ok) { toast("That didn't go through. Try again.", 'danger'); return }
+    onDone()
   }
 
   return { answer, setAnswer, busy, send, dismiss }
@@ -147,10 +149,16 @@ export function useThread(tenantId, sessionId) {
     const text = input.trim()
     if (!text || busy) return
     setBusy(true); setInput('')
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/reply`, {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/reply`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text }),
-    })
+    }).catch(() => null)
+    if (!r || !r.ok) {
+      // 23 Nov 2026 audit: the box was cleared and the reply lost when WhatsApp refused it
+      const d = r ? await r.json().catch(() => ({})) : {}
+      setInput(text)
+      toast(d.detail || "That reply didn't go to the customer. It's still in the box — try again.", 'danger')
+    }
     await load()
     setBusy(false)
   }
