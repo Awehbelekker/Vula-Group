@@ -66,6 +66,7 @@ export function useBooksReview(tenantId) {
   const link = (txnId, target) => post(a(`/lines/${txnId}/link`), target);
   const payBill = (txnId, billIds, accountCode) => post(a(`/lines/${txnId}/pay-bill`),
     { bill_ids: billIds, account_code: accountCode });
+  const payInvoices = (txnId, invoiceIds) => post(a(`/lines/${txnId}/pay-invoices`), { invoice_ids: invoiceIds });
   const correctDate = (kind, id, date, why) => post(a(`/documents/${kind}/${id}/date`), { date, reason: why });
   const agree = (auditId, note) => post(a(`/${auditId}/agree`), { note });
   const categorise = (ids, accountCode) => post(`${base(tenantId)}/bank/transactions/bulk-categorize`,
@@ -100,6 +101,6 @@ export function useBooksReview(tenantId) {
   }
 
   return { review, accounts, checks, state, reload, runCheck, restore, setAside, transfer, link, correctDate,
-    agree, categorise, payBill, paidBack, recordDraft, cancelDraft, upload, check, apply, docFigures, docConfirm, docBook,
+    agree, categorise, payBill, payInvoices, paidBack, recordDraft, cancelDraft, upload, check, apply, docFigures, docConfirm, docBook,
     docNotABill, docCertificate, popLink, popDismiss, docAddToInvoices, docLinkInvoice, docDuplicate, docVatBasis, billCancelDuplicate, billMatchDocument, mergeSuppliers };
 }

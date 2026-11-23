@@ -190,7 +190,7 @@ function LineTable({ rows, caption, select }) {
   return <DataTable columns={cols} rows={rows} caption={caption} stack />;
 }
 
-const lineCount = (open) => ["restore", "duplicates", "transfers", "to_categorise", "bill_payments", "refile"]
+const lineCount = (open) => ["restore", "duplicates", "transfers", "to_categorise", "bill_payments", "invoice_payments", "refile"]
   .reduce((t, k) => t + (open[k] || 0), 0);
 
 function usePick(rows) {
@@ -282,6 +282,7 @@ function Lines({ x, r }) {
         ) : <p className="vbr2-text">Every line has a category.</p>}
       </Card>
       <BillPayments x={x} groups={r.bill_payments || []} options={options} nameOf={nameOf} />
+      <InvoicePayments x={x} groups={r.invoice_payments || []} />
       <Card>
         <h3 className="vbr2-h">Filed by an old rule</h3>
         <p className="vbr2-sub">Vula filed these by a single word in the bank's description (like "App" in "FNB App
@@ -354,6 +355,53 @@ function BillPayments({ x, groups, options, nameOf }) {
                       {o.bills.length === 1
                         ? `Paid ${names(o)} (${o.bills[0].date}${o.bills[0].project ? `, ${o.bills[0].project}` : ""})`
                         : `Paid ${o.bills.map((b) => `${b.number} ${money(b.owed_cents)}${b.already_paid ? " (marked paid)" : ""}`).join(" + ")}`}
+                    </Button>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+// ── A customer's payment for one or several of the business's invoices (22 Nov 2026) ──────
+
+function InvoicePayments({ x, groups }) {
+  if (!groups.length) return null;
+  const names = (o) => o.invoices.map((i) => i.number || "invoice").join(" + ");
+  async function pay(ln, o) {
+    const drafts = o.invoices.filter((i) => i.draft).map((i) => i.number).join(", ");
+    const marked = o.invoices.filter((i) => i.already_paid).map((i) => i.number).join(", ");
+    if (!(await confirmDialog(`${ln.date} ${money(ln.amount_cents)} paid ${names(o)}? `
+      + (o.invoices.length > 1 ? "Each invoice gets its share. " : "") + "Invoices still owed are marked paid on that date"
+      + (drafts ? ` (${drafts} is still a draft — it was sent after all)` : "")
+      + (marked ? ` (${marked} is already marked paid and is only tied to this payment)` : "")
+      + ", and the payment is filed as sales, so each sale is counted once.",
+    { confirmLabel: `It paid ${names(o)}` }))) return;
+    if (await done(await x.payInvoices(ln.id, o.invoices.map((i) => i.id)), "Tied to the invoice.", "That didn't save — try again.")) x.reload();
+  }
+  return (
+    <Card>
+      <h3 className="vbr2-h">Payments from a customer for their invoices</h3>
+      <p className="vbr2-sub">Each payment names a customer (or one of their invoice numbers) whose invoices come to exactly
+        that amount — one invoice, or two or three of theirs paid together. Tie them so each invoice is paid once and the
+        money isn't counted as a second sale.</p>
+      {groups.map((g) => (
+        <div key={g.key} className="vbr2-group">
+          <p className="vbr2-text"><b>{g.customer}</b> · {g.lines.length} payment{g.lines.length === 1 ? "" : "s"} · <b>{money(g.cents)}</b></p>
+          <ul className="vbr2-list">
+            {g.lines.map((ln) => (
+              <li key={ln.id} className="vbr2-row vbr2-wrap">
+                <span className="vbr2-text">{ln.date} · {ln.description} · <b>{money(ln.amount_cents)}</b></span>
+                <span className="vbr2-actions">
+                  {(ln.options || []).map((o) => (
+                    <Button key={o.invoices.map((i) => i.id).join("+")} variant="secondary" onClick={() => pay(ln, o)}>
+                      {o.invoices.length === 1
+                        ? `Paid ${names(o)} (${o.invoices[0].date}${o.invoices[0].draft ? ", draft" : ""})`
+                        : `Paid ${o.invoices.map((i) => `${i.number} ${money(i.owed_cents)}${i.draft ? " (draft)" : ""}${i.already_paid ? " (marked paid)" : ""}`).join(" + ")}`}
                     </Button>
                   ))}
                 </span>

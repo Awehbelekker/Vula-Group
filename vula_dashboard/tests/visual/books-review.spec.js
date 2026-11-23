@@ -74,7 +74,7 @@ test.describe("books review", () => {
 
   test("lines an old rule filed are re-filed once per payee", async ({ page }) => {
     await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
-    await expect(page.getByRole("tab", { name: /^Bank lines/ })).toContainText("(17)");
+    await expect(page.getByRole("tab", { name: /^Bank lines/ })).toContainText("(18)");
     await page.getByRole("tab", { name: /^Bank lines/ }).click();
     const content = page.locator(".v2-content");
     await expect(content).toContainText("FNB App Payment To Skipp Rubble Removal · 8 lines");
@@ -109,6 +109,20 @@ test.describe("books review", () => {
     await page.getByRole("dialog").getByRole("button", { name: "It paid DIG-BILL-00081 + DIG-BILL-00197" }).click();
     expect((await both).postDataJSON()).toEqual({ bill_ids: ["bill-81", "bill-97"], account_code: "cost_of_sales" });
     await expect(content).not.toContainText("Payments that pay a supplier's bill");
+  });
+
+  test("a customer's payment is tied to the invoices it paid", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await page.getByRole("tab", { name: /^Bank lines/ }).click();
+    const content = page.locator(".v2-content");
+    await expect(content).toContainText("Payments from a customer for their invoices");
+    const both = page.getByRole("button", { name: /Paid MD-INV-0101 R\s?11\s?500\.00 \+ MD-INV-0102 R\s?5\s?750\.00 \(draft\)/ });
+    const sent = page.waitForRequest((r) => r.url().endsWith("/books-audit/lines/ci1/pay-invoices"));
+    await both.click();
+    await expect(page.getByRole("dialog")).toContainText("MD-INV-0102 is still a draft");
+    await page.getByRole("dialog").getByRole("button", { name: "It paid MD-INV-0101 + MD-INV-0102" }).click();
+    expect((await sent).postDataJSON()).toEqual({ invoice_ids: ["inv-101", "inv-102"] });
+    await expect(content).not.toContainText("Payments from a customer for their invoices");
   });
 
   test("a payment in transit is tied to its bank line", async ({ page }) => {
