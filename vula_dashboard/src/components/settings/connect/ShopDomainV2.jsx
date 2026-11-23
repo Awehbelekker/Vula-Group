@@ -8,6 +8,7 @@ import { Check, Copy, ExternalLink, Globe, MessageCircle, Trash2 } from 'lucide-
 import { Button, Card, Field, Input, Skeleton, StatusChip } from '../../ui/index.jsx'
 import { copy, useShopDomain } from './useShopDomain'
 import { openWhatsApp } from '../../../lib/phone'
+import ShopDirectoryCard from './ShopDirectoryCard.jsx'
 import '../settings.css'
 
 const STATE = {
@@ -68,6 +69,7 @@ export default function ShopDomainV2({ tenantId, kind = 'shop' }) {
           <div className="vst-row"><Button type="submit" Icon={Globe} disabled={x.busy}>{x.busy ? 'Adding…' : 'Use this address'}</Button></div>
         </form>
       </Card>
+      {kind === 'shop' && <ShopDirectoryCard tenantId={tenantId} />}
     </>)
   }
 
@@ -113,5 +115,6 @@ export default function ShopDomainV2({ tenantId, kind = 'shop' }) {
       {info.error && <p className="vcn-error" role="alert">{info.error}</p>}
       <div className="vst-row"><Button size="sm" variant="quiet" Icon={Trash2} className="vcn-danger-btn" onClick={x.remove}>Stop using this address</Button></div>
     </Card>
+    {kind === 'shop' && <ShopDirectoryCard tenantId={tenantId} />}
   </>)
 }

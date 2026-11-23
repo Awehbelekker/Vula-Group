@@ -72,7 +72,7 @@ PUBLIC = {
     ("POST", "/menu/{tenant_id}/basket"): "public shop page basket → WhatsApp order link (priced server-side, throttled)",
     ("GET", "/shop-ping"): "which shop this host serves — no data, used to tell when a shop domain is live",
     ("GET", "/link-ping"): "which business this client-links address serves — no data, used to tell when it is live",
-    ("GET", "/"): "a shop on its own address (shop.<their domain>) — 404 on any other host",
+    ("GET", "/"): "a shop on its own address (shop.<their domain>), or the shop directory on its address — 404 on any other host",
     ("GET", "/robots.txt"): "a shop's own or free address only — tells search engines where its sitemap is; 404 on any other host",
     ("GET", "/sitemap.xml"): "a shop's own or free address only — its one public page; 404 on any other host",
     ("GET", "/receipt/{token}"): "public paid-order receipt page — HMAC token, like Tap to Pay /r/<token>",
