@@ -97,10 +97,9 @@ def spending_jumps(tenant_id: str, today: date) -> List[Dict[str, Any]]:
 
 def low_stock(tenant_id: str) -> List[Dict[str, Any]]:
     try:
-        rows = (_client().table("commerce_products")
-                .select("name,stock_quantity,reorder_threshold,archived")
-                .eq("tenant_id", tenant_id).not_.is_("stock_quantity", "null")
-                .limit(1000).execute().data or [])
+        rows = all_rows(lambda: _client().table("commerce_products")
+                        .select("name,stock_quantity,reorder_threshold,archived")
+                        .eq("tenant_id", tenant_id).not_.is_("stock_quantity", "null"))
     except Exception as exc:
         log.debug("advisor: stock skipped: %s", exc)
         return []

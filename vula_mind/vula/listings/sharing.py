@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from vula.listings import service as ls
+from vula.db_pages import all_rows
 
 log = logging.getLogger(__name__)
 
@@ -243,7 +244,7 @@ async def resolve_recipient(tenant_id: str, who: str) -> Tuple[Optional[Dict[str
     people: Dict[str, Dict[str, str]] = {}
     for table, cols in ((ls.ENQUIRIES, "name,whatsapp"), (WISHES, "name,phone")):
         try:
-            rows = _client().table(table).select(cols).eq("tenant_id", tenant_id).limit(1000).execute().data or []
+            rows = all_rows(lambda t=table, c=cols: _client().table(t).select(c).eq("tenant_id", tenant_id))
         except Exception:
             rows = []
         for r in rows:

@@ -260,8 +260,8 @@ def save_answers(tenant_id: str, items: List[Dict[str, str]]) -> int:
     """New questions only, as PENDING learned answers (reviewed in Settings before any use)."""
     from vula.escalation import _same_question
     try:
-        existing = [r.get("question") or "" for r in (_client().table("vula_learned_answers")
-                    .select("question").eq("tenant_id", tenant_id).limit(1000).execute().data or [])]
+        existing = [r.get("question") or "" for r in (all_rows(lambda: _client().table("vula_learned_answers")
+                    .select("question").eq("tenant_id", tenant_id)))]
     except Exception:
         existing = []
     rows = []

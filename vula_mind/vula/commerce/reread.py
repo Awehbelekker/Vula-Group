@@ -344,8 +344,8 @@ def _stock_sheet_candidates(tenant_id: str) -> List[dict]:
         except Exception as exc:
             log.debug("stock sheet candidates skipped: %s", exc)
     try:
-        have = {r.get("doc_id") for r in (db.table("vula_stock_sheets").select("doc_id")
-                                          .eq("tenant_id", tenant_id).limit(1000).execute().data or [])}
+        have = {r.get("doc_id") for r in all_rows(lambda: db.table("vula_stock_sheets").select("doc_id")
+                                                  .eq("tenant_id", tenant_id), order="doc_id")}
     except Exception:
         have = set()
     out, seen = [], set()

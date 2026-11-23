@@ -101,7 +101,7 @@ def test_settlements_with_unverified_figures_are_not_used():
             {"id": "c", "fields": {"net_cents": 300}}]
     db = MagicMock()
     db.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value \
-        .limit.return_value.execute.return_value.data = rows
+        .order.return_value.range.return_value.execute.return_value.data = rows
     assert [s["id"] for s in bank_rec._load_settlements(db, TID)] == ["a"]
 
 

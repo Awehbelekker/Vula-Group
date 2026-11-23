@@ -888,9 +888,9 @@ def review(tenant_id: str) -> Dict[str, Any]:
         in_transit.append({**d, "candidates": _candidates(d, free)})
 
     try:
-        claims = [c for c in (db.table("commerce_expenses")
+        claims = [c for c in (all_rows(lambda: db.table("commerce_expenses")
                               .select("id,date,description,supplier,amount_cents,status,paid_by_name,paid_with,reimbursable")
-                              .eq("tenant_id", tenant_id).eq("reimbursable", True).limit(1000).execute().data or [])
+                              .eq("tenant_id", tenant_id).eq("reimbursable", True)))
                   if (c.get("status") or "") in ("submitted", "approved", "paid")]
     except Exception:  # noqa: BLE001
         claims = []

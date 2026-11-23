@@ -17,7 +17,8 @@ T = "t1"
 
 
 def _big_limits():
-    """Every `.limit(<number above 1000>)` in the code that runs (vula/, core/)."""
+    """Every `.limit(<1000 or more>)` in the code that runs (vula/, core/): a request returns at most 1 000 rows,
+    so a limit that high means "all" — and gets 1 000. A real "first N" stays below 1 000."""
     out = []
     for path in sorted(list((ROOT / "vula").rglob("*.py")) + list((ROOT / "core").rglob("*.py"))):
         try:
@@ -27,12 +28,12 @@ def _big_limits():
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "limit"
                     and node.args and isinstance(node.args[0], ast.Constant)
-                    and isinstance(node.args[0].value, int) and node.args[0].value > 1000):
+                    and isinstance(node.args[0].value, int) and node.args[0].value >= 1000):
                 out.append(f"{path.relative_to(ROOT)}:{node.lineno} .limit({node.args[0].value})")
     return out
 
 
-def test_no_query_asks_for_more_than_a_thousand_rows_in_one_request():
+def test_no_query_asks_for_a_thousand_rows_or_more_in_one_request():
     found = _big_limits()
     assert found == [], ("A request returns at most 1 000 rows — read these with vula.db_pages.all_rows(…, cap=N):\n"
                          + "\n".join(found))
@@ -41,10 +42,10 @@ def test_no_query_asks_for_more_than_a_thousand_rows_in_one_request():
 def test_the_guard_finds_one(tmp_path, monkeypatch):
     bad = tmp_path / "vula" / "x.py"
     bad.parent.mkdir()
-    bad.write_text('rows = db.table("t").select("*").limit(5000).execute().data\n')
+    bad.write_text('rows = db.table("t").select("*").limit(1000).execute().data\n')
     (tmp_path / "core").mkdir()
     monkeypatch.setattr("tests.test_no_silent_row_cap.ROOT", tmp_path)
-    assert _big_limits() == ["vula/x.py:1 .limit(5000)"]
+    assert _big_limits() == ["vula/x.py:1 .limit(1000)"]
 
 
 # ── the helper ───────────────────────────────────────────────────────────────
@@ -135,3 +136,32 @@ def test_what_customers_owe_reads_every_invoice(monkeypatch):
     monkeypatch.setattr(ledger_v2, "is_on", lambda tid: False)
     out = asyncio.run(finances.insights(T, days=30))
     assert out["receivables"]["outstanding_cents"] == 1200 * 1000
+
+
+def _open_invoices(n):
+    return [{"id": f"i{i:05d}", "tenant_id": T, "invoice_number": f"INV-{i:05d}", "customer_name": "Sam",
+             "direction": "outbound", "doc_type": "invoice", "status": "sent", "total_cents": 1000,
+             "total_paid_cents": 0, "issue_date": "2026-10-01", "due_date": "2026-10-15"} for i in range(n)]
+
+
+def test_a_bank_line_s_candidates_include_an_invoice_past_the_thousandth(monkeypatch):
+    from vula.api import commerce
+    from vula.commerce import service
+    invs = _open_invoices(1200)
+    invs[-1]["total_cents"] = 4321                                 # the one that matches, last by id
+    d = FakeSupabase({"commerce_invoices": invs, "commerce_bank_transactions": [
+        {"id": "t1", "tenant_id": T, "direction": "in", "amount_cents": 4321, "txn_date": "2026-10-20"}]})
+    d.max_rows = 1000
+    monkeypatch.setattr(service, "_client", lambda: d)
+    out = asyncio.run(commerce.admin_bank_match_candidates(T, "t1"))
+    assert out["candidates"][0]["number"] == "INV-01199" and out["candidates"][0]["exact"]
+
+
+def test_the_owner_digest_counts_every_open_invoice(monkeypatch):
+    from datetime import date
+    from vula import owner_digest
+    d = FakeSupabase({"commerce_invoices": _open_invoices(1200), "commerce_invoice_payments": []})
+    d.max_rows = 1000
+    monkeypatch.setattr(owner_digest, "_client", lambda: d)
+    out = owner_digest.build(T, date(2026, 11, 1))
+    assert out["overdue"] == [("Sam", 1200 * 1000)]                  # 1 200 × R10 overdue from Sam

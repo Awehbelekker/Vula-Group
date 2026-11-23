@@ -745,10 +745,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     # link them (single source of truth, no double-count) and let the RECEIPT's category win
     # (the slip knows what was bought; the statement line usually doesn't).
     try:
-        card_exps = (db.table("commerce_expenses")
+        card_exps = (all_rows(lambda: db.table("commerce_expenses")
                      .select("id,date,amount_cents,account_code,supplier")
                      .eq("tenant_id", tenant_id).eq("paid_with", "company_card")
-                     .in_("status", ["submitted", "approved"]).limit(1000).execute().data or [])
+                     .in_("status", ["submitted", "approved"])))
     except Exception:
         card_exps = []
     used_exp_ids: set = set()
@@ -1052,10 +1052,9 @@ def _load_settlements(db, tenant_id: str) -> List[Dict[str, Any]]:
     """Filed settlement summaries from the last ~4 months with a verified net payout."""
     from datetime import date, timedelta
     try:
-        rows = (db.table("vula_filed_documents").select("id,fields,created_at")
+        rows = (all_rows(lambda: db.table("vula_filed_documents").select("id,fields,created_at")
                 .eq("tenant_id", tenant_id).eq("category", "Settlement Statement")
-                .gte("created_at", (date.today() - timedelta(days=120)).isoformat())
-                .limit(1000).execute().data or [])
+                .gte("created_at", (date.today() - timedelta(days=120)).isoformat())))
     except Exception as exc:
         log.debug("reconcile: settlement load skipped: %s", exc)
         return []

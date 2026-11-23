@@ -721,8 +721,8 @@ class CodeIn(BaseModel):
 @router.get("/{tenant_id}/codes")
 async def list_codes(tenant_id: str) -> dict:
     try:
-        rows = (_client().table("vula_code_library").select("*")
-                .eq("tenant_id", tenant_id).order("code_ref").limit(1000).execute().data or [])
+        rows = (all_rows(lambda: _client().table("vula_code_library").select("*")
+                .eq("tenant_id", tenant_id).order("code_ref")))
     except Exception as exc:
         log.warning("code library list failed (run migration 016?): %s", exc)
         rows = []
