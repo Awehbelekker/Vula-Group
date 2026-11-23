@@ -54,8 +54,9 @@ async def _first_photo(order: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-async def notify(tenant_id: str, order: Dict[str, Any], status: str) -> bool:
-    """Tell the customer about this step. True when something was sent. Never raises."""
+async def notify(tenant_id: str, order: Dict[str, Any], status: str, note: str = "") -> bool:
+    """Tell the customer about this step. True when something was sent. Never raises. `note` is
+    one more line under the news (a courier's tracking number — vula/commerce/shipping.py)."""
     phone = order.get("customer_phone")
     if not phone or status not in STEPS:
         return False
@@ -66,6 +67,9 @@ async def notify(tenant_id: str, order: Dict[str, Any], status: str) -> bool:
         from vula.commerce import order_slip
         shop = tenants.display_name(tenant_id)
         text = message(order, status, shop)
+        if note and text:
+            head, _, sign = text.rpartition("\n\n")
+            text = f"{head}\n{note}\n\n{sign}"
         creds = await _resolve_wa(tenant_id)
         photo = await _first_photo(order)
         number = _wa_number(phone)

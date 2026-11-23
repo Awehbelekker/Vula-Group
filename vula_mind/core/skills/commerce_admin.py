@@ -185,6 +185,30 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["order_id", "status"]},
     }},
     {"type": "function", "function": {
+        "name": "book_courier",
+        "description": "Book the business's connected courier (The Courier Guy / PUDO) to collect an "
+                       "order and deliver it to the customer's address: 'book a courier for SEE-00042', "
+                       "'send OTH-00017 overnight'. Without confirm=true it returns the price as a "
+                       "preview; show it and wait for a yes — booking charges the business's courier "
+                       "account. If it returns status: need_info (no courier connected, the address or "
+                       "parcel size is missing, already booked), that message IS your reply. Never say "
+                       "a courier was booked unless the result gives a waybill number.",
+        "parameters": {"type": "object", "properties": {
+            "order_id": {"type": "string", "description": "The order's number, e.g. SEE-00042."},
+            "service": {"type": "string", "description": "Only when the person asked for one, e.g. "
+                        "'overnight' or 'economy'. Left out, the cheapest is offered."},
+            "confirm": {"type": "boolean"}},
+            "required": ["order_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "courier_status",
+        "description": "Where an order's parcel is: asks the courier now and returns the waybill "
+                       "number, the latest status and when it changed. Use for 'where is SEE-00042's "
+                       "parcel', 'has the courier collected OTH-00017'.",
+        "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}},
+                       "required": ["order_id"]},
+    }},
+    {"type": "function", "function": {
         "name": "stock_status",
         "description": "Show product stock. Set low_only=true to show just low/out-of-stock items.",
         "parameters": {"type": "object", "properties": {"low_only": {"type": "boolean"}}},
@@ -2148,6 +2172,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "reimbursement_balance": "finances", "add_expense": "finances",
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
+    "book_courier": "orders", "courier_status": "orders",
     "order_payment": "orders", "picture_promotion": "broadcast", "recent_promotions": "broadcast",
     "set_product_photo": "products",
     "cost_sheet": "manufacturing", "add_material": "manufacturing", "receive_material": "manufacturing",
@@ -2267,7 +2292,9 @@ _PREVIEW_FIRST = frozenset({"send_invoice", "payment_link", "credit_note", "reco
                             # estimate (and other businesses' when shared) — shown before it's kept
                             "confirm_buildup", "buildup_suggestion",
                             # 20 Nov 2026: a document leaves the business — shown before it goes
-                            "send_document"}
+                            "send_document",
+                            # 23 Nov 2026: booking a courier charges the business's courier account
+                            "book_courier"}
                            | frozenset().union(*(a.ADMIN_PREVIEW_FIRST for a in _ADDONS)))
 
 
@@ -3418,6 +3445,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "sales_summary":      return await self._sales_summary(tid, args.get("period", "today"))
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))
             if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""), args.get("payment_method"), bool(args.get("confirm")))
+            if name == "book_courier":       return await self._book_courier(tid, args, ctx)
+            if name == "courier_status":     return await self._courier_status(tid, args.get("order_id", ""))
             if name == "stock_status":       return await self._stock_status(tid, bool(args.get("low_only")))
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity"), bool(args.get("confirm")), actor=ctx.get("phone"), add=args.get("add"), product_id=args.get("product_id"), variant_id=args.get("variant_id"))
             if name == "receive_stock":      return await self._receive_stock(tid, args.get("lines") or [], args.get("reference"), bool(args.get("confirm")), actor=ctx.get("phone"))
@@ -3617,6 +3646,89 @@ class CommerceAdminSkill(BaseSkill):
         return [{"order": o.get("display_id"), "status": o.get("status"),
                  "total": self._rands(o.get("total_cents")), "customer": o.get("customer_name")}
                 for o in orders] or {"message": "No orders found."}
+
+    async def _book_courier(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """book_courier (23 Nov 2026, vula/commerce/shipping.py): price first, then book that price.
+        The preview writes the service and its price INTO `args` — the same dict the pending
+        confirmation stores — so the yes books exactly what was shown, and shipping.book refuses
+        if the courier's price moved in between. Every word of the reply is built in code."""
+        from vula import couriers
+        from vula.commerce import shipping
+        match = await self._find_order_by_display_id(tid, args.get("order_id", ""))
+        if not match:
+            return {"error": f"No order {args.get('order_id') or ''} found.".replace("  ", " ")}
+        number = match.get("display_id")
+        rand = lambda c: f"R{int(c) / 100:,.2f}"           # noqa: E731 — cents from the courier, shown as rand
+        try:
+            if not (args.get("confirm") and args.get("service") and args.get("expected_cents") is not None):
+                q = await shipping.quote(tid, match["id"])
+                if q["existing"]:
+                    s = q["existing"][0]
+                    return {"status": "need_info", "message":
+                            f"Order {number} already has a courier booked: {s['courier']}, waybill "
+                            f"{s.get('tracking_reference') or 'not issued yet'} ({s['status_text']}). "
+                            "Cancel that booking in the order first if you want another."}
+                if q["missing"]:
+                    return {"status": "need_info", "message":
+                            f"I can't price a courier for {number} yet. Still needed: "
+                            + "; ".join(q["missing"]) + ". You can fill these in on the order (Book a courier)."}
+                want = str(args.get("service") or "").strip().lower()
+                rates = q["rates"]
+                rate = next((r for r in rates if want and (want == r["code"].lower() or want in r["name"].lower())), None)
+                if want and not rate:
+                    return {"status": "need_info", "message":
+                            f"{q['courier']} doesn't offer '{args.get('service')}' for {number}. It offers: "
+                            + "; ".join(f"{r['name']} {rand(r['cents'])}" for r in rates) + "."}
+                rate = rate or rates[0]
+                args["service"], args["expected_cents"] = rate["code"], rate["cents"]
+                parcel = q["parcel"]
+                others = [f"{r['name']} {rand(r['cents'])}" for r in rates if r["code"] != rate["code"]][:4]
+                return {"preview": True, "book_a_courier_for_order": number,
+                        "courier": q["courier"] + (" (test account)" if q["mode"] == "test" else ""),
+                        "service": rate["name"], "price": rand(rate["cents"]) + " incl VAT, charged to your courier account",
+                        "deliver_to": f"{q['order'].get('customer_name') or 'the customer'}, {shipping.address_line(q['address'])}",
+                        "parcel": (f"{parcel['length_cm']:g} × {parcel['width_cm']:g} × {parcel['height_cm']:g} cm, "
+                                   f"{parcel['weight_kg']:g} kg"
+                                   + (" (your usual parcel)" if q["weight_from"] == "usual" else "")),
+                        "other_services": "; ".join(others)}
+            s = await shipping.book(tid, match["id"], service_code=str(args["service"]),
+                                    expected_cents=int(args["expected_cents"]),
+                                    actor={"email": ctx.get("email") or ctx.get("person_key"),
+                                           "name": ctx.get("caller_name") or ctx.get("phone")})
+        except (shipping.ShippingError, couriers.CourierError) as exc:
+            return _not_confirmed(str(exc))
+        result = {"booked": number, "courier": s["courier"], "waybill": s["tracking_reference"],
+                  "service": s.get("service_name"), "price_cents": s.get("quoted_cents")}
+        text = (f"Courier booked for {number}: {s['courier']} {s.get('service_name') or ''}, "
+                f"{rand(s.get('quoted_cents') or 0)}. Waybill *{s['tracking_reference']}*.\n"
+                "Print the waybill from the order in your dashboard. The customer is told when it's collected.")
+        if s.get("verified"):
+            return _checked(result, "✅ " + text)
+        result["reply_verbatim"] = ("📦 " + text + "\n⚠️ The courier took the booking but hasn't shown it back to "
+                                    "me yet — check it on the order in a few minutes.")
+        return result
+
+    async def _courier_status(self, tid: str, display_id: str) -> Dict[str, Any]:
+        from vula.commerce import shipping
+        match = await self._find_order_by_display_id(tid, display_id)
+        if not match:
+            return {"error": f"No order {display_id} found."}
+        rows = shipping.shipments_for(tid, match["id"])
+        if not rows:
+            return {"order": match.get("display_id"), "courier_booked": False}
+        s = rows[0]
+        checked_now = False
+        if s["live"] and s.get("tracking_reference"):
+            try:
+                s = await shipping.refresh(tid, s["id"])
+                checked_now = True
+            except shipping.ShippingError as exc:
+                logger.info("courier_status: not refreshed: %s", exc)
+        last = (s.get("events") or [{}])[-1]
+        return {"order": match.get("display_id"), "courier_booked": True, "courier": s["courier"],
+                "waybill": s.get("tracking_reference"), "status": s["status_text"],
+                "last_update": last.get("at") or None, "location": last.get("location") or None,
+                "to_pickup_point": s.get("pickup_point_name"), "checked_with_courier_now": checked_now}
 
     async def _find_order_by_display_id(self, tid: str, display_id: str) -> Optional[dict]:
         """Exact lookup by display id — the old scan of the latest 200 orders silently missed
