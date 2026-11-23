@@ -9,7 +9,9 @@ last month's pack (vula/commerce/management_pack.py) once:
   2. else the approved `vula_document_share` template with a week-long link to the PDF;
   3. else email (the business's own mailbox, else Vula's) with the PDF and the Excel attached.
 
-A month with no money in or out isn't sent. Each send is kept in vula_merchant_audit
+Never a month that ended before the business's send was switched on: the first time the switch is
+seen on, that day is kept (`features.management_accounts_since`), so switching it on mid-month starts with
+the month then running. A month with no money in or out isn't sent. Each send is kept in vula_merchant_audit
 (`management_pack_sent`, with the month and who it went to) and a month already sent to an owner is
 never sent again — the scheduler can run on two workers at once, so the record is read before sending.
 """
@@ -18,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
@@ -165,14 +167,46 @@ def _tenants() -> List[str]:
             and features.on(r["tenant_id"], SWITCH)]
 
 
+SINCE = "management_accounts_since"
+
+
+def _since(tenant_id: str, today: date) -> Optional[date]:
+    """The day the business's send was switched on. The first time the switch is seen on, today is
+    recorded (vula_tenant_config.features), so switching it on mid-month never sends an older month
+    (23 Nov 2026: switched on for DIGG on the 23rd, it would have sent October at once)."""
+    db = _client()
+    rows = db.table("vula_tenant_config").select("features").eq("tenant_id", tenant_id).limit(1).execute().data or []
+    if not rows:
+        return None
+    feats = dict(rows[0].get("features") or {})
+    try:
+        return date.fromisoformat(str(feats[SINCE])[:10])
+    except (KeyError, TypeError, ValueError):
+        pass
+    feats[SINCE] = today.isoformat()
+    db.table("vula_tenant_config").update({"features": feats}).eq("tenant_id", tenant_id).execute()
+    log.info("management pack: %s switched on, first month to send is the one ending after %s", tenant_id, today)
+    return today
+
+
+def _month_end(month: str) -> date:
+    y, m = (int(x) for x in month.split("-"))
+    return (date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)) - timedelta(days=1)
+
+
 async def tick(now: Optional[datetime] = None) -> int:
-    """One pass: every business with the switch on gets last month's pack, once it's due."""
+    """One pass: every business with the switch on gets last month's pack, once it's due — never a
+    month that ended before its send was switched on. (Master's send-now route sends any month.)"""
+    now = (now or datetime.now(SAST)).astimezone(SAST)
     month = due_month(now)
     if not month:
         return 0
     sent = 0
     for tid in _tenants():
         try:
+            since = _since(tid, now.date())
+            if since is None or _month_end(month) < since:
+                continue
             out = await send_month(tid, month)
             sent += len(out.get("sent") or [])
             if out.get("sent"):
