@@ -1606,3 +1606,15 @@ export const accountantActivity = [
   { id: 3, created_at: "2026-11-18T10:01:00Z", actor_email: "books@ledgerline.example.test", action: "accountant_viewed",
     detail: { page: "reports/pnl", what: "Profit and loss" } },
 ];
+
+// Sell › Reviews (23 Nov 2026): ratings customers gave on WhatsApp after delivery
+export const reviews = {
+  count: 6, average: 4.3, low: 1, google_review_url: "",
+  stars: { 5: 4, 4: 1, 3: 0, 2: 1, 1: 0 },
+  reviews: [
+    { id: "rv-1", rating: 5, customer_name: "Thandi Nkosi", order_number: "OTH-00141", created_at: "2026-11-21T09:12:00+02:00", comment: "Kingklip was perfect, thank you!" },
+    { id: "rv-2", rating: 2, customer_name: "Pieter van Wyk", order_number: "OTH-00138", created_at: "2026-11-20T17:40:00+02:00", comment: null },
+    { id: "rv-3", rating: 5, customer_name: "Ayesha Patel", order_number: "OTH-00135", created_at: "2026-11-19T12:05:00+02:00", comment: null },
+    { id: "rv-4", rating: 4, customer_phone: "27825550104", order_number: "OTH-00131", created_at: "2026-11-18T08:30:00+02:00", comment: null },
+  ],
+};

@@ -10,7 +10,7 @@ import {
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
   Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
   PenLine, PencilRuler, Receipt, ReceiptText, Repeat, Rocket, Route, Ruler, ScanLine, Settings,
-  ShieldCheck, ShoppingBag, Smartphone, Sparkles, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound,
+  ShieldCheck, ShoppingBag, Smartphone, Sparkles, Star, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound,
   Wallet, Wrench, Zap,
 } from "lucide-react";
 
@@ -22,7 +22,7 @@ export const NAV_ICONS = {
   // merchant
   overview: House, inbox: Inbox, today: CalendarCheck, activity: Activity,
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
-  sell: Store, orders: Package, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag,
+  sell: Store, orders: Package, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag, reviews: Star, salesreports: TrendingUp,
   subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, listings: Building2, suppliers: Truck, import: Download,
   money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen, booksreview: ClipboardCheck,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
@@ -79,6 +79,8 @@ export const MERCHANT_GROUPS = [
       { id: "stock", icon: "📊", label: "Stock" },
       { id: "costing", icon: "🏭", label: "Costing" },
       { id: "discounts", icon: "🏷️", label: "Discounts" },
+      { id: "reviews", icon: "⭐", label: "Reviews" },
+      { id: "salesreports", icon: "📈", label: "Sales reports" },
       { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
       { id: "delivery", icon: "🛵", label: "Delivery" },
       { id: "bookings", icon: "📅", label: "Bookings" },
@@ -245,6 +247,8 @@ const MERCHANT_MODMAP = {
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft',
   tradecosting: 'estimating',  // Costing by trade — also needs its switch (MERCHANT_FEATUREMAP)
   discounts: 'products',
+  reviews: 'orders',        // ratings customers give their delivered orders on WhatsApp
+  salesreports: 'orders',   // sales by day and best sellers (Sell › Sales reports)
   stock: 'products',        // the Stock tab counts and receives the same products
   costing: 'manufacturing', // materials, recipes, batches, cost per unit (Manufacturing Core)
   onboarding: 'broadcasts',  // rides the same module key it was invisibly bundled under before the Broadcast/Onboarding split

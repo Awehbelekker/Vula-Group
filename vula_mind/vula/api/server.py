@@ -2091,7 +2091,15 @@ _SECTION_RULES = [
     # (methods or None for all, path regex, tab ids that grant it)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoices|invoice-clients|invoice-items|"
                       r"recurring-invoices|quotes|bank|accounts|finances)(?:/|$)"), _MONEY_TABS),
+    # 23 Nov 2026: Sell › Sales reports — sales by day and best sellers only (the bare route;
+    # P&L, VAT and the rest of reports/ stay Money access).
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports/?$"), _MONEY_TABS | {"labour", "salesreports"}),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports(?:/|$)"), _MONEY_TABS | {"labour"}),
+    # 23 Nov 2026: Sell › Reviews. The Google review link goes out on the business's number, and
+    # sending the WhatsApp catalogue changes what every customer sees: owner and managers only.
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reviews/settings/?$"), frozenset()),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reviews/?$"), frozenset({"reviews", "orders", "customers"})),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/meta-catalog/sync/?$"), frozenset()),
     # a rep's own expenses tab reads the same endpoint (VulaExpenses defaultPaidBy)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/expenses(?:/|$)"), _MONEY_TABS | {"rep-expenses"}),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/expense-sheet(?:/|$)"),
