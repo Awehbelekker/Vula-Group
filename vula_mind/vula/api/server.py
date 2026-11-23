@@ -2117,7 +2117,7 @@ _SECTION_RULES = [
     # a mailbox; the screens were hidden in the browser only. Reading stays as it was. First in
     # the list: the first rule that matches decides.
     (_WRITES, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoice-settings|order-settings|business-profile|"
-                         r"persona|learned-answers|wa-profile|shop-domain|link-domain|shopify|woocommerce|"
+                         r"persona|learned-answers|wa-profile|shop-domain|shop-directory|link-domain|shopify|woocommerce|"
                          r"brand|ai/topup)(?:/|$)"), frozenset()),
     (_WRITES, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/providers(?:/|$)"), frozenset()),
     (_WRITES, re.compile(r"^/v1/(?:whatsapp/(?:disconnect|numbers)|email/(?:disconnect|set-primary)|"

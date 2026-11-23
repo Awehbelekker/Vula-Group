@@ -338,7 +338,8 @@ def _host_ready(host: str, tenant_id: str) -> bool:
 # The business's own address (shop.<their domain>) still wins once it is live.
 
 _LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_RESERVED_LABELS = frozenset({"www", "api", "app", "admin", "mail", "shop", "store", "vula", "master"})
+_RESERVED_LABELS = frozenset({"www", "api", "app", "admin", "mail", "shop", "store", "vula", "master",
+                              "directory"})       # directory.<base> is the shop directory
 
 
 def shop_base_domain() -> str:

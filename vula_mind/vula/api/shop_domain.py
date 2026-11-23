@@ -53,6 +53,29 @@ async def shop_domain_disconnect(tenant_id: str, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# ── the shop directory (24 Nov 2026, vula/commerce/shop_directory.py) ─────────────────────────
+#     GET /v1/commerce/{tenant}/admin/shop-directory    the listing, whether it's showing, why not
+#     PUT /v1/commerce/{tenant}/admin/shop-directory    {listed, about, town} — owner/manager only
+
+@router.get("/{tenant_id}/admin/shop-directory")
+async def shop_directory_status(tenant_id: str):
+    from vula.commerce import shop_directory
+    return await shop_directory.status(tenant_id)
+
+
+@router.put("/{tenant_id}/admin/shop-directory")
+async def shop_directory_save(tenant_id: str, body: dict, request: Request):
+    from vula.api.commerce import _actor
+    from vula.commerce import shop_directory
+    await _owner_or_manager(request, tenant_id)
+    body = body or {}
+    try:
+        return await shop_directory.save(tenant_id, listed=body.get("listed"), about=body.get("about"),
+                                         town=body.get("town"), actor={"email": _actor(request)})
+    except shop_directory.DirectoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ── where the business's client links open (10 Nov 2026) ─────────────────────────────────────
 #     GET/POST/DELETE /v1/commerce/{tenant}/admin/link-domain — projects.<their domain>, the same
 #     set-up as the shop's address; client links (/track/…) switch to it once it's live.
