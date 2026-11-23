@@ -83,6 +83,7 @@ PUBLIC = {
     ("POST", "/v1/yoco/webhook"): "Yoco webhook — signature-verified in handler",
     ("POST", "/v1/shopify/webhook/{tenant_id}"): "Shopify webhook — HMAC-verified in handler with the store's app secret",
     ("POST", "/v1/woocommerce/webhook/{tenant_id}"): "WooCommerce webhook — HMAC-verified with the secret Vula gave the store; unsigned creation pings answered and ignored",
+    ("POST", "/v1/couriers/webhook/{tenant_id}/{provider}/{token}"): "Courier tracking webhook — the token in the address is the business's secret; the body is only a pointer and the status is re-read from the courier with the business's key",
     ("GET", "/v1/whatsapp/webhook"): "Meta verification handshake (verify token)",
     ("POST", "/v1/whatsapp/webhook"): "Meta webhook — X-Hub-Signature-256 verified in handler",
     ("POST", "/v1/whatsapp/connect"): "embedded signup — check_body_tenant in handler",
