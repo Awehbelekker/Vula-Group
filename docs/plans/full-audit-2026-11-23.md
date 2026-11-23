@@ -36,6 +36,26 @@ below; the shop, checkout and storefront are in `../vula-commerce-audit.md`.
 - Access is "nothing" unless listed. Full access comes only from the role.
 - "My" filters come from the signed-in person on the server, never from the browser.
 
+**Done 23 Nov (PR #369, `tests/test_access_1123.py`):**
+- A1 and A2: writes to every setting and connection are owner/manager only on the server
+  (`server._SECTION_RULES`), and so are body-tenant connects (`tenant_auth.check_body_tenant`).
+- A3:
+  - A team member who isn't an owner or manager is saved with nothing (`normalize_access`) when
+    added, un-ticked to nothing, or demoted.
+  - A login for someone already on the team keeps their tabs.
+  - Team shows "Full access by default" on rows saved before.
+- A4 and A5: "my" contacts, reminders, expenses and the rep's day come from the signed-in person
+  (`commerce._only_mine`). A rep can't overwrite a colleague's contact.
+- A6: someone who isn't an owner or manager gets colleagues' names and roles only.
+
+**Still open:**
+- A7–A9.
+- **Grandfathered rows** (production, 23 Nov). These were saved with nothing ticked or with no
+  team row, so they still have full access until the owner ticks their tabs:
+  - DIGG: 2 staff logins with no team row, and 1 "admin" with nothing ticked.
+  - Off the Hook: 1 staff member.
+  - Gerflor: 1 sales rep.
+
 ## 2. Wrong or lost work (money, customers, content)
 
 | # | Finding | Evidence |

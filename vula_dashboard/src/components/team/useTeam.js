@@ -137,17 +137,30 @@ export function useTeam(tenantId) {
 
   const add = async () => {
     if (!form.name && !form.whatsapp) return;
-    await fetch(`${VULA_API}/v1/team/${tenantId}`, {
+    setMsg("");
+    const r = await fetch(`${VULA_API}/v1/team/${tenantId}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      // no notifications until they choose; a team gives that team's tabs (12 Nov 2026)
+      // no notifications until they choose; a team gives that team's tabs (12 Nov 2026). With no
+      // team, someone who isn't a manager starts with nothing until their tabs are ticked (23 Nov 2026).
       body: JSON.stringify({ ...form, team: form.team || null, access: [], notify: [] }),
-    });
+    }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : {};
+    if (!r || !r.ok || d.error) {
+      setMsg(/duplicate|unique/i.test(d.error || "") ? "Someone on the team already has that WhatsApp number."
+        : d.detail || d.error || "That didn't save. Try again.");
+      return;
+    }
+    const full = form.role === "owner" || form.role === "manager";
+    setMsg(full || form.team ? `${form.name || form.whatsapp} added.`
+      : `${form.name || form.whatsapp} added. Tick what they can use below — until then they only see Home.`);
     setForm({ name: "", whatsapp: "", role: "staff", team: "" }); load();
   };
   const patch = async (id, body) => {
-    const d = await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
+    const r = await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then((x) => x.json()).catch(() => ({}));
+    }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : { error: "That didn't save. Check your connection and try again." };
+    if (r && !r.ok && !d.error) d.error = d.detail || "That didn't save. Try again.";
     if (d.error) setMsg(/duplicate|unique/i.test(d.error) ? "Someone on the team already has that WhatsApp number." : d.error);
     else if (d.login_revoked) setMsg("Disabled — their dashboard login was revoked too.");
     load();

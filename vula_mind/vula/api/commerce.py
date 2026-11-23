@@ -2423,8 +2423,15 @@ async def admin_agent_activity(tenant_id: str, limit: int = 60):
 # not a new auth boundary (route-level access is still tenant_admin_guard, same as every other
 # /admin/ route).
 
+_WIDE_CONTACTS = frozenset({"customers", "contacts", "inbox"})
+
+
 @router.get("/{tenant_id}/admin/contacts")
-async def admin_list_contacts(tenant_id: str, created_by: str = "", search: str = ""):
+async def admin_list_contacts(tenant_id: str, created_by: str = "", search: str = "",
+                              request: Request = None):  # type: ignore[assignment]
+    mine = await _only_mine(tenant_id, request, _WIDE_CONTACTS)
+    if mine is not None:
+        created_by = mine
     q = (service._client().table("commerce_contacts").select("*").eq("tenant_id", tenant_id))
     if created_by:
         q = q.eq("created_by", created_by)
@@ -2445,7 +2452,7 @@ class ContactIn(BaseModel):
 
 
 @router.post("/{tenant_id}/admin/contacts")
-async def admin_upsert_contact(tenant_id: str, body: ContactIn):
+async def admin_upsert_contact(tenant_id: str, body: ContactIn, request: Request = None):  # type: ignore[assignment]
     from uuid import uuid4
     name = (body.name or "").strip()
     if not name:
@@ -2455,17 +2462,31 @@ async def admin_upsert_contact(tenant_id: str, body: ContactIn):
         phone = "27" + phone[1:]
     if not phone:
         phone = f"nophone-{uuid4().hex[:10]}"
+    mine = await _only_mine(tenant_id, request, _WIDE_CONTACTS)
+    created_by = body.created_by or None
+    if mine is not None:
+        created_by = None if mine == _NOBODY else mine
+        # one row per (business, phone): a rep saving a number another rep already has would
+        # overwrite their contact
+        held = (service._client().table("commerce_contacts").select("created_by")
+                .eq("tenant_id", tenant_id).eq("phone", phone).limit(1).execute().data or [])
+        if held and held[0].get("created_by") and held[0]["created_by"] != created_by:
+            raise HTTPException(status_code=409, detail="A colleague already has this contact.")
     row = {"tenant_id": tenant_id, "phone": phone, "name": name,
            "email": body.email or None, "company": body.company or None,
            "title": body.title or None, "notes": body.notes or None,
-           "source": "dashboard", "created_by": body.created_by or None}
+           "source": "dashboard", "created_by": created_by}
     res = (service._client().table("commerce_contacts")
            .upsert(row, on_conflict="tenant_id,phone").execute())
     return {"saved": True, "contact": (res.data or [row])[0]}
 
 
 @router.get("/{tenant_id}/admin/reminders")
-async def admin_list_reminders(tenant_id: str, created_by: str = "", status: str = "open"):
+async def admin_list_reminders(tenant_id: str, created_by: str = "", status: str = "open",
+                               request: Request = None):  # type: ignore[assignment]
+    mine = await _only_mine(tenant_id, request, frozenset({"followups"}))
+    if mine is not None:
+        created_by = mine
     q = (service._client().table("vula_reminders").select("id,text,due_at,status,created_at")
          .eq("tenant_id", tenant_id))
     if created_by:
@@ -2497,10 +2518,31 @@ def _rep_digits(p: Optional[str]) -> str:
     return "27" + d[1:] if d.startswith("0") else d
 
 
+_NOBODY = "-"   # matches no number: a "my" list for a login with no WhatsApp number on its team row
+
+
+async def _only_mine(tenant_id: str, request: Optional[Request], wide: frozenset) -> Optional[str]:
+    """None when the caller may see everyone's rows (owner, manager, or a login with one of the
+    `wide` tabs), else the caller's own WhatsApp number to filter by (23 Nov 2026 audit: "My
+    contacts", "My reminders", "My expenses" and the rep's day took the number from the browser,
+    and an empty number returned every rep's records)."""
+    if request is None:
+        return None
+    from vula.api.tenant_auth import member_scope, scope_allows
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    if scope is None or scope_allows(scope, wide):
+        return None
+    return _rep_digits((scope.get("member") or {}).get("whatsapp")) or _NOBODY
+
+
 @router.get("/{tenant_id}/admin/rep/today")
-async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None):
+async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None,
+                          request: Request = None):  # type: ignore[assignment]
     from vula.bookings import service as bk
     rep = _rep_digits(rep_phone) or None
+    mine = await _only_mine(tenant_id, request, frozenset({"bookings"}))
+    if mine is not None:
+        rep = mine
     day = await bk.list_day(tenant_id, date, booked_by=rep)
     notes = []
     try:
@@ -4836,8 +4878,13 @@ class ExpenseAssignIn(BaseModel):
 async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
                               reimbursable: Optional[bool] = None, project: Optional[str] = None,
                               since: Optional[str] = None, until: Optional[str] = None,
-                              paid_by: Optional[str] = None):
+                              paid_by: Optional[str] = None,
+                              request: Request = None):  # type: ignore[assignment]
     from vula.commerce import expenses, accounting
+    from vula.api.server import _MONEY_TABS
+    mine = await _only_mine(tenant_id, request, _MONEY_TABS)
+    if mine is not None:          # a rep's own expenses tab: theirs only
+        paid_by = mine
     # Real chart-of-accounts categories for the dashboard's category dropdown — deliberately
     # curated/finite (not free text), unlike `project` which is inherently open-ended. Expense
     # accounts only; an expense is never income.

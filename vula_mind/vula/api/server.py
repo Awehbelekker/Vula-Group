@@ -2087,8 +2087,21 @@ _TENANT_GUARD_PUBLIC = [
 # rest of the admin API is still membership-only (see docs/ux-redesign-audit.md §1).
 _MONEY_TABS = frozenset({"invoices", "expenses", "bank", "books", "payments", "taptopay",
                          "budget", "scanner", "finances"})
+_WRITES = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _SECTION_RULES = [
     # (methods or None for all, path regex, tab ids that grant it)
+    # 23 Nov 2026 audit: the business's settings and connections — owner and managers only. Any
+    # member could change the bank details printed on invoices (invoice-settings isn't under
+    # invoices/), opening hours, delivery fees and payment methods, the assistant's voice, the
+    # shop and link domains, store connections, payment gateway keys, and disconnect WhatsApp or
+    # a mailbox; the screens were hidden in the browser only. Reading stays as it was. First in
+    # the list: the first rule that matches decides.
+    (_WRITES, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoice-settings|order-settings|business-profile|"
+                         r"persona|learned-answers|wa-profile|shop-domain|link-domain|shopify|woocommerce|"
+                         r"brand|ai/topup)(?:/|$)"), frozenset()),
+    (_WRITES, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/providers(?:/|$)"), frozenset()),
+    (_WRITES, re.compile(r"^/v1/(?:whatsapp/(?:disconnect|numbers)|email/(?:disconnect|set-primary)|"
+                         r"yoco/disconnect|connections)/"), frozenset()),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoices|invoice-clients|invoice-items|"
                       r"recurring-invoices|quotes|bank|accounts|finances)(?:/|$)"), _MONEY_TABS),
     # 23 Nov 2026: Sell › Sales reports — sales by day and best sellers only (the bare route;
