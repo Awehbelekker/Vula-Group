@@ -29,6 +29,26 @@ const TEXT = {
   },
 }
 
+/** The free address every shop has (23 Nov 2026): <business>.<Vula's shop domain>. Nothing to set up. */
+function FreeAddress({ free }) {
+  if (!free) return null
+  return (
+    <Card className="vst-card">
+      <div className="vst-row">
+        <span className="vst-strong">{free.host}</span>
+        <StatusChip tone={free.live ? 'ok' : 'warn'}>{free.live && <Check size={14} aria-hidden="true" />}{free.live ? 'Live' : 'Being set up'}</StatusChip>
+        {free.live && <a className="vcn-link" href={free.url} target="_blank" rel="noreferrer">Open<ExternalLink size={14} aria-hidden="true" /></a>}
+        {free.live && <Button size="sm" variant="secondary" Icon={Copy} onClick={() => copy(free.url)} aria-label="Copy your shop's address">Copy</Button>}
+      </div>
+      <p className="vst-body">
+        {free.live
+          ? 'Your shop’s free web address. Share it anywhere — your website, social pages, a QR code. Search engines can find it.'
+          : 'Your shop’s free web address isn’t answering yet. Until it does, links stay on Vula’s address.'}
+      </p>
+    </Card>
+  )
+}
+
 export default function ShopDomainV2({ tenantId, kind = 'shop' }) {
   const x = useShopDomain(tenantId, kind)
   const t = TEXT[kind] || TEXT.shop
@@ -36,7 +56,8 @@ export default function ShopDomainV2({ tenantId, kind = 'shop' }) {
   if (!info) return <Card><Skeleton lines={3} /></Card>
 
   if (!info.domain) {
-    return (
+    return (<>
+      <FreeAddress free={info.free} />
       <Card>
         <form className="vst-card" onSubmit={x.connect}>
           <p className="vst-body">{t.intro}</p>
@@ -47,13 +68,14 @@ export default function ShopDomainV2({ tenantId, kind = 'shop' }) {
           <div className="vst-row"><Button type="submit" Icon={Globe} disabled={x.busy}>{x.busy ? 'Adding…' : 'Use this address'}</Button></div>
         </form>
       </Card>
-    )
+    </>)
   }
 
   const [tone, label] = STATE[info.state] || ['muted', 'Setting up']
   const records = info.records || []
   const live = info.state === 'live'
-  return (
+  return (<>
+    {!live && <FreeAddress free={info.free} />}
     <Card className="vst-card">
       <div className="vst-row">
         <span className="vst-strong">{info.domain}</span>
@@ -91,5 +113,5 @@ export default function ShopDomainV2({ tenantId, kind = 'shop' }) {
       {info.error && <p className="vcn-error" role="alert">{info.error}</p>}
       <div className="vst-row"><Button size="sm" variant="quiet" Icon={Trash2} className="vcn-danger-btn" onClick={x.remove}>Stop using this address</Button></div>
     </Card>
-  )
+  </>)
 }
