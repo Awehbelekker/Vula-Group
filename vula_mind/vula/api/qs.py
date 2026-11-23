@@ -21,6 +21,14 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["qs"])
 
 
+def _refused(message: str, status: int = 400):
+    """A failure the dashboard can see (23 Nov 2026 audit: these routes answered 200 {"error"} and
+    screens that checked the status showed "Saved"). Both keys, so older screens that read
+    `error` still find it."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=status, content={"error": message, "detail": message})
+
+
 def _client():
     from vula.commerce import service as commerce_service
     return commerce_service._client()
@@ -126,12 +134,12 @@ async def upsert_rate(tenant_id: str, body: RateIn) -> dict:
             res = (db.table("vula_qs_rates").update(row)
                    .eq("tenant_id", tenant_id).eq("id", rid).execute())
             if not res.data:
-                return {"error": "Rate not found."}
+                return _refused("Rate not found.", 404)
             return res.data[0]
         res = db.table("vula_qs_rates").insert(row).execute()
         return res.data[0] if res.data else {"error": "insert returned no row"}
     except Exception as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
 
 
 @router.delete("/rates/{tenant_id}/{rate_id}")
@@ -141,4 +149,4 @@ async def delete_rate(tenant_id: str, rate_id: str) -> dict:
          .eq("tenant_id", tenant_id).eq("id", rate_id).execute())
         return {"id": rate_id, "deleted": True}
     except Exception as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)

@@ -37,6 +37,14 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["commerce"])
 
 
+def _refused(message: str, status: int = 400):
+    """A failure the dashboard can see (23 Nov 2026 audit: these routes answered 200 {"error"} and
+    screens that checked the status showed "Saved"). Both keys, so older screens that read
+    `error` still find it."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=status, content={"error": message, "detail": message})
+
+
 # ── Products ─────────────────────────────────────────────────────────────────
 
 @router.get("/{tenant_id}/products")
@@ -2837,7 +2845,7 @@ async def admin_agent_teach(tenant_id: str, body: TeachRequest):
             content=f"Q: {q}\nA: {a}", filename="owner-taught.txt", doc_id=doc_id, source_type="reference",
             audience="public")       # taught for customers' questions too (KB audience, 2026-10-16)
     except Exception as exc:
-        return {"error": f"could not teach: {exc}"}
+        return _refused(f"could not teach: {exc}", 400)
     try:
         from core.reasoning_telemetry import emit
         emit(system="vula-agent-teach", task="correction", tenant_id=tenant_id, outcome="learned")
@@ -2919,7 +2927,7 @@ async def admin_agent_unteach(tenant_id: str, body: dict):
         from vula.ingestion.pipeline import VulaIngestionPipeline
         await VulaIngestionPipeline(tenant_id=tenant_id).store.delete_document(tenant_id, doc_id)
     except Exception as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
     return {"ok": True, "removed": q}
 
 
@@ -2961,7 +2969,7 @@ async def admin_set_persona(tenant_id: str, body: PersonaPatch):
     try:
         service._client().table("vula_tenant_config").update(patch).eq("tenant_id", tenant_id).execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 116/119/262?)"}
+        return _refused(f"{exc} (run migration 116/119/262?)", 400)
     _tenants.invalidate(tenant_id)
     out: Dict[str, Any] = {"ok": True}
     if "persona_prompt" in patch:
@@ -3322,7 +3330,7 @@ async def admin_bank_settings(tenant_id: str, body: BankSettingsIn):
     try:
         bank_rec.set_statement_password(tenant_id, body.password, body.bank)
     except Exception as exc:
-        return {"error": f"{exc} (connect email + run migration 057 first?)"}
+        return _refused(f"{exc} (connect email + run migration 057 first?)", 400)
     return {"ok": True, "bank": body.bank}
 
 
@@ -3404,7 +3412,7 @@ async def admin_bank_statement_from_text(tenant_id: str, body: dict):
     async def _run():
         txns = await bank_rec.extract_transactions(text)
         if not txns:
-            return {"error": "no transactions found in the text"}
+            return _refused("no transactions found in the text", 400)
         ok = bank_rec.reconciliation_ok(txns)
         result = await bank_rec.reconcile(tenant_id, txns,
                                           source_file=(body or {}).get("filename") or "pasted-statement",
@@ -3763,7 +3771,7 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
             from vula.commerce import expenses as _expenses
             _expenses.post_to_ledger(tenant_id, (res.data or [exp])[0])
         except Exception as exc:
-            return {"error": str(exc)}
+            return _refused(str(exc), 400)
     elif body.action == "ignore":
         patch = {"match_status": "ignored"}
     else:
@@ -3863,7 +3871,7 @@ async def admin_upsert_account(tenant_id: str, body: AccountIn):
     try:
         db.table("commerce_accounts").upsert(row, on_conflict="tenant_id,code").execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 058?)"}
+        return _refused(f"{exc} (run migration 058?)", 400)
     return {"account": row}
 
 
@@ -4280,9 +4288,9 @@ async def admin_upsert_worker(tenant_id: str, body: WorkerIn):
     try:
         return {"worker": labour.upsert_worker(tenant_id, body.model_dump())}
     except ValueError as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
     except Exception as exc:
-        return {"error": f"{exc} (run migration 059?)"}
+        return _refused(f"{exc} (run migration 059?)", 400)
 
 
 @router.delete("/{tenant_id}/admin/workers/{worker_id}")
@@ -5030,7 +5038,7 @@ async def admin_create_expense(tenant_id: str, body: ExpenseIn):
         try:
             res = db.table("commerce_expenses").insert(row).execute()
         except Exception as exc:
-            return {"error": f"{exc} (run migration 009/074?)"}
+            return _refused(f"{exc} (run migration 009/074?)", 400)
         return {"expense": (res.data or [row])[0]}
 
     from vula.commerce import expenses
@@ -5040,7 +5048,7 @@ async def admin_create_expense(tenant_id: str, body: ExpenseIn):
             **body.model_dump(exclude={"due_date"}))
         return {"expense": claim}
     except Exception as exc:
-        return {"error": f"{exc} (run migration 060?)"}
+        return _refused(f"{exc} (run migration 060?)", 400)
 
 
 @router.post("/{tenant_id}/admin/expenses/{expense_id}/assign")
@@ -5130,7 +5138,7 @@ async def admin_add_card(tenant_id: str, body: dict):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        return {"error": f"{exc} (run migration 061?)"}
+        return _refused(f"{exc} (run migration 061?)", 400)
 
 
 @router.delete("/{tenant_id}/admin/cards/{card_id}")
@@ -5212,7 +5220,7 @@ async def admin_import_undo(tenant_id: str):
             db.table("commerce_orders").delete().eq("tenant_id", tenant_id) \
                 .like("delivery_notes", f"{IMPORT_TAG}%").execute()
     except Exception as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
     return {"removed": len(ids)}
 
 
@@ -8386,7 +8394,7 @@ async def admin_customer_tags(tenant_id: str, phone: str, body: dict):
             on_conflict="tenant_id,phone",
         ).execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 046?)"}
+        return _refused(f"{exc} (run migration 046?)", 400)
     return {"ok": True, "tags": tags, "area": area}
 
 
@@ -8406,7 +8414,7 @@ async def admin_customer_note(tenant_id: str, phone: str, body: dict):
                 "channel": "web", "customer_phone": phone, "agent_note": note,
             }).execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 048?)"}
+        return _refused(f"{exc} (run migration 048?)", 400)
     return {"ok": True, "note": note}
 
 
