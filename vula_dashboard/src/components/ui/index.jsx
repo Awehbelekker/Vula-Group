@@ -96,9 +96,9 @@ export function StatCard({ label, value, sub, color, accent = false, variant = "
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ font: "600 var(--fs-overline)/var(--lh-overline) var(--font-sans)", letterSpacing: ".06em",
             textTransform: "uppercase", color: variant === "hot" ? "var(--warm-text)" : "var(--muted)", marginBottom: 6 }}>{label}</div>
-          <div className={hero ? "vula-display" : "vula-money"} style={hero
-            ? { fontSize: "var(--fs-display-xl)", lineHeight: "var(--lh-display-xl)", fontWeight: 600, color: color || "var(--ink)" }
-            : { fontSize: 22, lineHeight: 1.1, color: color || "var(--ink)" }}>{value}</div>
+          <div className="vula-figure" style={hero
+            ? { fontSize: "var(--fs-display-xl)", lineHeight: 1.05, color: color || "var(--ink)" }
+            : { fontSize: 24, lineHeight: 1.1, color: color || "var(--ink)" }}>{value}</div>
           {(sub || chip) && (
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 8 }}>
               {sub && <span style={{ fontSize: "var(--fs-caption)", color: "var(--muted)" }}>{sub}</span>}
@@ -111,9 +111,9 @@ export function StatCard({ label, value, sub, color, accent = false, variant = "
   }
   return (
     <Card pad="18px 20px">
-      <div style={{ fontSize: 11, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted, fontFamily: T.mono, marginBottom: 8 }}>{label}</div>
-      <div className="vula-display" style={{ fontSize: 30, fontWeight: 700, lineHeight: 1, color: color || (accent ? T.accent : T.ink) }}>{value}</div>
-      {sub && <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6, fontFamily: T.mono }}>{sub}</div>}
+      <div style={{ font: "600 var(--fs-overline)/var(--lh-overline) var(--font-sans)", letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, marginBottom: 8 }}>{label}</div>
+      <div className="vula-figure" style={{ fontSize: 22, lineHeight: 1.1, color: color || (accent ? T.accent : T.ink) }}>{value}</div>
+      {sub && <div style={{ fontSize: "var(--fs-caption)", color: T.muted, marginTop: 6 }}>{sub}</div>}
     </Card>
   );
 }
@@ -125,7 +125,7 @@ export function Badge({ children, tone = "muted", style, outline = false, text }
   return (
     <span style={{
       padding: "3px 10px", borderRadius: T.rPill, fontSize: 11, fontWeight: 600,
-      fontFamily: T.mono, color: text || c, whiteSpace: "nowrap",
+      fontFamily: "var(--font-sans)", color: text || c, whiteSpace: "nowrap",
       background: outline ? "transparent" : tone === "accent" ? T.accentSoft : `color-mix(in srgb, ${c} 8%, transparent)`,
       border: `1px solid color-mix(in srgb, ${c} ${outline ? 45 : 19}%, transparent)`, ...style,
     }}>{children}</span>
@@ -150,7 +150,7 @@ export function StatusChip({ children, tone = "muted", outline = false, style })
 export function Field({ label, hint, children, style }) {
   return (
     <label style={{ display: "block", ...style }}>
-      {label && <div style={{ fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, fontFamily: T.mono, marginBottom: 5 }}>{label}</div>}
+      {label && <div style={{ font: "500 var(--fs-label)/var(--lh-label) var(--font-sans)", color: "var(--text)", marginBottom: 5 }}>{label}</div>}
       {children}
       {hint && <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4 }}>{hint}</div>}
     </label>
