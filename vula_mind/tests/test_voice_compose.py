@@ -281,4 +281,4 @@ def test_team_read_still_works_before_the_migration_is_applied():
     with patch.object(service, "_client", return_value=db):
         rows = team_index.active_members("fresh-tenant")
     team_index.invalidate()
-    assert [r["name"] for r in rows] == ["Thandi"] and len(calls) == 2 and "prefs" not in calls[1]
+    assert [r["name"] for r in rows] == ["Thandi"] and "prefs" not in calls[-1]

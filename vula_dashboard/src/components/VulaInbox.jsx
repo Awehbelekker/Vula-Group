@@ -10,7 +10,7 @@
 import InboxV2 from './inbox/InboxV2'
 
 /** v2: the redesigned Inbox (same hooks, so the same data and actions). */
-export default function VulaInbox({ tenantId }) {
-  return <InboxV2 tenantId={tenantId} />;
+export default function VulaInbox({ tenantId, mine = false }) {
+  return <InboxV2 tenantId={tenantId} mine={mine} />;
 }
 

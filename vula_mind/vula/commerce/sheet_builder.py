@@ -39,9 +39,9 @@ MAX_ROWS = 5000
 PREVIEW_ROWS = 5
 DRAFT_DAYS = 7
 MAX_GROUPS = 300
-PERIODS = ("this_month", "last_month", "this_year", "last_year", "tax_year", "last_tax_year",
-           "last_12_months", "all")
-GROUPS = ("none", "month", "project", "supplier", "customer", "account", "status")
+PERIODS = ("this_week", "last_week", "this_month", "last_month", "this_year", "last_year", "tax_year",
+           "last_tax_year", "last_12_months", "all")
+GROUPS = ("none", "month", "project", "supplier", "customer", "account", "status", "person")
 
 
 @dataclass(frozen=True)
@@ -107,16 +107,43 @@ SOURCES: Dict[str, Source] = {
         _f(("number", "Invoice no.", "text"), ("type", "Type", "text"), ("customer", "Customer", "text"),
            ("date", "Date", "date"), ("due", "Due", "date"), ("project", "Project", "text"),
            ("excl_vat", "Excl VAT", "money"), ("vat", "VAT", "money"), ("total", "Total", "money"),
-           ("paid", "Paid", "money"), ("owed", "Still owed", "money"), ("status", "Status", "text")),
+           ("paid", "Paid", "money"), ("owed", "Still owed", "money"), ("status", "Status", "text"),
+           ("person", "Made by", "text")),
         ("number", "customer", "date", "project", "total", "paid", "owed", "status"),
-        ("period", "customer", "project", "status", "type"), "_customer_invoices", party="customer"),
+        ("period", "customer", "project", "status", "type", "person"), "_customer_invoices", party="customer"),
     "orders": Source(
         "orders", "Orders", "orders",
         _f(("number", "Order", "text"), ("date", "Date", "date"), ("customer", "Customer", "text"),
            ("channel", "Channel", "text"), ("status", "Status", "text"), ("subtotal", "Subtotal", "money"),
-           ("delivery", "Delivery", "money"), ("total", "Total", "money")),
+           ("delivery", "Delivery", "money"), ("total", "Total", "money"), ("person", "Made by", "text")),
         ("number", "date", "customer", "status", "total"),
-        ("period", "customer", "status"), "_orders", party="customer"),
+        ("period", "customer", "status", "person"), "_orders", party="customer"),
+    # 12 Nov 2026: what the team did (vula/team_activity.py) — Team access only (owners/managers).
+    "meetings": Source(
+        "meetings", "Meetings", "team",
+        _f(("date", "Date", "date"), ("time", "Time", "text"), ("person", "Who", "text"),
+           ("with", "Meeting with", "text"), ("address", "Address", "text"), ("status", "Status", "text"),
+           ("checked_in", "Checked in", "text"), ("distance_m", "Metres from address", "number")),
+        ("date", "time", "person", "with", "address", "checked_in"),
+        ("period", "person", "customer", "status"), "_meetings", party="with"),
+    "bookings": Source(
+        "bookings", "Bookings", "team",
+        _f(("date", "Date", "date"), ("time", "Time", "text"), ("person", "Booked by", "text"),
+           ("customer", "Customer", "text"), ("service", "Service", "text"), ("status", "Status", "text")),
+        ("date", "time", "person", "customer", "service", "status"),
+        ("period", "person", "customer", "status"), "_bookings", party="customer"),
+    "follow_ups": Source(
+        "follow_ups", "Follow-ups", "team",
+        _f(("date", "Due", "date"), ("person", "Who", "text"), ("text", "Follow-up", "text"),
+           ("status", "Status", "text"), ("done", "Done on", "date")),
+        ("date", "person", "text", "status", "done"),
+        ("period", "person", "status"), "_follow_ups"),
+    "meeting_notes": Source(
+        "meeting_notes", "Meeting notes", "team",
+        _f(("date", "Date", "date"), ("person", "Who", "text"), ("summary", "Summary", "text"),
+           ("actions", "Action items", "number")),
+        ("date", "person", "summary", "actions"),
+        ("period", "person"), "_meeting_notes"),
     # 13 Nov 2026 (Ian: spreadsheets out of the chat): the catalogue, one row per variant.
     "products": Source(
         "products", "Products", "products",
@@ -128,7 +155,7 @@ SOURCES: Dict[str, Source] = {
 }
 
 _GROUP_FIELD = {"month": "date", "project": "project", "supplier": "supplier", "customer": "customer",
-                "account": "account", "status": "status"}
+                "account": "account", "status": "status", "person": "person"}
 
 
 class SpecError(ValueError):
@@ -296,6 +323,9 @@ def period_range(filters: Dict[str, Any], today: Optional[date] = None) -> Tuple
     p = filters.get("period")
     if not p or p == "all":
         return None, None
+    if p in ("this_week", "last_week"):
+        monday = t - timedelta(days=t.weekday()) - timedelta(days=7 if p == "last_week" else 0)
+        return monday.isoformat(), (monday + timedelta(days=6)).isoformat()
     if p == "last_year":
         return date(t.year - 1, 1, 1).isoformat(), date(t.year - 1, 12, 31).isoformat()
     return reports.period_dates(p, today=t)
@@ -429,10 +459,12 @@ _DOC_TYPE_LABEL = {"invoice": "Invoice", "credit_note": "Credit note", "quote": 
 
 
 def _customer_invoices(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
     def make():
         q = (_db().table("commerce_invoices")
              .select("id,invoice_number,doc_type,direction,customer_name,issue_date,due_date,project,"
-                     "subtotal_cents,vat_cents,total_cents,total_paid_cents,status")
+                     "subtotal_cents,vat_cents,total_cents,total_paid_cents,status,created_by")
              .eq("tenant_id", tenant_id))
         if since:
             q = q.gte("issue_date", since)
@@ -453,14 +485,17 @@ def _customer_invoices(tenant_id, since, until, labels):
                     "date": str(r.get("issue_date") or "")[:10], "due": str(r.get("due_date") or "")[:10],
                     "project": r.get("project") or "",
                     "excl_vat": sign * abs(int(r.get("subtotal_cents") or 0)) if r.get("subtotal_cents") is not None else total - vat,
-                    "vat": vat, "total": total, "paid": paid, "owed": total - paid, "status": r.get("status") or ""})
+                    "vat": vat, "total": total, "paid": paid, "owed": total - paid, "status": r.get("status") or "",
+                    "person": who(r.get("created_by")) if r.get("created_by") else ""})
     return out
 
 
 def _orders(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
     def make():
         q = (_db().table("commerce_orders")
-             .select("id,display_id,created_at,customer_name,channel,status,subtotal_cents,delivery_cents,total_cents")
+             .select("id,display_id,created_at,customer_name,channel,status,subtotal_cents,delivery_cents,total_cents,created_by")
              .eq("tenant_id", tenant_id))
         if since:
             q = q.gte("created_at", since)
@@ -470,7 +505,118 @@ def _orders(tenant_id, since, until, labels):
     return [{"number": r.get("display_id") or "", "date": str(r.get("created_at") or "")[:10],
              "customer": r.get("customer_name") or "", "channel": r.get("channel") or "",
              "status": r.get("status") or "", "subtotal": int(r.get("subtotal_cents") or 0),
-             "delivery": int(r.get("delivery_cents") or 0), "total": int(r.get("total_cents") or 0)}
+             "delivery": int(r.get("delivery_cents") or 0), "total": int(r.get("total_cents") or 0),
+             "person": who(r.get("created_by")) if r.get("created_by") else ""}
+            for r in _pages(make)]
+
+
+def _people(tenant_id: str) -> Callable[[Any], str]:
+    """A stored WhatsApp number → the team member's name (the number itself if not on the team)."""
+    from vula.team_index import active_members, digits_za
+    names = {}
+    try:
+        names = {digits_za(m.get("whatsapp") or "")[-9:]: m.get("name") or m.get("whatsapp")
+                 for m in active_members(tenant_id) if m.get("whatsapp")}
+    except Exception:  # noqa: BLE001 — a name is never why a sheet fails
+        pass
+    emails = {}
+    try:
+        emails = {(m.get("email") or "").lower(): m.get("name") or m.get("email")
+                  for m in active_members(tenant_id) if m.get("email")}
+    except Exception:  # noqa: BLE001
+        pass
+
+    def name(who: Any) -> str:
+        w = str(who or "")
+        if "@" in w:
+            return emails.get(w.lower()) or w
+        return names.get(digits_za(w)[-9:]) or (w or "—")
+    return name
+
+
+def _sast(value: Any) -> Tuple[str, str]:
+    """('2026-11-13', '10:00') in South African time."""
+    from vula.when import SAST
+    try:
+        t = datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(SAST)
+        return t.date().isoformat(), t.strftime("%H:%M")
+    except Exception:
+        return str(value or "")[:10], ""
+
+
+def _day_bounds(q, col: str, since: Optional[str], until: Optional[str]):
+    if since:
+        q = q.gte(col, since + "T00:00:00+02:00")
+    if until:
+        q = q.lte(col, until + "T23:59:59+02:00")
+    return q
+
+
+def _meetings(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("vula_meetings").select("id,created_by,with_name,address,starts_at,status")
+                           .eq("tenant_id", tenant_id), "starts_at", since, until).order("starts_at")
+    rows = _pages(make)
+    checked: Dict[str, Dict[str, Any]] = {}
+    ids = [r["id"] for r in rows if r.get("id")]
+    for i in range(0, len(ids), 200):            # their check-ins (vula/checkins.py)
+        try:
+            for c in (_db().table("vula_checkins").select("meeting_id,at,distance_m").eq("tenant_id", tenant_id)
+                      .eq("status", "checked_in").in_("meeting_id", ids[i:i + 200]).execute().data or []):
+                checked.setdefault(c["meeting_id"], c)
+        except Exception:  # noqa: BLE001 — no check-ins table yet is not a reason to fail the sheet
+            break
+    out = []
+    for r in rows:
+        d, t = _sast(r.get("starts_at"))
+        c = checked.get(r.get("id")) or {}
+        out.append({"date": d, "time": t, "person": who(r.get("created_by")), "with": r.get("with_name") or "",
+                    "address": r.get("address") or "", "status": r.get("status") or "",
+                    "checked_in": _sast(c["at"])[1] if c.get("at") else "",
+                    "distance_m": c.get("distance_m")})
+    return out
+
+
+def _bookings(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("commerce_bookings")
+                           .select("id,booked_by,customer_name,service_name,start_at,status")
+                           .eq("tenant_id", tenant_id), "start_at", since, until).order("start_at")
+    out = []
+    for r in _pages(make):
+        d, t = _sast(r.get("start_at"))
+        out.append({"date": d, "time": t, "person": who(r.get("booked_by")) if r.get("booked_by") else "—",
+                    "customer": r.get("customer_name") or "", "service": r.get("service_name") or "",
+                    "status": r.get("status") or ""})
+    return out
+
+
+def _follow_ups(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("vula_reminders").select("id,created_by,text,due_at,status,completed_at")
+                           .eq("tenant_id", tenant_id), "due_at", since, until).order("due_at")
+    return [{"date": _sast(r.get("due_at"))[0] if r.get("due_at") else "", "person": who(r.get("created_by")),
+             "text": r.get("text") or "", "status": r.get("status") or "",
+             "done": _sast(r.get("completed_at"))[0] if r.get("completed_at") else ""}
+            for r in _pages(make)]
+
+
+def _meeting_notes(tenant_id, since, until, labels):
+    who = _people(tenant_id)
+
+    def make():
+        return _day_bounds(_db().table("vula_filed_documents").select("id,filed_by,summary,fields,created_at")
+                           .eq("tenant_id", tenant_id).eq("category", "meeting_notes"),
+                           "created_at", since, until).order("created_at")
+    return [{"date": _sast(r.get("created_at"))[0], "person": who(r.get("filed_by")),
+             "summary": r.get("summary") or "",
+             "actions": len((r.get("fields") or {}).get("action_items") or [])}
             for r in _pages(make)]
 
 
@@ -542,9 +688,12 @@ def _products(tenant_id, since, until, labels):
 _LOADERS: Dict[str, Callable] = {"_supplier_invoices": _supplier_invoices, "_supplier_lines": _supplier_lines,
                                  "_bank": _bank, "_expenses": _expenses,
                                  "_customer_invoices": _customer_invoices, "_orders": _orders,
+                                 "_meetings": _meetings, "_bookings": _bookings,
+                                 "_follow_ups": _follow_ups, "_meeting_notes": _meeting_notes,
                                  "_products": _products}
 # Left out unless the owner asks for that status: they're not real money.
-_NOT_COUNTED = {"expenses": {"cancelled", "void", "deleted"},
+_NOT_COUNTED = {"meetings": {"cancelled"}, "bookings": {"cancelled"},
+                "expenses": {"cancelled", "void", "deleted"},
                 "customer_invoices": {"cancelled", "void", "draft"},
                 "orders": {"cancelled", "abandoned", "pending_payment"},
                 "products": {"archived"}}
@@ -610,6 +759,9 @@ def rows_for(tenant_id: str, spec: Dict[str, Any], resolved: Dict[str, Any],
         if f.get("account") and _norm(f["account"]) not in _norm(f"{r.get('account')} {r.get('account_code')}"):
             continue
         if f.get("type") and _norm(f["type"]) not in _norm(f"{r.get('type')} {r.get('doc_type')}"):
+            continue
+        if f.get("person") and not all(w in _norm(r.get("person") or "").split()
+                                       for w in _norm(f["person"]).split()):
             continue
         if not _status_ok(src.id, r, f.get("status")):
             continue
@@ -744,6 +896,8 @@ def understood(spec: Dict[str, Any], resolved: Dict[str, Any], today: Optional[d
         out.append(f"• Category: {f['account']}")
     if f.get("type"):
         out.append(f"• Type: {f['type']}")
+    if f.get("person"):
+        out.append(f"• Person: {f['person']}")
     if f.get("status"):
         out.append(f"• Status: {f['status']}")
     elif spec["source"] in _NOT_COUNTED:
@@ -832,7 +986,7 @@ def _avg(field: Field, v: float) -> str:
 # ── the file ───────────────────────────────────────────────────────────────
 
 _GROUP_LABEL = {"month": "Month", "project": "Project", "supplier": "Supplier", "customer": "Customer",
-                "account": "Category", "status": "Status"}
+                "account": "Category", "status": "Status", "person": "Person"}
 _STAT_FUNC = {"count": "COUNT", "average": "AVERAGE", "min": "MIN", "max": "MAX"}
 
 

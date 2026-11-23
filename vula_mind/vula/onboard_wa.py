@@ -110,8 +110,18 @@ STEPS: List[Dict[str, str]] = [
      "q": "Send any price list, menu, brochure or document customers ask about, one at a time, so I can "
           "answer from them. Reply *done* when that's all (or *skip*)."},
     {"key": "team", "kind": "team", "label": "Team",
-     "q": "Who else in the team should use Vula? Send each person as *name, WhatsApp number, role* "
-          "(role: manager or staff), e.g. *Thandi, 082 123 4567, manager*. Reply *done* when that's everyone."},
+     "q": "Who else in the team should use Vula? Send each person as *name, WhatsApp number, role or team* "
+          "(manager, staff, or a team: sales, admin, bookkeeping, operations, marketing, field), e.g. "
+          "*Thandi, 082 123 4567, manager* or *Sipho, 083 765 4321, sales*. Reply *done* when that's everyone."},
+    # 12 Nov 2026 (Ian): the team's scheduled messages start off; the owner picks which (the
+    # question lists only the ones that fit this business — _alerts_question). Skipped when none fit.
+    {"key": "alerts", "kind": "alerts", "label": "Team messages", "q": ""},
+    # 12 Nov 2026 (Ian): notifications stay off unless the owner asked — here, or later by asking.
+    # "no" (or skip) leaves the morning brief off; a time and days switch it on (vula/owner_briefs.py).
+    {"key": "briefs", "kind": "briefs", "label": "Morning brief",
+     "q": "Would you like a short WhatsApp from me in the morning with what needs you that day (customers "
+          "waiting, follow-ups, quotes to approve, bookings) and the money paid and owed? Reply with a time "
+          "and days, e.g. *weekdays at 7* or *Mon–Sat 6:30*, or *no*. You can change it any time by asking me."},
 ]
 _BY_KEY = {s["key"]: s for s in STEPS}
 
@@ -198,7 +208,42 @@ def _applies(step: Dict[str, Any], answers: Dict[str, Any], sells: bool) -> bool
 def _steps_for(tenant_id: Optional[str], answers: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The questions this business is asked, in order."""
     sells = _sells(tenant_id)
-    return [s for s in STEPS if _applies(s, answers or {}, sells)]
+    return [s for s in STEPS if _applies(s, answers or {}, sells)
+            and (s["kind"] != "alerts" or _alert_choices(tenant_id))]
+
+
+def _alert_choices(tenant_id: Optional[str]) -> List[str]:
+    if not tenant_id:
+        return []
+    try:
+        from vula.commerce.job_config import team_message_choices
+        return team_message_choices(tenant_id)
+    except Exception:
+        return []
+
+
+def _alerts_question(tenant_id: Optional[str]) -> str:
+    from vula.commerce.job_config import TEAM_MESSAGES, get_configs, when_text
+    jobs = _alert_choices(tenant_id)
+    cfgs = get_configs(tenant_id) if tenant_id else {}
+    lines = [f"{i + 1}. {TEAM_MESSAGES[j]}" + (f" ({when_text(cfgs[j])})" if j in cfgs and cfgs[j]["kind"] != "interval" else "")
+             for i, j in enumerate(jobs)]
+    return ("Which messages should I send your team on WhatsApp? Nothing is sent unless you choose it.\n"
+            + "\n".join(lines) + "\nReply with the numbers (e.g. *1 3*), *all*, or *none*. You can change "
+            "these, and their times, any time by asking me.")
+
+
+def parse_alert_choice(text: str, count: int) -> Optional[List[int]]:
+    """'1 3' / '1,3' / 'all' / 'none' → the chosen positions (0-based), or None if unreadable."""
+    t = (text or "").strip().lower()
+    if re.match(r"^(?:none|no|nope|nothing|no thanks|neither)\b", t):
+        return []
+    if re.match(r"^(?:all|all of them|everything|yes all|both)\b", t):
+        return list(range(count))
+    nums = [int(n) for n in re.findall(r"\b\d{1,2}\b", t)]
+    if not nums or any(n < 1 or n > count for n in nums):
+        return None
+    return sorted({n - 1 for n in nums})
 
 
 def _draft(tenant_id: Optional[str], step_key: str) -> Optional[Dict[str, str]]:
@@ -227,7 +272,8 @@ def _ask(step_key: str, tenant_id: Optional[str] = None, answers: Optional[Dict[
     steps = _steps_for(tenant_id, answers)
     keys = [s["key"] for s in steps]
     n = keys.index(step_key) + 1 if step_key in keys else _index(step_key) + 1
-    text = f"*Question {n} of {len(steps)}:* {_BY_KEY.get(step_key, STEPS[0])['q']}"
+    q = _alerts_question(tenant_id) if step_key == "alerts" else _BY_KEY.get(step_key, STEPS[0])["q"]
+    text = f"*Question {n} of {len(steps)}:* {q}"
     draft = _draft(tenant_id, step_key)
     if draft:
         text += f"\n\nYour website says: “{draft['answer']}”\nReply *yes* to keep that, or send the right answer."
@@ -482,12 +528,23 @@ def parse_member(text: str) -> Optional[Dict[str, str]]:
     rest = (text[:m.start()] + " " + text[m.end():])
     role = "manager" if re.search(r"\bmanager\b", rest, re.I) else \
         "bookkeeper" if re.search(r"\b(?:bookkeeper|accounts?)\b", rest, re.I) else "staff"
+    # 12 Nov 2026: a team instead of a role ("Sipho, 082…, sales") puts them in that preset team
+    # with its tabs (vula/team_presets.py); a role word still works as before.
+    from vula import team_presets
+    parts = [p.strip() for p in re.split(r"[,;\n]", rest) if p.strip()]
+    team = team_presets.find(parts[-1]) if len(parts) >= 2 else None
+    if team and team != "bookkeeping":
+        rest = ", ".join(parts[:-1])
     name = re.sub(r"\b(?:manager|staff|bookkeeper|accounts?|role)\b", " ", rest, flags=re.I)
     name = re.sub(r"[,;:\n]+", " ", name)
     name = re.sub(r"\s+", " ", name).strip(" -.")
     if not name:
         return None
-    return {"name": name[:80], "whatsapp": phone, "role": role}
+    out = {"name": name[:80], "whatsapp": phone, "role": role}
+    if team:
+        out["team"] = team
+        out["access"] = team_presets.access_for(team, role, [])
+    return out
 
 
 async def _save(row: Dict[str, Any], step: Dict[str, str], text: str) -> Tuple[Optional[str], Optional[str]]:
@@ -556,6 +613,33 @@ async def _save(row: Dict[str, Any], step: Dict[str, str], text: str) -> Tuple[O
             ok = s.get("vat_registered") is True and s.get("vat_number") == compact
             return (f"VAT registered, number {compact}", None) if ok else (None, "I couldn't save that just now — send it again?")
         return None, "A South African VAT number has 10 digits and starts with 4. Send it again, or reply *no*."
+    if kind == "alerts":
+        from vula.commerce import job_config
+        jobs = _alert_choices(tid)
+        picked = parse_alert_choice(text, len(jobs))
+        if picked is None:
+            return None, f"Reply with the numbers from the list (1 to {len(jobs)}), *all*, or *none*."
+        want = {j: i in picked for i, j in enumerate(jobs)}
+        for j, on in want.items():
+            job_config.upsert_config(tid, j, {"enabled": on})
+        now = job_config.get_configs(tid)                 # read back
+        if any(now[j]["enabled"] != on for j, on in want.items()):
+            return None, "I couldn't save that just now — send it again?"
+        chosen = [job_config.TEAM_MESSAGES[j] for j, on in want.items() if on]
+        return ("; ".join(chosen) if chosen else "None for now — ask me any time"), None
+    if kind == "briefs":
+        from vula import owner_briefs
+        parsed = owner_briefs.parse_schedule("morning", text)
+        if parsed is None:
+            return None, "Send a time and days, e.g. *weekdays at 7*, or reply *no*."
+        try:
+            now_set = owner_briefs.save(tid, {"morning": parsed})["morning"]
+        except Exception as exc:
+            log.warning("onboarding brief choice failed for %s: %s", tid, exc)
+            return None, "I couldn't save that just now — send it again?"
+        if now_set["on"] != parsed["on"]:
+            return None, "I couldn't save that just now — send it again?"
+        return (f"On, {now_set['when']}" if now_set["on"] else "Off — ask me any time"), None
     if kind == "bank":
         b = parse_bank(text)
         if not b:
@@ -656,14 +740,27 @@ async def _add_member(row: Dict[str, Any], text: str) -> Tuple[Optional[str], Op
         return None, ("Send each person as *name, WhatsApp number, role*, e.g. *Thandi, 082 123 4567, "
                       "manager*, or reply *done*.")
     tid = row["tenant_id"]
-    _db().table("vula_team_members").upsert({**m, "tenant_id": tid, "active": True},
-                                            on_conflict="tenant_id,whatsapp").execute()
+    try:
+        _db().table("vula_team_members").upsert({**m, "tenant_id": tid, "active": True},
+                                                on_conflict="tenant_id,whatsapp").execute()
+    except Exception:
+        if "team" not in m:
+            raise
+        m = {k: v for k, v in m.items() if k != "team"}       # migration 280 not applied yet
+        _db().table("vula_team_members").upsert({**m, "tenant_id": tid, "active": True},
+                                                on_conflict="tenant_id,whatsapp").execute()
     from vula import team_index
     team_index.invalidate(tid)
     back = team_index.member_for_phone(tid, m["whatsapp"])
     if not back:
         return None, "I couldn't add them just now — send it again?"
-    return f"{back.get('name')} ({back.get('whatsapp')}, {back.get('role')})", None
+    team = team_presets_label(back.get("team"))
+    return f"{back.get('name')} ({back.get('whatsapp')}, {team or back.get('role')})", None
+
+
+def team_presets_label(team: Optional[str]) -> Optional[str]:
+    from vula import team_presets
+    return (team_presets.TEAMS.get(team or "") or {}).get("label")
 
 
 # ── The conversation ───────────────────────────────────────────────────────────────────────────
@@ -695,6 +792,7 @@ async def _advance(row: Dict[str, Any], answers: Dict[str, Any], prefix: str) ->
     nxt = _next_key(row.get("step") or STEPS[0]["key"])
     sells = _sells(row["tenant_id"])
     while nxt and (not _applies(_BY_KEY[nxt], answers, sells)
+                   or (nxt == "alerts" and not _alert_choices(row["tenant_id"]))
                    or await _already_answered(row["tenant_id"], nxt, answers)):
         if nxt == "logo" and not answers.get("logo"):
             answers = {**answers, "logo": "From the website"}
