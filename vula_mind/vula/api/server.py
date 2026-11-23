@@ -1651,6 +1651,13 @@ async def _books_health_loop() -> None:
     await run_forever()
 
 
+async def _management_pack_loop() -> None:
+    """Hourly: from 08:00 SAST on the 5th, last month's management accounts to the owners of every
+    business with the switch on, once each. See vula/management_send.py."""
+    from vula.management_send import run_forever
+    await run_forever()
+
+
 async def _statement_backfill_loop() -> None:
     """Every ten minutes: a business that asked for it (features.statement_backfill) gets the bank
     statements behind its lines filed under their accounts, once. See vula/commerce/statement_files.py."""
@@ -1844,6 +1851,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_statement_backfill_loop()))
     # Courier bookings still on their way: what the courier says, hourly (2026-11-23).
     _scheduled_job_tasks.append(_asyncio.create_task(_courier_tracking_loop()))
+    # Last month's management accounts to the owners, around the 5th (2026-11-23).
+    _scheduled_job_tasks.append(_asyncio.create_task(_management_pack_loop()))
     # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
     _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
     # Right answers from each business's own records, after every deploy (2026-11-16).
@@ -2097,11 +2106,32 @@ _TENANT_GUARD_PUBLIC = [
 # rest of the admin API is still membership-only (see docs/ux-redesign-audit.md §1).
 _MONEY_TABS = frozenset({"invoices", "expenses", "bank", "books", "payments", "taptopay",
                          "budget", "scanner", "finances"})
+_WRITES = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _SECTION_RULES = [
     # (methods or None for all, path regex, tab ids that grant it)
+    # 23 Nov 2026 audit: the business's settings and connections — owner and managers only. Any
+    # member could change the bank details printed on invoices (invoice-settings isn't under
+    # invoices/), opening hours, delivery fees and payment methods, the assistant's voice, the
+    # shop and link domains, store connections, payment gateway keys, and disconnect WhatsApp or
+    # a mailbox; the screens were hidden in the browser only. Reading stays as it was. First in
+    # the list: the first rule that matches decides.
+    (_WRITES, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoice-settings|order-settings|business-profile|"
+                         r"persona|learned-answers|wa-profile|shop-domain|link-domain|shopify|woocommerce|"
+                         r"brand|ai/topup)(?:/|$)"), frozenset()),
+    (_WRITES, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/providers(?:/|$)"), frozenset()),
+    (_WRITES, re.compile(r"^/v1/(?:whatsapp/(?:disconnect|numbers)|email/(?:disconnect|set-primary)|"
+                         r"yoco/disconnect|connections)/"), frozenset()),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoices|invoice-clients|invoice-items|"
                       r"recurring-invoices|quotes|bank|accounts|finances)(?:/|$)"), _MONEY_TABS),
-    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports(?:/|$)"), _MONEY_TABS | {"labour"}),
+    # 23 Nov 2026: Sell › Sales reports — sales by day and best sellers only (the bare route;
+    # P&L, VAT and the rest of reports/ stay Money access).
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports/?$"), _MONEY_TABS | {"labour", "salesreports"}),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports(?:/|$)"), _MONEY_TABS | {"labour", "management"}),
+    # 23 Nov 2026: Sell › Reviews. The Google review link goes out on the business's number, and
+    # sending the WhatsApp catalogue changes what every customer sees: owner and managers only.
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reviews/settings/?$"), frozenset()),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reviews/?$"), frozenset({"reviews", "orders", "customers"})),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/meta-catalog/sync/?$"), frozenset()),
     # a rep's own expenses tab reads the same endpoint (VulaExpenses defaultPaidBy)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/expenses(?:/|$)"), _MONEY_TABS | {"rep-expenses"}),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/expense-sheet(?:/|$)"),

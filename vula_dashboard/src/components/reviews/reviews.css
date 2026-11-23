@@ -1,0 +1,25 @@
+/* reviews.css — Sell › Reviews (reviews/ReviewsV2.jsx). Tokens only; every text holder wraps. */
+.vrv { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.vrv-sub { margin: 0; font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; }
+.vrv-h { margin: 0; font-size: var(--fs-h3, 1rem); color: var(--ink); }
+.vrv-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.vrv-ok { margin: 0; font-size: var(--fs-body); color: var(--ok-text); }
+.vrv-error { margin: 0; font-size: var(--fs-body); color: var(--danger-text); }
+.vrv-summary { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); align-items: center; }
+.vrv-avg { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.vrv-avg-n { font-size: 2.5rem; font-weight: 700; line-height: 1; color: var(--ink); }
+.vrv-stars { display: inline-flex; gap: 2px; }
+.vrv-star--on { color: var(--warn); fill: var(--warn); }
+.vrv-star--off { color: var(--line); }
+.vrv-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.vrv-bar { display: grid; grid-template-columns: 3em 1fr 3em; align-items: center; gap: var(--space-2); font-size: var(--fs-caption); color: var(--ink); }
+.vrv-bar-track { height: 8px; border-radius: 4px; background: var(--surface-alt, var(--line)); overflow: hidden; }
+.vrv-bar-fill { display: block; height: 100%; background: var(--warn); }
+.vrv-bar-n { text-align: right; color: var(--muted); }
+.vrv-link { display: flex; flex-direction: column; gap: var(--space-2); }
+.vrv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.vrv-list > li { min-width: 0; }
+.vrv-item { display: flex; flex-direction: column; gap: var(--space-1); height: 100%; box-sizing: border-box; }
+.vrv-date { margin-left: auto; }
+.vrv-who { margin: 0; font-weight: 600; font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.vrv-comment { margin: 0; font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }

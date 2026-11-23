@@ -16,7 +16,7 @@ import logging
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from vula.api.tenant_auth import member_scope, require_tenant_admin
@@ -96,8 +96,13 @@ async def list_teams(tenant: str) -> dict:
     return {"teams": team_presets.presets()}
 
 
+# 23 Nov 2026 audit: every member could read every colleague's WhatsApp number, email and
+# birthday. Someone who isn't an owner or manager gets what the inbox's "assign to" needs.
+_PUBLIC_MEMBER = ("id", "name", "role", "team", "active", "calendar_connected")
+
+
 @router.get("/{tenant}")
-async def list_members(tenant: str) -> dict:
+async def list_members(tenant: str, request: Request = None) -> dict:  # type: ignore[assignment]
     try:
         rows = (_client().table("vula_team_members").select("*")
                 .eq("tenant_id", tenant).order("created_at").execute().data or [])
@@ -111,6 +116,11 @@ async def list_members(tenant: str) -> dict:
         connected = {}
     for r in rows:
         r["calendar_connected"] = str(r.get("id")) in connected
+    from vula.api.tenant_auth import member_scope, scope_allows
+    scope = (await member_scope(request.headers.get("authorization", ""), tenant)) if request is not None else None
+    if scope is not None and not scope_allows(scope, frozenset()):
+        mine = str(((scope.get("member") or {}).get("id")) or "")
+        rows = [r if str(r.get("id")) == mine else {k: r.get(k) for k in _PUBLIC_MEMBER} for r in rows]
     return {"tenant_id": tenant, "members": rows, "count": len(rows)}
 
 
@@ -131,6 +141,8 @@ async def add_member(tenant: str, body: MemberIn,
             row["access"] = team_presets.access_for(team, row.get("role"), [])
     else:
         row.pop("team", None)                  # works before migration 280 too
+    from vula.api.tenant_auth import normalize_access
+    row["access"] = normalize_access(row.get("role"), row.get("access"))
     try:
         res = _client().table("vula_team_members").upsert(
             row, on_conflict="tenant_id,whatsapp").execute()
@@ -204,6 +216,16 @@ async def update_member(tenant: str, member_id: str, body: MemberPatch,
             cur = (_client().table("vula_team_members").select("role,access").eq("id", member_id)
                    .eq("tenant_id", tenant).limit(1).execute().data or [{}])[0]
             patch["access"] = team_presets.access_for(team, patch.get("role") or cur.get("role"), cur.get("access"))
+    if "access" in patch or "role" in patch:
+        from vula.api.tenant_auth import normalize_access
+        cur = (_client().table("vula_team_members").select("role,access").eq("id", member_id)
+               .eq("tenant_id", tenant).limit(1).execute().data or [{}])[0]
+        role = patch.get("role") or cur.get("role")
+        if "access" in patch:
+            patch["access"] = normalize_access(role, patch["access"])
+        elif not normalize_access(role, cur.get("access")) == list(cur.get("access") or []):
+            # made a non-manager while holding no tabs: that used to mean full access
+            patch["access"] = normalize_access(role, cur.get("access"))
     patch["updated_at"] = "now()"
     try:
         _client().table("vula_team_members").update(patch).eq("id", member_id).eq("tenant_id", tenant).execute()

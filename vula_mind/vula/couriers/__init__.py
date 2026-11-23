@@ -510,7 +510,7 @@ def list_providers(tenant_id: str) -> list:
                 .select("id,provider,mode,is_default,active,webhook_token,credentials,updated_at")
                 .eq("tenant_id", tenant_id).execute().data or [])
     except Exception as exc:
-        logger.debug("courier providers list skipped (run migration 296?): %s", exc)
+        logger.debug("courier providers list skipped (run migration 297?): %s", exc)
         return []
     for r in rows:
         creds = _decrypt(r.pop("credentials", {}))

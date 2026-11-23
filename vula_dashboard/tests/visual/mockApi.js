@@ -142,9 +142,32 @@ function routes(role, modules = [], features = []) {
     r("GET", `${A}/bank/transactions\\.csv`, () => ({ __raw: { status: 200, contentType: "text/csv", body: "Date,Account\n" } })),
     r("GET", `^/v1/payments/${T}/providers`, () => F.paymentProviders),
     r("GET", `${A}/discount-codes`, () => ({ discount_codes: F.discountCodes })),
+    r("GET", `${A}/reviews`, () => F.reviews),
+    r("POST", `${A}/reviews/settings`, (m, url, req) => {
+      const u = (req.postDataJSON() || {}).google_review_url || "";
+      return u && !/^https:\/\/(g\.page|search\.google\.com|maps\.app\.goo\.gl)\//.test(u)
+        ? { __raw: { status: 400, contentType: "application/json", body: JSON.stringify({ detail: "That isn't a Google review link." }) } }
+        : { ok: true, google_review_url: u };
+    }),
+    r("GET", `${A}/meta-catalog`, () => ({ connected: true })),
+    r("POST", `${A}/meta-catalog/sync`, () => ({ ok: true, synced: 8, message: "8 products sent to your WhatsApp catalogue. WhatsApp can take a few minutes to show them." })),
     r("GET", `${A}/delivery-list`, () => F.deliveryList),
     r("GET", `^/v1/subscriptions/${T}`, () => ({ subscriptions: F.recurringSubs })),
     r("GET", `${A}/finances/insights`, () => F.financeInsights),
+    // 23 Nov 2026: management accounts (Money access, or the accountant) and Home's financial position
+    r("GET", `${A}/reports/management\\.(pdf|xlsx)`, (m, url) => { const kind = m[m.length - 1]; return booksViewer
+      ? { __raw: { status: 200, contentType: kind === "pdf" ? "application/pdf" : "application/octet-stream",
+          body: kind === "pdf" ? "%PDF-1.4\n" : "PK", headers: { "content-disposition":
+            `attachment; filename="Management_accounts_${url.searchParams.get("month") || "2026-10"}.${kind}"`,
+            "access-control-expose-headers": "content-disposition" } } }
+      : booksOff; }),
+    r("GET", `${A}/reports/management`, (m, url) => {
+      if (!booksViewer) return booksOff;
+      const month = url.searchParams.get("month") || "2026-10";
+      if (month < "2026-08") return { __raw: { status: 400, contentType: "application/json", body: '{"detail":"the business\'s books start in August 2026"}' } };
+      return F.managementPack(month);
+    }),
+    r("GET", `${A}/reports/position`, () => (booksViewer ? F.financialPosition : booksOff)),
     r("GET", `${A}/reports/aged-creditors`, () => ({ as_at: "2026-10-17", total_cents: 1_275_050, count: 2,
       aging: { current: 412_850, days_1_30: 862_200, days_31_60: 0, days_61_90: 0, days_90_plus: 0 }, suppliers: [] })),
     r("GET", `${A}/reports/trial-balance`, (m, url) => (features.includes("books_v2")

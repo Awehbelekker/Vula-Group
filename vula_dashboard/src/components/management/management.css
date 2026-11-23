@@ -1,0 +1,32 @@
+/* management.css — Money › Management accounts (23 Nov 2026). Tokens only; every flex child holding
+   text gets min-width: 0 and wraps, so nothing pushes the page sideways on a phone. */
+.vma-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4, 16px); min-width: 0; }
+.vma-panel { min-width: 0; }
+.vma-head { display: flex; flex-wrap: wrap; gap: var(--space-3, 12px); justify-content: space-between;
+  align-items: flex-start; margin-bottom: var(--space-3, 12px); min-width: 0; }
+.vma-text { min-width: 0; overflow-wrap: anywhere; }
+.vma-h { font-size: var(--fs-h3, 17px); margin: 0 0 var(--space-2, 8px); overflow-wrap: anywhere; }
+.vma-h4 { font-size: var(--fs-body, 14px); margin: var(--space-3, 12px) 0 var(--space-2, 8px); }
+.vma-sub { color: var(--muted); font-size: var(--fs-body, 14px); margin: 0; overflow-wrap: anywhere; }
+.vma-total { margin-top: var(--space-2, 8px); }
+.vma-actions { display: inline-flex; flex-wrap: wrap; gap: var(--space-2, 8px); }
+.vma-month { min-width: 0; max-width: 100%; }
+.vma-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.vma-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: var(--space-2, 8px); min-width: 0; }
+.vma-tiles--small { margin-top: var(--space-2, 8px); }
+.vma-tile { display: grid; gap: 2px; padding: var(--space-3, 12px); border: 1px solid var(--surface-2);
+  border-radius: var(--radius, 8px); min-width: 0; }
+.vma-tile-label { color: var(--muted); font-size: var(--fs-small, 13px); overflow-wrap: anywhere; }
+.vma-tile-value { font-size: var(--fs-h3, 17px); font-weight: 600; overflow-wrap: anywhere; }
+.vma-tile--good .vma-tile-value { color: var(--ok-text); }
+.vma-tile--bad .vma-tile-value { color: var(--danger-text); }
+.vma-notes { margin: 0; padding-left: var(--space-4, 16px); display: grid; gap: var(--space-1, 4px);
+  font-size: var(--fs-body, 14px); min-width: 0; overflow-wrap: anywhere; }
+.vma-row-head, .vma-row-total { font-weight: 600; }
+.vma-strong { font-weight: 600; }
+.vma-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: var(--space-4, 16px); min-width: 0; }
+.vma-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1, 4px); min-width: 0; }
+.vma-li { display: flex; justify-content: space-between; gap: var(--space-2, 8px); min-width: 0;
+  border-bottom: 1px solid var(--surface-2); padding: var(--space-1, 4px) 0; font-size: var(--fs-body, 14px); }

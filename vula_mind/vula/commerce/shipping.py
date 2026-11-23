@@ -12,7 +12,7 @@ Rules this keeps:
     `book` is given that price back (`expected_cents`) and re-quotes first — a price that moved
     is refused with the new one, never booked at a figure nobody saw.
   * One live booking per order. The row is written before the courier is called (status
-    `booking`, unique per order — migration 296), so a double click or two people can't book
+    `booking`, unique per order — migration 297), so a double click or two people can't book
     twice, and a call that died half way leaves a row saying so.
   * Verified, not reported: a booking is read back from the courier before it's called booked.
     A cancellation is read back too.
@@ -169,7 +169,7 @@ def get_settings(tenant_id: str) -> dict:
         rows = (_db().table("commerce_courier_settings").select("*")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
     except Exception as exc:  # noqa: BLE001
-        log.debug("courier settings read skipped (run migration 296?): %s", exc)
+        log.debug("courier settings read skipped (run migration 297?): %s", exc)
         rows = []
     r = rows[0] if rows else {}
     return {"collection_address": r.get("collection_address"), "collection_contact": r.get("collection_contact"),
@@ -273,7 +273,7 @@ def shipments_for(tenant_id: str, order_id: str) -> List[dict]:
         rows = (_db().table("commerce_shipments").select("*").eq("tenant_id", tenant_id)
                 .eq("order_id", order_id).order("created_at", desc=True).limit(20).execute().data or [])
     except Exception as exc:  # noqa: BLE001
-        log.debug("shipments read skipped (run migration 296?): %s", exc)
+        log.debug("shipments read skipped (run migration 297?): %s", exc)
         return []
     return [_public(r) for r in rows]
 
@@ -669,7 +669,7 @@ async def refresh_open(max_rows: int = 200, older_than_minutes: int = 50) -> Dic
                 .eq("open", True).gte("created_at", cutoff).order("last_checked_at", desc=False)
                 .limit(max_rows).execute().data or [])
     except Exception as exc:  # noqa: BLE001
-        log.debug("open shipments read skipped (run migration 296?): %s", exc)
+        log.debug("open shipments read skipped (run migration 297?): %s", exc)
         return {"checked": 0, "failed": 0}
     checked = failed = 0
     for r in rows:

@@ -31,6 +31,8 @@ PAGES = {
     "reports/pnl": "Profit and loss", "reports/vat": "VAT", "reports/ledger": "General ledger",
     "reports/ledger.csv": "General ledger (CSV)", "reports/statements": "Financial statements",
     "reports/trial-balance": "Trial balance", "reports/aged-creditors": "Aged creditors",
+    "reports/management": "Management accounts", "reports/position": "Financial position", "reports/management.pdf": "Management accounts (PDF)",
+    "reports/management.xlsx": "Management accounts (Excel)",
     "reports/vat-scenario": "VAT check", "accounts": "Chart of accounts",
     "bank/transactions": "Bank lines", "bank/reconciliation": "Bank reconciliation",
     "bank/accounts": "Bank accounts", "invoices": "Invoices", "invoices/:id/pdf": "Invoice PDF",

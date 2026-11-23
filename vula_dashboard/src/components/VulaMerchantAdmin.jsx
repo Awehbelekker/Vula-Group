@@ -41,6 +41,7 @@ import { escapeHtml as esc } from '../lib/html'
 const DeliveryV2 = lazyScreen(() => import('./delivery/DeliveryV2'))
 const VulaBankRec = lazyScreen(() => import('./VulaBankRec'))
 const BooksReview = lazyScreen(() => import('./booksreview/BooksReview'))
+const ManagementAccounts = lazyScreen(() => import('./management/ManagementAccounts'))
 const VulaAccounting = lazyScreen(() => import('./VulaAccounting'))
 const VulaLabour = lazyScreen(() => import('./VulaLabour'))
 const VulaExpenses = lazyScreen(() => import('./VulaExpenses'))
@@ -66,6 +67,7 @@ const VulaTeam = lazyScreen(() => import('./VulaTeam'))
 const VulaProjectWorkspace = lazyScreen(() => import('./VulaProjectWorkspace'))
 const VulaFieldOps = lazyScreen(() => import('./VulaFieldOps'))
 const VulaReports = lazyScreen(() => import('./VulaReports'))
+const ReviewsV2 = lazyScreen(() => import('./reviews/ReviewsV2'))
 
 const VulaClientOnboarding = lazyScreen(() => import('./VulaClientOnboarding'))
 
@@ -265,6 +267,8 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
       {active === 'costing' && <VulaCosting tenantId={tenantId} />}
       {active === 'suppliers' && (<SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
       {active === 'import' && <VulaImport tenantId={tenantId} />}
+      {active === 'reviews' && <ReviewsV2 tenantId={tenantId} />}
+      {active === 'salesreports' && <VulaReports tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
   )
@@ -281,6 +285,7 @@ function MoneySection({ tenantId, products, subtabs, pendingSubtab, onConsumePen
       {active === 'expenses' && <VulaExpenses tenantId={tenantId} />}
       {active === 'bank' && <VulaBankRec tenantId={tenantId} />}
       {active === 'books' && <VulaAccounting tenantId={tenantId} />}
+      {active === 'management' && <ManagementAccounts tenantId={tenantId} />}
       {active === 'booksreview' && <BooksReview tenantId={tenantId} />}
       {active === 'payments' && <VulaPayments tenantId={tenantId} />}
       {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} />}

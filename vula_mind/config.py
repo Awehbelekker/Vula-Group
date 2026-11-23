@@ -594,6 +594,8 @@ class Settings(BaseSettings):
     # One trusted book (Phase 1 of Xero-quality books, migration 288): per business via
     # vula_tenant_config.features, never on for everyone before each business's audit is signed off.
     books_v2_enabled: bool = False
+    # The month's management accounts sent to the owners around the 5th (vula/management_send.py)
+    management_accounts_enabled: bool = False
     open_chat_per_hour: int = 60          # messages per person per hour in the open chat
     research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
     # Cut the research prompt to fit the local model so Vula's own model writes it; off = the

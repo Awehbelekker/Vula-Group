@@ -1,4 +1,4 @@
--- 296_couriers.sql — book a courier from an order (23 Nov 2026).
+-- 297_couriers.sql — book a courier from an order (23 Nov 2026).
 --
 -- A business connects its own courier account (The Courier Guy, PUDO lockers), the way it connects
 -- its own payment gateway: the courier bills the business, Vula never holds the delivery money.

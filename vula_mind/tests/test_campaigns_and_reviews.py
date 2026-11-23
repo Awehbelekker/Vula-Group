@@ -38,10 +38,14 @@ async def test_review_from_another_number_does_not_touch_the_order():
     q = _chain([{"customer_phone": "27821112222", "review_rating": None}])
     db = MagicMock()
     db.table.return_value = q
-    with patch.object(commerce.service, "_client", return_value=db):
+    from fastapi import HTTPException
+    # 23 Nov 2026: refused outright now, not quietly kept (tests/test_reviews_1123.py)
+    with patch.object(commerce.service, "_client", return_value=db), pytest.raises(HTTPException) as e:
         await commerce.create_review("t1", commerce.ReviewIn(rating=1, order_id="o1",
                                                              customer_phone="27830000000"))
+    assert e.value.status_code == 404
     assert not any(c.args and c.args[0] == {"review_rating": 1} for c in q.update.call_args_list)
+    q.insert.assert_not_called()
 
 
 @pytest.mark.asyncio
