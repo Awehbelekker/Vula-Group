@@ -172,6 +172,9 @@ class _Sheet:
         return self.formula(col, f"=SUM({letter}{first}:{letter}{last})" if last >= first else "=0", cents)
 
 
+Sheet = _Sheet      # shared with the monthly management pack (vula/commerce/management_pack.py)
+
+
 def _sub(y: Dict[str, Any], what: str) -> str:
     tail = "" if y["ended"] else f" — the year hasn't ended: figures to {y['until']}"
     return f"{what}{tail}"

@@ -18,6 +18,8 @@ import {
   Button, Card, DataTable, EmptyState, ErrorCard, Field, Input, PillTabs, Select, Skeleton, StatusChip,
 } from "../ui/index.jsx";
 import FinanceFolders, { YearEndPack } from "../documents/FinanceFolders";
+import { ManagementDownloads } from "../management/ManagementDownloads.jsx";
+import { monthLabel, monthsFrom } from "../management/useManagementAccounts.js";
 import { useBankLines, useClients, useInvoiceList, useOverview, useReports } from "./useAccountant";
 import "./accountant.css";
 
@@ -124,6 +126,7 @@ function Reports({ tenantId }) {
         <Button Icon={Download} onClick={r.ledgerCsv}>General ledger (CSV)</Button>
         <Button Icon={Download} variant="secondary" onClick={r.statementsPdf}>Financial statements (PDF)</Button>
       </Card>
+      <ManagementCard tenantId={tenantId} />
       {r.state === "loading" && <Card><Skeleton lines={6} /></Card>}
       {r.state === "off" && <Off />}
       {r.state === "failed" && <ErrorCard what="the reports" />}
@@ -164,6 +167,28 @@ function Reports({ tenantId }) {
           </div>
         </>)}
     </div>
+  );
+}
+
+/** The month's management accounts as the owners get them (23 Nov 2026), PDF or Excel. */
+function ManagementCard({ tenantId }) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 12, 1);
+  const months = monthsFrom(`${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`, now).slice(1);
+  const [month, setMonth] = useState(months[0]);
+  return (
+    <Card className="vac-card vac-pad">
+      <h2 className="vac-h">Management accounts</h2>
+      <p className="vac-sub">The month against the month before and the year to date, cash per account, what was owed at the month end and notes — as the owners receive it.</p>
+      <div className="vac-range">
+        <Field label="Month">
+          <Select aria-label="Month for the management accounts" value={month} onChange={(e) => setMonth(e.target.value)}>
+            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </Select>
+        </Field>
+        <ManagementDownloads tenantId={tenantId} month={month} />
+      </div>
+    </Card>
   );
 }
 

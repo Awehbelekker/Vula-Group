@@ -4127,6 +4127,56 @@ async def admin_report_aged_creditors(tenant_id: str, as_at: Optional[str] = Non
 
 
 
+@router.get("/{tenant_id}/admin/reports/management")
+async def admin_report_management(tenant_id: str, month: Optional[str] = None):
+    """The month's management accounts (23 Nov 2026): the month against last month (and the same month
+    last year when the business traded then), the year to date, cash per account, what's owed both
+    ways, VAT, key figures and notes — all worked out in code (vula/commerce/management_pack.py)."""
+    import asyncio as _a
+    from vula.commerce import management_pack as mp
+    try:
+        f = await _a.to_thread(mp.figures, tenant_id, (month or "").strip() or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return mp.public(f)
+
+
+@router.get("/{tenant_id}/admin/reports/position")
+async def admin_report_position(tenant_id: str):
+    """Where the business stands now (the Home "Financial position" card): bank balance per account,
+    owed both ways, profit and VAT so far this month."""
+    import asyncio as _a
+    from vula.commerce import management_pack as mp
+    return await _a.to_thread(mp.position, tenant_id)
+
+
+async def _management_file(tenant_id: str, month: Optional[str], kind: str):
+    import asyncio as _a
+    from fastapi.responses import Response
+    from vula.commerce import management_pack as mp
+    try:
+        f = await _a.to_thread(mp.figures, tenant_id, (month or "").strip() or None)
+        data = await _a.to_thread(mp.pdf if kind == "pdf" else mp.workbook, f)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:                     # didn't read back: nothing handed out
+        raise HTTPException(status_code=422, detail=str(exc))
+    media = ("application/pdf" if kind == "pdf"
+             else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return Response(content=data, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{mp.filename(f, kind)}"'})
+
+
+@router.get("/{tenant_id}/admin/reports/management.pdf")
+async def admin_report_management_pdf(tenant_id: str, month: Optional[str] = None):
+    return await _management_file(tenant_id, month, "pdf")
+
+
+@router.get("/{tenant_id}/admin/reports/management.xlsx")
+async def admin_report_management_xlsx(tenant_id: str, month: Optional[str] = None):
+    return await _management_file(tenant_id, month, "xlsx")
+
+
 @router.get("/{tenant_id}/admin/boq-template.xlsx")
 async def admin_boq_template(tenant_id: str):
     """A branded Bill of Quantities workbook priced from the tenant's own price book

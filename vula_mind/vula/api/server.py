@@ -1643,6 +1643,13 @@ async def _books_health_loop() -> None:
     await run_forever()
 
 
+async def _management_pack_loop() -> None:
+    """Hourly: from 08:00 SAST on the 5th, last month's management accounts to the owners of every
+    business with the switch on, once each. See vula/management_send.py."""
+    from vula.management_send import run_forever
+    await run_forever()
+
+
 async def _statement_backfill_loop() -> None:
     """Every ten minutes: a business that asked for it (features.statement_backfill) gets the bank
     statements behind its lines filed under their accounts, once. See vula/commerce/statement_files.py."""
@@ -1834,6 +1841,8 @@ def _start_scheduled_job_tasks() -> None:
     # The one trusted book: retries hourly, checks daily (2026-11-18).
     _scheduled_job_tasks.append(_asyncio.create_task(_books_health_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_statement_backfill_loop()))
+    # Last month's management accounts to the owners, around the 5th (2026-11-23).
+    _scheduled_job_tasks.append(_asyncio.create_task(_management_pack_loop()))
     # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
     _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
     # Right answers from each business's own records, after every deploy (2026-11-16).
@@ -2107,7 +2116,7 @@ _SECTION_RULES = [
     # 23 Nov 2026: Sell › Sales reports — sales by day and best sellers only (the bare route;
     # P&L, VAT and the rest of reports/ stay Money access).
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports/?$"), _MONEY_TABS | {"labour", "salesreports"}),
-    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports(?:/|$)"), _MONEY_TABS | {"labour"}),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports(?:/|$)"), _MONEY_TABS | {"labour", "management"}),
     # 23 Nov 2026: Sell › Reviews. The Google review link goes out on the business's number, and
     # sending the WhatsApp catalogue changes what every customer sees: owner and managers only.
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/reviews/settings/?$"), frozenset()),

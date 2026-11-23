@@ -268,3 +268,16 @@ def test_a_year_of_more_than_a_thousand_bank_lines_is_read_whole(db):
     data, _m = yep.build_workbook(T, "2026-03-01")          # the months add up to the year
     cov = sf.coverage(T, date(2026, 3, 1), date(2027, 2, 28))
     assert sum(m["lines"] for a in cov["accounts"] for m in a["months"]) == 1200
+
+
+def test_management_accounts_on_the_one_book_read_the_journal(db):
+    """The monthly management pack (management_pack.py) reads the same journal as this pack."""
+    from vula.commerce import management_pack as mp
+    f = mp.figures(T, "2026-10", today=date(2027, 3, 15))
+    assert f["source"] == "journal"
+    assert f["pnl"]["totals"]["this"]["net_cents"] == accounting.pnl(T, "2026-10-01", "2026-10-31", "accrual")["net_profit_cents"]
+    assert [a["account"] for a in f["cash"]["accounts"]] == [r["account"] for r in
+                                                             books_reports.cash_by_account(T, "2026-10-01", "2026-10-31")]
+    assert f["vat"] is not None                                    # VAT registered in this set
+    mp.workbook(f)                                                 # reads back
+    assert NUMBER not in mp.summary_text(f)
