@@ -220,6 +220,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("294", "commerce_bank_transactions", "pop_options"),
     ("295", "commerce_scheduled_job_config", "settings"),
     ("296", "vula_tenant_config", "google_review_url"),
+    ("297", "commerce_shipments", "open"),               # courier bookings (vula/commerce/shipping.py)
 ]
 
 
