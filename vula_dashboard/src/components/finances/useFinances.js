@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
 import { toast } from "../ui/index.jsx";
 
 export const INSIGHT_PERIODS = [{ d: 7, l: "7 days" }, { d: 30, l: "30 days" }, { d: 90, l: "90 days" }];
@@ -19,12 +20,16 @@ export function useFinanceInsights(tenantId) {
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState("");
   const [asking, setAsking] = useState(false);
+  const [error, setError] = useState("");
 
+  // A refused or failed load is null + error (the screen says it couldn't load), never a
+  // half-empty snapshot that crashes on its first figure.
   const load = useCallback(async () => {
     setLoading(true); setSummary("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/finances/insights?days=${days}`)
-      .then(r => r.json()).catch(() => null);
-    setD(r); setLoading(false);
+    try {
+      const r = await tryApi(`/v1/commerce/${tenantId}/admin/finances/insights?days=${days}`);
+      setD(r.ok ? r.data : null); setError(r.ok ? "" : r.error);
+    } finally { setLoading(false); }
   }, [tenantId, days]);
 
   useEffect(() => { load(); }, [load]);
@@ -37,7 +42,7 @@ export function useFinanceInsights(tenantId) {
     setAsking(false);
   };
 
-  return { days, setDays, d, loading, summary, asking, askVula };
+  return { days, setDays, d, loading, error, reload: load, summary, asking, askVula };
 }
 
 /** Sales over the last N days: totals, the daily revenue trend and the top products. */
@@ -73,20 +78,22 @@ export function useLedger(tenantId) {
   const [detail, setDetail] = useState(null);
   const [tb, setTb] = useState(null);
   const [tbOpen, setTbOpen] = useState(false);
+  const [error, setError] = useState("");
 
   const loadTrialBalance = useCallback(async () => {
     if (!tenantId) return;
     // A business on the one book: the view chosen in Money › Books (accrual unless cash), per viewer.
     let basis = "accrual";
     try { if (localStorage.getItem("vula.books.basis") === "cash") basis = "cash"; } catch { /* private window */ }
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/trial-balance?basis=${basis}`);
-    setTb(await r.json());
+    const r = await tryApi(`/v1/commerce/${tenantId}/admin/reports/trial-balance?basis=${basis}`);
+    setTb(r.ok ? { ...r.data, accounts: r.data.accounts || [] } : { error: r.error });
   }, [tenantId]);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
-    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/finances`);
-    setData(await r.json());
+    const r = await tryApi(`/v1/projects/${tenantId}/finances`);
+    if (r.ok) { setData({ projects: [], transactions: [], ...r.data }); setError(""); }
+    else setError(r.error);   // the last good figures (or the empty shape) stay; the screen says it failed
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
 
@@ -129,7 +136,8 @@ export function useLedger(tenantId) {
   };
 
   const certifyClaim = async (project, claimId) => {
-    await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims/${claimId}/certify`, { method: "POST" });
+    const r = await tryApi(`/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims/${claimId}/certify`, { method: "POST" });
+    if (!r.ok) toast(`Couldn't certify this claim: ${r.error}`, "danger");
     refreshProject(project);
   };
 
@@ -151,27 +159,28 @@ export function useLedger(tenantId) {
   const saveContract = async (project) => {
     const total = Number(contractDraft);
     if (!total) return;
-    await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ total }),
+    const res = await tryApi(`/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`, {
+      method: "POST", body: { total },
     });
+    if (!res.ok) { toast(`Couldn't save the contract value: ${res.error}`, "danger"); return; }
     setContractDraft("");
     const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
     setDetail(r); load();
   };
 
   const saveBudget = async (project) => {
-    await fetch(`${VULA_API}/v1/projects/${tenantId}/budget`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project, budget: Number(budget) || 0 }),
+    const res = await tryApi(`/v1/projects/${tenantId}/budget`, {
+      method: "POST", body: { project, budget: Number(budget) || 0 },
     });
+    // refused: the budget box stays open with what was typed
+    if (!res.ok) { toast(`Couldn't save the budget: ${res.error}`, "danger"); return; }
     setEditing(null); setBudget(""); load();
   };
   const startBudget = (p) => { setEditing(p.project); setBudget(p.budget || ""); };
-  const toggleTrialBalance = () => { setTbOpen(!tbOpen); if (!tb) loadTrialBalance(); };
+  const toggleTrialBalance = () => { setTbOpen(!tbOpen); if (!tb || tb.error) { setTb(null); loadTrialBalance(); } };
 
   return {
-    data, editing, setEditing, budget, setBudget, startBudget, openProj, detail, tb, tbOpen, toggleTrialBalance,
+    data, error, reload: load, editing, setEditing, budget, setBudget, startBudget, openProj, detail, tb, tbOpen, toggleTrialBalance,
     contractDraft, setContractDraft, claims, newClaim, setNewClaim, claimBusy, invoicing, setInvoicing,
     openDetail, addClaim, certifyClaim, submitInvoice, saveContract, saveBudget,
   };

@@ -7,6 +7,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
 import { takeHandOff } from "../../lib/sharedFiles";
+import { api, tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const EXT_ICON = {
   ".pdf": "PDF", ".docx": "DOC", ".doc": "DOC",
@@ -56,6 +58,7 @@ export function useFiledLibrary({ tenantId, customerPhone, defaultFiledBy, proje
   const [projects, setProjects] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);   // the library didn't load (23 Nov 2026 audit)
   const [total, setTotal] = useState(0);
   const [lightboxDoc, setLightboxDoc] = useState(null);
   const [filters, setFilters] = useState({ search: "", category: "", customer_phone: customerPhone || "", since: "", until: "", filed_by: defaultFiledBy || "", project: project || "" });
@@ -72,13 +75,18 @@ export function useFiledLibrary({ tenantId, customerPhone, defaultFiledBy, proje
       const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? from : 0) });
       Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
       const [dr, pr] = await Promise.all([
-        fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/filed?${params}`).then((r) => r.json()),
-        projects.length ? Promise.resolve({ projects }) : fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/projects`).then((r) => r.json()),
+        api(`/v1/documents/${tenantId.trim()}/filed?${params}`),
+        projects.length ? Promise.resolve({ projects }) : api(`/v1/documents/${tenantId.trim()}/projects`).catch(() => ({})),
       ]);
       setDocs((prev) => append ? [...prev, ...(dr.documents || [])] : (dr.documents || []));
       setTotal(dr.total ?? (dr.documents || []).length);
       if (!projects.length) setProjects(pr.projects || []);
-    } catch { /* ignore */ }
+      setError(null);
+    } catch (e) {
+      // a failed load used to show "No documents match"; say it didn't load instead
+      setError(e.message);
+      toast(`Your documents couldn't be loaded: ${e.message}`, "danger");
+    }
     finally { setLoading(false); }
   }, [tenantId, filters]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -97,10 +105,11 @@ export function useFiledLibrary({ tenantId, customerPhone, defaultFiledBy, proje
   const assign = async (docId, label) => {
     const proj = projects.find((p) => p.label === label);
     if (!proj) return;
-    await fetch(`${VULA_API}/v1/documents/${docId}/assign-project`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant_id: tenantId.trim(), project: proj.label, clickup_list_id: proj.clickup_list_id }),
+    const res = await tryApi(`/v1/documents/${docId}/assign-project`, {
+      method: "POST",
+      body: { tenant_id: tenantId.trim(), project: proj.label, clickup_list_id: proj.clickup_list_id },
     });
+    if (!res.ok) toast(`It wasn't filed under ${proj.label}: ${res.error}`, "danger");
     load(false);
   };
 
@@ -121,7 +130,7 @@ export function useFiledLibrary({ tenantId, customerPhone, defaultFiledBy, proje
     load(false);
   };
 
-  return { docs, projects, customers, categories, loading, total, lightboxDoc, setLightboxDoc, filters, setFilter, loadMore, assign, move, moveMsg };
+  return { docs, projects, customers, categories, loading, error, total, lightboxDoc, setLightboxDoc, filters, setFilter, loadMore, assign, move, moveMsg };
 }
 
 /** "Just store this" — a photo/form/file with nothing to extract, no OCR/KB-ingest attempted. */
@@ -170,22 +179,26 @@ export function useDriveImport(tenantId, onImported) {
   const search = async () => {
     setSearching(true);
     try {
-      const r = await fetch(`${VULA_API}/v1/google/${tenantId.trim()}/drive/search?q=${encodeURIComponent(q)}`);
-      const d = await r.json();
+      const d = await api(`/v1/google/${tenantId.trim()}/drive/search?q=${encodeURIComponent(q)}`);
       setResults(d.files || []);
-    } catch { setResults([]); }
+    } catch (e) {
+      setResults(null);   // not "nothing found" — the search didn't run
+      toast(`Google Drive couldn't be searched: ${e.message}`, "danger");
+    }
     setSearching(false);
   };
   const doImport = async (file) => {
     setImportingId(file.id);
     try {
-      await fetch(`${VULA_API}/v1/google/${tenantId.trim()}/drive/import`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_id: file.id }),
+      await api(`/v1/google/${tenantId.trim()}/drive/import`, {
+        method: "POST", body: { file_id: file.id },
       });
       setResults((rs) => rs.filter((f) => f.id !== file.id));
       onImported?.();
-    } catch { /* ignore */ }
+    } catch (e) {
+      // the file stays in the list to try again
+      toast(`${file.name || "That file"} wasn't imported: ${e.message}`, "danger");
+    }
     setImportingId(null);
   };
   return { status, q, setQ, results, searching, importingId, search, doImport };

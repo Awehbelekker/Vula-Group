@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, BookOpen, CornerDownRight, FolderKanban, Pencil, Plus, Upload, X } from "lucide-react";
 import { formatMoney } from "../../lib/money";
-import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea, confirmDialog } from "../ui/index.jsx";
+import { Button, Card, EmptyState, Field, FilterBar, IconButton, Input, ListRow, PageHeader, PillTabs, Select, StatusChip, Textarea, confirmDialog, toast } from "../ui/index.jsx";
 import FiledLibraryV2 from "../documents/FiledLibraryV2";
 import { PROJECT_TABS, addDecision, addDirectPayment, addProjectClient, createShare, decideClientSlip, decideDownloadRequest, downloadBoq, downloadBoqPdf, downloadProjectFile, fetchBillLines, fetchBoq, fetchBoqLibrary, fetchBoqOnline,
   fetchClientEmails, fetchProjectFile, fetchQsView, fetchTracker, sendClientEmail, makeBoqTheBudget, printBoq, removeDirectPayment, removeProjectClient, revokeShare, saveBoqOnline, saveBoqTotal, setProjectFee, uploadToProject,
@@ -130,7 +130,7 @@ function ProjectHeader({ x }) {
             </Select>
           </Field>
           {form.name.trim() !== sel.name && <p className="vpj-sub vpj-wide">Renaming moves every document, invoice, expense and the BOQ to the new name. The old name keeps working.</p>}
-          <div className="vpj-go"><Button onClick={() => { x.saveEdit(form); setEditing(false); }}>Save</Button>
+          <div className="vpj-go"><Button onClick={async () => { if (await x.saveEdit(form)) setEditing(false); }}>Save</Button>
             <Button variant="secondary" onClick={() => setEditing(false)}>Cancel</Button></div>
         </div>
       )}
@@ -141,7 +141,7 @@ function ProjectHeader({ x }) {
           <span key={a} className="vpj-alias">{a}<IconButton Icon={X} quiet label={`Remove the name ${a}`} className="vpj-alias-x" onClick={() => x.removeAlias(a)} /></span>
         ))}
         <Input className="vpj-alias-in" placeholder="Add another name…" aria-label="Add another name for this project" value={alias}
-          onChange={(e) => setAlias(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { x.addAlias(alias); setAlias(""); } }} />
+          onChange={(e) => setAlias(e.target.value)} onKeyDown={async (e) => { if (e.key === "Enter" && await x.addAlias(alias)) setAlias(""); }} />
       </div>
       <p className="vpj-sub">Documents, invoices and WhatsApp messages using any of these names file under this project.</p>
 
@@ -155,7 +155,7 @@ function ProjectHeader({ x }) {
           <div className="vpj-form">
             <Field label="New phase"><Input placeholder="e.g. Phase 2" value={phase} onChange={(e) => setPhase(e.target.value)} /></Field>
             <Field label="Move documents filed as… (optional)"><Input value={moveFrom} onChange={(e) => setMoveFrom(e.target.value)} /></Field>
-            <div className="vpj-go"><Button variant="secondary" Icon={Plus} disabled={!phase.trim()} onClick={() => { x.addPhase(phase, moveFrom); setPhase(""); setMoveFrom(""); }}>Add phase</Button></div>
+            <div className="vpj-go"><Button variant="secondary" Icon={Plus} disabled={!phase.trim()} onClick={async () => { if (await x.addPhase(phase, moveFrom)) { setPhase(""); setMoveFrom(""); } }}>Add phase</Button></div>
           </div>
           <p className="vpj-sub">A phase has its own BOQ, budget, documents and job costing; this project adds them together.</p>
         </>
@@ -308,7 +308,8 @@ function ProjectBoq({ tenantId, project }) {
   const [note, setNote] = useState("");
   const [total, setTotal] = useState("");
   const load = useCallback(() => {
-    fetchBoq(tenantId, project).then((d) => { setBoq(d); setTotal(d.total_cents ? String(d.total_cents / 100) : ""); }).catch(() => setBoq(null));
+    fetchBoq(tenantId, project).then((d) => { setBoq(d); setTotal(d.total_cents ? String(d.total_cents / 100) : ""); })
+      .catch((e) => { setBoq(null); toast(`The project budget couldn't be read: ${e.message}`, "danger"); });
     fetchBoqOnline(tenantId, project).then((d) => {
       setBill(d);
       setLines((d.lines || []).map((l) => ({ ...NEW_LINE, ...l, key: l.key || "", qty: l.qty ?? "", rate: toRand(l.rate_cents), area: l.area || "", unit: l.unit || "" })));
@@ -347,6 +348,7 @@ function ProjectBoq({ tenantId, project }) {
     setNote(`${(d.lines || []).length} lines from the filed bill — check them, then Save.`);
   };
   if (!bill) return <Empty>Loading…</Empty>;
+  if (bill.error) return <Empty>The bill couldn't be read just now.</Empty>;
   const sections = boq?.sections || [];
   // the business's reconciled project bill carries what each section really cost and what's paid
   const reconciled = sections.some((s) => s.actual_cents != null);
@@ -841,7 +843,7 @@ function Decisions({ tenantId, project, decisions, onChange }) {
           value={<Button size="sm" variant="secondary" onClick={async () => { if (await withdrawDecision(tenantId, d.id)) onChange(); }}>Take back</Button>} />
       ))}
       <div className="vpj-form vpj-pad">
-        <Field label="Note a decision" hint="In your own words, e.g. “DIGG paid the R3,700 plumbing change.”">
+        <Field label="Note a decision" hint="In your own words, e.g. “The client paid the R3,700 plumbing change.”">
           <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} />
         </Field>
         <div className="vpj-go"><Button disabled={!text.trim()} onClick={add}>Note it</Button></div>

@@ -3,7 +3,8 @@
  * RepContactsV2). Moved verbatim out of VulaRepCrmContacts.jsx.
  */
 import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const emptyContact = () => ({ name: "", phone: "", email: "", company: "", title: "", notes: "" });
 
@@ -16,8 +17,9 @@ export function useRepContacts(tenantId, repPhone) {
   const load = useCallback(async () => {
     if (!tenantId) return;
     const params = new URLSearchParams({ created_by: repPhone || "", search });
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/contacts?${params}`);
-    const d = await r.json().catch(() => ({}));
+    // 23 Nov 2026 audit: a failed load showed "No contacts yet"
+    const { ok, data: d, error } = await tryApi(`/v1/commerce/${tenantId}/admin/contacts?${params}`);
+    if (!ok) { toast(`Your contacts couldn't be loaded: ${error}`, "danger"); return; }
     setContacts(d.contacts || []);
   }, [tenantId, repPhone, search]);
   useEffect(() => { load(); }, [load]);
@@ -26,13 +28,11 @@ export function useRepContacts(tenantId, repPhone) {
   const save = async () => {
     if (!form.name.trim()) { setMsg("Name is required."); return false; }
     setMsg("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/contacts`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, created_by: repPhone || "" }),
+    const { ok, data: d, error } = await tryApi(`/v1/commerce/${tenantId}/admin/contacts`, {
+      method: "POST", body: { ...form, created_by: repPhone || "" },
     });
-    const d = await r.json().catch(() => ({}));
-    if (d.saved) { setForm(emptyContact()); load(); return true; }
-    setMsg(d.detail || d.error || "Could not save contact.");
+    if (ok && d.saved) { setForm(emptyContact()); load(); return true; }
+    setMsg(ok ? (d.detail || d.error || "Could not save contact.") : error);
     return false;
   };
 

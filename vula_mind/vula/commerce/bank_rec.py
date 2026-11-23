@@ -37,11 +37,12 @@ def _now():
 # is_primary=True (not just tenant_id) matters now: without it, the UPDATE below would
 # silently overwrite this field on every connected account, not just one.
 
-def set_statement_password(tenant_id: str, password: str, bank: str = "Capitec") -> None:
+def set_statement_password(tenant_id: str, password: str, bank: Optional[str] = None) -> None:
     from vula.email_imap.credentials import encrypt_secret
-    _client().table("vula_email_accounts").update(
-        {"statement_password": encrypt_secret(password), "bank": bank}
-    ).eq("tenant_id", tenant_id).eq("is_primary", True).execute()
+    row = {"statement_password": encrypt_secret(password)}
+    if bank:                       # only when the business named it (it used to say Capitec for everyone)
+        row["bank"] = bank
+    _client().table("vula_email_accounts").update(row).eq("tenant_id", tenant_id).eq("is_primary", True).execute()
 
 
 def get_statement_password(tenant_id: str) -> Optional[str]:

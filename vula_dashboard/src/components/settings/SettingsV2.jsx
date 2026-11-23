@@ -322,7 +322,7 @@ function BusinessProfile({ tenantId }) {
         Ticked answers can be used when Vula replies to customers; the rest are only for you and your team.
       </p>
       <ProfileDrafts tenantId={tenantId} onChanged={p.apply} />
-      {p.data.questions.map(q => (
+      {(p.data.questions || []).map(q => (
         <div key={q.key} className="vst-q">
           <label htmlFor={`bp-${q.key}`} className="vst-q-label">{q.q}</label>
           <Textarea id={`bp-${q.key}`} rows={2} value={p.draft[q.key] || ''} onChange={e => p.setDraft({ ...p.draft, [q.key]: e.target.value })} style={{ minHeight: 64 }} />
@@ -424,7 +424,7 @@ function Delivery({ tenantId }) {
 function Learned({ tenantId }) {
   const l = useLearnedSummary(tenantId)
   const data = l.data
-  if (!data) return <Card><Skeleton lines={4} /></Card>
+  if (!data) return <Card>{l.loadError ? <p className="vst-sub">{l.loadError}</p> : <Skeleton lines={4} />}</Card>
   return (
     <div className="vst-stack">
       <Card className="vst-card">

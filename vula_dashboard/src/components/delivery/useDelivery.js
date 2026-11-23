@@ -5,8 +5,9 @@
  * delivery/DeliveryV2.jsx; the calls and bodies are unchanged.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { VULA_API } from '../../lib/authFetch'
 import { escapeHtml as esc } from '../../lib/html'
+import { api, tryApi } from '../../lib/api'
+import { toast } from '../ui/index.jsx'
 import { todaySA } from '../../lib/dates'
 
 export const DEL_PAID = new Set(['paid', 'confirmed', 'packing', 'dispatched', 'delivered'])
@@ -22,10 +23,14 @@ export function useDeliveryList(tenantId) {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/delivery-list?date=${date}`)
-    const d = await r.json().catch(() => null)
-    setData(d)
-    setLoading(false)
+    try {
+      setData(await api(`/v1/commerce/${tenantId}/admin/delivery-list?date=${date}`))
+    } catch (e) {
+      setData(null)
+      toast(`Couldn't load the deliveries: ${e.message}`, 'danger')
+    } finally {
+      setLoading(false)
+    }
   }, [tenantId, date])
 
   useEffect(() => { load() }, [load])
@@ -73,16 +78,27 @@ export function useOrderWorkflow(tenantId) {
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
-    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/order-settings`)
-      .then((r) => r.json()).then((d) => setS(d.settings || {})).catch(() => setS({}))
+    // A failed load leaves the settings unshown (s stays null) — saving defaults over the real
+    // settings would switch things off nobody chose to.
+    tryApi(`/v1/commerce/${tenantId}/admin/order-settings`).then((res) => {
+      if (res.ok) setS(res.data.settings || {})
+      else toast(`Couldn't load your order settings: ${res.error}`, 'danger')
+    })
   }, [tenantId])
 
   const save = async (patch) => {
+    const prev = s
     const next = { ...s, ...patch }
     setS(next)
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/order-settings`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
-    }).then((r) => r.json()).catch(() => ({}))
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/order-settings`, {
+      method: 'PUT', body: next,
+    })
+    if (!res.ok) {
+      setS(prev)
+      toast(`That setting wasn't saved: ${res.error}`, 'danger')
+      return
+    }
+    const d = res.data
     if (d.settings) setS(d.settings)
     setMsg('Saved ✓'); setTimeout(() => setMsg(''), 1500)
   }

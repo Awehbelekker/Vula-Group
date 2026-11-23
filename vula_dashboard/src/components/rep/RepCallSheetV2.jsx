@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { Check, ClipboardList, Eye, X } from "lucide-react";
 import { SA_TZ } from "../../lib/dates";
-import { Button, Card, EmptyState, Field, Input, Select, Skeleton, Textarea } from "../ui/index.jsx";
+import { Button, Card, EmptyState, ErrorCard, Field, Input, Select, Skeleton, Textarea } from "../ui/index.jsx";
 import { DAYS, useRepCallSheet } from "./useRepCallSheet";
 import "./rep.css";
 
@@ -49,7 +49,7 @@ export default function RepCallSheetV2({ tenantId, repPhone }) {
 
       <Card className="vrp-card" role="group" aria-labelledby="vrp-cs-fix">
         <h2 className="vrp-h" id="vrp-cs-fix">Fix or add something</h2>
-        <Field label="What should change?" hint={'e.g. "the Dick meeting was about self-levelling, not HBC"'}>
+        <Field label="What should change?" hint={'e.g. "the Monday meeting was about the floor quote, not the roof"'}>
           <Textarea rows={2} value={x.instruction} onChange={(e) => { x.setInstruction(e.target.value); x.setPreview(null); }} />
         </Field>
         {x.preview
@@ -66,7 +66,9 @@ export default function RepCallSheetV2({ tenantId, repPhone }) {
       {x.msg && <p className="vrp-error" role="alert">{x.msg}</p>}
 
       <h2 className="vrp-overline">This week so far ({x.entries.length})</h2>
-      {x.entries.length === 0
+      {x.loadError && x.entries.length === 0
+        ? <ErrorCard what="your call sheet" onRetry={x.load} />
+        : x.entries.length === 0
         ? <EmptyState Icon={ClipboardList} title="Nothing logged yet">Log a meeting on WhatsApp and it appears here.</EmptyState>
         : <Card pad={4}>
             <ul className="vrp-list" aria-label="Call sheet entries">

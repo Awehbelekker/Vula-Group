@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { promptDialog, toast } from '../ui/index.jsx'
 import { VULA_API } from '../../lib/authFetch'
+import { api, tryApi } from '../../lib/api'
 
 /** "now", "5m", "3h", "2d" (agoSuffix adds " ago" and says "just now"). */
 export function since(ts, agoSuffix = false) {
@@ -22,23 +23,27 @@ export function useInboxList(tenantId) {
   const [mineOnly, setMineOnly] = useState(false)   // the server sent only chats assigned to this login
   const [escalations, setEscalations] = useState([])
   const [loading, setLoading] = useState(true)
+  // 23 Nov 2026 audit: a failed load showed "No chats yet". Now it says it couldn't load; a later
+  // refresh that works clears it. What was already loaded stays on screen.
+  const [error, setError] = useState(null)
+  const [escError, setEscError] = useState(null)
 
   const load = useCallback(async () => {
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations`)
-      const d = await r.json()
-      setConvos(d.conversations || [])
-      setMineOnly(!!d.mine_only)
-    } catch {}
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/conversations`)
+    if (res.ok) {
+      setConvos(res.data.conversations || [])
+      setMineOnly(!!res.data.mine_only)
+      setError(null)
+    } else {
+      setError(res.error)
+    }
     setLoading(false)
   }, [tenantId])
 
   const loadEscalations = useCallback(async () => {
-    try {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations`)
-      const d = await r.json()
-      setEscalations(d.escalations || [])
-    } catch {}
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/escalations`)
+    if (res.ok) { setEscalations(res.data.escalations || []); setEscError(null) }
+    else setEscError(res.error)
   }, [tenantId])
 
   useEffect(() => {
@@ -49,7 +54,7 @@ export function useInboxList(tenantId) {
     return () => { clearInterval(t); clearInterval(te) }
   }, [load, loadEscalations])
 
-  return { convos, escalations, loading, load, loadEscalations, mineOnly }
+  return { convos, escalations, loading, load, loadEscalations, mineOnly, error, escError }
 }
 
 /** Answer or dismiss one escalation. */
@@ -136,12 +141,14 @@ export function useThread(tenantId, sessionId) {
 
   async function setHandoff(paused) {
     setBusy(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/handoff`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paused }),
-    })
-    await load()
-    setBusy(false)
+    try {
+      await api(`/v1/commerce/${tenantId}/admin/conversations/${sessionId}/handoff`, {
+        method: 'POST', body: { paused },
+      })
+    } catch (e) {
+      toast(paused ? `Couldn't take over the chat: ${e.message}` : `Couldn't hand the chat back to Vula: ${e.message}`, 'danger')
+    }
+    try { await load() } finally { setBusy(false) }
   }
 
   async function sendReply(e) {
@@ -164,10 +171,12 @@ export function useThread(tenantId, sessionId) {
   }
 
   async function saveMeta(patch) {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/meta`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-    }).catch(() => {})
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/conversations/${sessionId}/meta`, {
+      method: 'POST', body: patch,
+    })
+    if (!res.ok) toast(`That change wasn't saved: ${res.error}`, 'danger')
     load()
+    return res.ok
   }
 
   return { data, msgs, paused, input, setInput, busy, canned, rated, rate, setHandoff, sendReply, saveMeta }

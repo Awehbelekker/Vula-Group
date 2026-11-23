@@ -14,6 +14,7 @@ import { onPhone, openWhatsApp, toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
 import { FONT_PAIRINGS } from '../theme/tokens'
 import { VULA_API } from '../lib/authFetch'
+import { tryApi } from '../lib/api'
 import { todaySA } from '../lib/dates'
 import InvoiceListV2 from './invoices/InvoiceListV2'
 
@@ -191,9 +192,8 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     if (method === null) return  // cancelled
     const body = { status: 'paid' }
     if (method.trim()) body.payment_method = method.trim().toLowerCase()
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/invoices/${inv.id}`, { method: 'PATCH', body })
+    if (!res.ok) toast(res.error || "Couldn't mark this invoice paid.", 'danger')
     load()
   }
 
@@ -252,12 +252,15 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     if (!ids.length) return
     if (!(await confirmDialog(`Delete ${ids.length} selected quote${ids.length === 1 ? '' : 's'}? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return
     setBulkDeleting(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/quotes/bulk-delete`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ quote_ids: ids }),
-    })
-    await load()
-    setBulkDeleting(false)
+    try {
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/quotes/bulk-delete`, {
+        method: 'POST', body: { quote_ids: ids },
+      })
+      if (!res.ok) toast(res.error || "Couldn't delete those quotes.", 'danger')
+      await load()
+    } finally {
+      setBulkDeleting(false)
+    }
   }
 
   // Open the customer's WhatsApp with a prefilled message + PDF download link.
@@ -872,13 +875,14 @@ function InvoiceItemsCatalog({ tenantId, onDone }) {
     if (!form.name.trim()) return
     setSaving(true)
     try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-items`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/invoice-items`, {
+        method: 'POST',
+        body: {
           kind: form.kind, name: form.name.trim(), description: form.description.trim(),
           unit: form.unit.trim(), unit_price_cents: Math.round((parseFloat(form.unit_price) || 0) * 100),
-        }),
+        },
       })
+      if (!res.ok) { toast(res.error || "Couldn't save this item.", 'danger'); return }
       setForm({ kind: 'service', name: '', description: '', unit: '', unit_price: '' })
       load()
     } finally {
@@ -888,7 +892,8 @@ function InvoiceItemsCatalog({ tenantId, onDone }) {
 
   async function del(id) {
     if (!(await confirmDialog('Remove this item from the catalog?', { danger: true, confirmLabel: 'Yes' }))) return
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-items/${id}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/invoice-items/${id}`, { method: 'DELETE' })
+    if (!res.ok) toast(res.error || "Couldn't remove this item.", 'danger')
     load()
   }
 

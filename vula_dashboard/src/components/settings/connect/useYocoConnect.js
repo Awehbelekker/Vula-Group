@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from 'react'
 import { VULA_API } from '../../../lib/authFetch'
+import { errorText, tryApi } from '../../../lib/api'
 import { confirmDialog, toast } from '../../ui/index.jsx'
 
 export function useYocoConnect({ tenantId, tenantName, adminEmail }) {
@@ -23,13 +24,13 @@ export function useYocoConnect({ tenantId, tenantName, adminEmail }) {
 
   useEffect(() => {
     if (!tenantId) return
-    fetch(`${VULA_API}/v1/yoco/status/${tenantId}`)
-      .then(r => r.json())
-      .then(data => {
+    tryApi(`/v1/yoco/status/${tenantId}`)
+      .then(res => {
+        if (!res.ok) { setStatus('error'); setError(`Couldn't check Yoco: ${res.error}`); return }
+        const data = res.data
         setStatus(data.status)
         setAccount(data)
       })
-      .catch(() => setStatus('error'))
   }, [tenantId])
 
   async function handleConnect(e) {
@@ -49,8 +50,8 @@ export function useYocoConnect({ tenantId, tenantName, adminEmail }) {
         }),
       })
       if (!resp.ok) {
-        const err = await resp.json()
-        throw new Error(err.detail || 'Connection failed')
+        const err = await resp.json().catch(() => null)
+        throw new Error(errorText(err, 'Connection failed'))
       }
       const data = await resp.json()
       setAccount({
@@ -75,8 +76,9 @@ export function useYocoConnect({ tenantId, tenantName, adminEmail }) {
     setTesting(true)
     try {
       const resp = await fetch(`${VULA_API}/v1/yoco/test/${tenantId}`, { method: 'POST' })
-      const data = await resp.json()
-      if (!data.ok) setError(`Test failed: HTTP ${data.status_code}`)
+      const data = await resp.json().catch(() => null)
+      if (!resp.ok) setError(`Test failed: ${errorText(data)}`)
+      else if (!data || !data.ok) setError(`Test failed: HTTP ${data?.status_code ?? resp.status}`)
       else { setError(null); toast('Yoco keys valid') }
     } catch (err) {
       setError(err.message)
@@ -88,10 +90,13 @@ export function useYocoConnect({ tenantId, tenantName, adminEmail }) {
   async function handleDisconnect() {
     if (!(await confirmDialog(`Disconnect Yoco for ${tenantName}? Pending checkouts will fail.`, { danger: true, confirmLabel: 'Yes' }))) return
     setLoading(true)
-    await fetch(`${VULA_API}/v1/yoco/disconnect/${tenantId}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/yoco/disconnect/${tenantId}`, { method: 'DELETE' })
+    setLoading(false)
+    // only show "not connected" once the server says it's done
+    if (!res.ok) { setError(`Yoco wasn't disconnected: ${res.error}`); return }
+    setError(null)
     setStatus('not_connected')
     setAccount(null)
-    setLoading(false)
   }
 
   return { status, account, loading, testing, error, showForm, setShowForm, form, setForm, handleConnect, handleTest, handleDisconnect }

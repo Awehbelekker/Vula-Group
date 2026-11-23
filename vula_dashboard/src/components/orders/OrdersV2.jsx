@@ -6,7 +6,7 @@
  */
 import { ArrowRight, ClipboardList, Download, Package, Plus, Trash2 } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
-import { Button, Card, DataTable, EmptyState, FilterBar, PageHeader, Skeleton, StatusChip } from '../ui/index.jsx'
+import { Button, Card, DataTable, EmptyState, ErrorCard, FilterBar, PageHeader, Skeleton, StatusChip } from '../ui/index.jsx'
 import { NEXT_STATUSES, ORDER_DELETABLE, ORDER_FILTERS, useOrders } from './useOrders'
 import './orders.css'
 
@@ -86,7 +86,9 @@ export default function OrdersV2({ tenantId, DetailDrawer, ManualOrderModal }) {
         </div>
       )}
 
-      {!c.loading && c.orders.length === 0 ? (
+      {!c.loading && c.loadError && c.orders.length === 0 ? (
+        <ErrorCard what="your orders" onRetry={c.load} />
+      ) : !c.loading && c.orders.length === 0 ? (
         <EmptyState Icon={Package} title="No orders here">
           {c.filter === 'all' ? 'Orders from WhatsApp and your shop land here.' : 'Nothing with this status right now.'}
         </EmptyState>

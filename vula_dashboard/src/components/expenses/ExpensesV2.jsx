@@ -9,7 +9,7 @@ import { useState } from "react";
 import { Banknote, Check, CircleAlert, CreditCard, MessageCircle, Plus, Receipt, Wallet, X } from "lucide-react";
 import { formatMoney } from "../../lib/money";
 import {
-  Button, Card, DataTable, EmptyState, Field, FilterBar, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatCard, StatusChip,
+  Button, Card, DataTable, EmptyState, ErrorCard, Field, FilterBar, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatCard, StatusChip, toast,
 } from "../ui/index.jsx";
 import { addExpense, useExpenses } from "./useExpenses";
 import "./expenses.css";
@@ -127,7 +127,9 @@ export default function ExpensesV2({ tenantId, defaultPaidBy }) {
         onToggle={(id) => x.setFilter(x.filter === id ? "all" : id)} />
       {x.msg && <p className="vex-msg" role="status">{x.msg}</p>}
 
-      {x.busy && !x.rows.length ? <Skeleton lines={5} height={18} /> : !x.rows.length ? (
+      {x.busy && !x.rows.length ? <Skeleton lines={5} height={18} /> : !x.rows.length && x.loadError ? (
+        <ErrorCard what="your expenses" onRetry={x.load} />
+      ) : !x.rows.length ? (
         <EmptyState Icon={Receipt} title="No expenses yet">Snap a receipt on WhatsApp or add one.</EmptyState>
       ) : (
         <>
@@ -215,8 +217,13 @@ function AddFormV2({ tenantId, projects, sections, onDone }) {
   const submit = async () => {
     if (!f.amount || !f.description) return;
     setBusy(true);
-    await addExpense(tenantId, f);
-    setBusy(false); onDone();
+    try {
+      await addExpense(tenantId, f);
+    } catch (e) {
+      toast(`Couldn't save the expense: ${e.message}`, "danger");   // the form stays open with what was typed
+      return;
+    } finally { setBusy(false); }
+    onDone();
   };
   return (
     <Card className="vex-add">

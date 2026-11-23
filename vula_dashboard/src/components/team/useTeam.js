@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { REP_DEFAULT_ACCESS, MERCHANT_GROUPS } from "../../navConfig.jsx";
 import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
 
 // Sales rep ("My Work") tabs — a sales_rep login gets these by default (see createLogin).
 export const REP_MODULES = [["rep-contacts", "My Contacts"], ["rep-chats", "My chats"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
@@ -127,7 +128,9 @@ export function useTeam(tenantId) {
     else setMsg(d.error || d.detail || "Reset failed");
   };
   const removeLogin = async (uid) => {
-    await fetch(`${VULA_API}/v1/users/${tenantId}/users/${uid}`, { method: "DELETE" }); load();
+    const res = await tryApi(`/v1/users/${tenantId}/users/${uid}`, { method: "DELETE" });
+    if (!res.ok) setMsg(res.error);
+    load();
   };
   const changeMyPassword = async () => {
     setMsg("");
@@ -166,7 +169,11 @@ export function useTeam(tenantId) {
     else if (d.login_revoked) setMsg("Disabled — their dashboard login was revoked too.");
     load();
   };
-  const del = async (id) => { await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, { method: "DELETE" }); load(); };
+  const del = async (id) => {
+    const res = await tryApi(`/v1/team/${tenantId}/${id}`, { method: "DELETE" });
+    if (!res.ok) setMsg(res.error);
+    load();
+  };
 
   return {
     members, form, setForm, logins, loginForm, setLoginForm, tempPw, newPw, setNewPw, msg, auditLog, showAudit, setShowAudit,

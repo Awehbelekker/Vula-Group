@@ -6,11 +6,12 @@
  * resized, or edited in the last ~2.5s is protected from being overwritten by a poll response
  * that lands mid-gesture — see `recentRef`/`draggingRef` below.
  */
-import { confirmDialog } from './ui/index.jsx'
+import { confirmDialog, toast } from './ui/index.jsx'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import { supabase } from '../lib/supabase'
 import { VULA_API } from '../lib/authFetch'
+import { api, tryApi } from '../lib/api'
 
 const PROTECT_MS = 2500
 const POLL_MS = 15000
@@ -28,15 +29,19 @@ const PALETTE = [null, 'var(--warn-soft)', '#FFD9C4', '#FFC4D6', '#E1D4FF', '#DC
 export default function VulaProjectBoard({ tenantId, project }) {
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)   // the board didn't load (not "no cards yet")
   const [uploadingIds, setUploadingIds] = useState(() => new Set())
   const draggingRef = useRef(null)             // card id currently being dragged/resized
   const recentRef = useRef(new Map())          // card id -> timestamp of last local edit
+  const unsavedRef = useRef(new Set())         // card ids whose last change the server refused —
+                                               // kept as edited (a poll mustn't wipe it) until a save works
   const saveTimers = useRef({})                // card id -> debounce timer (text edits)
   const maxZRef = useRef(1)                    // highest z-index handed out so far
   const scrollRef = useRef(null)               // scrollable board viewport, for "fit to view"
 
-  const base = `${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/board`
-  const cardUrl = (id) => `${VULA_API}/v1/projects/${tenantId}/board/${id}`
+  // lib/api adds the host; 23 Nov 2026 audit: no write here checked the server's answer
+  const base = `/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/board`
+  const cardUrl = (id) => `/v1/projects/${tenantId}/board/${id}`
 
   const markRecent = (id) => recentRef.current.set(id, Date.now())
 
@@ -45,7 +50,7 @@ export default function VulaProjectBoard({ tenantId, project }) {
       const prevById = new Map(prev.map((c) => [c.id, c]))
       const now = Date.now()
       const protectedId = (id) =>
-        draggingRef.current === id || (now - (recentRef.current.get(id) || 0)) < PROTECT_MS
+        draggingRef.current === id || unsavedRef.current.has(id) || (now - (recentRef.current.get(id) || 0)) < PROTECT_MS
       return serverCards.map((sc) => (protectedId(sc.id) && prevById.has(sc.id) ? prevById.get(sc.id) : sc))
     })
   }, [])
@@ -53,13 +58,18 @@ export default function VulaProjectBoard({ tenantId, project }) {
   const load = useCallback(async (isPoll) => {
     if (!isPoll) setLoading(true)
     try {
-      const d = await fetch(base).then((r) => r.json())
+      const d = await api(base)
       const rows = d.cards || []
       maxZRef.current = Math.max(1, ...rows.map((c) => c.z_index || 1))
       if (isPoll) mergeFromServer(rows)
       else setCards(rows)
-    } catch { /* keep last known state on a failed poll */ }
-    if (!isPoll) setLoading(false)
+      setLoadError(null)
+    } catch (e) {
+      // keep last known state on a failed poll; a failed first load says so
+      if (!isPoll) setLoadError(e.message)
+    } finally {
+      if (!isPoll) setLoading(false)
+    }
   }, [base, mergeFromServer])
 
   useEffect(() => {
@@ -76,17 +86,21 @@ export default function VulaProjectBoard({ tenantId, project }) {
       z_index: ++maxZRef.current,
       content: card_type === 'checklist' ? { items: [] } : {},
     }
-    const d = await fetch(base, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    }).then((r) => r.json())
+    const { ok, data: d, error } = await tryApi(base, { method: 'POST', body })
+    if (!ok) { toast(`The card wasn't added: ${error}`, 'danger'); return }
     if (d.card) { setCards((c) => [...c, d.card]); markRecent(d.card.id) }
   }
 
   async function patchCard(id, patch) {
     markRecent(id)
-    await fetch(cardUrl(id), {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-    })
+    const { ok, error } = await tryApi(cardUrl(id), { method: 'PATCH', body: patch })
+    if (!ok) {
+      unsavedRef.current.add(id)
+      toast(`That change to the card wasn't saved: ${error}`, 'danger')
+      return false
+    }
+    unsavedRef.current.delete(id)
+    return true
   }
 
   function updateLocal(id, fields) {
@@ -113,8 +127,13 @@ export default function VulaProjectBoard({ tenantId, project }) {
 
   async function removeCard(id) {
     if (!(await confirmDialog('Remove this card?', { danger: true, confirmLabel: 'Yes' }))) return
+    const removed = cards.find((c) => c.id === id)
     setCards((cs) => cs.filter((c) => c.id !== id))
-    await fetch(cardUrl(id), { method: 'DELETE' })
+    const { ok, error } = await tryApi(cardUrl(id), { method: 'DELETE' })
+    if (!ok) {
+      if (removed) setCards((cs) => (cs.some((c) => c.id === id) ? cs : [...cs, removed]))
+      toast(`The card wasn't removed: ${error}`, 'danger')
+    }
   }
 
   async function uploadImage(id, file) {
@@ -124,12 +143,14 @@ export default function VulaProjectBoard({ tenantId, project }) {
       const clean = file.name.replace(/[^a-zA-Z0-9.-]/g, '-').toLowerCase()
       const path = `${tenantId}/board/${project}/${Date.now()}-${clean}`
       const { error } = await supabase.storage.from('product-images').upload(path, file, { cacheControl: '3600', upsert: true })
-      if (error) return
+      if (error) { toast(`The image wasn't uploaded: ${error.message || 'try again.'}`, 'danger'); return }
       const { data } = supabase.storage.from('product-images').getPublicUrl(path)
       if (data?.publicUrl) {
         const card = cards.find((c) => c.id === id)
         updateContent(id, { ...(card?.content || {}), url: data.publicUrl })
       }
+    } catch {
+      toast("The image wasn't uploaded. Check your connection and try again.", 'danger')
     } finally {
       setUploadingIds((s) => { const n = new Set(s); n.delete(id); return n })
     }
@@ -164,7 +185,10 @@ export default function VulaProjectBoard({ tenantId, project }) {
         {loading && <span style={{ fontSize: 11, color: s.muted, alignSelf: 'center' }}>Loading…</span>}
       </div>
       <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', position: 'relative', background: s.bg }}>
-        {!loading && cards.length === 0 && (
+        {!loading && loadError && cards.length === 0 && (
+          <div role="alert" style={s.emptyHint}>Couldn't load this board: {loadError} <button onClick={() => load(false)} style={s.addBtn}>Retry</button></div>
+        )}
+        {!loading && !loadError && cards.length === 0 && (
           <div style={s.emptyHint}>Click a button above to add your first card — a note, image, link, or checklist.</div>
         )}
         <div style={{ position: 'relative', width: 2200, height: 1600 }}>

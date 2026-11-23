@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { VULA_API } from '../../../lib/authFetch'
+import { tryApi } from '../../../lib/api'
 import { confirmDialog, toast } from '../../ui/index.jsx'
 
 export const PRESETS = {
@@ -38,11 +39,9 @@ export function useEmailConnect({ tenantId, adminEmail }) {
 
   const loadStatus = useCallback(async () => {
     if (!tenantId) return
-    try {
-      const r = await fetch(`${VULA_API}/v1/email/status/${tenantId}`)
-      const d = await r.json()
-      setAccounts(d.accounts || [])
-    } catch { setAccounts([]) }
+    const res = await tryApi(`/v1/email/status/${tenantId}`)
+    if (res.ok) setAccounts(res.data.accounts || [])
+    else toast(`Couldn't load your mailboxes: ${res.error}`, 'danger')
     setLoading(false)
   }, [tenantId])
   useEffect(() => { loadStatus() }, [loadStatus])
@@ -67,15 +66,17 @@ export function useEmailConnect({ tenantId, adminEmail }) {
   const disconnect = async (accountId) => {
     if (!(await confirmDialog('Disconnect this mailbox?', { danger: true, confirmLabel: 'Yes' }))) return
     setBusyAccountId(accountId)
-    await fetch(`${VULA_API}/v1/email/disconnect/${tenantId}/${accountId}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/email/disconnect/${tenantId}/${accountId}`, { method: 'DELETE' })
     setBusyAccountId(null)
+    if (!res.ok) { toast(`That mailbox wasn't disconnected: ${res.error}`, 'danger'); return }
     loadStatus()
   }
 
   const setPrimary = async (accountId) => {
     setBusyAccountId(accountId)
-    await fetch(`${VULA_API}/v1/email/set-primary/${tenantId}/${accountId}`, { method: 'POST' })
+    const res = await tryApi(`/v1/email/set-primary/${tenantId}/${accountId}`, { method: 'POST' })
     setBusyAccountId(null)
+    if (!res.ok) { toast(`That mailbox wasn't made the main one: ${res.error}`, 'danger'); return }
     loadStatus()
   }
 
@@ -90,8 +91,9 @@ export function useEmailConnect({ tenantId, adminEmail }) {
 
   const backfill = async (accountId) => {
     setBusyAccountId(accountId)
-    await fetch(`${VULA_API}/v1/email/backfill/${tenantId}?account_id=${accountId}`, { method: 'POST' })
+    const res = await tryApi(`/v1/email/backfill/${tenantId}?account_id=${accountId}`, { method: 'POST' })
     setBusyAccountId(null)
+    if (!res.ok) { toast(`The backfill didn't start: ${res.error}`, 'danger'); return }
     toast('Backfill started in the background — check Contacts/Documents in a few minutes.')
   }
 

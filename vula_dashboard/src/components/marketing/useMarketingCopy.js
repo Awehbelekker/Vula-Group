@@ -6,6 +6,8 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { errorText, tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const KINDS = [
   { id: "specials", label: "📣 Today's specials", hint: "A fresh-today post for WhatsApp status or social." },
@@ -32,9 +34,10 @@ export function useMarketingCopy(tenantId) {
   const loadSaved = useCallback(async () => {
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/marketing/saved`);
-      const d = await r.json();
-      setSaved(d.saved || []);
-    } catch {}
+      const d = await r.json().catch(() => null);
+      if (!r.ok) { toast(`Couldn't load your saved copy: ${errorText(d)}`, "danger"); return; }
+      setSaved((d && d.saved) || []);
+    } catch { toast("Couldn't load your saved copy. Check your connection and try again.", "danger"); }
   }, [tenantId]);
   useEffect(() => { loadSaved(); }, [loadSaved]);
 
@@ -45,9 +48,9 @@ export function useMarketingCopy(tenantId) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind, topic, tone, variants: 2 }),
       });
-      const d = await r.json();
-      if (d.error) setErr(d.error);
-      else setVariants(d.variants || []);
+      const d = await r.json().catch(() => null);
+      if (!r.ok || d?.error) setErr(errorText(d));
+      else setVariants(d?.variants || []);
     } catch (e) { setErr(String(e.message || e)); }
     setLoading(false);
   };
@@ -58,20 +61,20 @@ export function useMarketingCopy(tenantId) {
   };
 
   const saveVariant = async (text, i) => {
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/marketing/saved`, {
+      method: "POST",
+      body: { kind, topic, tone, body: text },
+    });
+    if (!res.ok) { toast(`That copy wasn't saved: ${res.error}`, "danger"); return; }
     setSavedIdx(i);
-    try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/marketing/saved`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, topic, tone, body: text }),
-      });
-      loadSaved();
-    } catch {}
+    loadSaved();
     setTimeout(() => setSavedIdx(-1), 1200);
   };
 
   const deleteSaved = async (id) => {
     setSaved(s => s.filter(x => x.id !== id));
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/marketing/saved/${id}`, { method: "DELETE" }).catch(() => {});
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/marketing/saved/${id}`, { method: "DELETE" });
+    if (!res.ok) { toast(`That copy wasn't deleted: ${res.error}`, "danger"); loadSaved(); }
   };
 
   return { kind, setKind, topic, setTopic, tone, setTone, variants, loading, err, copied, saved, savedIdx, active, needsTopic, generate, copy, saveVariant, deleteSaved };

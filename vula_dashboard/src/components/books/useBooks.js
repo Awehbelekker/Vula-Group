@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
 import { toast } from "../ui/index.jsx";
 
 const BASIS_KEY = "vula.books.basis";
@@ -20,6 +21,7 @@ export function useBooks(tenantId) {
   const [until, setUntil] = useState("");
   const [pnl, setPnl] = useState(null);
   const [vat, setVat] = useState(null);
+  const [error, setError] = useState("");
   const [basis, setBasisState] = useState(readBasis);
   const setBasis = (b) => { setBasisState(b); try { localStorage.setItem(BASIS_KEY, b); } catch { /* private window */ } };
   const fromBooks = pnl?.source === "journal";
@@ -34,10 +36,14 @@ export function useBooks(tenantId) {
     const q = new URLSearchParams(); if (since) q.set("since", since); if (until) q.set("until", until);
     const pq = new URLSearchParams(q); pq.set("basis", basis);     // ignored by a business not on the one book
     const [p, v] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/pnl?${pq}`).then(r => r.json()).catch(() => null),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/vat?${q}`).then(r => r.json()).catch(() => null),
+      tryApi(`/v1/commerce/${tenantId}/admin/reports/pnl?${pq}`),
+      tryApi(`/v1/commerce/${tenantId}/admin/reports/vat?${q}`),
     ]);
-    setPnl(p); setVat(v);
+    // A refused or failed report is left out (no R0.00 tiles) and said once, not shown as zero.
+    setPnl(p.ok ? p.data : null); setVat(v.ok ? v.data : null);
+    const failed = !p.ok ? p : !v.ok ? v : null;
+    setError(failed ? failed.error : "");
+    if (failed) toast(`Couldn't load your books: ${failed.error}`, "danger");
   }, [tenantId, since, until, basis]);
   useEffect(() => { load(); }, [load]);
 
@@ -53,5 +59,5 @@ export function useBooks(tenantId) {
     } catch { toast("Couldn't export the ledger — please try again.", "danger"); }
   };
 
-  return { since, setSince, until, setUntil, pnl, vat, exportLedger, basis, setBasis, fromBooks };
+  return { since, setSince, until, setUntil, pnl, vat, exportLedger, basis, setBasis, fromBooks, error };
 }

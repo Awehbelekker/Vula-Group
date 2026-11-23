@@ -7,9 +7,16 @@
  */
 import { useEffect, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { errorText } from "../../lib/api";
 import { confirmDialog } from "../ui/index.jsx";
 
-const api = (t, p, opts) => fetch(`${VULA_API}/v1/commerce/${t}/admin${p}`, opts).then(r => r.json());
+// The JSON on success; on a refusal `{ error: "<the server's words>" }` (callers check `.error` —
+// FastAPI's 4xx `{detail}` used to look like success).
+const api = (t, p, opts) => fetch(`${VULA_API}/v1/commerce/${t}/admin${p}`, opts).then(async (r) => {
+  const d = await r.json().catch(() => null);
+  if (!r.ok) return { ...(d && typeof d === "object" ? d : {}), error: errorText(d) };
+  return d ?? {};
+});
 
 export function useWATemplates(tenantId) {
   const [rows, setRows] = useState([]);
@@ -21,8 +28,9 @@ export function useWATemplates(tenantId) {
 
   const load = async () => {
     setBusy(true);
-    const d = await api(tenantId, "/wa-templates").catch(() => ({ templates: [] }));
-    setRows(d.templates || []);
+    const d = await api(tenantId, "/wa-templates").catch(() => ({ error: "Couldn't reach Vula. Check your connection and try again." }));
+    if (d.error) flash(`Couldn't load your templates: ${d.error}`);
+    else setRows(d.templates || []);
     setBusy(false);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [tenantId]);
@@ -34,7 +42,7 @@ export function useWATemplates(tenantId) {
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/wa-templates/standard`, { method: "POST" })
       .then(async (x) => ({ ok: x.ok, d: await x.json().catch(() => ({})) })).catch(() => ({ ok: false, d: {} }));
     setBusy(false);
-    if (!r.ok) { flash(r.d.detail || "Couldn't submit the standard templates."); return; }
+    if (!r.ok) { flash(errorText(r.d, "Couldn't submit the standard templates.")); return; }
     const { submitted = [], already_there = [], failed = [] } = r.d;
     flash(`${submitted.length} submitted for review, ${already_there.length} already on the account`
       + (failed.length ? `, ${failed.length} refused: ${failed.map(f => `${f.name} (${f.error})`).join("; ")}` : "") + ".");
@@ -43,8 +51,8 @@ export function useWATemplates(tenantId) {
 
   const remove = async (name) => {
     if (!(await confirmDialog(`Delete template "${name}"? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return;
-    const r = await api(tenantId, `/wa-templates/${name}`, { method: "DELETE" }).catch(() => ({ error: "network" }));
-    flash(r.error || `Deleted "${name}".`);
+    const r = await api(tenantId, `/wa-templates/${name}`, { method: "DELETE" }).catch(() => ({ error: "Couldn't reach Vula. Check your connection and try again." }));
+    flash(r.error ? `"${name}" wasn't deleted: ${r.error}` : `Deleted "${name}".`);
     load();
   };
 
@@ -80,7 +88,7 @@ export function useTemplateForm(tenantId, { onDone, flash }) {
         header_type: headerType || undefined, header_example_url: headerType ? headerUrl : undefined,
         buttons: cleanButtons.length ? cleanButtons : undefined,
       }),
-    }).then(r => r.json ? r.json() : r).catch(() => ({ error: "network" }));
+    }).then(r => r.json ? r.json() : r).catch(() => ({ error: "Couldn't reach Vula. Check your connection and try again." }));
     setBusy(false);
     if (r.error) return flash(r.error);
     onDone();
