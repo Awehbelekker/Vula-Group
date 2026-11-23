@@ -113,10 +113,104 @@ async def shop_home(request: Request) -> HTMLResponse:
     name in WhatsApp's browser, not Vula's (2026-10-13). Any other host has nothing here."""
     from fastapi import HTTPException
     from vula.commerce import web_basket
-    tenant_id = web_basket.tenant_for_shop_host(request.headers.get("host") or "")
+    host = (request.headers.get("host") or "").strip().lower().split(":")[0]
+    tenant_id = web_basket.tenant_for_shop_host(host)
     if not tenant_id:
         raise HTTPException(status_code=404, detail="Not Found")
+    # A free address exists for every business, shop or not: one with nothing to sell has no page.
+    if host == web_basket.free_shop_host(tenant_id) and not await web_basket.shop_products(tenant_id):
+        raise HTTPException(status_code=404, detail="Not Found")
     return await photo_menu(tenant_id, request)
+
+
+def _shop_host_of(request: Request) -> tuple:
+    """(host, tenant) when this request came in on a shop's address, else ("", None)."""
+    from vula.commerce import web_basket
+    host = (request.headers.get("host") or "").strip().lower().split(":")[0]
+    tenant_id = web_basket.tenant_for_shop_host(host)
+    return (host, tenant_id) if tenant_id else ("", None)
+
+
+@router.get("/robots.txt", include_in_schema=False)
+async def shop_robots(request: Request):
+    """On a shop's address: search engines may read it, and here is its sitemap. Any other host
+    (Vula's own API address) has nothing here."""
+    from fastapi import HTTPException
+    from fastapi.responses import PlainTextResponse
+    host, tenant_id = _shop_host_of(request)
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return PlainTextResponse(f"User-agent: *\nAllow: /\nDisallow: /receipt/\nSitemap: https://{host}/sitemap.xml\n")
+
+
+@router.get("/sitemap.xml", include_in_schema=False)
+async def shop_sitemap(request: Request):
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+    host, tenant_id = _shop_host_of(request)
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="Not Found")
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+           f"  <url><loc>https://{host}/</loc></url>\n</urlset>")
+    return Response(content=xml, media_type="application/xml")
+
+
+def _rand_decimal(cents) -> str:
+    """12550 → '125.50' (schema.org prices are plain decimals), from integer cents."""
+    c = max(int(cents or 0), 0)
+    return f"{c // 100}.{c % 100:02d}"
+
+
+def seo_head(shop_name: str, ranges: list, page_url: str, logo_url: str = "") -> str:
+    """What a search engine or a link preview reads: description, the page's one true address,
+    and the shop with its products and prices as structured data. `shop_name` and `logo_url`
+    arrive already escaped; everything here comes from the database, nothing is worked out."""
+    names = [r["title"] for r in ranges[:6] if r.get("title")]
+    desc = f"{html.unescape(shop_name)} — order online and pay on WhatsApp." + (
+        f" {', '.join(names)}{' and more' if len(ranges) > len(names) else ''}." if names else "")
+    first_img = next((o["img"] for r in ranges for o in r.get("opts") or [] if o.get("img")), "")
+    offers = []
+    for r in ranges[:100]:
+        for o in (r.get("opts") or [])[:1]:
+            if not o.get("cents"):
+                continue
+            item = {"@type": "Product", "name": r.get("title") or o.get("name") or "Item"}
+            if o.get("img"):
+                item["image"] = o["img"]
+            if r.get("short"):
+                item["description"] = r["short"]
+            offers.append({"@type": "Offer", "itemOffered": item, "price": _rand_decimal(o["cents"]),
+                           "priceCurrency": "ZAR", "availability": "https://schema.org/InStock"})
+    store = {"@context": "https://schema.org", "@type": "Store", "name": html.unescape(shop_name)}
+    if page_url:
+        store["url"] = page_url
+    if logo_url:
+        store["logo"] = html.unescape(logo_url)
+    if first_img:
+        store["image"] = first_img
+    if offers:
+        store["hasOfferCatalog"] = {"@type": "OfferCatalog", "name": "Products", "itemListElement": offers}
+    ld = json.dumps(store).replace("<", "\\u003c")     # no tag can start inside the script block
+    out = [f'<meta name="description" content="{_esc(desc[:300])}">',
+           f'<meta property="og:title" content="{shop_name}">',
+           f'<meta property="og:description" content="{_esc(desc[:300])}">',
+           '<meta property="og:type" content="website">']
+    if page_url:
+        out += [f'<link rel="canonical" href="{_esc(page_url)}">', f'<meta property="og:url" content="{_esc(page_url)}">']
+    if first_img:
+        out.append(f'<meta property="og:image" content="{_esc(first_img)}">')
+    out.append(f'<script type="application/ld+json">{ld}</script>')
+    return "\n".join(out)
+
+
+def noscript_list(ranges: list) -> str:
+    """The products as plain HTML, for readers that don't run the page's script."""
+    rows = "".join(
+        f"<li>{_esc(r.get('title') or '')}"
+        + (f" — {_fmt_price(r['opts'][0]['cents'])}" if r.get("opts") and r["opts"][0].get("cents") else "")
+        + "</li>" for r in ranges[:200])
+    return f"<noscript><ul>{rows}</ul></noscript>" if rows else ""
 
 
 @router.get("/menu/{tenant_id}", response_class=HTMLResponse)
@@ -155,7 +249,19 @@ async def photo_menu(tenant_id: str, request: Request = None) -> HTMLResponse:
                        "canOrder": can_order, "chat": f"https://wa.me/{number}" if number else ""}
                       ).replace("</", "<\\/")
 
+    # The page's one true address: the shop's own or free address when it has one, so the copy on
+    # Vula's server (/menu/…) points search engines there instead of competing with it.
+    shop_host = web_basket.shop_host(tenant_id)
+    req_host = ((request.headers.get("host") or "") if request is not None else "").strip().lower().split(":")[0]
+    if req_host and web_basket.tenant_for_shop_host(req_host) == tenant_id:
+        page_url = f"https://{req_host}/"
+    else:
+        page_url = f"https://{shop_host}/" if shop_host else ""
+    head = seo_head(shop_name, ranges, page_url, logo_url)
+
     page = _SHOP_HTML.replace("{{TITLE}}", shop_name).replace("{{ACCENT}}", accent) \
+        .replace("{{HEAD}}", head.replace("{{", "{ {")) \
+        .replace("{{NOSCRIPT}}", noscript_list(ranges).replace("{{", "{ {")) \
         .replace("{{LOGO}}", f'<img class="logo" src="{logo_url}" alt="">' if logo_url else "") \
         .replace("{{LOGO_H}}", str(logo_h)).replace("{{LOGO_W}}", str(logo_w)) \
         .replace("{{PB_CSS}}", powered_by.pill_css()).replace("{{PB}}", powered_by.pill_html()) \
@@ -207,6 +313,7 @@ async def create_basket(tenant_id: str, request: Request) -> JSONResponse:
 _SHOP_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{TITLE}} — Shop</title>
+{{HEAD}}
 <style>
 :root{--accent:{{ACCENT}};--bg:#FAF8F3;--surface:#fff;--text:#24231F;--muted:#77736B;--line:#E6E1D6;--chip:#F1EDE4;--r:14px}
 @media (prefers-color-scheme:dark){:root{--bg:#161614;--surface:#22221F;--text:#EDEAE2;--muted:#A39F96;--line:#34332E;--chip:#2C2B27}}
@@ -278,7 +385,7 @@ main{padding:14px 16px;display:grid;gap:14px;grid-template-columns:repeat(auto-f
   <input class="search" id="q" type="search" placeholder="Search — e.g. round basin, charcoal" autocomplete="off">
   <div class="cats" id="cats"></div>
 </header>
-<main id="grid"></main>
+<main id="grid">{{NOSCRIPT}}</main>
 {{PB}}
 <div class="bar" id="bar"><div class="sum" id="sum"></div><button class="wa" id="go">Order on WhatsApp</button></div>
 <div class="sheet" id="sheet"><div class="panel" id="panel"></div></div>

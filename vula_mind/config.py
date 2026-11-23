@@ -419,6 +419,10 @@ class Settings(BaseSettings):
     clickup_client_secret: str = ""
     # Public base URL the OAuth redirect comes back to (defaults to Railway prod)
     public_base_url: str = "https://vula-group-production.up.railway.app"
+    # Every shop's free address (23 Nov 2026): <business>.<shop_base_domain>, e.g. shop.vula-ai.com
+    # gives seedleme.shop.vula-ai.com. Needs ONE wildcard domain (*.<shop_base_domain>) on this
+    # Railway service and its DNS records; empty = no free addresses (vula/commerce/web_basket.py).
+    shop_base_domain: str = ""
 
     # Tap-to-pay (KakEnBetaal) pilot: comma-separated tenant ids that have it switched on. Empty =
     # off everywhere (no inbound message is inspected, no /t/ tag resolves). tap_hash_pepper keys
