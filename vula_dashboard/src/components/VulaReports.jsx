@@ -28,12 +28,12 @@ function StatCard({ label, value, sub }) {
 function BarChart({ data }) {
   const max = Math.max(...data.map(d => d.revenue_cents), 1);
   return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 120, padding: "0 4px" }}>
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 120, padding: "0 4px", minWidth: 0 }}>
       {data.map((d, i) => {
         const pct = (d.revenue_cents / max) * 100;
         const label = d.date?.slice(5); // MM-DD
         return (
-          <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+          <div key={i} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
             <div
               title={`${label}: ${fmt(d.revenue_cents)} · ${d.orders} orders`}
               style={{
@@ -58,11 +58,11 @@ export default function VulaReports({ tenantId }) {
   const { days, setDays, data, loading, error, avgCents } = useSalesReport(tenantId);
 
   return (
-    <div style={{ padding: "4px 0" }}>
+    <div style={{ padding: "4px 0", minWidth: 0 }}>
       {/* Period selector */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: C.text }}>Sales Reports</h2>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
           {[7, 14, 30, 90].map(n => (
             <button key={n} onClick={() => setDays(n)} style={{
               padding: "6px 14px", fontSize: 12, fontWeight: 600, borderRadius: 6,
@@ -89,7 +89,7 @@ export default function VulaReports({ tenantId }) {
       {!loading && data && (
         <>
           {/* Summary stats */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))", gap: 12, marginBottom: 24 }}>
             <StatCard label="Total Revenue" value={fmt(data.total_revenue_cents)} sub={`last ${days} days`} />
             <StatCard label="Total Orders" value={data.total_orders} sub="paid / confirmed / dispatched" />
             <StatCard label="Avg Order Value" value={fmt(avgCents)} sub="per order" />
@@ -125,13 +125,13 @@ export default function VulaReports({ tenantId }) {
               Top Products by Revenue
             </div>
             {data.top_products && data.top_products.length > 0 ? (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${C.border}` }}>
                     <th style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>Product</th>
                     <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>Units</th>
                     <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>Revenue</th>
-                    <th style={{ padding: "6px 8px", width: 120 }}></th>
+                    <th style={{ padding: "6px 8px", width: "25%" }}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -152,7 +152,7 @@ export default function VulaReports({ tenantId }) {
                     );
                   })}
                 </tbody>
-              </table>
+              </table></div>
             ) : (
               <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>
                 No product data for this period.
