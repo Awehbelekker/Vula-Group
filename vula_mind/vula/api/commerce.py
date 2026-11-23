@@ -3320,7 +3320,7 @@ async def admin_finances_insights(tenant_id: str, days: int = 30, explain: bool 
 # ── Bank reconciliation (read the statement → match invoices/expenses) ─────────
 class BankSettingsIn(BaseModel):
     password: str            # statement PDF password (e.g. ID number) — stored encrypted
-    bank: str = "Capitec"
+    bank: Optional[str] = None   # 23 Nov 2026: no longer "Capitec" whatever the bank
 
 
 @router.post("/{tenant_id}/admin/bank/settings")

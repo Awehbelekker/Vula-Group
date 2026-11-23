@@ -9,7 +9,7 @@ import { useState } from "react";
 import { ChevronRight, Download, FileText, Sparkles, Users } from "lucide-react";
 import { formatMoney } from "../../lib/money";
 import { downloadCsv } from "../../lib/csv";
-import { Button, Card, EmptyState, Field, Input, PillTabs, Skeleton, StatCard, StatusChip } from "../ui/index.jsx";
+import { Button, Card, EmptyState, ErrorCard, Field, Input, PillTabs, Skeleton, StatCard, StatusChip } from "../ui/index.jsx";
 import JobCostingV2 from "./JobCostingV2";
 import CrossCheckV2 from "./CrossCheckV2";
 import RevenueChart from "./RevenueChart";
@@ -49,7 +49,7 @@ function Insights({ tenantId }) {
         <h2 id="vfn-insights" className="vfn-h2">Financial insights</h2>
         <Chips label="Period" options={INSIGHT_PERIODS.map((p) => [p.d, p.l])} value={x.days} onChange={x.setDays} />
       </div>
-      {x.loading ? <Card><Skeleton lines={3} /></Card> : (!d || d.error) ? <EmptyState Icon={FileText} title="No financial data yet">It fills in as orders are paid and expenses are logged.</EmptyState> : (
+      {x.loading ? <Card><Skeleton lines={3} /></Card> : x.error ? <ErrorCard what="your financial insights" onRetry={x.reload} /> : (!d || d.error) ? <EmptyState Icon={FileText} title="No financial data yet">It fills in as orders are paid and expenses are logged.</EmptyState> : (
         <>
           <div className="vfn-stats">
             <StatCard variant="tile" label="Revenue" value={money(d.revenue_cents)} sub={`${d.orders_count} paid orders`} color="var(--ok-text)" />
@@ -182,13 +182,14 @@ function Ledger({ tenantId }) {
       <p className="vfn-sub">Built from the invoices and payments Vula files. Payments are matched to invoices, not guessed.</p>
       <JobCostingV2 tenantId={tenantId} />
       <CrossCheckV2 tenantId={tenantId} />
+      {L.error ? <ErrorCard what="money per project" onRetry={L.reload} /> : (
       <div className="vfn-stats">
         <StatCard variant="tile" label="Money in" value={rands(data.total_in)} color="var(--ok-text)" />
         <StatCard variant="tile" label="Money out" value={rands(data.total_out)} />
         <StatCard variant="tile" label="Net" value={formatMoney(netCents, { cents: "always" })} />
-      </div>
+      </div>)}
 
-      {data.projects.length === 0 ? <EmptyState Icon={FileText} title="No projects yet">No financial documents are filed under a project yet.</EmptyState> : (
+      {L.error ? null : data.projects.length === 0 ? <EmptyState Icon={FileText} title="No projects yet">No financial documents are filed under a project yet.</EmptyState> : (
         <ul className="vfn-projects" aria-label="Projects">
           {data.projects.map((p) => <ProjectItem key={p.project} p={p} L={L} />)}
         </ul>
@@ -205,7 +206,7 @@ function Ledger({ tenantId }) {
               <span className="vula-money vfn-amt">{rands(t.amount)}</span>
               <span className="vfn-sub">{t.reconciled ? "Matched" : String(t.kind || "").replace(/_/g, " ")}</span>
             </li>))}
-          {data.transactions.length === 0 && <li className="vfn-empty">Nothing filed yet.</li>}
+          {data.transactions.length === 0 && !L.error && <li className="vfn-empty">Nothing filed yet.</li>}
         </ul>
       </Card>
 
