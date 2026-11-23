@@ -671,15 +671,73 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
             log.warning("could not release abandoned checkout order %s: %s", order.get("id"), exc)
         raise HTTPException(status_code=detail_status, detail=detail)
 
-    # Resolve Yoco credentials — per-tenant from Supabase, env var fallback
-    from vula.api.yoco import _get_tenant_yoco_creds
-    yoco_creds = await _get_tenant_yoco_creds(tenant_id)
-    if not yoco_creds or not yoco_creds.get("secret_key"):
-        await _abandon(503, f"Payment gateway not configured for {tenant_id}. Connect Yoco in Vula Admin.")
-    yoco_secret = yoco_creds["secret_key"]
-
+    # Where the customer lands after paying: the shop's own site when it has one, else Vula's
+    # own result pages. (It used to fall back to Off the Hook's website for every business.)
+    from config import settings as _settings
     from vula.api import tenants as _tenants
-    store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
+    store_url = (_tenants.store_url(tenant_id) or "").rstrip("/")
+    api_url = (_settings.public_base_url or "").rstrip("/")
+    success_url = (f"{store_url}/payment/success?order={order['id']}" if store_url
+                   else f"{api_url}/payment/success?order={order['display_id']}")
+    cancel_url = (f"{store_url}/payment/cancel?order={order['id']}" if store_url
+                  else f"{api_url}/payment/cancel?order={order['display_id']}")
+    failure_url = f"{store_url}/payment/failed?order={order['id']}" if store_url else cancel_url
+
+    async def _spent(redirect_url: str, provider: str, **status_kw):
+        """The gateway's checkout exists: the order waits for payment, the cart is spent, the
+        invoice goes out in the background, and the customer is sent to pay."""
+        await service.update_order_status(order["id"], "pending_payment", **status_kw)
+        try:
+            await service.clear_cart(cart["id"])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cart %s not cleared after checkout %s: %s", cart.get("id"), order.get("id"), exc)
+        # Fire-and-forget — the customer is waiting to be redirected to pay, so PDF render +
+        # WhatsApp media upload (a couple of seconds) must not sit in this response's critical path.
+        import asyncio
+        from vula.commerce.service import send_order_invoice
+        # with_pay_link=False: the checkout just made is this order's payment link.
+        asyncio.create_task(send_order_invoice(tenant_id, order["id"], with_pay_link=False))
+        return {
+            "order_id": order["id"],
+            "display_id": order["display_id"],
+            "redirect_url": redirect_url,
+            "provider": provider,
+            "total_cents": order["total_cents"],
+            "total_rands": f"R{order['total_cents'] / 100:.2f}",
+        }
+
+    # Which gateway (23 Nov 2026): the business's default one. This route used to know only
+    # Yoco, so a shop on PayFast, Ozow, Peach, iKhokha or Paystack had no web checkout at all.
+    # A Yoco account keeps its own checkout below (its webhook reads the order from the
+    # metadata); any other default goes through vula.payments, whose signed notification marks
+    # the order paid by its number — only when the amount covers the total (api/payments.py).
+    from vula import payments as _payments
+    from vula.api.yoco import _get_tenant_yoco_creds
+    default_row = _payments.default_provider_row(tenant_id)
+    yoco_creds = await _get_tenant_yoco_creds(tenant_id)
+    has_yoco = bool(yoco_creds and yoco_creds.get("secret_key"))
+    if default_row and (default_row.get("provider") != "yoco" or not has_yoco):
+        provider = default_row["provider"]
+        try:
+            link = await _payments.create_pay_link(
+                tenant_id, amount_cents=order["total_cents"], reference=order["display_id"],
+                description=f"Order {order['display_id']}",
+                success_url=success_url, cancel_url=cancel_url,
+                notify_url=f"{api_url}/v1/payments/webhook/{tenant_id}/{provider}",
+                customer={"name": body.customer_name, "phone": body.customer_phone,
+                          **({"email": body.customer_email} if body.customer_email else {})})
+        except Exception as exc:  # noqa: BLE001
+            log.error("%s checkout request failed for %s: %s", provider, tenant_id, type(exc).__name__)
+            await _abandon(502, "Payment gateway error — please try again")
+        if not link or not link.url:
+            log.error("%s gave no checkout address for %s", provider, tenant_id)
+            await _abandon(502, "Payment gateway error — please try again")
+        return await _spent(link.url, provider)
+
+    if not has_yoco:
+        await _abandon(503, "This shop can't take card payments online yet. "
+                            "Connect a payment gateway under Settings › Payments.")
+    yoco_secret = yoco_creds["secret_key"]
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -689,9 +747,9 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
                 json={
                     "amount": order["total_cents"],
                     "currency": "ZAR",
-                    "successUrl": f"{store_url}/payment/success?order={order['id']}",
-                    "cancelUrl": f"{store_url}/payment/cancel?order={order['id']}",
-                    "failureUrl": f"{store_url}/payment/failed?order={order['id']}",
+                    "successUrl": success_url,
+                    "cancelUrl": cancel_url,
+                    "failureUrl": failure_url,
                     "metadata": {
                         "order_id": order["id"],
                         "display_id": order["display_id"],
@@ -710,29 +768,7 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
         await _abandon(502, "Payment gateway error — please try again")
 
     yoco_data = resp.json()
-    await service.update_order_status(order["id"], "pending_payment", yoco_checkout_id=yoco_data["id"])
-    # Only now is the cart spent (see create_order's clear_cart_after).
-    try:
-        await service.clear_cart(cart["id"])
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cart %s not cleared after checkout %s: %s", cart.get("id"), order.get("id"), exc)
-
-    # Fire-and-forget — the customer is waiting to be redirected to pay, so PDF render +
-    # WhatsApp media upload (a couple of seconds) must not sit in this response's critical
-    # path. Same asyncio.create_task convention already used elsewhere in this file for
-    # background side-effects (statement ingestion jobs).
-    import asyncio
-    from vula.commerce.service import send_order_invoice
-    # with_pay_link=False: the storefront's Yoco checkout above is this order's payment link.
-    asyncio.create_task(send_order_invoice(tenant_id, order["id"], with_pay_link=False))
-
-    return {
-        "order_id": order["id"],
-        "display_id": order["display_id"],
-        "redirect_url": yoco_data["redirectUrl"],
-        "total_cents": order["total_cents"],
-        "total_rands": f"R{order['total_cents'] / 100:.2f}",
-    }
+    return await _spent(yoco_data["redirectUrl"], "yoco", yoco_checkout_id=yoco_data["id"])
 
 
 # ── Orders ───────────────────────────────────────────────────────────────────
