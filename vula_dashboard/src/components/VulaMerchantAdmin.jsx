@@ -41,6 +41,7 @@ import { escapeHtml as esc } from '../lib/html'
 const DeliveryV2 = lazyScreen(() => import('./delivery/DeliveryV2'))
 const VulaBankRec = lazyScreen(() => import('./VulaBankRec'))
 const BooksReview = lazyScreen(() => import('./booksreview/BooksReview'))
+const ManagementAccounts = lazyScreen(() => import('./management/ManagementAccounts'))
 const VulaAccounting = lazyScreen(() => import('./VulaAccounting'))
 const VulaLabour = lazyScreen(() => import('./VulaLabour'))
 const VulaExpenses = lazyScreen(() => import('./VulaExpenses'))
@@ -280,6 +281,7 @@ function MoneySection({ tenantId, products, subtabs, pendingSubtab, onConsumePen
       {active === 'expenses' && <VulaExpenses tenantId={tenantId} />}
       {active === 'bank' && <VulaBankRec tenantId={tenantId} />}
       {active === 'books' && <VulaAccounting tenantId={tenantId} />}
+      {active === 'management' && <ManagementAccounts tenantId={tenantId} />}
       {active === 'booksreview' && <BooksReview tenantId={tenantId} />}
       {active === 'payments' && <VulaPayments tenantId={tenantId} />}
       {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} />}

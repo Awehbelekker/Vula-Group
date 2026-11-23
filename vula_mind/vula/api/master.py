@@ -947,6 +947,19 @@ async def master_statement_files_backfill(tenant_id: str) -> dict:
     return await statement_files.backfill(tenant_id)
 
 
+@router.post("/management-pack/{tenant_id}/send")
+async def master_management_pack_send(tenant_id: str, month: Optional[str] = None) -> dict:
+    """Send a month's management accounts to the business's owners now (default: last month), once
+    each — an owner who already had it isn't sent it again (vula/management_send.py)."""
+    from fastapi import HTTPException
+    from vula import management_send
+    try:
+        return await management_send.send_month(tenant_id, (month or "").strip() or None,
+                                                actor={"email": "master (send now)"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/books-health/run")
 async def master_books_health_run() -> dict:
     """Run the books health checks now (every business on the one book) and return the result."""
