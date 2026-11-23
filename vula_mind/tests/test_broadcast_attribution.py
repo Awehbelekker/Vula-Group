@@ -87,7 +87,7 @@ async def test_create_order_includes_attribution_in_insert():
 @pytest.mark.asyncio
 async def test_admin_broadcast_recipients_computes_attributed_revenue():
     orders_table = MagicMock()
-    orders_table.select.return_value.eq.return_value.eq.return_value.limit.return_value \
+    orders_table.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value \
         .execute.return_value = MagicMock(data=[
             {"total_cents": 15000, "status": "paid"},
             {"total_cents": 20000, "status": "dispatched"},
@@ -95,7 +95,7 @@ async def test_admin_broadcast_recipients_computes_attributed_revenue():
             {"total_cents": 3000, "status": "cancelled"},          # excluded
         ])
     recipients_table = MagicMock()
-    recipients_table.select.return_value.eq.return_value.eq.return_value.limit.return_value \
+    recipients_table.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value \
         .execute.return_value = MagicMock(data=[
             {"phone": "27821234567", "status": "read", "error": None, "clicked_at": "2026-07-20T00:00:00Z", "click_count": 1},
         ])
@@ -116,7 +116,7 @@ async def test_admin_broadcast_recipients_computes_attributed_revenue():
 @pytest.mark.asyncio
 async def test_admin_broadcast_recipients_defaults_to_zero_on_missing_migration():
     recipients_table = MagicMock()
-    recipients_table.select.return_value.eq.return_value.eq.return_value.limit.return_value \
+    recipients_table.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value \
         .execute.return_value = MagicMock(data=[])
 
     def _table(name):

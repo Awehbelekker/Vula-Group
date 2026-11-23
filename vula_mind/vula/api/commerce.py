@@ -3619,11 +3619,11 @@ async def admin_bank_match_candidates(tenant_id: str, txn_id: str, limit: int = 
     txn = rows[0]
     inbound = txn.get("direction") != "in"
     statuses = ["draft", "sent", "overdue", "part_paid"] if inbound else ["sent", "overdue", "part_paid"]
-    docs = (db.table("commerce_invoices")
+    docs = (all_rows(lambda: db.table("commerce_invoices")
             .select("id,invoice_number,customer_name,supplier,project,issue_date,due_date,status,"
                     "total_cents,total_paid_cents,doc_type,direction")
             .eq("tenant_id", tenant_id).eq("direction", "inbound" if inbound else "outbound")
-            .eq("doc_type", "invoice").in_("status", statuses).limit(1000).execute().data or [])
+            .eq("doc_type", "invoice").in_("status", statuses)))
     amount = int(txn.get("amount_cents") or 0)
     tdate = str(txn.get("txn_date") or "")[:10]
 
@@ -5069,8 +5069,8 @@ async def admin_stats(tenant_id: str):
     # Knowledge pulling through — make what the assistant knows VISIBLE (UI overhaul Phase 3).
     knowledge = {}
     try:
-        learned = (db.table("vula_learned_answers").select("source")
-                   .eq("tenant_id", tenant_id).limit(1000).execute().data or [])
+        learned = (all_rows(lambda: db.table("vula_learned_answers").select("source")
+                   .eq("tenant_id", tenant_id)))
         knowledge = {
             "learned_answers": len(learned),
             "taught": sum(1 for r in learned if (r.get("source") or "") != "escalation"),
@@ -8097,10 +8097,9 @@ async def admin_broadcast_recipients(tenant_id: str, broadcast_id: str):
     plus attributed revenue (migration 104) — orders placed by a customer within 7 days of
     clicking this broadcast's link (service.py:_attribute_broadcast, set at order creation)."""
     db = service._client()
-    recs = (db.table("commerce_broadcast_recipients")
+    recs = (all_rows(lambda: db.table("commerce_broadcast_recipients")
             .select("phone,status,error,clicked_at,click_count")
-            .eq("tenant_id", tenant_id).eq("broadcast_id", broadcast_id)
-            .limit(1000).execute().data or [])
+            .eq("tenant_id", tenant_id).eq("broadcast_id", broadcast_id)))
     funnel = {"sent": len(recs),
               "delivered": sum(1 for r in recs if r.get("status") in ("delivered", "read")),
               "read": sum(1 for r in recs if r.get("status") == "read"),
@@ -8108,9 +8107,8 @@ async def admin_broadcast_recipients(tenant_id: str, broadcast_id: str):
               "failed": sum(1 for r in recs if r.get("status") == "failed")}
 
     try:
-        orders = (db.table("commerce_orders").select("total_cents,status")
-                  .eq("tenant_id", tenant_id).eq("attributed_broadcast_id", broadcast_id)
-                  .limit(1000).execute().data or [])
+        orders = (all_rows(lambda: db.table("commerce_orders").select("total_cents,status")
+                  .eq("tenant_id", tenant_id).eq("attributed_broadcast_id", broadcast_id)))
         counted = [o for o in orders if o.get("status") not in ("pending_payment", "cancelled", "refunded")]
         funnel["attributed_orders"] = len(counted)
         funnel["attributed_revenue_cents"] = sum(int(o.get("total_cents") or 0) for o in counted)
