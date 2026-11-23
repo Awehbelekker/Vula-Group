@@ -3,8 +3,8 @@
  * LabourV2). Moved verbatim out of VulaLabour.jsx.
  */
 import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../../lib/authFetch";
-import { confirmDialog } from "../ui/index.jsx";
+import { tryApi } from "../../lib/api";
+import { confirmDialog, toast } from "../ui/index.jsx";
 
 export const blank = { name: "", id_number: "", bank_account: "", phone: "", rate_rands: "", rate_period: "daily", type: "casual", default_project: "" };
 
@@ -17,12 +17,17 @@ export function useLabour({ tenantId }) {
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
+    // 23 Nov 2026 audit: a failed load showed "No workers yet". Only what loaded replaces the screen.
     const [w, r, p] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/workers`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/labour`).then(r => r.json()).catch(() => null),
-      fetch(`${VULA_API}/v1/projects/${tenantId}/labels`).then(r => r.json()).catch(() => ({})),
+      tryApi(`/v1/commerce/${tenantId}/admin/workers`),
+      tryApi(`/v1/commerce/${tenantId}/admin/reports/labour`),
+      tryApi(`/v1/projects/${tenantId}/labels`),
     ]);
-    setWorkers(w.workers || []); setReport(r); setProjects(p.projects || []);
+    if (w.ok) setWorkers(w.data.workers || []);
+    if (r.ok) setReport(r.data);
+    if (p.ok) setProjects(p.data.projects || []);
+    if (!w.ok) toast(`The worker register couldn't be loaded: ${w.error}`, "danger");
+    else if (!r.ok) toast(`The labour report couldn't be loaded: ${r.error}`, "danger");
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
 
@@ -30,11 +35,12 @@ export function useLabour({ tenantId }) {
 
   const save = async () => {
     if (!f.name.trim()) return flash("Worker name is required.");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/workers`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...f, rate_rands: f.rate_rands ? Number(f.rate_rands) : null }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
-    if (r.error) return flash(r.error);
+    // 23 Nov 2026 audit: only r.error was checked, so a refusal ({detail}) said "Worker saved ✓".
+    const r = await tryApi(`/v1/commerce/${tenantId}/admin/workers`, {
+      method: "POST",
+      body: { ...f, rate_rands: f.rate_rands ? Number(f.rate_rands) : null },
+    });
+    if (!r.ok) { toast(`The worker wasn't saved: ${r.error}`, "danger"); return false; }
     setF(blank); setEditing(false); flash("Worker saved ✓"); load();
     return true;   // the redesign closes its sheet on this
   };
@@ -42,7 +48,8 @@ export function useLabour({ tenantId }) {
   const edit = (w) => { setF({ ...blank, ...w, rate_rands: w.rate_cents ? (w.rate_cents / 100).toString() : "" }); setEditing(true); };
   const remove = async (id) => {
     if (!(await confirmDialog("Remove this worker from the active register?", { danger: true, confirmLabel: 'Yes' }))) return;
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/workers/${id}`, { method: "DELETE" }).catch(() => {});
+    const r = await tryApi(`/v1/commerce/${tenantId}/admin/workers/${id}`, { method: "DELETE" });
+    if (!r.ok) toast(`The worker wasn't removed: ${r.error}`, "danger");
     load();
   };
   return { workers, setWorkers, report, setReport, projects, setProjects, f, setF, editing, setEditing, msg, setMsg, load, flash, save, edit, remove };

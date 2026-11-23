@@ -3,7 +3,8 @@
  * RepRemindersV2). Moved verbatim out of VulaRepReminders.jsx.
  */
 import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export function useRepReminders(tenantId, repPhone) {
   const [reminders, setReminders] = useState([]);
@@ -12,14 +13,16 @@ export function useRepReminders(tenantId, repPhone) {
   const load = useCallback(async () => {
     if (!tenantId) return;
     const params = new URLSearchParams({ created_by: repPhone || "", status });
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reminders?${params}`);
-    const d = await r.json().catch(() => ({}));
+    // 23 Nov 2026 audit: a failed load showed "You're all caught up"
+    const { ok, data: d, error } = await tryApi(`/v1/commerce/${tenantId}/admin/reminders?${params}`);
+    if (!ok) { toast(`Your reminders couldn't be loaded: ${error}`, "danger"); return; }
     setReminders(d.reminders || []);
   }, [tenantId, repPhone, status]);
   useEffect(() => { load(); }, [load]);
 
   const complete = async (id) => {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reminders/${id}`, { method: "PATCH" });
+    const { ok, error } = await tryApi(`/v1/commerce/${tenantId}/admin/reminders/${id}`, { method: "PATCH" });
+    if (!ok) toast(`That reminder wasn't marked done: ${error}`, "danger");
     load();
   };
 

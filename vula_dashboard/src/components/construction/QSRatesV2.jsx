@@ -22,7 +22,7 @@ export default function QSRatesV2({ tenantId }) {
   const f = x.form;
   const set = (k) => (e) => x.setForm({ ...f, [k]: e.target.value });
   const close = () => { setOpen(false); x.setForm(blank); };
-  const save = async () => { if (!f.description.trim() || f.rate === "") return; await x.save(); setOpen(false); };
+  const save = async () => { if (!f.description.trim() || f.rate === "") return; if (await x.save()) setOpen(false); };
   const del = async (r) => { if (await confirmDialog(`Delete your rate "${r.description}"?`, { danger: true, confirmLabel: "Delete" })) x.del(r.id); };
   return (
     <section className="vco" aria-label="QS rate library">
@@ -83,7 +83,7 @@ export default function QSRatesV2({ tenantId }) {
             <Field label="Unit"><Select value={f.unit} onChange={set("unit")}>{[...new Set([...UNITS, f.unit])].map((u) => <option key={u}>{u}</option>)}</Select></Field>
             <Field label="Rate (R)"><Input type="number" min="0" step="0.01" inputMode="decimal" value={f.rate} onChange={set("rate")} /></Field>
             <Field label="Category" hint="Optional"><Input value={f.category} onChange={set("category")} /></Field>
-            <Field label="Source" hint="e.g. DIGG 2026"><Input value={f.source} onChange={set("source")} /></Field>
+            <Field label="Source" hint="e.g. Price list 2026"><Input value={f.source} onChange={set("source")} /></Field>
           </div>
         </form>
       </Sheet>

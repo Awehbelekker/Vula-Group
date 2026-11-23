@@ -5,8 +5,13 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { api, tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const P = (t, p) => `${VULA_API}/v1/projects/${t}/${p}`;
+// The same paths without the host, for lib/api (which adds it). 23 Nov 2026 audit: nothing here
+// checked the server's answer — a refused brief showed as saved, a failed to-do cleared the box.
+const PP = (t, p) => `/v1/projects/${t}/${p}`;
 
 export function useProjectWorkspace({ tenantId }) {
   const [projects, setProjects] = useState([]);
@@ -24,7 +29,8 @@ export function useProjectWorkspace({ tenantId }) {
   const scroller = useRef(null);
 
   useEffect(() => {
-    fetch(P(tenantId, "labels")).then((r) => r.json()).then((d) => {
+    tryApi(PP(tenantId, "labels")).then(({ ok, data: d, error }) => {
+      if (!ok) { toast(`Your projects couldn't be loaded: ${error}`, "danger"); return; }
       setProjects(d.projects || []);
       if (!project && d.projects?.length) setProject(d.projects[0]);
     });
@@ -33,27 +39,34 @@ export function useProjectWorkspace({ tenantId }) {
   const loadProject = useCallback(async () => {
     if (!project) return;
     const [t, b, tk] = await Promise.all([
-      fetch(P(tenantId, `p/${encodeURIComponent(project)}/threads`)).then((r) => r.json()),
-      fetch(P(tenantId, `p/${encodeURIComponent(project)}/brief`)).then((r) => r.json()),
-      fetch(P(tenantId, `p/${encodeURIComponent(project)}/tasks`)).then((r) => r.json()),
+      tryApi(PP(tenantId, `p/${encodeURIComponent(project)}/threads`)),
+      tryApi(PP(tenantId, `p/${encodeURIComponent(project)}/brief`)),
+      tryApi(PP(tenantId, `p/${encodeURIComponent(project)}/tasks`)),
     ]);
-    setThreads(t.threads || []);
-    setThreadId((t.threads || [])[0]?.id || null);
-    setBrief(b.brief || ""); setBriefDirty(false);
-    setTasks(tk.tasks || []);
+    // Only what loaded replaces what's on screen (a failed brief must not look empty and be saved over).
+    if (t.ok) {
+      setThreads(t.data.threads || []);
+      setThreadId((t.data.threads || [])[0]?.id || null);
+    }
+    if (b.ok) { setBrief(b.data.brief || ""); setBriefDirty(false); }
+    if (tk.ok) setTasks(tk.data.tasks || []);
+    const failed = [t, b, tk].find((x) => !x.ok);
+    if (failed) toast(`Part of this project couldn't be loaded: ${failed.error}`, "danger");
   }, [tenantId, project]);
   useEffect(() => { loadProject(); }, [loadProject]);
 
   const loadMessages = useCallback(async () => {
     if (!threadId) { setMessages([]); return; }
-    const d = await fetch(P(tenantId, `threads/${threadId}/messages`)).then((r) => r.json());
+    const { ok, data: d, error } = await tryApi(PP(tenantId, `threads/${threadId}/messages`));
+    if (!ok) { setMessages([]); toast(`This chat couldn't be loaded: ${error}`, "danger"); return; }
     setMessages(d.messages || []);
   }, [tenantId, threadId]);
   useEffect(() => { loadMessages(); }, [loadMessages]);
   useEffect(() => { scroller.current?.scrollTo(0, scroller.current.scrollHeight); }, [messages, busy]);
 
   const newThread = async () => {
-    const d = await fetch(P(tenantId, `p/${encodeURIComponent(project)}/threads`), { method: "POST" }).then((r) => r.json());
+    const { ok, data: d, error } = await tryApi(PP(tenantId, `p/${encodeURIComponent(project)}/threads`), { method: "POST" });
+    if (!ok) { toast(`A new chat couldn't be started: ${error}`, "danger"); return; }
     if (d.thread) { setThreads([d.thread, ...threads]); setThreadId(d.thread.id); setMessages([]); }
   };
 
@@ -61,38 +74,47 @@ export function useProjectWorkspace({ tenantId }) {
     if (!input.trim()) return;
     let tid = threadId;
     if (!tid) {
-      const d = await fetch(P(tenantId, `p/${encodeURIComponent(project)}/threads`), { method: "POST" }).then((r) => r.json());
+      const { ok, data: d, error } = await tryApi(PP(tenantId, `p/${encodeURIComponent(project)}/threads`), { method: "POST" });
+      if (!ok || !d.thread?.id) { toast(`Your message wasn't sent — a chat couldn't be started: ${error || "try again."}`, "danger"); return; }
       tid = d.thread?.id; setThreadId(tid); setThreads([d.thread, ...threads]);
     }
     const text = input; setInput("");
-    setMessages((m) => [...m, { role: "user", content: text }]); setBusy(true);
+    const mine = { role: "user", content: text };
+    setMessages((m) => [...m, mine]); setBusy(true);
     try {
-      const d = await fetch(P(tenantId, `threads/${tid}/messages`), {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project, message: text }),
-      }).then((r) => r.json());
+      const d = await api(PP(tenantId, `threads/${tid}/messages`), {
+        method: "POST", body: { project, message: text },
+      });
       setMessages((m) => [...m, { role: "assistant", content: d.reply || "…" }]);
       loadProject();
-    } catch { setMessages((m) => [...m, { role: "assistant", content: "Something went wrong." }]); }
+    } catch (e) {
+      // the question goes back in the box to send again
+      setMessages((m) => m.filter((x) => x !== mine));
+      setInput(text);
+      toast(`Vula didn't answer that: ${e.message}`, "danger");
+    }
     finally { setBusy(false); }
   };
 
   const saveBrief = async () => {
-    await fetch(P(tenantId, `p/${encodeURIComponent(project)}/brief`), {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brief }),
+    const { ok, error } = await tryApi(PP(tenantId, `p/${encodeURIComponent(project)}/brief`), {
+      method: "PUT", body: { brief },
     });
+    if (!ok) { toast(`The brief wasn't saved: ${error}`, "danger"); return; }
     setBriefDirty(false);
   };
   const addTask = async () => {
     if (!newTask.trim()) return;
-    const d = await fetch(P(tenantId, `p/${encodeURIComponent(project)}/tasks`), {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: newTask }),
-    }).then((r) => r.json());
+    const { ok, data: d, error } = await tryApi(PP(tenantId, `p/${encodeURIComponent(project)}/tasks`), {
+      method: "POST", body: { title: newTask },
+    });
+    if (!ok) { toast(`The to-do wasn't added: ${error}`, "danger"); return; }
     if (d.task) setTasks([d.task, ...tasks]); setNewTask("");
   };
   const toggleTask = async (t) => {
     const status = t.status === "done" ? "open" : "done";
-    await fetch(P(tenantId, `tasks/${t.id}`), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+    const { ok, error } = await tryApi(PP(tenantId, `tasks/${t.id}`), { method: "PATCH", body: { status } });
+    if (!ok) { toast(`That to-do wasn't updated: ${error}`, "danger"); return; }
     setTasks(tasks.map((x) => x.id === t.id ? { ...x, status } : x));
   };
   return { projects, setProjects, project, setProject, threads, setThreads, threadId, setThreadId, messages, setMessages, input, setInput, busy, setBusy, brief, setBrief, briefDirty, setBriefDirty, tasks, setTasks, newTask, setNewTask, mode, setMode, scroller, loadProject, loadMessages, newThread, send, saveBrief, addTask, toggleTask };

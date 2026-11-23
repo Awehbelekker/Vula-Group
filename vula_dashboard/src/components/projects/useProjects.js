@@ -5,25 +5,34 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { api as callApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const PROJECT_TABS = [["overview", "Overview"], ["documents", "Documents"], ["boq", "BOQ"], ["money", "Money"], ["team", "Standards & team"]];
 
 /** A project's BOQ (total + trade sections). */
+// 23 Nov 2026 audit: these loads reject when the server refuses (they used to resolve to its
+// {detail} as if it were the data), so each caller's .catch shows its "couldn't be read".
 export const fetchBoq = (tenantId, project) =>
-  fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`).then((r) => r.json());
-/** Set the contract value; `total` is rand as typed ("1 250 000" → 1250000). Returns false if it isn't a number. */
+  callApi(`/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`);
+/** Set the contract value; `total` is rand as typed ("1 250 000" → 1250000). Returns false if it isn't
+ * a number or the server didn't save it (the reason is shown). */
 export async function saveBoqTotal(tenantId, project, total) {
   const v = parseFloat(String(total).replace(/[^\d.]/g, ""));
   if (!v) return false;
-  await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ total: v }) });
+  try {
+    await callApi(`/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`, { method: "POST", body: { total: v } });
+  } catch (e) {
+    toast(`The contract value wasn't saved: ${e.message}`, "danger");
+    return false;
+  }
   return true;
 }
 export const fetchFinancials = (tenantId, project) =>
-  fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then((r) => r.json());
+  callApi(`/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`);
 /** The project tracker (budget vs actual, account, share links) — vula/commerce/project_tracker.py. */
 export const fetchTracker = (tenantId, project) =>
-  fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/tracker?project=${encodeURIComponent(project)}`).then((r) => r.json());
+  callApi(`/v1/commerce/${tenantId}/admin/projects/tracker?project=${encodeURIComponent(project)}`);
 /** A client link for the project in `view` ("price" | "open_book"); resolves to { url, expires_at } or { error }. */
 export async function createShare(tenantId, project, view) {
   const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/share`, {
@@ -43,7 +52,7 @@ export async function setProjectFee(tenantId, project, terms) {
 /** The online BOQ (vula/commerce/boq_online.py): the bill, the rate library, and its actions. */
 const boqUrl = (tenantId, path = "") => `${VULA_API}/v1/commerce/${tenantId}/admin/projects/boq-online${path}`;
 export const fetchBoqOnline = (tenantId, project) =>
-  fetch(`${boqUrl(tenantId)}?project=${encodeURIComponent(project)}`).then((r) => r.json());
+  callApi(`/v1/commerce/${tenantId}/admin/projects/boq-online?project=${encodeURIComponent(project)}`);
 export const fetchBoqLibrary = (tenantId) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/boq-library`).then((r) => r.json());
 export const fetchBillLines = (tenantId, project) =>
@@ -125,7 +134,7 @@ export const decideDownloadRequest = (tenantId, id, approve) =>
 /** Emails sent to the project's client from Vula (vula/commerce/project_emails.py); [] if not allowed. */
 export const fetchClientEmails = (tenantId, project) =>
   fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/client-emails?project=${encodeURIComponent(project)}`)
-    .then((r) => (r.ok ? r.json() : { emails: null })).then((d) => d.emails).catch(() => null);
+    .then((r) => (r.ok ? r.json() : { emails: null })).then((d) => (Array.isArray(d.emails) ? d.emails : null)).catch(() => null);
 /** Send an email to the project's client from the business's mailbox; resolves to the saved row or { error }. */
 export async function sendClientEmail(tenantId, body) {
   const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/projects/client-emails`, {
@@ -179,22 +188,26 @@ export function useProjects(tenantId) {
     const r = await fetch(`${VULA_API}/v1/projects/${tenantId}${path}`, {
       method, headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
-    });
+    }).catch(() => null);
+    if (!r) return { error: "Couldn't reach Vula. Check your connection and try again." };
     const d = await r.json().catch(() => ({}));
     return r.ok ? d : { error: d.detail || d.error || "Something went wrong." };
   }, [tenantId]);
 
   const loadProjects = useCallback(async () => {
     const d = await api("GET", "");
+    if (d.error) { setMsg(`Your projects couldn't be loaded: ${d.error}`); return; }
     setProjects(d.projects || []);
   }, [api]);
   const loadCodes = useCallback(async () => {
     const d = await api("GET", "/codes");
+    if (d.error) { toast(`The code library couldn't be loaded: ${d.error}`, "danger"); return; }
     setCodes(d.codes || []);
   }, [api]);
   const openProject = useCallback(async (pid) => {
     setMsg("");
     const [p, o] = await Promise.all([api("GET", `/p/${pid}`), api("GET", `/p/${pid}/overview`)]);
+    if (p.error) setMsg(`That project couldn't be opened: ${p.error}`);
     setSel(p.error ? null : p);
     setOv(o.error ? null : o);
   }, [api]);
@@ -236,43 +249,60 @@ export function useProjects(tenantId) {
     await loadProjects();
     if (p.id) openProject(p.id);
   };
+  // Each returns true when the server saved it, so a form closes / clears only then.
   const saveEdit = async (patch) => {
-    if (!sel) return;
+    if (!sel) return false;
     const d = await api("PATCH", `/p/${sel.id}`, patch);
-    if (d.error) { setMsg(d.error); return; }
+    if (d.error) { setMsg(d.error); return false; }
     const moved = Object.values(d.moved || {}).reduce((a, b) => a + b, 0);
     setMsg(moved ? `Saved — ${moved} record(s) moved to the new name; the old name still works.` : "Saved.");
     await loadProjects(); openProject(sel.id);
+    return true;
   };
   const addAlias = async (alias) => {
-    if (!sel || !alias.trim()) return;
+    if (!sel || !alias.trim()) return false;
     const d = await api("POST", `/p/${sel.id}/aliases`, { alias });
-    if (d.error) { setMsg(d.error); return; }
+    if (d.error) { setMsg(d.error); return false; }
     const n = (d.moved || {}).vula_filed_documents || 0;
     setMsg(`“${alias}” now files under ${sel.name}${n ? ` — ${n} document(s) moved` : ""}.`);
     await loadProjects(); openProject(sel.id);
+    return true;
   };
   const removeAlias = async (alias) => saveEdit({ aliases: (sel.aliases || []).filter((a) => a !== alias) });
   const addPhase = async (phase, moveFrom) => {
-    if (!sel || !phase.trim()) return;
+    if (!sel || !phase.trim()) return false;
     const d = await api("POST", `/p/${sel.id}/phases`, { phase, move_from: moveFrom || undefined });
-    if (d.error) { setMsg(d.error); return; }
+    if (d.error) { setMsg(d.error); return false; }
     setMsg(`${d.name} added — its own BOQ, budget and documents.`);
     await loadProjects(); openProject(sel.id);
+    return true;
   };
   const addCode = async () => {
     if (!newCode.code_ref.trim() || !newCode.title.trim()) return;
     setBusy(true);
-    await api("POST", "/codes", { ...newCode, category: "Standards", status: "current" });
-    setNewCode({ code_ref: "", title: "", version: "", content: "" });
-    await loadCodes();
-    setBusy(false);
+    try {
+      const d = await api("POST", "/codes", { ...newCode, category: "Standards", status: "current" });
+      if (d.error) { toast(`The code wasn't added: ${d.error}`, "danger"); return; }
+      setNewCode({ code_ref: "", title: "", version: "", content: "" });
+      await loadCodes();
+    } finally { setBusy(false); }
   };
-  const linkCode = async (cid) => { if (sel) { await api("POST", `/p/${sel.id}/codes/${cid}`); openProject(sel.id); } };
-  const unlinkCode = async (cid) => { if (sel) { await api("DELETE", `/p/${sel.id}/codes/${cid}`); openProject(sel.id); } };
+  const linkCode = async (cid) => {
+    if (!sel) return;
+    const d = await api("POST", `/p/${sel.id}/codes/${cid}`);
+    if (d.error) toast(`The code wasn't linked: ${d.error}`, "danger");
+    openProject(sel.id);
+  };
+  const unlinkCode = async (cid) => {
+    if (!sel) return;
+    const d = await api("DELETE", `/p/${sel.id}/codes/${cid}`);
+    if (d.error) toast(`The code wasn't removed: ${d.error}`, "danger");
+    openProject(sel.id);
+  };
   const addMember = async () => {
     if (!sel || !newMember.name.trim()) return;
-    await api("POST", `/p/${sel.id}/team`, newMember);
+    const d = await api("POST", `/p/${sel.id}/team`, newMember);
+    if (d.error) { toast(`${newMember.name.trim()} wasn't added to the team: ${d.error}`, "danger"); return; }
     setNewMember({ name: "", role: "" });
     openProject(sel.id);
   };
