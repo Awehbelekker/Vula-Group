@@ -31,3 +31,14 @@ test("missing or broken amounts show a dash, never R 0", () => {
 test("string cents from the API are accepted", () => {
   assert.equal(formatMoney("250000"), `R${S}2${S}500`);
 });
+
+test("randToCents reads a typed amount as written", async () => {
+  const { randToCents } = await import("../../src/lib/money.js");
+  assert.equal(randToCents("200"), 20000);
+  assert.equal(randToCents("R1,948.50"), 194850);
+  assert.equal(randToCents("199,5"), 19950);
+  assert.equal(randToCents("2 300.00"), 230000);
+  assert.equal(randToCents(""), null);
+  assert.equal(randToCents("abc"), null);
+  assert.equal(randToCents("12.345"), null);
+});
