@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react'
 import { VULA_API } from '../../../lib/authFetch'
+import { errorText } from '../../../lib/api'
 import { confirmDialog, toast } from '../../ui/index.jsx'
 
 export const STORES = {
@@ -39,8 +40,10 @@ export function useStoreConnect({ tenantId, adminEmail, store }) {
   async function load() {
     try {
       const r = await fetch(base)
+      if (!r.ok) toast(`Couldn't check ${S.label}: ${errorText(await r.json().catch(() => null))}`, 'danger')
       setInfo(r.ok ? await r.json() : { connected: false })
     } catch {
+      toast(`Couldn't check ${S.label}. Check your connection and try again.`, 'danger')
       setInfo({ connected: false })
     }
   }
@@ -63,7 +66,7 @@ export function useStoreConnect({ tenantId, adminEmail, store }) {
         body: JSON.stringify({ ...body, connected_by: adminEmail }),
       })
       const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.detail || `${S.label} connection failed`)
+      if (!r.ok) throw new Error(errorText(data, `${S.label} connection failed`))
       setForm(S.emptyForm)
       setShowForm(false)
       toast(`${S.label} connected — reading your catalogue now.`)
@@ -76,16 +79,21 @@ export function useStoreConnect({ tenantId, adminEmail, store }) {
   }
 
   async function syncNow() {
-    const r = await fetch(`${base}/sync`, { method: 'POST' })
-    const data = await r.json().catch(() => ({}))
-    if (!r.ok) { toast(data.detail || 'Could not start the sync', 'danger'); return }
+    const r = await fetch(`${base}/sync`, { method: 'POST' }).catch(() => null)
+    const data = r ? await r.json().catch(() => ({})) : {}
+    if (!r || !r.ok) { toast(errorText(data, 'Could not start the sync'), 'danger'); return }
     toast(data.started ? `Reading your ${S.label} catalogue…` : 'A sync is already running.')
     load()
   }
 
   async function disconnect() {
     if (!(await confirmDialog(S.disconnectMsg))) return
-    await fetch(base, { method: 'DELETE' })
+    const r = await fetch(base, { method: 'DELETE' }).catch(() => null)
+    if (!r || !r.ok) {
+      const d = r ? await r.json().catch(() => null) : null
+      toast(`${S.label} wasn't disconnected: ${r ? errorText(d) : "Couldn't reach Vula. Check your connection and try again."}`, 'danger')
+      return
+    }
     toast(`${S.label} disconnected.`)
     load()
   }

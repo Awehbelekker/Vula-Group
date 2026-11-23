@@ -6,7 +6,8 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { VULA_API } from '../../lib/authFetch'
-import { confirmDialog } from '../ui/index.jsx'
+import { api, errorText, tryApi } from '../../lib/api'
+import { confirmDialog, toast } from '../ui/index.jsx'
 
 export const BLANK_DISCOUNT = {
   code: '', type: 'percent', value: '', min_order_cents: '', starts_at: '', ends_at: '',
@@ -23,10 +24,14 @@ export function useDiscounts(tenantId) {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes`)
-    const d = await r.json()
-    setCodes(d.discount_codes || [])
-    setLoading(false)
+    try {
+      const d = await api(`/v1/commerce/${tenantId}/admin/discount-codes`)
+      setCodes(d.discount_codes || [])
+    } catch (e) {
+      toast(`Couldn't load your discount codes: ${e.message}`, 'danger')
+    } finally {
+      setLoading(false)
+    }
   }, [tenantId])
 
   useEffect(() => { load() }, [load])
@@ -69,10 +74,10 @@ export function useDiscounts(tenantId) {
     const r = await fetch(
       `${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes${isEdit ? `/${editing.id}` : ''}`,
       { method: isEdit ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-    )
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}))
-      setError(d.detail || 'Could not save that code.')
+    ).catch(() => null)
+    const d = r ? await r.json().catch(() => ({})) : {}
+    if (!r || !r.ok || d.error) {
+      setError(r ? errorText(d, 'Could not save that code.') : "Couldn't reach Vula. Check your connection and try again.")
       setSaving(false)
       return
     }
@@ -84,16 +89,18 @@ export function useDiscounts(tenantId) {
   async function remove(c) {
     if (!(await confirmDialog(`Delete code "${c.code}"?`, { danger: true, confirmLabel: 'Yes' }))) return
     setSaving(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, { method: 'DELETE' })
+    if (!res.ok) toast(`"${c.code}" wasn't deleted: ${res.error}`, 'danger')
     await load()
     setSaving(false)
   }
 
   async function toggleActive(c) {
     setSaving(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !c.active }),
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, {
+      method: 'PATCH', body: { active: !c.active },
     })
+    if (!res.ok) toast(`"${c.code}" wasn't switched ${c.active ? 'off' : 'on'}: ${res.error}`, 'danger')
     await load()
     setSaving(false)
   }

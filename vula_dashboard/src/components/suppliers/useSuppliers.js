@@ -6,7 +6,8 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { VULA_API } from '../../lib/authFetch'
-import { confirmDialog } from '../ui/index.jsx'
+import { api, tryApi } from '../../lib/api'
+import { confirmDialog, toast } from '../ui/index.jsx'
 
 export const BLANK_SUPPLIER = {
   name: '', aliases: '', payment_terms_days: 30, category: 'general',
@@ -23,10 +24,14 @@ export function useSuppliers(tenantId) {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`)
-    const d = await r.json()
-    setSuppliers(d.suppliers || [])
-    setLoading(false)
+    try {
+      const d = await api(`/v1/commerce/${tenantId}/admin/suppliers`)
+      setSuppliers(d.suppliers || [])
+    } catch (e) {
+      toast(`Couldn't load your suppliers: ${e.message}`, 'danger')
+    } finally {
+      setLoading(false)
+    }
   }, [tenantId])
 
   useEffect(() => { load() }, [load])
@@ -53,10 +58,16 @@ export function useSuppliers(tenantId) {
       aliases: String(form.aliases).split(',').map(a => a.trim()).filter(Boolean),
     }
     if (editing && editing.id) payload.id = editing.id
-    const saved = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).then(r => r.json()).catch(() => ({}))
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/suppliers`, {
+      method: 'POST', body: payload,
+    })
+    if (!res.ok) {
+      // keep the form open with what was typed
+      toast(`The supplier wasn't saved: ${res.error}`, 'danger')
+      setSaving(false)
+      return
+    }
+    const saved = res.data
     // a new supplier that is a business already on file is not added twice (supplier_identity.py)
     setNotice(saved && saved.matched_existing
       ? `${payload.name} is already on your list as ${saved.name}, so it was added as another name for it.`
@@ -69,10 +80,11 @@ export function useSuppliers(tenantId) {
   async function remove(s) {
     if (!(await confirmDialog(`Delete supplier "${s.name}"?`, { danger: true, confirmLabel: 'Yes' }))) return false
     setSaving(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers/${s.id}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/suppliers/${s.id}`, { method: 'DELETE' })
+    if (!res.ok) toast(`"${s.name}" wasn't deleted: ${res.error}`, 'danger')
     await load()
     setSaving(false)
-    return true
+    return res.ok
   }
 
   return { suppliers, loading, saving, editing, form, setForm, startEdit, startNew, cancel, save, remove, notice, reload: load }
@@ -123,35 +135,38 @@ export function usePurchaseOrders(tenantId) {
   const load = useCallback(async () => {
     setLoading(true)
     const [s, p] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reorder-suggestions`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders`).then(r => r.json()).catch(() => ({})),
+      tryApi(`/v1/commerce/${tenantId}/admin/reorder-suggestions`),
+      tryApi(`/v1/commerce/${tenantId}/admin/purchase-orders`),
     ])
-    setSuggestions(s.groups || [])
-    setPos(p.purchase_orders || [])
+    if (s.ok) setSuggestions(s.data.groups || [])
+    if (p.ok) setPos(p.data.purchase_orders || [])
+    if (!s.ok || !p.ok) toast(`Couldn't load your purchase orders: ${(!p.ok ? p : s).error}`, 'danger')
     setLoading(false)
   }, [tenantId])
   useEffect(() => { load() }, [load])
 
   async function createFromSuggestion(group) {
     setBusy(group.supplier_id || 'unassigned')
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/purchase-orders`, {
+      method: 'POST',
+      body: {
         supplier_id: group.supplier_id, supplier_name: group.supplier_name,
         items: group.items.map(it => ({
           product_id: it.product_id, name: it.name, quantity: it.suggested_qty, unit_cost_cents: it.unit_cost_cents,
         })),
-      }),
+      },
     })
+    if (!res.ok) toast(`The purchase order wasn't created: ${res.error}`, 'danger')
     await load()
     setBusy(null)
   }
 
   async function advance(po, status) {
     setBusy(po.id)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders/${po.id}/status`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/purchase-orders/${po.id}/status`, {
+      method: 'PATCH', body: { status },
     })
+    if (!res.ok) toast(`The purchase order wasn't changed: ${res.error}`, 'danger')
     await load()
     setBusy(null)
   }
@@ -159,12 +174,12 @@ export function usePurchaseOrders(tenantId) {
   async function sendPo(po) {
     setBusy(po.id)
     setSendMsg({ ...sendMsg, [po.id]: 'Sending…' })
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders/${po.id}/send`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: channel[po.id] || 'email' }),
-    }).then(r => r.json()).catch(() => ({ error: 'network' }))
-    if (r.error) {
-      setSendMsg({ ...sendMsg, [po.id]: r.error })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/purchase-orders/${po.id}/send`, {
+      method: 'POST', body: { channel: channel[po.id] || 'email' },
+    })
+    const r = res.data || {}
+    if (!res.ok) {
+      setSendMsg({ ...sendMsg, [po.id]: res.error })
     } else {
       setSendMsg({ ...sendMsg, [po.id]: r.warnings ? `Sent via ${r.sent_via.join(', ')} (${r.warnings[0]})` : `Sent via ${r.sent_via.join(', ')} ✓` })
       await load()

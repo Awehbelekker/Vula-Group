@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from 'react'
 import { applyBrand, DEFAULT_BRAND } from '../../theme/tokens'
 import { uploadBrandImage } from '../../lib/brandUpload'
 import { VULA_API } from '../../lib/authFetch'
+import { tryApi } from '../../lib/api'
+import { toast } from '../ui/index.jsx'
 
 const API = VULA_API
 const hex6 = (v, d) => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : d)
@@ -40,11 +42,19 @@ export function useBrandKit(tenantId) {
   const [website, setWebsite] = useState('')
   const [suggesting, setSuggesting] = useState(false)
   const [suggestion, setSuggestion] = useState(null)
+  // Set when the saved brand didn't load: the form then shows defaults, so saving would replace
+  // the real brand with them — save refuses until a reload brings the real one in.
+  const [loadError, setLoadError] = useState('')
 
   useEffect(() => {
-    fetch(`${API}/v1/commerce/${tenantId}/admin/invoice-settings`)
-      .then(r => r.json())
-      .then(d => {
+    tryApi(`/v1/commerce/${tenantId}/admin/invoice-settings`)
+      .then(res => {
+        if (!res.ok) {
+          const m = `Your saved brand kit didn't load (${res.error}). Reload the page before changing it.`
+          setLoadError(m); setMsg(m); setLoaded(true)
+          return
+        }
+        const d = res.data
         const st = d.settings || {}
         setName(st.trading_as || st.company_name || '')
         setTagline(st.tagline || '')
@@ -65,14 +75,13 @@ export function useBrandKit(tenantId) {
         setHeaderCtaLink(st.header_cta_link || '')
         setLoaded(true)
       })
-      .catch(() => setLoaded(true))
   }, [tenantId])  // eslint-disable-line
 
   // Live: every change shows across the whole dashboard straight away (nothing is saved until
   // "Save brand kit"; leaving without saving is undone on the next load of the saved brand).
   const draft = { accent_color: accent, secondary_color: secondary || null, ink_color: ink,
     font_pairing: fontPairing, corner_style: corners, density, nav_style: navStyle, logo_size: logoSize, logo_url: logoUrl, icon_url: iconUrl }
-  useEffect(() => { if (loaded) applyBrand(draft) }, [loaded, accent, secondary, ink, fontPairing, corners, density, navStyle, logoSize])  // eslint-disable-line
+  useEffect(() => { if (loaded && !loadError) applyBrand(draft) }, [loaded, loadError, accent, secondary, ink, fontPairing, corners, density, navStyle, logoSize])  // eslint-disable-line
 
   async function upload(e, kind) {
     const file = (e.target.files || [])[0]
@@ -91,9 +100,9 @@ export function useBrandKit(tenantId) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ logo_url: logoUrl || undefined, website_url: website || undefined }) })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) { setMsg(d.detail || 'No suggestion found.'); return }
+      if (!r.ok) { setMsg(typeof d.detail === 'string' && d.detail ? d.detail : 'No suggestion found.'); return }
       setSuggestion(d.suggestion)
-    } finally { setSuggesting(false) }
+    } catch { setMsg("Couldn't reach Vula. Check your connection and try again.") } finally { setSuggesting(false) }
   }
   function applySuggestion() {
     const sg = suggestion || {}
@@ -106,19 +115,20 @@ export function useBrandKit(tenantId) {
   }
 
   async function save() {
+    if (loadError) { setMsg(loadError); return }
     setSaving(true); setMsg('')
     try {
-      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/invoice-settings`, {
+        method: 'POST',
+        body: {
           trading_as: name, tagline, logo_url: logoUrl, icon_url: iconUrl,
           accent_color: accent, secondary_color: secondary || null, ink_color: ink, font_pairing: fontPairing,
           corner_style: corners, density, nav_style: navStyle,
           logo_align: logoAlign, logo_size: logoSize, header_sticky: headerSticky,
           header_nav_position: headerNavPosition, header_cta_text: headerCtaText, header_cta_link: headerCtaLink,
-        }),
+        },
       })
-      if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(d.detail || 'Could not save.'); return }
+      if (!res.ok) { setMsg(`Not saved: ${res.error}`); return }
       window.dispatchEvent(new Event('vula-brand-changed'))   // shell name/logo/app icon update now
       setMsg('Saved ✓')
       setTimeout(() => setMsg(''), 2500)
@@ -129,7 +139,7 @@ export function useBrandKit(tenantId) {
     name, setName, tagline, setTagline, logoUrl, setLogoUrl, iconUrl, setIconUrl, accent, setAccent, secondary, setSecondary,
     ink, setInk, fontPairing, setFontPairing, corners, setCorners, density, setDensity, navStyle, setNavStyle, logoAlign, setLogoAlign, logoSize, setLogoSize,
     headerSticky, setHeaderSticky, headerNavPosition, setHeaderNavPosition, headerCtaText, setHeaderCtaText, headerCtaLink, setHeaderCtaLink,
-    uploading, saving, msg, loaded, website, setWebsite, suggesting, suggestion, upload, suggest, applySuggestion, save,
+    uploading, saving, msg, loaded, loadError, website, setWebsite, suggesting, suggestion, upload, suggest, applySuggestion, save,
   }
 }
 
@@ -146,13 +156,19 @@ export function useDeliverySettings(tenantId) {
   const [geoSearch, setGeoSearch] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loadError, setLoadError] = useState('')   // the saved settings didn't load: don't save blanks over them
   const mapRef = useRef(null)     // { map, L, marker, circle }
   const mapDivRef = useRef(null)
 
   useEffect(() => {
-    fetch(`${API}/v1/commerce/${tenantId}/admin/order-settings`)
-      .then(r => r.json())
-      .then(d => {
+    tryApi(`/v1/commerce/${tenantId}/admin/order-settings`)
+      .then(res => {
+        if (!res.ok) {
+          const m = `Your delivery settings didn't load (${res.error}). Reload the page before changing them.`
+          setLoadError(m); setMsg(m)
+          return
+        }
+        const d = res.data
         const st = d.settings || {}
         setAreas((st.delivery_areas || []).join(', '))
         setFee(st.delivery_fee_cents != null ? String(st.delivery_fee_cents / 100) : '')
@@ -161,7 +177,7 @@ export function useDeliverySettings(tenantId) {
         if (st.origin_lat != null && st.origin_lng != null) setOrigin({ lat: st.origin_lat, lng: st.origin_lng })
         if (st.origin_label) setOriginLabel(st.origin_label)
         if (st.delivery_radius_km) setRadiusKm(st.delivery_radius_km)
-      }).catch(() => {})
+      })
   }, [tenantId])  // eslint-disable-line
 
   // Lazy-load Leaflet + OSM tiles once; click-to-place pin, live radius circle.
@@ -219,6 +235,7 @@ export function useDeliverySettings(tenantId) {
   const rands = v => { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(n * 100) : null }
 
   async function save() {
+    if (loadError) { setMsg(loadError); return }
     setBusy(true)
     try {
       const body = {
@@ -231,11 +248,10 @@ export function useDeliverySettings(tenantId) {
         origin_label: originLabel || null,
         delivery_radius_km: origin ? Number(radiusKm) : null,
       }
-      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/order-settings`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/order-settings`, {
+        method: 'PUT', body,
       })
-      const d = await r.json()
-      setMsg(d.error ? String(d.error) : 'Saved — the assistant uses this immediately.')
+      setMsg(res.ok ? 'Saved — the assistant uses this immediately.' : `Not saved: ${res.error}`)
     } catch (e) { setMsg('Could not save — try again.') } finally {
       setBusy(false); setTimeout(() => setMsg(''), 6000)
     }
@@ -263,11 +279,17 @@ export function useBusinessHours(tenantId) {
   const [afterHours, setAfterHours] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loadError, setLoadError] = useState('')   // the saved hours didn't load: don't save the defaults over them
 
   useEffect(() => {
-    fetch(`${API}/v1/commerce/${tenantId}/admin/order-settings`)
-      .then(r => r.json())
-      .then(d => {
+    tryApi(`/v1/commerce/${tenantId}/admin/order-settings`)
+      .then(res => {
+        if (!res.ok) {
+          const m = `Your opening hours didn't load (${res.error}). Reload the page before changing them.`
+          setLoadError(m); setMsg(m)
+          return
+        }
+        const d = res.data
         const st = d.settings || {}
         if (st.business_hours) {
           setDays(prev => {
@@ -283,7 +305,7 @@ export function useBusinessHours(tenantId) {
         }
         if (st.business_hours_note) setNote(st.business_hours_note)
         if (st.after_hours_message) setAfterHours(st.after_hours_message)
-      }).catch(() => {})
+      })
   }, [tenantId])  // eslint-disable-line
 
   function setDay(key, patch) {
@@ -291,6 +313,7 @@ export function useBusinessHours(tenantId) {
   }
 
   async function save() {
+    if (loadError) { setMsg(loadError); return }
     setBusy(true)
     try {
       const business_hours = Object.fromEntries(DAYS.map(d => {
@@ -302,11 +325,10 @@ export function useBusinessHours(tenantId) {
         business_hours_note: note.trim() || null,
         after_hours_message: afterHours.trim() || null,
       }
-      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/order-settings`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/order-settings`, {
+        method: 'PUT', body,
       })
-      const d = await r.json()
-      setMsg(d.error ? String(d.error) : 'Saved — the assistant uses this immediately.')
+      setMsg(res.ok ? 'Saved — the assistant uses this immediately.' : `Not saved: ${res.error}`)
     } catch (e) { setMsg('Could not save — try again.') } finally {
       setBusy(false); setTimeout(() => setMsg(''), 6000)
     }
@@ -320,10 +342,13 @@ export function useLearnedSummary(tenantId) {
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [loadError, setLoadError] = useState('')
 
   function load() {
-    fetch(`${API}/v1/commerce/${tenantId}/admin/learned-summary`)
-      .then(r => r.json()).then(setData).catch(() => {})
+    tryApi(`/v1/commerce/${tenantId}/admin/learned-summary`).then(res => {
+      if (res.ok) { setData(res.data); setLoadError('') }
+      else setLoadError(`Couldn't load what Vula has learned: ${res.error}`)
+    })
   }
   useEffect(load, [tenantId])  // eslint-disable-line
 
@@ -332,13 +357,12 @@ export function useLearnedSummary(tenantId) {
     setBusy(true)
     try {
       const persona_prompt = accept ? data.voice.suggested : data.voice.current
-      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/persona`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ persona_prompt }),
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/persona`, {
+        method: 'PATCH',
+        body: { persona_prompt },
       })
-      const d = await r.json()
-      setMsg(d.error ? String(d.error) : (accept ? 'Voice updated.' : 'Dismissed.'))
-      load()
+      setMsg(!res.ok ? `Not saved: ${res.error}` : (accept ? 'Voice updated.' : 'Dismissed.'))
+      if (res.ok) load()
     } catch (e) { setMsg('Could not save — try again.') } finally {
       setBusy(false); setTimeout(() => setMsg(''), 5000)
     }
@@ -347,12 +371,13 @@ export function useLearnedSummary(tenantId) {
   async function reviewLearned(id, action) {
     setBusy(true)
     try {
-      await fetch(`${API}/v1/commerce/${tenantId}/admin/learned-answers/${id}/${action}`, { method: 'POST' })
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/learned-answers/${id}/${action}`, { method: 'POST' })
+      if (!res.ok) toast(`That answer wasn't ${action === 'approve' ? 'kept' : 'binned'}: ${res.error}`, 'danger')
       load()
     } finally { setBusy(false) }
   }
 
-  return { data, busy, msg, respondToVoiceSuggestion, reviewLearned }
+  return { data, busy, msg, loadError, respondToVoiceSuggestion, reviewLearned }
 }
 
 /** The business profile: the owner's own answers, and which of them customers may be told. */
@@ -368,20 +393,23 @@ export function useBusinessProfile(tenantId) {
   const apply = d => { setData(d); setDraft(d.answers || {}); setPublicKeys(d.public_keys || []) }
   useEffect(() => {
     if (!tenantId) return
-    fetch(`${API}/v1/commerce/${tenantId}/admin/business-profile`)
-      .then(r => r.json()).then(apply)
-      .catch(() => setMsg('Couldn’t load the profile.'))
+    tryApi(`/v1/commerce/${tenantId}/admin/business-profile`).then(res => {
+      // an error is never stored as the profile (the screen reads data.questions)
+      if (res.ok && res.data && Array.isArray(res.data.questions)) apply(res.data)
+      else setMsg(`Couldn’t load the profile${res.ok ? '.' : `: ${res.error}`}`)
+    })
   }, [tenantId])
   const save = async () => {
     setSaving(true); setMsg('')
     try {
-      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/business-profile`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers: draft, public_keys: publicKeys }),
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/business-profile`, {
+        method: 'PUT',
+        body: { answers: draft, public_keys: publicKeys },
       })
-      const d = await r.json()
-      if (!r.ok) throw new Error(d.detail || 'Save failed')
-      setData(d); setPublicKeys(d.public_keys || publicKeys)
+      if (!res.ok) throw new Error(`Not saved: ${res.error}`)
+      const d = res.data
+      if (Array.isArray(d.questions)) setData(d)
+      setPublicKeys(d.public_keys || publicKeys)
       setMsg(d.warning || `Saved — ${d.answered} of ${d.total} answered.`)
     } catch (e) { setMsg(e.message) } finally { setSaving(false) }
   }

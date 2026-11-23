@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { VULA_API } from '../../../lib/authFetch'
+import { errorText } from '../../../lib/api'
 
 /** provider: "google" | "microsoft"; popupName: the window name; label: for the error message. */
 export function useOAuthConnect({ tenantId, provider, popupName, label }) {
@@ -21,9 +22,10 @@ export function useOAuthConnect({ tenantId, provider, popupName, label }) {
     try {
       const r = await fetch(`${VULA_API}/v1/${provider}/status/${tenantId}`)
       const d = await r.json()
+      if (!r.ok) { setStatus('error'); setError(`Couldn't check ${label}: ${errorText(d)}`); return }
       setStatus(d.status); setAccount(d)
     } catch { setStatus('error') }
-  }, [tenantId, provider])
+  }, [tenantId, provider, label])
 
   useEffect(() => { loadStatus() }, [loadStatus])
   useEffect(() => {
@@ -37,8 +39,8 @@ export function useOAuthConnect({ tenantId, provider, popupName, label }) {
     setLoading(true); setError(null)
     try {
       const r = await fetch(`${VULA_API}/v1/${provider}/authorize-url?tenant_id=${encodeURIComponent(tenantId)}`)
-      const d = await r.json()
-      if (!d.url) throw new Error(d.error || `${label} app not configured.`)
+      const d = await r.json().catch(() => null)
+      if (!r.ok || !d?.url) throw new Error(errorText(d, `${label} app not configured.`))
       window.open(d.url, popupName, 'width=520,height=680')
       let ticks = 0
       pollRef.current = setInterval(() => { loadStatus(); if (++ticks > 30 || status === 'connected') clearInterval(pollRef.current) }, 3000)

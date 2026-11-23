@@ -6,6 +6,8 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../../lib/authFetch"
+import { tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export function useAgentActivity(tenantId) {
   const [events, setEvents] = useState(null);
@@ -22,15 +24,16 @@ export function useAgentActivity(tenantId) {
   const [analyzing, setAnalyzing] = useState(false);
 
   const load = useCallback(async () => {
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/agent-activity?limit=80`)
-      .then(r => r.json()).catch(() => ({ events: [] }));
-    setEvents(d.events || []);
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/agent-activity?limit=80`);
+    if (!res.ok) toast(`Couldn't load what the assistant did: ${res.error}`, "danger");
+    setEvents((res.ok && res.data.events) || []);
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
 
   const loadPersona = useCallback(async () => {
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/persona`)
-      .then(r => r.json()).catch(() => ({}));
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/persona`);
+    if (!res.ok) { toast(`Couldn't load how Vula sounds: ${res.error}`, "danger"); return; }
+    const d = res.data;
     setPersona(d.persona_prompt || "");
     setSuggested(d.persona_prompt_suggested || "");
     setTeamVoice(d.team_voice_prompt || "");
@@ -48,11 +51,11 @@ export function useAgentActivity(tenantId) {
 
   const savePersona = async (text) => {
     setVoiceMsg("Saving…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/persona`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona_prompt: text }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
-    if (r.error) setVoiceMsg(r.error);
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/persona`, {
+      method: "PATCH",
+      body: { persona_prompt: text },
+    });
+    if (!res.ok) setVoiceMsg(`Not saved: ${res.error}`);
     else { setPersona(text); setSuggested(""); setVoiceMsg("Saved ✓"); }
     setTimeout(() => setVoiceMsg(""), 4000);
   };
@@ -73,21 +76,21 @@ export function useAgentActivity(tenantId) {
   const analyzeVoice = async () => {
     setAnalyzing(true);
     setVoiceMsg("Reading your recent replies…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/persona/analyze`, { method: "POST" })
-      .then(r => r.json()).catch(() => ({ error: "network" }));
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/persona/analyze`, { method: "POST" });
+    const r = res.data || {};
     setAnalyzing(false);
-    if (r.error) setVoiceMsg(r.error);
+    if (!res.ok) setVoiceMsg(res.error);
     else { setSuggested(r.suggested); setVoiceMsg(`Learned from ${r.sample_count} of your replies ✓`); }
   };
 
   const teach = async () => {
     if (!q.trim() || !a.trim()) { setMsg("Fill in both the question and the correct answer."); return; }
     setMsg("Teaching…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/agent-teach`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: q, answer: a }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
-    if (r.error) setMsg(r.error);
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/agent-teach`, {
+      method: "POST",
+      body: { question: q, answer: a },
+    });
+    if (!res.ok) setMsg(`Not learned: ${res.error}`);
     else { setMsg("Learned ✓ — your AI assistant will use this from now on."); setQ(""); setA(""); }
     setTimeout(() => setMsg(""), 4000);
   };

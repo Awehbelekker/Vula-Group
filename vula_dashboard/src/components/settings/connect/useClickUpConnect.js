@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { VULA_API } from '../../../lib/authFetch'
+import { errorText, tryApi } from '../../../lib/api'
 
 export function useClickUpConnect(tenantId) {
   const [status, setStatus] = useState(null)   // null | connected | not_connected | error
@@ -23,6 +24,7 @@ export function useClickUpConnect(tenantId) {
     try {
       const r = await fetch(`${VULA_API}/v1/clickup/status/${tenantId}`)
       const d = await r.json()
+      if (!r.ok) { setStatus('error'); setError(`Couldn't check ClickUp: ${errorText(d)}`); return }
       setStatus(d.status)
       setAccount(d)
       if (d.status === 'connected') {
@@ -59,8 +61,8 @@ export function useClickUpConnect(tenantId) {
     const popup = window.open('', 'clickup-oauth', 'width=620,height=760')
     try {
       const r = await fetch(`${VULA_API}/v1/clickup/authorize-url?tenant_id=${encodeURIComponent(tenantId)}`)
-      const d = await r.json()
-      if (!d.url) throw new Error(d.error || 'ClickUp app not configured.')
+      const d = await r.json().catch(() => null)
+      if (!r.ok || !d?.url) throw new Error(errorText(d, 'ClickUp app not configured.'))
       if (popup && !popup.closed) popup.location.href = d.url
       else { window.location.href = d.url; return }
       // Poll for ~90s while the user authorises in the popup.
@@ -85,7 +87,7 @@ export function useClickUpConnect(tenantId) {
         body: JSON.stringify({ tenant_id: tenantId, api_token: token.trim() }),
       })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.detail || 'ClickUp didn\'t accept that token.')
+      if (!r.ok) throw new Error(errorText(d, 'ClickUp didn\'t accept that token.'))
       setToken(''); setShowToken(false)
       setNotice(`Connected to ${d.workspace || 'ClickUp'} — documents filed while it was off are being sent across now.`)
       loadStatus()
@@ -98,17 +100,18 @@ export function useClickUpConnect(tenantId) {
 
   const refileMissing = async () => {
     setError(null); setNotice(null)
-    const r = await fetch(`${VULA_API}/v1/clickup/refile-missing/${tenantId}`, { method: 'POST' })
-    const d = await r.json().catch(() => ({}))
-    if (r.ok) setNotice('Sending documents that never reached ClickUp — this runs in the background.')
-    else setError(d.detail || 'Could not start that.')
+    const res = await tryApi(`/v1/clickup/refile-missing/${tenantId}`, { method: 'POST' })
+    if (res.ok) setNotice('Sending documents that never reached ClickUp — this runs in the background.')
+    else setError(res.data ? errorText(res.data, 'Could not start that.') : res.error)
   }
 
   const setDefaultList = async (listId) => {
-    await fetch(`${VULA_API}/v1/clickup/default-list`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenant_id: tenantId, list_id: listId }),
+    setError(null); setNotice(null)
+    const res = await tryApi(`/v1/clickup/default-list`, {
+      method: 'POST',
+      body: { tenant_id: tenantId, list_id: listId },
     })
+    if (!res.ok) setError(`The default list wasn't saved: ${res.error}`)
     loadStatus()
   }
 
