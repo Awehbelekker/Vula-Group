@@ -415,6 +415,20 @@ class MemoryRepo:
         r["updated_at"] = self.clock().isoformat()
         return True
 
+    def rows_since(self, table, tenant_id, since_iso):
+        return [dict(r) for r in self._ts_rows(table).values() if r["tenant_id"] == tenant_id
+                and _ts(r["created_at"]) >= _ts(since_iso)]
+
+    def paid_since(self, tenant_id, since_iso):
+        out = []
+        for s in self.sessions.values():
+            if s["tenant_id"] != tenant_id or s["state"] != "paid" or _ts(s["updated_at"]) < _ts(since_iso):
+                continue
+            b = self.bills.get(s.get("bill_id")) or {}
+            out.append({"staff_id": b.get("staff_id"), "is_test": bool(b.get("is_test")),
+                        "bill_cents": s["bill_cents"], "tip_cents": s["tip_cents"], "paid_at": s["updated_at"]})
+        return out
+
     def menu_products(self, tenant_id):
         return [dict(p) for p in getattr(self, "products", []) if p["tenant_id"] == tenant_id and p.get("in_stock", True)]
 

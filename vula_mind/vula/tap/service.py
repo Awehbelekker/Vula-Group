@@ -118,6 +118,11 @@ class TapService:
         return None
 
     @property
+    def scores(self):
+        from vula.tap.scoreboard import ScoreDesk
+        return ScoreDesk(self)
+
+    @property
     def express(self):
         from vula.tap.express import ExpressPay
         return ExpressPay(self)

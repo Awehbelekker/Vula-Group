@@ -210,6 +210,28 @@ class SupabaseRepo:
                 .eq("id", row_id).eq("status", expected).execute().data or [])
         return bool(rows)
 
+    def rows_since(self, table: str, tenant_id: str, since_iso: str) -> list[dict]:
+        """Every call or order made since a time (the scoreboard) — read page by page."""
+        assert table in self._TABLESIDE
+        from vula.db_pages import all_rows
+        return all_rows(lambda: self.db.table(table).select("*").eq("tenant_id", tenant_id).gte("created_at", since_iso))
+
+    def paid_since(self, tenant_id: str, since_iso: str) -> list[dict]:
+        """Paid bills since a time: who served, the bill amount, the tip and when it was paid."""
+        from vula.db_pages import all_rows
+        sessions = all_rows(lambda: self.db.table("kb_sessions").select("id,bill_id,bill_cents,tip_cents,updated_at")
+                            .eq("tenant_id", tenant_id).eq("state", "paid").gte("updated_at", since_iso))
+        ids = sorted({s["bill_id"] for s in sessions if s.get("bill_id")})
+        bills: dict = {}
+        for i in range(0, len(ids), 200):
+            for b in (self.db.table("kb_bills").select("id,staff_id,is_test").eq("tenant_id", tenant_id)
+                      .in_("id", ids[i:i + 200]).execute().data or []):
+                bills[b["id"]] = b
+        return [{"staff_id": (bills.get(s.get("bill_id")) or {}).get("staff_id"),
+                 "is_test": bool((bills.get(s.get("bill_id")) or {}).get("is_test")),
+                 "bill_cents": int(s["bill_cents"]), "tip_cents": int(s["tip_cents"]), "paid_at": s["updated_at"]}
+                for s in sessions]
+
     def menu_products(self, tenant_id: str) -> list[dict]:
         """The business's products a customer can order from a table: listed and in stock."""
         rows = (self.db.table("commerce_products").select("*").eq("tenant_id", tenant_id).eq("in_stock", True)

@@ -272,6 +272,7 @@ function Home({ token, onLock, onExpired }) {
       {me && me.mode === "off" && <div className="banner">Tap to Pay is switched off for this business.</div>}
       {err && <div className="err" role="alert">{err}</div>}
 
+      <Scores token={token} guard={guard} bump={bills} />
       <Floor token={token} guard={guard} online={online} />
       <Tabs token={token} guard={guard} online={online} bump={bills} />
 
@@ -528,6 +529,45 @@ export function Floor({ token, guard, online }) {
                   </form>)}
             </div>)}
         </div>))}
+    </div>
+  );
+}
+
+// ── my numbers and the team's board (vula_mind/vula/tap/scoreboard.py). All counted by the server.
+// My own tips show here; the board everyone sees never carries tips.
+const wait = (s) => (s == null ? "–" : s < 60 ? `${s}s` : `${Math.round(s / 60)} min`);
+export function Scores({ token, guard, bump }) {
+  const [period, setPeriod] = useState("today");
+  const [d, setD] = useState(null);
+  const [open, setOpen] = useState(false);
+  const load = useCallback(async () => {
+    try { setD(await call(`/v1/tap/app/scores?period=${period}`, { token })); } catch (x) { if (x.status) guard(x); }
+  }, [token, guard, period]);
+  useEffect(() => { load(); }, [load, bump]);
+  if (!d) return null;
+  const me = d.me;
+  return (
+    <div className="card">
+      <div className="row"><h2 style={{ margin: 0 }}>My numbers</h2>
+        <div className="chips" style={{ margin: 0 }}>{[["today", "Today"], ["week", "7 days"], ["month", "30 days"]].map(([k, l]) => (
+          <button key={k} className="chip" aria-pressed={period === k} onClick={() => setPeriod(k)}>{l}</button>))}</div></div>
+      <div className="stats">
+        <div><span className="muted">Sales</span><strong>{rands(me.sales_cents)}</strong></div>
+        <div><span className="muted">My tips</span><strong>{rands(me.tips_cents)}</strong></div>
+        <div><span className="muted">Bills</span><strong>{me.bills}</strong></div>
+        <div><span className="muted">Tables answered</span><strong>{me.calls}{me.calls ? ` · ${wait(me.avg_wait_seconds)}` : ""}</strong></div>
+      </div>
+      <div className="muted">{me.rank ? `You're number ${me.rank} of ${me.of} with ${me.points} points.` : "No points yet for this period."}
+        {me.streak_days > 1 ? ` ${me.streak_days} days in a row.` : ""}{me.badges.length ? ` ${me.badges.join(" · ")}.` : ""}</div>
+      {d.board.length > 0 && <button className="ghost small" style={{ marginTop: 8 }} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide the team board" : "Show the team board"}</button>}
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {d.board.map((r) => (
+            <div key={r.member_id} className="row tab-line"><span><strong>{r.rank}. {r.name}</strong>{r.badges.length ? <span className="muted"> · {r.badges.join(" · ")}</span> : null}
+              <div className="muted">{rands(r.sales_cents)} · {r.bills} bills · {r.calls} {r.calls === 1 ? "table" : "tables"}{r.calls ? ` in ${wait(r.avg_wait_seconds)}` : ""}</div></span>
+              <strong>{r.points}</strong></div>))}
+          <div className="muted" style={{ marginTop: 6 }}>Points: {d.points_rule} Tips are never shown here.</div>
+        </div>)}
     </div>
   );
 }

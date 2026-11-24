@@ -404,3 +404,16 @@ async def app_table_add(tag_id: str, body: TableLine, a: Actor = Depends(app_act
 async def app_table_void(tag_id: str, item_id: str, a: Actor = Depends(app_actor)) -> dict:
     _my_table(a, tag_id)
     return {"bill": _tbl(_tables_on(a).void_item, a.tenant_id, tag_id, item_id, a.member_id)}
+
+
+# ── each waiter's numbers and the team's board (vula/tap/scoreboard.py) ───────────────────────
+@router.get("/v1/tap/app/scores")
+async def app_scores(period: str = "today", a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own numbers (their tips included) and the shared board (no tips)."""
+    from vula.tap.scoreboard import POINTS_RULE, ScoreError
+    desk = tap_api.get_service().scores
+    try:
+        return {"me": desk.mine(a.tenant_id, a.member_id, period), "board": desk.board(a.tenant_id, period),
+                "points_rule": POINTS_RULE}
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

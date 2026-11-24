@@ -38,3 +38,11 @@
 .vtp-check { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
 .vtp-check input { margin-top: 3px; width: 18px; height: 18px; flex: none; accent-color: var(--brand); }
 .vtp-check > span { min-width: 0; display: flex; flex-direction: column; }
+.vtp-pill { min-height: 36px; padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); color: var(--ink); font: 500 var(--fs-caption)/1 var(--font-sans); cursor: pointer; }
+.vtp-pill[aria-pressed="true"] { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+.vtp-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.vtp-scroll { overflow-x: auto; }
+.vtp-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.vtp-table th { text-align: left; font: 500 var(--fs-caption)/1.4 var(--font-sans); color: var(--muted); padding: var(--space-2); white-space: nowrap; }
+.vtp-table td { padding: var(--space-2); border-top: 1px solid var(--line); vertical-align: middle; }
+.vtp-table .vtp-num { text-align: right; white-space: nowrap; }

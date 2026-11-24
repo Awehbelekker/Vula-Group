@@ -820,3 +820,18 @@ async def remove_table(tenant: str, tag_id: str, identity: dict = Depends(requir
     _table_call(get_service().tables.remove_table, tenant, tag_id)
     _audit(tenant, identity, "table.remove", tag_id=tag_id)
     return {"removed": tag_id}
+
+
+@router.get("/v1/tap/{tenant}/scores")
+async def team_scores(tenant: str, request: Request, period: str = "week",
+                      identity: dict = Depends(require_tenant_actor)) -> dict:
+    """The team's board for the business's own screens. Tips are on it only for an owner or a
+    manager; any other member of the business gets the same board the staff app shows."""
+    from vula.api.commerce import _may_apply_stock
+    from vula.tap.scoreboard import POINTS_RULE, ScoreError
+    full = await _may_apply_stock(request, tenant)
+    try:
+        return {"period": period, "board": get_service().scores.board(tenant, period, with_tips=full),
+                "points_rule": POINTS_RULE}
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
