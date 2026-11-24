@@ -81,33 +81,16 @@ SUPPLIER = [
 ]
 
 # vula/api/field_ops.py::FIELD_TEMPLATES  (contractor flow, any business with Field Ops)
-# 24 Nov 2026: neutral names, and the bodies/placeholder counts the code actually sends (this list
-# had drifted: 1 placeholder where the code sends 3). digg-demo's approved `digg_…` copies keep
-# working until these are approved for it (field_ops.field_template).
-FIELDOPS = [
-    ("field_task_assigned",       # name, project, task
-     "Hi {{1}}, you've been assigned a task on project {{2}}: {{3}}. Reply DONE when complete, "
-     "or send photos as evidence. Reply with any questions and I'll help.",
-     "UTILITY", None),
-    ("field_task_chase",          # name, task
-     "Hi {{1}}, just checking in on task {{2}}. Is it complete? Reply DONE to confirm, "
-     "or send photos if sign-off is required.",
-     "UTILITY", None),
-    ("field_walkthrough_start",   # name, walkthrough
-     "Hi {{1}}, please do a site walkthrough for {{2}}. Check Vula for the checklist and send "
-     "photos for each item. Reply DONE when all photos are sent.",
-     "UTILITY", None),
-    ("field_walkthrough_approved",  # walkthrough
-     "Walkthrough {{1}} has been approved. Great work!",
-     "UTILITY", None),
-    ("field_walkthrough_rejected",  # walkthrough, reason
-     "Walkthrough {{1}} needs attention: {{2}}. Please address and re-submit.",
-     "UTILITY", None),
-    ("field_daily_tasks",         # name, count
-     "Good morning {{1}}! You have {{2}} task(s) today. Check Vula for the full list. "
-     "Reply DONE when each task is complete, or send photos as evidence.",
-     "UTILITY", None),
-]
+# 24 Nov 2026: neutral names and the bodies the code sends; the one list is
+# vula/commerce/wa_templates.FIELD_OPS_TEMPLATES, also in the dashboard's standard set for a
+# business with Field Ops. digg-demo's approved `digg_…` copies keep working until these are
+# approved for it (field_ops.field_template).
+def _fieldops():
+    from vula.commerce.wa_templates import FIELD_OPS_TEMPLATES
+    return [(name, body, "UTILITY", None) for name, body, _ex in FIELD_OPS_TEMPLATES]
+
+
+FIELDOPS = _fieldops()
 
 SETS = {
     "shared": SHARED,
