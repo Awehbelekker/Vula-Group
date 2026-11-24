@@ -122,6 +122,21 @@ async def courier_settings(tenant_id: str, body: dict, request: Request) -> dict
         raise _refuse(exc) from exc
 
 
+@router.post("/{tenant_id}/admin/couriers/address-search")
+async def courier_address_search(tenant_id: str, body: dict) -> dict:
+    """Addresses matching what was typed, split into street, suburb, town, province and postal code
+    with their position (the address forms' Find). Asked on a button press, never per key."""
+    from vula.commerce import address_search
+    q = str((body or {}).get("query") or "").strip()
+    if len(q) < 5:
+        raise HTTPException(status_code=400, detail="Type the street and the suburb or town, then press Find.")
+    try:
+        return {"results": await address_search.search(q)}
+    except address_search.LookupDown as exc:
+        raise HTTPException(status_code=502, detail="The address lookup isn't answering right now. "
+                                                    "Type the address in below, or try again.") from exc
+
+
 @router.get("/{tenant_id}/admin/couriers/pickup-points")
 async def courier_pickup_points(tenant_id: str, near: str = "", provider: Optional[str] = None,
                                 lat: Optional[float] = None, lng: Optional[float] = None) -> dict:

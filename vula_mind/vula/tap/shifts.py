@@ -249,6 +249,38 @@ class ShiftDesk:
                                              **self._clean(tenant_id, data or {})})
         return self._view(row, self._members(tenant_id), self.svc.repo.availability(tenant_id))
 
+    def copy_week(self, tenant_id: str, day: Any, by: str) -> dict:
+        """Last week's roster as this week's drafts: the same people at the same times, seven days
+        on. Nothing is published and nobody is told. A shift is left out when its person has left
+        the team or already has a shift then (so copying twice adds nothing); cancelled ones are
+        never copied; one nobody held comes across as an open shift."""
+        monday, lo, hi = self._week(day)
+        week = timedelta(days=7)
+        members = self._members(tenant_id)
+        source = [s for s in self.svc.repo.shifts_between(tenant_id, (lo - week).isoformat(), (hi - week).isoformat())
+                  if s["status"] != "cancelled"]
+        there = [s for s in self.svc.repo.shifts_between(tenant_id, (lo - timedelta(hours=16)).isoformat(), hi.isoformat())
+                 if s["status"] != "cancelled"]
+        copied, left, clash = 0, 0, 0
+        for s in sorted(source, key=lambda r: r["starts_at"]):
+            mid = s.get("member_id") or None
+            if mid and mid not in members:
+                left += 1
+                continue
+            start, end = _ts(s["starts_at"]) + week, _ts(s["ends_at"]) + week
+            if any((o.get("member_id") or None) == mid and _ts(o["starts_at"]) < end and _ts(o["ends_at"]) > start
+                   and (mid or (_ts(o["starts_at"]) == start and _ts(o["ends_at"]) == end)) for o in there):
+                clash += 1
+                continue
+            row = self.svc.repo.add_row(SHIFTS, {
+                "tenant_id": tenant_id, "status": "draft", "created_by": by, "member_id": mid,
+                "starts_at": start.astimezone(timezone.utc).isoformat(), "ends_at": end.astimezone(timezone.utc).isoformat(),
+                "section": s.get("section") or None, "note": s.get("note") or None})
+            there.append(row)
+            copied += 1
+        return {"copied": copied, "already_there": clash, "left_the_team": left, "last_week": len(source),
+                "week_start": monday.isoformat()}
+
     async def change(self, tenant_id: str, shift_id: str, data: dict) -> dict:
         """Move a shift or give it to someone else. A published one goes back to "published" for the
         (new) person to confirm, and they are told."""

@@ -53,7 +53,7 @@ function Booking({ s, c }) {
   )
 }
 
-function BookSheet({ c, order, onClose }) {
+function BookSheet({ c, order, tenantId, onClose }) {
   const [to, setTo] = useState('door')
   const [address, setAddress] = useState(null)          // null = let the server split the order's own text
   const [parcel, setParcel] = useState(null)
@@ -97,7 +97,7 @@ function BookSheet({ c, order, onClose }) {
         {to === 'door' && (
           <>
             <p className="vcr-sub">The customer wrote: {order.delivery_address || 'no address'}</p>
-            {(q || address) && <AddressFields value={shownAddress} company={false} onChange={(a) => { setAddress({ ...a, lat: null, lng: null }); setPicked(null); c.setQuote(null) }} />}
+            {(q || address) && <AddressFields value={shownAddress} company={false} tenantId={tenantId} onChange={(a) => { setAddress(a); setPicked(null); c.setQuote(null) }} />}
           </>)}
 
         {to === 'point' && (
@@ -163,7 +163,7 @@ export default function OrderCourier({ tenantId, order }) {
       {c.error && !open && <p className="vsl-error" role="alert">{c.error}</p>}
       {!live && c.connected && sendable && (
         <Button variant="secondary" Icon={Truck} onClick={() => { c.setError(''); c.setQuote(null); setOpen(true) }}>Book a courier</Button>)}
-      {open && <BookSheet c={c} order={order} onClose={() => setOpen(false)} />}
+      {open && <BookSheet c={c} order={order} tenantId={tenantId} onClose={() => setOpen(false)} />}
     </section>
   )
 }

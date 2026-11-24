@@ -290,3 +290,48 @@ async def test_on_now_is_only_people_on_a_published_shift_that_covers_this_minut
     assert svc.shifts.on_now(T) == [THANDI]
     clock.t += timedelta(hours=4)                                        # 16:00: hers is over, his not begun
     assert svc.shifts.on_now(T) == []
+
+
+# ── copying last week ─────────────────────────────────────────────────────────────────────────
+async def test_copy_last_week_makes_drafts_at_the_same_times_and_tells_nobody(env):
+    svc, repo, msg, push, clock = env
+    shift(svc, clock, THANDI, days=1, section="Floor", note="Open the bar")      # Wed this week
+    shift(svc, clock, PIETER, days=2)
+    svc.shifts.create(T, {"member_id": None, "starts_at": at(clock, 3, "10:00"), "ends_at": at(clock, 3, "15:00")}, "o@x")
+    gone = shift(svc, clock, PIETER, days=4)
+    await svc.shifts.publish(T)
+    await svc.shifts.cancel(T, gone["id"])
+    msg.sent.clear(); push.sent.clear()
+    nxt = (clock.t.astimezone(SAST) + timedelta(days=7)).date().isoformat()
+    out = svc.shifts.copy_week(T, nxt, "owner@x")
+    assert out["copied"] == 3 and out["last_week"] == 3 and out["already_there"] == 0      # the cancelled one isn't last week's
+    wk = svc.shifts.week(T, nxt)
+    assert {s["status"] for s in wk["shifts"]} == {"draft"} and wk["drafts"] == 3
+    mine = next(s for s in wk["shifts"] if s["member_id"] == THANDI)
+    assert mine["section"] == "Floor" and mine["note"] == "Open the bar" and "17:00" in mine["when"]
+    assert mine["date"] == (clock.t.astimezone(SAST) + timedelta(days=8)).date().isoformat()
+    assert sum(1 for s in wk["shifts"] if s["open"]) == 1
+    assert not msg.sent and not push.sent                                    # drafts: nobody hears
+    assert svc.shifts.mine(T, THANDI)["to_confirm"] == 1                     # only last week's own
+
+
+async def test_copying_twice_adds_nothing_and_a_shift_already_planned_is_kept(env):
+    svc, repo, msg, push, clock = env
+    shift(svc, clock, THANDI, days=1)
+    shift(svc, clock, PIETER, days=1)
+    nxt = (clock.t.astimezone(SAST) + timedelta(days=7)).date().isoformat()
+    svc.shifts.create(T, {"member_id": THANDI, "starts_at": at(clock, 8, "18:00"), "ends_at": at(clock, 8, "22:00")}, "o@x")
+    out = svc.shifts.copy_week(T, nxt, "owner@x")
+    assert out["copied"] == 1 and out["already_there"] == 1                  # Thandi is already on then
+    again = svc.shifts.copy_week(T, nxt, "owner@x")
+    assert again["copied"] == 0 and again["already_there"] == 2
+    assert len(svc.shifts.week(T, nxt)["shifts"]) == 2
+
+
+def test_someone_who_left_the_team_is_not_copied(env):
+    svc, repo, msg, push, clock = env
+    shift(svc, clock, PIETER, days=1)
+    repo.members[T] = [m for m in repo.members[T] if m["id"] != PIETER]
+    nxt = (clock.t.astimezone(SAST) + timedelta(days=7)).date().isoformat()
+    assert svc.shifts.copy_week(T, nxt, "o@x") == {"copied": 0, "already_there": 0, "left_the_team": 1, "last_week": 1,
+                                                   "week_start": svc.shifts.week(T, nxt)["week_start"]}

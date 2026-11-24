@@ -428,6 +428,21 @@ async def app_scores(period: str = "today", a: Actor = Depends(app_actor)) -> di
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class TargetIn(BaseModel):
+    period: Optional[str] = None
+    cents: Optional[int] = None
+
+
+@router.put("/v1/tap/app/target")
+async def app_set_target(body: TargetIn, a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own target (no amount removes it). Nobody else's, ever."""
+    from vula.tap.scoreboard import ScoreError
+    try:
+        return {"target": tap_api.get_service().scores.set_target(a.tenant_id, a.member_id, body.period, body.cents)}
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/v1/tap/app/income")
 async def app_income(days: int = 30, a: Actor = Depends(app_actor)) -> dict:
     """The signed-in person's own earnings, day by day. Nobody else's."""

@@ -23,7 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
-from typing import Dict, List
+import logging
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 SAST = ZoneInfo("Africa/Johannesburg")
@@ -32,6 +33,8 @@ QUICK_SECONDS = 120
 POINTS_RULE = ("1 point per R100 of sales, 5 for answering a table within 2 minutes (2 if later), "
                "3 for each order confirmed.")
 LOOKBACK_DAYS = 30
+MAX_TARGET_CENTS = 99_999_900
+logger = logging.getLogger(__name__)
 
 
 class ScoreError(ValueError):
@@ -158,6 +161,31 @@ class ScoreDesk:
                 "points": self.points(r), "rank": me["rank"] if me else None, "of": len(board),
                 "streak_days": self._streak(r["days"]), "badges": me["badges"] if me else []}
 
+    def target(self, tenant_id: str, member_id: str) -> Optional[dict]:
+        """The person's own target, or None. Never raises: before migration 307 (or with the
+        database away) there is simply none, and the app keeps the one on the phone."""
+        try:
+            t = self.svc.repo.get_target(tenant_id, member_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("target read failed (tenant=%s)", tenant_id, exc_info=True)
+            return None
+        return {"period": t["period"], "cents": int(t["cents"])} if t and t.get("cents") else None
+
+    def set_target(self, tenant_id: str, member_id: str, period: Any, cents: Any) -> Optional[dict]:
+        """Save (or with no amount, remove) the person's own target, and read it back."""
+        if cents in (None, 0):
+            self.svc.repo.set_target(tenant_id, member_id, None, None)
+            return None
+        if period not in ("day", "week"):
+            raise ScoreError("Choose a target for each day or each week.")
+        if isinstance(cents, bool) or not isinstance(cents, int) or not 100 <= cents <= MAX_TARGET_CENTS:
+            raise ScoreError("Type a target between R1 and R999,999.")
+        self.svc.repo.set_target(tenant_id, member_id, period, cents)
+        saved = self.svc.repo.get_target(tenant_id, member_id)
+        if not saved or int(saved["cents"]) != cents or saved["period"] != period:
+            raise ScoreError("Your target couldn't be saved. Try again.")
+        return {"period": period, "cents": cents}
+
     def income(self, tenant_id: str, member_id: str, days: int = 30) -> dict:
         """What one person has earned, day by day (South African days, oldest first): their share
         from the ledger — bills and tips, less any fee they carry — beside the sales and tips those
@@ -190,4 +218,5 @@ class ScoreDesk:
         this_week = [v for d, v in by_day.items() if d >= monday]
         return {"days": [{"date": d.isoformat(), **v} for d, v in sorted(by_day.items())],
                 "today": total(1), "last_7": total(min(7, days)), "last_30": total(min(30, days)),
-                "this_week": {k: sum(r[k] for r in this_week) for k in ("earned_cents", "sales_cents", "tips_cents", "bills")}}
+                "this_week": {k: sum(r[k] for r in this_week) for k in ("earned_cents", "sales_cents", "tips_cents", "bills")},
+                "target": self.target(tenant_id, member_id)}

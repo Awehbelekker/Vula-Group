@@ -5,17 +5,63 @@
  * Changing any of it is for the owner or a manager (the server refuses anyone else).
  */
 import { useEffect, useState } from 'react'
-import { Copy, KeyRound, Star, Truck, Unplug } from 'lucide-react'
+import { Copy, KeyRound, MapPin, Search, Star, Truck, Unplug } from 'lucide-react'
 import { Button, Card, Field, Input, Select, Sheet, StatusChip, confirmDialog, toast } from '../ui/index.jsx'
-import { EMPTY_ADDRESS, PROVINCES, useCourierSetup } from './useCouriers'
+import { EMPTY_ADDRESS, PROVINCES, findAddress, useCourierSetup } from './useCouriers'
 import './couriers.css'
 
 const PARCEL = { length_cm: '', width_cm: '', height_cm: '', weight_kg: '' }
 
-export function AddressFields({ value, onChange, company = true }) {
-  const set = (k) => (e) => onChange({ ...value, [k]: e.target.value })
+/** Type an address, press Find, pick the match: it fills the fields below and keeps its position.
+ *  Asked only on the press (the free map lookup doesn't allow search-as-you-type). */
+function AddressFinder({ tenantId, onPick }) {
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [found, setFound] = useState(null)          // null = not searched yet
+  const [error, setError] = useState('')
+  const find = async () => {
+    if (q.trim().length < 5) { setError('Type the street and the suburb or town first.'); return }
+    setBusy(true); setError(''); setFound(null)
+    try { setFound(await findAddress(tenantId, q.trim())) } catch (e) { setError(e.message) }
+    setBusy(false)
+  }
+  return (
+    <div className="vcr-find">
+      <Field label="Find the address" hint="Type the street and suburb or town, then press Find. Or fill in the fields below yourself.">
+        <span className="vcr-find-row">
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="12 Main Road, Green Point"
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); find() } }} />
+          <Button variant="secondary" Icon={Search} onClick={find} disabled={busy}>{busy ? 'Looking…' : 'Find'}</Button>
+        </span>
+      </Field>
+      {error && <p className="vsl-error" role="alert">{error}</p>}
+      {found && found.length === 0 && <p className="vcr-sub" role="status">Nothing found for that. Check the spelling or add the town, or fill in the fields below.</p>}
+      {found && found.length > 0 && (
+        <ul className="vcr-options" aria-label="Addresses found">
+          {found.map((r) => (
+            <li key={r.label}>
+              <button type="button" className="vcr-option vcr-found" onClick={() => { onPick(r); setFound(null); setQ('') }}>
+                <MapPin size={16} aria-hidden="true" />
+                <span className="vcr-option-main"><strong>{r.label}</strong>
+                  {!r.has_number && <span className="vcr-sub">No street number on the map: add it after choosing.</span>}</span>
+              </button>
+            </li>))}
+        </ul>)}
+    </div>
+  )
+}
+
+const PLACE_KEYS = ['street_address', 'local_area', 'city', 'zone', 'code']
+
+export function AddressFields({ value, onChange, company = true, tenantId }) {
+  // Changing where it is by hand drops the position a picked address came with: the server finds it again.
+  const set = (k) => (e) => onChange({ ...value, [k]: e.target.value, ...(PLACE_KEYS.includes(k) ? { lat: null, lng: null } : {}) })
+  const pick = (r) => onChange({ ...value, street_address: r.street_address, local_area: r.local_area, city: r.city,
+    zone: r.zone || value.zone || '', code: r.code || '', lat: r.lat, lng: r.lng,
+    ...(company && r.place && !value.company ? { company: r.place } : {}) })
   return (
     <div className="vcr-form">
+      {tenantId && <AddressFinder tenantId={tenantId} onPick={pick} />}
       {company && <Field label="Business or building name"><Input value={value.company || ''} onChange={set('company')} /></Field>}
       <Field label="Street address"><Input value={value.street_address || ''} onChange={set('street_address')} placeholder="12 Main Road" /></Field>
       <div className="vcr-two">
@@ -70,7 +116,9 @@ export default function CourierSetup({ tenantId }) {
     if (await confirmDialog(`Disconnect ${a.label}? Parcels already booked stay booked with them.`, { danger: true, confirmLabel: 'Disconnect' })) c.remove(a.id)
   }
   const copy = (text) => navigator.clipboard?.writeText(text).then(() => toast('Copied.'))
-  const saveDetails = () => c.saveSettings({ collection_address: { ...address, type: 'business' }, collection_contact: contact, default_parcel: parcel })
+  const saveDetails = async () => {
+    if (await c.saveSettings({ collection_address: { ...address, type: 'business' }, collection_contact: contact, default_parcel: parcel })) toast('Saved.')
+  }
 
   return (
     <Card className="vsl-card vcr">
@@ -79,7 +127,7 @@ export default function CourierSetup({ tenantId }) {
         {c.saved && <span className="vsl-msg" role="status">Saved</span>}
       </div>
       <p className="vsl-sub">Connect your own courier account, then book a courier from any order. The courier bills you directly.</p>
-      {c.error && !openId && <p className="vsl-error" role="alert">{c.error}</p>}
+      {c.error && !openId && !anyConnected && <p className="vsl-error" role="alert">{c.error}</p>}
 
       <ul className="vcr-list" aria-label="Couriers">
         {(c.data.available || []).map((a) => {
@@ -108,7 +156,7 @@ export default function CourierSetup({ tenantId }) {
       {anyConnected && (
         <div className="vsl-divide vcr-form">
           <h3 className="vcr-h">Where parcels are collected</h3>
-          <AddressFields value={address} onChange={setAddress} />
+          <AddressFields value={address} onChange={setAddress} tenantId={tenantId} />
           <div className="vcr-two">
             <Field label="Who hands over the parcel"><Input value={contact.name} onChange={(e) => setContact({ ...contact, name: e.target.value })} /></Field>
             <Field label="Their cellphone"><Input type="tel" value={contact.mobile_number} onChange={(e) => setContact({ ...contact, mobile_number: e.target.value })} placeholder="082…" /></Field>
@@ -116,6 +164,7 @@ export default function CourierSetup({ tenantId }) {
           <h3 className="vcr-h">Your usual parcel</h3>
           <p className="vsl-sub">Used when an order's own size isn't known. You can change it on each booking.</p>
           <ParcelFields value={parcel} onChange={setParcel} />
+          {c.error && !openId && <p className="vsl-error" role="alert">{c.error}</p>}
           <div><Button onClick={saveDetails} disabled={c.saving}>{c.saving ? 'Saving…' : 'Save'}</Button></div>
         </div>)}
 
