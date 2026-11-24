@@ -658,6 +658,15 @@ async def public_validate_discount_code(tenant_id: str, body: ValidateDiscountRe
 
 @router.post("/{tenant_id}/checkout")
 async def create_checkout(tenant_id: str, body: CheckoutRequest):
+    return await checkout_for(tenant_id, body)
+
+
+async def checkout_for(tenant_id: str, body: CheckoutRequest, *, extra: Optional[dict] = None,
+                       return_to=None):
+    """The checkout itself, for the storefront's route above and for server-made baskets (event
+    tickets, vula/commerce/events.py). `extra` adds to what the order is created with.
+    `return_to(order) -> (success_url, cancel_url)` says where the customer lands after paying or
+    giving up — made by the server from the order, never taken from a request."""
     from vula.api import tenants as _tenants
     if not _tenants.is_active(tenant_id):
         raise HTTPException(status_code=403, detail="This store isn't accepting orders right now.")
@@ -673,7 +682,8 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     # if the gateway is down the customer keeps their cart and can simply try again.
     try:
         order = await service.create_order(
-            tenant_id, cart, {**body.model_dump(), "payment_method": "online"}, clear_cart_after=False)
+            tenant_id, cart, {**body.model_dump(), "payment_method": "online", **(extra or {})},
+            clear_cart_after=False)
     except service.OutOfStockError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -698,6 +708,9 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     cancel_url = (f"{store_url}/payment/cancel?order={order['id']}" if store_url
                   else f"{api_url}/payment/cancel?order={order['display_id']}")
     failure_url = f"{store_url}/payment/failed?order={order['id']}" if store_url else cancel_url
+    if return_to is not None:
+        success_url, cancel_url = return_to(order)
+        failure_url = cancel_url
 
     async def _spent(redirect_url: str, provider: str, **status_kw):
         """The gateway's checkout exists: the order waits for payment, the cart is spent, the

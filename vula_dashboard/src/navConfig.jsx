@@ -5,7 +5,7 @@
  */
 import {
   Building2, KanbanSquare,
-  Activity, Banknote, Bike, CalendarCheck, Bot, BookOpen, Boxes, ClipboardCheck, ChartPie, BrainCircuit, BrickWall, Briefcase, Calculator,
+  Activity, Banknote, Bike, CalendarCheck, Bot, BookOpen, Boxes, ClipboardCheck, ChartPie, BrainCircuit, BrickWall, Briefcase, Calculator, Ticket,
   CalendarDays, ClipboardList, Clock, Contact, CreditCard, Download, Factory, FileSignature,
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
   Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
@@ -22,7 +22,7 @@ export const NAV_ICONS = {
   // merchant
   overview: House, inbox: Inbox, today: CalendarCheck, activity: Activity,
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
-  sell: Store, orders: Package, till: Calculator, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag, reviews: Star, salesreports: TrendingUp,
+  sell: Store, orders: Package, till: Calculator, events: Ticket, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag, reviews: Star, salesreports: TrendingUp,
   subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, listings: Building2, suppliers: Truck, import: Download,
   money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen, management: ChartPie, booksreview: ClipboardCheck,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
@@ -76,6 +76,7 @@ export const MERCHANT_GROUPS = [
     { id: "sell", icon: "📦", label: "Sell", subtabs: [
       { id: "orders", icon: "📦", label: "Orders" },
       { id: "till", icon: "🧾", label: "Till" },
+      { id: "events", icon: "🎟️", label: "Events" },
       { id: "products", icon: "🛍️", label: "Products" },
       { id: "stock", icon: "📊", label: "Stock" },
       { id: "costing", icon: "🏭", label: "Costing" },
@@ -251,6 +252,7 @@ const MERCHANT_MODMAP = {
   discounts: 'products',
   reviews: 'orders',        // ratings customers give their delivered orders on WhatsApp
   till: 'orders',           // selling over the counter (Sell › Till) makes the same orders
+  events: 'orders',         // event tickets (Sell › Events) are sold as orders too
   salesreports: 'orders',   // sales by day and best sellers (Sell › Sales reports)
   stock: 'products',        // the Stock tab counts and receives the same products
   costing: 'manufacturing', // materials, recipes, batches, cost per unit (Manufacturing Core)
