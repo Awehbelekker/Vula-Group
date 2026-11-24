@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 SAST = ZoneInfo("Africa/Johannesburg")
 SHIFTS, AVAIL = "kb_shifts", "kb_availability"
 LIVE = ("published", "confirmed")
+# The approved template that carries a roster message to a team member who hasn't written in the
+# last 24 hours (vula/commerce/wa_templates.py submits it with the standard set). One per WhatsApp
+# account, shared by name: first name, the business, the message on one line.
+SHIFT_TEMPLATE = "vula_staff_shifts"
+SHIFT_TEMPLATE_BODY = ("Hi {{1}}, a message from {{2}} about your shifts: {{3}} "
+                       "Reply MY SHIFTS to see them, CONFIRM to confirm, or tell us if you can't make it.")
+SHIFT_TEMPLATE_EXAMPLE = ["Thandi", "The Yard", "Your shifts: Fri 27 Nov 17:00 to 23:00 (Floor). Please confirm."]
+TEMPLATE_ROOM = 190                      # send_template cuts a value at 200 characters
 STAFF_SEES = ("published", "confirmed", "declined", "sick")
 DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -72,6 +80,27 @@ class ShiftDesk:
         return next((m for m in self.svc.repo.team_members(tenant_id)
                      if re.sub(r"\D", "", m.get("whatsapp") or "")[-9:] == digits), None)
 
+    def on_now(self, tenant_id: str) -> List[str]:
+        """Who is on a published or confirmed shift right now (table calls go to them)."""
+        now = self.svc.now()
+        rows = self.svc.repo.shifts_between(tenant_id, (now - timedelta(hours=16)).isoformat(),
+                                            (now + timedelta(seconds=1)).isoformat())
+        out: List[str] = []
+        for s in rows:
+            if s.get("member_id") and s["status"] in LIVE and _ts(s["ends_at"]) > now and s["member_id"] not in out:
+                out.append(s["member_id"])
+        return out
+
+    async def _whatsapp(self, tenant_id: str, phone: str, name: str, title: str, body: str) -> None:
+        """A WhatsApp message to one of the team. Outside WhatsApp's 24-hour window a plain message
+        is refused, so the approved roster template carries the same words on one line."""
+        svc = self.svc
+        if await svc._say_ok(tenant_id, phone, f"{title}: {body}"):
+            return
+        line = re.sub(r"\s+", " ", f"{title}: {body}").strip()[:TEMPLATE_ROOM]
+        await svc.messenger.template(tenant_id, phone, SHIFT_TEMPLATE,
+                                     [name or "there", svc.repo.merchant_name(tenant_id) or "your workplace", line])
+
     async def _tell(self, tenant_id: str, member_id: Optional[str], title: str, body: str, ref: str) -> None:
         """One person (push + WhatsApp), or with no member the owners and managers."""
         svc = self.svc
@@ -82,7 +111,7 @@ class ShiftDesk:
             phone = (members.get(mid) or {}).get("whatsapp")
             if phone:
                 try:
-                    await svc._say(tenant_id, phone, f"{title}: {body}")
+                    await self._whatsapp(tenant_id, phone, self._name(members, mid), title, body)
                 except Exception:  # noqa: BLE001 — a message that doesn't send never loses the change
                     logger.exception("shift message failed (tenant=%s)", tenant_id)
 

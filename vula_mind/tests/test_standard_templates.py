@@ -23,7 +23,7 @@ def test_a_shop_gets_its_own_names_for_the_jobs_it_runs():
     names = _names(wa_templates.standard_templates("seedleme", RETAIL, "retail"))
     assert {"seedleme_intro_optin", "seedleme_unpaid_order_chase", "seedleme_order_update", "seedleme_reorder_nudge", "seedleme_sales_summary",
             "seedleme_delivery_briefing", "seedleme_low_stock_alert", "vula_notification", "vula_owner_checkin_nudge",
-            "supplier_po_notice"} | PROACTIVE == set(names)
+            "supplier_po_notice", "vula_staff_shifts"} | PROACTIVE == set(names)
     assert not any("friday" in n or "pending_project" in n for n in names)
 
 
@@ -74,7 +74,9 @@ async def test_only_names_not_already_on_the_account_are_submitted(monkeypatch):
                                      "seedleme_staff_notice", "seedleme_staff_notice_image",
                                      "seedleme_staff_day", "seedleme_staff_poll_invite",
                                      # a filed document sent outside 24 h, with a DOCUMENT header (doc_send)
-                                     "vula_document_share"} | PROACTIVE
+                                     "vula_document_share",
+                                     # a roster message outside 24 h (vula/tap/shifts.py)
+                                     "vula_staff_shifts"} | PROACTIVE
     assert set(res["already_there"]) == {"vula_notification", "vula_owner_checkin_nudge", "supplier_po_notice"}
     assert sent == res["submitted"]
 

@@ -185,6 +185,10 @@ class TapService:
     async def _say(self, tenant_id: str, phone: str, body: str) -> None:
         await self.messenger.text(tenant_id, phone, body)
 
+    async def _say_ok(self, tenant_id: str, phone: str, body: str) -> bool:
+        """The same, saying whether WhatsApp took it (False outside the 24-hour window)."""
+        return bool(await self.messenger.text(tenant_id, phone, body))
+
     # ── 1. the tap (HTTP) ────────────────────────────────────────────────────────────────────
     def tap(self, code: str) -> Optional[str]:
         """Verify the tag and mint a one-time claim token. Returns the wa.me URL, or None when the

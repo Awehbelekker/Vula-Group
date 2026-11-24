@@ -487,6 +487,9 @@ def staff_templates(tenant_id: str) -> List[Dict[str, Any]]:
     ]
 
 
+ROSTER_MODULES = {"tables", "taptopay", "team"}      # where Admin › Shifts shows (navConfig modmap)
+
+
 def standard_templates(tenant_id: str, modules: Optional[set] = None,
                        business_type: str = "") -> List[Dict[str, str]]:
     """The templates this business needs, named the way its jobs will look them up."""
@@ -504,6 +507,12 @@ def standard_templates(tenant_id: str, modules: Optional[set] = None,
     if "fieldops" in mods:
         out += [{"name": n, "body": b, "category": "UTILITY", "examples": ex}
                 for n, b, ex in FIELD_OPS_TEMPLATES]
+    if mods & ROSTER_MODULES:
+        # a roster message to a team member outside the 24-hour window (vula/tap/shifts.py); shared
+        # across the WhatsApp account by name, like vula_notification
+        from vula.tap import shifts
+        out.append({"name": shifts.SHIFT_TEMPLATE, "body": shifts.SHIFT_TEMPLATE_BODY, "category": "UTILITY",
+                    "examples": shifts.SHIFT_TEMPLATE_EXAMPLE})
     return out
 
 
