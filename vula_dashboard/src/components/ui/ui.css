@@ -36,6 +36,12 @@
   border: 1px solid var(--line) !important; border-radius: var(--radius-pill); background: var(--surface-2);
   width: fit-content; justify-self: start; max-width: 100%; overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap !important; }
 .vui-tabs--pill::-webkit-scrollbar { display: none; }
+/* With a mouse there is no way to scroll a strip whose scrollbar is hidden (24 Nov 2026: Sell's
+   last tabs, Lessons among them, couldn't be reached). So a strip that doesn't fit wraps onto
+   another row there; a touch screen keeps the one row it can swipe. */
+@media (hover: hover) and (pointer: fine) {
+  .vui-tabs--pill { flex-wrap: wrap !important; overflow-x: visible; border-radius: var(--radius-lg); }
+}
 .vui-tabs--pill .vui-tab { min-height: 36px; }
 .vui-tabs--pill .vui-tab[aria-selected="true"] { background: var(--surface) !important; color: var(--ink) !important;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent); }
@@ -93,6 +99,7 @@ button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
 .vui-search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
 .vui-chips { display: flex; gap: var(--space-2); overflow-x: auto; scrollbar-width: none; max-width: 100%; }
 .vui-chips::-webkit-scrollbar { display: none; }
+@media (hover: hover) and (pointer: fine) { .vui-chips { flex-wrap: wrap; overflow-x: visible; } }   /* same reason as the pill tabs */
 .vui-chip { min-height: 36px; padding: 0 14px; border-radius: var(--radius-pill); border: 1px solid var(--line);
   background: var(--surface); color: var(--ink); font: 500 var(--fs-label)/1 var(--font-sans);
   white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
