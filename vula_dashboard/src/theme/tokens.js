@@ -222,6 +222,8 @@ export const FONT_PAIRINGS = {
  * default Vula pairing (already loaded by index.css) for an unknown/blank key. */
 export function applyFontPairing(key) {
   if (typeof document === "undefined") return;
+  // "plain": headings in the interface's own sans, no serif — a partner whose design system has
+  // no display face (FlowCrew). Not one of the brand kit's choices, so it isn't in FONT_PAIRINGS.
   const p = FONT_PAIRINGS[key] || FONT_PAIRINGS.vula;
   if (p !== FONT_PAIRINGS.vula) {
     const id = `font-pairing-${key}`;
@@ -232,7 +234,7 @@ export function applyFontPairing(key) {
       document.head.appendChild(link);
     }
   }
-  document.documentElement.style.setProperty("--font-display", `'${p.family}', ${p.fallback}`);
+  document.documentElement.style.setProperty("--font-display", key === "plain" ? "var(--font-body)" : `'${p.family}', ${p.fallback}`);
 }
 
 function clamp(n) { return Math.max(0, Math.min(255, Math.round(n))); }
