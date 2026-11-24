@@ -483,3 +483,24 @@ async def test_the_assistant_says_what_is_missing_or_already_booked(world, assis
     where = await assistant._courier_status(TID, "SEE-00042")
     assert where["courier_booked"] and where["waybill"] == "G9G" and where["status"] == "Booked"
     assert where["checked_with_courier_now"] is True
+
+
+def test_every_status_the_courier_guy_documents_is_known():
+    """The Courier Guy's own list of shipment statuses (their Postman collection, 24 Nov 2026):
+    each has plain words, and the ones that move an order or need the team are in the right set."""
+    documented = ['approval-rejected', 'at-destination-hub', 'at-hub', 'awaiting-dropoff', 'cancelled',
+                  'collect-and-return-to-hub', 'collected', 'collection-accepted', 'collection-assigned',
+                  'collection-exception', 'collection-failed-attempt', 'collection-rejected', 'collection-unassigned',
+                  'damaged', 'delivered', 'delivery-assigned', 'delivery-exception', 'delivery-failed-attempt',
+                  'delivery-rejected', 'delivery-scheduled', 'delivery-unassigned', 'failed', 'floor-check',
+                  'in-locker', 'in-transit', 'inbound-customs-and-vat', 'manifested', 'on-hold', 'on-hold-internal',
+                  'out-for-delivery', 'payment-failed', 'payment-pending', 'pending-approval', 'quote',
+                  'quote-expired', 'ready-for-dispatch', 'ready-for-pickup', 'return-to-hub', 'returned-to-hub',
+                  'returned-to-sender', 'submitted', 'undeliverable', 'under-query']
+    for s in documented:
+        assert couriers.plain_status(s) and "-" not in couriers.plain_status(s), s
+    assert couriers.order_status_for("delivery-unassigned") == "dispatched"      # it has been collected
+    assert couriers.order_status_for("delivery-rejected") == "dispatched"
+    assert couriers.order_status_for("collection-unassigned") is None            # still with the business
+    assert "inbound-customs-and-vat" in couriers.PROBLEM and couriers.order_status_for("inbound-customs-and-vat") is None
+    assert not (couriers.MOVING & couriers.PROBLEM) and not (couriers.MOVING & couriers.DELIVERED)
