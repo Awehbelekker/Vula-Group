@@ -12,6 +12,7 @@ import { formatMoney } from '../../lib/money'
 import { Button, Card, Field, Input, Select, StatusChip, confirmDialog } from '../ui/index.jsx'
 import { MODE_BADGE, STATUS_TONE, useTapToPay } from './useTapToPay'
 import TablesCard from './TablesCard.jsx'
+import ScoresCard from './ScoresCard.jsx'
 import './taptopay.css'
 
 const money = (c) => formatMoney(c, { cents: 'always' })
@@ -155,6 +156,7 @@ export default function TapToPayV2({ tenantId }) {
       {st.mode !== 'off' && <Unpaid x={x} st={st} />}
       {st.mode !== 'off' && x.tabs && <Tabs x={x} />}
       {st.mode !== 'off' && <TablesCard tenantId={tenantId} />}
+      {st.mode !== 'off' && <ScoresCard tenantId={tenantId} />}
       {st.mode !== 'off' && <NewBill x={x} withTag={withTag} />}
       {x.activity.length > 0 && <Activity x={x} />}
     </section>

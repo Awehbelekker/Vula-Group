@@ -13,9 +13,13 @@ import {
   Button, Card, DataTable, EmptyState, Field, FilterBar, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatusChip, Textarea,
 } from "../ui/index.jsx";
 import CatalogueSync from "./CatalogueSync";
+import VulaImageUpload from "../VulaImageUpload";
 import { useBusinessType } from "../../store/business";
 import { examplesFor, isFood } from "../../lib/examples";
+import { lazyScreen, ScreenSuspense } from "../../lib/lazyScreen.jsx";
 import "./products.css";
+
+const OptionsBuilder = lazyScreen(() => import("./OptionsBuilder"));
 
 // 24 Nov 2026 audit: the star (is_daily_catch) read "Catch of the day" for every business — only a
 // food business calls it that; everyone else sees "Featured". Same field either way.
@@ -107,7 +111,7 @@ export default function ProductsV2({ api, EditPanel }) {
         <Card className="vpr-block">
           <form onSubmit={api.createProduct} className="vpr-form">
             <Field label="Product name"><Input required value={api.form.name} onChange={(e) => api.setForm({ ...api.form, name: e.target.value })} /></Field>
-            <Field label="Price (R)"><Input required type="number" step="0.01" inputMode="decimal" value={api.form.price} onChange={(e) => api.setForm({ ...api.form, price: e.target.value })} /></Field>
+            <Field label="Price (R)"><Input required inputMode="decimal" value={api.form.price} onChange={(e) => api.setForm({ ...api.form, price: e.target.value })} /></Field>
             <Field label="Sold by">
               <Select value={api.form.sold_by} onChange={(e) => api.setForm({ ...api.form, sold_by: e.target.value })}>
                 <option value="pack">per pack / item</option><option value="kg">per kg</option>
@@ -121,10 +125,41 @@ export default function ProductsV2({ api, EditPanel }) {
             <Field label="Description (optional)" style={{ gridColumn: "1 / -1" }}>
               <Textarea rows={2} value={api.form.description} onChange={(e) => api.setForm({ ...api.form, description: e.target.value })} />
             </Field>
+            <div className="vpr-wide">
+              <span className="vpr-label">Photos <span className="vpr-sub">— the first is the cover</span></span>
+              <VulaImageUpload tenantId={api.tenantId} existingUrls={api.form.images} maxFiles={5}
+                onUploaded={(urls) => api.setForm((f) => ({ ...f, images: urls }))} />
+            </div>
+            {!api.form.hasOptions && (
+              <Field label="Stock on hand (optional)" hint="Blank means you don't count it.">
+                <Input inputMode="decimal" value={api.form.stock} onChange={(e) => api.setForm({ ...api.form, stock: e.target.value })} />
+              </Field>
+            )}
+            <label className="vpr-check vpr-wide">
+              <input type="checkbox" checked={api.form.hasOptions}
+                onChange={(e) => api.setForm({ ...api.form, hasOptions: e.target.checked })} />
+              It comes in sizes or colours
+            </label>
+            {api.form.hasOptions && (
+              <div className="vpr-wide">
+                <ScreenSuspense><OptionsBuilder rows={api.form.optionRows} disabled={api.adding}
+                  onChange={(rows) => api.setForm((f) => ({ ...f, optionRows: rows }))} /></ScreenSuspense>
+                <Field label="Stock of each version (optional)" hint="You can change each one afterwards, under Edit.">
+                  <Input inputMode="decimal" value={api.form.stock} onChange={(e) => api.setForm({ ...api.form, stock: e.target.value })} />
+                </Field>
+              </div>
+            )}
+            <details className="vpr-more vpr-wide">
+              <summary>SKU, barcode and cost price</summary>
+              <div className="vpr-form">
+                <Field label="SKU (your own code)"><Input value={api.form.sku} onChange={(e) => api.setForm({ ...api.form, sku: e.target.value })} /></Field>
+                <Field label="Barcode"><Input inputMode="numeric" value={api.form.barcode} onChange={(e) => api.setForm({ ...api.form, barcode: e.target.value })} /></Field>
+                <Field label="Cost price (R)" hint="What you pay for it, for your margins."><Input inputMode="decimal" value={api.form.cost} onChange={(e) => api.setForm({ ...api.form, cost: e.target.value })} /></Field>
+              </div>
+            </details>
             <div className="vpr-form-go">
               <Button type="submit" Icon={Plus} disabled={api.adding}>{api.adding ? "Adding…" : "Add product"}</Button>
               <Button type="button" variant="secondary" onClick={() => api.setShowAdd(false)}>Cancel</Button>
-              <span className="vpr-sub">Add a photo afterwards, under Edit.</span>
             </div>
           </form>
         </Card>

@@ -118,6 +118,16 @@ class TapService:
         return None
 
     @property
+    def shifts(self):
+        from vula.tap.shifts import ShiftDesk
+        return ShiftDesk(self)
+
+    @property
+    def scores(self):
+        from vula.tap.scoreboard import ScoreDesk
+        return ScoreDesk(self)
+
+    @property
     def express(self):
         from vula.tap.express import ExpressPay
         return ExpressPay(self)
@@ -205,6 +215,11 @@ class TapService:
             return True
         if await self.tax.handle_text(tenant_id, phone, text):
             return True
+        try:      # a team member writing "sick" / "my shifts" / "confirm" (vula/tap/shifts.py)
+            if await self.shifts.handle_text(tenant_id, phone, text):
+                return True
+        except Exception:  # noqa: BLE001 — shifts need migration 301; never stop the pay flow
+            logger.exception("shift message failed (tenant=%s)", tenant_id)
         session = self._live(self.repo.active_session_for_payer(
             tenant_id, self.phone_hash(phone), self.now()))
         if session and session.get("expecting"):
@@ -733,6 +748,10 @@ class TapService:
                     continue
                 stats["reminders"] += outcome == "sent"
                 stats["followups"] += outcome in ("followup", "opted_out")
+            try:
+                stats["shift_reminders"] = stats.get("shift_reminders", 0) + await self.shifts.sweep(t)
+            except Exception:  # noqa: BLE001 — shifts need migration 301
+                logger.exception("shift reminder sweep failed (tenant=%s)", t)
             try:
                 stats["table_calls"] = stats.get("table_calls", 0) + await self.tables.sweep(t)
             except Exception:  # noqa: BLE001 — table service needs migration 300; never stop the pass

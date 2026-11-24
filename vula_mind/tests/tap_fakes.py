@@ -177,7 +177,18 @@ class MemoryRepo:
         return dict(p)
 
     def insert_ledger_lines(self, rows):
-        self.ledger.extend(rows)
+        if not hasattr(self, "ledger_at"):
+            self.ledger_at = []                     # when each line was written (the table's created_at)
+        self.ledger_at.extend([None] * (len(self.ledger) - len(self.ledger_at)))
+        for r in rows:
+            self.ledger.append(r)
+            self.ledger_at.append(self.clock().isoformat())
+
+    def ledger_for(self, tenant_id, party_id, since_iso):
+        at = getattr(self, "ledger_at", [])
+        return [{**l, "created_at": at[i]} for i, l in enumerate(self.ledger)
+                if l["tenant_id"] == tenant_id and l["party_id"] == party_id
+                and i < len(at) and at[i] and _ts(at[i]) >= _ts(since_iso)]
 
     def get_split_rule(self, tenant_id, staff_id):
         return self.rules.get((tenant_id, staff_id)) or self.rules.get((tenant_id, None))
@@ -386,7 +397,7 @@ class MemoryRepo:
     # service at the table (migration 300)
     def _ts_rows(self, table):
         if not hasattr(self, "_tableside"):
-            self._tableside = {"kb_table_calls": {}, "kb_table_orders": {}}
+            self._tableside = {"kb_table_calls": {}, "kb_table_orders": {}, "kb_shifts": {}, "kb_availability": {}}
         return self._tableside[table]
 
     def add_row(self, table, row):
@@ -414,6 +425,42 @@ class MemoryRepo:
         r.update(fields)
         r["updated_at"] = self.clock().isoformat()
         return True
+
+    def rows_since(self, table, tenant_id, since_iso):
+        return [dict(r) for r in self._ts_rows(table).values() if r["tenant_id"] == tenant_id
+                and _ts(r["created_at"]) >= _ts(since_iso)]
+
+    def paid_since(self, tenant_id, since_iso):
+        out = []
+        for s in self.sessions.values():
+            if s["tenant_id"] != tenant_id or s["state"] != "paid" or _ts(s["updated_at"]) < _ts(since_iso):
+                continue
+            b = self.bills.get(s.get("bill_id")) or {}
+            out.append({"staff_id": b.get("staff_id"), "is_test": bool(b.get("is_test")),
+                        "bill_cents": s["bill_cents"], "tip_cents": s["tip_cents"], "paid_at": s["updated_at"]})
+        return out
+
+    def shifts_between(self, tenant_id, from_iso, to_iso):
+        return sorted([dict(r) for r in self._ts_rows("kb_shifts").values() if r["tenant_id"] == tenant_id
+                       and _ts(from_iso) <= _ts(r["starts_at"]) < _ts(to_iso)], key=lambda r: r["starts_at"])
+
+    def update_row(self, table, tenant_id, row_id, fields):
+        r = self._ts_rows(table).get(row_id)
+        if not r or r["tenant_id"] != tenant_id:
+            return None
+        r.update(fields)
+        return dict(r)
+
+    def delete_row(self, table, tenant_id, row_id, **eq):
+        r = self._ts_rows(table).get(row_id)
+        if not r or r["tenant_id"] != tenant_id or any(r.get(k) != v for k, v in eq.items()):
+            return False
+        del self._ts_rows(table)[row_id]
+        return True
+
+    def availability(self, tenant_id, member_id=None):
+        return [dict(r) for r in self._ts_rows("kb_availability").values() if r["tenant_id"] == tenant_id
+                and (member_id is None or r["member_id"] == member_id)]
 
     def menu_products(self, tenant_id):
         return [dict(p) for p in getattr(self, "products", []) if p["tenant_id"] == tenant_id and p.get("in_stock", True)]

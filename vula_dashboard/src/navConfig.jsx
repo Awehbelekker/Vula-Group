@@ -23,7 +23,7 @@ export const NAV_ICONS = {
   overview: House, inbox: Inbox, today: CalendarCheck, activity: Activity,
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
   sell: Store, orders: Package, till: Calculator, events: Ticket, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag, reviews: Star, salesreports: TrendingUp,
-  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, tables: UtensilsCrossed, lessons: Waves, specials: Sparkles, listings: Building2, suppliers: Truck, import: Download,
+  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, shifts: CalendarCheck, tables: UtensilsCrossed, lessons: Waves, specials: Sparkles, listings: Building2, suppliers: Truck, import: Download,
   money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen, management: ChartPie, booksreview: ClipboardCheck,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
   people: Users, pipeline: KanbanSquare, customers: Users, contacts: Contact, followups: MailCheck,
@@ -154,6 +154,7 @@ export const MERCHANT_GROUPS = [
     ]},
   ]},
   { label: "Admin", items: [
+    { id: "shifts", icon: "🗓️", label: "Shifts" },
     { id: "team", icon: "👥", label: "Team" },
     { id: "settings", icon: "⚙️", label: "Settings" },
   ]},
@@ -259,6 +260,7 @@ const MERCHANT_MODMAP = {
   till: 'orders',           // selling over the counter (Sell › Till) makes the same orders
   events: 'orders',         // event tickets (Sell › Events) are sold as orders too
   specials: 'tables',       // a restaurant's specials come with its table bookings
+  shifts: ['tables', 'taptopay', 'team'],   // the team's roster (Admin › Shifts)
   taptopay: ['taptopay', 'payments', 'tables'],   // waiters, table tags and paying at the table come with a restaurant's bookings
   salesreports: 'orders',   // sales by day and best sellers (Sell › Sales reports)
   stock: 'products',        // the Stock tab counts and receives the same products
