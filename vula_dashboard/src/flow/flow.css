@@ -91,3 +91,9 @@ button, input, select { font: inherit; color: inherit; }
 .fc-cam { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 14px; background: var(--fc-bg); }
 .fc-cam-frame { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px; background: var(--fc-ink); }
 .fc-btn-link { display: inline-grid; place-items: center; text-decoration: none; }
+
+/* the day in plain words */
+.fc-brief { display: grid; gap: 8px; }
+.fc-brief p { margin: 0; }
+.fc-brief-h { font-weight: 600; font-size: 17px; line-height: 1.35; }
+.fc-brief-p { font-size: 14px; line-height: 1.45; }

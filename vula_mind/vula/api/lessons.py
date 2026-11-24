@@ -164,7 +164,10 @@ async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str 
         hours = await conditions.forecast(spot["lat"], spot["lng"], day)
     except Exception:  # noqa: BLE001 — the forecast is a guide; the screen says it couldn't be read
         return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True, "cameras": cameras}
+    taught = sorted({x.get("sport") for x in (lessons.settings(tenant_id).get("lessons") or [])} - {None})
+    models = await conditions.wind_models(spot["lat"], spot["lng"], day)
     return {"spot": spot, "date": day.isoformat(), "cameras": cameras,
+            "summary": conditions.brief(hours, models, taught),     # the day in plain words
             "hours": conditions.day_view(hours, sport if sport in lessons.SPORTS else "surf")}
 
 

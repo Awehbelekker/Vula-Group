@@ -143,6 +143,7 @@ function Conditions({ tenantId }) {
       {(d?.cameras || []).map(c => (
         <p key={c.id} className="vtb-sub"><strong>{c.name}</strong> · camera by {c.owner} · <a className="vtb-a" href={c.page_url} target="_blank" rel="noreferrer">Watch live<ExternalLink size={14} aria-hidden="true" /></a>
           {c.kind === 'link' ? ' (opens their page; your customers get the same link)' : ''}</p>))}
+      {d?.summary?.headline && <p className="vtb-sub"><strong>{d.summary.headline}</strong> {d.summary.confidence} Your customers see this in the app.</p>}
       {!d ? <Skeleton lines={2} /> : d.unavailable || !d.hours.length ? <p className="vtb-sub">The forecast couldn't be read just now.</p> : (
         <div className="vls-hours">
           {d.hours.map(h => (

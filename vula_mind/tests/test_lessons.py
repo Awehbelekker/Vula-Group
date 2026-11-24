@@ -600,3 +600,47 @@ def test_a_coach_sees_only_their_own_lessons_and_month(world, monkeypatch):
     with pytest.raises(HTTPException) as e:
         run(lessons_api.coaches_month(TID, Req()))
     assert e.value.status_code == 403
+
+
+# ── the day in plain words ────────────────────────────────────────────────────────────────────
+def _windy(wind, wave=0.9, gust=None):
+    return {h: {"wind_kn": wind(h), "gust_kn": (gust or wind)(h) + 3, "wind_from": 135, "wave_m": wave, "period_s": 10}
+            for h in range(6, 18)}
+
+
+def test_the_day_in_words_names_the_best_part_and_says_when_forecasts_agree():
+    hours = _windy(lambda h: 6 if h < 10 else 12 if h < 14 else 16)
+    models = {"A": {h: hours[h]["wind_kn"] + 1 for h in hours}, "B": {h: hours[h]["wind_kn"] - 1 for h in hours}}
+    out = conditions.brief(hours, models, ["surf", "kite"])
+    assert [p["part"] for p in out["parts"]] == ["Morning", "Midday", "Afternoon"]
+    assert out["parts"][0]["text"] == "A light wind from the SE (6 kn, about 11 km/h), a small swell out at sea (0.9 m)"
+    assert out["parts"][0]["ratings"] == {"surf": "good", "kite": "poor"}
+    assert out["parts"][2]["ratings"]["kite"] == "good"
+    assert out["headline"] == "Good for a surf lesson all day. Best for kiting in the afternoon."
+    assert out["confidence"] == "The 2 forecasts agree on the wind." and out["sources"] == ["A", "B"]
+
+
+def test_forecasts_that_differ_are_named_with_their_range_and_one_forecast_says_so():
+    hours = _windy(lambda h: 12)
+    models = {"A": {h: 8 for h in hours}, "B": {h: 8 if h < 14 else 22 for h in hours}}
+    out = conditions.brief(hours, models, ["surf"])
+    assert out["confidence"] == "The forecasts differ on the afternoon wind (8 to 22 kn), so look again nearer the time."
+    assert out["parts"][2]["wind_range_kn"] == [8, 22] and out["parts"][0]["agree"] is True
+    alone = conditions.brief(hours, {}, [])
+    assert alone["confidence"] == "From one forecast." and list(alone["parts"][0]["ratings"]) == ["surf"]
+    assert conditions.brief({}, {}, ["surf"])["parts"] == []
+
+
+def test_a_day_nobody_should_go_out_says_why_and_calm_wind_has_no_direction():
+    out = conditions.brief(_windy(lambda h: 30, wave=3.2), {}, ["surf"])
+    assert out["headline"].startswith("Not a day for a surf lesson (") and "big swell" in out["headline"]
+    calm = conditions.brief(_windy(lambda h: 2), {}, ["surf"])
+    assert calm["parts"][0]["text"].startswith("Hardly any wind (2 kn")
+
+
+def test_the_comparison_reads_each_forecast_from_one_answer():
+    answer = {"hourly": {"time": ["2026-11-25T06:00", "2026-11-25T07:00"],
+                         "wind_speed_10m_ecmwf_ifs025": [5.0, None], "wind_speed_10m_gfs_seamless": [7, 9],
+                         "wind_speed_10m_other": [1, 1]}}
+    assert conditions.read_models(answer) == {"ECMWF (Europe)": {6: 5.0}, "GFS (United States)": {6: 7.0, 7: 9.0}}
+    assert conditions.read_models({}) == {}

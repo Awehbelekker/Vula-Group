@@ -88,6 +88,13 @@ function Conditions({ shop, spot }) {
       {day === 0 && d?.report && <p className="fc-note"><b>Seen from the beach at {d.report.time}{d.report.by ? ` by ${d.report.by}` : ""}:</b> {d.report.text}.{d.report.coach_note ? ` “${d.report.coach_note}”` : ""}</p>}
       {(d?.cameras || []).map((c) => <Camera key={c.id} cam={c} />)}
       {!d ? <p className="fc-sub">Reading the forecast…</p> : !hours.length ? <p className="fc-sub">The forecast couldn't be read just now.</p> : (<>
+        {d.summary?.headline && (
+          <div className="fc-brief">
+            <p className="fc-brief-h">{d.summary.headline}</p>
+            {d.summary.parts.map((p) => (
+              <p key={p.part} className="fc-brief-p"><b>{p.part}</b> <span className="fc-sub">{p.from}–{p.to}</span><br />{p.text}.</p>))}
+            <p className="fc-sub">{d.summary.confidence}</p>
+          </div>)}
         {now && <p style={{ margin: 0 }}><span className={`fc-chip ${now.rating}`}>{RATING[now.rating]} for learners{day === 0 ? " now" : " at 08:00"}</span> <span className="fc-sub">{now.text}</span></p>}
         <div className="fc-hours">
           {hours.map((h) => (
