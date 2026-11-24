@@ -914,6 +914,16 @@ async def shifts_publish(tenant: str, request: Request, week: Optional[str] = No
     return out
 
 
+@router.post("/v1/tap/{tenant}/shifts/copy")
+async def shifts_copy(tenant: str, request: Request, week: Optional[str] = None,
+                      identity: dict = Depends(require_tenant_actor)) -> dict:
+    """Last week's roster as drafts in the chosen week. Nothing is published."""
+    await _manager(request, tenant)
+    out = _shift_sync(get_service().shifts.copy_week, tenant, week, _owner(identity))
+    _audit(tenant, identity, "shifts.copy", **out)
+    return out
+
+
 @router.put("/v1/tap/{tenant}/scores/settings")
 async def scores_settings(tenant: str, body: BoardSettingsIn, request: Request,
                           identity: dict = Depends(require_tenant_actor)) -> dict:

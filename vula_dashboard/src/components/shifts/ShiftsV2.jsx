@@ -5,7 +5,7 @@
  * change anything (the server refuses others).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, Megaphone, Plus, Send, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, Copy, Megaphone, Plus, Send, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { Button, Card, ErrorCard, Field, Input, PageHeader, Select, Sheet, Skeleton, StatusChip, confirmDialog, toast } from '../ui/index.jsx'
 import './shifts.css'
@@ -86,13 +86,29 @@ export default function ShiftsV2({ tenantId }) {
     run(() => api(`${base}/publish?week=${day}`, { method: 'POST', body: {} }), 'Published')
   }
 
+  const copy = async () => {
+    setBusy(true)
+    try {
+      const r = await api(`${base}/copy?week=${day}`, { method: 'POST', body: {} })
+      const left = [r.already_there && `${r.already_there} already planned`, r.left_the_team && `${r.left_the_team} for people no longer on the team`].filter(Boolean).join(', ')
+      toast(!r.last_week ? 'There were no shifts the week before.'
+        : `${r.copied} shift${r.copied === 1 ? '' : 's'} copied as drafts${left ? ` (left out: ${left})` : ''}.`, r.copied ? undefined : 'warn')
+      load()
+    } catch (e) { toast(e.message, 'danger') }
+    setBusy(false)
+  }
+
   if (error) return <ErrorCard what="the shifts" onRetry={load} />
   if (!week) return <Card><Skeleton lines={6} /></Card>
   const cover = week.shifts.filter(s => s.status === 'declined' || s.status === 'sick')
   return (
     <div className="vsh">
       <PageHeader sub="Plan who works when, then publish. Each person confirms on the staff app or WhatsApp, and you hear at once if someone can’t make it or is sick."
-        actions={week.drafts > 0 && <Button Icon={Send} disabled={busy} onClick={publish}>Publish {week.drafts} draft{week.drafts === 1 ? '' : 's'}</Button>} />
+        actions={<>
+          <Button variant="secondary" Icon={Copy} disabled={busy} onClick={copy}
+            title="Add the week before's shifts to this week as drafts. Nobody is told until you publish.">Copy last week</Button>
+          {week.drafts > 0 && <Button Icon={Send} disabled={busy} onClick={publish}>Publish {week.drafts} draft{week.drafts === 1 ? '' : 's'}</Button>}
+        </>} />
       <div className="vsh-bar">
         <Button variant="quiet" Icon={ChevronLeft} aria-label="The week before" onClick={() => setDay(shiftDay(week.week_start, -7))} />
         <strong>Week of {dayLabel(week.week_start)}</strong>

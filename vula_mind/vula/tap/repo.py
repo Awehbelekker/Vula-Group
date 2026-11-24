@@ -7,7 +7,7 @@ a real Postgres (migrations 199/200) but this client code needs a staging run (d
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 logger = logging.getLogger(__name__)
@@ -238,6 +238,20 @@ class SupabaseRepo:
         from vula.db_pages import all_rows
         return all_rows(lambda: self.db.table("kb_ledger_lines").select("id,kind,cents,created_at")
                         .eq("tenant_id", tenant_id).eq("party_id", party_id).gte("created_at", since_iso))
+
+    # a person's own target (migration 306)
+    def get_target(self, tenant_id: str, member_id: str) -> Optional[dict]:
+        rows = (self.db.table("kb_staff_targets").select("period,cents").eq("tenant_id", tenant_id)
+                .eq("member_id", member_id).limit(1).execute().data or [])
+        return rows[0] if rows else None
+
+    def set_target(self, tenant_id: str, member_id: str, period: Optional[str], cents: Optional[int]) -> None:
+        t = self.db.table("kb_staff_targets")
+        if not cents:
+            t.delete().eq("tenant_id", tenant_id).eq("member_id", member_id).execute()
+            return
+        t.upsert({"tenant_id": tenant_id, "member_id": member_id, "period": period, "cents": cents,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}, on_conflict="tenant_id,member_id").execute()
 
     # shifts and availability (migration 301)
     def shifts_between(self, tenant_id: str, from_iso: str, to_iso: str) -> list[dict]:

@@ -594,7 +594,7 @@ export function Scores({ token, guard, bump }) {
 }
 
 // ── what I've earned, my target and the last two weeks (vula_mind/vula/tap/scoreboard.py income).
-// Every amount is the server's. The target is my own, kept on this phone only; the ring just
+// Every amount is the server's. The target is my own (saved for me, never shown to anyone else); the ring just
 // compares the server's figure with it.
 const TARGET_RE = /^\d{1,6}([.,]\d{1,2})?$/;
 export function Income({ token, guard, bump, name }) {
@@ -602,9 +602,17 @@ export function Income({ token, guard, bump, name }) {
   const [target, setTarget] = useState(() => { try { return JSON.parse(LS.get("vp.target") || "null"); } catch { return null; } });
   const [edit, setEdit] = useState(null);          // null | { period, amount }
   const [err, setErr] = useState("");
+  // Best effort: the target is already on this phone, so a save that doesn't reach the server loses nothing.
+  const putTarget = useCallback((t) => call("/v1/tap/app/target", { token, method: "PUT", body: t || { cents: null } }).catch(() => {}), [token]);
   const load = useCallback(async () => {
-    try { setD(await call("/v1/tap/app/income?days=14", { token })); } catch (x) { if (x.status) guard(x); }
-  }, [token, guard]);
+    try {
+      const x = await call("/v1/tap/app/income?days=14", { token });
+      setD(x);
+      // The server's copy wins; a target that only this phone has is sent up once, so a new phone has it.
+      if (x.target) { setTarget(x.target); LS.set("vp.target", JSON.stringify(x.target)); }
+      else { let mine = null; try { mine = JSON.parse(LS.get("vp.target") || "null"); } catch { /* none */ } if (mine?.cents) putTarget(mine); }
+    } catch (x) { if (x.status) guard(x); }
+  }, [token, guard, putTarget]);
   useEffect(() => { load(); }, [load, bump]);
   if (!d) return null;
 
@@ -619,7 +627,7 @@ export function Income({ token, guard, bump, name }) {
     if (!TARGET_RE.test(edit.amount.trim())) return setErr("Type your target in rands, like 800.");
     const [r, c = ""] = edit.amount.trim().replace(",", ".").split(".");
     const t = { period: edit.period, cents: Number(r) * 100 + Number(c.padEnd(2, "0")) };
-    setTarget(t); LS.set("vp.target", JSON.stringify(t)); setEdit(null); setErr("");
+    setTarget(t); LS.set("vp.target", JSON.stringify(t)); putTarget(t); setEdit(null); setErr("");
   };
   const first = (name || "").split(" ")[0];
 
@@ -656,8 +664,8 @@ export function Income({ token, guard, bump, name }) {
           <input value={edit.amount} inputMode="decimal" placeholder="Target in rands" aria-label="Target in rands" onChange={(e) => setEdit({ ...edit, amount: e.target.value })} />
           {err && <div className="err" role="alert">{err}</div>}
           <div className="row"><button type="submit">Save my target</button>
-            {target && <button type="button" className="ghost" onClick={() => { setTarget(null); LS.del("vp.target"); setEdit(null); }}>Remove</button>}</div>
-          <div className="hero-lbl">Your target is your own. It stays on this phone.</div>
+            {target && <button type="button" className="ghost" onClick={() => { setTarget(null); LS.del("vp.target"); putTarget(null); setEdit(null); }}>Remove</button>}</div>
+          <div className="hero-lbl">Your target is your own. Nobody else sees it.</div>
         </form>
       ) : <button className="hero-btn" onClick={() => setEdit({ period: target?.period || "day", amount: target ? String(target.cents / 100) : "" })}>{target ? "Change my target" : "Set a target for myself"}</button>}
     </div>

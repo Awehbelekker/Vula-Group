@@ -190,6 +190,17 @@ class MemoryRepo:
                 if l["tenant_id"] == tenant_id and l["party_id"] == party_id
                 and i < len(at) and at[i] and _ts(at[i]) >= _ts(since_iso)]
 
+    def get_target(self, tenant_id, member_id):
+        return dict(getattr(self, "targets", {}).get((tenant_id, member_id)) or {}) or None
+
+    def set_target(self, tenant_id, member_id, period, cents):
+        if not hasattr(self, "targets"):
+            self.targets = {}
+        if not cents:
+            self.targets.pop((tenant_id, member_id), None)
+        else:
+            self.targets[(tenant_id, member_id)] = {"period": period, "cents": cents}
+
     def get_split_rule(self, tenant_id, staff_id):
         return self.rules.get((tenant_id, staff_id)) or self.rules.get((tenant_id, None))
 

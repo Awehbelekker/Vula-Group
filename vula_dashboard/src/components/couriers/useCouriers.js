@@ -27,6 +27,10 @@ export const EMPTY_ADDRESS = { company: '', street_address: '', local_area: '', 
 export const PROVINCES = [['', 'Province'], ['EC', 'Eastern Cape'], ['FS', 'Free State'], ['GP', 'Gauteng'], ['KZN', 'KwaZulu-Natal'],
   ['LP', 'Limpopo'], ['MP', 'Mpumalanga'], ['NC', 'Northern Cape'], ['NW', 'North West'], ['WC', 'Western Cape']]
 
+/** Addresses matching what was typed, each already split into the form's fields (asked on Find, not per key). */
+export const findAddress = async (tenantId, query) =>
+  (await call(`${base(tenantId)}/couriers/address-search`, { method: 'POST', body: { query } })).results || []
+
 export function useCourierSetup(tenantId) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')

@@ -130,3 +130,28 @@ async def test_income_is_the_persons_own_share_day_by_day(env):
     for bad in (0, 61, 1.5, True):
         with pytest.raises(ScoreError):
             svc.scores.income(T, THANDI, bad)
+
+
+# ── a person's own target, saved on the server ────────────────────────────────────────────────
+def test_a_target_is_saved_read_back_and_only_ever_that_persons(env):
+    svc = env[0]
+    from vula.tap.scoreboard import ScoreError
+    assert svc.scores.income(T, THANDI, 7)["target"] is None
+    assert svc.scores.set_target(T, THANDI, "week", 250000) == {"period": "week", "cents": 250000}
+    assert svc.scores.income(T, THANDI, 7)["target"] == {"period": "week", "cents": 250000}
+    assert svc.scores.income(T, PIETER, 7)["target"] is None                 # his colleague's is not his
+    assert svc.scores.income("someone-else", THANDI, 7)["target"] is None
+    for period, cents in (("month", 5000), ("day", 50), ("day", True), ("day", 12.5), ("day", 10**9)):
+        with pytest.raises(ScoreError):
+            svc.scores.set_target(T, THANDI, period, cents)
+    assert svc.scores.target(T, THANDI) == {"period": "week", "cents": 250000}   # a refused one changes nothing
+    assert svc.scores.set_target(T, THANDI, None, None) is None and svc.scores.target(T, THANDI) is None
+
+
+def test_before_the_table_exists_there_is_simply_no_target(env):
+    svc = env[0]
+
+    def missing(*a):
+        raise RuntimeError('relation "kb_staff_targets" does not exist')
+    svc.repo.get_target = missing
+    assert svc.scores.income(T, THANDI, 7)["target"] is None
