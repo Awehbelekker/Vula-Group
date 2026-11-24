@@ -257,6 +257,7 @@ const MERCHANT_MODMAP = {
   till: 'orders',           // selling over the counter (Sell › Till) makes the same orders
   events: 'orders',         // event tickets (Sell › Events) are sold as orders too
   specials: 'tables',       // a restaurant's specials come with its table bookings
+  taptopay: ['taptopay', 'payments', 'tables'],   // waiters, table tags and paying at the table come with a restaurant's bookings
   salesreports: 'orders',   // sales by day and best sellers (Sell › Sales reports)
   stock: 'products',        // the Stock tab counts and receives the same products
   costing: 'manufacturing', // materials, recipes, batches, cost per unit (Manufacturing Core)

@@ -110,8 +110,10 @@ BUSINESS_TYPES: dict[str, dict] = {
     # bookings and specials; an organiser who only sells tickets. Both can move to a full type later
     # with nothing to migrate (the modules are switches, the data is the same). Documents stays on
     # for both (the 12 Nov rule): the menu or the event's terms is what Vula answers customers from.
+    # A restaurant also gets Products (its menu) and, through `tables`, Tap to Pay: waiters, table
+    # tags, calling and ordering from the table.
     "restaurant_lite": {"label": "Restaurant: table bookings & specials only",
-                        "modules": ["tables", "inbox", "crm", "team", "documents"]},
+                        "modules": ["tables", "products", "inbox", "crm", "team", "documents"]},
     "events_lite": {"label": "Events: tickets & the door only",
                     "modules": ["orders", "payments", "crm", "team", "reports", "documents"]},
     "other":    {"label": "Other / General",
