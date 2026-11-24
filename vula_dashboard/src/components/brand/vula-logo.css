@@ -20,3 +20,4 @@
 .vula-logo { display: block; flex: none; width: auto; }
 .vula-powered-by { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-caption); color: var(--muted); white-space: nowrap; }
 .vula-powered-by .vula-logo { display: inline-block; }
+.vula-pmark { height: 20px; }
