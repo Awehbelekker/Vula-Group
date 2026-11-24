@@ -272,6 +272,7 @@ function Home({ token, onLock, onExpired }) {
       {me && me.mode === "off" && <div className="banner">Tap to Pay is switched off for this business.</div>}
       {err && <div className="err" role="alert">{err}</div>}
 
+      <Floor token={token} guard={guard} online={online} />
       <Tabs token={token} guard={guard} online={online} bump={bills} />
 
       <form className="card" onSubmit={create}>
@@ -419,6 +420,112 @@ function Tabs({ token, guard, online, bump }) {
                     </div>
                     <button type="submit" disabled={busy || !online}>{busy ? "Adding…" : `Add to ${t.name}'s tab`}</button>
                   </form>}
+            </div>)}
+        </div>))}
+    </div>
+  );
+}
+
+// ── service at the table: who is calling, the orders to confirm, and each table's bill ────────
+// (vula_mind/vula/tap/tableside.py). Everything shown is the server's; this only asks and taps.
+export function Floor({ token, guard, online }) {
+  const [floor, setFloor] = useState(null);
+  const [menu, setMenu] = useState(null);
+  const [openId, setOpenId] = useState("");
+  const [line, setLine] = useState({ product: "", qty: "1", desc: "", price: "", note: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const seen = useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await call("/v1/tap/app/floor", { token });
+      const waiting = [...d.calls.filter((c) => c.status === "open").map((c) => c.id), ...d.orders.map((o) => o.id)];
+      if (seen.current && waiting.some((id) => !seen.current.has(id))) buzz();     // something new is waiting
+      seen.current = new Set(waiting);
+      setFloor(d);
+    } catch (x) { if (x.status) guard(x); }
+  }, [token, guard]);
+  useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
+
+  if (!floor || !(floor.settings.calls || floor.settings.orders)) return null;
+
+  const run = async (path, body) => {
+    setBusy(true); setErr("");
+    try { await call(path, { token, method: "POST", body: body || {} }); await load(); return true; }
+    catch (x) { if (x.status === 401) guard(x); else setErr(x.message); await load(); return false; }
+    finally { setBusy(false); }
+  };
+  const openTable = async (id) => {
+    setOpenId(openId === id ? "" : id); setErr("");
+    if (!menu) { try { setMenu((await call("/v1/tap/app/menu", { token })).menu); } catch (x) { guard(x); } }
+  };
+  const addLine = async (e, t) => {
+    e.preventDefault();
+    const qty = Number(line.qty);
+    if (!Number.isInteger(qty) || qty < 1) return setErr("How many? Type a whole number.");
+    let body;
+    if (line.product) body = { product_id: line.product, quantity: qty, note: line.note.trim() };
+    else {
+      if (!line.desc.trim()) return setErr("Choose something from the menu, or type what it was.");
+      if (!TAB_RE.test(line.price.trim())) return setErr("Type the price in rands, like 60 or 60.50.");
+      const [r, c = ""] = line.price.trim().replace(",", ".").split(".");
+      body = { description: line.desc.trim(), quantity: qty, unit_cents: Number(r) * 100 + Number(c.padEnd(2, "0")), note: line.note.trim() };
+    }
+    if (await run(`/v1/tap/app/tables/${t.id}/items`, body)) setLine({ product: "", qty: "1", desc: "", price: "", note: "" });
+  };
+
+  return (
+    <div className="card">
+      <h2>Tables</h2>
+      {err && <div className="err" role="alert">{err}</div>}
+      {floor.calls.map((c) => (
+        <div key={c.id} className={`call${c.status === "open" ? " call-open" : ""}`}>
+          <div><strong>{c.table}</strong> · {c.what}
+            <div className="muted">{c.status === "accepted" ? `${c.accepted_by || "Someone"} is on it` : c.waited_minutes ? `Waiting ${c.waited_minutes} min` : "Just now"}</div></div>
+          {c.status === "open"
+            ? <button className="small" disabled={busy || !online} onClick={() => run(`/v1/tap/app/calls/${c.id}/accept`)}>I'm going</button>
+            : <button className="ghost small" disabled={busy || !online} onClick={() => run(`/v1/tap/app/calls/${c.id}/done`)}>Done</button>}
+        </div>))}
+      {floor.orders.map((o) => (
+        <div key={o.id} className="call call-open">
+          <div><strong>{o.table}</strong> · new order · {rands(o.total_cents)}
+            {o.items.map((i) => <div key={i.product_id} className="tab-line">{i.quantity} x {i.name}</div>)}
+            {o.note && <div className="muted">Note: {o.note}</div>}
+            <div className="row" style={{ marginTop: 6, justifyContent: "flex-start" }}>
+              <button className="small" disabled={busy || !online} onClick={() => run(`/v1/tap/app/orders/${o.id}/confirm`)}>Confirm</button>
+              <button className="ghost small" disabled={busy || !online} onClick={() => run(`/v1/tap/app/orders/${o.id}/reject`, { reason: "" })}>Can't do it</button>
+            </div></div>
+        </div>))}
+      {floor.tables.length === 0 && <div className="muted">No tables are yours yet. Ask your manager to add them.</div>}
+      {floor.tables.map((t) => (
+        <div key={t.id} className="tab">
+          <button className="tab-head" onClick={() => openTable(t.id)} aria-expanded={openId === t.id}>
+            <span>{t.label}<span className="muted"> · {t.waiter || "nobody yet"}</span></span>
+            <span>{t.bill ? rands(t.bill.total_cents) : "No bill"}{t.bill?.status === "claimed" ? " · paying" : ""}</span>
+          </button>
+          {openId === t.id && (
+            <div className="tab-body">
+              {!t.waiter_id && <button className="ghost small" disabled={busy} onClick={() => run(`/v1/tap/app/tables/${t.id}/take`)}>This is my table</button>}
+              {(t.bill?.items || []).map((i) => (
+                <div key={i.id} className="row tab-line"><span>{i.quantity} x {i.description}</span>
+                  <span>{rands(i.line_cents)}{t.bill.status === "open" && <button className="ghost small" style={{ marginLeft: 8 }} disabled={busy} aria-label={`Remove ${i.description}`} onClick={() => run(`/v1/tap/app/tables/${t.id}/items/${i.id}/void`)}>Remove</button>}</span></div>))}
+              {t.bill?.status === "claimed"
+                ? <div className="banner">The customer is paying now. Add more once they've paid.</div>
+                : (
+                  <form onSubmit={(e) => addLine(e, t)}>
+                    <select value={line.product} onChange={(e) => setLine({ ...line, product: e.target.value })} aria-label="Menu item">
+                      <option value="">Not on the menu (type it)</option>
+                      {(menu || []).map((m) => <option key={m.id} value={m.id}>{m.name} · {rands(m.price_cents)}</option>)}
+                    </select>
+                    {!line.product && <>
+                      <input value={line.desc} maxLength={80} placeholder="What was it?" aria-label="Description" onChange={(e) => setLine({ ...line, desc: e.target.value })} />
+                      <input value={line.price} inputMode="decimal" placeholder="Price in rands" aria-label="Price in rands" onChange={(e) => setLine({ ...line, price: e.target.value })} />
+                    </>}
+                    <input value={line.qty} inputMode="numeric" aria-label="How many" onChange={(e) => setLine({ ...line, qty: e.target.value })} />
+                    <input value={line.note} maxLength={40} placeholder="Note for the kitchen (optional)" aria-label="Note for the kitchen" onChange={(e) => setLine({ ...line, note: e.target.value })} />
+                    <button disabled={busy || !online}>Add to {t.label}</button>
+                  </form>)}
             </div>)}
         </div>))}
     </div>

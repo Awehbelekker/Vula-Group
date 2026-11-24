@@ -106,6 +106,18 @@ class TapService:
         return TabDesk(self)
 
     @property
+    def tables(self):
+        from vula.tap.tableside import TableDesk
+        return TableDesk(self)
+
+    def _itemised_total(self, tenant_id: str, bill: dict) -> Optional[int]:
+        """What a bill made of lines owes right now (a bar tab, a table's bill); None for a bill
+        with one typed amount."""
+        if bill.get("bill_type") in ("tab", "table"):
+            return sum(int(i["line_cents"]) for i in self.repo.tab_items(tenant_id, bill["id"]))
+        return None
+
+    @property
     def express(self):
         from vula.tap.express import ExpressPay
         return ExpressPay(self)
@@ -255,6 +267,9 @@ class TapService:
         if bill.get("bill_type") == "tab" and not self.tabs.total(tenant_id, bill_id):
             await self._say(tenant_id, phone, "Your tab is empty so far. Order something first!")
             return
+        if bill.get("bill_type") == "table" and not self._itemised_total(tenant_id, bill):
+            await self._say(tenant_id, phone, MSG_NO_BILL)
+            return
         if bill["status"] == "claimed" and bill.get("claimed_by_hash") == payer:
             existing = self._live(self.repo.active_session_for_payer(tenant_id, payer, self.now()))
             if existing and existing.get("bill_id") == bill_id:
@@ -272,9 +287,9 @@ class TapService:
             await self._say(tenant_id, phone, MSG_LOCKED)    # lost the atomic claim
             return
         amount = int(bill["subtotal_cents"])
-        if bill.get("bill_type") == "tab":
-            # the items decide what is owed, worked out now the tab is claimed (staff can't add to it)
-            amount = self.tabs.total(tenant_id, bill_id)
+        if bill.get("bill_type") in ("tab", "table"):
+            # the items decide what is owed, worked out now the bill is claimed (staff can't add to it)
+            amount = self._itemised_total(tenant_id, bill)
             self.repo.update_bill(tenant_id, bill_id, {"subtotal_cents": amount})
         session = self._new_session(tenant_id, bill_id, payer, phone, amount)
         self.repo.cas_session(tenant_id, session["id"], expected="claimed", new=st.session_next("claimed", "amount_set"))
@@ -718,6 +733,10 @@ class TapService:
                     continue
                 stats["reminders"] += outcome == "sent"
                 stats["followups"] += outcome in ("followup", "opted_out")
+            try:
+                stats["table_calls"] = stats.get("table_calls", 0) + await self.tables.sweep(t)
+            except Exception:  # noqa: BLE001 — table service needs migration 300; never stop the pass
+                logger.exception("table call sweep failed (tenant=%s)", t)
             try:
                 stats["tab_prompts"] = stats.get("tab_prompts", 0) + await self.tabs.sweep_idle(t)
             except Exception:  # noqa: BLE001 — tabs need migration 231; never stop the reminder pass
