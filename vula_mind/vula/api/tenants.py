@@ -351,7 +351,7 @@ PARTNERS: dict[str, dict] = {
                  # font_pairing "plain": FlowCrew's design system sets everything in the plain sans —
                  # no serif headings on its screens (the dashboard's tokens.applyFontPairing)
                  "brand": {"accent_color": "#2196F3", "secondary_color": "#7ED321", "ink_color": "#1E2A39",
-                           "font_pairing": "plain"},
+                           "font_pairing": "plain", "tagline": "For surf and kite schools"},   # under its name at sign-in
                  # the partner's own web address (24 Nov 2026): its businesses sign in there and its
                  # customers' app lives there, under the partner's name and look
                  "domain": "flowcrew.co.za",

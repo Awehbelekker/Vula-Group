@@ -17,7 +17,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
   const x = useLogin({ onSuccess, notice, email })
   const go = (mode) => { x.setMode(mode); x.setError(''); x.setInfo('') }
   const b = x.loginBrand
-  const sc = b?.partner_login ? 'school' : ''
+  const sc = b?.partner_login && 'school'
 
   return (
     <main className="vlg">
@@ -27,7 +27,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
             <>
               {b.logo_url ? <img src={b.logo_url} alt={b.name || ''} className="vlg-logo vula-login-logo" />
                 : <span className="vlg-name">{b.name}</span>}
-              {b.partner_login ? <><span className="vlg-name">{b.name}</span><span className="vlg-over">For surf and kite schools</span></>
+              {b.partner_login ? <><span className="vlg-name">{b.name}</span><span className="vlg-over">{b.tagline}</span></>
                 : <PoweredByVula partner={b.partner?.name || ''} />}
             </>
           ) : (
@@ -86,7 +86,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
             <Notes x={x} info={false} />
             <form onSubmit={x.handleSetupWorkspace} className="vlg-form">
               <Field label={sc ? 'School name' : 'Business name'}>
-                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={sc ? '' : examplesFor(null).businessName} />
+                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={sc ? '' : examplesFor().businessName} />
               </Field>
               {/* on a partner's own address the server decides the kind (a FlowCrew surf school) */}
               {!sc && <Field label="What kind of business?">
