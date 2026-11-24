@@ -90,8 +90,10 @@ function BeachReport({ tenantId }) {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [points, setPoints] = useState(null)
   const base = `/v1/commerce/${tenantId}/admin/lessons/beach-report`
-  useEffect(() => { api(base).then((d) => setReport(d.report)).catch(() => {}) }, [base])
+  const loadPoints = useCallback(() => api(`/v1/commerce/${tenantId}/admin/lessons/sharing`).then(setPoints).catch(() => {}), [tenantId])
+  useEffect(() => { api(base).then((d) => setReport(d.report)).catch(() => {}); loadPoints() }, [base, loadPoints])
   const send = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -100,7 +102,7 @@ function BeachReport({ tenantId }) {
     try {
       const fd = new FormData(); fd.append('file', file); fd.append('note', note)
       const d = await api(base, { method: 'POST', body: fd })
-      setReport(d.report); setNote(''); toast('Report added. Your customers can see it in the app.')
+      setReport(d.report); setNote(''); toast('Report added. Your customers can see it in the app.'); loadPoints()
     } catch (err) { setError(err.message) }
     setBusy(false)
   }
@@ -114,6 +116,13 @@ function BeachReport({ tenantId }) {
       </div>
       {error && <p className="vtb-error" role="alert">{error}</p>}
       <p className="vtb-sub">Face the waves. The photo is read once and not kept; customers see only the words, the time and your first name.</p>
+      {points && (
+        <div className="vls-points">
+          <p className="vtb-sub"><strong>Sharing points this month</strong>{points.me ? ` — yours: ${points.me.points}` : ''}</p>
+          {points.board.length > 0 && <ul>{points.board.map((c, i) => (
+            <li key={c.member_id}><span>{i + 1}. {c.name}</span><span className="vtb-sub">{c.reports} {c.reports === 1 ? 'report' : 'reports'}</span><strong className="vula-money">{c.points}</strong></li>))}</ul>}
+          <p className="vtb-sub">{points.rule}</p>
+        </div>)}
     </div>
   )
 }

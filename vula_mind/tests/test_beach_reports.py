@@ -147,3 +147,32 @@ def test_the_routes_take_a_photo_and_show_customers_the_words(world, monkeypatch
     public = run(lessons_api.flow_conditions("big-bay-surf", Req()))
     assert public["report"]["text"] == "clean, about waist high, a few people out" and public["report"]["by"] == "Shane"
     assert "confidence" not in public["report"] and "id" not in public["report"] and public["spot"] == {"name": "Big Bay"}
+
+
+def _report(world, at, by="m1", tenant=TID):
+    world.db.rows["commerce_beach_reports"].append({"id": f"r{len(world.db.rows['commerce_beach_reports'])}", "tenant_id": tenant,
+                                                    "taken_at": at, "reported_by": by, "reporter_name": "X", **GOOD})
+
+
+def test_sharing_points_follow_the_fixed_rule(world, monkeypatch):
+    monkeypatch.setattr("vula.team_index.active_members", lambda tid: [
+        {"id": "m1", "name": "Shane Daniels", "whatsapp": "27820000001"}, {"id": "m2", "name": "Zoe Peters", "whatsapp": "27820000002"}])
+    _report(world, "2026-11-03T05:00:00+00:00", "m2")        # 07:00 SAST: the day's first → 15
+    _report(world, "2026-11-03T05:30:00+00:00")              # Shane, not first → 10
+    _report(world, "2026-11-03T06:00:00+00:00")              # 30 min after his last: listed, no points
+    _report(world, "2026-11-03T08:00:00+00:00")              # → 10
+    _report(world, "2026-11-03T11:00:00+00:00")              # → 10 (his third that counts)
+    _report(world, "2026-11-03T14:00:00+00:00")              # a fourth in the day: no points
+    _report(world, "2026-11-04T05:00:00+00:00")              # next day's first → 15
+    _report(world, "2026-11-05T05:00:00+00:00", "gone")      # someone no longer on the team: nothing, but it was the day's first
+    _report(world, "2026-11-05T09:00:00+00:00", "m2")        # → 10, not first
+    _report(world, "2026-10-31T21:59:00+00:00")              # 23:59 on 31 Oct SAST: last month
+    _report(world, "2026-11-06T05:00:00+00:00", "m1", "other")   # another business
+    got = br.sharing_points(TID, "2026-11", who="27820000002")
+    assert [(c["name"], c["reports"], c["counted"], c["firsts"], c["points"]) for c in got["board"]] == [
+        ("Shane", 6, 4, 1, 45), ("Zoe", 2, 2, 1, 25)]
+    assert got["me"]["name"] == "Zoe" and got["rule"] == br.POINTS_RULE
+    assert br.sharing_points(TID, "2026-10")["board"][0]["points"] == 15 and br.sharing_points(TID, "2026-10")["me"] is None
+    assert br.sharing_points(TID, "2026-09")["board"] == []
+    with pytest.raises(lessons.LessonError):
+        br.sharing_points(TID, "November")

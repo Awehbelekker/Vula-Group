@@ -12,6 +12,7 @@ vula/api/lessons.py — lessons and gear hire the business confirms by hand
     GET     …/{t}/admin/lessons/conditions?date=  the forecast for the spot, hour by hour
     GET     …/{t}/admin/lessons/coaches?month=  every coach's month and share (owner/manager)
     GET     …/{t}/admin/lessons/mine?month=     the signed-in coach's own lessons and month
+    GET     …/{t}/admin/lessons/sharing?month=  points for sharing beach reports: the team's board and your own
     GET/POST …/{t}/admin/lessons/beach-report   the latest reading from the beach; POST a photo to add one
 
 The customer app (`public`, mounted at /v1/flow; the dashboard's /flow/<business> page). No login:
@@ -181,6 +182,17 @@ async def my_lessons(tenant_id: str, request: Request, month: Optional[str] = No
     login, never from the request."""
     try:
         return lessons.mine(tenant_id, await _who(request, tenant_id), month or _this_month())
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.get("/{tenant_id}/admin/lessons/sharing")
+async def sharing(tenant_id: str, request: Request, month: Optional[str] = None) -> dict:
+    """Points for sharing reports from the beach: the board the team shares (first names, counts
+    and points — no money) and the signed-in person's own row."""
+    from vula.commerce import beach_reports
+    try:
+        return beach_reports.sharing_points(tenant_id, month or _this_month(), await _who(request, tenant_id))
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
 

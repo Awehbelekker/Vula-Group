@@ -32,6 +32,13 @@ CROWD = {"empty": "nobody out", "few": "a few people out", "busy": "busy", "pack
 CONFIDENCE = ("low", "medium", "high")
 FRESH_HOURS = 4
 MAX_UPLOAD = 12 * 1024 * 1024
+# Points for sharing a report. Fixed here and shown to the team, so everyone knows what counts.
+POINTS_REPORT = 10            # each report that was good enough to show customers
+POINTS_FIRST = 5              # extra for the day's first report from this business
+POINTS_GAP_HOURS = 2          # the same person's next report counts only this long after their last
+POINTS_DAILY = 3              # at most this many of one person's reports count in a day
+POINTS_RULE = (f"{POINTS_REPORT} points for each beach report customers could see, {POINTS_FIRST} more for the "
+               f"first one of the day. Up to {POINTS_DAILY} a day count, at least {POINTS_GAP_HOURS} hours apart.")
 _PROMPT = (
     "This photo was taken from a beach by a surf coach to record the water conditions. "
     "Reply with JSON only, using exactly these keys and only the listed values:\n"
@@ -181,3 +188,44 @@ def for_customers(report: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not report or not report.get("text"):
         return None
     return {k: report.get(k) for k in ("time", "day", "by", "text", "coach_note", "surface", "wave_size", "crowd")}
+
+
+def sharing_points(tenant_id: str, month: str, who: str = "") -> Dict[str, Any]:
+    """Who shared what from the beach in a month (South African time), in points: counted here
+    from the saved readings, by the fixed rule in POINTS_RULE. Only current team members are
+    listed, by first name. `me` is the signed-in person's own row. Points are a count — nothing
+    is paid for them."""
+    from vula import team_index
+    from vula.commerce import lessons
+    from vula.db_pages import all_rows
+    lo, hi = lessons._month_bounds(month)
+    rows = all_rows(lambda: _db().table("commerce_beach_reports").select("id,taken_at,reported_by")
+                    .eq("tenant_id", tenant_id).gte("taken_at", lo).lt("taken_at", hi), cap=5000)
+    rows.sort(key=lambda r: str(r["taken_at"]))
+    team = {str(m.get("id")): (m.get("name") or "").split(" ")[0] or "Team member" for m in team_index.active_members(tenant_id)}
+    by: Dict[str, Dict[str, Any]] = {}
+    first_seen: set = set()                     # days that already have their first report
+    last: Dict[str, datetime] = {}              # a person's last report that counted
+    per_day: Dict[tuple, int] = {}
+    for r in rows:
+        at = datetime.fromisoformat(str(r["taken_at"]).replace("Z", "+00:00")).astimezone(SAST)
+        day, pid = at.date(), str(r.get("reported_by") or "")
+        first = day not in first_seen
+        first_seen.add(day)
+        if pid not in team:                     # a report nobody on the team is behind earns nothing
+            continue
+        c = by.setdefault(pid, {"member_id": pid, "name": team[pid], "reports": 0, "counted": 0, "firsts": 0, "points": 0})
+        c["reports"] += 1
+        if per_day.get((pid, day), 0) >= POINTS_DAILY or (pid in last and at - last[pid] < timedelta(hours=POINTS_GAP_HOURS)):
+            continue
+        per_day[(pid, day)] = per_day.get((pid, day), 0) + 1
+        last[pid] = at
+        c["counted"] += 1
+        c["points"] += POINTS_REPORT
+        if first:
+            c["firsts"] += 1
+            c["points"] += POINTS_FIRST
+    board = sorted(by.values(), key=lambda c: (-c["points"], c["name"].lower()))
+    mine = _reporter(tenant_id, who)[0] if who else None
+    return {"month": month, "rule": POINTS_RULE, "board": board,
+            "me": next((c for c in board if c["member_id"] == mine), None)}
