@@ -1059,6 +1059,30 @@ async def admin_list_products(tenant_id: str):
     return {"products": products, "count": len(products)}
 
 
+def _check_codes(tenant_id: str, data: dict, *, product_id: Optional[str] = None,
+                 variant_id: Optional[str] = None) -> None:
+    """SKU, barcode, cost price and a variant's photo, checked before they're written (24 Nov 2026:
+    the screen couldn't set them; a barcode must be on one product or variant only)."""
+    from vula.commerce import product_variants as pv
+    try:
+        for k in ("sku", "barcode"):
+            if k in data:
+                v = " ".join(str(data[k] or "").split())
+                if len(v) > 64:
+                    raise pv.VariantError(f"That {k.upper() if k == 'sku' else k} is too long (64 characters at most).")
+                data[k] = v or None
+        if "cost_cents" in data:
+            data["cost_cents"] = pv._cents_or_none(data["cost_cents"], "Cost price")
+        if "image_url" in data and variant_id is not None:
+            data["image_url"] = pv.https_image(data["image_url"])
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if data.get("barcode"):
+        owner = pv.barcode_owner(tenant_id, data["barcode"], product_id=product_id, variant_id=variant_id)
+        if owner:
+            raise HTTPException(status_code=409, detail=f"Barcode {data['barcode']} is already on {owner}.")
+
+
 @router.patch("/{tenant_id}/admin/products/{product_id}")
 async def admin_update_product(tenant_id: str, product_id: str, body: dict, request: Request):
     """Patch product — everything the merchant may edit (widened for migration 073 depth:
@@ -1070,10 +1094,12 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict, requ
                "reorder_threshold", "reorder_qty", "default_supplier_id",
                "pricing_mode", "price_per_kg_cents", "min_weight_g", "max_weight_g",
                "reference_weight_g", "catch_source", "fisherman_name", "seo", "status", "options",
-               "product_type", "bundle_items", "cooking_tips", "related_ids", "choices"}
+               "product_type", "bundle_items", "cooking_tips", "related_ids", "choices",
+               "sku", "barcode", "cost_cents"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    _check_codes(tenant_id, update, product_id=product_id)
     if "choices" in update:              # 267: [{"name", "values"}], cleaned; empty = none
         update["choices"] = service.clean_product_choices(update["choices"]) or None
     # Keep the cover in sync: first gallery image becomes image_url unless explicitly set.
@@ -1186,6 +1212,19 @@ async def admin_create_product(tenant_id: str, body: dict):
     category = _known_category(tenant_id, body.get("category"))
     sold_by = body.get("sold_by") if body.get("sold_by") in ("kg", "pack") else "pack"
 
+    from vula.commerce import product_variants as pv
+    try:
+        options = pv.clean_options(body.get("options")) if body.get("options") else []
+        images = [pv.https_image(u) for u in (body.get("images") or []) if u][:10]
+        image_url = pv.https_image(body.get("image_url")) if body.get("image_url") else None
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    codes = {k: body[k] for k in ("sku", "barcode", "cost_cents") if body.get(k) not in (None, "")}
+    _check_codes(tenant_id, codes)
+    stock = body.get("stock_quantity")
+    stock = service.qty(stock) if stock not in (None, "") else None
+    if stock is not None and stock < 0:
+        raise HTTPException(status_code=400, detail="Stock can't be below zero.")
     payload = {
         "name": name,
         "slug": slug,
@@ -1193,11 +1232,24 @@ async def admin_create_product(tenant_id: str, body: dict):
         "category": category,
         "sold_by": sold_by,
         "description": body.get("description") or "",
-        "image_url": body.get("image_url"),
-        "in_stock": body.get("in_stock", True),
-        "stock_quantity": body.get("stock_quantity"),
+        "image_url": image_url or (images[0] if images else None),
+        "in_stock": body.get("in_stock", True) if stock is None else stock > 0,
+        "stock_quantity": None if options else stock,
+        **({"images": images} if images else {}),
+        **codes,
     }
-    return await service.create_product(tenant_id, payload)
+    product = await service.create_product(tenant_id, payload)
+    if options:
+        # 24 Nov 2026: sizes and colours made with the product, each at the product's price; the
+        # stock typed on the form goes on each version (it's counted per version from then on).
+        try:
+            made = pv.generate(tenant_id, product["id"], options, stock_quantity=stock)
+            product["variants"], product["options"] = made["variants"], [o["name"] for o in options]
+        except Exception as exc:
+            log.warning("variants for a new product didn't save: %s", type(exc).__name__)
+            product["variants_error"] = ("The product was added, but its sizes and colours didn't save. "
+                                         "Open it under Edit and make them again.")
+    return product
 
 
 def _csv_bool(v, default: bool) -> bool:
@@ -1558,7 +1610,7 @@ def _actor(request: Optional[Request]) -> str:
 
 VARIANT_FIELDS = {"option_values", "sku", "barcode", "price_cents", "stock_quantity",
                   "in_stock", "sort_order", "archived", "reorder_threshold", "reorder_qty",
-                  "default_supplier_id"}
+                  "default_supplier_id", "cost_cents", "image_url"}
 
 
 @router.get("/{tenant_id}/admin/products/{product_id}/variants")
@@ -1578,6 +1630,7 @@ def _variant_barcode_conflict(exc: Exception, barcode) -> HTTPException:
 @router.post("/{tenant_id}/admin/products/{product_id}/variants")
 async def admin_create_variant(tenant_id: str, product_id: str, body: dict):
     data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
+    _check_codes(tenant_id, data, variant_id="")
     try:
         return await service.create_variant(tenant_id, product_id, data)
     except Exception as exc:
@@ -1590,6 +1643,7 @@ async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str,
     data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
     if not data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    _check_codes(tenant_id, data, variant_id=variant_id)
     if data.get("stock_quantity") is not None:
         qty = service.qty(data.pop("stock_quantity"))
         data.pop("in_stock", None)
@@ -1603,6 +1657,42 @@ async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str,
         return await service.update_variant(tenant_id, variant_id, data)
     except Exception as exc:
         raise _variant_barcode_conflict(exc, data.get("barcode"))
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/variants/generate")
+async def admin_generate_variants(tenant_id: str, product_id: str, body: dict):
+    """Make every combination of the options not already a variant. Body: {options: [{name,
+    values}], price_cents?, stock_quantity?} — a new version's price is the product's unless
+    given. Existing versions are kept as they are; ones outside the options are listed, never
+    deleted (vula/commerce/product_variants.py)."""
+    from vula.commerce import product_variants as pv
+    body = body or {}
+    try:
+        return pv.generate(tenant_id, product_id, body.get("options"),
+                           price_cents=body.get("price_cents"), stock_quantity=body.get("stock_quantity"))
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/variants/photo")
+async def admin_variant_option_photo(tenant_id: str, product_id: str, body: dict):
+    """One photo for every version with one option value ("all the red ones"). Body: {option,
+    value, image_url} — image_url null clears it. https only, read back."""
+    from vula.commerce import product_variants as pv
+    body = body or {}
+    try:
+        return pv.set_option_photo(tenant_id, product_id, body.get("option"), body.get("value"),
+                                   body.get("image_url"))
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.delete("/{tenant_id}/admin/products/{product_id}/variants/{variant_id}")

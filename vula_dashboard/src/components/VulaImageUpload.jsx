@@ -129,7 +129,7 @@ export default function VulaImageUpload({ tenantId, onUploaded, maxFiles = 5, ex
           >
             {uploading ? `Uploading… ${progress}%` : '📷 Add photos'}
           </label>
-          <p style={{ fontSize: 11, color: 'var(--faint)', margin: '4px 0 0' }}>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '4px 0 0' }}>
             JPG, PNG, WEBP · Max 10MB each · {maxFiles - previews.length} remaining
           </p>
         </div>

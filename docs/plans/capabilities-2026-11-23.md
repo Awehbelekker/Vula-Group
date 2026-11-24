@@ -26,11 +26,11 @@ The screen doesn't show most of it:
 
 | Problem | Where | Kind |
 |---|---|---|
-| Add takes only name, price, sold by, category and description; photo, stock and sizes come after, in a long edit sheet | `VulaMerchantAdmin.jsx` ProductEditPanel | UI |
+| Add takes only name, price, sold by, category and description; photo, stock and sizes come after, in a long edit sheet ✔ 24 Nov: photos, stock, codes, cost and sizes/colours on the Add form; versions made from typed options; a photo per colour | `VulaMerchantAdmin.jsx` ProductEditPanel | UI |
 | **Create changes any custom category to "extras"** | `api/commerce.py` create product | bug |
 | **A failed add or save says nothing**: the form clears even when the server refused it | `createProduct` / `patch` never check `r.ok` | bug |
 | The edit sheet saves four different ways: "Save details", on leaving a box, at once (photos, options), "Save choices". SEO boxes sit below "Save details" and only that button saves them | ProductEditPanel | UX |
-| SKU, barcode and cost can't be set on the product (barcode only by the stock scanner, cost only from a scanned invoice) | PATCH whitelist `api/commerce.py` | UI + 1-line backend |
+| SKU, barcode and cost can't be set on the product (barcode only by the stock scanner, cost only from a scanned invoice) ✔ 24 Nov | PATCH whitelist `api/commerce.py` | UI + 1-line backend |
 | Fish-shop fields (catch source, fisherman, cooking tips) shown to every business | ProductEditPanel | UX |
 | "Pricing: by weight" duplicates "Sold by kg" and nothing reads it | migration 085 fields | remove |
 | Categories can be added, not renamed, deleted or reordered (delete exists on the server) | Products › Categories | UI |
