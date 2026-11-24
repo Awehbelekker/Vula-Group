@@ -289,7 +289,7 @@ export default function FlowApp() {
       {tab === "book" && <Book key={bookKey} shop={shop} info={info} start={start} onDone={(r) => { setFresh(r); setTab("mine"); window.scrollTo(0, 0); }} />}
       {tab === "mine" && <Mine shop={shop} info={info} fresh={fresh} go={go} />}
       {tab === "chat" && <Chat info={info} />}
-      <p className="fc-foot">{info.partner?.name || "FlowCrew"} · Powered by Vula</p>
+      <p className="fc-foot">Powered by {info.partner?.name || "FlowCrew"}</p>
       <nav className="fc-bar" aria-label="Main">
         {[["home", "Home"], ["book", "Book"], ["mine", "Bookings"], ["chat", "Chat"]].map(([id, label]) => (
           <button key={id} type="button" className="fc-tab" aria-current={tab === id ? "page" : undefined} onClick={() => (id === "book" ? go("book", {}) : go(id))}>
