@@ -68,10 +68,14 @@ def effective_price_cents(product: dict) -> int:
     return int(sale)
 
 
+TICKET_PRODUCT_TYPE = "ticket"
+
+
 async def list_products(tenant_id: str, category: Optional[str] = None, in_stock_only: bool = True,
                         include_archived: bool = False,
                         statuses: Optional[set] = None,
-                        with_variant_price_range: bool = False) -> List[dict]:
+                        with_variant_price_range: bool = False,
+                        include_tickets: bool = False) -> List[dict]:
     """statuses: when given, restrict to rows whose `status` is in this set — used by
     public-facing reads (migration 085) so a draft/archived product is never surfaced outside
     the merchant admin. None (the default) means no status filtering, i.e. admin call sites
@@ -88,6 +92,10 @@ async def list_products(tenant_id: str, category: Optional[str] = None, in_stock
         q = q.eq("in_stock", True)
     result = q.order("is_daily_catch", desc=True).order("name").execute()
     rows = result.data or []
+    # An event's ticket type is a product row so the basket, stock hold, payment and books treat
+    # it like any sale (24 Nov 2026) — but it is sold from its event page, never listed as goods.
+    if not include_tickets:
+        rows = [r for r in rows if r.get("product_type") != TICKET_PRODUCT_TYPE]
     if not include_archived:
         rows = [r for r in rows if not r.get("archived")]
     if statuses is not None:
@@ -1506,6 +1514,8 @@ async def update_order_status(order_id: str, status: str, yoco_checkout_id: Opti
                 ledger.post_order_refund(order["tenant_id"], order, amount_cents=refund[0], source_id=refund[1])
         except Exception as exc:
             logger.warning("ledger hook failed for order %s: %s", order_id, exc)
+    if status in ("paid", "cancelled", "refunded") and result.data:
+        await _tickets_after(result.data[0], status)
 
 
 async def mark_order_paid(tenant_id: str, order_id: str, payment_method: str = "online",
@@ -1536,7 +1546,22 @@ async def mark_order_paid(tenant_id: str, order_id: str, payment_method: str = "
     except Exception as exc:  # noqa: BLE001
         logger.warning("ledger hook failed for order %s: %s", order_id, exc)
     _settle_order_invoice(tenant_id, order)
+    await _tickets_after(order, "paid")
     return order
+
+
+async def _tickets_after(order: dict, status: str) -> None:
+    """An order was paid, cancelled or refunded: issue or void its event tickets, if it has any
+    (vula/commerce/events.py). Never fails the order — the tickets page issues what's missing."""
+    try:
+        from vula.commerce import events
+        if status == "paid":
+            await events.issue_for_order(order.get("tenant_id") or "", order)
+        elif status == "cancelled" or (status == "refunded" and int(order.get("refunded_amount_cents") or 0)
+                                       >= int(order.get("total_cents") or 0)):
+            events.void_for_order(order.get("tenant_id") or "", order.get("id") or "", status)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ticket hook (%s) failed for order %s: %s", status, order.get("id"), exc)
 
 
 def _settle_order_invoice(tenant_id: str, order: dict) -> None:
@@ -2605,12 +2630,12 @@ async def get_reorder_candidates(tenant_id: str, days_ago: int = 7) -> List[dict
 async def get_low_stock_products(tenant_id: str, threshold: int = 5) -> List[dict]:
     """Find products below stock threshold."""
     result = _client().table("commerce_products") \
-        .select("id, name, stock_quantity") \
+        .select("id, name, stock_quantity, product_type") \
         .eq("tenant_id", tenant_id) \
         .eq("in_stock", True) \
         .lt("stock_quantity", threshold) \
         .execute()
-    return result.data or []
+    return [r for r in (result.data or []) if r.get("product_type") != TICKET_PRODUCT_TYPE]
 
 
 # ── Suppliers (tiered intake auto-detection) ──────────────────────────────────

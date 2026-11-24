@@ -194,6 +194,10 @@ def _express(code: str, request: Request, error: str = "") -> Response:
         return RedirectResponse(url, status_code=302) if url else _page(
             "Tag not verified", "We couldn't verify this tag. Ask staff to take payment another way.", 404)
     nonce = secrets.token_urlsafe(16)
+    try:
+        v["table"] = svc.tables.page(code, svc.express.payer(cookie))     # service at the table, if it's on
+    except Exception:  # noqa: BLE001 — needs migration 300; the pay page never depends on it
+        log.exception("table service view failed")
     resp = _secure(HTMLResponse(express_page.render(code, v, error, nonce), status_code=200), nonce)
     if fresh:
         resp.set_cookie(COOKIE, cookie, max_age=86400, httponly=True, samesite="lax", secure=True)
@@ -223,6 +227,100 @@ async def tap_pay(code: str, request: Request):
     except MoneyError:
         return _express(code, request, "That amount doesn't look right. Type it in rands, for example 15.")
     return RedirectResponse(url, status_code=303)
+
+
+# ── service at the table (vula/tap/tableside.py): the buttons and the menu on the tag's page ──
+_TABLE_RECENT: dict = {}
+
+
+def _table_throttled(key: str, per_minute: int) -> bool:
+    import time as _time
+    from collections import deque
+    now = _time.monotonic()
+    q = _TABLE_RECENT.setdefault(key, deque())
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= per_minute:
+        return True
+    q.append(now)
+    if len(_TABLE_RECENT) > 5000:
+        _TABLE_RECENT.clear()
+    return False
+
+
+def _table_caller(request: Request) -> Optional[str]:
+    """The browser asking, as the same hashed cookie the pay page uses. None = cookies are blocked."""
+    from vula.tap.express import COOKIE
+    cookie = request.cookies.get(COOKIE) or ""
+    return get_service().express.payer(cookie) if cookie else None
+
+
+@router.post("/t/{code}/call")
+async def table_call(code: str, request: Request):
+    """Call a waiter / ask for the bill / ask for the card machine, from the tag's page."""
+    from vula.tap.tableside import TableError
+    code = code[:64]
+    caller = _table_caller(request)
+    if not caller:
+        return _express(code, request, "Please allow cookies for this page, then try again.")
+    if _table_throttled(f"c|{caller}", 6):
+        return _express(code, request, "We've told the staff. Please give them a moment.")
+    form = await request.form()
+    try:
+        await get_service().tables.call(code, caller, str(form.get("kind") or ""))
+    except TableError as exc:
+        return _express(code, request, str(exc))
+    return RedirectResponse(f"/t/{code}", status_code=303)
+
+
+@router.get("/t/{code}/menu")
+async def table_menu(code: str, request: Request):
+    from vula.tap import express_page
+    from vula.tap.express import COOKIE, ExpressPay
+    code = code[:64]
+    svc = get_service()
+    tag = svc.tables._customer_tag(code)
+    if not tag or not svc.tables.settings(tag["tenant_id"])["orders"]:
+        return _page("No menu here", "You can't order from this tag. Please ask your waiter.", 404)
+    nonce = secrets.token_urlsafe(16)
+    resp = _secure(HTMLResponse(express_page.menu(code, svc.repo.merchant_name(tag["tenant_id"]), tag.get("label") or "",
+                                                  svc.tables.menu(tag["tenant_id"]), nonce=nonce)), nonce)
+    if not request.cookies.get(COOKIE):
+        resp.set_cookie(COOKIE, ExpressPay.new_cookie(), max_age=86400, httponly=True, samesite="lax", secure=True)
+    return resp
+
+
+@router.post("/t/{code}/order")
+async def table_order(code: str, request: Request):
+    """The menu's Send order button: product ids and quantities only; the server prices it, and
+    nothing is owed until a waiter confirms it."""
+    from vula.tap import express_page
+    from vula.tap.tableside import TableError
+    code = code[:64]
+    svc = get_service()
+    tag = svc.tables._customer_tag(code)
+    if not tag:
+        return _page("Tag not verified", "We couldn't verify this tag. Please ask your waiter.", 404)
+
+    def again(msg: str) -> Response:
+        nonce = secrets.token_urlsafe(16)
+        return _secure(HTMLResponse(express_page.menu(code, svc.repo.merchant_name(tag["tenant_id"]), tag.get("label") or "",
+                                                      svc.tables.menu(tag["tenant_id"]), error=msg, nonce=nonce)), nonce)
+    caller = _table_caller(request)
+    if not caller:
+        return again("Please allow cookies for this page, then try again.")
+    if _table_throttled(f"o|{caller}", 6):
+        return again("That's a lot of orders in a minute. Give it a moment.")
+    form = await request.form()
+    items = []
+    for key, val in form.items():
+        if key.startswith("q_") and str(val).strip().isdigit() and int(val) > 0:
+            items.append({"product_id": key[2:], "quantity": int(val)})
+    try:
+        await svc.tables.order(code, caller, items, str(form.get("note") or ""))
+    except TableError as exc:
+        return again(str(exc))
+    return RedirectResponse(f"/t/{code}", status_code=303)
 
 
 @router.get("/t/{code}/qr.svg")
@@ -661,3 +759,64 @@ async def close_empty_tab(tenant: str, bill_id: str, identity: dict = Depends(re
     if not _tab_call(_guard(tenant).tabs.close_empty, tenant, bill_id, by=_owner(identity)):
         raise HTTPException(status_code=409, detail="This tab can't be closed.")
     return {"status": "cancelled"}
+
+
+# ── tables: the restaurant's table tags, who serves them, and service at the table ────────────
+class TableSettingsIn(BaseModel):
+    calls: Optional[bool] = None
+    orders: Optional[bool] = None
+    escalate_minutes: Optional[int] = Field(default=None, ge=1, le=30)
+
+
+class TableIn(BaseModel):
+    label: str = Field(min_length=1, max_length=30)
+    waiter_id: Optional[str] = None
+
+
+class TableAssignIn(BaseModel):
+    waiter_id: Optional[str] = None
+
+
+def _table_call(fn, *args, **kw):
+    from vula.tap.tableside import TableError
+    try:
+        return fn(*args, **kw)
+    except TableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/{tenant}/tables")
+async def list_tables(tenant: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    svc = get_service()
+    return {"settings": svc.tables.settings(tenant), "tables": svc.tables.tables(tenant),
+            "staff": [{"id": m["id"], "name": m.get("name") or ""} for m in svc.repo.team_members(tenant)]}
+
+
+@router.put("/v1/tap/{tenant}/tables/settings")
+async def set_table_settings(tenant: str, body: TableSettingsIn, identity: dict = Depends(require_tenant_actor)) -> dict:
+    out = _table_call(get_service().tables.save_settings, tenant, calls=body.calls, orders=body.orders,
+                      escalate_minutes=body.escalate_minutes)
+    _audit(tenant, identity, "tables.settings", **out)
+    return out
+
+
+@router.post("/v1/tap/{tenant}/tables")
+async def add_table(tenant: str, body: TableIn, identity: dict = Depends(require_tenant_actor)) -> dict:
+    out = _table_call(get_service().tables.create_table, tenant, body.label, body.waiter_id)
+    _audit(tenant, identity, "table.create", table=out["label"])
+    return out
+
+
+@router.post("/v1/tap/{tenant}/tables/{tag_id}/assign")
+async def assign_table(tenant: str, tag_id: str, body: TableAssignIn,
+                       identity: dict = Depends(require_tenant_actor)) -> dict:
+    out = _table_call(get_service().tables.assign, tenant, tag_id, body.waiter_id)
+    _audit(tenant, identity, "table.assign", table=out["label"], member_id=body.waiter_id)
+    return out
+
+
+@router.delete("/v1/tap/{tenant}/tables/{tag_id}")
+async def remove_table(tenant: str, tag_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    _table_call(get_service().tables.remove_table, tenant, tag_id)
+    _audit(tenant, identity, "table.remove", tag_id=tag_id)
+    return {"removed": tag_id}

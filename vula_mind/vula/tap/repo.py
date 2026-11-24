@@ -178,6 +178,47 @@ class SupabaseRepo:
     def update_tag(self, tenant_id: str, tag_id: str, fields: dict) -> None:
         self.db.table("kb_tags").update(fields).eq("tenant_id", tenant_id).eq("id", tag_id).execute()
 
+    # service at the table (migration 300): calls and orders — one small set of row helpers
+    _TABLESIDE = ("kb_table_calls", "kb_table_orders")
+
+    def add_row(self, table: str, row: dict) -> Optional[dict]:
+        """Insert into one of the table-service tables. None when the row breaks a unique rule
+        (a live call of that kind already exists for the table)."""
+        assert table in self._TABLESIDE
+        try:
+            return self.db.table(table).insert(row).execute().data[0]
+        except Exception as exc:  # noqa: BLE001
+            if _is_dup(exc):
+                return None
+            raise
+
+    def get_row(self, table: str, tenant_id: str, row_id: str) -> Optional[dict]:
+        assert table in self._TABLESIDE
+        return self._one(self.db.table(table).select("*").eq("tenant_id", tenant_id).eq("id", row_id))
+
+    def find_rows(self, table: str, tenant_id: str, statuses: Sequence[str], **eq) -> list[dict]:
+        assert table in self._TABLESIDE
+        q = self.db.table(table).select("*").eq("tenant_id", tenant_id).in_("status", list(statuses))
+        for k, v in eq.items():
+            q = q.eq(k, v)
+        return q.order("created_at").limit(200).execute().data or []
+
+    def cas_row(self, table: str, tenant_id: str, row_id: str, *, expected: str, fields: dict) -> bool:
+        """Change a row only while its status is `expected` — one winner when two phones tap at once."""
+        assert table in self._TABLESIDE
+        rows = (self.db.table(table).update({**fields, "updated_at": "now()"}).eq("tenant_id", tenant_id)
+                .eq("id", row_id).eq("status", expected).execute().data or [])
+        return bool(rows)
+
+    def menu_products(self, tenant_id: str) -> list[dict]:
+        """The business's products a customer can order from a table: listed and in stock."""
+        rows = (self.db.table("commerce_products").select("*").eq("tenant_id", tenant_id).eq("in_stock", True)
+                .order("category").order("name").limit(500).execute().data or [])
+        with_options = {v["product_id"] for v in (self.db.table("commerce_product_variants")
+                                                  .select("product_id,archived").eq("tenant_id", tenant_id)
+                                                  .limit(900).execute().data or []) if not v.get("archived")}
+        return [r for r in rows if r["id"] not in with_options]
+
     def recent_bills(self, tenant_id: str, limit: int = 20) -> list[dict]:
         return (self.db.table("kb_bills")
                 .select("id,tag_id,bill_type,status,description,subtotal_cents,staff_id,is_test,created_at")

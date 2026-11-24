@@ -80,6 +80,11 @@ class ExpressPay:
                "pay_with": svc.gateway_label(tenant)}
         if d.kind == mt.CLAIM:
             bill = svc.repo.get_bill(tenant, d.bill_id) or {}
+            itemised = svc._itemised_total(tenant, bill) if bill else None
+            if itemised is not None:
+                bill = {**bill, "subtotal_cents": itemised}
+                out["items"] = [{"description": i["description"], "quantity": i["quantity"], "line_cents": i["line_cents"]}
+                                for i in svc.repo.tab_items(tenant, bill["id"])]
             out.update(bill_cents=int(bill.get("subtotal_cents") or 0),
                        description=bill.get("description") or "", is_test=bool(bill.get("is_test")),
                        staff=svc.repo.staff_name(tenant, bill.get("staff_id")) or out["staff"])
@@ -98,8 +103,11 @@ class ExpressPay:
 
     def _decide(self, tenant: str, tag: dict, payer: str) -> mt.Decision:
         svc = self.svc
+        # a bar tab is paid through WhatsApp (it proves the number); a table's bill with nothing on
+        # it yet is not a bill to pay
         bills = [mt.BillView(b["id"], b["status"], b.get("customer_hash"), b.get("claimed_by_hash"))
-                 for b in svc.repo.live_bills_for_tag(tenant, tag["id"]) if b.get("bill_type") != "tab"]
+                 for b in svc.repo.live_bills_for_tag(tenant, tag["id"]) if b.get("bill_type") != "tab"
+                 and not (b.get("bill_type") == "table" and not svc._itemised_total(tenant, b))]
         return mt.resolve_tap(tag_mode=tag.get("mode", "appointment"), payer_hash=payer, bills=bills,
                               tag_allows_open_amount=bool(tag.get("allow_open_amount")),
                               code_locked=svc._code_locked(tenant, bills, payer))
@@ -157,7 +165,13 @@ class ExpressPay:
         elif not svc.repo.cas_bill(tenant, bill_id, expected="open", new="claimed",
                                    fields={"claimed_by_hash": payer}):
             raise ExpressError(svc_msg("MSG_LOCKED"))
-        s = self._session(tenant, bill_id, payer, int(bill["subtotal_cents"]))
+        amount = int(bill["subtotal_cents"])
+        itemised = svc._itemised_total(tenant, bill)
+        if itemised is not None:
+            # a table's bill owes the sum of its lines, worked out now it is claimed (no more can be added)
+            amount = itemised
+            svc.repo.update_bill(tenant, bill_id, {"subtotal_cents": amount})
+        s = self._session(tenant, bill_id, payer, amount)
         return self._advance(s, "awaiting_tip", "amount_set")
 
     def _session(self, tenant: str, bill_id: Optional[str], payer: str, bill_cents: int,

@@ -31,6 +31,7 @@ EVENTS = (
     "buildup_suggestion",    # a finished job came out far from its build-up (vula/commerce/actuals.py)
     "pop_to_link",           # a proof of payment by email may pay a supplier's bill (vula/commerce/pop_links.py)
     "delivery_problem",      # a courier couldn't collect or deliver an order (vula/commerce/shipping.py)
+    "table_booking",         # a customer booked a table (vula/commerce/tables.py)
 )
 
 # Alerts that must reach SOMEONE (2026-10-26). An ordinary event nobody subscribed to goes to no

@@ -125,6 +125,11 @@ async def shop_home(request: Request) -> HTMLResponse:
         raise HTTPException(status_code=404, detail="Not Found")
     # A free address exists for every business, shop or not: one with nothing to sell has no page.
     if host == web_basket.free_shop_host(tenant_id) and not await web_basket.shop_products(tenant_id):
+        # A restaurant with no shop still has a front page: its bookings and today's specials (24 Nov 2026).
+        from vula.commerce import tables
+        if tables.settings(tenant_id)["enabled"] or tables.todays_specials(tenant_id):
+            from vula.api.tables import booking_page
+            return await booking_page(tenant_id)
         raise HTTPException(status_code=404, detail="Not Found")
     return await photo_menu(tenant_id, request)
 
