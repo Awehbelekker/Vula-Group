@@ -99,11 +99,6 @@
   padding: 4px !important; margin-bottom: var(--space-4) !important; border: 1px solid var(--line) !important;
   border-radius: var(--radius-pill); background: var(--surface-2); flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; }
 :root[data-ui="v2"] .v2-content .vula-tabs::-webkit-scrollbar { display: none; }
-/* With a mouse a strip whose scrollbar is hidden can't be scrolled (24 Nov 2026: Sell's last tabs
-   couldn't be reached), so there it wraps onto another row; a touch screen keeps one row to swipe. */
-@media (hover: hover) and (pointer: fine) {
-  :root[data-ui="v2"] .v2-content .vula-tabs { flex-wrap: wrap !important; overflow-x: visible; border-radius: var(--radius-lg); }
-}
 :root[data-ui="v2"] .v2-content .vula-tabs [role="tab"] { min-height: 36px; }
 :root[data-ui="v2"] .v2-content .vula-tabs [role="tab"][aria-selected="true"] { background: var(--surface) !important; color: var(--ink) !important;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent); }
