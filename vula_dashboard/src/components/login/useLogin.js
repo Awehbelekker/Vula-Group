@@ -60,6 +60,9 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
       .then((r) => (r.ok ? r.json() : {}))
       .catch(() => ({}))
       .then((d) => {
+        if (d?.partner) {                                     // a partner's own address (flowcrew.co.za): its name and look
+          return { ...d.partner.brand, name: d.partner.name, logo_url: `/partners/${d.partner.id}-mark.png`, partner_login: true }
+        }
         const tid = d?.tenant_id || HOST_HINT
         if (!tid) return null
         return fetch(`${VULA_API}/v1/commerce/${tid}/brand`).then((r) => (r.ok ? r.json() : null))

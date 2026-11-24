@@ -28,12 +28,18 @@ export default function VulaLogo({ kind = "lockup", size = 32, height = 40, titl
   );
 }
 
+/** The partner's own mark after its name (public/partners/<name>-mark.png); nothing if it has none. */
+export function PartnerMark({ name, height = 20 }) {
+  return <img src={`/partners/${String(name).toLowerCase().replace(/[^a-z0-9]/g, "")}-mark.png`} alt="" height={height}
+    style={{ height, width: "auto", verticalAlign: "middle", marginLeft: 6 }} onError={(e) => { e.currentTarget.style.display = "none"; }} />;
+}
+
 /** "Powered by vula" — the credit on tenant-branded screens (the logo set's inline badge). A
  *  business that came through a partner is credited to that partner alone: "Powered by FlowCrew". */
 export function PoweredByVula({ className = "", partner = "" }) {
   return (
     <span className={`vula-powered-by${className ? ` ${className}` : ""}`}>
-      Powered by {partner ? <strong>{partner}</strong> : <VulaLogo kind="lockup" height={22} title="Vula" />}
+      Powered by {partner ? <><strong>{partner}</strong><PartnerMark name={partner} /></> : <VulaLogo kind="lockup" height={22} title="Vula" />}
     </span>
   );
 }

@@ -20,9 +20,9 @@ button, input, select { font: inherit; color: inherit; }
 .fc-hero h2, .fc-hero p { color: var(--fc-ink); margin: 0; }
 .fc-hero .fc-glass { background: rgba(255, 255, 255, 0.88); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
 .fc-row { display: flex; flex-wrap: wrap; gap: 10px; }
-.fc-btn { min-height: 48px; padding: 0 22px; border-radius: 999px; border: 2px solid transparent; background: var(--fc-green); color: var(--fc-ink); font-weight: 700; cursor: pointer; flex: none; }
+.fc-btn { min-height: 48px; padding: 0 22px; border-radius: 999px; border: 2px solid transparent; background: var(--fc-green); color: var(--fc-on, var(--fc-ink)); font-weight: 700; cursor: pointer; flex: none; }
 .fc-row > .fc-btn { flex: 1 1 140px; }
-.fc-btn.white { background: #fff; }
+.fc-btn.white { background: #fff; color: var(--fc-ink); }
 .fc-chip.pick { cursor: pointer; border: 0; }
 .fc-chip.pick.on { background: var(--fc-ink); color: #fff; }
 .fc-btn.alt { background: #fff; border-color: var(--fc-blue); color: var(--fc-blue-text); }
@@ -60,7 +60,7 @@ button, input, select { font: inherit; color: inherit; }
 .fc-tab { flex: 1; height: 56px; border: 0; background: transparent; border-radius: 28px; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 11px; font-weight: 600; color: var(--fc-muted); position: relative; }
 .fc-tab svg { width: 22px; height: 22px; }
 .fc-tab[aria-current="page"] { color: var(--fc-ink); }
-.fc-tab[aria-current="page"] .fc-bead { background: var(--fc-grad); color: var(--fc-ink); box-shadow: 0 4px 14px rgba(0, 212, 170, 0.45); }
+.fc-tab[aria-current="page"] .fc-bead { background: var(--fc-grad); color: var(--fc-on, var(--fc-ink)); box-shadow: 0 4px 14px rgba(0, 212, 170, 0.45); }
 .fc-bead { width: 40px; height: 32px; border-radius: 16px; display: grid; place-items: center; transition: background 0.2s; }
 .fc-count { position: absolute; top: 4px; right: calc(50% - 26px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--fc-ink); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
 @media (prefers-reduced-motion: reduce) { .fc-bead { transition: none; } }
@@ -85,3 +85,4 @@ button, input, select { font: inherit; color: inherit; }
 .fc-coach { display: flex; gap: 12px; align-items: flex-start; }
 .fc-coach img, .fc-coach .fc-face { width: 56px; height: 56px; font-size: 22px; border-radius: 50%; object-fit: cover; flex: none; }
 .fc-coach > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fc-foot img { height: 16px; width: auto; vertical-align: middle; margin-left: 6px; }

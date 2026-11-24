@@ -26,7 +26,8 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
             <>
               {b.logo_url ? <img src={b.logo_url} alt={b.name || ''} className="vlg-logo vula-login-logo" />
                 : <span className="vlg-name">{b.name}</span>}
-              <PoweredByVula />
+              {b.partner_login ? <><span className="vlg-name">{b.name}</span><span className="vlg-over">For surf and kite schools</span></>
+                : <PoweredByVula partner={b.partner?.name || ''} />}
             </>
           ) : (
             <>

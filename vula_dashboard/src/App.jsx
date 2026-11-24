@@ -250,7 +250,9 @@ export default function App() {
       .then((r) => (r.ok ? r.json() : null))
       .then((b) => {
         if (!alive || !b) return;
-        applyBrand(b); setBrand(b);
+        // a partner's business: the team's dashboard wears the partner's look (FlowCrew is the face);
+        // the business's own look is for its customers
+        applyBrand(b?.partner_look ? { ...b, ...b.partner_look } : b); setBrand(b);
         // the installed app (home-screen name + icon) and the browser tab wear the brand too
         // ?app: the manifest is served from the API, so it learns the app's own address (start page, Share target)
         setLink("manifest", `${VULA_API}/v1/commerce/${tid}/manifest.webmanifest?app=${encodeURIComponent(window.location.origin)}`);
@@ -437,7 +439,7 @@ export default function App() {
     return (
       <div>
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url || partnerMark(brand), logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || brand?.partner?.name || "Business admin", partner: tenantPartner || brand?.partner?.name }}
+          brand={{ logoUrl: partnerMark(brand) || brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || brand?.partner?.name || "Business admin", partner: tenantPartner || brand?.partner?.name }}
           groups={groups}
           activeId={merchTab}
           onSelect={setMerchTab}
@@ -482,7 +484,7 @@ export default function App() {
             {impersonateReason && <span className="v2-impersonate-why">({impersonateReason})</span>}
           </div>}
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url || partnerMark(brand), logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant", partner: tenantPartner || brand?.partner?.name }}
+          brand={{ logoUrl: partnerMark(brand) || brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant", partner: tenantPartner || brand?.partner?.name }}
           groups={mGroups}
           activeId={merchTab}
           onSelect={setMerchTab}

@@ -112,7 +112,7 @@ export default function Discover({ api }) {
       {d && view === "map" && <SchoolMap schools={shown} />}
       {d && view === "list" && shown.map((s) => <Card key={s.shop} s={s} />)}
       {d && shown.length === 0 && <section className="fc-card"><p className="fc-sub">{all.length === 0 ? "No schools are listed yet. If your school sent you a link, open that." : "No school matches that. Try another town or clear the search."}</p></section>}
-      <p className="fc-foot">Powered by FlowCrew</p>
+      <p className="fc-foot">Powered by FlowCrew<img src="/partners/flowcrew-mark.png" alt="" /></p>
     </main>
   );
 }
