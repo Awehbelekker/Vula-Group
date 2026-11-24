@@ -540,3 +540,63 @@ def test_the_customer_app_is_throttled_and_caps_open_requests(world, monkeypatch
     with pytest.raises(HTTPException) as e:
         run(lessons_api.flow_request("big_bay_surf", other, _Req("41.9.9.9")))
     assert e.value.status_code == 429
+
+
+# ── the coach's side ──────────────────────────────────────────────────────────────────────────
+def test_a_coachs_month_and_share_are_worked_out_to_the_cent(world, monkeypatch):
+    assert lessons.share_of(35001, 7000) == 24501 and lessons.share_of(65000, 2750) == 17875      # half up, to the cent
+    assert lessons.share_of(100, None) is None and lessons.share_of(0, 7000) == 0
+    monkeypatch.setattr(lessons, "coaches", lambda tid: [{"id": "m1", "name": "Shane Daniels", "role": "staff"},
+                                                         {"id": "m2", "name": "Zinhle Khumalo", "role": "staff"}])
+    month = (datetime.now(lessons.SAST) + timedelta(days=1)).strftime("%Y-%m")
+    a, b, c, d = _ask(), _ask(phone="0835550000", people=1, fmt="private"), _ask(phone="0845550000"), _ask(phone="0715550000")
+    for r, coach in ((a, "m1"), (b, "m1"), (c, "m2")):
+        run(lessons.confirm(TID, r["id"], starts_at=_at(1, 9), coach_id=coach))
+    run(lessons.confirm(TID, d["id"], starts_at=_at(1, 11)))                                        # no coach chosen
+    for r in (a, b, d):
+        lessons.set_status(TID, r["id"], "completed")
+    out = lessons.coach_month(TID, month)
+    assert out["coach_share_bp"] is None and out["total"] == {"done": 3, "value_cents": 70000 + 65000 + 70000, "share_cents": None}
+    by = {c["coach_id"]: c for c in out["coaches"]}
+    assert (by["m1"]["done"], by["m1"]["people"], by["m1"]["value_cents"], by["m1"]["share_cents"]) == (2, 3, 135000, None)
+    assert (by["m2"]["done"], by["m2"]["to_come"]) == (0, 1) and by[None]["name"] == "No coach set" and out["coaches"][-1]["coach_id"] is None
+    lessons.save_settings(TID, {"coach_share_bp": 7000})
+    out = lessons.coach_month(TID, month)
+    by = {c["coach_id"]: c for c in out["coaches"]}
+    assert by["m1"]["share_cents"] == 49000 + 45500 and by[None]["share_cents"] == 0 and out["total"]["share_cents"] == 94500
+    for bad in ({"coach_share_bp": 10001}, {"coach_share_bp": 70.0}, {"coach_share_bp": "70"}):
+        with pytest.raises(lessons.LessonError):
+            lessons.save_settings(TID, bad)
+    with pytest.raises(lessons.LessonError):
+        lessons.coach_month(TID, "2026-13")
+    assert lessons.coach_month("other", month)["coaches"] == []
+
+
+def test_a_coach_sees_only_their_own_lessons_and_month(world, monkeypatch):
+    monkeypatch.setattr("vula.team_index.active_members", lambda tid: [
+        {"id": "m1", "name": "Shane Daniels", "whatsapp": "27820000001", "email": "shane@bigbay.example"},
+        {"id": "m2", "name": "Zinhle Khumalo", "whatsapp": "27820000002", "email": "zinhle@bigbay.example"}])
+    monkeypatch.setattr(lessons, "coaches", lambda tid: [{"id": "m1", "name": "Shane Daniels", "role": "staff"},
+                                                         {"id": "m2", "name": "Zinhle Khumalo", "role": "staff"}])
+    lessons.save_settings(TID, {"coach_share_bp": 7000})
+    month = (datetime.now(lessons.SAST) + timedelta(days=1)).strftime("%Y-%m")
+    a, b = _ask(), _ask(phone="0835550000")
+    run(lessons.confirm(TID, a["id"], starts_at=_at(1, 9), coach_id="m1"))
+    run(lessons.confirm(TID, b["id"], starts_at=_at(1, 10), coach_id="m2"))
+    shane = lessons.mine(TID, "082 000 0001", month)
+    assert shane["me"] == {"id": "m1", "name": "Shane Daniels"} and [r["id"] for r in shane["upcoming"]] == [a["id"]]
+    assert shane["month"]["to_come"] == 1 and shane["month"]["coach_id"] == "m1"
+    assert lessons.mine(TID, "ZINHLE@bigbay.example", month)["upcoming"][0]["id"] == b["id"]
+    for nobody in ("0719999999", "", "stranger@example.com"):
+        assert lessons.mine(TID, nobody, month) == {"me": None, "upcoming": [], "month": None}
+
+    class Req:
+        headers = {"authorization": "Bearer staff"}
+
+    async def not_full(request, tenant_id):
+        return False
+
+    monkeypatch.setattr("vula.api.commerce._may_apply_stock", not_full)
+    with pytest.raises(HTTPException) as e:
+        run(lessons_api.coaches_month(TID, Req()))
+    assert e.value.status_code == 403

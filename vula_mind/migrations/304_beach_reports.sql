@@ -7,6 +7,10 @@
 --
 -- Idempotent. RLS on.
 
+-- The coach's part of a lesson, in hundredths of a percent (70% = 7000); null = not set.
+alter table commerce_lesson_settings add column if not exists coach_share_bp integer
+    check (coach_share_bp is null or coach_share_bp between 0 and 10000);
+
 create table if not exists commerce_beach_reports (
     id            uuid primary key default gen_random_uuid(),
     tenant_id     text not null,

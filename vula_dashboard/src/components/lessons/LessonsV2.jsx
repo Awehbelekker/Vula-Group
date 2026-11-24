@@ -19,6 +19,68 @@ const rand = (cents) => cents === null || cents === undefined ? '' : String(cent
 const cents = (text) => String(text ?? '').trim() === '' ? null : randToCents(text)
 // the customer app (src/flow/): a page customers can add to their phone, at /flow/<business>
 const appLink = (tenantId) => `${window.location.origin}/flow/${String(tenantId).replace(/_/g, '-')}`
+/** "70" or "27,5" → hundredths of a percent (7000, 2750), read as written; null when empty, undefined when unreadable. */
+const percentToBp = (text) => {
+  const t = String(text ?? '').replace(/[%\s]/g, '')
+  if (!t) return null
+  const m = t.match(/^(\d{1,3})(?:[.,](\d{1,2}))?$/)
+  if (!m) return undefined
+  const bp = Number(m[1]) * 100 + Number((m[2] || '0').padEnd(2, '0'))
+  return bp <= 10000 ? bp : undefined
+}
+const bpToPercent = (bp) => bp === null || bp === undefined ? '' : (bp % 100 ? `${Math.floor(bp / 100)}.${String(bp % 100).padStart(2, '0').replace(/0$/, '')}` : String(bp / 100))
+const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+
+/** Each coach's month: lessons done, what they were charged at, and the coach's share where one is
+ * set. The owner or a manager sees everyone; a coach sees only their own. Figures are the server's. */
+function Coaches({ tenantId }) {
+  const [month, setMonth] = useState(thisMonth())
+  const [all, setAll] = useState(null)
+  const [own, setOwn] = useState(null)
+  const [error, setError] = useState('')
+  const base = `/v1/commerce/${tenantId}/admin/lessons`
+  useEffect(() => {
+    let live = true
+    setAll(null); setOwn(null); setError('')
+    api(`${base}/coaches?month=${month}`).then(d => live && setAll(d))
+      .catch(e => (e.status === 403 ? api(`${base}/mine?month=${month}`).then(d => live && setOwn(d)) : Promise.reject(e)))
+      .catch(e => live && setError(e.message))
+    return () => { live = false }
+  }, [base, month])
+  const pick = <Field label="Month"><Input type="month" value={month} onChange={e => e.target.value && setMonth(e.target.value)} /></Field>
+  if (error) return <Card><p className="vtb-error" role="alert">{error}</p></Card>
+  if (!all && !own) return <Card><Skeleton lines={3} /></Card>
+  if (own) return (
+    <Card className="vtb-list">
+      <div className="vtb-row">{pick}</div>
+      {!own.me ? <p className="vtb-sub">Your login isn't linked to a team member, so there are no lessons under your name.</p> : (<>
+        <p className="vtb-sub"><strong>{own.me.name}</strong> — {own.month ? `${own.month.done} done, ${own.month.to_come} to come this month` : 'no lessons this month'}
+          {own.month && own.month.share_cents !== null ? `. Your share so far: ${formatMoney(own.month.share_cents)}` : ''}.</p>
+        <ul>{own.upcoming.map(r => <li key={r.id} className="vtb-b"><span className="vtb-main"><strong>{r.when}</strong><span className="vtb-sub">{r.customer_name} · {r.summary}{r.level_text ? ` · ${r.level_text}` : ''}</span></span></li>)}</ul>
+        {own.upcoming.length === 0 && <p className="vtb-sub">Nothing confirmed for you yet.</p>}
+      </>)}
+    </Card>
+  )
+  return (
+    <Card className="vtb-list">
+      <div className="vtb-row">{pick}</div>
+      {all.coaches.length === 0 ? <p className="vtb-sub">No lessons in this month yet.</p> : (
+        <ul>
+          {all.coaches.map(c => (
+            <li key={c.coach_id || 'none'} className="vtb-b">
+              <span className="vtb-main"><strong>{c.name}</strong><span className="vtb-sub">{c.done} done · {c.people} people · {c.to_come} to come</span></span>
+              <span className="vls-amount vula-money">{formatMoney(c.value_cents)}</span>
+              {c.share_cents !== null && c.coach_id && <StatusChip tone="ok">Share {formatMoney(c.share_cents)}</StatusChip>}
+            </li>))}
+          <li className="vtb-b"><span className="vtb-main"><strong>Total</strong><span className="vtb-sub">{all.total.done} lessons done</span></span>
+            <span className="vls-amount vula-money">{formatMoney(all.total.value_cents)}</span>
+            {all.total.share_cents !== null && <StatusChip tone="ok">Shares {formatMoney(all.total.share_cents)}</StatusChip>}</li>
+        </ul>)}
+      <p className="vtb-sub">{all.coach_share_bp === null ? 'Set the coach’s share in Lessons and prices to see what each coach has earned.' : `A coach’s share is ${bpToPercent(all.coach_share_bp)}% of each lesson marked done. This is a report: nothing is paid out from here.`}</p>
+    </Card>
+  )
+}
+
 const PART_TIME = { morning: '09:00', midday: '12:00', afternoon: '15:00', any: '09:00' }
 
 /** What the water looks like now: a team member's photo from the beach, read into a few fixed
@@ -181,7 +243,7 @@ function AddSheet({ tenantId, st, onClose, onDone }) {
 
 const blankLesson = () => ({ name: '', sport: 'surf', minutes: 90, max_per_coach: 5, package_sessions: 4, group: [{ min: 1, max: '', single: '', pack: '' }], private_single: '', private_pack: '', extras: [] })
 const toForm = (st) => ({
-  enabled: st.enabled, form_url: st.form_url || '', pay_note: st.pay_note || '', spot_name: st.spot?.name || '', lat: st.spot?.lat ?? '', lng: st.spot?.lng ?? '',
+  enabled: st.enabled, share: bpToPercent(st.coach_share_bp), form_url: st.form_url || '', pay_note: st.pay_note || '', spot_name: st.spot?.name || '', lat: st.spot?.lat ?? '', lng: st.spot?.lng ?? '',
   lessons: st.lessons.map(l => ({ id: l.id, name: l.name, sport: l.sport, minutes: l.minutes, max_per_coach: l.max_per_coach, package_sessions: l.package_sessions,
     group: l.group.map(t => ({ min: t.min, max: t.max ?? '', single: rand(t.single_cents), pack: rand(t.package_cents) })),
     private_single: rand(l.private?.single_cents), private_pack: rand(l.private?.package_cents), extras: l.extras.map(e => ({ id: e.id, name: e.name, price: rand(e.cents) })) })),
@@ -191,8 +253,10 @@ const toForm = (st) => ({
 function fromForm(f) {
   const money = (text, what) => { const c = cents(text); if (String(text ?? '').trim() !== '' && c === null) throw new Error(`${what}: that price couldn't be read.`); return c }
   const whole = (v) => v === '' || v === null ? null : Number(v)
+  const share = percentToBp(f.share)
+  if (share === undefined) throw new Error("The coach's share: enter a percentage between 0 and 100.")
   return {
-    enabled: f.enabled, form_url: f.form_url, pay_note: f.pay_note,
+    enabled: f.enabled, coach_share_bp: share, form_url: f.form_url, pay_note: f.pay_note,
     spot: f.spot_name.trim() ? { name: f.spot_name, lat: Number(f.lat), lng: Number(f.lng) } : null,
     lessons: f.lessons.map(l => ({ id: l.id, name: l.name, sport: l.sport, minutes: Number(l.minutes), max_per_coach: Number(l.max_per_coach), package_sessions: Number(l.package_sessions),
       group: l.group.filter(t => String(t.single).trim() !== '').map(t => ({ min: Number(t.min), max: whole(t.max), single_cents: money(t.single, l.name), package_cents: money(t.pack, l.name) })),
@@ -267,6 +331,7 @@ function SettingsSheet({ tenantId, st, onClose, onSaved }) {
           <Field label="Longitude"><Input inputMode="decimal" value={f.lng} placeholder="18.459" onChange={e => setF({ ...f, lng: e.target.value })} /></Field>
         </div>
         <Field label="Indemnity form (web address, optional)" hint="Sent with every confirmation."><Input type="url" value={f.form_url} placeholder="https://" onChange={e => setF({ ...f, form_url: e.target.value })} /></Field>
+        <Field label="Coach's share of each lesson (%, optional)" hint="Used only for the Coaches report. Nothing is paid out by Vula."><Input inputMode="decimal" value={f.share} placeholder="70" onChange={e => setF({ ...f, share: e.target.value })} /></Field>
         <Field label="How to pay (optional)" hint="Added to the confirmation, in your words."><Textarea rows={2} maxLength={300} value={f.pay_note} placeholder="Pay at the shop or by EFT before your lesson." onChange={e => setF({ ...f, pay_note: e.target.value })} /></Field>
         {error && <p className="vtb-error" role="alert">{error}</p>}
       </div>
@@ -320,8 +385,8 @@ export default function LessonsV2({ tenantId }) {
             <a className="vtb-a" href={appLink(tenantId)} target="_blank" rel="noreferrer">Open<ExternalLink size={14} aria-hidden="true" /></a></span>
         </Card>
         <Conditions tenantId={tenantId} />
-        <PillTabs label="Requests" tabs={[{ id: 'open', label: `Open${data.waiting ? ` · ${data.waiting} to confirm` : ''}` }, { id: 'past', label: 'Earlier' }]} active={tab} onChange={setTab} />
-        {rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (
+        <PillTabs label="Requests" tabs={[{ id: 'open', label: `Open${data.waiting ? ` · ${data.waiting} to confirm` : ''}` }, { id: 'past', label: 'Earlier' }, { id: 'coaches', label: 'Coaches' }]} active={tab} onChange={setTab} />
+        {tab === 'coaches' ? <Coaches tenantId={tenantId} /> : rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (
           <Card className="vtb-list">
             <ul>
               {rows.map(r => {

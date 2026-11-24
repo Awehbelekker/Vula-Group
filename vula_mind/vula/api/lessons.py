@@ -10,6 +10,8 @@ vula/api/lessons.py — lessons and gear hire the business confirms by hand
     POST    …/{t}/admin/lessons/{id}/decline    {reason} — the customer is told
     POST    …/{t}/admin/lessons/{id}/status     completed | no_show | cancelled
     GET     …/{t}/admin/lessons/conditions?date=  the forecast for the spot, hour by hour
+    GET     …/{t}/admin/lessons/coaches?month=  every coach's month and share (owner/manager)
+    GET     …/{t}/admin/lessons/mine?month=     the signed-in coach's own lessons and month
     GET/POST …/{t}/admin/lessons/beach-report   the latest reading from the beach; POST a photo to add one
 
 The customer app (`public`, mounted at /v1/flow; the dashboard's /flow/<business> page). No login:
@@ -155,6 +157,32 @@ async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str 
         return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True}
     return {"spot": spot, "date": day.isoformat(),
             "hours": conditions.day_view(hours, sport if sport in lessons.SPORTS else "surf")}
+
+
+def _this_month() -> str:
+    return lessons._now().astimezone(lessons.SAST).strftime("%Y-%m")
+
+
+@router.get("/{tenant_id}/admin/lessons/coaches")
+async def coaches_month(tenant_id: str, request: Request, month: Optional[str] = None) -> dict:
+    """Every coach's month: lessons done, their value and the coach's share. Owner or manager only."""
+    from vula.api.commerce import _may_apply_stock
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can see every coach's figures.")
+    try:
+        return lessons.coach_month(tenant_id, month or _this_month())
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.get("/{tenant_id}/admin/lessons/mine")
+async def my_lessons(tenant_id: str, request: Request, month: Optional[str] = None) -> dict:
+    """The signed-in coach's own lessons to come and their own month. Who they are comes from the
+    login, never from the request."""
+    try:
+        return lessons.mine(tenant_id, await _who(request, tenant_id), month or _this_month())
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
 
 
 @router.get("/{tenant_id}/admin/lessons/beach-report")

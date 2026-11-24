@@ -41,7 +41,7 @@ DURATIONS = {"2h": "2 hours", "4h": "4 hours", "1d": "1 day", "2d": "2 days", "3
 _DAYS = {"1d": 1, "2d": 2, "3d": 3, "7d": 7}
 SPORTS = ("surf", "sup", "kite", "skate", "other")
 DEFAULTS = {"enabled": False, "lessons": [], "hire": [], "spot": None, "form_url": None, "pay_note": None,
-            "note": None}
+            "note": None, "coach_share_bp": None}
 _REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _ID_RE = re.compile(r"^[a-z0-9]{1,20}$")
 MAX_CENTS = 100_000_00           # R100 000: a typed price above this is a typing slip
@@ -215,6 +215,8 @@ def save_settings(tenant_id: str, data: dict) -> dict:
     for key, limit in (("pay_note", 300), ("note", 200)):
         if key in d:
             patch[key] = _text(d[key], limit) or None
+    if "coach_share_bp" in d:                       # the coach's part of a lesson, in hundredths of a percent (70% = 7000)
+        patch["coach_share_bp"] = None if d["coach_share_bp"] is None else _int(d["coach_share_bp"], "The coach's share", 0, 10000)
     merged = {**cur, **patch}
     if merged["enabled"] and not (merged["lessons"] or merged["hire"]):
         raise LessonError("Add a lesson or some gear for hire before taking requests.")
@@ -789,3 +791,79 @@ async def cancel_by_token(tenant_id: str, token: Any) -> Optional[dict]:
         except Exception as exc:  # noqa: BLE001
             log.warning("cancellation not sent to the team (%s): %s", tenant_id, exc)
     return _for_customer(_get(tenant_id, rid))
+
+
+# ── the coach's side: their own lessons, and their share ───────────────────────────────────────
+def share_of(amount_cents: Any, share_bp: Any) -> Optional[int]:
+    """The coach's part of an amount, to the cent, half up — None when no share is set."""
+    if share_bp is None or amount_cents is None:
+        return None
+    return (int(amount_cents) * int(share_bp) + 5000) // 10000
+
+
+def member_for(tenant_id: str, who: str) -> Optional[dict]:
+    """The team member behind a WhatsApp number or login: {"id", "name"}, or None."""
+    try:
+        from vula import team_index
+        digits = re.sub(r"\D", "", who or "")
+        for m in team_index.active_members(tenant_id):
+            mine = re.sub(r"\D", "", str(m.get("whatsapp") or ""))
+            if (len(digits) >= 9 and mine[-9:] == digits[-9:]) or (who and "@" in who and who.lower() == str(m.get("email") or "").lower()):
+                return {"id": str(m.get("id") or ""), "name": m.get("name") or ""}
+    except Exception as exc:  # noqa: BLE001
+        log.debug("member not found for %s: %s", tenant_id, exc)
+    return None
+
+
+def _month_bounds(month: str) -> Tuple[str, str]:
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(month or "")):
+        raise LessonError("Choose a month (YYYY-MM).")
+    y, m = int(month[:4]), int(month[5:])
+    start = datetime(y, m, 1, tzinfo=SAST)
+    end = datetime(y + (m == 12), 1 if m == 12 else m + 1, 1, tzinfo=SAST)
+    return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+
+
+def coach_month(tenant_id: str, month: str, only_coach: str = "") -> dict:
+    """Lessons taught in a month (South African time), per coach: how many were done, what they
+    were charged at, and the coach's share where the business has set one. A lesson counts once it
+    is marked done; what is still to come is counted apart. Hire is nobody's lesson."""
+    from vula.db_pages import all_rows
+    lo, hi = _month_bounds(month)
+    bp = settings(tenant_id).get("coach_share_bp")
+
+    def query():
+        q = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).eq("kind", "lesson")
+             .in_("status", ["confirmed", "completed"]).gte("starts_at", lo).lt("starts_at", hi))
+        return q.eq("coach_id", only_coach) if only_coach else q
+    by: Dict[str, dict] = {}
+    for r in all_rows(query, cap=5000):
+        key = r.get("coach_id") or ""
+        c = by.setdefault(key, {"coach_id": key or None, "name": r.get("coach_name") or "No coach set", "done": 0, "to_come": 0,
+                                "people": 0, "value_cents": 0, "share_cents": 0 if bp is not None else None})
+        if r["status"] != "completed":
+            c["to_come"] += 1
+            continue
+        owed = r.get("price_cents") if r.get("price_cents") is not None else r.get("quote_cents")
+        c["done"] += 1
+        c["people"] += int(r.get("party_size") or 0)
+        c["value_cents"] += int(owed or 0)
+        if bp is not None and key:                       # each lesson's share to the cent, then added up
+            c["share_cents"] += share_of(owed or 0, bp)
+    rows = sorted(by.values(), key=lambda c: (c["coach_id"] is None, c["name"].lower()))
+    return {"month": month, "coach_share_bp": bp, "coaches": rows,
+            "total": {"done": sum(c["done"] for c in rows), "value_cents": sum(c["value_cents"] for c in rows),
+                      "share_cents": sum(c["share_cents"] or 0 for c in rows) if bp is not None else None}}
+
+
+def mine(tenant_id: str, who: str, month: str) -> dict:
+    """The signed-in coach's own lessons still to come, and their own month — nobody else's."""
+    me = member_for(tenant_id, who)
+    if not me or not me["id"]:
+        return {"me": None, "upcoming": [], "month": None}
+    now = _now().isoformat()
+    rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).eq("coach_id", me["id"])
+            .eq("status", "confirmed").gte("starts_at", now).order("starts_at").limit(50).execute().data or [])
+    figures = coach_month(tenant_id, month, only_coach=me["id"])
+    own = next((c for c in figures["coaches"] if c["coach_id"] == me["id"]), None)
+    return {"me": me, "upcoming": [_out(r) for r in rows], "month": own, "coach_share_bp": figures["coach_share_bp"]}
