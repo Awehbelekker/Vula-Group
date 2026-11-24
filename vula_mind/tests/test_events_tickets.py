@@ -341,3 +341,79 @@ def test_the_event_page_escapes_and_shows_what_is_left(world, monkeypatch):
     page = run(events_api.event_page(ev["id"])).body.decode()
     assert "has been cancelled" in page and 'id="buy"' not in page
     assert events_api.when_text("2026-12-05T16:00:00+00:00", "2026-12-05T20:00:00+00:00") == "Sat 5 Dec 2026, 18:00 – 22:00"
+
+
+# ── the door link ─────────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def door(world, monkeypatch):
+    monkeypatch.setattr(tenants, "dashboard_url_for", lambda tid: f"https://{tid}.vula-ai.com")
+    ev, types = _on_sale()
+    _buy(ev, [{"type_id": types["General"]["id"], "quantity": 3}])
+    tickets = _pay(world)
+    link = events.door_link(TID, ev["id"])
+    return SimpleNamespace(ev=ev, tickets=tickets, key=link["url"].split("#")[1], url=link["url"], world=world)
+
+
+def test_the_door_link_shows_names_and_hashes_never_codes_phones_or_money(door):
+    assert door.url.startswith("https://seedleme.vula-ai.com/door/#D") and events.door_status(TID, door.ev["id"])["on"]
+    assert events.door_link(TID, door.ev["id"])["url"] == door.url                       # the same link again
+    lst = events.door_list(door.key)
+    assert lst["sold"] == 3 and lst["checked_in"] == 0 and lst["event"]["title"] == "Summer Market"
+    text = str(lst)
+    assert all(k["code"] not in text for k in door.tickets) and "2782" not in text and "cents" not in text
+    assert {r["h"] for r in lst["tickets"]} == {events._code_hash(k["code"]) for k in door.tickets}
+    assert set(lst["tickets"][0]) == {"id", "h", "name", "type", "status", "at", "by"}
+
+
+def test_the_door_link_lets_tickets_in_by_scan_or_from_the_list(door):
+    a, b, c = door.tickets
+    ok = events.door_check_in(door.key, {"code": a["code"]}, "Gate A")
+    assert ok["result"] == "ok" and ok["ticket"]["checked_in_by"] == "Door: Gate A"
+    assert events.door_check_in(door.key, {"code": a["code"]}, "Gate B")["result"] == "already"
+    assert events.door_check_in(door.key, {"ticket_id": b["id"]}, "")["ticket"]["checked_in_by"] == "Door"
+    assert events.door_check_in(door.key, {"ticket_id": "not-a-ticket"})["result"] == "unknown"
+    assert events.door_check_in(door.key, {})["result"] == "unknown"
+    assert events.door_list(door.key)["checked_in"] == 2
+
+
+def test_check_ins_made_with_no_signal_are_sent_later_once_each(door):
+    a, b, c = door.tickets
+    events.check_in(TID, door.ev["id"], b["code"], "owner@x.co.za")                      # another door got there first
+    when = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    out = events.door_sync(door.key, [{"ref": "1", "code": a["code"], "at": when},
+                                      {"ref": "2", "code": b["code"], "at": when},
+                                      {"ref": "3", "ticket_id": c["id"], "at": "2099-01-01T00:00:00+00:00"},
+                                      {"ref": "4", "code": "VT-" + "q" * 22}, "junk"], "Gate A")
+    assert [(r["ref"], r["result"]) for r in out["results"]] == [("1", "ok"), ("2", "already"), ("3", "ok"), ("4", "unknown")]
+    assert out["results"][1]["ticket"]["checked_in_by"] == "owner@x.co.za"
+    rows = {k["id"]: k for k in door.world.db.rows["commerce_tickets"]}
+    assert rows[a["id"]]["checked_in_at"] == when                                    # when the phone scanned it
+    assert rows[c["id"]]["checked_in_at"] != "2099-01-01T00:00:00+00:00"               # a time in the future isn't believed
+    again = events.door_sync(door.key, [{"ref": "1", "code": a["code"], "at": when}], "Gate A")
+    assert again["results"][0]["result"] == "already"                                 # sent twice: still one entry
+    with pytest.raises(events.EventError):
+        events.door_sync(door.key, [{}] * 501)
+
+
+def test_a_door_link_stops_working(door):
+    for bad in ("", "D" + "x" * 30, "'; drop", door.key[:-1]):
+        with pytest.raises(events.EventError) as e:
+            events.door_list(bad)
+        assert e.value.status == 404
+    renewed = events.door_link(TID, door.ev["id"], new=True)["url"].split("#")[1]
+    assert renewed != door.key and events.door_list(renewed)["sold"] == 3
+    with pytest.raises(events.EventError):
+        events.door_list(door.key)                                                    # the old link is dead
+    events.door_off(TID, door.ev["id"])
+    with pytest.raises(events.EventError):
+        events.door_check_in(renewed, {"code": door.tickets[0]["code"]})
+    key = events.door_link(TID, door.ev["id"])["url"].split("#")[1]
+    ev_row = door.world.db.rows["commerce_events"][0]
+    ev_row["starts_at"] = ev_row["ends_at"] = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+    with pytest.raises(events.EventError):
+        events.door_list(key)                                                         # 12 hours after it ended
+    draft, _ = _event(title="Not yet")
+    with pytest.raises(events.EventError):
+        events.door_link(TID, draft["id"])
+    with pytest.raises(events.EventError):
+        events.door_link("someone_else", door.ev["id"])

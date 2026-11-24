@@ -20,6 +20,7 @@ create table if not exists commerce_events (
     image_url      text,
     status         text not null default 'draft',      -- draft | on_sale | closed | cancelled
     sales_close_at timestamptz,                        -- null = until the event starts
+    door_key       text unique,                        -- the door link's secret; null = no door link
     created_by     text,
     created_at     timestamptz not null default now(),
     updated_at     timestamptz not null default now()
@@ -64,6 +65,8 @@ create table if not exists commerce_tickets (
     status         text not null default 'valid',       -- valid | checked_in | void
     checked_in_at  timestamptz,
     checked_in_by  text,
+    reminded_at    timestamptz,                         -- the day-before reminder went to the buyer
+    thanked_at     timestamptz,                         -- the after-event message went to the buyer
     voided_at      timestamptz,
     void_reason    text,
     created_at     timestamptz not null default now(),

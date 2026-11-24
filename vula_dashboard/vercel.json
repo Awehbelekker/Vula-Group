@@ -12,6 +12,10 @@
       "destination": "/r/index.html"
     },
     {
+      "source": "/door/(.*)",
+      "destination": "/door/index.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
@@ -19,6 +23,19 @@
   "headers": [
     {
       "source": "/r/(.*)",
+      "headers": [
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    },
+    {
+      "source": "/door/(.*)",
       "headers": [
         {
           "key": "Referrer-Policy",

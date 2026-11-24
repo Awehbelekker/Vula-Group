@@ -154,6 +154,37 @@ function Door({ tenantId, ev, onBack }) {
   )
 }
 
+/** The door link (owner or manager): people hired for the night open it on their own phones — no
+ *  login — and can only see who is coming to this event and let tickets in. */
+function DoorLink({ ev, x }) {
+  const [link, setLink] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const run = async (body, done) => {
+    setBusy(true)
+    try { const d = await x.doorLink(ev.id, body); setLink(d); if (done) toast(done) } catch (e) { toast(e.message, 'danger') }
+    setBusy(false)
+  }
+  if (!link) return <Button size="sm" variant="secondary" disabled={busy} onClick={() => run(undefined)}>Door link for staff</Button>
+  if (!link.on) return (
+    <div className="vev-door">
+      <span className="vev-sub">A door link lets the people on the door check tickets in on their own phones, with no login. It works without signal and stops 12 hours after the event.</span>
+      <div className="vev-row"><Button size="sm" disabled={busy} onClick={() => run({}, 'Door link made')}>Make a door link</Button></div>
+    </div>
+  )
+  return (
+    <div className="vev-door">
+      <span className="vev-sub">Send this only to the people working the door. Anyone with it can let tickets in for this event.</span>
+      <code className="vev-code">{link.url}</code>
+      <div className="vev-row">
+        <Button size="sm" Icon={Copy} onClick={() => copy(link.url)}>Copy</Button>
+        <a className="vev-link" href={`https://wa.me/?text=${encodeURIComponent(`Door link for ${ev.title}: ${link.url}`)}`} target="_blank" rel="noreferrer">Send on WhatsApp<ExternalLink size={14} aria-hidden="true" /></a>
+        <Button size="sm" variant="quiet" disabled={busy} onClick={async () => { if (await confirmDialog('Make a new door link? The old one stops working on every phone.')) run({ new: true }, 'New door link made') }}>New link</Button>
+        <Button size="sm" variant="quiet" disabled={busy} onClick={async () => { if (await confirmDialog('Stop the door link? Phones using it can no longer check tickets in.')) run({ on: false }, 'Door link stopped') }}>Stop</Button>
+      </div>
+    </div>
+  )
+}
+
 function EventCard({ ev, x, onEdit, onDoor }) {
   const [tone, label] = stateOf(ev)
   const [busy, setBusy] = useState(false)
@@ -193,6 +224,7 @@ function EventCard({ ev, x, onEdit, onDoor }) {
           ? `Cancel this event? ${ev.sold} ticket${ev.sold === 1 ? ' has' : 's have'} been sold. Cancelling stops sales but refunds nobody: refund each order in Orders.`
           : 'Cancel this event? This can’t be undone.')}>Cancel event</Button>}
       </div>
+      {ev.status !== 'draft' && ev.status !== 'cancelled' && <DoorLink ev={ev} x={x} />}
     </Card>
   )
 }

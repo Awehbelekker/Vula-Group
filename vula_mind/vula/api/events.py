@@ -12,6 +12,14 @@ Dashboard (`router`, mounted at /v1/commerce, so the tenant guard applies):
     POST …/{t}/admin/events/{id}/check-in         {code} — let one ticket in
     POST …/{t}/admin/events/{id}/tickets/{k}/undo a check-in made by mistake (owner/manager)
 
+    GET/POST …/{t}/admin/events/{id}/door-link    the door link: read it, make it, renew it, stop it (owner/manager)
+
+The door page (`door`, mounted at /v1/door — the link's secret is the only way in):
+
+    GET  /v1/door/{key}            the event and its tickets as names, types and code hashes
+    POST /v1/door/{key}/check-in   {code | ticket_id, device?, at?} — let one ticket in
+    POST /v1/door/{key}/sync       {items:[{ref, code | ticket_id, at}], device?} — check-ins made with no signal
+
 Public (`public`, no prefix — anyone with the link):
 
     GET  /events/{id}            the event's page: what, when, where, tickets left
@@ -110,6 +118,89 @@ async def event_undo_check_in(tenant_id: str, event_id: str, ticket_id: str, req
         raise HTTPException(status_code=403, detail="Only the owner or a manager can undo a check-in.")
     try:
         return {"ticket": events.undo_check_in(tenant_id, event_id, ticket_id)}
+    except events.EventError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.get("/{tenant_id}/admin/events/{event_id}/door-link")
+async def event_door_link(tenant_id: str, event_id: str) -> dict:
+    try:
+        return events.door_status(tenant_id, event_id)
+    except events.EventError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.post("/{tenant_id}/admin/events/{event_id}/door-link")
+async def event_make_door_link(tenant_id: str, event_id: str, body: dict, request: Request) -> dict:
+    """Make the door link ({"new": true}: a fresh one, the old stops working) or turn it off
+    ({"on": false}). Whoever holds the link can let people in, so: owner or manager only."""
+    from vula.api.commerce import _may_apply_stock
+    from vula.api.merchant_audit import audit
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can make or stop a door link.")
+    b = body or {}
+    try:
+        out = events.door_off(tenant_id, event_id) if b.get("on") is False \
+            else events.door_link(tenant_id, event_id, new=bool(b.get("new")))
+    except events.EventError as exc:
+        raise _refuse(exc) from exc
+    audit(tenant_id, {"email": await _who(request, tenant_id)}, "event_door_link", event_id=event_id,
+          on=out["on"], new=bool(b.get("new")))
+    return out
+
+
+# ── the door page's own routes: the link's secret is the only way in ──────────────────────────
+door = APIRouter(tags=["events-door"])          # mounted at /v1/door
+
+_DOOR_RECENT: dict = {}
+
+
+def _door_throttled(key: str, per_minute: int) -> bool:
+    now = time.monotonic()
+    q = _DOOR_RECENT.setdefault(key, deque())
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= per_minute:
+        return True
+    q.append(now)
+    if len(_DOOR_RECENT) > 5000:
+        _DOOR_RECENT.clear()
+    return False
+
+
+def _door_guard(request: Request, key: str, per_minute: int) -> None:
+    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or \
+        (request.client.host if request.client else "")
+    # by address (someone guessing keys) and by key (one link, however many phones share it)
+    if _door_throttled(f"ip|{ip}", 240) or _door_throttled(f"k|{key[:80]}", per_minute):
+        raise HTTPException(status_code=429, detail="Too many tries. Wait a moment.")
+
+
+@door.get("/{key}")
+async def door_list(key: str, request: Request) -> dict:
+    _door_guard(request, key, 120)
+    try:
+        return events.door_list(key)
+    except events.EventError as exc:
+        raise _refuse(exc) from exc
+
+
+@door.post("/{key}/check-in")
+async def door_check_in(key: str, body: dict, request: Request) -> dict:
+    _door_guard(request, key, 600)
+    b = body or {}
+    try:
+        return events.door_check_in(key, b, b.get("device"))
+    except events.EventError as exc:
+        raise _refuse(exc) from exc
+
+
+@door.post("/{key}/sync")
+async def door_sync(key: str, body: dict, request: Request) -> dict:
+    _door_guard(request, key, 60)
+    b = body or {}
+    try:
+        return events.door_sync(key, b.get("items"), b.get("device"))
     except events.EventError as exc:
         raise _refuse(exc) from exc
 

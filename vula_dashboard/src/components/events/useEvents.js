@@ -22,7 +22,9 @@ export function useEvents(tenantId) {
     .then(d => { load(); return d.event })
   const setStatus = (id, status) => api(`${base(tenantId)}/${id}/status`, { method: 'POST', body: { status } })
     .then(d => { load(); return d.event })
-  return { events, error, load, save, setStatus }
+  /** The door link: read it, make it ({}), renew it ({new: true}) or stop it ({on: false}). */
+  const doorLink = (id, body) => api(`${base(tenantId)}/${id}/door-link`, body ? { method: 'POST', body } : {})
+  return { events, error, load, save, setStatus, doorLink }
 }
 
 export function useDoor(tenantId, eventId) {

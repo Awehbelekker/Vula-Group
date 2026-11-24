@@ -630,7 +630,7 @@ def _ticket_out(tenant_id: str, k: dict) -> dict:
             "status": k["status"], "checked_in_at": k.get("checked_in_at"), "checked_in_by": k.get("checked_in_by")}
 
 
-def check_in(tenant_id: str, event_id: str, raw_code: Any, by: str = "") -> dict:
+def check_in(tenant_id: str, event_id: str, raw_code: Any, by: str = "", at: Optional[str] = None) -> dict:
     """Let one ticket in. `result`: ok | already | void | wrong_event | unknown. The write only
     succeeds for a valid ticket of this business and this event, so two doors scanning the same
     ticket at once let it in once."""
@@ -638,7 +638,7 @@ def check_in(tenant_id: str, event_id: str, raw_code: Any, by: str = "") -> dict
     if not code:
         return {"result": "unknown", "message": "That isn't one of our ticket codes."}
     _event_row(tenant_id, event_id)
-    now = _iso(_now())
+    now = at or _iso(_now())
     res = (_db().table("commerce_tickets").update({"status": "checked_in", "checked_in_at": now,
                                                    "checked_in_by": _text(by, 120) or None})
            .eq("tenant_id", tenant_id).eq("event_id", event_id).eq("code", code).eq("status", "valid").execute())
@@ -655,6 +655,20 @@ def check_in(tenant_id: str, event_id: str, raw_code: Any, by: str = "") -> dict
     if k["status"] == "void":
         return {"result": "void", "message": "This ticket was cancelled or refunded.", "ticket": out}
     return {"result": "already", "message": "This ticket has already been used.", "ticket": out}
+
+
+def check_in_ticket(tenant_id: str, event_id: str, ticket_id: Any, by: str = "", at: Optional[str] = None) -> dict:
+    """Let in a ticket picked from the door list by name (a phone that died, a lost message): the
+    same single write as a scan, found by the ticket's id instead of its code."""
+    try:
+        tid = str(uuid.UUID(str(ticket_id)))
+    except ValueError:
+        return {"result": "unknown", "message": "That ticket isn't on the list."}
+    rows = (_db().table("commerce_tickets").select("code").eq("tenant_id", tenant_id).eq("event_id", event_id)
+            .eq("id", tid).limit(1).execute().data or [])
+    if not rows:
+        return {"result": "unknown", "message": "That ticket isn't on the list."}
+    return check_in(tenant_id, event_id, rows[0]["code"], by, at=at)
 
 
 def undo_check_in(tenant_id: str, event_id: str, ticket_id: str) -> dict:
@@ -688,3 +702,134 @@ def attendees(tenant_id: str, event_id: str) -> dict:
             for k in tickets]
     rows.sort(key=lambda r: (r["holder_name"].lower(), r["order"], r["type"]))
     return {"event": {**ev, "takings_cents": paid}, "attendees": rows}
+
+
+# ── the door link ─────────────────────────────────────────────────────────────────────────────
+# The people on the door are often hired for the night. They get no login: the owner makes a door
+# link for the event, and whoever opens it can do exactly two things for that one event — see who
+# is coming (names and ticket types, no phone numbers, no money) and let tickets in. The link stops
+# working when the owner turns it off or 12 hours after the event ends. The door page keeps the list
+# on the phone, so it goes on working with no signal and sends its check-ins when the signal is back.
+DOOR_GRACE_HOURS = 12
+DOOR_OPENS_HOURS_BEFORE = 24
+
+
+def _door_url(tenant_id: str, key: str) -> str:
+    from vula.api import tenants
+    return f"{tenants.dashboard_url_for(tenant_id)}/door/#{key}"
+
+
+def door_link(tenant_id: str, event_id: str, *, new: bool = False) -> dict:
+    """The event's door link, making one when there is none (or `new`: the old link stops working)."""
+    ev = _event_row(tenant_id, event_id)
+    if ev.get("status") in ("draft", "cancelled"):
+        raise EventError("Put the event on sale before making a door link.")
+    key = ev.get("door_key")
+    if new or not key:
+        key = "D" + secrets.token_urlsafe(24)
+        _db().table("commerce_events").update({"door_key": key}).eq("tenant_id", tenant_id).eq("id", event_id).execute()
+        if _event_row(tenant_id, event_id).get("door_key") != key:
+            raise EventError("The door link didn't save. Nothing changed.", 500)
+    return {"url": _door_url(tenant_id, key), "on": True}
+
+
+def door_off(tenant_id: str, event_id: str) -> dict:
+    _db().table("commerce_events").update({"door_key": None}).eq("tenant_id", tenant_id).eq("id", event_id).execute()
+    if _event_row(tenant_id, event_id).get("door_key"):
+        raise EventError("The door link is still on. Try again.", 500)
+    return {"url": "", "on": False}
+
+
+def door_status(tenant_id: str, event_id: str) -> dict:
+    key = _event_row(tenant_id, event_id).get("door_key")
+    return {"url": _door_url(tenant_id, key) if key else "", "on": bool(key)}
+
+
+def _door_event(raw_key: Any) -> dict:
+    """The event a door key opens. EventError(404) for anything else — a wrong key, a link turned
+    off, an event that ended more than 12 hours ago — all the same answer."""
+    key = str(raw_key or "").strip()
+    gone = EventError("This door link isn't working. Ask the organiser for a new one.", 404)
+    if not re.fullmatch(r"D[A-Za-z0-9_-]{20,60}", key):
+        raise gone
+    rows = _db().table("commerce_events").select("*").eq("door_key", key).limit(1).execute().data or []
+    if not rows or rows[0].get("status") in ("draft", "cancelled"):
+        raise gone
+    ev = rows[0]
+    from datetime import timedelta
+    from vula.api import tenants
+    end = _when(ev.get("ends_at") or ev.get("starts_at"), "the event's time", required=True)
+    if _now() > end + timedelta(hours=DOOR_GRACE_HOURS) or not tenants.is_active(ev["tenant_id"]):
+        raise gone
+    return ev
+
+
+def _code_hash(code: str) -> str:
+    import hashlib
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def door_list(raw_key: Any) -> dict:
+    """What the door page keeps on the phone: the event, and every live ticket as a name, a type,
+    its state and the SHA-256 of its code — so a scanned code can be matched with no signal, while
+    the phone never holds a code it hasn't been shown."""
+    ev = _door_event(raw_key)
+    tenant_id = ev["tenant_id"]
+    names = {t["id"]: t["name"] for t in _type_rows(tenant_id, ev["id"], include_archived=True)}
+    rows = [{"id": k["id"], "h": _code_hash(k["code"]), "name": k.get("holder_name") or "",
+             "type": names.get(k["ticket_type_id"], "Ticket"), "status": k["status"],
+             "at": k.get("checked_in_at"), "by": k.get("checked_in_by")}
+            for k in _tickets(tenant_id, ev["id"]) if k.get("status") != "void"]
+    rows.sort(key=lambda r: (r["name"].lower(), r["type"], r["id"]))
+    return {"event": {"title": ev["title"], "starts_at": ev["starts_at"], "ends_at": ev.get("ends_at"),
+                      "venue": ev.get("venue") or ""},
+            "tickets": rows, "sold": len(rows), "checked_in": sum(1 for r in rows if r["status"] == "checked_in"),
+            "as_at": _iso(_now())}
+
+
+def _door_by(device: Any) -> str:
+    label = _text(device, 40)
+    return f"Door: {label}" if label else "Door"
+
+
+def _scan_time(raw: Any) -> Optional[str]:
+    """When the door phone says it scanned a ticket while it had no signal — kept only when it is
+    a real time in the last two days and not in the future; otherwise the server's own clock."""
+    from datetime import timedelta
+    try:
+        dt = _when(raw, "the scan time")
+    except EventError:
+        return None
+    if not dt or dt > _now() + timedelta(minutes=5) or dt < _now() - timedelta(days=2):
+        return None
+    return _iso(dt)
+
+
+def _door_one(ev: dict, it: dict, by: str) -> dict:
+    at = _scan_time(it.get("at"))
+    if it.get("ticket_id"):
+        return check_in_ticket(ev["tenant_id"], ev["id"], it.get("ticket_id"), by, at=at)
+    return check_in(ev["tenant_id"], ev["id"], it.get("code"), by, at=at)
+
+
+def door_check_in(raw_key: Any, item: Any, device: Any = "") -> dict:
+    """One check-in from the door page: {code} from a scan, or {ticket_id} picked from the list."""
+    ev = _door_event(raw_key)
+    return _door_one(ev, item if isinstance(item, dict) else {}, _door_by(device))
+
+
+def door_sync(raw_key: Any, items: Any, device: Any = "") -> dict:
+    """Check-ins the door phone made with no signal, sent once it is back: each is the same single
+    write as a live scan. One that another door let in first comes back as `already`, naming who."""
+    ev = _door_event(raw_key)
+    if not isinstance(items, list) or len(items) > 500:
+        raise EventError("Send up to 500 check-ins at a time.")
+    by = _door_by(device)
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        res = _door_one(ev, it, by)
+        out.append({"ref": str(it.get("ref") or "")[:80], "result": res["result"],
+                    "message": res.get("message"), "ticket": res.get("ticket")})
+    return {"results": out}
