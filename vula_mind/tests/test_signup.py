@@ -208,3 +208,31 @@ def test_signup_rolls_back_tenant_config_if_user_insert_fails():
     assert ("vula_tenant_config", "insert") in kinds
     assert ("vula_tenant_users", "insert") in kinds
     assert ("vula_tenant_config", "delete") in kinds  # rolled back the orphaned row
+
+
+# ── Signing up on a partner's own address (FlowCrew, 24 Nov 2026) ────────────────────────────
+
+def _signup_from(origin, business_type="retail"):
+    fake_client = _FakeClient(tables={"vula_tenant_config": [], "vula_tenant_users": []})
+    with (
+        patch("vula.api.master_auth._verify_jwt", new=AsyncMock(return_value=VALID_USER)),
+        patch("vula.api.signup._client", return_value=fake_client),
+    ):
+        headers = {**_auth_headers(), **({"Origin": origin} if origin else {})}
+        resp = client.post("/v1/signup", headers=headers, json={
+            "tenant_id": "Big Bay Surf", "display_name": "Big Bay Surf", "business_type": business_type})
+    assert resp.status_code == 200
+    return next(c[2] for c in fake_client.calls if c[0] == "vula_tenant_config" and c[1] == "insert")
+
+
+def test_signup_on_flowcrews_address_makes_a_flowcrew_surf_school():
+    for origin in ("https://app.flowcrew.co.za", "https://flowcrew.co.za"):
+        row = _signup_from(origin, business_type="retail")           # whatever the form sent
+        assert row["business_type"] == "watersports" and "lessons" in row["modules"]
+        assert row["features"] == {"partner": "flowcrew"}
+
+
+def test_signup_anywhere_else_is_unchanged():
+    for origin in (None, "https://digg.vula-ai.com", "https://flowcrew.co.za.evil.example", "not a url"):
+        row = _signup_from(origin, business_type="retail")
+        assert row["business_type"] == "retail" and "features" not in row
