@@ -2217,7 +2217,7 @@ class CommerceAssistantSkill(BaseSkill):
         # greeting menu header) — this is the first time a product photo appears while actually
         # shopping. Scoped to add-to-cart only (one confirmed item, one image) rather than every
         # browse/list result, to avoid sending a flood of images per message.
-        # 24 Nov 2026: the colour's own photo when it has one (migration 301).
+        # 24 Nov 2026: the colour's own photo when it has one (migration 302).
         photo = ((variant or {}).get("image_url") or product.get("image_url"))
         if ctx is not None and photo:
             ctx["media_url"] = photo
