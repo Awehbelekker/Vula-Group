@@ -6,7 +6,7 @@
 import { useMemo, useState } from 'react'
 import { Camera, Check, CloudOff, RefreshCw, Wifi, X } from 'lucide-react'
 import { Button, Card, Input, StatusChip } from '../components/ui/index.jsx'
-import { useBarcodeCamera } from '../components/stock/useStock'
+import { useBarcodeCamera } from '../lib/useBarcodeCamera'
 import { cleanCode, doorKey, useDoor } from './useDoor'
 import './door.css'
 
