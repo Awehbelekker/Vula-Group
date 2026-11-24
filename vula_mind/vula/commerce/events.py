@@ -39,6 +39,7 @@ STATUSES = ("draft", "on_sale", "closed", "cancelled")
 CODE_PREFIX = "VT-"
 MAX_TYPES = 12
 MAX_PER_ORDER_CAP = 50
+MAX_IMAGES, MAX_ADDONS, MAX_ADDON_QTY = 6, 12, 20
 PAID_STATUSES = ("paid", "confirmed", "packing", "dispatched", "delivered")
 
 
@@ -114,6 +115,24 @@ def _clean_event(data: dict, current: Optional[dict] = None) -> dict:
         if img and not img.startswith("https://"):
             raise EventError("The picture's address must start with https://")
         out["image_url"] = img or None
+    if "images" in data:
+        imgs = data.get("images")
+        if not isinstance(imgs, list) or len(imgs) > MAX_IMAGES:
+            raise EventError(f"An event can have up to {MAX_IMAGES} photos.")
+        clean = []
+        for u in imgs:
+            u = _text(u, 500)
+            if not u.startswith("https://"):
+                raise EventError("A photo's address must start with https://")
+            if u not in clean:
+                clean.append(u)
+        out["images"] = clean
+        out["image_url"] = clean[0] if clean else None          # the cover is the first photo
+    if "addon_product_ids" in data:
+        ids = data.get("addon_product_ids")
+        if not isinstance(ids, list) or len(ids) > MAX_ADDONS or not all(isinstance(i, str) for i in ids):
+            raise EventError(f"An event can offer up to {MAX_ADDONS} products with its tickets.")
+        out["addon_product_ids"] = list(dict.fromkeys(ids))
     for key in ("remind_buyers", "thank_buyers"):
         if key in data:
             if not isinstance(data[key], bool):
@@ -158,6 +177,52 @@ def _tickets(tenant_id: str, event_id: str) -> List[dict]:
     from vula.db_pages import all_rows
     return all_rows(lambda: _db().table("commerce_tickets").select("*").eq("tenant_id", tenant_id)
                     .eq("event_id", event_id))
+
+
+def addons_for(tenant_id: str, ids: Any) -> List[dict]:
+    """The products an event offers with its tickets, as they can be sold right now: this
+    business's own, active, in stock, at one price each (a product with options or sold by weight
+    is bought in the shop, where it can be chosen properly). Prices are the product rows'."""
+    from vula.commerce import service
+    ids = [i for i in (ids or []) if isinstance(i, str)][:MAX_ADDONS]
+    if not ids:
+        return []
+    rows = (_db().table("commerce_products").select("*").eq("tenant_id", tenant_id).in_("id", ids).execute().data or [])
+    with_options = {v["product_id"] for v in (_db().table("commerce_product_variants").select("product_id,archived")
+                                              .eq("tenant_id", tenant_id).in_("product_id", ids).execute().data or [])
+                    if not v.get("archived")}
+    by_id = {r["id"]: r for r in rows}
+    out = []
+    for pid in ids:
+        p = by_id.get(pid)
+        if (not p or p.get("archived") or p.get("product_type") == service.TICKET_PRODUCT_TYPE
+                or (p.get("status") or "active") != "active" or not p.get("in_stock") or pid in with_options
+                or p.get("choices") or p.get("pricing_mode") == "per_kg" or p.get("sold_by") == "kg"):
+            continue
+        price = int(service.effective_price_cents(p) or 0)
+        if price <= 0:
+            continue
+        stock = p.get("stock_quantity")
+        most = MAX_ADDON_QTY if stock is None else min(MAX_ADDON_QTY, max(0, int(float(stock))))
+        if most < 1:
+            continue
+        img = str(p.get("image_url") or "")
+        out.append({"id": pid, "name": p.get("name") or "Item", "price_cents": price,
+                    "image": img if img.startswith("https://") else "", "max": most})
+    return out
+
+
+def _check_addons(tenant_id: str, ids: List[str]) -> None:
+    """Every product named is this business's own and not a ticket. (Whether it can be sold today
+    is decided when the page is shown.)"""
+    from vula.commerce import service
+    if not ids:
+        return
+    rows = (_db().table("commerce_products").select("id,product_type").eq("tenant_id", tenant_id)
+            .in_("id", ids).execute().data or [])
+    ok = {r["id"] for r in rows if r.get("product_type") != service.TICKET_PRODUCT_TYPE}
+    if any(i not in ok for i in ids):
+        raise EventError("One of those products isn't in your product list.")
 
 
 def _left(product: Optional[dict]) -> int:
@@ -223,6 +288,7 @@ def get(tenant_id: str, event_id: str) -> dict:
 async def create(tenant_id: str, data: dict, actor: str = "") -> dict:
     row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, "status": "draft", "created_by": actor or None,
            **_clean_event(data or {})}
+    _check_addons(tenant_id, row.get("addon_product_ids") or [])
     _db().table("commerce_events").insert(row).execute()
     if (data or {}).get("types") is not None:
         await save_types(tenant_id, row["id"], data["types"])
@@ -232,6 +298,7 @@ async def create(tenant_id: str, data: dict, actor: str = "") -> dict:
 async def update(tenant_id: str, event_id: str, data: dict) -> dict:
     cur = _event_row(tenant_id, event_id)
     patch = _clean_event({k: v for k, v in (data or {}).items() if k != "types"}, cur)
+    _check_addons(tenant_id, patch.get("addon_product_ids") or [])
     if patch:
         _db().table("commerce_events").update({**patch, "updated_at": _iso(_now())}) \
             .eq("tenant_id", tenant_id).eq("id", event_id).execute()
@@ -372,6 +439,8 @@ def public_event(event_id: str) -> Optional[dict]:
             "description": ev.get("description") or "", "venue": ev.get("venue") or "",
             "address": ev.get("address") or "", "starts_at": ev["starts_at"], "ends_at": ev.get("ends_at"),
             "image_url": ev.get("image_url") or "", "status": ev["status"], "selling": full["selling"],
+            "images": [u for u in (ev.get("images") or []) if isinstance(u, str) and u.startswith("https://")],
+            "addons": addons_for(ev["tenant_id"], ev.get("addon_product_ids")) if full["selling"] else [],
             "url": full["url"],
             "types": [{"id": t["id"], "name": t["name"], "price_cents": t["price_cents"], "left": t["left"],
                        "max_per_order": t["max_per_order"]} for t in full["types"]]}
@@ -415,7 +484,36 @@ def _clean_buy(event: dict, raw_items: Any) -> List[dict]:
     return out
 
 
-async def buy(event_id: str, *, items: Any, name: Any, phone: Any, email: Any = "") -> dict:
+def _clean_addons(event: dict, raw: Any) -> List[dict]:
+    """What the buyer added to their tickets: only products this event offers, whole numbers,
+    within what is in stock."""
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        raise EventError("That order couldn't be read. Refresh the page and try again.")
+    offered = {a["id"]: a for a in event.get("addons") or []}
+    want: Dict[str, int] = {}
+    for it in raw[:MAX_ADDONS * 2]:
+        if not isinstance(it, dict):
+            continue
+        pid, q = str(it.get("product_id") or ""), it.get("quantity")
+        if isinstance(q, bool) or not isinstance(q, int) or q < 0:
+            raise EventError("How many of each item must be a whole number.")
+        if q == 0:
+            continue
+        if pid not in offered:
+            raise EventError("One of those items isn't offered with this event any more. Refresh the page.")
+        want[pid] = want.get(pid, 0) + q
+    out = []
+    for pid, q in want.items():
+        a = offered[pid]
+        if q > a["max"]:
+            raise EventError(f"Only {a['max']} of {a['name']} can be added.", 409)
+        out.append({"product_id": pid, "quantity": q})
+    return out
+
+
+async def buy(event_id: str, *, items: Any, name: Any, phone: Any, email: Any = "", addons: Any = None) -> dict:
     """Start a ticket purchase: an ordinary order for the chosen tickets (seats held from now),
     and the address of the business's payment page. Prices come from the product rows."""
     from fastapi import HTTPException
@@ -435,11 +533,14 @@ async def buy(event_id: str, *, items: Any, name: Any, phone: Any, email: Any = 
     if mail and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", mail):
         raise EventError("That email address doesn't look right.")
     lines = _clean_buy(event, items)
+    extras = _clean_addons(event, addons)
     session = uuid.uuid4().hex
     cart = await service.get_or_create_cart(tenant_id, session, customer_phone=number)
     type_rows = {t["id"]: t for t in _type_rows(tenant_id, event["id"])}
     for ln in lines:
         await service.add_to_cart(tenant_id, cart["id"], type_rows[ln["type"]["id"]]["product_id"], ln["quantity"])
+    for ex in extras:
+        await service.add_to_cart(tenant_id, cart["id"], ex["product_id"], ex["quantity"])
 
     base = web_basket.public_base(tenant_id)
 

@@ -261,7 +261,8 @@ async def event_page(event_id: str, cancelled: int = 0) -> HTMLResponse:
     brand = await _brand(ev["tenant_id"])
     when = when_text(ev["starts_at"], ev.get("ends_at"))
     where = ", ".join(x for x in (ev["venue"], ev["address"]) if x)
-    img = ev["image_url"] if ev["image_url"].startswith("https://") else ""
+    photos = ev.get("images") or ([ev["image_url"]] if ev["image_url"].startswith("https://") else [])
+    img = photos[0] if photos else ""
     lowest = min((t["price_cents"] for t in ev["types"]), default=0)
     ld = {"@context": "https://schema.org", "@type": "Event", "name": ev["title"], "startDate": ev["starts_at"],
           "eventStatus": "https://schema.org/EventCancelled" if ev["status"] == "cancelled"
@@ -304,9 +305,20 @@ async def event_page(event_id: str, cancelled: int = 0) -> HTMLResponse:
         rows += (f'<li class="tt" data-id="{_esc(t["id"])}" data-c="{int(t["price_cents"])}" data-max="{most}">'
                  f'<div><strong>{_esc(t["name"])}</strong>{few}<br><span class="pr">{events.rand(t["price_cents"])}</span></div>'
                  f'{tail}</li>')
+    extras = ""
+    for a in ev.get("addons") or []:
+        pic = (f'<img class="ai" src="{_esc(a["image"])}" alt="" loading="lazy">' if a["image"]
+               else '<span class="ai none" aria-hidden="true"></span>')
+        extras += (f'<li class="tt ad" data-pid="{_esc(a["id"])}" data-c="{int(a["price_cents"])}" data-max="{int(a["max"])}">'
+                   f'{pic}<div class="an"><strong>{_esc(a["name"])}</strong><br><span class="pr">{events.rand(a["price_cents"])}</span></div>'
+                   f'<div class="qty"><button type="button" class="st" data-d="-1" aria-label="One fewer {_esc(a["name"])}">−</button>'
+                   f'<output aria-live="polite">0</output>'
+                   f'<button type="button" class="st" data-d="1" aria-label="One more {_esc(a["name"])}">+</button></div></li>')
+    if extras:
+        extras = f'<h2 class="sec">Add to your order</h2><p class="hint">Collect these at the event.</p><ul class="tts">{extras}</ul>'
     form = ""
     if ev["selling"] and ev["types"]:
-        form = (f'<form id="buy" novalidate><ul class="tts">{rows}</ul>'
+        form = (f'<form id="buy" novalidate><ul class="tts" id="tix">{rows}</ul>{extras}'
                 '<label>Your name<input id="nm" autocomplete="name" required maxlength="80"></label>'
                 '<label>Cellphone number<input id="ph" type="tel" autocomplete="tel" inputmode="tel" required '
                 'placeholder="082 123 4567"></label>'
@@ -317,7 +329,12 @@ async def event_page(event_id: str, cancelled: int = 0) -> HTMLResponse:
     elif ev["types"]:
         form = f'<ul class="tts">{rows}</ul>'
     back = '<p class="note">Payment was cancelled. Your tickets were not bought.</p>' if cancelled else ""
-    body = ((f'<img class="hero" src="{_esc(img)}" alt="">' if img else "")
+    if len(photos) > 1:
+        hero = '<div class="gal" tabindex="0" aria-label="Photos of the event">' + "".join(
+            f'<img src="{_esc(u)}" alt="" loading="{"eager" if n == 0 else "lazy"}">' for n, u in enumerate(photos)) + '</div>'
+    else:
+        hero = f'<img class="hero" src="{_esc(img)}" alt="">' if img else ""
+    body = (hero
             + '<div class="by">' + (f'<img class="lg" src="{_esc(brand["logo"])}" alt="">' if brand["logo"] else "")
             + f'<span>{_esc(brand["name"])}</span></div>'
             f'<h1>{_esc(ev["title"])}</h1>'
@@ -356,7 +373,7 @@ async def event_buy(event_id: str, body: dict, request: Request) -> dict:
     b = body or {}
     try:
         return await events.buy(event_id, items=b.get("items"), name=b.get("name"), phone=b.get("phone"),
-                                email=b.get("email") or "")
+                                email=b.get("email") or "", addons=b.get("addons"))
     except events.EventError as exc:
         raise _refuse(exc) from exc
 
@@ -437,6 +454,12 @@ _SHELL = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 main{max-width:640px;margin:0 auto;padding:24px 16px 8px}
 .hero{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:16px;margin:0 0 20px;background:var(--line)}
+.gal{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;margin:0 0 20px;border-radius:16px}
+.gal img{flex:none;width:88%;aspect-ratio:16/9;object-fit:cover;border-radius:16px;scroll-snap-align:start;background:var(--line)}
+.gal:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.sec{font-size:18px;margin:4px 0 2px}
+.ad{justify-content:flex-start}.an{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.ai{flex:none;width:52px;height:52px;border-radius:10px;object-fit:cover;background:var(--line)}
 .by{display:flex;align-items:center;gap:10px;color:var(--mute);font-size:14px;margin:0 0 8px}
 .lg{width:28px;height:28px;border-radius:6px;object-fit:contain;background:#fff}
 h1{font-size:28px;line-height:1.15;margin:0 0 10px;letter-spacing:-.02em;overflow-wrap:anywhere}
@@ -484,17 +507,18 @@ _BUY_JS = r"""<script>
 (function(){var f=document.getElementById('buy');if(!f)return;var EVENT={{EVENT}};
 var go=document.getElementById('go'),err=document.getElementById('err'),rows=[].slice.call(f.querySelectorAll('.tt'));
 function money(c){var r=Math.floor(c/100),k=c%100;return 'R'+String(r).replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+(k<10?'0':'')+k;}
+function isAd(r){return r.hasAttribute('data-pid');}
 function sum(){var n=0,c=0;rows.forEach(function(r){var o=r.querySelector('output');if(!o)return;var q=+o.textContent;
-n+=q;c+=q*(+r.getAttribute('data-c'));var b=r.querySelectorAll('.st');b[0].disabled=q<=0;b[1].disabled=q>=+r.getAttribute('data-max');});
-go.disabled=n===0;go.textContent=n?('Pay '+money(c)+' for '+n+' ticket'+(n===1?'':'s')):'Choose your tickets';}
+if(!isAd(r))n+=q;c+=q*(+r.getAttribute('data-c'));var b=r.querySelectorAll('.st');b[0].disabled=q<=0;b[1].disabled=q>=+r.getAttribute('data-max');});
+go.disabled=n===0;go.textContent=n?('Pay '+money(c)):'Choose your tickets';}
 rows.forEach(function(r){[].slice.call(r.querySelectorAll('.st')).forEach(function(b){b.addEventListener('click',function(){
 var o=r.querySelector('output'),q=Math.max(0,Math.min(+r.getAttribute('data-max'),+o.textContent+(+b.getAttribute('data-d'))));
 o.textContent=q;sum();});});});
 sum();
 f.addEventListener('submit',function(e){e.preventDefault();err.hidden=true;
-var items=rows.map(function(r){var o=r.querySelector('output');return o?{type_id:r.getAttribute('data-id'),quantity:+o.textContent}:null;})
-.filter(function(x){return x&&x.quantity>0;});
-var body={items:items,name:document.getElementById('nm').value,phone:document.getElementById('ph').value,email:document.getElementById('em').value};
+var items=[],addons=[];rows.forEach(function(r){var o=r.querySelector('output');if(!o)return;var q=+o.textContent;if(q<=0)return;
+if(isAd(r))addons.push({product_id:r.getAttribute('data-pid'),quantity:q});else items.push({type_id:r.getAttribute('data-id'),quantity:q});});
+var body={items:items,addons:addons,name:document.getElementById('nm').value,phone:document.getElementById('ph').value,email:document.getElementById('em').value};
 go.disabled=true;var label=go.textContent;go.textContent='One moment…';
 fetch('/events/'+EVENT+'/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
 .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})

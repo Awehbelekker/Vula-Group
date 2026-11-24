@@ -18,6 +18,8 @@ create table if not exists commerce_events (
     starts_at      timestamptz not null,
     ends_at        timestamptz,
     image_url      text,
+    images         jsonb not null default '[]'::jsonb, -- the event's photos, the cover first
+    addon_product_ids jsonb not null default '[]'::jsonb, -- products offered with the tickets (merch, parking)
     status         text not null default 'draft',      -- draft | on_sale | closed | cancelled
     sales_close_at timestamptz,                        -- null = until the event starts
     door_key       text unique,                        -- the door link's secret; null = no door link

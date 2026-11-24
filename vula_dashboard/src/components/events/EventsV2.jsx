@@ -3,9 +3,11 @@
  * people in at the door. A ticket sale is an ordinary order, so the money shows in Orders and the
  * books like any other sale. Refunds are made on the order; that cancels its tickets.
  */
-import { useState } from 'react'
-import { ArrowLeft, Camera, Check, Copy, ExternalLink, Plus, RefreshCw, Ticket, Trash2, Undo2, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowLeft, Camera, Check, Copy, ExternalLink, ImagePlus, Plus, RefreshCw, Ticket, Trash2, Undo2, X } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
+import { api } from '../../lib/api'
+import { uploadBrandImage } from '../../lib/brandUpload'
 import { Button, Card, EmptyState, ErrorCard, Field, Input, PageHeader, Skeleton, StatusChip, Textarea, confirmDialog, toast } from '../ui/index.jsx'
 import { useBarcodeCamera } from '../stock/useStock'
 import { isoToLocal, localToIso, typesBody, useDoor, useEvents, whenText } from './useEvents'
@@ -17,12 +19,72 @@ const stateOf = (ev) => (ev.status === 'on_sale' && !ev.selling ? ['warn', 'Sale
 const copy = (text) => navigator.clipboard?.writeText(text).then(() => toast('Copied'), () => toast("Couldn't copy. Select and copy it by hand.", 'danger'))
 const blankType = () => ({ key: Math.random().toString(36).slice(2), name: '', price: '', capacity: '', max_per_order: '10' })
 
-function Editor({ ev, x, onDone }) {
+/** The event's photos: uploaded to the business's own storage, the first one is the cover. */
+function Photos({ tenantId, images, onChange }) {
+  const [busy, setBusy] = useState(false)
+  const add = async (e) => {
+    const files = [...(e.target.files || [])].slice(0, 6 - images.length)
+    e.target.value = ''
+    if (!files.length) return
+    setBusy(true)
+    const urls = []
+    for (const f of files) {
+      const url = await uploadBrandImage(tenantId, f, 'events')
+      if (url) urls.push(url); else toast(`${f.name} didn't upload. Try again.`, 'danger')
+    }
+    onChange([...images, ...urls]); setBusy(false)
+  }
+  return (
+    <div className="vev-card">
+      <span className="vev-label">Photos</span>
+      <span className="vev-sub">Up to 6. The first one is the cover people see when the link is shared.</span>
+      {images.length > 0 && (
+        <ul className="vev-photos">
+          {images.map((u, i) => (
+            <li key={u}>
+              <img src={u} alt="" />
+              {i === 0 && <span className="vev-cover">Cover</span>}
+              <button type="button" className="vev-photo-x" aria-label={`Remove photo ${i + 1}`} onClick={() => onChange(images.filter(o => o !== u))}><X size={14} /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {images.length < 6 && (
+        <label className="vev-upload"><ImagePlus size={16} aria-hidden="true" />{busy ? 'Uploading…' : 'Add photos'}
+          <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy} onChange={add} /></label>
+      )}
+    </div>
+  )
+}
+
+/** Products offered with the tickets (a T-shirt, parking): picked from the business's own list.
+ *  Only ones with a single price are offered here; ones with sizes or sold by weight sell in the shop. */
+function AddOns({ tenantId, picked, onChange }) {
+  const [products, setProducts] = useState(null)
+  useEffect(() => {
+    api(`/v1/commerce/${tenantId}/admin/till/products`).then(d => setProducts((d.products || []).filter(p => !p.variants?.length && !p.by_kg))).catch(() => setProducts([]))
+  }, [tenantId])
+  if (!products) return <Skeleton lines={2} />
+  if (!products.length) return <p className="vev-sub">Add products under Sell › Products to offer them with tickets.</p>
+  const toggle = (id) => onChange(picked.includes(id) ? picked.filter(o => o !== id) : [...picked, id].slice(0, 12))
+  return (
+    <ul className="vev-list vev-addons">
+      {products.map(p => (
+        <li key={p.id}><label className="vev-check"><input type="checkbox" checked={picked.includes(p.id)} onChange={() => toggle(p.id)} />
+          <span>{p.name}<span className="vev-sub">{money(p.price_cents)}{p.in_stock ? '' : ' · out of stock, so not shown'}</span></span></label></li>
+      ))}
+    </ul>
+  )
+}
+
+function Editor({ ev, x, tenantId, onDone }) {
   const [f, setF] = useState({
     title: ev?.title || '', starts: isoToLocal(ev?.starts_at), ends: isoToLocal(ev?.ends_at), venue: ev?.venue || '',
     address: ev?.address || '', description: ev?.description || '', image_url: ev?.image_url || '',
     remind: ev ? ev.remind_buyers !== false : true, thank: ev ? ev.thank_buyers !== false : true,
   })
+  const [images, setImages] = useState(ev?.images?.length ? ev.images : ev?.image_url ? [ev.image_url] : [])
+  const [addons, setAddons] = useState(ev?.addon_product_ids || [])
   const [rows, setRows] = useState(ev?.types?.length
     ? ev.types.map(t => ({ key: t.id, id: t.id, name: t.name, price: (t.price_cents / 100).toFixed(2), capacity: String(t.capacity), max_per_order: String(t.max_per_order), sold: t.sold }))
     : [blankType()])
@@ -39,7 +101,7 @@ function Editor({ ev, x, onDone }) {
     setBusy(true); setError('')
     try {
       const saved = await x.save(ev?.id, { title: f.title, starts_at: localToIso(f.starts), ends_at: localToIso(f.ends) || null,
-        venue: f.venue, address: f.address, description: f.description, image_url: f.image_url,
+        venue: f.venue, address: f.address, description: f.description, images, addon_product_ids: addons,
         remind_buyers: f.remind, thank_buyers: f.thank, types: t.types })
       toast('Saved'); onDone(saved)
     } catch (err) { setError(err.message) }
@@ -60,7 +122,7 @@ function Editor({ ev, x, onDone }) {
           <Field label="Address"><Input maxLength={200} value={f.address} onChange={set('address')} placeholder="12 Harbour Road, Hout Bay" /></Field>
         </div>
         <Field label="About the event"><Textarea maxLength={4000} value={f.description} onChange={set('description')} /></Field>
-        <Field label="Picture (optional)" hint="The web address of a picture, starting with https://"><Input value={f.image_url} onChange={set('image_url')} placeholder="https://…" /></Field>
+        <Photos tenantId={tenantId} images={images} onChange={setImages} />
       </Card>
       <Card className="vev-card">
         <h3 className="vev-h">Tickets</h3>
@@ -77,6 +139,11 @@ function Editor({ ev, x, onDone }) {
           ))}
         </ul>
         <div className="vev-row"><Button type="button" variant="secondary" size="sm" Icon={Plus} onClick={() => setRows([...rows, blankType()])}>Add a ticket type</Button></div>
+      </Card>
+      <Card className="vev-card">
+        <h3 className="vev-h">Sell with the tickets</h3>
+        <p className="vev-sub">Tick products buyers can add to their ticket order, like merchandise or parking. They pay once and collect at the event.</p>
+        <AddOns tenantId={tenantId} picked={addons} onChange={setAddons} />
       </Card>
       <Card className="vev-card">
         <h3 className="vev-h">WhatsApp messages to buyers</h3>
@@ -244,7 +311,7 @@ export default function EventsV2({ tenantId }) {
   const [door, setDoor] = useState(null)
 
   if (door) return <Door tenantId={tenantId} ev={door} onBack={() => { setDoor(null); x.load() }} />
-  if (editing) return <Editor ev={editing === 'new' ? null : editing} x={x} onDone={() => setEditing(null)} />
+  if (editing) return <Editor ev={editing === 'new' ? null : editing} x={x} tenantId={tenantId} onDone={() => setEditing(null)} />
   return (
     <div className="vev">
       <PageHeader sub="Put on an event, sell tickets on its own page and check people in at the door. Ticket sales show in Orders and your books like any other sale."

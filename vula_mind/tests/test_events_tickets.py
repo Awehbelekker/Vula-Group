@@ -46,6 +46,7 @@ def _soon(days=10, hours=0):
 @pytest.fixture
 def world(monkeypatch):
     db = DB({t: [] for t in ("commerce_events", "commerce_ticket_types", "commerce_tickets", "commerce_products",
+                             "commerce_product_variants",
                              "commerce_carts", "commerce_cart_items", "commerce_orders", "commerce_order_items")})
     monkeypatch.setattr(service, "_client", lambda: db)
     monkeypatch.setattr(tenants, "is_active", lambda tid: tid != "paused")
@@ -598,3 +599,69 @@ def test_the_thank_you_goes_to_those_who_came_with_the_next_event(world, told):
     assert "Next up: Winter Market" in m["text"] and m["link"].endswith(f"/events/{nxt['id']}")
     assert run(events.send_thanks(after)) == 0 and len(told) == 1
     assert run(events.send_thanks(datetime.now(timezone.utc) + timedelta(hours=5 + 3 + 1))) == 0     # too soon
+
+
+# ── photos and things sold with the tickets ───────────────────────────────────────────────────
+def _product(world, name, price=25000, **kw):
+    row = {"id": str(uuid.uuid4()), "tenant_id": kw.pop("tenant_id", TID), "name": name, "price_cents": price,
+           "in_stock": True, "status": "active", "stock_quantity": kw.pop("stock", 8), **kw}
+    world.db.rows["commerce_products"].append(row)
+    return row
+
+
+def test_photos_are_https_the_first_is_the_cover_and_six_is_the_most(world):
+    ev, _ = _event(images=["https://cdn.example/a.jpg", "https://cdn.example/b.jpg", "https://cdn.example/a.jpg"])
+    assert ev["images"] == ["https://cdn.example/a.jpg", "https://cdn.example/b.jpg"] and ev["image_url"] == "https://cdn.example/a.jpg"
+    assert run(events.update(TID, ev["id"], {"images": []}))["image_url"] is None
+    for bad in (["http://plain.example/a.jpg"], ["javascript:alert(1)"], ["https://x/%d.jpg" % n for n in range(7)], "x"):
+        with pytest.raises(events.EventError):
+            _event(images=bad)
+
+
+def test_only_the_business_own_sellable_products_are_offered_with_tickets(world):
+    tee = _product(world, "Market T-shirt", 25000, image_url="https://cdn.example/tee.jpg")
+    parking = _product(world, "Parking", 5000, stock=None)                      # stock not counted
+    sale = _product(world, "Tote bag", 12000, sale_price_cents=9000)
+    gone = _product(world, "Sold out cap", 9000, stock=0, in_stock=False)
+    draft = _product(world, "Not listed yet", 9000, status="draft")
+    by_kg = _product(world, "Biltong", 40000, sold_by="kg")
+    sized = _product(world, "Hoodie", 60000)
+    world.db.rows["commerce_product_variants"].append({"id": "v1", "tenant_id": TID, "product_id": sized["id"], "archived": False})
+    theirs = _product(world, "Someone else's", 100, tenant_id="other")
+    with pytest.raises(events.EventError, match="product list"):
+        _event(addon_product_ids=[theirs["id"]])
+    ev, types = _event(addon_product_ids=[p["id"] for p in (tee, parking, sale, gone, draft, by_kg, sized)])
+    with pytest.raises(events.EventError):                                         # a ticket is not merch
+        run(events.update(TID, ev["id"], {"addon_product_ids": [world.db.rows["commerce_products"][-1]["id"]]}))
+    run(events.set_status(TID, ev["id"], "on_sale"))
+    offered = events.public_event(ev["id"])["addons"]
+    assert [(a["name"], a["price_cents"], a["max"]) for a in offered] == [
+        ("Market T-shirt", 25000, 8), ("Parking", 5000, 20), ("Tote bag", 9000, 8)]
+    assert offered[0]["image"] == "https://cdn.example/tee.jpg"
+
+
+def test_merch_goes_on_the_same_order_and_only_tickets_become_tickets(world, monkeypatch):
+    async def inv(tid):
+        return {"trading_as": "SeedleMe"}
+    monkeypatch.setattr(service, "get_invoice_settings", inv)
+    tee = _product(world, "Market <b>T-shirt</b>", 25000, stock=3)
+    other = _product(world, "Not offered", 100)
+    ev, types = _event(addon_product_ids=[tee["id"]], images=["https://cdn.example/a.jpg", "https://cdn.example/b.jpg"])
+    run(events.set_status(TID, ev["id"], "on_sale"))
+    gen = [{"type_id": types["General"]["id"], "quantity": 2}]
+    page = run(events_api.event_page(ev["id"])).body.decode()
+    assert "Add to your order" in page and "Market &lt;b&gt;T-shirt&lt;/b&gt;" in page and f'data-pid="{tee["id"]}"' in page
+    assert page.count("<img src=") == 2 and 'class="gal"' in page                    # both photos
+    for bad, status in (([{"product_id": other["id"], "quantity": 1}], 400), ([{"product_id": tee["id"], "quantity": 4}], 409),
+                        ([{"product_id": tee["id"], "quantity": 1.5}], 400), ("x", 400)):
+        with pytest.raises(events.EventError) as e:
+            run(events.buy(ev["id"], items=gen, name="Thandi Mokoena", phone="0821234567", addons=bad))
+        assert e.value.status == status and world.orders == []
+    with pytest.raises(events.EventError):                                         # merch alone isn't a ticket sale
+        run(events.buy(ev["id"], items=[], name="Thandi Mokoena", phone="0821234567",
+                       addons=[{"product_id": tee["id"], "quantity": 1}]))
+    out = run(events.buy(ev["id"], items=gen, name="Thandi Mokoena", phone="0821234567",
+                         addons=[{"product_id": tee["id"], "quantity": 2}]))
+    assert out["total_cents"] == 2 * 15000 + 2 * 25000
+    assert next(p for p in world.db.rows["commerce_products"] if p["id"] == tee["id"])["stock_quantity"] == 1
+    assert len(_pay(world)) == 2                                                    # two tickets; the shirts are not tickets
