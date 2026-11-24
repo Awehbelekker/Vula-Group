@@ -79,7 +79,7 @@ _FOOTER = """          </table>
         <tr><td style="background:#F7F4EE;padding:24px 40px;border-top:1px solid #DDD8CE;">
           <p style="margin:0;font-size:12px;color:#8A8680;line-height:1.6;">
             Questions? Reply to this email or WhatsApp us — we reply fast.<br>
-            Vula Group (Pty) Ltd · Cape Town, South Africa
+            Aweh Be Lekker (Pty) Ltd t/a Vula Group · Cape Town, South Africa
           </p>
         </td></tr>
       </table>

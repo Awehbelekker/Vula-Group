@@ -1,4 +1,4 @@
-# PAIA Manual of [Company legal name] (Vula) (draft, November 2026)
+# PAIA Manual of Aweh Be Lekker (Pty) Ltd t/a Vula Group (Vula) (draft, November 2026)
 
 > **DRAFT for review by the owner and a legal adviser — not yet published.**
 > Prepared under section 51 of the Promotion of Access to Information Act 2 of 2000 (PAIA), as
@@ -6,7 +6,6 @@
 > "publish a PAIA s51 manual" and "register an Information Officer" as open owner tasks.
 >
 > **Placeholders to fill before publishing**
-> - [Company legal name] — the live privacy page says "Vula Group (Pty) Ltd". Confirm the exact registered name.
 > - [Registration number]
 > - [Physical address]
 > - [Postal address]
@@ -38,7 +37,7 @@ needed to use or protect a right. This manual explains:
 - how we process personal information under POPIA;
 - how to ask for a record, and what it costs.
 
-[Company legal name] ("Vula", "we", "us") runs Vula: an AI business assistant that small businesses
+Aweh Be Lekker (Pty) Ltd t/a Vula Group ("Vula", "we", "us") runs Vula: an AI business assistant that small businesses
 use on WhatsApp and in a web dashboard. Businesses use it for orders, invoices, documents, projects
 and customer conversations.
 
@@ -57,7 +56,7 @@ publishing it regardless.]
 
 | | |
 |---|---|
-| Company name | [Company legal name] |
+| Company name | Aweh Be Lekker (Pty) Ltd t/a Vula Group |
 | Trading name | Vula |
 | Registration number | [Registration number] |
 | Physical address | [Physical address] |
@@ -300,7 +299,7 @@ frequency, e.g. once a year].
 
 ## Review list: everything to fill or confirm
 
-**Placeholders:** [Company legal name], [Registration number], [Physical address], [Postal address],
+**Placeholders:** [Registration number], [Physical address], [Postal address],
 [Information Officer name, email, phone], [Deputy Information Officer], [Effective date].
 
 **[confirm] items:**

@@ -124,7 +124,7 @@ below; the shop, checkout and storefront are in `../vula-commerce-audit.md`.
   - Quick Cost uses City of Cape Town fees, a Western Cape factor and "HVAC / ExtraAir".
 - **Field Ops WhatsApp templates** are named `digg_task_assigned` and similar, for every business.
 - **Vula's own legal name differs between pages:** "Aweh Be Lekker (Pty) Ltd" on the dashboard
-  and "Vula Group (Pty) Ltd" on Privacy.
+  and "Vula Group (Pty) Ltd" on Privacy ✔ (24 Nov: "Aweh Be Lekker (Pty) Ltd t/a Vula Group" everywhere).
 
 **Fix:**
 - Fish wording only when the business type is food.

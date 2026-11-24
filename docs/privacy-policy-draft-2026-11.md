@@ -6,7 +6,6 @@
 > until the owner signs it off and the page is updated.
 >
 > **Placeholders to fill before publishing**
-> - [Company legal name] — the live page says "Vula Group (Pty) Ltd". Confirm the exact registered name.
 > - [Registration number]
 > - [Physical address] — the live page says only "Cape Town, South Africa".
 > - [Postal address]
@@ -24,7 +23,7 @@
 
 **Effective date:** [Effective date]
 
-[Company legal name] ("Vula", "we", "us"), registration number [Registration number], runs Vula: an
+Aweh Be Lekker (Pty) Ltd t/a Vula Group ("Vula", "we", "us"), registration number [Registration number], runs Vula: an
 AI business assistant that small businesses use on WhatsApp and in a web dashboard. This policy
 explains what personal information we hold, why, where it is kept, who helps us process it, how long
 we keep it, and what your rights are under the Protection of Personal Information Act 4 of 2013
@@ -355,7 +354,7 @@ We will tell businesses using Vula about important changes. [confirm: how — em
 
 ## 14. Contact us
 
-[Company legal name], registration number [Registration number]
+Aweh Be Lekker (Pty) Ltd t/a Vula Group, registration number [Registration number]
 Physical address: [Physical address]
 Postal address: [Postal address]
 Information Officer: [Information Officer name, email, phone]
@@ -401,7 +400,7 @@ The live page says "We process deletion requests within 30 days." That promise h
 
 ## Review list: everything to fill or confirm
 
-**Placeholders:** [Company legal name], [Registration number], [Physical address], [Postal address],
+**Placeholders:** [Registration number], [Physical address], [Postal address],
 [Information Officer name, email, phone], [Deputy Information Officer], [Effective date], link to the
 PAIA manual.
 
