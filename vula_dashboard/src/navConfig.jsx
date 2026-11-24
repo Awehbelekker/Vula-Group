@@ -10,7 +10,7 @@ import {
   FileText, FolderKanban, FolderOpen, Globe, HardHat, House, Inbox, Landmark, LayoutDashboard,
   Library, Link, Mail, MailCheck, Megaphone, MessageSquare, MessagesSquare, Package, PartyPopper,
   PenLine, PencilRuler, Receipt, ReceiptText, Repeat, Rocket, Route, Ruler, ScanLine, Settings,
-  ShieldCheck, ShoppingBag, Smartphone, Sparkles, Star, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound,
+  ShieldCheck, ShoppingBag, Smartphone, Sparkles, Star, Store, Tag, Target, TrendingUp, Truck, Users, UsersRound, UtensilsCrossed,
   Wallet, Wrench, Zap,
 } from "lucide-react";
 
@@ -23,7 +23,7 @@ export const NAV_ICONS = {
   overview: House, inbox: Inbox, today: CalendarCheck, activity: Activity,
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
   sell: Store, orders: Package, till: Calculator, events: Ticket, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag, reviews: Star, salesreports: TrendingUp,
-  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, listings: Building2, suppliers: Truck, import: Download,
+  subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, tables: UtensilsCrossed, specials: Sparkles, listings: Building2, suppliers: Truck, import: Download,
   money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen, management: ChartPie, booksreview: ClipboardCheck,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
   people: Users, pipeline: KanbanSquare, customers: Users, contacts: Contact, followups: MailCheck,
@@ -86,6 +86,9 @@ export const MERCHANT_GROUPS = [
       { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
       { id: "delivery", icon: "🛵", label: "Delivery" },
       { id: "bookings", icon: "📅", label: "Bookings" },
+      // restaurants: tab id = module id `tables`; Specials rides on the same module
+      { id: "tables", icon: "🍽️", label: "Tables" },
+      { id: "specials", icon: "✨", label: "Specials" },
       // real-estate businesses only: tab id = module id `listings`, so no MERCHANT_MODMAP entry
       { id: "listings", icon: "🏠", label: "Listings" },
       { id: "suppliers", icon: "🚚", label: "Suppliers" },
@@ -253,6 +256,7 @@ const MERCHANT_MODMAP = {
   reviews: 'orders',        // ratings customers give their delivered orders on WhatsApp
   till: 'orders',           // selling over the counter (Sell › Till) makes the same orders
   events: 'orders',         // event tickets (Sell › Events) are sold as orders too
+  specials: 'tables',       // a restaurant's specials come with its table bookings
   salesreports: 'orders',   // sales by day and best sellers (Sell › Sales reports)
   stock: 'products',        // the Stock tab counts and receives the same products
   costing: 'manufacturing', // materials, recipes, batches, cost per unit (Manufacturing Core)

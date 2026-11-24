@@ -66,6 +66,8 @@ MODULES: dict[str, str] = {
     "listings":   "Property listings (real estate)",
     # 2026-11-10: deals board for any business type (stages per business type) — vula/pipeline/.
     "pipeline":   "Deals pipeline",
+    # 2026-11-24: restaurants — table bookings and today's specials — vula/commerce/tables.py.
+    "tables":     "Table bookings & specials (restaurants)",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
@@ -104,6 +106,14 @@ BUSINESS_TYPES: dict[str, dict] = {
     "real_estate": {"label": "Real estate / Estate agency / Rentals",
                     "modules": ["listings", "pipeline", "bookings", "crm", "followups", "pages", "inbox",
                                 "broadcasts", "marketing", "documents", "team", "reports", "invoices"]},
+    # 2026-11-24: the light plans — one job each, none of the rest. A restaurant that only wants
+    # bookings and specials; an organiser who only sells tickets. Both can move to a full type later
+    # with nothing to migrate (the modules are switches, the data is the same). Documents stays on
+    # for both (the 12 Nov rule): the menu or the event's terms is what Vula answers customers from.
+    "restaurant_lite": {"label": "Restaurant: table bookings & specials only",
+                        "modules": ["tables", "inbox", "crm", "team", "documents"]},
+    "events_lite": {"label": "Events: tickets & the door only",
+                    "modules": ["orders", "payments", "crm", "team", "reports", "documents"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team", "documents"]},
 }
