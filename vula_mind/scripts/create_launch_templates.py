@@ -11,7 +11,7 @@ This submits the whole set in one go. Meta review is ~24-48h; check status with:
 Run against production (needs SUPABASE + a connected WABA per tenant in vula_whatsapp_accounts):
 
     cd vula_mind && python scripts/create_launch_templates.py                 # OTH + shared
-    cd vula_mind && python scripts/create_launch_templates.py --tenant digg-demo --set fieldops
+    cd vula_mind && python scripts/create_launch_templates.py --tenant <business> --set fieldops
 
 The body text and {{n}} placeholder counts here MUST match what the code sends — see the
 inline call-site references. If you edit the wording in Meta's console instead, keep the
@@ -80,19 +80,32 @@ SUPPLIER = [
      "UTILITY", None),
 ]
 
-# vula/api/field_ops.py  (DIGG contractor flow)
+# vula/api/field_ops.py::FIELD_TEMPLATES  (contractor flow, any business with Field Ops)
+# 24 Nov 2026: neutral names, and the bodies/placeholder counts the code actually sends (this list
+# had drifted: 1 placeholder where the code sends 3). digg-demo's approved `digg_…` copies keep
+# working until these are approved for it (field_ops.field_template).
 FIELDOPS = [
-    ("digg_task_assigned",
-     "New task assigned: {{1}}. Details in the message that follows. Reply DONE when complete.",
+    ("field_task_assigned",       # name, project, task
+     "Hi {{1}}, you've been assigned a task on project {{2}}: {{3}}. Reply DONE when complete, "
+     "or send photos as evidence. Reply with any questions and I'll help.",
      "UTILITY", None),
-    ("digg_daily_tasks",
-     "Good morning — you have {{1}} task(s) due today on {{2}}. Reply for the list.",
+    ("field_task_chase",          # name, task
+     "Hi {{1}}, just checking in on task {{2}}. Is it complete? Reply DONE to confirm, "
+     "or send photos if sign-off is required.",
      "UTILITY", None),
-    ("digg_walkthrough_approved",
-     "Your site walkthrough for {{1}} has been approved. Nothing further needed.",
+    ("field_walkthrough_start",   # name, walkthrough
+     "Hi {{1}}, please do a site walkthrough for {{2}}. Check Vula for the checklist and send "
+     "photos for each item. Reply DONE when all photos are sent.",
      "UTILITY", None),
-    ("digg_walkthrough_rejected",
-     "Your site walkthrough for {{1}} needs attention: {{2}}. Please review and resubmit.",
+    ("field_walkthrough_approved",  # walkthrough
+     "Walkthrough {{1}} has been approved. Great work!",
+     "UTILITY", None),
+    ("field_walkthrough_rejected",  # walkthrough, reason
+     "Walkthrough {{1}} needs attention: {{2}}. Please address and re-submit.",
+     "UTILITY", None),
+    ("field_daily_tasks",         # name, count
+     "Good morning {{1}}! You have {{2}} task(s) today. Check Vula for the full list. "
+     "Reply DONE when each task is complete, or send photos as evidence.",
      "UTILITY", None),
 ]
 
