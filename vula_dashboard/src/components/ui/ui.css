@@ -36,6 +36,15 @@
   border: 1px solid var(--line) !important; border-radius: var(--radius-pill); background: var(--surface-2);
   width: fit-content; justify-self: start; max-width: 100%; overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap !important; }
 .vui-tabs--pill::-webkit-scrollbar { display: none; }
+/* One compact row that slides (SectionTabs): an arrow at the side there is more on. */
+.vui-tabslide { position: relative; display: block; max-width: 100%; min-width: 0; }
+.vui-tabslide-btn { position: absolute; top: 5px; z-index: 2; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-pill);
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); display: grid; place-items: center; cursor: pointer;
+  box-shadow: 0 0 0 8px var(--surface-2), var(--shadow-sm); }   /* the ring hides the half tab beside the arrow */
+.vui-tabslide-btn--left { left: 5px; }
+.vui-tabslide-btn--right { right: 5px; }
+.vui-tabslide-btn:hover { background: var(--surface-2); }
+
 .vui-tabs--pill .vui-tab { min-height: 36px; }
 .vui-tabs--pill .vui-tab[aria-selected="true"] { background: var(--surface) !important; color: var(--ink) !important;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent); }
@@ -93,6 +102,7 @@ button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
 .vui-search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
 .vui-chips { display: flex; gap: var(--space-2); overflow-x: auto; scrollbar-width: none; max-width: 100%; }
 .vui-chips::-webkit-scrollbar { display: none; }
+@media (hover: hover) and (pointer: fine) { .vui-chips { flex-wrap: wrap; overflow-x: visible; } }   /* a mouse can't scroll a row whose scrollbar is hidden */
 .vui-chip { min-height: 36px; padding: 0 14px; border-radius: var(--radius-pill); border: 1px solid var(--line);
   background: var(--surface); color: var(--ink); font: 500 var(--fs-label)/1 var(--font-sans);
   white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }

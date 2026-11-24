@@ -75,6 +75,9 @@ export const MERCHANT_GROUPS = [
   { label: "Sell", items: [
     { id: "sell", icon: "📦", label: "Sell", subtabs: [
       { id: "orders", icon: "📦", label: "Orders" },
+      // surf and kite schools, gear hire: tab id = module id `lessons`. Second, because for a
+      // school it is the screen it lives on (only businesses with the module see it).
+      { id: "lessons", icon: "🏄", label: "Lessons" },
       { id: "till", icon: "🧾", label: "Till" },
       { id: "events", icon: "🎟️", label: "Events" },
       { id: "products", icon: "🛍️", label: "Products" },
@@ -88,8 +91,6 @@ export const MERCHANT_GROUPS = [
       { id: "bookings", icon: "📅", label: "Bookings" },
       // restaurants: tab id = module id `tables`; Specials rides on the same module
       { id: "tables", icon: "🍽️", label: "Tables" },
-      // surf and kite schools, gear hire: tab id = module id `lessons`
-      { id: "lessons", icon: "🏄", label: "Lessons" },
       { id: "specials", icon: "✨", label: "Specials" },
       // real-estate businesses only: tab id = module id `listings`, so no MERCHANT_MODMAP entry
       { id: "listings", icon: "🏠", label: "Listings" },
