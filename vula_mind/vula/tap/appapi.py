@@ -88,7 +88,14 @@ async def me(a: Actor = Depends(app_actor)) -> dict:
     tag = next((t for t in svc.repo.list_tags(a.tenant_id) if t.get("bound_id") == a.member_id
                 and t.get("status") == "active" and t.get("bound_type") != "table"), None)
     base = settings.public_base_url.rstrip("/")
-    return {"name": a.name, "role": a.role, "sees_all": a.sees_all,
+    import re as _re
+    inv = svc.repo.invoice_settings(a.tenant_id) or {}
+    accent = str(inv.get("accent_color") or "")
+    accent = accent if accent.startswith("#") else f"#{accent}"
+    logo = str(inv.get("logo_url") or "")
+    return {"brand": {"accent": accent if _re.fullmatch(r"#[0-9a-fA-F]{6}", accent) else None,
+                      "logo": logo if logo.startswith("https://") else None},
+            "name": a.name, "role": a.role, "sees_all": a.sees_all,
             "merchant": svc.repo.merchant_name(a.tenant_id), "mode": tap_api.tenant_mode(a.tenant_id),
             "tag": ({"url": f"{base}/t/{tag['code']}", "qr": f"{base}/t/{tag['code']}/qr.svg"} if tag else None),
             "push_public_key": settings.vapid_public_key or None}
@@ -404,3 +411,103 @@ async def app_table_add(tag_id: str, body: TableLine, a: Actor = Depends(app_act
 async def app_table_void(tag_id: str, item_id: str, a: Actor = Depends(app_actor)) -> dict:
     _my_table(a, tag_id)
     return {"bill": _tbl(_tables_on(a).void_item, a.tenant_id, tag_id, item_id, a.member_id)}
+
+
+# ── each waiter's numbers and the team's board (vula/tap/scoreboard.py) ───────────────────────
+@router.get("/v1/tap/app/scores")
+async def app_scores(period: str = "today", a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own numbers (their tips included) and the shared board (no tips)."""
+    from vula.tap.scoreboard import POINTS_RULE, ScoreError
+    desk = tap_api.get_service().scores
+    try:
+        tips = desk.tips_on_board(a.tenant_id)          # only when the owner switched it on
+        return {"me": desk.mine(a.tenant_id, a.member_id, period),
+                "board": desk.board(a.tenant_id, period, with_tips=tips), "tips_on_board": tips,
+                "points_rule": POINTS_RULE}
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/app/income")
+async def app_income(days: int = 30, a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own earnings, day by day. Nobody else's."""
+    from vula.tap.scoreboard import ScoreError
+    try:
+        return tap_api.get_service().scores.income(a.tenant_id, a.member_id, days)
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── my shifts and when I can work (vula/tap/shifts.py). Everything here is the caller's own. ──
+class WeeklyIn(BaseModel):
+    weekday: int = Field(ge=0, le=6)
+    start: str = Field(max_length=5)
+    end: str = Field(max_length=5)
+
+
+class TimeOffIn(BaseModel):
+    from_date: str = Field(max_length=10)
+    to_date: Optional[str] = Field(default=None, max_length=10)
+    note: str = Field(default="", max_length=80)
+
+
+class CantIn(BaseModel):
+    sick: bool = False
+    reason: str = Field(default="", max_length=120)
+
+
+def _shift(fn, *args, **kw):
+    from vula.tap.shifts import ShiftError
+    try:
+        return fn(*args, **kw)
+    except ShiftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+async def _shift_async(coro):
+    from vula.tap.shifts import ShiftError
+    try:
+        return await coro
+    except ShiftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/app/shifts")
+async def app_shifts(a: Actor = Depends(app_actor)) -> dict:
+    return tap_api.get_service().shifts.mine(a.tenant_id, a.member_id)
+
+
+@router.post("/v1/tap/app/shifts/{shift_id}/confirm")
+async def app_shift_confirm(shift_id: str, a: Actor = Depends(app_actor)) -> dict:
+    return {"shift": _shift(tap_api.get_service().shifts.confirm, a.tenant_id, shift_id, a.member_id)}
+
+
+@router.post("/v1/tap/app/shifts/{shift_id}/cant")
+async def app_shift_cant(shift_id: str, body: CantIn, a: Actor = Depends(app_actor)) -> dict:
+    out = await _shift_async(tap_api.get_service().shifts.cant(a.tenant_id, shift_id, a.member_id,
+                                                              sick=body.sick, reason=body.reason))
+    _audit(a, "shift.sick" if body.sick else "shift.decline", shift_id=shift_id)
+    return {"shift": out}
+
+
+@router.post("/v1/tap/app/shifts/{shift_id}/take")
+async def app_shift_take(shift_id: str, a: Actor = Depends(app_actor)) -> dict:
+    out = await _shift_async(tap_api.get_service().shifts.take(a.tenant_id, shift_id, a.member_id))
+    _audit(a, "shift.take", shift_id=shift_id)
+    return {"shift": out}
+
+
+@router.post("/v1/tap/app/availability/weekly")
+async def app_avail_weekly(body: WeeklyIn, a: Actor = Depends(app_actor)) -> dict:
+    return _shift(tap_api.get_service().shifts.add_weekly, a.tenant_id, a.member_id, body.weekday, body.start, body.end)
+
+
+@router.post("/v1/tap/app/availability/off")
+async def app_avail_off(body: TimeOffIn, a: Actor = Depends(app_actor)) -> dict:
+    return _shift(tap_api.get_service().shifts.add_time_off, a.tenant_id, a.member_id, body.from_date,
+                  body.to_date or body.from_date, body.note)
+
+
+@router.delete("/v1/tap/app/availability/{row_id}")
+async def app_avail_remove(row_id: str, a: Actor = Depends(app_actor)) -> dict:
+    return _shift(tap_api.get_service().shifts.remove_availability, a.tenant_id, a.member_id, row_id)
