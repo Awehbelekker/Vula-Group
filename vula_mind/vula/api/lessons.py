@@ -10,6 +10,16 @@ vula/api/lessons.py — lessons and gear hire the business confirms by hand
     POST    …/{t}/admin/lessons/{id}/decline    {reason} — the customer is told
     POST    …/{t}/admin/lessons/{id}/status     completed | no_show | cancelled
     GET     …/{t}/admin/lessons/conditions?date=  the forecast for the spot, hour by hour
+
+The customer app (`public`, mounted at /v1/flow; the dashboard's /flow/<business> page). No login:
+a request the phone made is opened only by the signed token it was given back.
+
+    GET  /v1/flow/{shop}                    the business, its look, its lessons, gear and prices
+    GET  /v1/flow/{shop}/conditions?date=   the forecast for its spot
+    POST /v1/flow/{shop}/quote              what a request would cost (writes nothing)
+    POST /v1/flow/{shop}/requests           ask for a lesson or gear → the request and its token
+    POST /v1/flow/{shop}/mine               {tokens} → those requests as they are now
+    POST /v1/flow/{shop}/cancel             {token} → cancelled
 """
 from __future__ import annotations
 
@@ -21,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Request
 from vula.commerce import lessons
 
 router = APIRouter(tags=["lessons"])             # mounted at /v1/commerce
+public = APIRouter(tags=["lessons-public"])      # mounted at /v1/flow — the customer app (/flow/<business>)
 
 
 def _refuse(exc: lessons.LessonError) -> HTTPException:
@@ -143,3 +154,113 @@ async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str 
         return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True}
     return {"spot": spot, "date": day.isoformat(),
             "hours": conditions.day_view(hours, sport if sport in lessons.SPORTS else "surf")}
+
+
+# ── the customer app ──────────────────────────────────────────────────────────────────────────
+_RECENT: dict = {}
+
+
+def _throttled(key: str, per_minute: int) -> bool:
+    import time
+    from collections import deque
+    now = time.monotonic()
+    q = _RECENT.setdefault(key, deque())
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= per_minute:
+        return True
+    q.append(now)
+    if len(_RECENT) > 5000:
+        _RECENT.clear()
+    return False
+
+
+def _ip(request: Request) -> str:
+    return (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or \
+        (request.client.host if request.client else "")
+
+
+def _shop(shop: str) -> str:
+    """The business behind an app address (its id, with - or _) — the same 404 for one that
+    doesn't exist, is paused, or isn't taking lesson requests."""
+    import re
+    from vula.api import tenants
+    label = str(shop or "").strip().lower()
+    if re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,62}", label):
+        for cand in dict.fromkeys((label, label.replace("-", "_"))):
+            cfg = tenants.get_config(cand) or {}
+            if cfg.get("tenant_id") == cand and tenants.is_active(cand) and lessons.settings(cand)["enabled"]:
+                return cand
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _limit(request: Request, what: str, per_minute: int) -> None:
+    if _throttled(f"{what}|{_ip(request)}", per_minute):
+        raise HTTPException(status_code=429, detail="Too many tries. Wait a minute and try again.")
+
+
+@public.get("/{shop}")
+async def flow_shop(shop: str, request: Request) -> dict:
+    from vula.api.commerce import public_brand
+    _limit(request, "shop", 60)
+    tenant_id = _shop(shop)
+    brand = await public_brand(tenant_id)
+    digits = "".join(ch for ch in str(brand.get("whatsapp") or "") if ch.isdigit())
+    if len(digits) == 10 and digits.startswith("0"):
+        digits = "27" + digits[1:]
+    return {"shop": tenant_id.replace("_", "-"), "name": brand.get("name"), "partner": brand.get("partner"),
+            "brand": {k: brand.get(k) for k in ("accent_color", "secondary_color", "ink_color", "logo_url", "tagline")},
+            "whatsapp": digits if 9 <= len(digits) <= 15 else None,
+            **lessons.public_settings(lessons.settings(tenant_id))}
+
+
+@public.get("/{shop}/conditions")
+async def flow_conditions(shop: str, request: Request, date: Optional[str] = None) -> dict:
+    _limit(request, "cond", 30)
+    out = await conditions_for(_shop(shop), date)
+    if out.get("spot"):
+        out["spot"] = {"name": out["spot"]["name"]}
+    return out
+
+
+@public.post("/{shop}/quote")
+async def flow_quote(shop: str, body: dict, request: Request) -> dict:
+    _limit(request, "quote", 60)
+    return await quote(_shop(shop), body)
+
+
+@public.post("/{shop}/requests")
+async def flow_request(shop: str, body: dict, request: Request) -> dict:
+    """A public endpoint that makes a request the team must answer: throttled per address, and one
+    number can have at most five open."""
+    _limit(request, "ask", 6)
+    tenant_id = _shop(shop)
+    b = body or {}
+    try:
+        if len(lessons.upcoming_for(tenant_id, str(b.get("phone") or ""))) >= 5:
+            raise lessons.LessonError("You already have five requests open. Message us to make another.", 409)
+        made = await lessons.request(
+            tenant_id, **_wanted(b), wanted_date=b.get("wanted_date"), wanted_part=str(b.get("wanted_part") or "any"),
+            level=str(b.get("level") or ""), name=b.get("name"), phone=b.get("phone"), notes=b.get("notes") or "",
+            channel="app")
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+    return {"request": lessons.for_customer(made)}
+
+
+@public.post("/{shop}/mine")
+async def flow_mine(shop: str, body: dict, request: Request) -> dict:
+    _limit(request, "mine", 30)
+    tokens = (body or {}).get("tokens")
+    if not isinstance(tokens, list) or not all(isinstance(t, str) for t in tokens):
+        raise HTTPException(status_code=400, detail="tokens must be a list.")
+    return {"requests": lessons.by_tokens(_shop(shop), tokens)}
+
+
+@public.post("/{shop}/cancel")
+async def flow_cancel(shop: str, body: dict, request: Request) -> dict:
+    _limit(request, "cancel", 10)
+    done = await lessons.cancel_by_token(_shop(shop), (body or {}).get("token"))
+    if not done or done["status"] != "cancelled":
+        raise HTTPException(status_code=409, detail="That request can't be cancelled here. Message us.")
+    return {"request": done}

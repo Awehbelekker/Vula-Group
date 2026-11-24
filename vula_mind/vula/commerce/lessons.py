@@ -715,3 +715,77 @@ async def run_forever(interval_s: int = 1800) -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("lesson reminders run failed: %s", exc)
         await asyncio.sleep(interval_s)
+
+
+# ── the customer app (vula/api/lessons.py `public`, the dashboard's /flow/ page) ───────────────
+def _token_secret() -> str:
+    from vula.commerce import order_slip
+    return "lesson-request:" + order_slip._secret()
+
+
+def token_for(request_id: str) -> str:
+    """What the customer's phone keeps for a request it made: only this opens or cancels it."""
+    from vula.tap.receipt import make_token
+    return make_token(_token_secret(), str(request_id), 0)
+
+
+def id_from_token(token: Any) -> Optional[str]:
+    from vula.tap.receipt import read_token
+    parsed = read_token(_token_secret(), str(token or "")[:300])
+    return parsed[0] if parsed else None
+
+
+def public_settings(st: dict) -> dict:
+    """What a customer may see of the settings: the lessons, the gear, their prices, the spot."""
+    return {"lessons": st["lessons"], "hire": [{**g, "durations": hire_durations(g)} for g in st["hire"]],
+            "spot": {"name": st["spot"]["name"]} if st.get("spot") else None,
+            "form_url": st.get("form_url"), "pay_note": st.get("pay_note"), "note": st.get("note"),
+            "levels": LEVELS, "parts": PARTS, "durations": DURATIONS}
+
+
+def _for_customer(r: dict) -> dict:
+    """A request as its own customer sees it — never who confirmed it or the team's note."""
+    o = _out(r)
+    return {"token": token_for(r["id"]), "ref": o["ref"], "kind": o["kind"], "item_name": o["item_name"],
+            "summary": o["summary"], "wanted": o["wanted"], "wanted_date": o["wanted_date"], "when": o["when"],
+            "starts_at": o.get("starts_at"), "status": o["status"], "amount_cents": o["amount_cents"],
+            "amount": o["amount"], "quote_lines": o.get("quote_lines") or [],
+            "coach": (o.get("coach_name") or "").split(" ")[0] or None,
+            "decline_reason": o.get("decline_reason") if o["status"] == "declined" else None}
+
+
+def for_customer(r: dict) -> dict:
+    return _for_customer(r)
+
+
+def by_tokens(tenant_id: str, tokens: List[str]) -> List[dict]:
+    """The requests these tokens open, for this business only; a token that opens nothing is left out."""
+    ids = [i for i in dict.fromkeys(id_from_token(t) for t in tokens[:20]) if i]
+    if not ids:
+        return []
+    rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).in_("id", ids)
+            .limit(20).execute().data or [])
+    rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return [_for_customer(r) for r in rows]
+
+
+async def cancel_by_token(tenant_id: str, token: Any) -> Optional[dict]:
+    """The customer cancels the request their token opens. The team hears when it was confirmed."""
+    rid = id_from_token(token)
+    if not rid:
+        return None
+    try:
+        cur = _get(tenant_id, rid)
+        was = cur["status"]
+        out = set_status(tenant_id, rid, "cancelled")
+    except LessonError:
+        return None
+    if was == "confirmed":
+        try:
+            from vula.integrations.notify import notify_team
+            await notify_team(tenant_id, "lesson_request",
+                              f"❌ {out['customer_name']} cancelled {out['summary']} on {when_text(cur['starts_at'])} ({out['ref']}).",
+                              idem_key=f"lesson_cancelled:{rid}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cancellation not sent to the team (%s): %s", tenant_id, exc)
+    return _for_customer(_get(tenant_id, rid))

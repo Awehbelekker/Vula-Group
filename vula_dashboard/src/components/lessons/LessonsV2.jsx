@@ -5,7 +5,7 @@
  * server's; a price typed here is read as written (lib/money.randToCents), never worked out.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Plus, Settings, Trash2, Waves, X } from 'lucide-react'
+import { Check, Copy, ExternalLink, Plus, Settings, Trash2, Waves, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import { formatMoney, randToCents } from '../../lib/money'
 import { Button, Card, EmptyState, ErrorCard, Field, Input, PageHeader, PillTabs, Select, Sheet, Skeleton, StatusChip, Textarea, confirmDialog, promptDialog, toast } from '../ui/index.jsx'
@@ -17,6 +17,8 @@ const DURS = ['2h', '4h', '1d', '2d', '3d']
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const rand = (cents) => cents === null || cents === undefined ? '' : String(cents / 100)
 const cents = (text) => String(text ?? '').trim() === '' ? null : randToCents(text)
+// the customer app (src/flow/): a page customers can add to their phone, at /flow/<business>
+const appLink = (tenantId) => `${window.location.origin}/flow/${String(tenantId).replace(/_/g, '-')}`
 const PART_TIME = { morning: '09:00', midday: '12:00', afternoon: '15:00', any: '09:00' }
 
 function Conditions({ tenantId }) {
@@ -276,6 +278,11 @@ export default function LessonsV2({ tenantId }) {
           Add your lessons, your gear and their prices. Customers then ask on WhatsApp, get your price, and you confirm the time and the coach.
         </EmptyState>
       ) : (<>
+        <Card className="vtb-link">
+          <span className="vtb-sub">Your customers' app</span><code>{appLink(tenantId)}</code>
+          <span className="vtb-actions"><Button size="sm" variant="secondary" Icon={Copy} onClick={() => navigator.clipboard?.writeText(appLink(tenantId)).then(() => toast('Copied'), () => toast("Couldn't copy.", 'danger'))}>Copy</Button>
+            <a className="vtb-a" href={appLink(tenantId)} target="_blank" rel="noreferrer">Open<ExternalLink size={14} aria-hidden="true" /></a></span>
+        </Card>
         <Conditions tenantId={tenantId} />
         <PillTabs label="Requests" tabs={[{ id: 'open', label: `Open${data.waiting ? ` · ${data.waiting} to confirm` : ''}` }, { id: 'past', label: 'Earlier' }]} active={tab} onChange={setTab} />
         {rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (

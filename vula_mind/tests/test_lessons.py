@@ -460,3 +460,83 @@ def test_a_partners_business_wears_its_colours_until_it_sets_its_own(monkeypatch
     plain = run(commerce.public_brand("other"))
     assert plain["accent_color"] is None and plain["partner"] is None                          # anyone else: Vula's defaults
     assert tenants.partner_brand(None) == {} and tenants.partner_brand("other") == {}
+
+
+# ── the customer app: no login, a signed token per request ────────────────────────────────────
+class _Req:
+    def __init__(self, ip="41.0.0.1"):
+        self.headers = {"x-forwarded-for": ip}
+        self.client = None
+
+
+def test_the_customer_app_shows_a_business_only_when_it_takes_requests(world, monkeypatch):
+    from vula.api import commerce
+
+    async def brand(tid):
+        return {"name": "Big Bay Surf", "partner": {"id": "flowcrew", "name": "FlowCrew"}, "accent_color": "#2196F3",
+                "whatsapp": "082 123 0000", "logo_url": None}
+
+    monkeypatch.setattr(commerce, "public_brand", brand)
+    monkeypatch.setattr(tenants, "get_config", lambda tid, **k: {"tenant_id": tid} if tid in (TID, "other") else {})
+    lessons_api._RECENT.clear()
+    out = run(lessons_api.flow_shop("big-bay-surf", _Req()))                                  # the web-safe spelling
+    assert out["shop"] == "big-bay-surf" and out["name"] == "Big Bay Surf" and out["whatsapp"] == "27821230000"
+    assert out["partner"]["name"] == "FlowCrew" and out["lessons"][0]["id"] == "surf" and out["spot"] == {"name": "Big Bay"}
+    assert out["hire"][0]["durations"] == ["2h", "4h", "1d", "2d", "3d", "7d"] and "lat" not in str(out["spot"])
+    for missing in ("other", "nobody", "../etc", "BIG BAY"):
+        with pytest.raises(HTTPException) as e:
+            run(lessons_api.flow_shop(missing, _Req()))
+        assert e.value.status_code == 404
+
+
+def test_a_request_from_the_app_is_opened_only_by_its_token(world, monkeypatch):
+    monkeypatch.setattr(tenants, "get_config", lambda tid, **k: {"tenant_id": tid} if tid == TID else {})
+    lessons_api._RECENT.clear()
+    body = {"kind": "lesson", "item_id": "surf", "format": "group", "people": 2, "extras": {"wetsuit": 2}, "level": "beginner",
+            "wanted_date": _day(), "wanted_part": "morning", "name": "Thandi Mokoena", "phone": "0821234567"}
+    assert run(lessons_api.flow_quote("big_bay_surf", body, _Req()))["quote_cents"] == 80000
+    made = run(lessons_api.flow_request("big_bay_surf", body, _Req()))["request"]
+    row = world.db.rows["commerce_lesson_requests"][0]
+    assert row["channel"] == "app" and row["status"] == "requested" and made["amount"] == "R800" and made["status"] == "requested"
+    assert "customer_phone" not in made and "id" not in made and "confirmed_by" not in made
+    assert lessons.id_from_token(made["token"]) == row["id"] and world.team[0][0] == "lesson_request"
+    other = _ask(phone="0835550000", name="Sipho Dlamini")
+    mine = run(lessons_api.flow_mine("big_bay_surf", {"tokens": [made["token"], "forged." + "0" * 20, made["token"][:-2] + "zz",
+                                                                 row["id"], other["id"]]}, _Req()))["requests"]
+    assert [m["ref"] for m in mine] == [made["ref"]]                                          # ids and forgeries open nothing
+    run(lessons.confirm(TID, row["id"], starts_at=_at(1, 9), coach_id="m1"))
+    seen = run(lessons_api.flow_mine("big_bay_surf", {"tokens": [made["token"]]}, _Req()))["requests"][0]
+    assert seen["status"] == "confirmed" and seen["coach"] == "Shane" and "at 09:00" in seen["when"]
+    world.team.clear()
+    with pytest.raises(HTTPException) as e:
+        run(lessons_api.flow_cancel("big_bay_surf", {"token": lessons.token_for(other["id"])[:-3] + "abc"}, _Req()))
+    assert e.value.status_code == 409 and world.db.rows["commerce_lesson_requests"][1]["status"] == "requested"
+    done = run(lessons_api.flow_cancel("big_bay_surf", {"token": made["token"]}, _Req()))["request"]
+    assert done["status"] == "cancelled" and "cancelled" in world.team[0][1]
+    with pytest.raises(HTTPException):
+        run(lessons_api.flow_cancel("big_bay_surf", {"token": made["token"]}, _Req()))        # already cancelled
+    with pytest.raises(HTTPException) as e:
+        run(lessons_api.flow_mine("big_bay_surf", {"tokens": "all"}, _Req()))
+    assert e.value.status_code == 400
+
+
+def test_the_customer_app_is_throttled_and_caps_open_requests(world, monkeypatch):
+    monkeypatch.setattr(tenants, "get_config", lambda tid, **k: {"tenant_id": tid} if tid == TID else {})
+    lessons_api._RECENT.clear()
+    body = {"kind": "hire", "item_id": "wetsuit", "duration": "1d", "people": 1, "wanted_date": _day(), "name": "Maria Lopez",
+            "phone": "0845551111"}
+    for i in range(5):
+        run(lessons_api.flow_request("big_bay_surf", body, _Req(f"41.0.0.{i}")))
+    with pytest.raises(HTTPException) as e:
+        run(lessons_api.flow_request("big_bay_surf", body, _Req("41.0.1.1")))
+    assert e.value.status_code == 409 and "five requests open" in e.value.detail
+    lessons_api._RECENT.clear()
+    other = {**body, "phone": "0845552222"}
+    for _ in range(6):
+        try:
+            run(lessons_api.flow_request("big_bay_surf", other, _Req("41.9.9.9")))
+        except HTTPException as exc:
+            assert exc.status_code == 409
+    with pytest.raises(HTTPException) as e:
+        run(lessons_api.flow_request("big_bay_surf", other, _Req("41.9.9.9")))
+    assert e.value.status_code == 429
