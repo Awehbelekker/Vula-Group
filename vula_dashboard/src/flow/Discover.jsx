@@ -7,6 +7,10 @@
  * card (the from-price, the distance, the conditions) is the server's.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { myAccount } from "./account";
+import AccountCard from "./AccountCard.jsx";
+
+const STATE = { requested: "Waiting for the school", confirmed: "Confirmed", declined: "Declined", cancelled: "Cancelled", completed: "Done", no_show: "Missed" };
 
 const SPORT = { surf: "Surf", sup: "SUP", kite: "Kite", skate: "Skate", other: "Other" };
 const RATING = { good: "Good now", marginal: "Marginal now", poor: "Poor now" };
@@ -63,7 +67,14 @@ function Card({ s }) {
   );
 }
 
-export default function Discover({ api }) {
+export default function Discover({ api, acct, onSignedOut }) {
+  const [mine, setMine] = useState([]);           // the signed-in customer's bookings, at every school
+  useEffect(() => {
+    let live = true;
+    if (!acct) { setMine([]); return undefined; }
+    myAccount(acct.token).then((a) => live && setMine(a.requests.filter((r) => r.status === "requested" || r.status === "confirmed"))).catch(() => {});
+    return () => { live = false; };
+  }, [acct]);
   const [d, setD] = useState(null);
   const [error, setError] = useState("");
   const [at, setAt] = useState(null);             // {lat, lng} once the customer asked for "near me"
@@ -112,6 +123,12 @@ export default function Discover({ api }) {
       {d && view === "map" && <SchoolMap schools={shown} />}
       {d && view === "list" && shown.map((s) => <Card key={s.shop} s={s} />)}
       {d && shown.length === 0 && <section className="fc-card"><p className="fc-sub">{all.length === 0 ? "No schools are listed yet. If your school sent you a link, open that." : "No school matches that. Try another town or clear the search."}</p></section>}
+      {mine.length > 0 && <section className="fc-card">
+        <h3>Your bookings</h3>
+        <ul className="fc-lines">{mine.map((r) => (
+          <li key={r.token}><a className="fc-link" href={`/flow/${r.shop}?via=find`}>{r.school}</a><span className="fc-sub">{r.summary} · {r.when || `asked for ${r.wanted}`} · {STATE[r.status] || r.status}</span></li>))}</ul>
+      </section>}
+      <AccountCard acct={acct} onSignedOut={onSignedOut} />
       <p className="fc-foot"><a className="fc-link" href="/signin">Run a school? Sign in</a></p>
       <p className="fc-foot">Powered by FlowCrew<img src="/partners/flowcrew-mark.png" alt="" /></p>
     </main>

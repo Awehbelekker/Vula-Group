@@ -1,4 +1,4 @@
--- 306_staff_targets.sql — the target a team member sets for themselves (vula/tap/scoreboard.py, 24 Nov 2026).
+-- 307_staff_targets.sql — the target a team member sets for themselves (vula/tap/scoreboard.py, 24 Nov 2026).
 --
 -- The staff app's home shows what a person has earned against a target of their own. It was kept
 -- on the phone only, so a new phone lost it. One row per person: a day or a week target in cents.

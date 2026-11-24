@@ -162,7 +162,7 @@ class ScoreDesk:
                 "streak_days": self._streak(r["days"]), "badges": me["badges"] if me else []}
 
     def target(self, tenant_id: str, member_id: str) -> Optional[dict]:
-        """The person's own target, or None. Never raises: before migration 306 (or with the
+        """The person's own target, or None. Never raises: before migration 307 (or with the
         database away) there is simply none, and the app keeps the one on the phone."""
         try:
             t = self.svc.repo.get_target(tenant_id, member_id)

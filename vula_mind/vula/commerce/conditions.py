@@ -186,3 +186,140 @@ def day_view(hours: Dict[int, dict], sport: str = "surf", level: str = "") -> Li
     """The daylight hours (06:00–19:00) with their figures, the line and the rating — for a screen."""
     return [{"hour": f"{h:02d}:00", **hours[h], "text": describe(hours[h]), **rate(sport, level, hours[h])}
             for h in sorted(hours) if 6 <= h <= 19]
+
+
+# ── the day in plain words, and how far the forecasts agree ────────────────────────────────────
+# Three weather services' own forecasts of the wind, asked for in one request. Nothing is scraped:
+# these are the forecasts the wind maps draw from, read from the service that publishes them.
+MODELS = (("ecmwf_ifs025", "ECMWF (Europe)"), ("gfs_seamless", "GFS (United States)"), ("icon_seamless", "ICON (Germany)"))
+PARTS = (("Morning", 6, 10), ("Midday", 10, 14), ("Afternoon", 14, 18))
+_SPORT_WORDS = {"surf": "a surf lesson", "sup": "paddling", "kite": "kiting"}
+_MODEL_CACHE: Dict[Tuple[float, float, str], Tuple[float, Dict[str, Dict[int, float]]]] = {}
+_AGREE_KN = 5.0          # the forecasts' average wind for a part of the day within this: they agree
+
+
+async def wind_models(lat: float, lng: float, day: date) -> Dict[str, Dict[int, float]]:
+    """{forecast's name: {hour: wind in knots}} for the day. Empty when it couldn't be read —
+    the summary then says how many forecasts it has, it never fails for this."""
+    key = (round(float(lat), 3), round(float(lng), 3), day.isoformat())
+    hit = _MODEL_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < _TTL:
+        return hit[1]
+    _, weather_host, api_key = _hosts()
+    params = {"latitude": key[0], "longitude": key[1], "timezone": "Africa/Johannesburg", "start_date": key[2],
+              "end_date": key[2], "hourly": "wind_speed_10m", "wind_speed_unit": "kn",
+              "models": ",".join(m for m, _ in MODELS)}
+    if api_key:
+        params["apikey"] = api_key
+    try:
+        answer = await _read(f"{weather_host}/v1/forecast", params)
+    except Exception as exc:  # noqa: BLE001 — the comparison is an extra
+        log.info("forecast comparison unavailable: %s", type(exc).__name__)
+        return {}
+    out = read_models(answer)
+    if out:
+        _MODEL_CACHE[key] = (time.monotonic(), out)
+    return out
+
+
+def read_models(answer: dict) -> Dict[str, Dict[int, float]]:
+    hourly = (answer or {}).get("hourly") or {}
+    times = hourly.get("time") or []
+    out: Dict[str, Dict[int, float]] = {}
+    for model, name in MODELS:
+        values = hourly.get(f"wind_speed_10m_{model}")
+        if not isinstance(values, list):
+            continue
+        hours: Dict[int, float] = {}
+        for stamp, value in zip(times, values):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    hours[int(str(stamp)[11:13])] = float(value)
+                except ValueError:
+                    continue
+        if hours:
+            out[name] = hours
+    return out
+
+
+def wind_words(knots: float) -> str:
+    return ("hardly any wind" if knots < 5 else "a light wind" if knots < 11 else "a moderate wind" if knots < 17
+            else "a strong wind" if knots < 25 else "a very strong wind")
+
+
+def swell_words(metres: float) -> str:
+    return ("a very small swell" if metres < 0.5 else "a small swell" if metres < 1.2 else "a medium swell" if metres < 2.0
+            else "a solid swell" if metres < 3.0 else "a big swell")
+
+
+def _mean(values: List[float]) -> Any:
+    return sum(values) / len(values) if values else None
+
+
+def _kmh(knots: float) -> int:
+    return int(knots * 1.852 + 0.5)
+
+
+def brief(hours: Dict[int, dict], models: Dict[str, Dict[int, float]], sports: List[str], level: str = "") -> dict:
+    """The day for someone who doesn't read wind maps: for each part of the day the wind and the
+    swell in words (with the figures), a rating per sport the school teaches, the best part of the
+    day, and whether the forecasts agree. Every word is chosen in code from the forecast's figures."""
+    sports = [s for s in sports if s in _SPORT_WORDS] or ["surf"]
+    parts: List[dict] = []
+    for name, start, end in PARTS:
+        inside = [hours[h] for h in range(start, end) if h in hours]
+        if not inside:
+            continue
+        wind = _mean([h["wind_kn"] for h in inside if h.get("wind_kn") is not None])
+        gust = max([h["gust_kn"] for h in inside if h.get("gust_kn") is not None], default=None)
+        wave = _mean([h["wave_m"] for h in inside if h.get("wave_m") is not None])
+        period = _mean([h["period_s"] for h in inside if h.get("period_s") is not None])
+        rain = max([h["rain_pct"] for h in inside if h.get("rain_pct") is not None], default=None)
+        middle = inside[len(inside) // 2]
+        bits = []
+        if wind is not None:
+            s = wind_words(wind)
+            if wind >= 5 and middle.get("wind_from") is not None:
+                s += f" from the {compass(middle['wind_from'])}"
+            bits.append(f"{s} ({wind:.0f} kn, about {_kmh(wind)} km/h)")
+        if wave is not None:
+            bits.append(f"{swell_words(wave)} out at sea ({wave:.1f} m)")
+        if rain is not None and rain >= 40:
+            bits.append("rain likely" if rain >= 60 else "rain possible")
+        average = {"wind_kn": wind, "gust_kn": gust, "wave_m": wave, "period_s": period, "rain_pct": rain}
+        ratings = {s: rate(s, level, average) for s in sports}
+        seen = [_mean([m[h] for h in range(start, end) if h in m]) for m in models.values()]
+        seen = [v for v in seen if v is not None]
+        part = {"part": name, "from": f"{start:02d}:00", "to": f"{end:02d}:00",
+                "text": (", ".join(bits)[:1].upper() + ", ".join(bits)[1:]) if bits else "No forecast",
+                "ratings": {s: r["rating"] for s, r in ratings.items()},
+                "reasons": {s: r["reasons"] for s, r in ratings.items() if r["reasons"]}}
+        if len(seen) >= 2:
+            part["wind_range_kn"] = [round(min(seen)), round(max(seen))]
+            part["agree"] = max(seen) - min(seen) <= _AGREE_KN
+        parts.append(part)
+    if not parts:
+        return {"parts": [], "headline": "", "sources": [], "confidence": ""}
+    order = {"good": 0, "marginal": 1, "poor": 2}
+    lines = []
+    for s in sports:
+        best = min(parts, key=lambda p: order[p["ratings"][s]])     # the earliest of the best
+        verdict = best["ratings"][s]
+        what = _SPORT_WORDS[s]
+        if verdict == "poor":
+            why = "; ".join(best["reasons"].get(s) or [])
+            lines.append(f"Not a day for {what}" + (f" ({why})" if why else "") + ".")
+        elif all(p["ratings"][s] == verdict for p in parts) and len(parts) > 1:
+            lines.append(f"{'Good' if verdict == 'good' else 'Possible'} for {what} all day.")
+        else:
+            lines.append(f"{'Best' if verdict == 'good' else 'Possible'} for {what} {'around midday' if best['part'] == 'Midday' else 'in the ' + best['part'].lower()}.")
+    compared = [p for p in parts if "agree" in p]
+    if not compared:
+        confidence = "From one forecast."
+    elif all(p["agree"] for p in compared):
+        confidence = f"The {len(models)} forecasts agree on the wind."
+    else:
+        off = next(p for p in compared if not p["agree"])
+        confidence = (f"The forecasts differ on the {off['part'].lower()} wind ({off['wind_range_kn'][0]} to "
+                      f"{off['wind_range_kn'][1]} kn), so look again nearer the time.")
+    return {"headline": " ".join(lines), "parts": parts, "confidence": confidence, "sources": sorted(models)}

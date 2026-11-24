@@ -239,7 +239,7 @@ class SupabaseRepo:
         return all_rows(lambda: self.db.table("kb_ledger_lines").select("id,kind,cents,created_at")
                         .eq("tenant_id", tenant_id).eq("party_id", party_id).gte("created_at", since_iso))
 
-    # a person's own target (migration 306)
+    # a person's own target (migration 307)
     def get_target(self, tenant_id: str, member_id: str) -> Optional[dict]:
         rows = (self.db.table("kb_staff_targets").select("period,cents").eq("tenant_id", tenant_id)
                 .eq("member_id", member_id).limit(1).execute().data or [])

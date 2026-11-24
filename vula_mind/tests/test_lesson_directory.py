@@ -176,3 +176,69 @@ def test_a_partners_business_keeps_its_own_look_apart_from_the_partners(monkeypa
     kit.update(accent_color="#2C5545")
     b = run(commerce_api.public_brand("x"))
     assert b["partner_look"] is None and b["own_look"] is None and b["accent_color"] == "#2C5545"
+
+
+def test_a_signed_in_customer_sees_only_their_own_requests_everywhere(world, monkeypatch):
+    world.db.rows["commerce_lesson_requests"] = []
+    monkeypatch.setattr(tenants, "display_name", lambda tid: {A: "Big Bay Surf", B: "Muizenberg Surf"}.get(tid, ""))
+
+    async def quiet(*a, **k):
+        return 0
+    monkeypatch.setattr("vula.integrations.notify.notify_team", quiet)
+    who = {"token": "t-ann"}
+
+    async def verify(token):
+        return {"t-ann": {"id": "u-ann"}, "t-ben": {"id": "u-ben"}}.get(token)
+    monkeypatch.setattr("vula.api.master_auth._verify_jwt", verify)
+
+    class Req:
+        client = None
+
+        def __init__(self, token=""):
+            self.headers = {"x-forwarded-for": "41.0.0.8", **({"authorization": f"Bearer {token}"} if token else {})}
+
+    day = (lessons._now().astimezone(lessons.SAST).date() + __import__("datetime").timedelta(days=2)).isoformat()
+    ask = {"kind": "lesson", "item_id": "surflesson", "people": 1, "wanted_date": day, "name": "Ann Smith", "phone": "0821112222"}
+    one = run(lessons_api.flow_request("big-bay-surf", dict(ask), Req("t-ann")))["request"]
+    two = run(lessons_api.flow_request("muizenberg-surf", dict(ask), Req("t-ann")))["request"]
+    run(lessons_api.flow_request("big-bay-surf", {**ask, "name": "Ben Jones", "phone": "0823334444"}, Req("t-ben")))
+    run(lessons_api.flow_request("big-bay-surf", {**ask, "name": "No Login", "phone": "0825556666"}, Req()))
+    rows = world.db.rows["commerce_lesson_requests"]
+    assert [r.get("customer_user_id") for r in rows] == ["u-ann", "u-ann", "u-ben", None]      # no login: no column written
+    assert "customer_user_id" not in rows[3]
+    mine = run(lessons_api.flow_account(Req("t-ann")))
+    assert {r["token"] for r in mine["requests"]} == {one["token"], two["token"]}              # hers, at both schools
+    assert {r["school"] for r in mine["requests"]} == {"Big Bay Surf", "Muizenberg Surf"} and mine["name"] == "Ann Smith"
+    assert all("customer_user_id" not in r and "customer_phone" not in r for r in mine["requests"])
+    for bad in (Req(), Req("forged")):
+        with pytest.raises(HTTPException) as e:
+            run(lessons_api.flow_account(bad))
+        assert e.value.status_code == 401
+    world.active[B] = False                                                                    # a paused school's requests drop out
+    assert {r["shop"] for r in run(lessons_api.flow_account(Req("t-ann")))["requests"]} == {"big-bay-surf"}
+
+
+def test_a_signed_in_request_still_goes_in_where_the_account_column_is_missing(world, monkeypatch):
+    world.db.rows["commerce_lesson_requests"] = []
+
+    async def quiet(*a, **k):
+        return 0
+    monkeypatch.setattr("vula.integrations.notify.notify_team", quiet)
+    real = world.db.table
+
+    def table(name):
+        t = real(name)
+        ins = t.insert
+
+        def insert(row, **k):
+            if "customer_user_id" in row:
+                raise RuntimeError('column "customer_user_id" does not exist')
+            return ins(row, **k)
+        t.insert = insert
+        return t
+    monkeypatch.setattr(world.db, "table", table)
+    day = (lessons._now().astimezone(lessons.SAST).date() + __import__("datetime").timedelta(days=2)).isoformat()
+    made = run(lessons.request(A, kind="lesson", item_id="surflesson", wanted_date=day, name="Ann Smith", phone="0821112222",
+                               channel="app", customer_user_id="u-ann"))
+    assert made["ref"].startswith("L-") and len(world.db.rows["commerce_lesson_requests"]) == 1
+    assert "customer_user_id" not in world.db.rows["commerce_lesson_requests"][0]
