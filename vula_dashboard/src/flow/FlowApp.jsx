@@ -47,6 +47,23 @@ const ICONS = {
 };
 const Icon = ({ name }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[name]}</svg>;
 
+/** A live camera near the spot. It is its owner's: by default a button to the owner's page; played
+ * here only where the owner agreed (the server sends a player address only then), and only once
+ * the customer asks, so nobody's data is spent on video they didn't want. */
+function Camera({ cam }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="fc-cam">
+      <p className="fc-sub"><b>{cam.name}</b> · camera by {cam.owner}</p>
+      {cam.kind === "embed" && open && <iframe className="fc-cam-frame" title={cam.name} src={cam.embed_url} allow="autoplay; fullscreen" referrerPolicy="no-referrer" sandbox="allow-scripts allow-same-origin" />}
+      <div className="fc-row">
+        {cam.kind === "embed" && <button type="button" className="fc-btn alt" onClick={() => setOpen(!open)}>{open ? "Hide the camera" : "Watch live"}</button>}
+        <a className={`fc-btn ${cam.kind === "embed" ? "quiet" : "alt"} fc-btn-link`} href={cam.page_url} target="_blank" rel="noreferrer">{cam.kind === "embed" ? "Open their page" : "Watch the live camera"}</a>
+      </div>
+    </div>
+  );
+}
+
 function Conditions({ shop, spot }) {
   const [day, setDay] = useState(0);
   const [d, setD] = useState(null);
@@ -69,6 +86,7 @@ function Conditions({ shop, spot }) {
         </div>
       </div>
       {day === 0 && d?.report && <p className="fc-note"><b>Seen from the beach at {d.report.time}{d.report.by ? ` by ${d.report.by}` : ""}:</b> {d.report.text}.{d.report.coach_note ? ` “${d.report.coach_note}”` : ""}</p>}
+      {(d?.cameras || []).map((c) => <Camera key={c.id} cam={c} />)}
       {!d ? <p className="fc-sub">Reading the forecast…</p> : !hours.length ? <p className="fc-sub">The forecast couldn't be read just now.</p> : (<>
         {now && <p style={{ margin: 0 }}><span className={`fc-chip ${now.rating}`}>{RATING[now.rating]} for learners{day === 0 ? " now" : " at 08:00"}</span> <span className="fc-sub">{now.text}</span></p>}
         <div className="fc-hours">

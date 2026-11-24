@@ -299,7 +299,7 @@ def test_the_routes_quote_list_and_refuse(world, monkeypatch):
     with pytest.raises(HTTPException) as e:
         run(lessons_api.set_status(TID, made["id"], {"status": "completed"}))
     assert e.value.status_code == 409
-    assert run(lessons_api.conditions_for("empty")) == {"spot": None, "hours": []}
+    assert run(lessons_api.conditions_for("empty")) == {"spot": None, "hours": [], "cameras": []}
 
     async def down(lat, lng, day):
         raise RuntimeError("no forecast")

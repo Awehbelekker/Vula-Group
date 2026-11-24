@@ -87,3 +87,7 @@ button, input, select { font: inherit; color: inherit; }
 .fc-coach > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .fc-foot img { height: 16px; width: auto; vertical-align: middle; margin-left: 6px; }
 .fc-lines li > a { flex: none; }
+ /* a live camera near the spot */
+.fc-cam { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 14px; background: var(--fc-bg); }
+.fc-cam-frame { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px; background: var(--fc-ink); }
+.fc-btn-link { display: inline-grid; place-items: center; text-decoration: none; }

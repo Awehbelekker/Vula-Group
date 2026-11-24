@@ -151,10 +151,11 @@ async def set_status(tenant_id: str, request_id: str, body: dict) -> dict:
 
 @router.get("/{tenant_id}/admin/lessons/conditions")
 async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str = "surf") -> dict:
-    from vula.commerce import conditions
+    from vula.commerce import conditions, spot_cameras
     spot = lessons.settings(tenant_id).get("spot")
     if not spot:
-        return {"spot": None, "hours": []}
+        return {"spot": None, "hours": [], "cameras": []}
+    cameras = spot_cameras.near(spot.get("lat"), spot.get("lng"))     # live cameras near the spot
     try:
         day = _date.fromisoformat(date) if date else lessons._now().astimezone(lessons.SAST).date()
     except ValueError as exc:
@@ -162,8 +163,8 @@ async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str 
     try:
         hours = await conditions.forecast(spot["lat"], spot["lng"], day)
     except Exception:  # noqa: BLE001 — the forecast is a guide; the screen says it couldn't be read
-        return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True}
-    return {"spot": spot, "date": day.isoformat(),
+        return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True, "cameras": cameras}
+    return {"spot": spot, "date": day.isoformat(), "cameras": cameras,
             "hours": conditions.day_view(hours, sport if sport in lessons.SPORTS else "surf")}
 
 
