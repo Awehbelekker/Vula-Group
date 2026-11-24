@@ -13,11 +13,13 @@ import {
   Button, Card, DataTable, EmptyState, Field, FilterBar, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatusChip, Textarea,
 } from "../ui/index.jsx";
 import CatalogueSync from "./CatalogueSync";
-import OptionsBuilder from "./OptionsBuilder";
 import VulaImageUpload from "../VulaImageUpload";
 import { useBusinessType } from "../../store/business";
 import { examplesFor, isFood } from "../../lib/examples";
+import { lazyScreen, ScreenSuspense } from "../../lib/lazyScreen.jsx";
 import "./products.css";
+
+const OptionsBuilder = lazyScreen(() => import("./OptionsBuilder"));
 
 // 24 Nov 2026 audit: the star (is_daily_catch) read "Catch of the day" for every business — only a
 // food business calls it that; everyone else sees "Featured". Same field either way.
@@ -140,8 +142,8 @@ export default function ProductsV2({ api, EditPanel }) {
             </label>
             {api.form.hasOptions && (
               <div className="vpr-wide">
-                <OptionsBuilder rows={api.form.optionRows} disabled={api.adding}
-                  onChange={(rows) => api.setForm((f) => ({ ...f, optionRows: rows }))} />
+                <ScreenSuspense><OptionsBuilder rows={api.form.optionRows} disabled={api.adding}
+                  onChange={(rows) => api.setForm((f) => ({ ...f, optionRows: rows }))} /></ScreenSuspense>
                 <Field label="Stock of each version (optional)" hint="You can change each one afterwards, under Edit.">
                   <Input inputMode="decimal" value={api.form.stock} onChange={(e) => api.setForm({ ...api.form, stock: e.target.value })} />
                 </Field>
