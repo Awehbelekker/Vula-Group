@@ -43,3 +43,4 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .bars{display:flex;align-items:flex-end;gap:4px;height:56px;margin:14px 0 10px}.bars span{flex:1 1 0;min-width:0;background:rgba(255,255,255,.9);border-radius:3px}.bars span.zero{background:rgba(255,255,255,.28)}
 .hero-foot{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px}.hero-foot div{display:flex;flex-direction:column;min-width:0}.hero-foot strong{font-size:15px;overflow-wrap:anywhere}
 .hero-btn{background:rgba(255,255,255,.16);color:#fff;font-size:15px;padding:10px 14px}.hero-form button{background:#fff;color:var(--vp-green)}.hero-form button.ghost{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}
+.trio{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}.trio>*{min-width:0;margin:6px 0}

@@ -1,0 +1,17 @@
+/* shifts.css — Admin › Shifts (shifts/ShiftsV2.jsx). Tokens only; every text holder can shrink. */
+.vsh, .vsh-form { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.vsh-row { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); align-items: end; }
+.vsh-sub { margin: 0; font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; }
+.vsh-error { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-soft); color: var(--danger-text); }
+.vsh-bar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.vsh-day { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.vsh-day h3 { margin: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); color: var(--ink); }
+.vsh-dayhead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.vsh-shift { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--line); }
+.vsh-time { flex: none; min-width: 96px; color: var(--ink); }
+.vsh-main { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.vsh-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.vsh-hours { font-size: var(--fs-caption); color: var(--muted); white-space: nowrap; }
+.vsh-hours .vula-figure { font-size: 18px; color: var(--ink); }
+.vsh-cover { display: flex; flex-direction: column; gap: var(--space-2); border-color: var(--warn); background: var(--warn-soft); }
+.vsh-cover > strong { display: inline-flex; align-items: center; gap: 6px; color: var(--warn-text); }

@@ -397,7 +397,7 @@ class MemoryRepo:
     # service at the table (migration 300)
     def _ts_rows(self, table):
         if not hasattr(self, "_tableside"):
-            self._tableside = {"kb_table_calls": {}, "kb_table_orders": {}}
+            self._tableside = {"kb_table_calls": {}, "kb_table_orders": {}, "kb_shifts": {}, "kb_availability": {}}
         return self._tableside[table]
 
     def add_row(self, table, row):
@@ -439,6 +439,28 @@ class MemoryRepo:
             out.append({"staff_id": b.get("staff_id"), "is_test": bool(b.get("is_test")),
                         "bill_cents": s["bill_cents"], "tip_cents": s["tip_cents"], "paid_at": s["updated_at"]})
         return out
+
+    def shifts_between(self, tenant_id, from_iso, to_iso):
+        return sorted([dict(r) for r in self._ts_rows("kb_shifts").values() if r["tenant_id"] == tenant_id
+                       and _ts(from_iso) <= _ts(r["starts_at"]) < _ts(to_iso)], key=lambda r: r["starts_at"])
+
+    def update_row(self, table, tenant_id, row_id, fields):
+        r = self._ts_rows(table).get(row_id)
+        if not r or r["tenant_id"] != tenant_id:
+            return None
+        r.update(fields)
+        return dict(r)
+
+    def delete_row(self, table, tenant_id, row_id, **eq):
+        r = self._ts_rows(table).get(row_id)
+        if not r or r["tenant_id"] != tenant_id or any(r.get(k) != v for k, v in eq.items()):
+            return False
+        del self._ts_rows(table)[row_id]
+        return True
+
+    def availability(self, tenant_id, member_id=None):
+        return [dict(r) for r in self._ts_rows("kb_availability").values() if r["tenant_id"] == tenant_id
+                and (member_id is None or r["member_id"] == member_id)]
 
     def menu_products(self, tenant_id):
         return [dict(p) for p in getattr(self, "products", []) if p["tenant_id"] == tenant_id and p.get("in_stock", True)]

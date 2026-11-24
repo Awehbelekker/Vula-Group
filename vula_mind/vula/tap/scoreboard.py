@@ -47,6 +47,10 @@ def _ts(v) -> datetime:
 class ScoreDesk:
     svc: "object"                                   # TapService
 
+    def tips_on_board(self, tenant_id: str) -> bool:
+        """The owner's switch (kb_settings.board_tips, off by default): tips on the board the team shares."""
+        return bool((self.svc.repo.get_settings(tenant_id) or {}).get("board_tips"))
+
     def _since(self, period: str) -> datetime:
         if period not in PERIODS:
             raise ScoreError("Choose today, week or month.")

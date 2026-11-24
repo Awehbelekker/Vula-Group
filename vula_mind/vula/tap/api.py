@@ -832,6 +832,96 @@ async def team_scores(tenant: str, request: Request, period: str = "week",
     full = await _may_apply_stock(request, tenant)
     try:
         return {"period": period, "board": get_service().scores.board(tenant, period, with_tips=full),
+                "tips_on_board": get_service().scores.tips_on_board(tenant), "can_change": full,
                 "points_rule": POINTS_RULE}
     except ScoreError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── shifts: the manager's planner (vula/tap/shifts.py). Reading is for any member of the business;
+#    every change is an owner's or a manager's. ────────────────────────────────────────────────
+class ShiftIn(BaseModel):
+    member_id: Optional[str] = None
+    starts_at: Optional[str] = None
+    ends_at: Optional[str] = None
+    section: Optional[str] = Field(default=None, max_length=40)
+    note: Optional[str] = Field(default=None, max_length=120)
+
+
+class BoardSettingsIn(BaseModel):
+    tips: bool
+
+
+async def _manager(request: Request, tenant: str) -> None:
+    from vula.api.commerce import _may_apply_stock
+    if not await _may_apply_stock(request, tenant):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can change this.")
+
+
+async def _shift_call(coro_or_value):
+    from vula.tap.shifts import ShiftError
+    try:
+        return await coro_or_value if hasattr(coro_or_value, "__await__") else coro_or_value
+    except ShiftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _shift_sync(fn, *args, **kw):
+    from vula.tap.shifts import ShiftError
+    try:
+        return fn(*args, **kw)
+    except ShiftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/{tenant}/shifts")
+async def shifts_week(tenant: str, week: Optional[str] = None, identity: dict = Depends(require_tenant_actor)) -> dict:
+    return _shift_sync(get_service().shifts.week, tenant, week)
+
+
+@router.post("/v1/tap/{tenant}/shifts")
+async def shift_create(tenant: str, body: ShiftIn, request: Request, identity: dict = Depends(require_tenant_actor)) -> dict:
+    await _manager(request, tenant)
+    return {"shift": _shift_sync(get_service().shifts.create, tenant, body.model_dump(exclude_unset=True), _owner(identity))}
+
+
+@router.put("/v1/tap/{tenant}/shifts/{shift_id}")
+async def shift_change(tenant: str, shift_id: str, body: ShiftIn, request: Request,
+                       identity: dict = Depends(require_tenant_actor)) -> dict:
+    await _manager(request, tenant)
+    return {"shift": await _shift_call(get_service().shifts.change(tenant, shift_id, body.model_dump(exclude_unset=True)))}
+
+
+@router.delete("/v1/tap/{tenant}/shifts/{shift_id}")
+async def shift_cancel(tenant: str, shift_id: str, request: Request, identity: dict = Depends(require_tenant_actor)) -> dict:
+    await _manager(request, tenant)
+    await _shift_call(get_service().shifts.cancel(tenant, shift_id))
+    return {"cancelled": shift_id}
+
+
+@router.post("/v1/tap/{tenant}/shifts/{shift_id}/offer")
+async def shift_offer(tenant: str, shift_id: str, request: Request, identity: dict = Depends(require_tenant_actor)) -> dict:
+    await _manager(request, tenant)
+    return {"shift": await _shift_call(get_service().shifts.offer(tenant, shift_id))}
+
+
+@router.post("/v1/tap/{tenant}/shifts/publish")
+async def shifts_publish(tenant: str, request: Request, week: Optional[str] = None,
+                         identity: dict = Depends(require_tenant_actor)) -> dict:
+    await _manager(request, tenant)
+    out = await _shift_call(get_service().shifts.publish(tenant, week))
+    _audit(tenant, identity, "shifts.publish", **out)
+    return out
+
+
+@router.put("/v1/tap/{tenant}/scores/settings")
+async def scores_settings(tenant: str, body: BoardSettingsIn, request: Request,
+                          identity: dict = Depends(require_tenant_actor)) -> dict:
+    """Whether tips show on the board the team shares. The owner's or a manager's choice."""
+    await _manager(request, tenant)
+    get_service().repo.upsert_settings(tenant, {"board_tips": body.tips})
+    back = get_service().scores.tips_on_board(tenant)
+    if back != body.tips:
+        raise HTTPException(status_code=500, detail="That didn't save. Nothing changed.")
+    _audit(tenant, identity, "scores.settings", tips=back)
+    return {"tips": back}

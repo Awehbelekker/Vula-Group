@@ -293,6 +293,7 @@ function Home({ token, onLock, onExpired }) {
 
       <Income token={token} guard={guard} bump={bills} name={me?.name} />
       <Scores token={token} guard={guard} bump={bills} />
+      <MyShifts token={token} guard={guard} online={online} />
       <Floor token={token} guard={guard} online={online} />
       <Tabs token={token} guard={guard} online={online} bump={bills} />
 
@@ -584,9 +585,9 @@ export function Scores({ token, guard, bump }) {
         <div style={{ marginTop: 8 }}>
           {d.board.map((r) => (
             <div key={r.member_id} className="row tab-line"><span><strong>{r.rank}. {r.name}</strong>{r.badges.length ? <span className="muted"> · {r.badges.join(" · ")}</span> : null}
-              <div className="muted">{rands(r.sales_cents)} · {r.bills} bills · {r.calls} {r.calls === 1 ? "table" : "tables"}{r.calls ? ` in ${wait(r.avg_wait_seconds)}` : ""}</div></span>
+              <div className="muted">{rands(r.sales_cents)}{r.tips_cents != null ? ` · ${rands(r.tips_cents)} tips` : ""} · {r.bills} bills · {r.calls} {r.calls === 1 ? "table" : "tables"}{r.calls ? ` in ${wait(r.avg_wait_seconds)}` : ""}</div></span>
               <strong>{r.points}</strong></div>))}
-          <div className="muted" style={{ marginTop: 6 }}>Points: {d.points_rule} Tips are never shown here.</div>
+          <div className="muted" style={{ marginTop: 6 }}>Points: {d.points_rule}{d.tips_on_board ? "" : " Tips are not shown here."}</div>
         </div>)}
     </div>
   );
@@ -659,6 +660,94 @@ export function Income({ token, guard, bump, name }) {
           <div className="hero-lbl">Your target is your own. It stays on this phone.</div>
         </form>
       ) : <button className="hero-btn" onClick={() => setEdit({ period: target?.period || "day", amount: target ? String(target.cents / 100) : "" })}>{target ? "Change my target" : "Set a target for myself"}</button>}
+    </div>
+  );
+}
+
+// ── my shifts and when I can work (vula_mind/vula/tap/shifts.py). All of it is my own. ─────────
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const SHIFT_LABEL = { published: "Please confirm", confirmed: "Confirmed", declined: "You can't make it", sick: "Off sick" };
+export function MyShifts({ token, guard, online }) {
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [askId, setAskId] = useState("");
+  const [reason, setReason] = useState("");
+  const [open, setOpen] = useState(false);
+  const [w, setW] = useState({ weekday: "4", start: "17:00", end: "23:00" });
+  const [off, setOff] = useState({ from_date: "", to_date: "", note: "" });
+  const load = useCallback(async () => {
+    try { setD(await call("/v1/tap/app/shifts", { token })); } catch (x) { if (x.status === 401) guard(x); }
+  }, [token, guard]);
+  useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
+  if (!d) return null;
+  const nothing = !d.shifts.length && !d.open.length && !d.availability.weekly.length && !d.availability.off.length;
+
+  const run = async (path, method = "POST", body) => {
+    setBusy(true); setErr("");
+    try { const out = await call(path, { token, method, body: body || (method === "POST" ? {} : undefined) }); await load(); return out; }
+    catch (x) { if (x.status === 401) guard(x); else setErr(x.message); return null; }
+    finally { setBusy(false); }
+  };
+  const cant = async (id, sick) => { if (await run(`/v1/tap/app/shifts/${id}/cant`, "POST", { sick, reason: sick ? "" : reason.trim() })) { setAskId(""); setReason(""); } };
+
+  return (
+    <div className="card">
+      <div className="row"><h2 style={{ margin: 0 }}>My shifts</h2>{d.hours_this_week > 0 && <span className="muted">{d.hours_this_week} h this week</span>}</div>
+      {err && <div className="err" role="alert">{err}</div>}
+      {d.shifts.length === 0 && <div className="muted" style={{ marginTop: 6 }}>{nothing ? "No shifts yet. Tell your manager when you can work, below." : "No shifts coming up."}</div>}
+      {d.shifts.map((s) => (
+        <div key={s.id} className={`call${s.status === "published" ? " call-open" : ""}`}>
+          <div className="grow"><strong>{s.when}</strong>{s.section ? ` · ${s.section}` : ""}
+            <div className="muted">{SHIFT_LABEL[s.status] || s.status}{s.note ? ` · ${s.note}` : ""}</div>
+            {(s.status === "published" || s.status === "confirmed") && askId !== s.id && (
+              <div className="row" style={{ marginTop: 6, justifyContent: "flex-start" }}>
+                {s.status === "published" && <button className="small" disabled={busy || !online} onClick={() => run(`/v1/tap/app/shifts/${s.id}/confirm`)}>Confirm</button>}
+                <button className="ghost small" disabled={busy} onClick={() => { setAskId(s.id); setReason(""); }}>I can't work this</button>
+              </div>)}
+            {askId === s.id && (
+              <div style={{ marginTop: 6 }}>
+                <input value={reason} maxLength={120} placeholder="Why? (your manager sees this)" aria-label="Why you can't work this shift" onChange={(e) => setReason(e.target.value)} />
+                <div className="row" style={{ justifyContent: "flex-start" }}>
+                  <button className="small" disabled={busy || !online} onClick={() => cant(s.id, false)}>Can't make it</button>
+                  <button className="small" disabled={busy || !online} onClick={() => cant(s.id, true)}>I'm sick</button>
+                  <button className="ghost small" onClick={() => setAskId("")}>Back</button>
+                </div>
+              </div>)}
+          </div>
+        </div>))}
+      {d.open.length > 0 && <h2 style={{ marginTop: 12 }}>Shifts that need someone</h2>}
+      {d.open.map((s) => (
+        <div key={s.id} className="call"><div><strong>{s.when}</strong>{s.section ? ` · ${s.section}` : ""}<div className="muted">{s.hours} hours</div></div>
+          <button className="small" disabled={busy || !online} onClick={() => run(`/v1/tap/app/shifts/${s.id}/take`)}>I'll take it</button></div>))}
+      <button className="ghost small" style={{ marginTop: 10 }} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide when I can work" : "When I can work"}</button>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          <div className="muted">Your manager plans around these. They can still ask you outside them.</div>
+          {d.availability.weekly.map((r) => (
+            <div key={r.id} className="row tab-line"><span>{WEEKDAYS[r.weekday]} · {r.start}–{r.end}</span>
+              <button className="ghost small" disabled={busy} aria-label={`Remove ${WEEKDAYS[r.weekday]} ${r.start}`} onClick={() => run(`/v1/tap/app/availability/${r.id}`, "DELETE")}>Remove</button></div>))}
+          <form onSubmit={(e) => { e.preventDefault(); run("/v1/tap/app/availability/weekly", "POST", { weekday: Number(w.weekday), start: w.start, end: w.end }); }}>
+            <div className="trio">
+              <select value={w.weekday} aria-label="Day" onChange={(e) => setW({ ...w, weekday: e.target.value })}>{WEEKDAYS.map((n, i) => <option key={n} value={i}>{n}</option>)}</select>
+              <input type="time" value={w.start} aria-label="From" onChange={(e) => setW({ ...w, start: e.target.value })} />
+              <input type="time" value={w.end} aria-label="Until" onChange={(e) => setW({ ...w, end: e.target.value })} />
+            </div>
+            <button className="ghost" disabled={busy || !online}>Add a time I can work</button>
+          </form>
+          <h2 style={{ marginTop: 12 }}>Days I'm away</h2>
+          {d.availability.off.map((r) => (
+            <div key={r.id} className="row tab-line"><span>{r.from === r.to ? r.from : `${r.from} to ${r.to}`}{r.note ? ` · ${r.note}` : ""}</span>
+              <button className="ghost small" disabled={busy} aria-label={`Remove days away from ${r.from}`} onClick={() => run(`/v1/tap/app/availability/${r.id}`, "DELETE")}>Remove</button></div>))}
+          <form onSubmit={async (e) => { e.preventDefault(); if (await run("/v1/tap/app/availability/off", "POST", { from_date: off.from_date, to_date: off.to_date || off.from_date, note: off.note })) setOff({ from_date: "", to_date: "", note: "" }); }}>
+            <div className="trio">
+              <input type="date" required value={off.from_date} aria-label="First day away" onChange={(e) => setOff({ ...off, from_date: e.target.value })} />
+              <input type="date" value={off.to_date} aria-label="Last day away" onChange={(e) => setOff({ ...off, to_date: e.target.value })} />
+              <input value={off.note} maxLength={80} placeholder="Why (optional)" aria-label="Why" onChange={(e) => setOff({ ...off, note: e.target.value })} />
+            </div>
+            <button className="ghost" disabled={busy || !online}>Add days away</button>
+          </form>
+        </div>)}
     </div>
   );
 }

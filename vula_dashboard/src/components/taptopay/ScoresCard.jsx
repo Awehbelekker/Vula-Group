@@ -51,7 +51,12 @@ export default function ScoresCard({ tenantId }) {
             </table>
           </div>
         )}
-      {d && <p className="vtp-muted">Points: {d.points_rule} Your team sees this board in the staff app without tips; each person sees only their own.</p>}
+      {d && <p className="vtp-muted">Points: {d.points_rule} {d.tips_on_board ? 'Your team sees tips on this board in the staff app.' : 'Your team sees this board in the staff app without tips; each person sees only their own.'}</p>}
+      {d?.can_change && (
+        <label className="vtp-check"><input type="checkbox" checked={!!d.tips_on_board}
+          onChange={e => api(`/v1/tap/${tenantId}/scores/settings`, { method: 'PUT', body: { tips: e.target.checked } }).then(load).catch(x => setError(x.message))} />
+          <span>Show everyone’s tips on the team board<span className="vtp-muted">Off unless your team is happy for colleagues to see what each other earns in tips.</span></span></label>
+      )}
     </Card>
   )
 }
