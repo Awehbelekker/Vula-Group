@@ -216,3 +216,29 @@ def test_a_signed_in_customer_sees_only_their_own_requests_everywhere(world, mon
         assert e.value.status_code == 401
     world.active[B] = False                                                                    # a paused school's requests drop out
     assert {r["shop"] for r in run(lessons_api.flow_account(Req("t-ann")))["requests"]} == {"big-bay-surf"}
+
+
+def test_a_signed_in_request_still_goes_in_where_the_account_column_is_missing(world, monkeypatch):
+    world.db.rows["commerce_lesson_requests"] = []
+
+    async def quiet(*a, **k):
+        return 0
+    monkeypatch.setattr("vula.integrations.notify.notify_team", quiet)
+    real = world.db.table
+
+    def table(name):
+        t = real(name)
+        ins = t.insert
+
+        def insert(row, **k):
+            if "customer_user_id" in row:
+                raise RuntimeError('column "customer_user_id" does not exist')
+            return ins(row, **k)
+        t.insert = insert
+        return t
+    monkeypatch.setattr(world.db, "table", table)
+    day = (lessons._now().astimezone(lessons.SAST).date() + __import__("datetime").timedelta(days=2)).isoformat()
+    made = run(lessons.request(A, kind="lesson", item_id="surflesson", wanted_date=day, name="Ann Smith", phone="0821112222",
+                               channel="app", customer_user_id="u-ann"))
+    assert made["ref"].startswith("L-") and len(world.db.rows["commerce_lesson_requests"]) == 1
+    assert "customer_user_id" not in world.db.rows["commerce_lesson_requests"][0]

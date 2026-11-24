@@ -431,7 +431,15 @@ async def request(tenant_id: str, *, kind: str, item_id: Any, wanted_date: Any, 
                ref="L-" + "".join(secrets.choice(_REF_ALPHABET) for _ in range(5)))
     if customer_user_id:                             # only then: the column is migration 306's
         row["customer_user_id"] = customer_user_id
-    _db().table("commerce_lesson_requests").insert(row).execute()
+    try:
+        _db().table("commerce_lesson_requests").insert(row).execute()
+    except Exception as exc:  # noqa: BLE001
+        if "customer_user_id" not in row:
+            raise
+        # a database without migration 306 yet: the request still goes in, just not tied to the login
+        log.warning("lesson request kept without its login for %s (migration 306?): %s", tenant_id, exc)
+        row.pop("customer_user_id")
+        _db().table("commerce_lesson_requests").insert(row).execute()
     rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).eq("ref", row["ref"])
             .limit(1).execute().data or [])
     if not rows:
