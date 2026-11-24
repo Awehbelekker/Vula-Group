@@ -438,3 +438,25 @@ def test_a_partner_is_named_only_when_it_is_a_known_one():
     for cfg in ({"features": {"partner": "someone"}}, {"features": {"partner": True}}, {"features": None}, {}, None):
         assert tenants.partner_of(cfg) is None
     assert tenants._public({"tenant_id": None, "features": {"partner": "flowcrew"}})["partner"]["name"] == "FlowCrew"
+
+
+def test_a_partners_business_wears_its_colours_until_it_sets_its_own(monkeypatch):
+    from vula.api import commerce
+    kit = {}
+
+    async def invoice_settings(tid):
+        return kit
+
+    monkeypatch.setattr(service, "get_invoice_settings", invoice_settings)
+    monkeypatch.setattr(tenants, "get_config", lambda tid, **k: {"tenant_id": tid, "display_name": "Big Bay Surf",
+                                                                 "features": {"partner": "flowcrew"} if tid == TID else {}})
+    b = run(commerce.public_brand(TID))
+    assert (b["accent_color"], b["secondary_color"], b["ink_color"]) == ("#2196F3", "#7ED321", "#1E2A39")
+    assert b["partner"] == {"id": "flowcrew", "name": "FlowCrew"} and b["name"] == "Big Bay Surf" and b["logo_url"] is None
+    kit.update(accent_color="#AA3300", trading_as="Big Bay Surf School")                       # its own always wins
+    b = run(commerce.public_brand(TID))
+    assert b["accent_color"] == "#AA3300" and b["secondary_color"] == "#7ED321" and b["name"] == "Big Bay Surf School"
+    kit.clear()
+    plain = run(commerce.public_brand("other"))
+    assert plain["accent_color"] is None and plain["partner"] is None                          # anyone else: Vula's defaults
+    assert tenants.partner_brand(None) == {} and tenants.partner_brand("other") == {}

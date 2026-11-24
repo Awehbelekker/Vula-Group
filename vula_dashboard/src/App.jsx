@@ -33,6 +33,12 @@ import { stillSignedIn } from "./lib/session";
 import { Button, promptDialog } from "./components/ui/index.jsx";
 import { ArrowLeft, Eye } from "lucide-react";
 import VulaLogo from "./components/brand/VulaLogo.jsx";
+
+// A business a partner brought (FlowCrew) wears the partner's mark until it uploads its own logo.
+// The marks ship with the dashboard (public/partners/<id>-mark.png); the id is checked against
+// this list, never put into an address as it arrives.
+const PARTNER_MARKS = { flowcrew: "/partners/flowcrew-mark.png" };
+const partnerMark = (brand) => PARTNER_MARKS[brand?.partner?.id] || undefined;
 const VulaSubscriptions = lazyScreen(() => import("./components/VulaSubscriptions"));
 const VulaTraining = lazyScreen(() => import("./components/VulaTraining"));
 const TwoStep = lazyScreen(() => import("./components/settings/TwoStep"));
@@ -431,7 +437,7 @@ export default function App() {
     return (
       <div>
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || "Business admin", partner: tenantPartner }}
+          brand={{ logoUrl: brand?.logo_url || partnerMark(brand), logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || brand?.partner?.name || "Business admin", partner: tenantPartner || brand?.partner?.name }}
           groups={groups}
           activeId={merchTab}
           onSelect={setMerchTab}
@@ -476,7 +482,7 @@ export default function App() {
             {impersonateReason && <span className="v2-impersonate-why">({impersonateReason})</span>}
           </div>}
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant", partner: tenantPartner }}
+          brand={{ logoUrl: brand?.logo_url || partnerMark(brand), logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant", partner: tenantPartner || brand?.partner?.name }}
           groups={mGroups}
           activeId={merchTab}
           onSelect={setMerchTab}

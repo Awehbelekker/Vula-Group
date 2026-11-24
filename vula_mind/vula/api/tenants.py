@@ -342,8 +342,13 @@ def _public(cfg: dict) -> dict:
 # surf and kite schools). The business's own brand stays first on its dashboard; the partner is
 # named in the credit at the foot — "FlowCrew · Powered by Vula". Set per business in
 # vula_tenant_config.features.partner (an id from this list, beside the switches).
+# The partner's own look (FlowCrew's, from its design system: ocean blue, fresh green, its ink) is
+# what a business it brought wears until the business sets its own in Settings › Brand kit — the
+# business's own colour, logo and name always win. The logo itself is a file the dashboard ships
+# (public/partners/<id>-mark.png).
 PARTNERS: dict[str, dict] = {
-    "flowcrew": {"name": "FlowCrew"},
+    "flowcrew": {"name": "FlowCrew",
+                 "brand": {"accent_color": "#2196F3", "secondary_color": "#7ED321", "ink_color": "#1E2A39"}},
 }
 
 
@@ -352,7 +357,16 @@ def partner_of(cfg: Optional[dict]) -> Optional[dict]:
     known partner is nobody."""
     features = (cfg or {}).get("features")
     pid = features.get("partner") if isinstance(features, dict) else None
-    return {"id": pid, **PARTNERS[pid]} if isinstance(pid, str) and pid in PARTNERS else None
+    return {"id": pid, "name": PARTNERS[pid]["name"]} if isinstance(pid, str) and pid in PARTNERS else None
+
+
+def partner_brand(tenant_id: Optional[str]) -> dict:
+    """The colours a business wears when it has set none of its own: its partner's, else {}."""
+    try:
+        partner = partner_of(get_config(tenant_id)) if tenant_id else None
+    except Exception:  # noqa: BLE001 — the brand must still load: Vula's own defaults
+        partner = None
+    return dict(PARTNERS[partner["id"]].get("brand") or {}) if partner else {}
 
 
 def _features_on(tenant_id: Optional[str]) -> list:
