@@ -15,7 +15,7 @@ What it does (each step is read back; safe to run again):
 Only surf lessons have published prices. SUP, skate and kite lessons are on the site without
 prices, so they are left out rather than guessed — add them in Sell › Lessons › Lessons and prices.
 
-Needs migration 301 applied. Run from vula_mind/:
+Needs migration 303 applied. Run from vula_mind/:
 
     python scripts/seed_flowcrew_demo.py --dry-run     # prints what it would write
     python scripts/seed_flowcrew_demo.py
@@ -95,7 +95,7 @@ def main() -> int:
     try:
         saved = lessons.save_settings(TENANT_ID, SETTINGS)          # checks every price and reads the row back
     except lessons.LessonError as exc:
-        print(f"✗ lessons not saved: {exc} (is migration 301 applied?)")
+        print(f"✗ lessons not saved: {exc} (is migration 303 applied?)")
         return 1
     print(f"✓ lessons on: {', '.join(x['name'] for x in saved['lessons'])}; hire: {', '.join(g['name'] for g in saved['hire'])}")
     print(lessons.price_list_text(TENANT_ID, saved))

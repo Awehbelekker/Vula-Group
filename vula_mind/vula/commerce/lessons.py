@@ -1,4 +1,4 @@
-"""Lessons and gear hire that the business confirms by hand (24 Nov 2026, migration 301) — surf
+"""Lessons and gear hire that the business confirms by hand (24 Nov 2026, migration 303) — surf
 schools, kite schools, board and wetsuit hire.
 
 A customer asks in the business's WhatsApp chat (vula/commerce/lesson_chat.py) or the team takes
@@ -90,7 +90,7 @@ def settings(tenant_id: str) -> dict:
     try:
         rows = (_db().table("commerce_lesson_settings").select("*").eq("tenant_id", tenant_id).limit(1)
                 .execute().data or [])
-    except Exception as exc:  # noqa: BLE001 — migration 301 not applied: lessons are simply off
+    except Exception as exc:  # noqa: BLE001 — migration 303 not applied: lessons are simply off
         log.debug("lesson settings unreadable for %s: %s", tenant_id, exc)
         rows = []
     return {**DEFAULTS, **{k: v for k, v in (rows[0] if rows else {}).items() if v is not None},

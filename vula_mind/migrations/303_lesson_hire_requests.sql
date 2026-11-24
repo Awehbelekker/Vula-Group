@@ -1,4 +1,4 @@
--- 301_lesson_hire_requests.sql — lessons and gear hire that the business confirms by hand
+-- 303_lesson_hire_requests.sql — lessons and gear hire that the business confirms by hand
 -- (vula/commerce/lessons.py, 24 Nov 2026 — surf schools, kite schools, board and wetsuit hire).
 --
 -- A customer asks for a lesson or for gear in the business's WhatsApp chat: which lesson, their
