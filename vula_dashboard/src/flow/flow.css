@@ -64,3 +64,24 @@ button, input, select { font: inherit; color: inherit; }
 .fc-bead { width: 40px; height: 32px; border-radius: 16px; display: grid; place-items: center; transition: background 0.2s; }
 .fc-count { position: absolute; top: 4px; right: calc(50% - 26px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--fc-ink); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
 @media (prefers-reduced-motion: reduce) { .fc-bead { transition: none; } }
+
+/* Find a school (Discover.jsx) and a school's coaches */
+.fc-find { padding-bottom: calc(32px + env(safe-area-inset-bottom)); }
+.fc-school { text-decoration: none; color: inherit; gap: 8px; }
+.fc-school:focus-visible, .fc-pick:focus-visible, .fc-back:focus-visible { outline: 3px solid var(--fc-blue); outline-offset: 2px; }
+.fc-school-top { display: flex; align-items: center; gap: 12px; }
+.fc-school-top img { width: 44px; height: 44px; border-radius: 12px; object-fit: contain; background: var(--fc-bg); flex: none; }
+.fc-school-top > span:nth-child(2) { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.fc-km { flex: none; font-weight: 700; font-size: 14px; color: var(--fc-blue-text); }
+.fc-chips { gap: 6px; }
+.fc-pick { border: 0; cursor: pointer; min-height: 36px; padding: 0 14px; }
+.fc-pick.on { background: var(--fc-ink); color: #fff; }
+.fc-from { font-size: 14px; }
+.fc-faces { display: flex; align-items: center; gap: 6px; }
+.fc-faces img, .fc-face { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; }
+.fc-face { display: grid; place-items: center; background: var(--fc-good-bg); color: var(--fc-good); font-size: 13px; font-weight: 700; }
+.fc-map { height: min(62dvh, 460px); border-radius: 20px; border: 1px solid var(--fc-line); overflow: hidden; z-index: 0; }
+.fc-back { align-self: flex-start; color: var(--fc-blue-text); font-weight: 600; font-size: 14px; text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; }
+.fc-coach { display: flex; gap: 12px; align-items: flex-start; }
+.fc-coach img, .fc-coach .fc-face { width: 56px; height: 56px; font-size: 22px; border-radius: 50%; object-fit: cover; flex: none; }
+.fc-coach > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

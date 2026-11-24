@@ -102,6 +102,7 @@ PUBLIC = {
     ("POST", "/v1/door/{key}/check-in"): "door link check-in — one conditional write for that event only; throttled",
     ("POST", "/v1/door/{key}/sync"): "door link — check-ins made with no signal, each the same single write; throttled",
     ("GET", "/book/{tenant_id}"): "a restaurant's public booking page and today's specials — 404 unless bookings are on or a special runs today",
+    ("GET", "/v1/flow/directory"): "the customer app — the schools that asked to be listed (name, look, one line, town, spot to ~100 m, from-price, coaches' first names); the caller's position only sorts the answer; throttled",
     ("GET", "/v1/flow/{shop}"): "the customer app (lessons and gear hire) — the business's name, look, lessons, gear and prices; 404 unless it takes lesson requests; throttled",
     ("GET", "/v1/flow/{shop}/conditions"): "the customer app — the forecast for the business's spot; no customer data; throttled",
     ("POST", "/v1/flow/{shop}/quote"): "the customer app — a price from the business's own list; writes nothing; throttled",

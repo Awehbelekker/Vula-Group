@@ -42,6 +42,9 @@ _DAYS = {"1d": 1, "2d": 2, "3d": 3, "7d": 7}
 SPORTS = ("surf", "sup", "kite", "skate", "other")
 DEFAULTS = {"enabled": False, "lessons": [], "hire": [], "spot": None, "form_url": None, "pay_note": None,
             "note": None, "coach_share_bp": None}
+# migration 305's columns: read with a default, written only when they are being changed, so a
+# database that doesn't have them yet still saves everything else
+DIRECTORY_DEFAULTS = {"coach_profiles": [], "listing": {}}
 _REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _ID_RE = re.compile(r"^[a-z0-9]{1,20}$")
 MAX_CENTS = 100_000_00           # R100 000: a typed price above this is a typing slip
@@ -93,7 +96,7 @@ def settings(tenant_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001 — migration 303 not applied: lessons are simply off
         log.debug("lesson settings unreadable for %s: %s", tenant_id, exc)
         rows = []
-    return {**DEFAULTS, **{k: v for k, v in (rows[0] if rows else {}).items() if v is not None},
+    return {**DEFAULTS, **DIRECTORY_DEFAULTS, **{k: v for k, v in (rows[0] if rows else {}).items() if v is not None},
             "tenant_id": tenant_id}
 
 
@@ -217,14 +220,21 @@ def save_settings(tenant_id: str, data: dict) -> dict:
             patch[key] = _text(d[key], limit) or None
     if "coach_share_bp" in d:                       # the coach's part of a lesson, in hundredths of a percent (70% = 7000)
         patch["coach_share_bp"] = None if d["coach_share_bp"] is None else _int(d["coach_share_bp"], "The coach's share", 0, 10000)
+    from vula.commerce import lesson_directory
+    if "coach_profiles" in d:                       # what the school shows of each coach
+        patch["coach_profiles"] = lesson_directory.clean_profiles(tenant_id, d["coach_profiles"])
+    if "listing" in d:                              # found in the customer app's directory, or not
+        patch["listing"] = lesson_directory.clean_listing(d["listing"])
     merged = {**cur, **patch}
     if merged["enabled"] and not (merged["lessons"] or merged["hire"]):
         raise LessonError("Add a lesson or some gear for hire before taking requests.")
-    row = {k: merged[k] for k in DEFAULTS} | {"tenant_id": tenant_id, "updated_at": _now().isoformat()}
+    keys = list(DEFAULTS) + [k for k in DIRECTORY_DEFAULTS if k in patch]
+    row = {k: merged[k] for k in keys} | {"tenant_id": tenant_id, "updated_at": _now().isoformat()}
     _db().table("commerce_lesson_settings").upsert(row, on_conflict="tenant_id").execute()
     back = settings(tenant_id)
-    if any(back[k] != row[k] for k in DEFAULTS):
+    if any(back[k] != row[k] for k in keys):
         raise LessonError("The settings didn't save. Nothing changed.", 500)
+    lesson_directory.changed()                      # the spot, the prices or the listing may have moved
     return back
 
 
@@ -738,7 +748,8 @@ def id_from_token(token: Any) -> Optional[str]:
 
 
 def public_settings(st: dict) -> dict:
-    """What a customer may see of the settings: the lessons, the gear, their prices, the spot."""
+    """What a customer may see of the settings: the lessons, the gear, their prices, the spot.
+    (Coach profiles are added by the route, which knows the business.)"""
     return {"lessons": st["lessons"], "hire": [{**g, "durations": hire_durations(g)} for g in st["hire"]],
             "spot": {"name": st["spot"]["name"]} if st.get("spot") else None,
             "form_url": st.get("form_url"), "pay_note": st.get("pay_note"), "note": st.get("note"),

@@ -348,6 +348,73 @@ function SettingsSheet({ tenantId, st, onClose, onSaved }) {
   )
 }
 
+const SPORT_NAMES = { surf: 'Surf', sup: 'SUP', kite: 'Kite', skate: 'Skate', other: 'Other' }
+
+/** What customers see of each coach, and whether the school can be found in the customer app's
+ * "find a school" list. Both are the school's choice; a coach's name is their first name from the
+ * team list. */
+function DirectorySheet({ tenantId, conf, team, onClose, onSaved }) {
+  const [listing, setListing] = useState(() => ({ listed: !!conf.directory.listed, about: conf.directory.about || '', town: conf.directory.town || '' }))
+  const [profiles, setProfiles] = useState(() => team.map(m => {
+    const p = (conf.settings.coach_profiles || []).find(x => x.member_id === m.id) || {}
+    return { member_id: m.id, name: m.name, bio: p.bio || '', photo_url: p.photo_url || '', levels: p.levels || [], sports: p.sports || [], shown: !!p.shown }
+  }))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const setP = (i, patch) => setProfiles(profiles.map((p, n) => n === i ? { ...p, ...patch } : p))
+  const flip = (list, k) => (list.includes(k) ? list.filter(x => x !== k) : [...list, k])
+  const photo = async (i, e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setBusy(true); setError('')
+    const { uploadBrandImage } = await import('../../lib/brandUpload')   // only when a photo is added
+    const url = await uploadBrandImage(tenantId, file, 'coaches')
+    if (url) setP(i, { photo_url: url }); else setError("The photo didn't upload. Try a smaller one.")
+    setBusy(false)
+  }
+  const save = async () => {
+    setBusy(true); setError('')
+    try {
+      const body = { listing, coach_profiles: profiles.filter(p => p.shown || p.bio || p.photo_url || p.levels.length || p.sports.length).map(({ name: _n, ...p }) => ({ ...p, photo_url: p.photo_url || null })) }
+      const d = await api(`/v1/commerce/${tenantId}/admin/lessons/settings`, { method: 'PUT', body })
+      toast(d.directory.listed ? (d.directory.showing ? 'Saved. Your school is in the list.' : `Saved. Not showing yet: ${d.directory.why_not}`) : 'Saved'); onSaved(d)
+    } catch (e) { setError(e.message) }
+    setBusy(false)
+  }
+  return (
+    <Sheet open title="Coaches and being found" onClose={onClose} footer={<Button onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>}>
+      <div className="vtb-form">
+        <h3 className="vtb-h">Find a school</h3>
+        <label className="vtb-check"><input type="checkbox" checked={listing.listed} onChange={e => setListing({ ...listing, listed: e.target.checked })} /><span>List my school where customers look for one near them</span></label>
+        <p className="vtb-sub">Listed schools appear with their beach on a map, to about 100 m, next to other schools. Your own app link always shows only you.</p>
+        <div className="vtb-row">
+          <Field label="Town"><Input value={listing.town} maxLength={conf.directory.town_max} placeholder="Table View" onChange={e => setListing({ ...listing, town: e.target.value })} /></Field>
+          <Field label="One line about your school"><Input value={listing.about} maxLength={conf.directory.about_max} placeholder="Lessons for all ages, every day the waves allow" onChange={e => setListing({ ...listing, about: e.target.value })} /></Field>
+        </div>
+        <h3 className="vtb-h">Coach profiles</h3>
+        {profiles.length === 0 && <p className="vtb-sub">Add your coaches in Team first. Each one can then have a profile here.</p>}
+        {profiles.map((p, i) => (
+          <div key={p.member_id} className="vls-block">
+            <div className="vls-coach">
+              {p.photo_url ? <img src={p.photo_url} alt="" /> : <span className="vls-face" aria-hidden="true">{p.name.slice(0, 1)}</span>}
+              <span className="vtb-main"><strong>{p.name.split(' ')[0]}</strong><span className="vtb-sub">Customers see the first name only.</span></span>
+              <label className="vtb-upload"><Camera size={16} aria-hidden="true" />{p.photo_url ? 'Change photo' : 'Add a photo'}<input type="file" accept="image/*" hidden disabled={busy} onChange={e => photo(i, e)} /></label>
+            </div>
+            <label className="vtb-check"><input type="checkbox" checked={p.shown} onChange={e => setP(i, { shown: e.target.checked })} /><span>Show this coach to customers</span></label>
+            <Field label="About them"><Textarea rows={2} maxLength={300} value={p.bio} placeholder="Surfing Big Bay since 2009. Patient with first timers." onChange={e => setP(i, { bio: e.target.value })} /></Field>
+            <div className="vls-ticks"><span className="vtb-sub">Teaches</span>
+              {Object.entries(conf.levels).map(([k, label]) => <label key={k} className="vtb-check"><input type="checkbox" checked={p.levels.includes(k)} onChange={() => setP(i, { levels: flip(p.levels, k) })} /><span>{label.split(' (')[0]}</span></label>)}</div>
+            <div className="vls-ticks"><span className="vtb-sub">Sports</span>
+              {(conf.sports || []).map(k => <label key={k} className="vtb-check"><input type="checkbox" checked={p.sports.includes(k)} onChange={() => setP(i, { sports: flip(p.sports, k) })} /><span>{SPORT_NAMES[k] || k}</span></label>)}</div>
+          </div>
+        ))}
+        {error && <p className="vtb-error" role="alert">{error}</p>}
+      </div>
+    </Sheet>
+  )
+}
+
 export default function LessonsV2({ tenantId }) {
   const [data, setData] = useState(null)
   const [conf, setConf] = useState(null)
@@ -382,6 +449,7 @@ export default function LessonsV2({ tenantId }) {
     <div className="vtb">
       <PageHeader sub="Lesson and gear requests from WhatsApp and the ones you take by phone. Nothing is booked until you confirm it."
         actions={<><Button variant="secondary" Icon={Settings} onClick={() => setOpen('settings')}>Lessons and prices</Button>
+          {st.enabled && <Button variant="secondary" Icon={Waves} onClick={() => setOpen('directory')}>Coaches and being found</Button>}
           {st.enabled && <Button Icon={Plus} onClick={() => setOpen('add')}>Add a request</Button>}</>} />
       {!st.enabled ? (
         <EmptyState Icon={Waves} title="Lesson requests are off" action={<Button onClick={() => setOpen('settings')}>Set up lessons</Button>}>
@@ -422,6 +490,7 @@ export default function LessonsV2({ tenantId }) {
           </Card>
         )}
       </>)}
+      {open === 'directory' && <DirectorySheet tenantId={tenantId} conf={conf} team={data.coaches || []} onClose={() => setOpen(null)} onSaved={(d) => { setConf(d); setOpen(null) }} />}
       {open === 'settings' && <SettingsSheet tenantId={tenantId} st={st} onClose={() => setOpen(null)} onSaved={(d) => { setConf(d); setOpen(null); load() }} />}
       {open === 'add' && <AddSheet tenantId={tenantId} st={st} onClose={() => setOpen(null)} onDone={() => { setOpen(null); load() }} />}
       {open?.confirm && <ConfirmSheet tenantId={tenantId} r={open.confirm} coaches={data.coaches} onClose={() => setOpen(null)} onDone={() => { setOpen(null); load() }} />}

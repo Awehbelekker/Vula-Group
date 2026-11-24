@@ -9,7 +9,9 @@
  * never adds anything up.
  */
 import "./flow.css";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+
+const Discover = lazy(() => import("./Discover.jsx"));   // find a school: only loaded where it's shown
 
 const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const LS = {
@@ -94,6 +96,14 @@ function Home({ shop, info, go }) {
       </div>
     </section>
     <Conditions shop={shop} spot={info.spot} />
+    {info.coaches?.length > 0 && <section className="fc-card">
+      <h3>Your coaches</h3>
+      {info.coaches.map((c, i) => (
+        <div key={i} className="fc-coach">
+          {c.photo_url ? <img src={c.photo_url} alt="" /> : <span className="fc-face">{c.name.slice(0, 1)}</span>}
+          <span><b>{c.name}</b>{c.levels.length > 0 && <span className="fc-sub">Teaches: {c.levels.join(", ").toLowerCase()}</span>}{c.bio && <span className="fc-sub">{c.bio}</span>}</span>
+        </div>))}
+    </section>}
     {info.lessons.map((l) => {
       const from = Math.min(...l.group.map((t) => t.single_cents), ...(l.private ? [l.private.single_cents] : []));
       return (
@@ -256,9 +266,12 @@ function Chat({ info }) {
 }
 
 export default function FlowApp() {
+  // came from the directory: a visit, not "my school" — the installed app keeps opening where it did
+  const [viaFind] = useState(() => new URLSearchParams(window.location.search).get("via") === "find");
   const [shop] = useState(() => {
     const fromPath = shopFromPath();
-    if (fromPath) { LS.set("fc.shop", fromPath); return fromPath; }
+    if (fromPath === "find") return "";                     // /flow/find: the directory, whatever school is remembered
+    if (fromPath) { if (!viaFind) LS.set("fc.shop", fromPath); return fromPath; }
     const kept = LS.get("fc.shop", "");                     // the installed app opens at /flow/: back to the school it was added from
     if (kept) window.history.replaceState(null, "", `/flow/${kept}`);
     return kept;
@@ -275,12 +288,12 @@ export default function FlowApp() {
   const go = (to, s) => { if (to === "book") { setStart(s || {}); setBookKey((k) => k + 1); } setFresh(null); setTab(to); window.scrollTo(0, 0); };
   const waiting = LS.get(`fc.tokens.${shop}`, []).length;
 
-  if (!shop) return <main className="fc"><header className="fc-top"><img src="/partners/flowcrew-mark.png" alt="" /><div><h1>FlowCrew</h1><p>Lessons and gear, booked with your school</p></div></header>
-    <section className="fc-card"><h2>Open your school's link</h2><p className="fc-sub">Your surf or kite school sends you a link to its page. Open it once and this app remembers the school.</p></section></main>;
+  if (!shop) return <Suspense fallback={<main className="fc"><p className="fc-sub">Loading…</p></main>}><Discover api={call} /></Suspense>;
   if (error && !info) return <main className="fc"><section className="fc-card"><p className="fc-err" role="alert">{error}</p><button type="button" className="fc-btn alt" onClick={load}>Try again</button></section></main>;
   if (!info) return <main className="fc"><p className="fc-sub">Loading…</p></main>;
   return (
     <main className="fc">
+      {viaFind && <a className="fc-back" href="/flow/find">‹ All schools</a>}
       <header className="fc-top">
         <img src={info.brand?.logo_url || "/partners/flowcrew-mark.png"} alt="" />
         <div><h1>{info.name}</h1><p>{info.brand?.tagline || (info.spot ? `Lessons and gear at ${info.spot.name}` : "Lessons and gear")}</p></div>

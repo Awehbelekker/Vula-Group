@@ -22,6 +22,7 @@ a request the phone made is opened only by the signed token it was given back.
     GET  /v1/flow/{shop}/conditions?date=   the forecast for its spot
     POST /v1/flow/{shop}/quote              what a request would cost (writes nothing)
     POST /v1/flow/{shop}/requests           ask for a lesson or gear → the request and its token
+    GET  /v1/flow/directory?lat=&lng=       the schools that asked to be listed, nearest first with a position
     POST /v1/flow/{shop}/mine               {tokens} → those requests as they are now
     POST /v1/flow/{shop}/cancel             {token} → cancelled
 """
@@ -47,13 +48,18 @@ async def _who(request: Request, tenant_id: str) -> str:
     return await acting.from_dashboard(request.headers.get("authorization", ""), tenant_id) or ""
 
 
+def _settings_out(tenant_id: str, st: dict) -> dict:
+    from vula.commerce import lesson_directory
+    return {"settings": st, "directory": lesson_directory.status(tenant_id, st), "sports": list(lessons.SPORTS), **_choices()}
+
+
 def _choices() -> dict:
     return {"levels": lessons.LEVELS, "parts": lessons.PARTS, "durations": lessons.DURATIONS}
 
 
 @router.get("/{tenant_id}/admin/lessons/settings")
 async def get_settings(tenant_id: str) -> dict:
-    return {"settings": lessons.settings(tenant_id), **_choices()}
+    return _settings_out(tenant_id, lessons.settings(tenant_id))
 
 
 @router.put("/{tenant_id}/admin/lessons/settings")
@@ -62,7 +68,7 @@ async def put_settings(tenant_id: str, body: dict, request: Request) -> dict:
     if not await _may_apply_stock(request, tenant_id):
         raise HTTPException(status_code=403, detail="Only the owner or a manager can change lessons, gear and prices.")
     try:
-        return {"settings": lessons.save_settings(tenant_id, body or {}), **_choices()}
+        return _settings_out(tenant_id, lessons.save_settings(tenant_id, body or {}))
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
 
@@ -257,11 +263,36 @@ def _limit(request: Request, what: str, per_minute: int) -> None:
         raise HTTPException(status_code=429, detail="Too many tries. Wait a minute and try again.")
 
 
+def _coord(raw: Optional[str], lo: float, hi: float) -> Optional[float]:
+    try:
+        v = float(raw) if raw not in (None, "") else None
+    except ValueError:
+        v = None
+    if v is not None and not lo <= v <= hi:
+        v = None
+    return v
+
+
+@public.get("/directory")
+async def flow_directory(request: Request, lat: Optional[str] = None, lng: Optional[str] = None) -> dict:
+    """The schools that asked to be listed: by name, or nearest first when the customer's position
+    is given. That position sorts this one answer and is not kept."""
+    from vula.commerce import lesson_directory
+    _limit(request, "dir", 30)
+    la, lo = _coord(lat, -90, 90), _coord(lng, -180, 180)
+    if la is None or lo is None:                    # half a position is no position
+        la = lo = None
+    rows = lesson_directory.near(await lesson_directory.entries(), la, lo)
+    return {"schools": await lesson_directory.with_conditions(rows), "sorted_by": "distance" if la is not None else "name"}
+
+
 @public.get("/{shop}")
 async def flow_shop(shop: str, request: Request) -> dict:
     from vula.api.commerce import public_brand
     _limit(request, "shop", 60)
+    from vula.commerce import lesson_directory
     tenant_id = _shop(shop)
+    st = lessons.settings(tenant_id)
     brand = await public_brand(tenant_id)
     digits = "".join(ch for ch in str(brand.get("whatsapp") or "") if ch.isdigit())
     if len(digits) == 10 and digits.startswith("0"):
@@ -269,7 +300,7 @@ async def flow_shop(shop: str, request: Request) -> dict:
     return {"shop": tenant_id.replace("_", "-"), "name": brand.get("name"), "partner": brand.get("partner"),
             "brand": {k: brand.get(k) for k in ("accent_color", "secondary_color", "ink_color", "logo_url", "tagline")},
             "whatsapp": digits if 9 <= len(digits) <= 15 else None,
-            **lessons.public_settings(lessons.settings(tenant_id))}
+            "coaches": lesson_directory.public_coaches(tenant_id, st), **lessons.public_settings(st)}
 
 
 @public.get("/{shop}/conditions")
