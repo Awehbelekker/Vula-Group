@@ -30,3 +30,17 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .tab-body{padding:0 2px 8px}.tab-line{padding:4px 0;font-size:15px}
 .call{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;margin:8px 0;border:1px solid var(--vp-line);border-radius:12px;overflow-wrap:anywhere}
 .call>div{min-width:0}.call-open{border-color:var(--vp-warn);background:#fffbeb}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}.stats>div{display:flex;flex-direction:column;min-width:0}.stats strong{font-size:20px;overflow-wrap:anywhere}
+.chip[aria-pressed=true]{background:var(--vp-green);color:#fff}
+:root{--vp-soft:color-mix(in srgb,var(--vp-green) 12%,#fff)}
+.head{justify-content:flex-start}.grow{flex:1 1 auto;min-width:0}.logo{flex:none;width:44px;height:44px;border-radius:10px;object-fit:contain;background:#fff;border:1px solid var(--vp-line)}
+.hero{background:var(--vp-green);color:#fff;border:0}.hero .muted,.hero-lbl{color:rgba(255,255,255,.82);font-size:13px}
+.hero-top{display:flex;align-items:center;gap:12px}.hero-hi{font-size:15px;font-weight:600;margin-bottom:6px}
+.hero-big{font-size:38px;font-weight:800;line-height:1.1;overflow-wrap:anywhere}
+.ring{position:relative;flex:none;width:84px;height:84px;display:grid;place-items:center}.ring svg{position:absolute;inset:0}
+.ring span{font-weight:800;font-size:17px}.ring-bg{fill:none;stroke:rgba(255,255,255,.25);stroke-width:8}.ring-fg{fill:none;stroke:#fff;stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset .6s ease}
+@media (prefers-reduced-motion:reduce){.ring-fg{transition:none}}
+.bars{display:flex;align-items:flex-end;gap:4px;height:56px;margin:14px 0 10px}.bars span{flex:1 1 0;min-width:0;background:rgba(255,255,255,.9);border-radius:3px}.bars span.zero{background:rgba(255,255,255,.28)}
+.hero-foot{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px}.hero-foot div{display:flex;flex-direction:column;min-width:0}.hero-foot strong{font-size:15px;overflow-wrap:anywhere}
+.hero-btn{background:rgba(255,255,255,.16);color:#fff;font-size:15px;padding:10px 14px}.hero-form button{background:#fff;color:var(--vp-green)}.hero-form button.ghost{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}
+.trio{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}.trio>*{min-width:0;margin:6px 0}

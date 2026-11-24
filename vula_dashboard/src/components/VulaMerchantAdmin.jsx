@@ -77,6 +77,7 @@ const TillV2 = lazyScreen(() => import('./till/TillV2'))   // Sell › Till: sel
 const EventsV2 = lazyScreen(() => import('./events/EventsV2'))   // Sell › Events: tickets and the door
 const TablesV2 = lazyScreen(() => import('./tables/TablesV2'))     // Sell › Tables: a restaurant's bookings
 const SpecialsV2 = lazyScreen(() => import('./tables/SpecialsV2')) // Sell › Specials
+const ShiftsV2 = lazyScreen(() => import('./shifts/ShiftsV2'))       // Admin › Shifts: the team's roster
 
 const VulaClientOnboarding = lazyScreen(() => import('./VulaClientOnboarding'))
 
@@ -281,6 +282,7 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
       {active === 'events' && <EventsV2 tenantId={tenantId} />}
       {active === 'tables' && <TablesV2 tenantId={tenantId} />}
       {active === 'specials' && <SpecialsV2 tenantId={tenantId} />}
+      {active === 'shifts' && <ShiftsV2 tenantId={tenantId} />}
       {active === 'salesreports' && <VulaReports tenantId={tenantId} />}
       </ScreenSuspense>
     </div>
