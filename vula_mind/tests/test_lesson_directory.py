@@ -141,3 +141,38 @@ def test_a_database_without_the_new_columns_still_saves_the_rest(world, monkeypa
     assert not ({"coach_profiles", "listing"} & seen[-1])                                      # untouched columns aren't written
     lessons.save_settings(A, {"listing": {"listed": False}})
     assert "listing" in seen[-1] and "coach_profiles" not in seen[-1]
+
+
+def test_a_partners_own_address_wears_the_partners_look():
+    for host in ("flowcrew.co.za", "app.flowcrew.co.za", "APP.FlowCrew.co.za:443"):
+        got = tenants.partner_for_host(host)
+        assert got["id"] == "flowcrew" and got["name"] == "FlowCrew" and got["brand"]["accent_color"] == "#2196F3"
+    for host in ("notflowcrew.co.za", "flowcrew.co.za.evil.example", "digg.vula-ai.com", ""):
+        assert tenants.partner_for_host(host) is None
+    out = run(tenants.get_tenant_by_domain("app.flowcrew.co.za"))
+    assert out["tenant_id"] is None and out["partner"]["name"] == "FlowCrew"
+    import re
+    from vula.api import server
+    rx = next(m.kwargs["allow_origin_regex"] for m in server.app.user_middleware if "allow_origin_regex" in m.kwargs)
+    assert re.fullmatch(rx, "https://app.flowcrew.co.za") and re.fullmatch(rx, "https://flowcrew.co.za")
+    assert not re.fullmatch(rx, "https://flowcrew.co.za.evil.example") and not re.fullmatch(rx, "https://evilflowcrew.co.za")
+
+
+def test_a_partners_business_keeps_its_own_look_apart_from_the_partners(monkeypatch):
+    from vula.commerce import service as svc
+    kit = {"accent_color": "#2C5545", "logo_url": ""}
+
+    async def settings(tid):
+        return dict(kit)
+    monkeypatch.setattr(svc, "get_invoice_settings", settings)
+    monkeypatch.setattr(tenants, "get_config", lambda tid, **k: {"tenant_id": tid, "features": {"partner": "flowcrew"}})
+    b = run(commerce_api.public_brand("x"))
+    assert b["partner_look"]["accent_color"] == "#2196F3" and b["accent_color"] == "#2196F3"       # Vula's default green = none chosen
+    assert b["own_look"] == {"accent_color": None, "secondary_color": None, "ink_color": None, "logo_url": None}
+    kit.update(accent_color="#0B3D5C", logo_url="https://cdn.example/a.png")
+    b = run(commerce_api.public_brand("x"))
+    assert b["own_look"]["accent_color"] == "#0B3D5C" and b["own_look"]["logo_url"] == "https://cdn.example/a.png" and b["partner_look"]["accent_color"] == "#2196F3"
+    monkeypatch.setattr(tenants, "get_config", lambda tid, **k: {"tenant_id": tid})                # no partner: unchanged
+    kit.update(accent_color="#2C5545")
+    b = run(commerce_api.public_brand("x"))
+    assert b["partner_look"] is None and b["own_look"] is None and b["accent_color"] == "#2C5545"

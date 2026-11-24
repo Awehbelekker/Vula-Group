@@ -348,8 +348,22 @@ def _public(cfg: dict) -> dict:
 # (public/partners/<id>-mark.png).
 PARTNERS: dict[str, dict] = {
     "flowcrew": {"name": "FlowCrew",
-                 "brand": {"accent_color": "#2196F3", "secondary_color": "#7ED321", "ink_color": "#1E2A39"}},
+                 "brand": {"accent_color": "#2196F3", "secondary_color": "#7ED321", "ink_color": "#1E2A39"},
+                 # the partner's own web address (24 Nov 2026): its businesses sign in there and its
+                 # customers' app lives there, under the partner's name and look
+                 "domain": "flowcrew.co.za"},
 }
+
+
+def partner_for_host(host: str) -> Optional[dict]:
+    """The partner a web address belongs to — its own domain or any name under it
+    (app.flowcrew.co.za) — as {"id", "name", "brand"}; None for every other address."""
+    h = (host or "").strip().lower().split(":")[0].rstrip(".")
+    for pid, p in PARTNERS.items():
+        d = p.get("domain")
+        if d and (h == d or h.endswith("." + d)):
+            return {"id": pid, "name": p["name"], "brand": dict(p.get("brand") or {})}
+    return None
 
 
 def partner_of(cfg: Optional[dict]) -> Optional[dict]:
@@ -512,8 +526,10 @@ def dashboard_link(tenant_id: str, page: str) -> str:
 @router.get("/by-domain")
 async def get_tenant_by_domain(host: str) -> dict:
     """Public: the tenant a dashboard hostname belongs to (no secrets — just the id), for a
-    branded login page."""
-    return {"tenant_id": tenant_for_host(host)}
+    branded login page; or the partner whose own address it is (name and colours)."""
+    partner = partner_for_host(host)
+    # a partner's own address is nobody's business in particular: the login wears the partner's look
+    return {"tenant_id": None if partner else tenant_for_host(host), "partner": partner}
 
 
 @router.get("/{tenant_id}")

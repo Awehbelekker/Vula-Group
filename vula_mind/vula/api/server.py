@@ -2022,9 +2022,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list(),
     # Allow every Vula tenant origin (current + future) without env changes:
-    #   *.vula-ai.com, *.offthehook.co.za, *.digg-ct.co.za, *.vercel.app, localhost
+    #   *.vula-ai.com, *.offthehook.co.za, *.digg-ct.co.za, *.flowcrew.co.za (a partner's own
+    #   address: tenants.PARTNERS), *.vercel.app, localhost
     allow_origin_regex=(
-        r"https://([a-z0-9-]+\.)*(vula-ai\.com|offthehook\.co\.za|digg-ct\.co\.za|vercel\.app)"
+        r"https://([a-z0-9-]+\.)*(vula-ai\.com|offthehook\.co\.za|digg-ct\.co\.za|flowcrew\.co\.za|vercel\.app)"
         r"|http://localhost:[0-9]+"
     ),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

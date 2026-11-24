@@ -6297,8 +6297,16 @@ async def public_brand(tenant_id: str):
     from vula.api.tenants import display_name as _display_name
     # a business a partner brought (FlowCrew) wears the partner's colours until it sets its own
     theirs = _tenants.partner_brand(tenant_id)
+    # Vula's own default green saved on a partner's business is "no colour chosen yet"
+    own_accent = settings.get("accent_color") if not (theirs and str(settings.get("accent_color") or "").upper() == "#2C5545") else None
     return {
         "partner": _tenants.partner_of(_tenants.get_config(tenant_id)),
+        # The partner is the face for the team (24 Nov 2026): the dashboard of a partner's business
+        # wears the partner's look. The business's own look is for its customers — the customer
+        # app once its school is chosen, its documents — so both are given, apart.
+        "partner_look": theirs or None,
+        "own_look": {"accent_color": own_accent, "secondary_color": settings.get("secondary_color"),
+                     "ink_color": settings.get("ink_color"), "logo_url": settings.get("logo_url") or None} if theirs else None,
         # the name everywhere (dashboard shell, login, app icon, emails): the brand kit's trading
         # name, else the company name, else the tenant's display name — never "Vula Commerce"
         "name": (settings.get("trading_as") or settings.get("company_name")
@@ -6306,7 +6314,7 @@ async def public_brand(tenant_id: str):
         "logo_url": settings.get("logo_url"),
         "icon_url": settings.get("icon_url"),
         "tagline": settings.get("tagline"),
-        "accent_color": settings.get("accent_color") or theirs.get("accent_color"),
+        "accent_color": own_accent or theirs.get("accent_color"),
         "secondary_color": settings.get("secondary_color") or theirs.get("secondary_color"),
         "ink_color": settings.get("ink_color") or theirs.get("ink_color"),
         "font_pairing": settings.get("font_pairing"),

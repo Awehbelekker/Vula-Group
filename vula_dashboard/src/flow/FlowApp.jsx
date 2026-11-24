@@ -265,6 +265,20 @@ function Chat({ info }) {
   );
 }
 
+/** The school's own colours, once a customer is on its page: its colour for the buttons and the
+ * banner, with text that reads on it. Nothing when the school has chosen none — FlowCrew's look. */
+function schoolLook(own) {
+  const hex = (c) => (/^#[0-9a-fA-F]{6}$/.test(c || "") ? c : null);
+  const a = hex(own?.accent_color);
+  if (!a) return undefined;
+  const lin = (i) => { const v = parseInt(a.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const lum = 0.2126 * lin(1) + 0.7152 * lin(3) + 0.0722 * lin(5);
+  const b = hex(own?.secondary_color) || a;
+  const dark = lum < 0.4;                                    // white reads on it
+  return { "--fc-green": a, "--fc-on": dark ? "white" : "var(--fc-ink)", "--fc-grad": `linear-gradient(135deg, ${a} 0%, ${b} 100%)`,
+    "--fc-blue": a, ...(dark ? { "--fc-blue-text": a } : {}) };
+}
+
 export default function FlowApp() {
   // came from the directory: a visit, not "my school" — the installed app keeps opening where it did
   const [viaFind] = useState(() => new URLSearchParams(window.location.search).get("via") === "find");
@@ -292,7 +306,7 @@ export default function FlowApp() {
   if (error && !info) return <main className="fc"><section className="fc-card"><p className="fc-err" role="alert">{error}</p><button type="button" className="fc-btn alt" onClick={load}>Try again</button></section></main>;
   if (!info) return <main className="fc"><p className="fc-sub">Loading…</p></main>;
   return (
-    <main className="fc">
+    <main className="fc" style={schoolLook(info.own_look)}>
       {viaFind && <a className="fc-back" href="/flow/find">‹ All schools</a>}
       <header className="fc-top">
         <img src={info.brand?.logo_url || "/partners/flowcrew-mark.png"} alt="" />
@@ -302,7 +316,7 @@ export default function FlowApp() {
       {tab === "book" && <Book key={bookKey} shop={shop} info={info} start={start} onDone={(r) => { setFresh(r); setTab("mine"); window.scrollTo(0, 0); }} />}
       {tab === "mine" && <Mine shop={shop} info={info} fresh={fresh} go={go} />}
       {tab === "chat" && <Chat info={info} />}
-      <p className="fc-foot">Powered by {info.partner?.name || "FlowCrew"}</p>
+      <p className="fc-foot">Powered by {info.partner?.name || "FlowCrew"}<img src="/partners/flowcrew-mark.png" alt="" /></p>
       <nav className="fc-bar" aria-label="Main">
         {[["home", "Home"], ["book", "Book"], ["mine", "Bookings"], ["chat", "Chat"]].map(([id, label]) => (
           <button key={id} type="button" className="fc-tab" aria-current={tab === id ? "page" : undefined} onClick={() => (id === "book" ? go("book", {}) : go(id))}>

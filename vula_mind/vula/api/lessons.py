@@ -299,6 +299,8 @@ async def flow_shop(shop: str, request: Request) -> dict:
         digits = "27" + digits[1:]
     return {"shop": tenant_id.replace("_", "-"), "name": brand.get("name"), "partner": brand.get("partner"),
             "brand": {k: brand.get(k) for k in ("accent_color", "secondary_color", "ink_color", "logo_url", "tagline")},
+            # the school's OWN colours, when it has chosen any: its page wears them once it is picked
+            "own_look": brand.get("own_look"),
             "whatsapp": digits if 9 <= len(digits) <= 15 else None,
             "coaches": lesson_directory.public_coaches(tenant_id, st), **lessons.public_settings(st)}
 
