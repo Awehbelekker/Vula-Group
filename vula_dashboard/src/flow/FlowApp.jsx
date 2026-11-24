@@ -64,6 +64,7 @@ function Conditions({ shop, spot }) {
           {["Today", "Tomorrow"].map((l, i) => <button key={l} type="button" className={`fc-chip pick${day === i ? " on" : ""}`} aria-pressed={day === i} onClick={() => setDay(i)}>{l}</button>)}
         </div>
       </div>
+      {day === 0 && d?.report && <p className="fc-note"><b>Seen from the beach at {d.report.time}{d.report.by ? ` by ${d.report.by}` : ""}:</b> {d.report.text}.{d.report.coach_note ? ` “${d.report.coach_note}”` : ""}</p>}
       {!d ? <p className="fc-sub">Reading the forecast…</p> : !hours.length ? <p className="fc-sub">The forecast couldn't be read just now.</p> : (<>
         {now && <p style={{ margin: 0 }}><span className={`fc-chip ${now.rating}`}>{RATING[now.rating]} for learners{day === 0 ? " now" : " at 08:00"}</span> <span className="fc-sub">{now.text}</span></p>}
         <div className="fc-hours">

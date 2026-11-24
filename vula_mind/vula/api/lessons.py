@@ -10,6 +10,7 @@ vula/api/lessons.py — lessons and gear hire the business confirms by hand
     POST    …/{t}/admin/lessons/{id}/decline    {reason} — the customer is told
     POST    …/{t}/admin/lessons/{id}/status     completed | no_show | cancelled
     GET     …/{t}/admin/lessons/conditions?date=  the forecast for the spot, hour by hour
+    GET/POST …/{t}/admin/lessons/beach-report   the latest reading from the beach; POST a photo to add one
 
 The customer app (`public`, mounted at /v1/flow; the dashboard's /flow/<business> page). No login:
 a request the phone made is opened only by the signed token it was given back.
@@ -26,7 +27,7 @@ from __future__ import annotations
 from datetime import date as _date
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 from vula.commerce import lessons
 
@@ -156,6 +157,23 @@ async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str 
             "hours": conditions.day_view(hours, sport if sport in lessons.SPORTS else "surf")}
 
 
+@router.get("/{tenant_id}/admin/lessons/beach-report")
+async def beach_report(tenant_id: str) -> dict:
+    from vula.commerce import beach_reports
+    return {"report": beach_reports.latest(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/lessons/beach-report")
+async def add_beach_report(tenant_id: str, request: Request, file: UploadFile = File(...), note: str = Form("")) -> dict:
+    """A photo of the water from the beach → a reading in fixed words. The photo is not kept."""
+    from vula.commerce import beach_reports
+    data = await file.read(beach_reports.MAX_UPLOAD + 1)
+    try:
+        return {"report": await beach_reports.add(tenant_id, data, who=await _who(request, tenant_id), note=note)}
+    except beach_reports.ReportError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 # ── the customer app ──────────────────────────────────────────────────────────────────────────
 _RECENT: dict = {}
 
@@ -217,9 +235,12 @@ async def flow_shop(shop: str, request: Request) -> dict:
 @public.get("/{shop}/conditions")
 async def flow_conditions(shop: str, request: Request, date: Optional[str] = None) -> dict:
     _limit(request, "cond", 30)
-    out = await conditions_for(_shop(shop), date)
+    from vula.commerce import beach_reports
+    tenant_id = _shop(shop)
+    out = await conditions_for(tenant_id, date)
     if out.get("spot"):
         out["spot"] = {"name": out["spot"]["name"]}
+    out["report"] = beach_reports.for_customers(beach_reports.latest(tenant_id))   # seen from the beach, last 4 hours
     return out
 
 

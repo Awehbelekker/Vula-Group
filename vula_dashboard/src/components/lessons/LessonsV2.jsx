@@ -5,7 +5,7 @@
  * server's; a price typed here is read as written (lib/money.randToCents), never worked out.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, ExternalLink, Plus, Settings, Trash2, Waves, X } from 'lucide-react'
+import { Camera, Check, Copy, ExternalLink, Plus, Settings, Trash2, Waves, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import { formatMoney, randToCents } from '../../lib/money'
 import { Button, Card, EmptyState, ErrorCard, Field, Input, PageHeader, PillTabs, Select, Sheet, Skeleton, StatusChip, Textarea, confirmDialog, promptDialog, toast } from '../ui/index.jsx'
@@ -20,6 +20,41 @@ const cents = (text) => String(text ?? '').trim() === '' ? null : randToCents(te
 // the customer app (src/flow/): a page customers can add to their phone, at /flow/<business>
 const appLink = (tenantId) => `${window.location.origin}/flow/${String(tenantId).replace(/_/g, '-')}`
 const PART_TIME = { morning: '09:00', midday: '12:00', afternoon: '15:00', any: '09:00' }
+
+/** What the water looks like now: a team member's photo from the beach, read into a few fixed
+ * words by the server. The photo is sent once and not kept; only the reading is. */
+function BeachReport({ tenantId }) {
+  const [report, setReport] = useState(null)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const base = `/v1/commerce/${tenantId}/admin/lessons/beach-report`
+  useEffect(() => { api(base).then((d) => setReport(d.report)).catch(() => {}) }, [base])
+  const send = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setBusy(true); setError('')
+    try {
+      const fd = new FormData(); fd.append('file', file); fd.append('note', note)
+      const d = await api(base, { method: 'POST', body: fd })
+      setReport(d.report); setNote(''); toast('Report added. Your customers can see it in the app.')
+    } catch (err) { setError(err.message) }
+    setBusy(false)
+  }
+  return (
+    <div className="vls-beach">
+      <p className="vtb-sub">{report ? <><strong>Seen from the beach at {report.time}{report.by ? ` by ${report.by}` : ''}:</strong> {report.text}{report.coach_note ? `. “${report.coach_note}”` : ''}</> : 'No report from the beach in the last 4 hours.'}</p>
+      <div className="vtb-row">
+        <Field label="Your note for customers (optional)"><Input value={note} maxLength={160} placeholder="Small and clean, good for first timers" onChange={e => setNote(e.target.value)} /></Field>
+        <label className={`vtb-upload${busy ? ' vls-busy' : ''}`}><Camera size={16} aria-hidden="true" />{busy ? 'Reading the photo…' : 'Take a photo of the water'}
+          <input type="file" accept="image/*" capture="environment" hidden disabled={busy} onChange={send} /></label>
+      </div>
+      {error && <p className="vtb-error" role="alert">{error}</p>}
+      <p className="vtb-sub">Face the waves. The photo is read once and not kept; customers see only the words, the time and your first name.</p>
+    </div>
+  )
+}
 
 function Conditions({ tenantId }) {
   const [day, setDay] = useState(0)
@@ -47,6 +82,7 @@ function Conditions({ tenantId }) {
         </div>
       )}
       <p className="vtb-sub">Swell height and period, wind and gusts in knots, rated for a beginner surf lesson. A forecast for open water: a guide, not a decision.</p>
+      <BeachReport tenantId={tenantId} />
     </Card>
   )
 }
