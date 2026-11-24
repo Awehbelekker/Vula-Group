@@ -82,11 +82,11 @@ HONESTY_RULES = (
     "- Distinguish what the documents say from your own general reasoning, so the user "
     "knows how confident to be.\n"
     "- Never say something isn't available and then describe having found it. Real reply "
-    "(2026-09-01): 'The cost of Creation 55 ref 0504 TWIST is not explicitly stated in the "
-    "provided tool results. However, the results do provide information on various Gerflor "
+    "(2026-09-01): 'The cost of the Classic 55 in grey is not explicitly stated in the "
+    "provided tool results. However, the results do provide information on various "
     "products, including their prices.' That is useless to the person asking. If the tools "
     "returned relevant data, GIVE IT. If they returned near-misses, name what you did find "
-    "('I have Creation 55 in 0503 and 0511 at Rx — not 0504') and say precisely what's "
+    "('I have the Classic 55 in white and black at Rx — not grey') and say precisely what's "
     "missing. 'Not found' is only ever a whole answer when you genuinely found nothing.\n"
 )
 
@@ -273,9 +273,9 @@ _LEAKED_TOOL_RE = re.compile(
     re.IGNORECASE)
 
 LEAKED_OWNER_FALLBACK = ("I couldn't finish that one properly. Could you ask again and name the supplier, "
-                         "customer or document — e.g. \"all Gardens Handiman invoices in Excel\"?")
+                         "customer or document — e.g. \"all Sunrise Trading invoices in Excel\"?")
 LEAKED_CUSTOMER_FALLBACK = ("Sorry, I couldn't complete that just now. Tell me the product and how much "
-                            "you'd like (e.g. \"40kg Atlantic Mackerel\") and I'll put it together — or "
+                            "you'd like (e.g. \"2 of the large ones\") and I'll put it together — or "
                             "reply \"speak to someone\" and the team will help.")
 
 

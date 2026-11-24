@@ -71,7 +71,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "before drafting anything.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "A name, company, or partial address, "
-                                                       "e.g. 'Jack', 'oroafrica', 'judy'"}},
+                                                       "e.g. 'Jack', 'sunrisetrading', 'thandi'"}},
             "required": ["query"]}}},
     {"type": "function", "function": {
         "name": "email_draft",
@@ -143,7 +143,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "this again with it set — never ask the same question twice.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Supplier/sender name, company, or "
-                      "topic — e.g. 'Gardens Handiman Centre', 'jackhammer', 'the Regan order'."},
+                      "topic — e.g. 'Sunrise Trading', 'sunrisetrading', 'the Smith order'."},
             "since": {"type": "string", "description": "Optional start date (YYYY-MM-DD) to "
                       "narrow the search — pass this once the user has answered a 'how far "
                       "back?' question, or if they already gave a date/period."}},
@@ -399,7 +399,7 @@ class EmailAdminSkill(BaseSkill):
                 "address ('email Jack about the invoice'), call find_contact FIRST. Never put a "
                 "name in the `to` field and never invent an address.\n"
                 "- Read the match back to the user before drafting — the person, their address, "
-                "and the company — e.g. 'Jack Hammer, jack@jackhammer.co.za (jackhammer.co.za) "
+                "and the company — e.g. 'Jack Smith, jack@sunrisetrading.co.za (sunrisetrading.co.za) "
                 "— that's the one?'. If several people match, or the best match is flagged "
                 "looks_automated (a no-reply/notification address wearing a person's name), ask "
                 "which one they mean instead of choosing. Two people really do share a name in "

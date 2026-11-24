@@ -107,6 +107,15 @@ def _update(tenant_id: str, phone: str, patch: dict) -> None:
         logger.warning("contact update failed: %s", exc)
 
 
+def _is_food(tenant_id: str) -> bool:
+    """Food wording (\"the daily catch\") only for a food business."""
+    try:
+        from vula.api.tenants import tenant_profile
+        return (tenant_profile(tenant_id) or {}).get("business_type") == "food"
+    except Exception:
+        return False
+
+
 def _business_name(tenant_id: str) -> str:
     """The tenant's own name — these messages used to say "Off the Hook" for every shop."""
     from vula.api.tenants import display_name
@@ -179,8 +188,11 @@ async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]
                 pass
         else:
             _update(tenant_id, phone, {"onboarding_state": "complete"})
-        return ("You're all set! 🎣 You'll get first dibs on the daily catch.\n\n"
-                "What can we get you today? Reply *menu* to see what's fresh.")
+        if _is_food(tenant_id):
+            return ("You're all set! 🎣 You'll get first dibs on the daily catch.\n\n"
+                    "What can we get you today? Reply *menu* to see what's fresh.")
+        return ("You're all set! 🎉 You'll be the first to hear about our specials.\n\n"
+                "What can we get you today? Reply *menu* to see what we have.")
 
     return None
 

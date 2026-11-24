@@ -447,7 +447,7 @@ async def _offer_product_photos(tenant_id: str, phone: str, photos: list) -> Non
                 if len(photos) > _PHOTO_OFFERS_PER_BURST else "")
         await _send_reply(phone, (
             "Still AI pictures on your website: " + ", ".join(left) + "." + more +
-            "\nSend a photo captioned with the product name (e.g. *photo Hake Fillets*) to "
+            "\nSend a photo captioned with the product name (e.g. *photo Blue Mug*) to "
             "replace one."), tenant_id)
 
 
@@ -7288,7 +7288,7 @@ async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id
         if not lines:
             await _send_reply(phone, "That looks like a delivery note, but I couldn't read its item "
                                      "lines. Send a clearer photo, or tell me what arrived "
-                                     "(e.g. \"received 10 hake, 5 prawns\").", tenant_id)
+                                     "(e.g. \"received 10 mugs, 5 teapots\").", tenant_id)
             return True
         args = {"lines": [{"product": str(ln.get("description"))[:120], "quantity": ln.get("quantity"),
                            **({"unit_cost_rands": ln["unit_price_rands"]}
@@ -7339,7 +7339,7 @@ async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id
         return True
 
     await _send_reply(phone, "I can read barcodes, labels and delivery notes, but I won't guess how "
-                             "many items are in a photo. Send the count (e.g. \"hake 12\"), a photo "
+                             "many items are in a photo. Send the count (e.g. \"mugs 12\"), a photo "
                              "of the barcode, or scan items in the dashboard's Stock: "
                              f"{_dashboard_link(tenant_id, 'stock')}",
                       tenant_id)
