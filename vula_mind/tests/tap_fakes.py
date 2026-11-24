@@ -383,6 +383,41 @@ class MemoryRepo:
         return "".join(c for c in phone if c.isdigit()) in self.opted_out
 
     # display
+    # service at the table (migration 300)
+    def _ts_rows(self, table):
+        if not hasattr(self, "_tableside"):
+            self._tableside = {"kb_table_calls": {}, "kb_table_orders": {}}
+        return self._tableside[table]
+
+    def add_row(self, table, row):
+        rows = self._ts_rows(table)
+        if table == "kb_table_calls" and any(r["tag_id"] == row["tag_id"] and r["kind"] == row["kind"]
+                                             and r["status"] in ("open", "accepted") for r in rows.values()):
+            return None                                   # the unique index: one live call of a kind per table
+        r = {"id": self._id(), "created_at": self.clock().isoformat(), "updated_at": self.clock().isoformat(), **row}
+        rows[r["id"]] = r
+        return dict(r)
+
+    def get_row(self, table, tenant_id, row_id):
+        r = self._ts_rows(table).get(row_id)
+        return dict(r) if r and r["tenant_id"] == tenant_id else None
+
+    def find_rows(self, table, tenant_id, statuses, **eq):
+        out = [dict(r) for r in self._ts_rows(table).values() if r["tenant_id"] == tenant_id
+               and r["status"] in statuses and all(r.get(k) == v for k, v in eq.items())]
+        return sorted(out, key=lambda r: r["created_at"])
+
+    def cas_row(self, table, tenant_id, row_id, *, expected, fields):
+        r = self._ts_rows(table).get(row_id)
+        if not r or r["tenant_id"] != tenant_id or r["status"] != expected:
+            return False
+        r.update(fields)
+        r["updated_at"] = self.clock().isoformat()
+        return True
+
+    def menu_products(self, tenant_id):
+        return [dict(p) for p in getattr(self, "products", []) if p["tenant_id"] == tenant_id and p.get("in_stock", True)]
+
     def merchant_name(self, tenant_id):
         return self.names.get(tenant_id, "Bean and Brew Coffee")
 

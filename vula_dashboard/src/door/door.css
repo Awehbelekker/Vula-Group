@@ -1,0 +1,29 @@
+/* door.css — the door page (door/DoorPage.jsx). Tokens only. Built for one hand and a queue: big
+   targets, one very loud result panel, nothing that needs reading twice. */
+.vdr { box-sizing: border-box; max-width: 560px; margin: 0 auto; padding: var(--space-4) var(--space-3) var(--space-6);
+  min-height: 100dvh; display: flex; flex-direction: column; gap: var(--space-3); background: var(--bg); color: var(--ink); font-family: var(--font-sans); }
+.vdr-head, .vdr-row, .vdr-att { display: flex; align-items: center; gap: var(--space-2); }
+.vdr-head { justify-content: space-between; align-items: flex-start; }
+.vdr-row { flex-wrap: wrap; }
+.vdr-row > input { flex: 1 1 180px; min-width: 0; min-height: 48px; box-sizing: border-box; }
+.vdr-main { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
+.vdr-h1 { margin: 0; font: 600 20px/1.2 var(--font-sans); overflow-wrap: anywhere; }
+.vdr-h2 { margin: 0; font: 600 var(--fs-body)/1.4 var(--font-sans); }
+.vdr-sub { margin: 0; font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; }
+.vdr-note, .vdr-err { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--warn-soft); color: var(--warn-text); }
+.vdr-err { background: var(--danger-soft); color: var(--danger-text); }
+.vdr-card { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vdr-count { display: flex; align-items: baseline; gap: var(--space-2); }
+.vdr-count .vula-figure { font-size: 40px; line-height: 1; }
+.vdr-result { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-align: center;
+  min-height: 132px; padding: var(--space-4); border-radius: var(--radius-lg); overflow-wrap: anywhere; }
+.vdr-result strong { display: inline-flex; align-items: center; gap: 8px; font-size: 22px; line-height: 1.2; }
+.vdr-result--idle { border: 2px dashed var(--line); color: var(--muted); }
+.vdr-result--ok { background: var(--ok); color: var(--on-brand); }
+.vdr-result--warn { background: var(--warn); color: var(--ink); }
+.vdr-result--bad { background: var(--danger); color: var(--on-brand); }
+.vdr-video { overflow: hidden; border-radius: var(--radius-md); background: var(--ink); aspect-ratio: 4 / 3; }
+.vdr-video[hidden] { display: none; }
+.vdr-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.vdr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vdr-att { padding: var(--space-2) 0; border-bottom: 1px solid var(--line); min-height: 44px; }

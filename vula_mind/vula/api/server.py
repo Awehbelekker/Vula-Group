@@ -112,6 +112,8 @@ from vula.api.shopify_connect import router as shopify_admin_router, webhook_rou
 from vula.api.shop_domain import router as shop_domain_router
 from vula.api.couriers import router as couriers_router, webhook_router as couriers_webhook_router
 from vula.api.till import router as till_router
+from vula.api.tables import public as tables_public_router, router as tables_router
+from vula.api.events import door as events_door_router, public as events_public_router, router as events_router
 from vula.api.woocommerce_connect import router as woo_admin_router, webhook_router as woo_webhook_router
 from vula.api.manufacturing import router as manufacturing_router
 from vula.api.draft import router as draft_router
@@ -1645,6 +1647,19 @@ async def _courier_tracking_loop() -> None:
     await run_forever()
 
 
+async def _event_messages_loop() -> None:
+    """Every half hour: ticket buyers are reminded the day before their event and thanked the day
+    after, once each. See vula/commerce/events.py."""
+    from vula.commerce.events import run_forever
+    await run_forever()
+
+
+async def _table_reminders_loop() -> None:
+    """Every half hour: a table booking a few hours away is reminded once. See vula/commerce/tables.py."""
+    from vula.commerce.tables import run_forever
+    await run_forever()
+
+
 async def _books_health_loop() -> None:
     """Hourly: failed postings tried again; daily: every business on the one trusted book checked
     (balanced, complete, bank reconciled, debtors/creditors tied) — loudly. See vula/books_health.py."""
@@ -1852,6 +1867,9 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_statement_backfill_loop()))
     # Courier bookings still on their way: what the courier says, hourly (2026-11-23).
     _scheduled_job_tasks.append(_asyncio.create_task(_courier_tracking_loop()))
+    # Event ticket buyers: the reminder the day before, the thank-you the day after (2026-11-24).
+    _scheduled_job_tasks.append(_asyncio.create_task(_event_messages_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_table_reminders_loop()))
     # Last month's management accounts to the owners, around the 5th (2026-11-23).
     _scheduled_job_tasks.append(_asyncio.create_task(_management_pack_loop()))
     # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
@@ -2383,6 +2401,11 @@ app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/a
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
 app.include_router(couriers_router, prefix="/v1/commerce")        # /{tenant}/admin/couriers|shipments — tenant-guarded
 app.include_router(till_router, prefix="/v1/commerce")            # /{tenant}/admin/till — tenant-guarded
+app.include_router(events_router, prefix="/v1/commerce")          # /{tenant}/admin/events — tenant-guarded
+app.include_router(events_public_router)                           # /events/{id}, /tickets/{token} — public pages
+app.include_router(events_door_router, prefix="/v1/door")              # the door link: its secret is the only way in
+app.include_router(tables_router, prefix="/v1/commerce")          # /{tenant}/admin/tables|specials — tenant-guarded
+app.include_router(tables_public_router)                           # /book/{tenant} — the public booking page
 app.include_router(couriers_webhook_router, prefix="/v1/couriers")  # the courier's tracking news — secret address, re-read from the courier
 from vula.api.buying_api import router as buying_router  # noqa: E402
 app.include_router(buying_router, prefix="/v1/commerce")          # /{tenant}/admin/buying — tenant-guarded

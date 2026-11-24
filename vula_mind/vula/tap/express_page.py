@@ -65,6 +65,102 @@ def _tips(bill_cents: int, presets: list) -> str:
             "<input class=n name=custom_tip inputmode=decimal placeholder='e.g. 20'></div>")
 
 
+_TABLE_CSS = """
+.svc{margin-top:1.5rem;padding-top:1.1rem;border-top:1px solid #d6d6d2}.svc h2{font-size:1rem;margin:0 0 .6rem}
+.svc form{margin:0}.svc button{margin-top:.55rem}.ok{background:#e6f4ea;border:1px solid #a9d3b6;padding:.6rem .8rem;
+border-radius:.6rem;margin:.5rem 0}.wait{background:#fff4d6;border:1px solid #e8c766;padding:.6rem .8rem;border-radius:.6rem;margin:.5rem 0}
+.lines{list-style:none;margin:.25rem 0 1rem;padding:0}.lines li{display:flex;justify-content:space-between;gap:.75rem;
+padding:.35rem 0;border-bottom:1px solid #e4e4e0}.lines span:first-child{min-width:0;overflow-wrap:anywhere}
+.mi{display:flex;gap:.75rem;align-items:center;padding:.7rem 0;border-bottom:1px solid #e4e4e0}.mi img{flex:none;width:3.4rem;
+height:3.4rem;border-radius:.6rem;object-fit:cover;background:#e4e4e0}.mi .t{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.mi small{display:block;color:#666}.mi input{flex:none;width:4.2rem;font-size:1.15rem;padding:.55rem .4rem;text-align:center;
+border:2px solid #d6d6d2;border-radius:.7rem}h2.cat{font-size:1rem;margin:1.2rem 0 .1rem;color:#444}
+textarea{width:100%;font:inherit;padding:.7rem;border:2px solid #d6d6d2;border-radius:.8rem;margin-top:.35rem}
+a.btn{display:block;text-decoration:none}
+"""
+
+_SAID = {"waiter": "a waiter", "bill": "the bill", "machine": "the card machine"}
+
+
+def _table(code: str, t: dict) -> str:
+    """Service at the table (vula/tap/tableside.py): what this table has asked for, what it has
+    ordered, and the buttons to ask."""
+    if not t:
+        return ""
+    parts = []
+    for c in t.get("calls") or []:
+        what = _SAID.get(c["kind"], "someone")
+        if c["status"] == "accepted":
+            parts.append(f"<div class=ok>{escape(c.get('by') or 'Your waiter')} is on the way with {what}.</div>"
+                         if c["kind"] != "waiter" else f"<div class=ok>{escape(c.get('by') or 'Your waiter')} is on the way.</div>")
+        else:
+            parts.append(f"<div class=wait>We've asked for {what}. Someone will be with you shortly.</div>")
+    for o in t.get("orders") or []:
+        if o["status"] == "pending":
+            parts.append(f"<div class=wait>Order sent: {escape(o['summary'])}. Waiting for your waiter to confirm it.</div>")
+        elif o["status"] == "confirmed":
+            parts.append(f"<div class=ok>Order confirmed: {escape(o['summary'])}.</div>")
+        else:
+            parts.append(f"<div class=err>Your order ({escape(o['summary'])}) couldn't be taken"
+                         f"{': ' + escape(o['reason']) if o.get('reason') else ''}. Please ask your waiter.</div>")
+    asked = {c["kind"] for c in t.get("calls") or []}
+    buttons = ""
+    if t.get("orders_on"):
+        buttons += f"<a class=btn href='/t/{escape(code)}/menu'><button type=button>See the menu and order</button></a>"
+    if t.get("calls_on"):
+        for kind, label in (("waiter", "Call a waiter"), ("bill", "Ask for the bill"), ("machine", "Bring the card machine")):
+            if kind not in asked:
+                buttons += (f"<form method=post action='/t/{escape(code)}/call'><input type=hidden name=kind value={kind}>"
+                            f"<button type=submit class=alt>{label}</button></form>")
+    head = f"<h2>{escape(t['label'])}</h2>" if t.get("label") else "<h2>Need something?</h2>"
+    return f"<div class=svc>{head}{''.join(parts)}{buttons}</div>"
+
+
+def _lines(items: list) -> str:
+    if not items:
+        return ""
+    return "<ul class=lines>" + "".join(
+        f"<li><span>{int(i['quantity'])} x {escape(str(i['description']))}</span><span>{_r(int(i['line_cents']))}</span></li>"
+        for i in items) + "</ul>"
+
+
+_MENU_JS = """
+(function(){var f=document.getElementById('m');if(!f)return;var b=document.getElementById('send');
+function rands(c){return 'R '+(c/100).toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g,' ')}
+function upd(){var n=0,c=0;[].forEach.call(f.querySelectorAll('input[data-c]'),function(i){var q=parseInt(i.value,10)||0;
+if(q<0){q=0;i.value=''}n+=q;c+=q*(+i.dataset.c)});b.disabled=n===0;b.textContent=n?('Send order \u00b7 '+rands(c)):'Choose something'}
+f.addEventListener('input',upd);f.addEventListener('submit',function(){b.disabled=true;b.textContent='Sending\u2026'});upd()})();
+"""
+
+
+def menu(code: str, merchant: str, label: str, items: list, error: str = "", nonce: str = "") -> str:
+    """The menu a table tag opens: every item with its price and a quantity box, a note, Send.
+    The total on the button is for display; the server prices the order from its own records."""
+    err = f"<div class=err>{escape(error)}</div>" if error else ""
+    rows, cat = "", None
+    for m in items:
+        if m["category"] != cat:
+            cat = m["category"]
+            rows += f"<h2 class=cat>{escape(cat)}</h2>"
+        img = f"<img src='{escape(m['image'])}' alt='' loading=lazy>" if m.get("image") else ""
+        rows += (f"<label class=mi>{img}<span class=t><strong>{escape(m['name'])}</strong>"
+                 f"<small>{_r(int(m['price_cents']))}{' · ' + escape(m['description']) if m.get('description') else ''}</small></span>"
+                 f"<input type=number inputmode=numeric min=0 max=20 name='q_{escape(m['id'])}' data-c={int(m['price_cents'])} "
+                 f"placeholder=0 aria-label='How many {escape(m['name'])}'></label>")
+    body = (f"<h1>{escape(merchant)}</h1><p class=who>{escape(label)}</p>{err}"
+            + (f"<form id=m method=post action='/t/{escape(code)}/order'>{rows}"
+               "<label class=l>Anything to add? (optional)</label>"
+               "<textarea name=note rows=2 maxlength=200 placeholder='No onions, extra ice'></textarea>"
+               "<button id=send type=submit>Send order</button></form>"
+               "<p class=foot>Your waiter confirms the order before it goes on your bill.</p>"
+               if items else "<p>The menu isn't loaded yet. Please ask your waiter.</p>")
+            + f"<p class=foot><a href='/t/{escape(code)}'>Back</a></p>")
+    return (f"<!doctype html><html lang=en><meta charset=utf-8>"
+            f"<meta name=viewport content='width=device-width,initial-scale=1'>"
+            f"<title>Menu · {escape(merchant)}</title><style>{_CSS}{_TABLE_CSS}</style><main>{body}</main>"
+            f"<script{_n(nonce)}>{_MENU_JS}</script></html>")
+
+
 def render(code: str, v: dict, error: str = "", nonce: str = "") -> str:
     """The page for one view() result (kinds bill / quick_tip / open_amount / tabs / locked / no_bill)."""
     merchant, staff, kind = v.get("merchant") or "", v.get("staff") or "", v["kind"]
@@ -93,7 +189,7 @@ def render(code: str, v: dict, error: str = "", nonce: str = "") -> str:
             bill = int(v.get("bill_cents") or 0)
             test = ("<div class=test>Test payment. Nothing is booked to anyone.</div>" if v.get("is_test") else "")
             fields = (f"{test}<div class=what>{escape(v.get('description') or 'Your bill')}</div>"
-                      f"<div class=amt>{_r(bill)}</div>{_tips(bill, v['tip_presets'])}")
+                      f"<div class=amt>{_r(bill)}</div>{_lines(v.get('items') or [])}{_tips(bill, v['tip_presets'])}")
             mode, data_bill = "bill", bill
         elif kind == "quick_tip":
             opts = [_opt("amount", str(c), _r(c).replace(".00", ""), checked=(i == 1))
@@ -112,9 +208,14 @@ def render(code: str, v: dict, error: str = "", nonce: str = "") -> str:
                 f"data-bill={data_bill}>{hidden}{fields}<button id=pay type=submit>Pay</button></form>"
                 f"<p class=foot>Secure payment on {escape(v.get('pay_with') or 'PayFast')}.<br>"
                 f"<a href='/t/{escape(code)}?via=whatsapp'>Rather pay in WhatsApp</a></p>")
+    table = v.get("table")
+    if table and kind == "no_bill":
+        # a table with nothing to pay yet: the page is for ordering and calling, not an error
+        body = f"{head}{err}<p>Nothing to pay yet.</p>{tab_links}"
+    body += _table(code, table)
     return (f"<!doctype html><html lang=en><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'>"
-            f"<title>Pay {escape(merchant)}</title><style>{_CSS}</style><main>{body}</main>"
+            f"<title>Pay {escape(merchant)}</title><style>{_CSS}{_TABLE_CSS if table else ''}</style><main>{body}</main>"
             f"<script{_n(nonce)}>{_JS}</script></html>")
 
 
