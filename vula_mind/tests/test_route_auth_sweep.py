@@ -60,6 +60,7 @@ PUBLIC = {
     ("POST", "/v1/tap/receipt/{token}/tax-invoice"): "tap-to-pay tax invoice request — same receipt token; one immutable invoice per payment",
     ("GET", "/v1/tap/receipt/{token}/tax-invoice.pdf"): "tap-to-pay tax invoice PDF — same receipt token; 404 until requested",
     ("GET", "/v1/tap/app/scores"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
+    ("GET", "/v1/tap/app/income"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("GET", "/v1/tap/app/floor"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("GET", "/v1/tap/app/menu"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("POST", "/v1/tap/app/calls/{call_id}/accept"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",

@@ -40,6 +40,15 @@ async function call(path, { token, method = "GET", body } = {}) {
   return data;
 }
 
+/** Is this #rrggbb dark enough for white text on it (contrast of 4.5:1 or better)? */
+export function darkEnough(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return false;
+  const ch = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  const lum = 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  return 1.05 / (lum + 0.05) >= 4.5;
+}
+
 const buzz = () => { try { navigator.vibrate?.([120, 60, 120]); } catch { /* unsupported */ } };
 
 function urlB64ToUint8(s) {
@@ -161,7 +170,15 @@ function Home({ token, onLock, onExpired }) {
   }, [token, guard]);
 
   useEffect(() => {
-    (async () => { try { setMe(await call("/v1/tap/app/me", { token })); } catch (x) { guard(x); } })();
+    (async () => {
+      try {
+        const m = await call("/v1/tap/app/me", { token });
+        setMe(m);
+        // the business's own colour, so the app looks like theirs (pay.css derives the tints from it)
+        // …unless it is too pale to carry white text (the hero card and the buttons sit on it)
+        if (m.brand?.accent && darkEnough(m.brand.accent)) document.documentElement.style.setProperty("--vp-green", m.brand.accent);
+      } catch (x) { guard(x); }
+    })();
     loadBills();
   }, [token, loadBills, guard]);
 
@@ -266,12 +283,15 @@ function Home({ token, onLock, onExpired }) {
 
   return (
     <>
-      <div className="row"><div><h1>{me?.merchant || "Vula Pay"}</h1><div className="muted"><span className="dot" style={{ background: live ? C.ok : C.off }} />{me ? `${me.name}${me.sees_all ? " · manager" : ""}` : ""} · {live ? "live" : "connecting…"}</div></div>
+      <div className="row head">
+        {me?.brand?.logo && <img className="logo" src={me.brand.logo} alt="" />}
+        <div className="grow"><h1>{me?.merchant || "Vula Pay"}</h1><div className="muted"><span className="dot" style={{ background: live ? C.ok : C.off }} />{me ? `${me.name}${me.sees_all ? " · manager" : ""}` : ""} · {live ? "live" : "connecting…"}</div></div>
         <button className="ghost small" onClick={onLock}>Lock</button></div>
       {!online && <div className="banner">You're offline. You can see recent bills, but creating a bill needs a connection.</div>}
       {me && me.mode === "off" && <div className="banner">Tap to Pay is switched off for this business.</div>}
       {err && <div className="err" role="alert">{err}</div>}
 
+      <Income token={token} guard={guard} bump={bills} name={me?.name} />
       <Scores token={token} guard={guard} bump={bills} />
       <Floor token={token} guard={guard} online={online} />
       <Tabs token={token} guard={guard} online={online} bump={bills} />
@@ -548,7 +568,7 @@ export function Scores({ token, guard, bump }) {
   const me = d.me;
   return (
     <div className="card">
-      <div className="row"><h2 style={{ margin: 0 }}>My numbers</h2>
+      <div className="row"><h2 style={{ margin: 0 }}>Where I stand</h2>
         <div className="chips" style={{ margin: 0 }}>{[["today", "Today"], ["week", "7 days"], ["month", "30 days"]].map(([k, l]) => (
           <button key={k} className="chip" aria-pressed={period === k} onClick={() => setPeriod(k)}>{l}</button>))}</div></div>
       <div className="stats">
@@ -568,6 +588,77 @@ export function Scores({ token, guard, bump }) {
               <strong>{r.points}</strong></div>))}
           <div className="muted" style={{ marginTop: 6 }}>Points: {d.points_rule} Tips are never shown here.</div>
         </div>)}
+    </div>
+  );
+}
+
+// ── what I've earned, my target and the last two weeks (vula_mind/vula/tap/scoreboard.py income).
+// Every amount is the server's. The target is my own, kept on this phone only; the ring just
+// compares the server's figure with it.
+const TARGET_RE = /^\d{1,6}([.,]\d{1,2})?$/;
+export function Income({ token, guard, bump, name }) {
+  const [d, setD] = useState(null);
+  const [target, setTarget] = useState(() => { try { return JSON.parse(LS.get("vp.target") || "null"); } catch { return null; } });
+  const [edit, setEdit] = useState(null);          // null | { period, amount }
+  const [err, setErr] = useState("");
+  const load = useCallback(async () => {
+    try { setD(await call("/v1/tap/app/income?days=14", { token })); } catch (x) { if (x.status) guard(x); }
+  }, [token, guard]);
+  useEffect(() => { load(); }, [load, bump]);
+  if (!d) return null;
+
+  const period = target?.period === "week" ? "this_week" : "today";
+  const earned = d[period].earned_cents;
+  const goal = target?.cents || 0;
+  const pct = goal ? Math.max(0, Math.min(100, Math.round((earned * 100) / goal))) : 0;
+  const R = 34, CIRC = 2 * Math.PI * R;
+  const top = Math.max(1, ...d.days.map((x) => x.earned_cents));
+  const saveTarget = (e) => {
+    e.preventDefault();
+    if (!TARGET_RE.test(edit.amount.trim())) return setErr("Type your target in rands, like 800.");
+    const [r, c = ""] = edit.amount.trim().replace(",", ".").split(".");
+    const t = { period: edit.period, cents: Number(r) * 100 + Number(c.padEnd(2, "0")) };
+    setTarget(t); LS.set("vp.target", JSON.stringify(t)); setEdit(null); setErr("");
+  };
+  const first = (name || "").split(" ")[0];
+
+  return (
+    <div className="card hero">
+      <div className="hero-top">
+        <div className="grow">
+          <div className="hero-hi">{first ? `Hi ${first}` : "Today"}</div>
+          <div className="muted hero-lbl">Earned today</div>
+          <div className="hero-big">{rands(d.today.earned_cents)}</div>
+          <div className="muted hero-lbl">{rands(d.today.tips_cents)} in tips · {d.today.bills} bill{d.today.bills === 1 ? "" : "s"} · {rands(d.today.sales_cents)} sold</div>
+        </div>
+        {goal > 0 && (
+          <div className="ring" role="img" aria-label={`${pct}% of my ${target.period === "week" ? "weekly" : "daily"} target of ${rands(goal)}`}>
+            <svg viewBox="0 0 80 80" width="84" height="84">
+              <circle cx="40" cy="40" r={R} className="ring-bg" />
+              <circle cx="40" cy="40" r={R} className="ring-fg" strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - pct / 100)} transform="rotate(-90 40 40)" />
+            </svg>
+            <span>{pct}%</span>
+          </div>)}
+      </div>
+      {goal > 0 && <div className="hero-lbl">{pct >= 100 ? "Target reached." : `${rands(Math.max(0, goal - earned))} to go`} · my {target.period === "week" ? "week" : "day"} target {rands(goal)}</div>}
+      <div className="bars" role="img" aria-label="What I earned each day, last 14 days">
+        {d.days.map((x) => <span key={x.date} title={`${x.date}: ${rands(x.earned_cents)}`} style={{ height: `${Math.max(4, Math.round((x.earned_cents * 100) / top))}%` }} className={x.earned_cents ? "" : "zero"} />)}
+      </div>
+      <div className="hero-foot">
+        <div><span className="hero-lbl">This week</span><strong>{rands(d.this_week.earned_cents)}</strong></div>
+        <div><span className="hero-lbl">Last 7 days</span><strong>{rands(d.last_7.earned_cents)}</strong></div>
+        <div><span className="hero-lbl">Last 14 days</span><strong>{rands(d.days.reduce((n, x) => n + x.earned_cents, 0))}</strong></div>
+      </div>
+      {edit ? (
+        <form onSubmit={saveTarget} className="hero-form">
+          <select value={edit.period} aria-label="Target for" onChange={(e) => setEdit({ ...edit, period: e.target.value })}><option value="day">Each day</option><option value="week">Each week</option></select>
+          <input value={edit.amount} inputMode="decimal" placeholder="Target in rands" aria-label="Target in rands" onChange={(e) => setEdit({ ...edit, amount: e.target.value })} />
+          {err && <div className="err" role="alert">{err}</div>}
+          <div className="row"><button type="submit">Save my target</button>
+            {target && <button type="button" className="ghost" onClick={() => { setTarget(null); LS.del("vp.target"); setEdit(null); }}>Remove</button>}</div>
+          <div className="hero-lbl">Your target is your own. It stays on this phone.</div>
+        </form>
+      ) : <button className="hero-btn" onClick={() => setEdit({ period: target?.period || "day", amount: target ? String(target.cents / 100) : "" })}>{target ? "Change my target" : "Set a target for myself"}</button>}
     </div>
   );
 }

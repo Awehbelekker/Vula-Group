@@ -153,3 +153,37 @@ class ScoreDesk:
                 "avg_wait_seconds": r["wait_seconds"] // r["calls"] if r["calls"] else None,
                 "points": self.points(r), "rank": me["rank"] if me else None, "of": len(board),
                 "streak_days": self._streak(r["days"]), "badges": me["badges"] if me else []}
+
+    def income(self, tenant_id: str, member_id: str, days: int = 30) -> dict:
+        """What one person has earned, day by day (South African days, oldest first): their share
+        from the ledger — bills and tips, less any fee they carry — beside the sales and tips those
+        days. Only ever that person's own."""
+        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 60:
+            raise ScoreError("Choose between 1 and 60 days.")
+        svc = self.svc
+        today = svc.now().astimezone(SAST).date()
+        start = today - timedelta(days=days - 1)
+        since = datetime.combine(start, time(0, 0), tzinfo=SAST).astimezone(timezone.utc).isoformat()
+        by_day = {start + timedelta(days=n): {"earned_cents": 0, "sales_cents": 0, "tips_cents": 0, "bills": 0}
+                  for n in range(days)}
+        for line in svc.repo.ledger_for(tenant_id, member_id, since):
+            d = _ts(line["created_at"]).astimezone(SAST).date()
+            if d in by_day:
+                by_day[d]["earned_cents"] += int(line["cents"])
+        for p in svc.repo.paid_since(tenant_id, since):
+            if p.get("staff_id") != member_id or p.get("is_test"):
+                continue
+            d = _ts(p["paid_at"]).astimezone(SAST).date()
+            if d in by_day:
+                by_day[d]["sales_cents"] += int(p["bill_cents"])
+                by_day[d]["tips_cents"] += int(p["tip_cents"])
+                by_day[d]["bills"] += 1
+
+        def total(n: int) -> dict:
+            rows = [v for d, v in by_day.items() if d > today - timedelta(days=n)]
+            return {k: sum(r[k] for r in rows) for k in ("earned_cents", "sales_cents", "tips_cents", "bills")}
+        monday = today - timedelta(days=today.weekday())
+        this_week = [v for d, v in by_day.items() if d >= monday]
+        return {"days": [{"date": d.isoformat(), **v} for d, v in sorted(by_day.items())],
+                "today": total(1), "last_7": total(min(7, days)), "last_30": total(min(30, days)),
+                "this_week": {k: sum(r[k] for r in this_week) for k in ("earned_cents", "sales_cents", "tips_cents", "bills")}}

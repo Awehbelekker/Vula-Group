@@ -177,7 +177,18 @@ class MemoryRepo:
         return dict(p)
 
     def insert_ledger_lines(self, rows):
-        self.ledger.extend(rows)
+        if not hasattr(self, "ledger_at"):
+            self.ledger_at = []                     # when each line was written (the table's created_at)
+        self.ledger_at.extend([None] * (len(self.ledger) - len(self.ledger_at)))
+        for r in rows:
+            self.ledger.append(r)
+            self.ledger_at.append(self.clock().isoformat())
+
+    def ledger_for(self, tenant_id, party_id, since_iso):
+        at = getattr(self, "ledger_at", [])
+        return [{**l, "created_at": at[i]} for i, l in enumerate(self.ledger)
+                if l["tenant_id"] == tenant_id and l["party_id"] == party_id
+                and i < len(at) and at[i] and _ts(at[i]) >= _ts(since_iso)]
 
     def get_split_rule(self, tenant_id, staff_id):
         return self.rules.get((tenant_id, staff_id)) or self.rules.get((tenant_id, None))

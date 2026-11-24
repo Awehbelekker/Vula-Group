@@ -232,6 +232,13 @@ class SupabaseRepo:
                  "bill_cents": int(s["bill_cents"]), "tip_cents": int(s["tip_cents"]), "paid_at": s["updated_at"]}
                 for s in sessions]
 
+    def ledger_for(self, tenant_id: str, party_id: str, since_iso: str) -> list[dict]:
+        """One person's ledger lines since a time (their share of bills and tips, less any fee
+        they carry) — what they have earned, read page by page."""
+        from vula.db_pages import all_rows
+        return all_rows(lambda: self.db.table("kb_ledger_lines").select("id,kind,cents,created_at")
+                        .eq("tenant_id", tenant_id).eq("party_id", party_id).gte("created_at", since_iso))
+
     def menu_products(self, tenant_id: str) -> list[dict]:
         """The business's products a customer can order from a table: listed and in stock."""
         rows = (self.db.table("commerce_products").select("*").eq("tenant_id", tenant_id).eq("in_stock", True)

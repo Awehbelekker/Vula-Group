@@ -103,3 +103,30 @@ async def test_periods_and_the_streak(env):
     assert svc.scores.mine(T, THANDI, "today")["streak_days"] == 0        # a day missed
     with pytest.raises(ScoreError):
         svc.scores.board(T, "year")
+
+
+async def test_income_is_the_persons_own_share_day_by_day(env):
+    svc, repo, clock = env
+
+    def earned(member, cents, kind="bill"):
+        repo.insert_ledger_lines([{"tenant_id": T, "payment_id": "pay", "kind": kind, "party_id": member, "cents": cents}])
+
+    clock.t -= timedelta(days=3)
+    paid(repo, clock, THANDI, 40000, tip_cents=4000)
+    earned(THANDI, 12000)
+    earned(THANDI, 4000, "tip")
+    clock.t += timedelta(days=3)
+    paid(repo, clock, THANDI, 20000, tip_cents=1000)
+    earned(THANDI, 6000)
+    earned(THANDI, 1000, "tip")
+    earned(THANDI, -150, "provider_fee")                                  # a fee they carry comes off
+    earned(PIETER, 99900)                                                 # someone else's is never theirs
+    inc = svc.scores.income(T, THANDI, 7)
+    assert len(inc["days"]) == 7 and inc["days"][-1]["earned_cents"] == 6850 and inc["days"][-4]["earned_cents"] == 16000
+    assert inc["today"] == {"earned_cents": 6850, "sales_cents": 20000, "tips_cents": 1000, "bills": 1}
+    assert inc["last_7"] == {"earned_cents": 22850, "sales_cents": 60000, "tips_cents": 5000, "bills": 2}
+    assert sum(d["earned_cents"] for d in inc["days"]) == inc["last_7"]["earned_cents"]
+    assert svc.scores.income(T, "w-nobody", 7)["last_7"]["earned_cents"] == 0
+    for bad in (0, 61, 1.5, True):
+        with pytest.raises(ScoreError):
+            svc.scores.income(T, THANDI, bad)

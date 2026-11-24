@@ -88,7 +88,14 @@ async def me(a: Actor = Depends(app_actor)) -> dict:
     tag = next((t for t in svc.repo.list_tags(a.tenant_id) if t.get("bound_id") == a.member_id
                 and t.get("status") == "active" and t.get("bound_type") != "table"), None)
     base = settings.public_base_url.rstrip("/")
-    return {"name": a.name, "role": a.role, "sees_all": a.sees_all,
+    import re as _re
+    inv = svc.repo.invoice_settings(a.tenant_id) or {}
+    accent = str(inv.get("accent_color") or "")
+    accent = accent if accent.startswith("#") else f"#{accent}"
+    logo = str(inv.get("logo_url") or "")
+    return {"brand": {"accent": accent if _re.fullmatch(r"#[0-9a-fA-F]{6}", accent) else None,
+                      "logo": logo if logo.startswith("https://") else None},
+            "name": a.name, "role": a.role, "sees_all": a.sees_all,
             "merchant": svc.repo.merchant_name(a.tenant_id), "mode": tap_api.tenant_mode(a.tenant_id),
             "tag": ({"url": f"{base}/t/{tag['code']}", "qr": f"{base}/t/{tag['code']}/qr.svg"} if tag else None),
             "push_public_key": settings.vapid_public_key or None}
@@ -415,5 +422,15 @@ async def app_scores(period: str = "today", a: Actor = Depends(app_actor)) -> di
     try:
         return {"me": desk.mine(a.tenant_id, a.member_id, period), "board": desk.board(a.tenant_id, period),
                 "points_rule": POINTS_RULE}
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/app/income")
+async def app_income(days: int = 30, a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own earnings, day by day. Nobody else's."""
+    from vula.tap.scoreboard import ScoreError
+    try:
+        return tap_api.get_service().scores.income(a.tenant_id, a.member_id, days)
     except ScoreError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
