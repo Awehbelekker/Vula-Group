@@ -111,6 +111,7 @@ from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.shopify_connect import router as shopify_admin_router, webhook_router as shopify_webhook_router
 from vula.api.shop_domain import router as shop_domain_router
 from vula.api.couriers import router as couriers_router, webhook_router as couriers_webhook_router
+from vula.api.till import router as till_router
 from vula.api.woocommerce_connect import router as woo_admin_router, webhook_router as woo_webhook_router
 from vula.api.manufacturing import router as manufacturing_router
 from vula.api.draft import router as draft_router
@@ -2116,7 +2117,7 @@ _SECTION_RULES = [
     # a mailbox; the screens were hidden in the browser only. Reading stays as it was. First in
     # the list: the first rule that matches decides.
     (_WRITES, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoice-settings|order-settings|business-profile|"
-                         r"persona|learned-answers|wa-profile|shop-domain|link-domain|shopify|woocommerce|"
+                         r"persona|learned-answers|wa-profile|shop-domain|shop-directory|link-domain|shopify|woocommerce|"
                          r"brand|ai/topup)(?:/|$)"), frozenset()),
     (_WRITES, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/providers(?:/|$)"), frozenset()),
     (_WRITES, re.compile(r"^/v1/(?:whatsapp/(?:disconnect|numbers)|email/(?:disconnect|set-primary)|"
@@ -2381,6 +2382,7 @@ app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
 app.include_router(couriers_router, prefix="/v1/commerce")        # /{tenant}/admin/couriers|shipments — tenant-guarded
+app.include_router(till_router, prefix="/v1/commerce")            # /{tenant}/admin/till — tenant-guarded
 app.include_router(couriers_webhook_router, prefix="/v1/couriers")  # the courier's tracking news — secret address, re-read from the courier
 from vula.api.buying_api import router as buying_router  # noqa: E402
 app.include_router(buying_router, prefix="/v1/commerce")          # /{tenant}/admin/buying — tenant-guarded

@@ -131,7 +131,7 @@ button.vui-row:hover, a.vui-row:hover { background: var(--surface-2); }
 .vui-palette-group { font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em;
   text-transform: uppercase; color: var(--muted); padding: var(--space-3) var(--space-2) var(--space-1); }
 .vui-palette .vui-row[aria-selected="true"] { background: var(--brand-soft); }
-.vui-kbd { font: 500 11px/1 var(--font-mono); border: 1px solid var(--line); border-radius: 6px;
+.vui-kbd { font: 500 11px/1 var(--font-code); border: 1px solid var(--line); border-radius: 6px;
   padding: 3px 6px; color: var(--muted); }
 
 /* ── Floating toolbar: fixed above the phone's home bar ─────────────────────────────────── */

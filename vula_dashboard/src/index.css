@@ -39,7 +39,11 @@
   /* Typography */
   --font-display: 'Cormorant Garamond', Georgia, serif;
   --font-body: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Source Code Pro', ui-monospace, monospace;
+  /* 24 Nov 2026: one typeface. Figures, codes and labels are set in the body face with aligned
+     digits, not a monospace: --font-mono is kept as the name every screen already uses for
+     them. Real code (DNS records, keyboard keys) uses --font-code, the device's own monospace. */
+  --font-mono: var(--font-body);
+  --font-code: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   /* Radii — the brand's corner style (data-corners on <html>) */
   --r-card: 12px;
@@ -229,7 +233,6 @@
 }
 :root[data-ui="v2"] body { font-size: var(--fs-body); line-height: var(--lh-body); }
 :root[data-ui="v2"] :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-:root[data-ui="v2"] .vula-money { font-weight: 500; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -240,7 +243,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3, .vula-display { font-family: var(--font-display); color: var(--ink); letter-spacing: -0.01em; }
-.vula-mono, .vula-money { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.vula-mono, .vula-money { font-family: var(--font-body); font-variant-numeric: tabular-nums lining-nums; }
+.vula-money { font-weight: 600; letter-spacing: -0.005em; }
+/* A figure is never set in the display face: its old-style numerals sit unevenly in an amount. */
+.vula-figure { font-family: var(--font-body); font-variant-numeric: tabular-nums lining-nums; font-weight: 600; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+code, kbd, pre, samp { font-family: var(--font-code); }
 
 button { font-family: var(--font-body); }
 input, select, textarea { font-family: var(--font-body); }

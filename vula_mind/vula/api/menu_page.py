@@ -114,6 +114,12 @@ async def shop_home(request: Request) -> HTMLResponse:
     from fastapi import HTTPException
     from vula.commerce import web_basket
     host = (request.headers.get("host") or "").strip().lower().split(":")[0]
+    from vula.commerce import shop_directory
+    if shop_directory.is_directory_host(host):
+        # The shop directory (24 Nov 2026): the shops that asked to be listed, on one page.
+        rows = await shop_directory.entries()
+        return HTMLResponse(shop_directory.page(rows, shop_directory.url()),
+                            headers={"Cache-Control": "public, max-age=300"})
     tenant_id = web_basket.tenant_for_shop_host(host)
     if not tenant_id:
         raise HTTPException(status_code=404, detail="Not Found")
@@ -131,6 +137,11 @@ def _shop_host_of(request: Request) -> tuple:
     return (host, tenant_id) if tenant_id else ("", None)
 
 
+def _is_directory(request: Request) -> bool:
+    from vula.commerce import shop_directory
+    return shop_directory.is_directory_host(request.headers.get("host") or "")
+
+
 @router.get("/robots.txt", include_in_schema=False)
 async def shop_robots(request: Request):
     """On a shop's address: search engines may read it, and here is its sitemap. Any other host
@@ -138,6 +149,9 @@ async def shop_robots(request: Request):
     from fastapi import HTTPException
     from fastapi.responses import PlainTextResponse
     host, tenant_id = _shop_host_of(request)
+    if not tenant_id and _is_directory(request):
+        from vula.commerce import shop_directory
+        return PlainTextResponse(f"User-agent: *\nAllow: /\nSitemap: {shop_directory.url()}sitemap.xml\n")
     if not tenant_id:
         raise HTTPException(status_code=404, detail="Not Found")
     return PlainTextResponse(f"User-agent: *\nAllow: /\nDisallow: /receipt/\nSitemap: https://{host}/sitemap.xml\n")
@@ -148,6 +162,10 @@ async def shop_sitemap(request: Request):
     from fastapi import HTTPException
     from fastapi.responses import Response
     host, tenant_id = _shop_host_of(request)
+    if not tenant_id and _is_directory(request):
+        from vula.commerce import shop_directory
+        return Response(content=shop_directory.sitemap(await shop_directory.entries(), shop_directory.url()),
+                        media_type="application/xml")
     if not tenant_id:
         raise HTTPException(status_code=404, detail="Not Found")
     xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
