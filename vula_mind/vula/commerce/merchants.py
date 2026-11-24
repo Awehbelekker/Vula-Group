@@ -291,8 +291,8 @@ async def _classify(key: str, sample_description: str, pages: str,
           "Expense accounts available:\n" + account_listing + "\n\n"
           'Reply with ONLY JSON: {"display_name": str, "what_they_sell": str, '
           '"suggested_account_code": str, "confidence": "confident"|"ambiguous"}\n'
-          "The account depends on the BUSINESS ABOVE, not on the merchant alone: a fish "
-          "wholesaler is cost_of_sales for a seafood shop and an odd one-off for an architect; "
+          "The account depends on the BUSINESS ABOVE, not on the merchant alone: a timber "
+          "merchant is cost_of_sales for a carpenter and an odd one-off for an accountant; "
           "a restaurant or fast-food meal is cost_of_sales for nobody except a caterer — for "
           "everyone else it is staff welfare or the owner's own spending.\n"
           'Use "ambiguous" whenever purchases there could reasonably be either a business cost '

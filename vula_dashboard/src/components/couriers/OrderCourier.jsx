@@ -103,7 +103,7 @@ function BookSheet({ c, order, onClose }) {
         {to === 'point' && (
           <>
             <div className="vcr-search">
-              <Field label="Near (suburb, town or address)"><Input value={near} onChange={(e) => setNear(e.target.value)} placeholder={order.delivery_address || 'Sea Point, Cape Town'} /></Field>
+              <Field label="Near (suburb, town or address)"><Input value={near} onChange={(e) => setNear(e.target.value)} placeholder={order.delivery_address || 'Suburb and town'} /></Field>
               <Button variant="secondary" Icon={Search} onClick={search} disabled={c.busy === 'points'}>{c.busy === 'points' ? 'Looking…' : 'Find'}</Button>
             </div>
             {points && points.length === 0 && <p className="vcr-sub">None found near there.</p>}

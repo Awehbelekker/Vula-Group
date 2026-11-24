@@ -39,6 +39,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["field-ops"])
 
 
+# The contractor templates under neutral names (24 Nov 2026 audit: every business's Field Ops sent
+# templates named `digg_…`). Meta templates belong to a WhatsApp account and can't be renamed, so a
+# business still on the old DIGG-named ones keeps them until the neutral ones are approved for it
+# (scripts/create_launch_templates.py --set fieldops). Placeholder counts are the same for both.
+FIELD_TEMPLATES = {
+    "task_assigned": "field_task_assigned",            # name, project, task
+    "task_chase": "field_task_chase",                  # name, task
+    "walkthrough_start": "field_walkthrough_start",    # name, walkthrough
+    "walkthrough_approved": "field_walkthrough_approved",  # walkthrough
+    "walkthrough_rejected": "field_walkthrough_rejected",  # walkthrough, reason
+    "daily_tasks": "field_daily_tasks",                # name, count
+}
+_LEGACY_PREFIX = "digg_"
+_NAMES_CACHE: dict = {}        # tenant -> (monotonic time, names on record)
+_NAMES_TTL_S = 600
+
+
+def _names_on_record(tenant_id: str) -> set:
+    import time
+    hit = _NAMES_CACHE.get(tenant_id)
+    if hit and time.monotonic() - hit[0] < _NAMES_TTL_S:
+        return hit[1]
+    names: set = set()
+    try:
+        from vula.commerce import service as _svc
+        wanted = list(FIELD_TEMPLATES.values()) + [_LEGACY_PREFIX + k for k in FIELD_TEMPLATES]
+        rows = (_svc._client().table("commerce_wa_templates").select("name")
+                .eq("tenant_id", tenant_id).in_("name", wanted).execute().data or [])
+        names = {r.get("name") for r in rows}
+    except Exception as exc:
+        logger.info("field templates: couldn't read %s's templates (%s)", tenant_id, type(exc).__name__)
+    _NAMES_CACHE[tenant_id] = (time.monotonic(), names)
+    return names
+
+
+def field_template(tenant_id: str, key: str) -> str:
+    """The template to send for `key`: the neutral one, unless this business only has the old
+    DIGG-named one on record."""
+    new, old = FIELD_TEMPLATES[key], _LEGACY_PREFIX + key
+    names = _names_on_record(tenant_id) if tenant_id else set()
+    return old if (old in names and new not in names) else new
+
+
 # ─── Request / Response Models ────────────────────────────────────────────────
 
 class ContractorIn(BaseModel):
@@ -206,7 +249,8 @@ async def assign_task(body: TaskAssignIn, request: Request, tenant_id: Optional[
         # 24h). Due date/notes go in the log; the contractor opens Vula or asks once they reply.
         logger.info("Task assigned: %s -> %s (project %s, due=%s, notes=%s)",
                     task.title, contractor.name, task.project_id, task.due_date, task.notes)
-        wa_sent = await _send_wa_template(contractor.tenant_id, contractor.phone, "digg_task_assigned",
+        wa_sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
+                                          field_template(contractor.tenant_id, "task_assigned"),
                                           contractor.name, task.project_id, task.title)
 
     return {
@@ -239,7 +283,7 @@ async def request_completion(task_id: str, body: CompleteRequestIn, request: Req
         sent = await _send_reply(contractor.phone, body.custom_message, contractor.tenant_id)
     else:
         sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
-                                       "digg_task_chase", contractor.name, task.title)
+                                       field_template(contractor.tenant_id, "task_chase"), contractor.name, task.title)
     return {"task_id": task_id, "contractor_name": contractor.name, "whatsapp_sent": sent}
 
 
@@ -333,7 +377,7 @@ async def start_walkthrough(body: WalkthroughStartIn) -> dict:
     numbered = "\n".join(f"{i+1}. {item}" for i, item in enumerate(body.items))
     logger.info("Walkthrough started: %s (%s) — checklist:\n%s", body.title, contractor.name, numbered)
     sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
-                                   "digg_walkthrough_start", contractor.name, body.title)
+                                   field_template(contractor.tenant_id, "walkthrough_start"), contractor.name, body.title)
 
     return {
         "walkthrough_id": wt.id,
@@ -362,10 +406,10 @@ async def approve_walkthrough(walkthrough_id: str, body: WalkthroughApproveIn, r
     contractors = [m for m in team if m["role"] == "contractor"]
     for c in contractors:
         if body.decision == "approved":
-            await _send_wa_template(wt.tenant_id, c["phone"], "digg_walkthrough_approved", wt.title)
+            await _send_wa_template(wt.tenant_id, c["phone"], field_template(wt.tenant_id, "walkthrough_approved"), wt.title)
         else:
             reason = body.notes or "no reason given"
-            await _send_wa_template(wt.tenant_id, c["phone"], "digg_walkthrough_rejected", wt.title, reason)
+            await _send_wa_template(wt.tenant_id, c["phone"], field_template(wt.tenant_id, "walkthrough_rejected"), wt.title, reason)
 
     return {
         "walkthrough_id": walkthrough_id,
@@ -425,7 +469,8 @@ async def dispatch_daily_briefings(tenant_id: str) -> dict:
             for t in contractor_tasks
         )
         logger.info("Daily briefing for %s: %d task(s)\n%s", contractor.name, len(contractor_tasks), task_lines)
-        ok = await _send_wa_template(contractor.tenant_id, contractor.phone, "digg_daily_tasks",
+        ok = await _send_wa_template(contractor.tenant_id, contractor.phone,
+                                     field_template(contractor.tenant_id, "daily_tasks"),
                                      contractor.name, str(len(contractor_tasks)))
         if ok:
             sent_count += 1

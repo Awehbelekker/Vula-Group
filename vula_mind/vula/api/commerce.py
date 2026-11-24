@@ -1510,7 +1510,7 @@ async def admin_generate_cooking_tips(tenant_id: str, product_id: str):
             f"product: {prod['name']} ({prod.get('category')}, {prod.get('pack_size') or ''}). "
             "Direct and specific: best cooking method (braai/pan/oven), rough time/temperature, "
             "one simple flavour suggestion. No intro, no bullet points, no exclamation marks — "
-            "just the advice, as if a fishmonger or butcher is talking to a customer."
+            "just the advice, as if someone behind the counter is talking to a customer."
         )}],
         temperature=0.4, max_tokens=160, api_key=api_key, api_base=api_base,
     )
@@ -6679,7 +6679,7 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
     """AI-write a WhatsApp broadcast from rough details the owner provides.
 
     Body:
-        details:      raw info, e.g. "yellowtail 180, snoek 95, kob 220, free delivery over R500"
+        details:      raw info, e.g. "gift boxes R180, mugs R95, free delivery over R500"
         message_type: weekly_fish | new_stock | reorder | promo | delivery (optional)
 
     Returns a polished, on-brand WhatsApp broadcast message the owner can
@@ -6706,7 +6706,7 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
         pass
 
     type_hint = {
-        "weekly_fish": "this week's fresh catch with prices",
+        "weekly_fish": "this week's specials with prices",
         "new_stock":   "a new stock arrival announcement",
         "reorder":     "a friendly reminder to reorder",
         "promo":       "a special promotion or limited-time offer",
@@ -6724,7 +6724,7 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
             messages=[
                 {"role": "system", "content":
                     "You write short, warm WhatsApp broadcast messages for a South African "
-                    "food business. Rules: under 60 words, friendly but not cheesy, ZAR prices, "
+                    "business. Rules: under 60 words, friendly but not cheesy, ZAR prices, "
                     "1-2 relevant emoji max, end with a clear call to action to order on WhatsApp. "
                     "Output ONLY the message text — no preamble, no quotes." +
                     (f"\n\nBrand voice:\n{brand_context}" if brand_context else "")},
@@ -8456,13 +8456,13 @@ class ScanRequest(BaseModel):
 
 _SCAN_PROMPTS = {
     "receipt": (
-        "This is a supplier receipt or expense slip for a South African food business. "
+        "This is a supplier receipt or expense slip for a South African business. "
         "Extract: supplier name, date (YYYY-MM-DD), total amount in Rands, and a best-guess "
         "category from [stock, delivery, packaging, marketing, equipment, staff, rent, utilities, other]. "
         "Also list individual line items if visible."
     ),
     "delivery_note": (
-        "This is a delivery note / packing slip for fresh food stock (fish, chicken, seafood). "
+        "This is a delivery note / packing slip for stock delivered to the business. "
         "Extract each product line: product name, quantity, and unit (kg or pack). "
         "Also extract supplier name and date if visible."
     ),
@@ -8471,7 +8471,7 @@ _SCAN_PROMPTS = {
         "each line item (description, qty, unit price in Rands, line total), subtotal, VAT, and total."
     ),
     "order": (
-        "This is a handwritten or printed customer order for a food business. "
+        "This is a handwritten or printed customer order for a business. "
         "Extract: customer name, phone if present, and each item ordered (product, quantity, unit)."
     ),
 }

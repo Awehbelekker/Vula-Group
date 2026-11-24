@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 TEMPLATE = "vula_document_share"
 TEMPLATE_BODY = "{{1}} has sent you {{2}}. Reply here if you have any questions."
-TEMPLATE_EXAMPLE = ["DIGG", "our bank confirmation letter"]
+TEMPLATE_EXAMPLE = ["Sunrise Trading", "our bank confirmation letter"]
 EMAIL_MAX_BYTES = 10 * 1024 * 1024
 FULL_ONLY = {"Bank Statement"}                       # a whole account's history: owner/manager only
 

@@ -18,7 +18,7 @@ export default function VulaPrivacy({ view = "privacy" }) {
           <span style={{ fontSize: 28, fontWeight: 700, color: C.green }}>Vula</span>
           <span style={{ fontSize: 12, color: C.muted, letterSpacing: "0.08em",
             textTransform: "uppercase", display: "block", marginTop: 2 }}>
-            Vula Group (Pty) Ltd
+            Aweh Be Lekker (Pty) Ltd t/a Vula Group
           </span>
         </div>
 
@@ -30,7 +30,7 @@ export default function VulaPrivacy({ view = "privacy" }) {
           <a href="#/terms" style={{ color: C.green, marginRight: 16 }}>Terms of Service</a>
           <a href="#/data-deletion" style={{ color: C.green }}>Data Deletion</a>
           <p style={{ marginTop: 12 }}>
-            Vula Group (Pty) Ltd · Cape Town, South Africa · hello@vula.co.za
+            Aweh Be Lekker (Pty) Ltd t/a Vula Group · Cape Town, South Africa · hello@vula.co.za
           </p>
         </div>
       </div>
@@ -85,7 +85,7 @@ function DataDeletion() {
 
       <h2 style={style.h2}>Contact</h2>
       <p style={style.p}>
-        Vula Group (Pty) Ltd, Cape Town, South Africa. Email: hello@vula.co.za
+        Aweh Be Lekker (Pty) Ltd t/a Vula Group, Cape Town, South Africa. Email: hello@vula.co.za
       </p>
     </div>
   );
@@ -98,7 +98,7 @@ function Privacy() {
       <p style={style.meta}>Last updated: 3 June 2026</p>
 
       <p style={style.p}>
-        Vula Group (Pty) Ltd ("Vula", "we", "us") operates an AI business assistant
+        Aweh Be Lekker (Pty) Ltd t/a Vula Group ("Vula", "we", "us") operates an AI business assistant
         delivered via WhatsApp and web. This policy explains what data we collect, how
         we use it, and your rights under the Protection of Personal Information Act
         (POPIA, Act 4 of 2013).
@@ -185,7 +185,7 @@ function Privacy() {
 
       <h2 style={style.h2}>7. Contact</h2>
       <p style={style.p}>
-        Vula Group (Pty) Ltd, Cape Town, South Africa.<br />
+        Aweh Be Lekker (Pty) Ltd t/a Vula Group, Cape Town, South Africa.<br />
         Email: hello@vula.co.za
       </p>
     </div>
@@ -199,8 +199,8 @@ function Terms() {
       <p style={style.meta}>Last updated: 3 June 2026</p>
 
       <p style={style.p}>
-        These terms govern your use of Vula, an AI business assistant operated by Vula
-        Group (Pty) Ltd. By using Vula via WhatsApp or web, you agree to these terms.
+        These terms govern your use of Vula, an AI business assistant operated by Aweh Be Lekker
+        (Pty) Ltd t/a Vula Group. By using Vula via WhatsApp or web, you agree to these terms.
       </p>
 
       <h2 style={style.h2}>1. The service</h2>
@@ -245,7 +245,7 @@ function Terms() {
 
       <h2 style={style.h2}>7. Contact</h2>
       <p style={style.p}>
-        Vula Group (Pty) Ltd, Cape Town, South Africa. Email: hello@vula.co.za
+        Aweh Be Lekker (Pty) Ltd t/a Vula Group, Cape Town, South Africa. Email: hello@vula.co.za
       </p>
     </div>
   );

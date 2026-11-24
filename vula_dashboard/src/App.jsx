@@ -8,6 +8,7 @@ const VulaUiKit = lazy(() => import("./components/VulaUiKit")); // #/ui-kit, mas
 const AccountantWorkspace = lazy(() => import("./components/accountant/AccountantWorkspace")); // an accountant's view-only login (19 Nov 2026)
 const ShareSheet = lazy(() => import("./components/share/ShareSheet")); // #/share, from the phone's Share sheet
 import { useAuthStore } from "./store/auth";
+import { useBusinessStore } from "./store/business";
 import { lazyScreen, ScreenSuspense } from "./lib/lazyScreen.jsx";
 const VulaDashboard = lazyScreen(() => import("./components/VulaDashboard"));
 const VulaQS = lazyScreen(() => import("./components/VulaQS"));
@@ -162,6 +163,7 @@ export default function App() {
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
   const { user, role, tenantId, logout, expire, signedOutEmail, access, full, teamRole, teamPhone, setMember } = useAuthStore();
+  const setBusiness = useBusinessStore((s) => s.setBusiness);
 
   // Vula turned a request away as "sign in required": if the sign-in really has run out, go back
   // to the login page and say so, instead of showing screens that can no longer load or save
@@ -278,8 +280,9 @@ export default function App() {
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
-      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); setTenantFeatures(d.features || []); })
-      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); setTenantFeatures([]); });
+      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); setTenantFeatures(d.features || []);
+        setBusiness({ businessType: d.profile?.business_type || d.business_type, displayName: d.display_name }); })
+      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); setTenantFeatures([]); setBusiness({}); });
     return () => { alive = false; };
   }, [user, role, tenantId, setMember]);
 

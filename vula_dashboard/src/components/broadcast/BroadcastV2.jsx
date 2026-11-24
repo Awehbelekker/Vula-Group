@@ -10,7 +10,7 @@ import { BarChart3, CalendarClock, ChevronDown, Eye, FileCheck2, Image as ImageI
 import { formatMoney } from '../../lib/money'
 import { SA_TZ } from '../../lib/dates'
 import { Button, Card, EmptyState, Field, IconButton, Input, PillTabs, Select, StatCard, StatusChip, Textarea, confirmDialog } from '../ui/index.jsx'
-import { AUDIENCES, SEG_LANGUAGES, TEMPLATES, useBroadcast, useBroadcastFunnel, usePicturePromo } from './useBroadcast'
+import { AUDIENCES, SEG_LANGUAGES, useBroadcast, useBroadcastFunnel, usePicturePromo } from './useBroadcast'
 import './broadcast.css'
 
 const plain = (t) => String(t || '').replace(/^[^A-Za-z0-9]+\s*/, '')   // the shared labels and messages start with an emoji
@@ -101,7 +101,7 @@ function PicturePromoV2({ tenantId }) {
 // ── Compose → preview audience → confirmed send ───────────────────────────────
 
 function Compose({ b }) {
-  const tpl = TEMPLATES.find(t => t.id === b.template)
+  const tpl = b.templates.find(t => t.id === b.template)
   const audName = (id) => plain(AUDIENCES.find(a => a.id === id)?.label || b.segments.find(sg => `seg:${sg.id}` === id)?.name || 'segment')
   const what = b.useApproved ? (b.approvedName || 'an approved template') : plain(b.selectedTpl?.label)
   const who = b.audiences.length ? b.audiences.map(audName).join(' + ') : 'No audience selected'
@@ -134,12 +134,12 @@ function Compose({ b }) {
         <>
           <Field label="Kind of message" hint={tpl?.hint}>
             <Select value={b.template} onChange={e => b.setTemplate(e.target.value)}>
-              {TEMPLATES.map(t => <option key={t.id} value={t.id}>{plain(t.label)}</option>)}
+              {b.templates.map(t => <option key={t.id} value={t.id}>{plain(t.label)}</option>)}
             </Select>
           </Field>
           <form className="vbc-row vbc-bottom" onSubmit={e => { e.preventDefault(); b.writeWithAI() }}>
             <Field label="Your details (Vula writes it for you)" style={{ flex: '1 1 240px', minWidth: 0 }}>
-              <Input value={b.details} onChange={e => b.setDetails(e.target.value)} placeholder="e.g. yellowtail R180, snoek R95, free delivery over R500" />
+              <Input value={b.details} onChange={e => b.setDetails(e.target.value)} placeholder={b.ex.broadcastDetails} />
             </Field>
             <Button type="submit" variant="secondary" Icon={Sparkles} disabled={b.drafting}>{b.drafting ? 'Writing…' : 'Write with AI'}</Button>
           </form>

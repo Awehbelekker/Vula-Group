@@ -10,6 +10,7 @@ import { FONT_PAIRINGS, CORNER_STYLES, DENSITIES, LOGO_SIZES } from '../theme/to
 import { useBrandKit } from './settings/useSettings'
 import SettingsV2 from './settings/SettingsV2'
 import BrandPreview from './settings/BrandPreview'
+import { examplesFor } from '../lib/examples'
 
 export default function VulaSettings({ ...props }) {
   return <SettingsV2 {...props} />;
@@ -67,7 +68,7 @@ export function BrandKitSettings({ tenantId }) {
         <div style={{ ...bk.suggestBox }}>
           <b style={{ fontSize: 13 }}>✨ Suggest from my logo or website</b>
           <div style={{ ...row, marginTop: 6 }}>
-            <input placeholder="Website (optional), e.g. gerflor.co.za" value={website} onChange={e => setWebsite(e.target.value)} style={{ ...bk.input, flex: '1 1 180px' }} aria-label="Website" />
+            <input placeholder={`Website (optional), ${examplesFor(null).website}`} value={website} onChange={e => setWebsite(e.target.value)} style={{ ...bk.input, flex: '1 1 180px' }} aria-label="Website" />
             <button type="button" onClick={suggest} disabled={suggesting || (!logoUrl && !website)} style={bk.saveBtn}>{suggesting ? 'Looking…' : 'Suggest'}</button>
           </div>
           {suggestion && (

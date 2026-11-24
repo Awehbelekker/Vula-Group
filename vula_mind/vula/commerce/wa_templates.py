@@ -445,17 +445,17 @@ def staff_templates(tenant_id: str) -> List[Dict[str, Any]]:
     return [
         {"name": template_name(tenant_id, STAFF_NOTICE_SUFFIX), "body": STAFF_NOTICE_BODY,
          "category": "UTILITY", "buttons": got_it,
-         "examples": ["DIGG", "The office is closed on Friday for the year-end function."]},
+         "examples": ["Sunrise Trading", "The office is closed on Friday for the year-end function."]},
         {"name": template_name(tenant_id, STAFF_NOTICE_IMAGE_SUFFIX), "body": STAFF_NOTICE_BODY,
          "category": "UTILITY", "buttons": got_it, "header_type": "IMAGE",
-         "examples": ["DIGG", "This month's newsletter is here — have a look at the picture."]},
+         "examples": ["Sunrise Trading", "This month's newsletter is here — have a look at the picture."]},
         {"name": template_name(tenant_id, STAFF_DAY_SUFFIX), "body": STAFF_DAY_BODY,
          "category": "UTILITY", "buttons": [{"type": "QUICK_REPLY", "text": "Thank you"}],
          "examples": ["Thandi", "tomorrow (Fri 16 Dec) is Day of Reconciliation, a public holiday.",
-                      "DIGG"]},
+                      "Sunrise Trading"]},
         {"name": template_name(tenant_id, STAFF_POLL_SUFFIX), "body": STAFF_POLL_BODY,
          "category": "UTILITY", "buttons": [{"type": "QUICK_REPLY", "text": "Vote"}],
-         "examples": ["Thandi", "DIGG", "Which day suits you for the year-end function?"]},
+         "examples": ["Thandi", "Sunrise Trading", "Which day suits you for the year-end function?"]},
     ]
 
 

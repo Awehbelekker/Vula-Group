@@ -172,7 +172,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "update_order_status",
-        "description": "Update an order's fulfilment status by its display id (e.g. OTH-00042). "
+        "description": "Update an order's fulfilment status by its display id (e.g. ABC-00042). "
                        "When marking one paid, pass payment_method if the owner said how they "
                        "were paid (e.g. 'paid cash', 'she did an EFT').",
         "parameters": {"type": "object", "properties": {
@@ -187,14 +187,14 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
         "name": "book_courier",
         "description": "Book the business's connected courier (The Courier Guy / PUDO) to collect an "
-                       "order and deliver it to the customer's address: 'book a courier for SEE-00042', "
-                       "'send OTH-00017 overnight'. Without confirm=true it returns the price as a "
+                       "order and deliver it to the customer's address: 'book a courier for ABC-00042', "
+                       "'send ABC-00017 overnight'. Without confirm=true it returns the price as a "
                        "preview; show it and wait for a yes — booking charges the business's courier "
                        "account. If it returns status: need_info (no courier connected, the address or "
                        "parcel size is missing, already booked), that message IS your reply. Never say "
                        "a courier was booked unless the result gives a waybill number.",
         "parameters": {"type": "object", "properties": {
-            "order_id": {"type": "string", "description": "The order's number, e.g. SEE-00042."},
+            "order_id": {"type": "string", "description": "The order's number, e.g. ABC-00042."},
             "service": {"type": "string", "description": "Only when the person asked for one, e.g. "
                         "'overnight' or 'economy'. Left out, the cheapest is offered."},
             "confirm": {"type": "boolean"}},
@@ -203,8 +203,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
         "name": "courier_status",
         "description": "Where an order's parcel is: asks the courier now and returns the waybill "
-                       "number, the latest status and when it changed. Use for 'where is SEE-00042's "
-                       "parcel', 'has the courier collected OTH-00017'.",
+                       "number, the latest status and when it changed. Use for 'where is ABC-00042's "
+                       "parcel', 'has the courier collected ABC-00017'.",
         "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}},
                        "required": ["order_id"]},
     }},
@@ -314,8 +314,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "name": "send_document",
         "description": "Send one of the business's own filed documents to someone — a client, a "
                        "supplier, or an email address / WhatsApp number — when asked: 'send our bank "
-                       "letter to Atlantis Foods', 'email the tax clearance to accounts@x.co.za', "
-                       "'forward the proof of payment for R5,600 to Belekkie Skips'. Name the document in "
+                       "letter to Sunrise Trading', 'email the tax clearance to accounts@x.co.za', "
+                       "'forward the proof of payment for R5,600 to Main Road Hardware'. Name the document in "
                        "`document` in the person's words (or give doc_id from find_document). Without "
                        "confirm=true it returns a preview; show it and wait for a yes. If it returns "
                        "status: need_info (which document, which account, who, or their email), that "
@@ -350,7 +350,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "call this again with it set — never ask the same question twice.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Supplier/sender name, company, or "
-                      "topic — e.g. 'Gardens Handiman Centre', 'jackhammer', 'the Regan order'."},
+                      "topic — e.g. 'Sunrise Trading', 'sunrisetrading', 'the Smith order'."},
             "since": {"type": "string", "description": "Optional start date (YYYY-MM-DD) to "
                       "narrow the search — pass this once the user has answered a 'how far "
                       "back?' question, or if they already gave a date/period."}},
@@ -410,8 +410,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "name": "bank_payments",
         "description": (
             "Search the BANK STATEMENT lines for a person or business by name — 'all payments "
-            "from Rudolf on the statements', 'what has Rudi paid us', 'what did we pay Pudlo', "
-            "'track payments to Flush'. Lists each matching line (date, amount, in/out, project) "
+            "from Sipho on the statements', 'what has Sipho paid us', 'what did we pay Sunrise Trading', "
+            "'track payments to Metro Plumbing'. Lists each matching line (date, amount, in/out, project) "
             "with totals, and says up to which date the statements run. Use this, not "
             "find_document, for anything about what went in or out of the bank."
         ),
@@ -426,13 +426,13 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "name": "move_to_project",
         "description": (
             "Move a supplier bill or a filed document to ANOTHER PROJECT when it was filed under "
-            "the wrong one — 'move DIG-BILL-00141 to Belladonna', 'the Pudlo invoice IN411287 "
-            "is Belladonna not HPC', 'that last document is for Atlantis'. Its document, pages, "
+            "the wrong one — 'move ABC-BILL-00141 to Main Road fit-out', 'the Sunrise Trading invoice IN411287 "
+            "is Main Road fit-out not Oak Avenue', 'that last document is for Oak Avenue'. Its document, pages, "
             "expense and prices move with it. First call returns a preview; call again with "
             "confirm=true only after the owner confirms."
         ),
         "parameters": {"type": "object", "properties": {
-            "reference": {"type": "string", "description": "A bill number (DIG-BILL-…), the "
+            "reference": {"type": "string", "description": "A bill number (ABC-BILL-…), the "
                           "supplier's invoice number, or 'last' for the most recent document"},
             "project": {"type": "string", "description": "The project it belongs to"},
             "confirm": {"type": "boolean"}},
@@ -549,8 +549,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
         "name": "order_payment",
         "description": "Ask a customer to pay a deposit or the balance on an EXISTING order — "
-                       "'ask Thandi for a 50% deposit on SEE-00012', 'send the balance for "
-                       "SEE-00012'. WhatsApps the order number, items, amounts and a Pay button "
+                       "'ask Thandi for a 50% deposit on ABC-00012', 'send the balance for "
+                       "ABC-00012'. WhatsApps the order number, items, amounts and a Pay button "
                        "(card or EFT); when it's paid the order is confirmed and you're told. "
                        "Give deposit_rands or deposit_pct for a deposit, or balance=true for "
                        "what's still owed. Without confirm=true returns a preview.",
@@ -682,7 +682,7 @@ INVOICE_TOOLS = [
     {"type": "function", "function": {
         "name": "send_invoice",
         "description": "Send an existing invoice to the customer, by its number (e.g. "
-                       "OTH-INV-00001) — on WhatsApp or by email. Leave `channel` out to use "
+                       "ABC-INV-00001) — on WhatsApp or by email. Leave `channel` out to use "
                        "whichever the business and the customer's details allow (WhatsApp when "
                        "the business has a number connected and the invoice has a phone number, "
                        "otherwise email); set it when the owner says which. Without confirm=true "
@@ -742,7 +742,7 @@ INVOICE_TOOLS = [
     {"type": "function", "function": {
         "name": "record_payment",
         "description": "Record a payment received against an existing invoice, by its number "
-                       "(e.g. OTH-INV-00001). Supports partial payments — status becomes "
+                       "(e.g. ABC-INV-00001). Supports partial payments — status becomes "
                        "'part_paid' until the running total reaches the invoice total, then "
                        "flips to 'paid' automatically. Without confirm=true, returns a preview "
                        "instead of recording it — only pass confirm=true after the owner has "
@@ -761,7 +761,7 @@ INVOICE_TOOLS = [
     {"type": "function", "function": {
         "name": "convert_quote_to_invoice",
         "description": "Convert an accepted quote into a real invoice, by the quote's number "
-                       "(e.g. OTH-QUO-00003). The quote must already be marked accepted "
+                       "(e.g. ABC-QUO-00003). The quote must already be marked accepted "
                        "(update_quote_status) first.",
         "parameters": {"type": "object", "properties": {"quote_number": {"type": "string"}},
                        "required": ["quote_number"]}}},
@@ -1021,8 +1021,8 @@ DECISION_TOOLS = [
         "name": "record_decision",
         "description": (
             "Save a RULING the owner or manager has just made about how something is booked, who "
-            "paid, what's in or out of a project or account — e.g. 'the 3700 was paid by DIGG', "
-            "'take out the extra tile labour', 'Sea Point Hire was Belladonna', 'further painting "
+            "paid, what's in or out of a project or account — e.g. 'the 3700 was paid by the company', "
+            "'take out the extra tile labour', 'the skip hire was Main Road fit-out', 'further painting "
             "is billed separately'. Save it in their words with the project it's about, then say "
             "what you noted. Not for a question, and not for a standing instruction about how to "
             "do future work (that's remember_rule). If it changes an earlier decision, it replaces it."
@@ -1468,7 +1468,7 @@ BUILDUP_TOOLS = [
                        "invoices, expenses, labour) — per component: estimated vs bought quantity "
                        "and cost. With finished=true (only when an owner or manager says the work "
                        "is finished, or the project is complete) Vula keeps suggested build-up "
-                       "changes for them to accept or dismiss. Use for 'how did the Bokaap walls "
+                       "changes for them to accept or dismiss. Use for 'how did the Main Road walls "
                        "compare with the estimate', 'the walls are done — what did we learn'.",
         "parameters": {"type": "object", "properties": {
             "project": {"type": "string", "description": "the project the estimate is for"},
@@ -1523,7 +1523,7 @@ PROJECT_TOOLS = [
         "description": "How a project (job) is doing money-wise, from the bank: received, cost by "
                        "trade, the cost-plus fee it should earn, its share of overheads, and profit "
                        "— or every project's headline when no project is named. Use for 'how is "
-                       "HPC doing', 'are we losing money on X', 'where did the money go on Y'. "
+                       "Main Road fit-out doing', 'are we losing money on X', 'where did the money go on Y'. "
                        "Quote the returned text; never compute these figures yourself.",
         "parameters": {"type": "object", "properties": {
             "project": {"type": "string", "description": "Project name as the user said it; omit for all."}}}}},
@@ -1563,8 +1563,8 @@ PROJECT_TOOLS = [
                        "what the client paid suppliers directly, the fee and the balance) or 'qs' (a "
                        "quantity surveyor's view: contract, certified and anticipated per bill, "
                        "variations, valuations, programme, document register). Use for 'share "
-                       "Belladonna with Rudi', 'send the client a project link', 'give the QS access "
-                       "to HPC'. If the owner didn't say which view, call without one — the tool asks. "
+                       "Main Road fit-out with Sipho', 'send the client a project link', 'give the QS access "
+                       "to Oak Avenue'. If the owner didn't say which view, call without one — the tool asks. "
                        "The first call previews what the client will see; call again with confirm="
                        "true only after the owner says yes. The reply is sent exactly as returned.",
         "parameters": {"type": "object", "properties": {
@@ -1610,12 +1610,12 @@ PROJECT_TOOLS = [
         "name": "client_paid_direct",
         "description": "Record that the CLIENT paid a supplier or trade directly on a project (or still "
                        "has to) — it counts in the project's spend against the budget, never as your "
-                       "cost, fee or profit. Use for 'Rudi paid Flush R58,268.30 directly', 'the client "
-                       "still has to pay Edward R45,000'. Not for money the client paid YOU. The first "
+                       "cost, fee or profit. Use for 'Sipho paid Metro Plumbing R58,268.30 directly', 'the client "
+                       "still has to pay the electrician R45,000'. Not for money the client paid YOU. The first "
                        "call previews; call again with confirm=true only after the owner says yes.",
         "parameters": {"type": "object", "properties": {
             "project": {"type": "string"},
-            "supplier": {"type": "string", "description": "Who the client paid, e.g. 'Flush Bathrooms'."},
+            "supplier": {"type": "string", "description": "Who the client paid, e.g. 'Metro Plumbing'."},
             "amount": {"type": "number", "description": "Rands, as the owner said it."},
             "date": {"type": "string", "description": "YYYY-MM-DD, only if given."},
             "still_to_pay": {"type": "boolean", "description": "True when the client hasn't paid it yet."},
@@ -2083,6 +2083,8 @@ def _product_tools_for(tenant_id: str) -> List[Dict[str, Any]]:
             continue
         t2 = json.loads(json.dumps(t))  # deep copy — never mutate the shared PRODUCT_TOOLS list
         t2["function"]["parameters"]["properties"].pop("is_daily_catch", None)
+        t2["function"]["description"] = t2["function"]["description"].replace(
+            "price, name, or daily-catch flag", "price or name")
         trimmed.append(t2)
     return trimmed
 

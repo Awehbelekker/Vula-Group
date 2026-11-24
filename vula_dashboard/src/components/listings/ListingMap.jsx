@@ -12,7 +12,8 @@ import { VULA_API } from "../../lib/authFetch";
 import { formatMoney } from "../../lib/money";
 import { Button } from "../ui/index.jsx";
 
-const CAPE_TOWN = { lat: -33.93, lng: 18.47 };
+// No pin yet: all of South Africa, not one city (24 Nov 2026 audit: it always opened on Cape Town).
+const SOUTH_AFRICA = { lat: -29, lng: 24, zoom: 5 };
 const hasPin = (p) => p.latitude != null && p.longitude != null;
 
 function useLeaflet(ref, init) {
@@ -61,7 +62,7 @@ export function ListingsMap({ listings, onOpen }) {
     });
     if (pinned.length === 1) s.map.setView([pinned[0].latitude, pinned[0].longitude], 14);
     else if (pinned.length > 1) s.map.fitBounds(s.L.latLngBounds(pinned.map((p) => [p.latitude, p.longitude])), { padding: [40, 40], maxZoom: 15 });
-    else s.map.setView([CAPE_TOWN.lat, CAPE_TOWN.lng], 10);
+    else s.map.setView([SOUTH_AFRICA.lat, SOUTH_AFRICA.lng], SOUTH_AFRICA.zoom);
   }, [ready, listings]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const missing = listings.length - pinned.length;
@@ -84,8 +85,8 @@ export function PinPicker({ tenantId, value, onChange, addressText }) {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const m = useLeaflet(div, (s) => {
-    const start = value || CAPE_TOWN;
-    s.map.setView([start.lat, start.lng], value ? 15 : 10);
+    const start = value || SOUTH_AFRICA;
+    s.map.setView([start.lat, start.lng], value ? 15 : SOUTH_AFRICA.zoom);
     s.marker = value ? s.L.circleMarker([value.lat, value.lng], pinStyle("active")).addTo(s.map) : null;
     s.map.on("click", (e) => onChangeRef.current({ lat: e.latlng.lat, lng: e.latlng.lng }));
   });

@@ -7,6 +7,7 @@
  */
 import { useState, useEffect } from "react";
 import { VULA_API } from "../lib/authFetch";
+import { examplesFor } from "../lib/examples";
 
 const fmt = (c) => `R${((c || 0) / 100).toFixed(2)}`;
 
@@ -75,7 +76,7 @@ export default function VulaInvoiceApproval({ tenant, invoiceId }) {
         ) : (
           <>
             <label style={s.label}>Your name (optional)
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Judy Downing" style={s.input} />
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder={examplesFor(null).person} style={s.input} />
             </label>
             {error && <div style={s.errorBox}>{error}</div>}
             <button onClick={approve} disabled={submitting} style={s.btn}>
