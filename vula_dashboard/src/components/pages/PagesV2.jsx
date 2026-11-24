@@ -18,6 +18,8 @@ import VulaImageUpload from "../VulaImageUpload";
 import { Button, Card, EmptyState, Field, IconButton, Input, Select, Sheet, Skeleton, StatusChip, Textarea } from "../ui/index.jsx";
 import { ADDABLE_FEATURES, MOOD_PRESETS, PREVIEW_VIEWPORTS, STOREFRONT_ROOT_DOMAIN, norm, templatesFor, usePages } from "./usePages";
 import "./pages.css";
+import { useBusinessType } from "../../store/business";
+import { examplesFor } from "../../lib/examples";
 
 const plain = (t) => String(t || "").replace(/\s*✓\s*/g, " ").replace(/\s+—\s+/g, ": ").trim();
 const Status = ({ status }) => <StatusChip tone={status === "published" ? "ok" : "warn"}>{status === "published" ? "Live" : "Draft"}</StatusChip>;
@@ -108,6 +110,7 @@ function List({ x, tenantId }) {
 }
 
 function AiDraftSheet({ x, tenantId }) {
+  const ex = examplesFor(useBusinessType());
   const close = () => !x.aiDraftBusy && x.setAiDraftTarget(null);
   return (
     <Sheet open={!!x.aiDraftTarget} onClose={close} title="AI-draft copy and design"
@@ -115,7 +118,7 @@ function AiDraftSheet({ x, tenantId }) {
         <Button Icon={Sparkles} disabled={x.aiDraftBusy} onClick={x.runAiDraft}>{x.aiDraftBusy ? "Drafting…" : "Draft it"}</Button></>}>
       <div className="vpg-form">
         <p className="vpg-muted">Optional: the more you give it, the more specific it gets. Nothing is saved until you review it, and your phone, email and address always come from your real settings.</p>
-        <Field label="About your business" hint='e.g. "fresh fish shop, deliver in Cape Town, WhatsApp orders"'>
+        <Field label="About your business" hint={ex.pageBrief}>
           <Textarea rows={2} value={x.aiDraftDescription} onChange={(e) => x.setAiDraftDescription(e.target.value)} />
         </Field>
         <div role="group" aria-labelledby="vpg-mood">

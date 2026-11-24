@@ -992,7 +992,7 @@ def project_list_message(tenant_id: str, docs: list) -> str:
             logger.debug("project suggestion skipped: %s", exc)
         name = (doc.get("filename") or "Document")[:60]
         lines.append(f"{i}. {name}" + (f" ({what})" if what else "") + guess)
-    example = ex[0] if ex else "Belladonna"
+    example = ex[0] if ex else "Main Road fit-out"
     lines.append(f"\nReply with the number and the project, one per line — e.g. *1 {example}*, "
                  f"*2-3 {example}* or *4 none*. A project I don't know yet, I'll offer to add.")
     return "\n".join(lines)

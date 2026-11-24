@@ -10,6 +10,7 @@ import { SA_TZ } from '../../../lib/dates'
 import { Button, Card, Field, Input, Skeleton, StatusChip } from '../../ui/index.jsx'
 import { STORES, useStoreConnect } from './useStoreConnect'
 import '../settings.css'
+import { examplesFor } from '../../../lib/examples'
 
 const STEPS = {
   shopify: [
@@ -86,7 +87,7 @@ export default function StoreConnectV2({ store, tenantId, adminEmail }) {
         <ol className="vcn-steps">{STEPS[store].map(s => <li key={s}>{s}</li>)}</ol>
         {store === 'shopify' ? (
           <>
-            <Field label="Store address" hint="Your myshopify.com address, e.g. seedleme.myshopify.com">
+            <Field label="Store address" hint={`Your myshopify.com address, ${examplesFor(null).shopUrl}`}>
               <Input required value={x.form.shop_domain} placeholder="yourstore.myshopify.com" onChange={e => set({ shop_domain: e.target.value })} />
             </Field>
             {x.useToken ? (

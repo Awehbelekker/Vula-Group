@@ -333,8 +333,8 @@ export const config = {
       defaultProps: {
         title: "Why us",
         items: [
-          { heading: "Fresh", body: "Caught daily." },
-          { heading: "Local", body: "Cape Town sourced." },
+          { heading: "Quality", body: "Chosen with care." },
+          { heading: "Local", body: "Proudly South African." },
           { heading: "Delivered", body: "To your door." },
         ],
       },
@@ -379,7 +379,7 @@ export const config = {
         count: { type: "number", label: "Max products" },
         linkBase: { type: "text", label: "Product link base" },
       },
-      defaultProps: { title: "Today's catch", count: 4, linkBase: "/shop" },
+      defaultProps: { title: "Featured", count: 4, linkBase: "/shop" },   // was "Today's catch" for every business (24 Nov 2026)
       render: (props) => <LiveProducts {...props} mode="featured" />,
     },
     CategoryNav: {

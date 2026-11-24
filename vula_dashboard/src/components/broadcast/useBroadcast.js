@@ -8,8 +8,18 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { VULA_API } from '../../lib/authFetch'
+import { useBusinessType } from '../../store/business'
+import { examplesFor, isFood } from '../../lib/examples'
 
 const H = { 'Content-Type': 'application/json' }  // JWT attached by lib/authFetch
+
+// 24 Nov 2026 audit: the weekly-specials label was fish for every business. The id stays
+// 'weekly_fish' (it's what the draft route is sent); only a food business sees fish wording.
+export function templatesFor(businessType) {
+  if (isFood(businessType)) return TEMPLATES
+  const ex = examplesFor(businessType)
+  return TEMPLATES.map(t => t.id === 'weekly_fish' ? { ...t, label: ex.specialTitle, hint: 'This week\'s specials + prices' } : t)
+}
 
 export const TEMPLATES = [
   { id: 'weekly_fish',   label: '🐟 Weekly fish specials', hint: 'This week\'s fresh catch + prices' },
@@ -87,6 +97,9 @@ export function useBroadcast(tenantId, draftBody, onConsumeDraft) {
   const [broadcasts, setBroadcasts] = useState([])
   const [funnelId, setFunnelId] = useState(null)   // expanded broadcast → funnel drawer (P3)
   const [loading, setLoading] = useState(true)
+  const businessType = useBusinessType()
+  const templates = templatesFor(businessType)
+  const ex = examplesFor(businessType)
   const [template, setTemplate] = useState(TEMPLATES[0].id)
   const [audiences, setAudiences] = useState(['all'])
   const toggleAud = (id) => setAudiences(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -115,7 +128,7 @@ export function useBroadcast(tenantId, draftBody, onConsumeDraft) {
 
   // Ask the AI assistant to write the broadcast from rough details
   async function writeWithAI() {
-    if (!details.trim()) { setError('Type a few details first (e.g. the catch + prices).'); return }
+    if (!details.trim()) { setError('Type a few details first (e.g. what\'s on offer + prices).'); return }
     setDrafting(true); setError(null)
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/draft`, {
@@ -250,7 +263,7 @@ export function useBroadcast(tenantId, draftBody, onConsumeDraft) {
     if (!scheduleAt) { setError('Pick a date & time.'); return }
     setSending(true); setError(null)
     try {
-      const tpl = TEMPLATES.find(t => t.id === template)
+      const tpl = templates.find(t => t.id === template)
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/campaigns`, {
         method: 'POST', headers: H,
         body: JSON.stringify({
@@ -297,7 +310,7 @@ export function useBroadcast(tenantId, draftBody, onConsumeDraft) {
     if (useApproved && approvedTpl?.header_type === 'IMAGE' && !headerImageUrl.trim()) { setError('This template has an image header — add an image URL.'); return }
     setSending(true); setError(null); setSent(false)
     try {
-      const tpl = TEMPLATES.find(t => t.id === template)
+      const tpl = templates.find(t => t.id === template)
       const payload = useApproved
         ? { template_name: approvedName, audience_filter: (audiences.join(',') || 'all'), name: approvedName, header_image_url: headerImageUrl || undefined, target_url: targetUrl || undefined, dry_run: false }
         : { body: bodyText, audience_filter: (audiences.join(',') || 'all'), name: tpl?.label, target_url: targetUrl || undefined, dry_run: false }
@@ -314,13 +327,13 @@ export function useBroadcast(tenantId, draftBody, onConsumeDraft) {
     }
   }
 
-  const selectedTpl = TEMPLATES.find(t => t.id === template)
+  const selectedTpl = templates.find(t => t.id === template)
   const audLabel = (id) => AUDIENCES.find(a => a.id === id)?.label
     || ('🎯 ' + (segments.find(sg => `seg:${sg.id}` === id)?.name || 'segment'))
   const selectedAudLabel = audiences.length ? audiences.map(audLabel).join(' + ') : 'No audience selected'
 
   return {
-    analytics, approvedName, approvedTpl, audCount, audLabel, audiences, bodyText, broadcasts, campaigns, counts, createSegment, deleteCampaign, deleteSegment, details, drafting, error, funnelId, headerImageUrl, loading, preview, previewBroadcast, realTemplates, recurrence, scheduleAt, scheduleCampaign, segForm, segHint, segments, selectedAudLabel, selectedTpl, sendBroadcast, sendTest, sending, sent, setApprovedName, setAudiences, setBodyText, setDetails, setError, setFunnelId, setHeaderImageUrl, setPreview, setRecurrence, setScheduleAt, setSegForm, setSending, setShowSeg, setTargetUrl, setTemplate, setTestMsg, setTestPhone, setUseApproved, showSeg, targetUrl, template, testMsg, testPhone, toggleAud, useApproved, writeWithAI,
+    analytics, ex, templates, approvedName, approvedTpl, audCount, audLabel, audiences, bodyText, broadcasts, campaigns, counts, createSegment, deleteCampaign, deleteSegment, details, drafting, error, funnelId, headerImageUrl, loading, preview, previewBroadcast, realTemplates, recurrence, scheduleAt, scheduleCampaign, segForm, segHint, segments, selectedAudLabel, selectedTpl, sendBroadcast, sendTest, sending, sent, setApprovedName, setAudiences, setBodyText, setDetails, setError, setFunnelId, setHeaderImageUrl, setPreview, setRecurrence, setScheduleAt, setSegForm, setSending, setShowSeg, setTargetUrl, setTemplate, setTestMsg, setTestPhone, setUseApproved, showSeg, targetUrl, template, testMsg, testPhone, toggleAud, useApproved, writeWithAI,
   }
 }
 

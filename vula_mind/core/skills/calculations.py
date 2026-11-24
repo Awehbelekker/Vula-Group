@@ -277,7 +277,7 @@ class CalculationsSkill(BaseSkill):
             "note the discrepancy. If lookup_rate finds nothing, ask for the rate or say it isn't "
             "on file — never assume a market rate.\n"
             "- When you state a rate, say where it came from with that rate's `where` text, e.g. "
-            "'R554.56 per m² (your HPC Bokaap BOQ, 26 Oct 2026)'. A rate is per its unit: never "
+            "'R554.56 per m² (your Main Road fit-out BOQ, 26 Oct 2026)'. A rate is per its unit: never "
             "present a line total (rate × quantity) as a rate."
         )
 
