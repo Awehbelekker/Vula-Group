@@ -61,6 +61,7 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
       .catch(() => ({}))
       .then((d) => {
         if (d?.partner) {                                     // a partner's own address (flowcrew.co.za): its name and look
+          document.title = d.partner.name
           return { ...d.partner.brand, name: d.partner.name, logo_url: `/partners/${d.partner.id}-mark.png`, partner_login: true }
         }
         const tid = d?.tenant_id || HOST_HINT
