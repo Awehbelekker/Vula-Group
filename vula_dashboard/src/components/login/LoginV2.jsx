@@ -80,12 +80,12 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
 
         {x.mode === 'setup_workspace' && (
           <>
-            <h1 className="vlg-h1">{b?.partner_login ? 'Set up your school' : 'Set up your workspace'}</h1>
+            <h1 className="vlg-h1">Set up your {b?.partner_login ? 'school' : 'workspace'}</h1>
             <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What's your {b?.partner_login ? 'school' : 'business'} called?</p>
             <Notes x={x} info={false} />
             <form onSubmit={x.handleSetupWorkspace} className="vlg-form">
-              <Field label={b?.partner_login ? 'School name' : 'Business name'}>
-                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={b?.partner_login ? 'e.g. Big Bay Surf School' : examplesFor(null).businessName} />
+              <Field label="Business name">
+                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={examplesFor(null).businessName} />
               </Field>
               {/* on a partner's own address the server decides the kind (a FlowCrew surf school) */}
               {!b?.partner_login && <Field label="What kind of business?">
@@ -94,7 +94,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
                     .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                 </Select>
               </Field>}
-              <Button size="lg" Icon={Building2} disabled={x.loading} className="vlg-wide">{x.loading ? 'Setting up…' : b?.partner_login ? 'Create my school' : 'Create my workspace'}</Button>
+              <Button size="lg" Icon={Building2} disabled={x.loading} className="vlg-wide">{x.loading ? 'Setting up…' : 'Create my workspace'}</Button>
             </form>
           </>
         )}
