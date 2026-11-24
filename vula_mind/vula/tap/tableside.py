@@ -247,14 +247,37 @@ class TableDesk:
         audit.record(self.svc, tenant_id, actor_kind="staff", actor=by, action=action, bill_id=bill_id, **detail)
 
     # ── telling people ───────────────────────────────────────────────────────────────────────
-    async def _tell(self, tenant_id: str, member_id: Optional[str], title: str, body: str, ref: str) -> None:
+    def _on_shift(self, tenant_id: str) -> List[str]:
+        """Who is working now, from the roster. Empty when the business plans no shifts (or the
+        roster can't be read): everything then goes as it did before shifts existed."""
+        try:
+            return self.svc.shifts.on_now(tenant_id)
+        except Exception:  # noqa: BLE001 — a roster that can't be read never loses a table's request
+            logger.exception("on-shift lookup failed (tenant=%s)", tenant_id)
+            return []
+
+    @staticmethod
+    def _serving(tag: dict, on: List[str]) -> Optional[str]:
+        """The table's waiter — unless people are on shift and that waiter isn't one of them, when
+        the table is treated as nobody's and whoever is working gets it."""
+        waiter = tag.get("bound_id")
+        return waiter if (not on or waiter in on) else None
+
+    async def _tell(self, tenant_id: str, member_id: Optional[str], title: str, body: str, ref: str,
+                    on: Optional[List[str]] = None) -> None:
         """The waiter serving the table: a push in the staff app and a WhatsApp message. With nobody
-        assigned, the owners and managers hear it instead."""
+        serving it, everyone on shift now hears it; with nobody on shift, the owners and managers."""
         svc = self.svc
-        ids = [member_id] if member_id else self._manager_ids(tenant_id)
+        if member_id:
+            ids, phones = [member_id], svc.repo.team_phones(tenant_id, member_id)
+        elif on:
+            ids = list(on)
+            phones = [p for mid in ids for p in svc.repo.team_phones(tenant_id, mid)]
+        else:
+            ids, phones = self._manager_ids(tenant_id), svc.repo.team_phones(tenant_id, None)
         for mid in ids:
             await svc._push(tenant_id, mid, title, body, tag=ref)
-        for p in svc.repo.team_phones(tenant_id, member_id):
+        for p in phones:
             try:
                 await svc._say(tenant_id, p, f"{title}: {body}")
             except Exception:  # noqa: BLE001 — a message that doesn't send never loses the request
@@ -290,7 +313,8 @@ class TableDesk:
             bill = self.bill_view(tenant, tag)
             if bill and bill["total_cents"]:
                 extra = f" Their bill is {mo.format_rands(bill['total_cents'])}."
-        await self._tell(tenant, tag.get("bound_id"), where, f"{where} {ASKED[kind]}.{extra}", row["id"])
+        on = self._on_shift(tenant)
+        await self._tell(tenant, self._serving(tag, on), where, f"{where} {ASKED[kind]}.{extra}", row["id"], on)
         return row
 
     def _call_view(self, tenant_id: str, c: dict, labels: dict) -> dict:
@@ -309,9 +333,9 @@ class TableDesk:
         that have been passed up; owners and managers see them all."""
         tags = {t["id"]: t for t in self.svc.repo.list_tags(tenant_id)}
         labels = self._labels(tenant_id)
-        out = []
+        out, on = [], self._on_shift(tenant_id)
         for c in self.svc.repo.find_rows(CALLS, tenant_id, ("open", "accepted")):
-            waiter = (tags.get(c["tag_id"]) or {}).get("bound_id")
+            waiter = self._serving(tags.get(c["tag_id"]) or {}, on)
             if sees_all or waiter in (member_id, None) or c.get("accepted_by") == member_id:
                 out.append(self._call_view(tenant_id, c, labels))
         return out
@@ -421,8 +445,9 @@ class TableDesk:
             "caller_hash": caller, "staff_id": tag.get("bound_id")})
         where = tag.get("label") or "A table"
         summary = ", ".join(f"{i['quantity']} x {i['name']}" for i in items[:4]) + ("…" if len(items) > 4 else "")
-        await self._tell(tenant, tag.get("bound_id"), f"New order, {where}",
-                         f"{summary} ({mo.format_rands(row['total_cents'])}). Confirm it in the app.", row["id"])
+        on = self._on_shift(tenant)
+        await self._tell(tenant, self._serving(tag, on), f"New order, {where}",
+                         f"{summary} ({mo.format_rands(row['total_cents'])}). Confirm it in the app.", row["id"], on)
         return row
 
     def _order_view(self, o: dict, labels: dict) -> dict:
@@ -432,9 +457,9 @@ class TableDesk:
 
     def orders_for(self, tenant_id: str, member_id: Optional[str], sees_all: bool) -> List[dict]:
         tags = {t["id"]: t for t in self.svc.repo.list_tags(tenant_id)}
-        labels = self._labels(tenant_id)
+        labels, on = self._labels(tenant_id), self._on_shift(tenant_id)
         return [self._order_view(o, labels) for o in self.svc.repo.find_rows(ORDERS, tenant_id, ("pending",))
-                if sees_all or (tags.get(o["tag_id"]) or {}).get("bound_id") in (member_id, None)]
+                if sees_all or self._serving(tags.get(o["tag_id"]) or {}, on) in (member_id, None)]
 
     def confirm(self, tenant_id: str, order_id: str, member_id: str) -> dict:
         """The waiter takes the order: it is claimed first (one winner), then its lines go on the

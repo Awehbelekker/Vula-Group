@@ -243,3 +243,50 @@ def test_tips_on_the_shared_board_only_when_the_owner_says(env):
     assert svc.scores.tips_on_board(T) is False
     repo.upsert_settings(T, {"board_tips": True})
     assert svc.scores.tips_on_board(T) is True
+
+
+# ── the roster outside WhatsApp's 24-hour window ──────────────────────────────────────────────
+async def test_a_roster_whatsapp_refuses_goes_by_the_approved_template_on_one_line(env):
+    svc, repo, msg, push, clock = env
+    from vula.tap import shifts as sh
+    shift(svc, clock, THANDI, section="Floor")
+    shift(svc, clock, THANDI, days=2)
+
+    async def refused(tenant_id, phone, body):                   # what Meta does outside the window
+        msg.sent.append(("text", tenant_id, phone, body))
+        return False
+    msg.text = refused
+    await svc.shifts.publish(T)
+    sent = [m[3] for m in msg.to(T_PHONE, "template")]
+    assert len(sent) == 1 and sent[0][0] == sh.SHIFT_TEMPLATE
+    first, business, line = sent[0][1]
+    assert first == "Thandi" and business and "\n" not in line and len(line) <= 200
+    assert line.startswith("Your shifts: ") and "17:00" in line
+    assert sh.SHIFT_TEMPLATE_BODY.count("{{") == len(sh.SHIFT_TEMPLATE_EXAMPLE) == 3
+
+
+async def test_inside_the_window_the_roster_is_a_plain_message_and_no_template(env):
+    svc, repo, msg, push, clock = env
+    shift(svc, clock, THANDI)
+    await svc.shifts.publish(T)
+    assert said(msg, T_PHONE) and not msg.to(T_PHONE, "template")
+
+
+def test_the_roster_template_is_in_the_standard_set_where_shifts_show():
+    from vula.commerce import wa_templates
+    from vula.tap import shifts as sh
+    names = lambda mods: {t["name"] for t in wa_templates.standard_templates("the-yard", mods, "restaurant_lite")}  # noqa: E731
+    assert sh.SHIFT_TEMPLATE in names({"tables", "products"}) and sh.SHIFT_TEMPLATE in names({"team"})
+    assert sh.SHIFT_TEMPLATE not in names({"orders", "products"})
+
+
+# ── who is working now ────────────────────────────────────────────────────────────────────────
+async def test_on_now_is_only_people_on_a_published_shift_that_covers_this_minute(env):
+    svc, repo, msg, push, clock = env
+    shift(svc, clock, THANDI, days=0, start="11:00", end="15:00")        # now is 12:00
+    shift(svc, clock, PIETER, days=0, start="17:00", end="23:00")        # later today
+    assert svc.shifts.on_now(T) == []                                    # drafts count for nothing
+    await svc.shifts.publish(T)
+    assert svc.shifts.on_now(T) == [THANDI]
+    clock.t += timedelta(hours=4)                                        # 16:00: hers is over, his not begun
+    assert svc.shifts.on_now(T) == []

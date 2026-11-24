@@ -297,3 +297,68 @@ async def test_the_pages_escape_and_show_what_was_asked(env):
     html = express_page.render(code_of(table), {**v, "table": svc.tables.page(code_of(table), CUST)})
     assert "Nothing to pay yet" in html and "We've asked for a waiter" in html
     assert "value=waiter" not in html and "value=bill" in html                                 # no second button for what's asked
+
+
+# ── with a roster: calls go to whoever is working ─────────────────────────────────────────────
+def _on_shift(svc, clock, member, start_h=-1, end_h=4):
+    """A published shift around now for `member`."""
+    from vula.tap.shifts import SHIFTS
+    now = clock.t
+    svc.repo.add_row(SHIFTS, {"tenant_id": T, "member_id": member, "status": "published",
+                              "starts_at": (now + timedelta(hours=start_h)).isoformat(),
+                              "ends_at": (now + timedelta(hours=end_h)).isoformat()})
+
+
+async def test_a_table_nobody_serves_calls_the_people_on_shift_not_the_owner(env):
+    svc, repo, msg, push, table, clock = env
+    free = svc.tables.create_table(T, "Table 9")
+    repo.team[(T, PIETER)] = ["27800000002"]
+    _on_shift(svc, clock, PIETER)
+    await svc.tables.call(code_of(free), CUST, "waiter")
+    assert [p[0] for p in push.sent] == [PIETER]
+    assert msg.to("27800000002", "text") and not msg.to("27800000009", "text")
+    assert [c["table"] for c in svc.tables.calls_for(T, PIETER, False)] == ["Table 9"]
+
+
+async def test_a_waiter_who_is_off_shift_does_not_get_their_table_while_others_are_working(env):
+    svc, repo, msg, push, table, clock = env
+    _on_shift(svc, clock, PIETER)                                        # Thandi serves Table 7 but isn't on
+    await svc.tables.call(code_of(table), CUST, "bill")
+    assert [p[0] for p in push.sent] == [PIETER] and not msg.to("27800000001", "text")
+    assert svc.tables.calls_for(T, PIETER, False)                        # he can see and accept it
+    await svc.tables.order(code_of(table), CUST, [{"product_id": "p-fish", "quantity": 1}])
+    assert svc.tables.orders_for(T, PIETER, False)
+
+
+async def test_the_tables_own_waiter_still_gets_it_when_on_shift_and_alone_when_nobody_is_planned(env):
+    svc, repo, msg, push, table, clock = env
+    await svc.tables.call(code_of(table), CUST, "waiter")                # no roster at all: as before
+    assert [p[0] for p in push.sent] == [THANDI]
+    push.sent.clear()
+    _on_shift(svc, clock, THANDI)
+    _on_shift(svc, clock, PIETER)
+    await svc.tables.call(code_of(table), CUST, "bill")
+    assert [p[0] for p in push.sent] == [THANDI]
+    assert not svc.tables.calls_for(T, PIETER, False)                    # her table, not his
+
+
+async def test_a_shift_that_has_ended_or_was_declined_counts_for_nothing(env):
+    svc, repo, msg, push, table, clock = env
+    from vula.tap.shifts import SHIFTS
+    free = svc.tables.create_table(T, "Table 9")
+    _on_shift(svc, clock, PIETER, start_h=-6, end_h=-1)                  # over
+    repo.add_row(SHIFTS, {"tenant_id": T, "member_id": THANDI, "status": "sick",
+                          "starts_at": (clock.t - timedelta(hours=1)).isoformat(),
+                          "ends_at": (clock.t + timedelta(hours=3)).isoformat()})
+    await svc.tables.call(code_of(free), CUST, "waiter")
+    assert [p[0] for p in push.sent] == [BOSS]                           # nobody working: owners and managers
+
+
+async def test_a_roster_that_cannot_be_read_never_loses_the_call(env):
+    svc, repo, msg, push, table, clock = env
+
+    def broken(*a, **k):
+        raise RuntimeError("database away")
+    repo.shifts_between = broken
+    await svc.tables.call(code_of(table), CUST, "waiter")
+    assert [p[0] for p in push.sent] == [THANDI]
