@@ -256,7 +256,7 @@ function AddSheet({ tenantId, st, onClose, onDone }) {
 
 const blankLesson = () => ({ name: '', sport: 'surf', minutes: 90, max_per_coach: 5, package_sessions: 4, group: [{ min: 1, max: '', single: '', pack: '' }], private_single: '', private_pack: '', extras: [] })
 const toForm = (st) => ({
-  enabled: st.enabled, share: bpToPercent(st.coach_share_bp), form_url: st.form_url || '', pay_note: st.pay_note || '', spot_name: st.spot?.name || '', lat: st.spot?.lat ?? '', lng: st.spot?.lng ?? '',
+  enabled: st.enabled, share: bpToPercent(st.coach_share_bp), form_url: st.form_url || '', pay_note: st.pay_note || '', spot_name: st.spot?.name || '', lat: st.spot?.lat ?? '', lng: st.spot?.lng ?? '', faces: st.spot?.faces ?? '',
   lessons: st.lessons.map(l => ({ id: l.id, name: l.name, sport: l.sport, minutes: l.minutes, max_per_coach: l.max_per_coach, package_sessions: l.package_sessions,
     group: l.group.map(t => ({ min: t.min, max: t.max ?? '', single: rand(t.single_cents), pack: rand(t.package_cents) })),
     private_single: rand(l.private?.single_cents), private_pack: rand(l.private?.package_cents), extras: l.extras.map(e => ({ id: e.id, name: e.name, price: rand(e.cents) })) })),
@@ -270,7 +270,7 @@ function fromForm(f) {
   if (share === undefined) throw new Error("The coach's share: enter a percentage between 0 and 100.")
   return {
     enabled: f.enabled, coach_share_bp: share, form_url: f.form_url, pay_note: f.pay_note,
-    spot: f.spot_name.trim() ? { name: f.spot_name, lat: Number(f.lat), lng: Number(f.lng) } : null,
+    spot: f.spot_name.trim() ? { name: f.spot_name, lat: Number(f.lat), lng: Number(f.lng), faces: f.faces === '' ? '' : Number(f.faces) } : null,
     lessons: f.lessons.map(l => ({ id: l.id, name: l.name, sport: l.sport, minutes: Number(l.minutes), max_per_coach: Number(l.max_per_coach), package_sessions: Number(l.package_sessions),
       group: l.group.filter(t => String(t.single).trim() !== '').map(t => ({ min: Number(t.min), max: whole(t.max), single_cents: money(t.single, l.name), package_cents: money(t.pack, l.name) })),
       private: String(l.private_single).trim() === '' ? null : { single_cents: money(l.private_single, l.name), package_cents: money(l.private_pack, l.name) },
@@ -343,6 +343,11 @@ function SettingsSheet({ tenantId, st, onClose, onSaved }) {
           <Field label="Latitude"><Input inputMode="decimal" value={f.lat} placeholder="-33.794" onChange={e => setF({ ...f, lat: e.target.value })} /></Field>
           <Field label="Longitude"><Input inputMode="decimal" value={f.lng} placeholder="18.459" onChange={e => setF({ ...f, lng: e.target.value })} /></Field>
         </div>
+        <Field label="The beach faces" hint="Standing on the sand looking out to sea, which way are you looking? The forecast then says when the wind is onshore or offshore.">
+          <Select value={f.faces} onChange={e => setF({ ...f, faces: e.target.value })}>
+            <option value="">Not set</option>
+            {['North', 'North-east', 'East', 'South-east', 'South', 'South-west', 'West', 'North-west'].map((n, i) => <option key={n} value={i * 45}>{n}</option>)}
+          </Select></Field>
         <Field label="Indemnity form (web address, optional)" hint="Sent with every confirmation."><Input type="url" value={f.form_url} placeholder="https://" onChange={e => setF({ ...f, form_url: e.target.value })} /></Field>
         <Field label="Coach's share of each lesson (%, optional)" hint="Used only for the Coaches report. Nothing is paid out by Vula."><Input inputMode="decimal" value={f.share} placeholder="70" onChange={e => setF({ ...f, share: e.target.value })} /></Field>
         <Field label="How to pay (optional)" hint="Added to the confirmation, in your words."><Textarea rows={2} maxLength={300} value={f.pay_note} placeholder="Pay at the shop or by EFT before your lesson." onChange={e => setF({ ...f, pay_note: e.target.value })} /></Field>

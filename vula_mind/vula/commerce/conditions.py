@@ -104,6 +104,26 @@ async def forecast(lat: float, lng: float, day: date) -> Dict[int, dict]:
     return hours
 
 
+def shore(wind_from: Any, faces: Any) -> str:
+    """onshore (the wind blows from the sea onto the beach), offshore (from the land out to sea) or
+    cross-shore (along the beach), from the wind's direction and the bearing the beach faces.
+    Within 45 degrees of the beach's facing is onshore, within 45 of its back offshore."""
+    try:
+        off = abs((float(wind_from) - float(faces) + 180) % 360 - 180)
+    except (TypeError, ValueError):
+        return ""
+    return "onshore" if off <= 45 else "offshore" if off >= 135 else "cross-shore"
+
+
+def with_shore(hours: Dict[int, dict], faces: Any) -> Dict[int, dict]:
+    """The hours with `shore` on each that has a wind direction — copies; the kept forecast is the
+    same for every school at a position. A spot with no facing set is returned as it is."""
+    if faces is None:
+        return hours
+    return {h: ({**v, "shore": shore(v["wind_from"], faces)} if v.get("wind_from") is not None else v)
+            for h, v in hours.items()}
+
+
 def describe(hour: dict) -> str:
     """The forecast's own figures in a line: 'swell 1.4 m at 10 s from SW, wind 5 kn SE gusting 9'."""
     bits = []
@@ -120,6 +140,8 @@ def describe(hour: dict) -> str:
             s += f" {compass(hour['wind_from'])}"
         if hour.get("gust_kn") is not None:
             s += f" gusting {hour['gust_kn']:.0f}"
+        if hour.get("shore"):
+            s += f", {hour['shore']}"
         bits.append(s)
     if hour.get("rain_pct") is not None and hour["rain_pct"] >= 30:
         bits.append(f"{hour['rain_pct']:.0f}% chance of rain")
@@ -154,6 +176,14 @@ def rate(sport: str, level: str, hour: dict) -> dict:
     wave, wind, gust, rain = hour.get("wave_m"), hour.get("wind_kn"), hour.get("gust_kn"), hour.get("rain_pct")
     if all(v is None for v in (wave, wind, gust, rain)):
         return {"rating": "marginal", "reasons": ["no forecast for this hour"]}
+    side = hour.get("shore") if wind is not None else None
+    if sport == "surf" and side == "onshore":            # wind off the sea breaks the waves up
+        over(wind, (12, 20), "onshore wind, bumpy waves", "strong onshore wind, messy waves")
+    elif sport == "sup" and side == "offshore":          # wind off the land carries a paddler out
+        over(wind, (6, 10), "offshore wind: stay close in", "offshore wind can carry you out")
+    elif sport == "kite" and side == "offshore" and wind >= 10:
+        worst = max(worst, 1)
+        reasons.append("offshore wind: only with a rescue boat")
     if sport == "surf":
         learner = level in ("", "first_timer", "beginner")
         lim = _LIMITS[("surf", "learner" if learner else "rider")]
@@ -193,6 +223,7 @@ def day_view(hours: Dict[int, dict], sport: str = "surf", level: str = "") -> Li
 # these are the forecasts the wind maps draw from, read from the service that publishes them.
 MODELS = (("ecmwf_ifs025", "ECMWF (Europe)"), ("gfs_seamless", "GFS (United States)"), ("icon_seamless", "ICON (Germany)"))
 PARTS = (("Morning", 6, 10), ("Midday", 10, 14), ("Afternoon", 14, 18))
+_SHORE_WORDS = {"onshore": "blowing onto the beach", "offshore": "blowing out to sea", "cross-shore": "blowing along the beach"}
 _SPORT_WORDS = {"surf": "a surf lesson", "sup": "paddling", "kite": "kiting"}
 _MODEL_CACHE: Dict[Tuple[float, float, str], Tuple[float, Dict[str, Dict[int, float]]]] = {}
 _AGREE_KN = 5.0          # the forecasts' average wind for a part of the day within this: they agree
@@ -281,12 +312,20 @@ def brief(hours: Dict[int, dict], models: Dict[str, Dict[int, float]], sports: L
             s = wind_words(wind)
             if wind >= 5 and middle.get("wind_from") is not None:
                 s += f" from the {compass(middle['wind_from'])}"
-            bits.append(f"{s} ({wind:.0f} kn, about {_kmh(wind)} km/h)")
+                side = middle.get("shore") or ""
+            else:
+                side = ""
+            if side:
+                s += f", {_SHORE_WORDS[side]} ({side}, {wind:.0f} kn, about {_kmh(wind)} km/h)"
+            else:
+                s += f" ({wind:.0f} kn, about {_kmh(wind)} km/h)"
+            bits.append(s)
         if wave is not None:
             bits.append(f"{swell_words(wave)} out at sea ({wave:.1f} m)")
         if rain is not None and rain >= 40:
             bits.append("rain likely" if rain >= 60 else "rain possible")
-        average = {"wind_kn": wind, "gust_kn": gust, "wave_m": wave, "period_s": period, "rain_pct": rain}
+        average = {"wind_kn": wind, "gust_kn": gust, "wave_m": wave, "period_s": period, "rain_pct": rain,
+                   "shore": side if wind is not None else None}
         ratings = {s: rate(s, level, average) for s in sports}
         seen = [_mean([m[h] for h in range(start, end) if h in m]) for m in models.values()]
         seen = [v for v in seen if v is not None]

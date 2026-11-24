@@ -187,7 +187,13 @@ def _clean_spot(raw: Any) -> Optional[dict]:
     ok = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lat, lng))
     if not ok or not -90 <= lat <= 90 or not -180 <= lng <= 180:
         raise LessonError("The spot needs its position on the map.")
-    return {"name": _text(raw.get("name"), 60), "lat": round(float(lat), 4), "lng": round(float(lng), 4)}
+    out = {"name": _text(raw.get("name"), 60), "lat": round(float(lat), 4), "lng": round(float(lng), 4)}
+    faces = raw.get("faces")          # the compass bearing the beach looks out to sea on (270 = west)
+    if faces not in (None, ""):
+        if isinstance(faces, bool) or not isinstance(faces, (int, float)) or not 0 <= faces < 360:
+            raise LessonError("Choose which way the beach faces.")
+        out["faces"] = int(faces)
+    return out
 
 
 def _clean_url(raw: Any) -> Optional[str]:
@@ -694,7 +700,7 @@ async def check_conditions(now: Optional[datetime] = None) -> int:
         if not spot:
             continue
         try:
-            hours = await conditions.forecast(spot["lat"], spot["lng"], tomorrow)
+            hours = conditions.with_shore(await conditions.forecast(spot["lat"], spot["lng"], tomorrow), spot.get("faces"))
         except Exception as exc:  # noqa: BLE001
             log.warning("conditions for %s unavailable: %s", tenant_id, exc)
             continue

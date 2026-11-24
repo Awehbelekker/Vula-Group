@@ -644,3 +644,39 @@ def test_the_comparison_reads_each_forecast_from_one_answer():
                          "wind_speed_10m_other": [1, 1]}}
     assert conditions.read_models(answer) == {"ECMWF (Europe)": {6: 5.0}, "GFS (United States)": {6: 7.0, 7: 9.0}}
     assert conditions.read_models({}) == {}
+
+
+# ── which way the beach faces ─────────────────────────────────────────────────────────────────
+def test_onshore_offshore_and_cross_shore_come_from_the_beachs_facing():
+    assert [conditions.shore(w, 270) for w in (270, 300, 90, 120, 0, 180, 315, 316)] == [
+        "onshore", "onshore", "offshore", "offshore", "cross-shore", "cross-shore", "onshore", "cross-shore"]
+    assert conditions.shore(350, 10) == "onshore" and conditions.shore(None, 270) == "" and conditions.shore(90, None) == ""
+    hours = {8: {"wind_kn": 14, "wind_from": 270}, 9: {"wave_m": 1.0}}
+    assert conditions.with_shore(hours, None) is hours
+    seen = conditions.with_shore(hours, 270)
+    assert seen[8]["shore"] == "onshore" and "shore" not in seen[9] and "shore" not in hours[8]
+    assert conditions.describe(seen[8]) == "wind 14 kn W, onshore"
+
+
+def test_the_wind_side_changes_the_rating_for_each_sport():
+    on, off = {"wind_kn": 14, "wind_from": 270, "shore": "onshore"}, {"wind_kn": 14, "wind_from": 90, "shore": "offshore"}
+    assert conditions.rate("surf", "", on) == {"rating": "marginal", "reasons": ["onshore wind, bumpy waves"]}
+    assert conditions.rate("surf", "", {**on, "wind_kn": 22})["rating"] == "poor"
+    assert conditions.rate("surf", "", off) == {"rating": "good", "reasons": []}
+    assert conditions.rate("sup", "", off) == {"rating": "poor", "reasons": ["offshore wind can carry you out", "breezy"]}
+    assert conditions.rate("kite", "", off) == {"rating": "marginal", "reasons": ["offshore wind: only with a rescue boat"]}
+    assert conditions.rate("kite", "", on) == {"rating": "good", "reasons": []}
+
+
+def test_the_day_in_words_says_which_way_the_wind_blows_at_this_beach():
+    hours = conditions.with_shore(_windy(lambda h: 7), 315)          # wind from the SE, beach faces NW
+    out = conditions.brief(hours, {}, ["surf"])
+    assert out["parts"][0]["text"] == ("A light wind from the SE, blowing out to sea (offshore, 7 kn, about 13 km/h), "
+                                       "a small swell out at sea (0.9 m)")
+
+
+def test_a_spot_keeps_which_way_it_faces_and_refuses_a_bearing_that_isnt_one():
+    assert lessons._clean_spot({"name": "Big Bay", "lat": -33.794, "lng": 18.459, "faces": 270})["faces"] == 270
+    assert "faces" not in lessons._clean_spot({"name": "Big Bay", "lat": -33.794, "lng": 18.459, "faces": ""})
+    with pytest.raises(lessons.LessonError):
+        lessons._clean_spot({"name": "Big Bay", "lat": -33.794, "lng": 18.459, "faces": 400})

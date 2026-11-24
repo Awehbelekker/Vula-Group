@@ -161,7 +161,7 @@ async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD.") from exc
     try:
-        hours = await conditions.forecast(spot["lat"], spot["lng"], day)
+        hours = conditions.with_shore(await conditions.forecast(spot["lat"], spot["lng"], day), spot.get("faces"))
     except Exception:  # noqa: BLE001 — the forecast is a guide; the screen says it couldn't be read
         return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True, "cameras": cameras}
     taught = sorted({x.get("sport") for x in (lessons.settings(tenant_id).get("lessons") or [])} - {None})

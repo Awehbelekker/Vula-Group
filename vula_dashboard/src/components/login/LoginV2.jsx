@@ -17,6 +17,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
   const x = useLogin({ onSuccess, notice, email })
   const go = (mode) => { x.setMode(mode); x.setError(''); x.setInfo('') }
   const b = x.loginBrand
+  const sc = b?.partner_login && 'school'
 
   return (
     <main className="vlg">
@@ -26,7 +27,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
             <>
               {b.logo_url ? <img src={b.logo_url} alt={b.name || ''} className="vlg-logo vula-login-logo" />
                 : <span className="vlg-name">{b.name}</span>}
-              {b.partner_login ? <><span className="vlg-name">{b.name}</span><span className="vlg-over">For surf and kite schools</span></>
+              {b.partner_login ? <><span className="vlg-name">{b.name}</span><span className="vlg-over">{b.tagline}</span></>
                 : <PoweredByVula partner={b.partner?.name || ''} />}
             </>
           ) : (
@@ -80,21 +81,21 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
 
         {x.mode === 'setup_workspace' && (
           <>
-            <h1 className="vlg-h1">Set up your {b?.partner_login ? 'school' : 'workspace'}</h1>
-            <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What's your {b?.partner_login ? 'school' : 'business'} called?</p>
+            <h1 className="vlg-h1">Set up your {sc || 'workspace'}</h1>
+            <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What's your {sc || 'business'} called?</p>
             <Notes x={x} info={false} />
             <form onSubmit={x.handleSetupWorkspace} className="vlg-form">
-              <Field label="Business name">
-                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={examplesFor(null).businessName} />
+              <Field label={sc ? 'School name' : 'Business name'}>
+                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={sc ? '' : examplesFor().businessName} />
               </Field>
               {/* on a partner's own address the server decides the kind (a FlowCrew surf school) */}
-              {!b?.partner_login && <Field label="What kind of business?">
+              {!sc && <Field label="What kind of business?">
                 <Select value={x.businessType} onChange={(e) => x.setBusinessType(e.target.value)}>
                   {(x.businessTypes.length ? x.businessTypes : [{ id: 'other', label: 'Other / General' }])
                     .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                 </Select>
               </Field>}
-              <Button size="lg" Icon={Building2} disabled={x.loading} className="vlg-wide">{x.loading ? 'Setting up…' : 'Create my workspace'}</Button>
+              <Button size="lg" Icon={Building2} disabled={x.loading} className="vlg-wide">{x.loading ? 'Setting up…' : `Create my ${sc || 'workspace'}`}</Button>
             </form>
           </>
         )}
