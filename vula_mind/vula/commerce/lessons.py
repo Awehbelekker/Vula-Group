@@ -390,8 +390,10 @@ def _get(tenant_id: str, request_id: str) -> dict:
 async def request(tenant_id: str, *, kind: str, item_id: Any, wanted_date: Any, name: Any, phone: Any,
                   people: Any = 1, fmt: str = "group", package: bool = False, level: str = "",
                   extras: Optional[Dict[str, int]] = None, duration: str = "", wanted_part: str = "any",
-                  notes: Any = "", channel: str = "whatsapp", tell_team: bool = True) -> dict:
-    """Keep a request for a lesson or for gear, quoted from the price list. Nothing is booked."""
+                  notes: Any = "", channel: str = "whatsapp", tell_team: bool = True,
+                  customer_user_id: Optional[str] = None) -> dict:
+    """Keep a request for a lesson or for gear, quoted from the price list. Nothing is booked.
+    `customer_user_id`: the customer's own login when they made it signed in (migration 306)."""
     from vula.api import tenants
     st = settings(tenant_id)
     if not st["enabled"] or not tenants.is_active(tenant_id):
@@ -427,7 +429,17 @@ async def request(tenant_id: str, *, kind: str, item_id: Any, wanted_date: Any, 
         raise LessonError("Choose a lesson or gear to hire.")
     row.update(quote_cents=cents, quote_lines=lines,
                ref="L-" + "".join(secrets.choice(_REF_ALPHABET) for _ in range(5)))
-    _db().table("commerce_lesson_requests").insert(row).execute()
+    if customer_user_id:                             # only then: the column is migration 306's
+        row["customer_user_id"] = customer_user_id
+    try:
+        _db().table("commerce_lesson_requests").insert(row).execute()
+    except Exception as exc:  # noqa: BLE001
+        if "customer_user_id" not in row:
+            raise
+        # a database without migration 306 yet: the request still goes in, just not tied to the login
+        log.warning("lesson request kept without its login for %s (migration 306?): %s", tenant_id, exc)
+        row.pop("customer_user_id")
+        _db().table("commerce_lesson_requests").insert(row).execute()
     rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).eq("ref", row["ref"])
             .limit(1).execute().data or [])
     if not rows:
@@ -769,6 +781,25 @@ def _for_customer(r: dict) -> dict:
 
 def for_customer(r: dict) -> dict:
     return _for_customer(r)
+
+
+def for_account(user_id: str) -> dict:
+    """A signed-in customer's own requests, at every school, newest first — found by their login's
+    id and nothing else. Each carries its signed token (they made it, so they may open and cancel
+    it) and its school. `name` and `phone` are what they gave last, to fill the next form."""
+    from vula.api import tenants
+    rows = (_db().table("commerce_lesson_requests").select("*").eq("customer_user_id", user_id)
+            .order("created_at", desc=True).limit(60).execute().data or [])
+    names: Dict[str, str] = {}
+    out = []
+    for r in rows:
+        tid = r["tenant_id"]
+        if tid not in names:
+            names[tid] = tenants.display_name(tid) if tenants.is_active(tid) else ""
+        if names[tid]:                               # a paused or removed school's requests aren't shown
+            out.append({**_for_customer(r), "shop": tid.replace("_", "-"), "school": names[tid]})
+    last = rows[0] if rows else {}
+    return {"requests": out, "name": last.get("customer_name") or "", "phone": last.get("customer_phone") or ""}
 
 
 def by_tokens(tenant_id: str, tokens: List[str]) -> List[dict]:

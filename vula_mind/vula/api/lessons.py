@@ -22,6 +22,7 @@ a request the phone made is opened only by the signed token it was given back.
     GET  /v1/flow/{shop}/conditions?date=   the forecast for its spot
     POST /v1/flow/{shop}/quote              what a request would cost (writes nothing)
     POST /v1/flow/{shop}/requests           ask for a lesson or gear → the request and its token
+    GET  /v1/flow/account                   a signed-in customer's own requests at every school (401 otherwise)
     GET  /v1/flow/directory?lat=&lng=       the schools that asked to be listed, nearest first with a position
     POST /v1/flow/{shop}/mine               {tokens} → those requests as they are now
     POST /v1/flow/{shop}/cancel             {token} → cancelled
@@ -150,10 +151,11 @@ async def set_status(tenant_id: str, request_id: str, body: dict) -> dict:
 
 @router.get("/{tenant_id}/admin/lessons/conditions")
 async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str = "surf") -> dict:
-    from vula.commerce import conditions
+    from vula.commerce import conditions, spot_cameras
     spot = lessons.settings(tenant_id).get("spot")
     if not spot:
-        return {"spot": None, "hours": []}
+        return {"spot": None, "hours": [], "cameras": []}
+    cameras = spot_cameras.near(spot.get("lat"), spot.get("lng"))     # live cameras near the spot
     try:
         day = _date.fromisoformat(date) if date else lessons._now().astimezone(lessons.SAST).date()
     except ValueError as exc:
@@ -161,8 +163,11 @@ async def conditions_for(tenant_id: str, date: Optional[str] = None, sport: str 
     try:
         hours = await conditions.forecast(spot["lat"], spot["lng"], day)
     except Exception:  # noqa: BLE001 — the forecast is a guide; the screen says it couldn't be read
-        return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True}
-    return {"spot": spot, "date": day.isoformat(),
+        return {"spot": spot, "date": day.isoformat(), "hours": [], "unavailable": True, "cameras": cameras}
+    taught = sorted({x.get("sport") for x in (lessons.settings(tenant_id).get("lessons") or [])} - {None})
+    models = await conditions.wind_models(spot["lat"], spot["lng"], day)
+    return {"spot": spot, "date": day.isoformat(), "cameras": cameras,
+            "summary": conditions.brief(hours, models, taught),     # the day in plain words
             "hours": conditions.day_view(hours, sport if sport in lessons.SPORTS else "surf")}
 
 
@@ -273,6 +278,27 @@ def _coord(raw: Optional[str], lo: float, hi: float) -> Optional[float]:
     return v
 
 
+async def _customer(request: Request) -> Optional[str]:
+    """The id of the signed-in customer behind this request, or None. A customer's login is an
+    ordinary sign-in with no business behind it; here it only ever opens that person's own requests."""
+    from vula.api.master_auth import _verify_jwt
+    token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    user = await _verify_jwt(token)
+    return str(user["id"]) if user and user.get("id") else None
+
+
+@public.get("/account")
+async def flow_account(request: Request) -> dict:
+    """The signed-in customer's own requests at every school. 401 without a valid sign-in."""
+    _limit(request, "account", 30)
+    uid = await _customer(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Sign in to see your bookings.")
+    return lessons.for_account(uid)
+
+
 @public.get("/directory")
 async def flow_directory(request: Request, lat: Optional[str] = None, lng: Optional[str] = None) -> dict:
     """The schools that asked to be listed: by name, or nearest first when the customer's position
@@ -336,7 +362,7 @@ async def flow_request(shop: str, body: dict, request: Request) -> dict:
         made = await lessons.request(
             tenant_id, **_wanted(b), wanted_date=b.get("wanted_date"), wanted_part=str(b.get("wanted_part") or "any"),
             level=str(b.get("level") or ""), name=b.get("name"), phone=b.get("phone"), notes=b.get("notes") or "",
-            channel="app")
+            channel="app", customer_user_id=await _customer(request))
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
     return {"request": lessons.for_customer(made)}

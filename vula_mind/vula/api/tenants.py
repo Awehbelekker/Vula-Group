@@ -354,7 +354,9 @@ PARTNERS: dict[str, dict] = {
                            "font_pairing": "plain"},
                  # the partner's own web address (24 Nov 2026): its businesses sign in there and its
                  # customers' app lives there, under the partner's name and look
-                 "domain": "flowcrew.co.za"},
+                 "domain": "flowcrew.co.za",
+                 # what a business that signs up on that address is (signup.py)
+                 "business_type": "watersports"},
 }
 
 

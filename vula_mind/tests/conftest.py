@@ -167,3 +167,13 @@ def sample_goal() -> str:
 @pytest.fixture
 def complex_goal() -> str:
     return "Analyse and compare the pros and cons of using DeepSeek R1 vs Qwen 2.5 for a privacy-first local AI system."
+
+
+@pytest.fixture(autouse=True)
+def _no_live_forecast_comparison(monkeypatch):
+    """No test asks the weather service: the comparison of forecasts reads nothing unless a test gives it some."""
+    from vula.commerce import conditions
+
+    async def none(lat, lng, day):
+        return {}
+    monkeypatch.setattr(conditions, "wind_models", none)

@@ -10,6 +10,8 @@
  */
 import "./flow.css";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { myAccount, session } from "./account";
+import AccountCard from "./AccountCard.jsx";
 
 const Discover = lazy(() => import("./Discover.jsx"));   // find a school: only loaded where it's shown
 
@@ -25,11 +27,11 @@ const shopFromPath = () => (window.location.pathname.replace(/^\/flow\/?/, "").s
 const RATING = { good: "Good", marginal: "Marginal", poor: "Poor" };
 const STATUS = { requested: ["marginal", "Waiting for the school"], confirmed: ["good", "Confirmed"], declined: ["poor", "Declined"], cancelled: ["", "Cancelled"], completed: ["", "Done"], no_show: ["poor", "Missed"] };
 
-async function call(shop, path = "", body) {
+async function call(shop, path = "", body, token) {
   let r;
   try {
     r = await fetch(`${API}/v1/flow/${shop}${path}`, body === undefined ? undefined
-      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      : { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
   } catch { throw new Error("No connection. Check your signal and try again."); }
   let d = {};
   try { d = await r.json(); } catch { /* empty */ }
@@ -44,6 +46,23 @@ const ICONS = {
   chat: <path d="M5 5h14v11H10l-4 3.5V16H5z" />,
 };
 const Icon = ({ name }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[name]}</svg>;
+
+/** A live camera near the spot. It is its owner's: by default a button to the owner's page; played
+ * here only where the owner agreed (the server sends a player address only then), and only once
+ * the customer asks, so nobody's data is spent on video they didn't want. */
+function Camera({ cam }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="fc-cam">
+      <p className="fc-sub"><b>{cam.name}</b> · camera by {cam.owner}</p>
+      {cam.kind === "embed" && open && <iframe className="fc-cam-frame" title={cam.name} src={cam.embed_url} allow="autoplay; fullscreen" referrerPolicy="no-referrer" sandbox="allow-scripts allow-same-origin" />}
+      <div className="fc-row">
+        {cam.kind === "embed" && <button type="button" className="fc-btn alt" onClick={() => setOpen(!open)}>{open ? "Hide the camera" : "Watch live"}</button>}
+        <a className={`fc-btn ${cam.kind === "embed" ? "quiet" : "alt"} fc-btn-link`} href={cam.page_url} target="_blank" rel="noreferrer">{cam.kind === "embed" ? "Open their page" : "Watch the live camera"}</a>
+      </div>
+    </div>
+  );
+}
 
 function Conditions({ shop, spot }) {
   const [day, setDay] = useState(0);
@@ -67,7 +86,15 @@ function Conditions({ shop, spot }) {
         </div>
       </div>
       {day === 0 && d?.report && <p className="fc-note"><b>Seen from the beach at {d.report.time}{d.report.by ? ` by ${d.report.by}` : ""}:</b> {d.report.text}.{d.report.coach_note ? ` “${d.report.coach_note}”` : ""}</p>}
+      {(d?.cameras || []).map((c) => <Camera key={c.id} cam={c} />)}
       {!d ? <p className="fc-sub">Reading the forecast…</p> : !hours.length ? <p className="fc-sub">The forecast couldn't be read just now.</p> : (<>
+        {d.summary?.headline && (
+          <div className="fc-brief">
+            <p className="fc-brief-h">{d.summary.headline}</p>
+            {d.summary.parts.map((p) => (
+              <p key={p.part} className="fc-brief-p"><b>{p.part}</b> <span className="fc-sub">{p.from}–{p.to}</span><br />{p.text}.</p>))}
+            <p className="fc-sub">{d.summary.confidence}</p>
+          </div>)}
         {now && <p style={{ margin: 0 }}><span className={`fc-chip ${now.rating}`}>{RATING[now.rating]} for learners{day === 0 ? " now" : " at 08:00"}</span> <span className="fc-sub">{now.text}</span></p>}
         <div className="fc-hours">
           {hours.map((h) => (
@@ -125,7 +152,7 @@ const Opt = ({ title, sub, pick }) => <button type="button" className="fc-opt" o
 
 const BLANK = { kind: "", item_id: "", level: "", format: "", people: 1, package: null, extras: null, duration: "", wanted_date: "", wanted_part: "" };
 
-function Book({ shop, info, start, onDone }) {
+function Book({ shop, info, start, onDone, acct }) {
   const [w, setW] = useState({ ...BLANK, ...start });
   const [me, setMe] = useState(() => LS.get("fc.me", { name: "", phone: "" }));
   const [quote, setQuote] = useState(null);
@@ -164,7 +191,7 @@ function Book({ shop, info, start, onDone }) {
   const send = async (e) => {
     e.preventDefault(); setBusy(true); setError("");
     try {
-      const d = await call(shop, "/requests", { ...wanted, level: w.level, wanted_date: w.wanted_date, wanted_part: w.wanted_part, name: me.name, phone: me.phone });
+      const d = await call(shop, "/requests", { ...wanted, level: w.level, wanted_date: w.wanted_date, wanted_part: w.wanted_part, name: me.name, phone: me.phone }, acct?.token);
       LS.set("fc.me", me);
       LS.set(`fc.tokens.${shop}`, [d.request.token, ...LS.get(`fc.tokens.${shop}`, [])].slice(0, 20));
       onDone(d.request);
@@ -217,7 +244,7 @@ function Book({ shop, info, start, onDone }) {
   );
 }
 
-function Mine({ shop, info, fresh, go }) {
+function Mine({ shop, info, fresh, go, acct, onSignedOut }) {
   const [list, setList] = useState(null);
   const [error, setError] = useState("");
   const load = useCallback(() => {
@@ -232,7 +259,7 @@ function Mine({ shop, info, fresh, go }) {
   };
   if (error && !list) return <section className="fc-card"><p className="fc-err" role="alert">{error}</p><button type="button" className="fc-btn alt" onClick={load}>Try again</button></section>;
   if (!list) return <section className="fc-card"><p className="fc-sub">Loading your bookings…</p></section>;
-  if (!list.length) return <section className="fc-card"><h2>Nothing booked yet</h2><p className="fc-sub">Requests you make on this phone show here, with the time once {info.name} confirms.</p><button type="button" className="fc-btn" onClick={() => go("book", {})}>Book a lesson</button></section>;
+  if (!list.length) return <><section className="fc-card"><h2>Nothing booked yet</h2><p className="fc-sub">Requests you make on this phone show here, with the time once {info.name} confirms.</p><button type="button" className="fc-btn" onClick={() => go("book", {})}>Book a lesson</button></section><AccountCard acct={acct} onSignedOut={onSignedOut} /></>;
   return (<>
     {fresh && <p className="fc-note" role="status">Sent. {info.name} will confirm the time with you on WhatsApp. Reference {fresh.ref}.</p>}
     {error && <p className="fc-err" role="alert">{error}</p>}
@@ -250,6 +277,7 @@ function Mine({ shop, info, fresh, go }) {
           {(r.status === "requested" || r.status === "confirmed") && <button type="button" className="fc-btn danger" style={{ flex: "none" }} onClick={() => cancel(r)}>Cancel</button>}
         </section>);
     })}
+    <AccountCard acct={acct} onSignedOut={onSignedOut} />
   </>);
 }
 
@@ -293,6 +321,24 @@ export default function FlowApp() {
   const [info, setInfo] = useState(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("home");
+  const [acct, setAcct] = useState(null);        // the signed-in customer: {token, email} — optional
+  const [acctKey, setAcctKey] = useState(0);
+  useEffect(() => {
+    let live = true;
+    session().then(async (s) => {
+      if (!live || !s) return;
+      setAcct(s);
+      if (!shop) return;
+      try {                                       // their requests at this school, made on any phone, show here too
+        const a = await myAccount(s.token);
+        const theirs = a.requests.filter((r) => r.shop === shop).map((r) => r.token);
+        LS.set(`fc.tokens.${shop}`, [...new Set([...theirs, ...LS.get(`fc.tokens.${shop}`, [])])].slice(0, 20));
+        if (!LS.get("fc.me", {}).phone && a.phone) LS.set("fc.me", { name: a.name, phone: a.phone });
+        if (live) setAcctKey((k) => k + 1);
+      } catch { /* the app still works from this phone's own tokens */ }
+    });
+    return () => { live = false; };
+  }, [shop]);
   const [start, setStart] = useState({});
   const [bookKey, setBookKey] = useState(0);
   const [fresh, setFresh] = useState(null);
@@ -302,7 +348,7 @@ export default function FlowApp() {
   const go = (to, s) => { if (to === "book") { setStart(s || {}); setBookKey((k) => k + 1); } setFresh(null); setTab(to); window.scrollTo(0, 0); };
   const waiting = LS.get(`fc.tokens.${shop}`, []).length;
 
-  if (!shop) return <Suspense fallback={<main className="fc"><p className="fc-sub">Loading…</p></main>}><Discover api={call} /></Suspense>;
+  if (!shop) return <Suspense fallback={<main className="fc"><p className="fc-sub">Loading…</p></main>}><Discover api={call} acct={acct} onSignedOut={() => setAcct(null)} /></Suspense>;
   if (error && !info) return <main className="fc"><section className="fc-card"><p className="fc-err" role="alert">{error}</p><button type="button" className="fc-btn alt" onClick={load}>Try again</button></section></main>;
   if (!info) return <main className="fc"><p className="fc-sub">Loading…</p></main>;
   return (
@@ -313,8 +359,8 @@ export default function FlowApp() {
         <div><h1>{info.name}</h1><p>{info.brand?.tagline || (info.spot ? `Lessons and gear at ${info.spot.name}` : "Lessons and gear")}</p></div>
       </header>
       {tab === "home" && <Home shop={shop} info={info} go={go} />}
-      {tab === "book" && <Book key={bookKey} shop={shop} info={info} start={start} onDone={(r) => { setFresh(r); setTab("mine"); window.scrollTo(0, 0); }} />}
-      {tab === "mine" && <Mine shop={shop} info={info} fresh={fresh} go={go} />}
+      {tab === "book" && <Book key={bookKey} shop={shop} info={info} start={start} acct={acct} onDone={(r) => { setFresh(r); setTab("mine"); window.scrollTo(0, 0); }} />}
+      {tab === "mine" && <Mine key={acctKey} shop={shop} info={info} fresh={fresh} go={go} acct={acct} onSignedOut={() => setAcct(null)} />}
       {tab === "chat" && <Chat info={info} />}
       <p className="fc-foot">Powered by {info.partner?.name || "FlowCrew"}<img src="/partners/flowcrew-mark.png" alt="" /></p>
       <nav className="fc-bar" aria-label="Main">
