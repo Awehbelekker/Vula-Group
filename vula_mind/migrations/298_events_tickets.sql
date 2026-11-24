@@ -21,6 +21,8 @@ create table if not exists commerce_events (
     status         text not null default 'draft',      -- draft | on_sale | closed | cancelled
     sales_close_at timestamptz,                        -- null = until the event starts
     door_key       text unique,                        -- the door link's secret; null = no door link
+    remind_buyers  boolean not null default true,      -- a WhatsApp reminder the day before
+    thank_buyers   boolean not null default true,      -- a WhatsApp thank-you to those who came
     created_by     text,
     created_at     timestamptz not null default now(),
     updated_at     timestamptz not null default now()

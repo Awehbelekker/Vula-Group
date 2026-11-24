@@ -21,6 +21,7 @@ function Editor({ ev, x, onDone }) {
   const [f, setF] = useState({
     title: ev?.title || '', starts: isoToLocal(ev?.starts_at), ends: isoToLocal(ev?.ends_at), venue: ev?.venue || '',
     address: ev?.address || '', description: ev?.description || '', image_url: ev?.image_url || '',
+    remind: ev ? ev.remind_buyers !== false : true, thank: ev ? ev.thank_buyers !== false : true,
   })
   const [rows, setRows] = useState(ev?.types?.length
     ? ev.types.map(t => ({ key: t.id, id: t.id, name: t.name, price: (t.price_cents / 100).toFixed(2), capacity: String(t.capacity), max_per_order: String(t.max_per_order), sold: t.sold }))
@@ -38,7 +39,8 @@ function Editor({ ev, x, onDone }) {
     setBusy(true); setError('')
     try {
       const saved = await x.save(ev?.id, { title: f.title, starts_at: localToIso(f.starts), ends_at: localToIso(f.ends) || null,
-        venue: f.venue, address: f.address, description: f.description, image_url: f.image_url, types: t.types })
+        venue: f.venue, address: f.address, description: f.description, image_url: f.image_url,
+        remind_buyers: f.remind, thank_buyers: f.thank, types: t.types })
       toast('Saved'); onDone(saved)
     } catch (err) { setError(err.message) }
     setBusy(false)
@@ -75,6 +77,13 @@ function Editor({ ev, x, onDone }) {
           ))}
         </ul>
         <div className="vev-row"><Button type="button" variant="secondary" size="sm" Icon={Plus} onClick={() => setRows([...rows, blankType()])}>Add a ticket type</Button></div>
+      </Card>
+      <Card className="vev-card">
+        <h3 className="vev-h">WhatsApp messages to buyers</h3>
+        <label className="vev-check"><input type="checkbox" checked={f.remind} onChange={e => setF({ ...f, remind: e.target.checked })} />
+          <span>Remind buyers the day before, with their tickets<span className="vev-sub">One message to each buyer, with the date, the place and a button to their tickets.</span></span></label>
+        <label className="vev-check"><input type="checkbox" checked={f.thank} onChange={e => setF({ ...f, thank: e.target.checked })} />
+          <span>Thank the people who came, the day after<span className="vev-sub">Goes only to buyers whose ticket was checked in, with your next event if one is on sale. Never to anyone who opted out.</span></span></label>
       </Card>
       {error && <p className="vev-error" role="alert">{error}</p>}
       <div className="vev-row"><Button type="submit" disabled={busy}>{busy ? 'Saving…' : ev ? 'Save changes' : 'Save as a draft'}</Button></div>

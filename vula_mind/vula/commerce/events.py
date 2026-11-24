@@ -114,6 +114,11 @@ def _clean_event(data: dict, current: Optional[dict] = None) -> dict:
         if img and not img.startswith("https://"):
             raise EventError("The picture's address must start with https://")
         out["image_url"] = img or None
+    for key in ("remind_buyers", "thank_buyers"):
+        if key in data:
+            if not isinstance(data[key], bool):
+                raise EventError("Reminders and thank-yous are either on or off.")
+            out[key] = data[key]
     if "starts_at" in data or not current:
         out["starts_at"] = _iso(_when(data.get("starts_at"), "when the event starts", required=True))
     for key, what in (("ends_at", "when the event ends"), ("sales_close_at", "when ticket sales close")):
@@ -833,3 +838,134 @@ def door_sync(raw_key: Any, items: Any, device: Any = "") -> dict:
         out.append({"ref": str(it.get("ref") or "")[:80], "result": res["result"],
                     "message": res.get("message"), "ticket": res.get("ticket")})
     return {"results": out}
+
+
+# ── the buyer hears from the business: the day before, and the day after ──────────────────────
+# Both go to the BUYER's own number (the one that bought), once per order, on the business's
+# WhatsApp line. The reminder is about something they paid for, so it always goes (when the event
+# has it on). The thank-you invites them to the next event, which is marketing: a number that
+# opted out doesn't get it. A ticket is marked first and the message sent after, so a crash can
+# skip a message but never send one twice.
+REMIND_FROM_HOURS, REMIND_UNTIL_HOURS = 30, 2
+THANK_FROM_HOURS, THANK_UNTIL_HOURS = 3, 48
+
+
+async def _message_buyer(tenant_id: str, order: dict, text: str, news: str, button: str, link: str) -> bool:
+    try:
+        from vula.api.whatsapp import _resolve_wa, _send_wa_cta_url, _wa_number, send_template
+        phone = order.get("customer_phone")
+        if not phone:
+            return False
+        creds = await _resolve_wa(tenant_id)
+        sent = bool(creds and link) and await _send_wa_cta_url(creds, _wa_number(phone), text, button, link)
+        if not sent:                       # outside WhatsApp's 24-hour window: the approved template
+            from vula.commerce.job_config import template_name
+            sent = await send_template(tenant_id, phone, template_name(tenant_id, "order_update"),
+                                       [order.get("customer_name") or "there", order.get("display_id") or "", news])
+        return bool(sent)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("event message for %s %s failed: %s", tenant_id, order.get("display_id"), exc)
+        return False
+
+
+def _claim(tenant_id: str, order_id: str, event_id: str, column: str, statuses: tuple) -> int:
+    """Mark this order's tickets as told (reminded / thanked) — only the ones not told yet. The
+    number marked by THIS call; 0 means another run got there first, so nothing is sent."""
+    n = 0
+    for status in statuses:
+        res = (_db().table("commerce_tickets").update({column: _iso(_now())}).eq("tenant_id", tenant_id)
+               .eq("order_id", order_id).eq("event_id", event_id).eq("status", status).is_(column, "null").execute())
+        n += len(res.data or [])
+    return n
+
+
+def _orders(tenant_id: str, ids: List[str]) -> Dict[str, dict]:
+    out: Dict[str, dict] = {}
+    for i in range(0, len(ids), 200):
+        for o in (_db().table("commerce_orders").select("id,display_id,customer_name,customer_phone")
+                  .eq("tenant_id", tenant_id).in_("id", ids[i:i + 200]).execute().data or []):
+            out[o["id"]] = o
+    return out
+
+
+async def send_reminders(now: Optional[datetime] = None) -> int:
+    """Buyers of an event starting in the next 2–30 hours hear once: when, where, and their tickets."""
+    from datetime import timedelta
+    from vula.api import tenants
+    from vula.api.events import when_text
+    now = now or _now()
+    rows = (_db().table("commerce_events").select("*").in_("status", ["on_sale", "closed"])
+            .gte("starts_at", _iso(now + timedelta(hours=REMIND_UNTIL_HOURS)))
+            .lte("starts_at", _iso(now + timedelta(hours=REMIND_FROM_HOURS))).limit(500).execute().data or [])
+    sent = 0
+    for ev in rows:
+        tenant_id = ev["tenant_id"]
+        if ev.get("remind_buyers") is False or not tenants.is_active(tenant_id):
+            continue
+        todo = [k for k in _tickets(tenant_id, ev["id"]) if k.get("status") == "valid" and not k.get("reminded_at")]
+        orders = _orders(tenant_id, sorted({k["order_id"] for k in todo}))
+        where = ", ".join(x for x in (ev.get("venue"), ev.get("address")) if x)
+        for order_id, order in orders.items():
+            n = _claim(tenant_id, order_id, ev["id"], "reminded_at", ("valid",))
+            if not n:
+                continue
+            first = (order.get("customer_name") or "").split(" ")[0]
+            news = f"{ev['title']} is on {when_text(ev['starts_at'], ev.get('ends_at'))}" + (f" at {where}" if where else "") + "."
+            text = (f"Hi {first}! " if first else "") + f"⏰ {news} You have {n} ticket{'' if n == 1 else 's'}: " \
+                "have the QR code ready at the door." + f"\n\n— {tenants.display_name(tenant_id)}"
+            if await _message_buyer(tenant_id, order, text, news, "View tickets", tickets_url(tenant_id, order_id)):
+                sent += 1
+    return sent
+
+
+async def send_thanks(now: Optional[datetime] = None) -> int:
+    """Buyers who came (a ticket of theirs was checked in) hear once after the event, with the
+    business's next event on sale if there is one. Never to a number that opted out."""
+    from datetime import timedelta
+    from vula import consent
+    from vula.api import tenants
+    now = now or _now()
+    rows = (_db().table("commerce_events").select("*").in_("status", ["on_sale", "closed"])
+            .gte("starts_at", _iso(now - timedelta(hours=THANK_UNTIL_HOURS + 24)))
+            .lte("starts_at", _iso(now)).limit(500).execute().data or [])
+    sent = 0
+    for ev in rows:
+        tenant_id = ev["tenant_id"]
+        end = _when(ev.get("ends_at") or ev.get("starts_at"), "the event's time", required=True)
+        if ev.get("thank_buyers") is False or not tenants.is_active(tenant_id) or not (
+                end + timedelta(hours=THANK_FROM_HOURS) <= now <= end + timedelta(hours=THANK_UNTIL_HOURS)):
+            continue
+        todo = [k for k in _tickets(tenant_id, ev["id"]) if k.get("status") == "checked_in" and not k.get("thanked_at")]
+        orders = _orders(tenant_id, sorted({k["order_id"] for k in todo}))
+        upcoming = [e for e in list_events(tenant_id) if e.get("selling") and e["id"] != ev["id"]]
+        upcoming.sort(key=lambda e: e.get("starts_at") or "")
+        nxt = upcoming[0] if upcoming else None
+        for order_id, order in orders.items():
+            if consent.opted_out(tenant_id, order.get("customer_phone") or ""):
+                continue
+            if not _claim(tenant_id, order_id, ev["id"], "thanked_at", ("checked_in",)):
+                continue
+            first = (order.get("customer_name") or "").split(" ")[0]
+            news = f"Thank you for coming to {ev['title']}."
+            text = (f"Hi {first}! " if first else "") + f"🙏 {news}" \
+                + (f" Next up: {nxt['title']}. Tickets are on sale now." if nxt else "") \
+                + f"\n\n— {tenants.display_name(tenant_id)}"
+            link = nxt["url"] if nxt else ""
+            # with no next event there is no button to send: the approved template carries the thanks
+            if await _message_buyer(tenant_id, order, text, news, "See the next event", link):
+                sent += 1
+    return sent
+
+
+async def run_forever(interval_s: int = 1800) -> None:
+    """Every half hour on the scheduler leader: reminders, then thank-yous. Never raises."""
+    import asyncio
+    await asyncio.sleep(120)
+    while True:
+        try:
+            r, t = await send_reminders(), await send_thanks()
+            if r or t:
+                log.info("event messages: %d reminder(s), %d thank-you(s)", r, t)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("event messages run failed: %s", exc)
+        await asyncio.sleep(interval_s)

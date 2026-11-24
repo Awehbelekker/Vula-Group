@@ -417,3 +417,184 @@ def test_a_door_link_stops_working(door):
         events.door_link(TID, draft["id"])
     with pytest.raises(events.EventError):
         events.door_link("someone_else", door.ev["id"])
+
+
+# ── tickets in the WhatsApp chat ──────────────────────────────────────────────────────────────
+@pytest.fixture
+def chat(world, monkeypatch):
+    from vula.api import whatsapp as wa
+    from vula.commerce import event_chat
+    sent, asked, closed = [], [], []
+
+    async def resolve(tid):
+        return {"phone_id": "1", "token": "t"}
+
+    async def send_list(creds, number, header, body, footer, button, sections):
+        sent.append(("list", body, [r for sec in sections for r in sec["rows"]]))
+        return True
+
+    async def cta(creds, number, body, label, url, image_url=None):
+        sent.append(("cta", body, label, url))
+        return True
+
+    async def reply(phone, body, tenant_id=None, **k):
+        sent.append(("text", body))
+
+    monkeypatch.setattr(wa, "_resolve_wa", resolve)
+    monkeypatch.setattr(wa, "_send_wa_list", send_list)
+    monkeypatch.setattr(wa, "_send_wa_cta_url", cta)
+    monkeypatch.setattr(wa, "_send_reply", reply)
+    monkeypatch.setattr("vula.open_questions.ask", lambda t, p, kind, ref, prompt="": asked.append((kind, ref)) or "q1")
+    monkeypatch.setattr("vula.open_questions.close", lambda qid, answer="", status="answered": closed.append((qid, answer)))
+    known = {}
+
+    async def profile(tid, phone):
+        return known.get(phone)
+
+    monkeypatch.setattr(service, "get_customer_profile", profile)
+    return SimpleNamespace(sent=sent, asked=asked, closed=closed, known=known, ec=event_chat, world=world)
+
+
+def test_what_counts_as_asking_for_tickets():
+    from vula.commerce import event_chat as ec
+    for yes in ("tickets", "Can I get 2 tickets please", "Kaartjies?", "ticket for saturday"):
+        assert ec.is_ticket_request(yes)
+    for no in ("", "what time do you open", "x" * 200 + " tickets"):
+        assert not ec.is_ticket_request(no)
+    assert ec.is_my_tickets("where are my tickets") and ec.is_my_tickets("I didn't get my ticket")
+    assert not ec.is_my_tickets("2 tickets please")
+    assert ec.clean_name("my name is Thandi Mokoena.") == "Thandi Mokoena" and ec.clean_name("Pieter van der Merwe")
+    for bad in ("how much are they?", "2", "see https://x.co.za", "ok thanks I will pay tomorrow morning then", ""):
+        assert ec.clean_name(bad) == ""
+
+
+def test_nothing_on_sale_leaves_the_message_to_the_assistant(chat):
+    assert run(chat.ec.start("27821234567", TID, "tickets")) is False and chat.sent == []
+    assert run(chat.ec.start("27821234567", TID, "what time do you open")) is False
+
+
+def test_buying_in_the_chat_step_by_step(chat):
+    ev, types = _on_sale()
+    gid = types["General"]["id"]
+    assert run(chat.ec.start("27821234567", TID, "Hi, tickets please")) is True
+    kind, body, rows = chat.sent[-1]
+    assert kind == "list" and "Summer Market" in body                       # one event: straight to its tickets
+    assert {r["id"] for r in rows} == {f"evt_t_{t['id']}" for t in types.values()}
+    assert next(r for r in rows if r["id"] == f"evt_t_{gid}")["description"] == "R150.00 · 5 left"
+    assert run(chat.ec.handle_tap("27821234567", TID, f"evt_t_{gid}")) is True
+    rows = chat.sent[-1][2]
+    assert [r["id"] for r in rows] == [f"evt_q_{gid}_{n}" for n in (1, 2, 3, 4)]     # 4 per order
+    assert rows[2] == {"id": f"evt_q_{gid}_3", "title": "3 tickets", "description": "R450.00"}
+    assert run(chat.ec.handle_tap("27821234567", TID, f"evt_q_{gid}_3")) is True     # a new customer: the name first
+    assert chat.asked == [("ticket_name", f"{gid}:3")] and chat.world.orders == []
+    q = {"id": "q1", "ref_id": f"{gid}:3"}
+    assert run(chat.ec.take_name("27821234567", TID, "how much is that?", q)) is False and chat.world.orders == []
+    assert run(chat.ec.take_name("27821234567", TID, "Thandi Mokoena", q)) is True
+    order = chat.world.orders[0]
+    assert order["customer_name"] == "Thandi Mokoena" and order["total_cents"] == 45000 and order["channel"] == "tickets"
+    kind, body, label, url = chat.sent[-1]
+    assert kind == "cta" and label == "Pay R450.00" and url == "https://pay.example/c/1" and "R450.00" in body
+    assert chat.closed == [("q1", "Thandi Mokoena")]
+
+
+def test_a_returning_customer_is_not_asked_their_name_and_several_events_are_listed(chat):
+    ev, types = _on_sale()
+    other, _ = _event(title="Winter Market", starts_at=_soon(20), ends_at=_soon(20, 4))
+    run(events.set_status(TID, other["id"], "on_sale"))
+    chat.known["27821234567"] = {"name": "Thandi Mokoena"}
+    run(chat.ec.start("27821234567", TID, "tickets"))
+    assert [r["id"] for r in chat.sent[-1][2]] == [f"evt_e_{ev['id']}", f"evt_e_{other['id']}"]     # soonest first
+    run(chat.ec.handle_tap("27821234567", TID, f"evt_e_{other['id']}"))
+    assert "Winter Market" in chat.sent[-1][1]
+    run(chat.ec.handle_tap("27821234567", TID, f"evt_q_{types['VIP']['id']}_2"))
+    assert chat.asked == [] and chat.world.orders[0]["total_cents"] == 90000
+
+
+def test_refused_taps_in_the_chat(chat):
+    ev, types = _on_sale()
+    gid = types["General"]["id"]
+    chat.known["27821234567"] = {"name": "Thandi Mokoena"}
+    assert run(chat.ec.handle_tap("27821234567", TID, f"evt_q_{gid}_99")) is False             # not a number we offered
+    run(chat.ec.handle_tap("27821234567", TID, f"evt_q_{gid}_10"))                             # more than 4 per order
+    assert chat.world.orders == [] and "up to 4" in chat.sent[-1][1]
+    run(chat.ec.handle_tap("27821234567", "someone_else", f"evt_t_{gid}"))                     # another business's line
+    assert "aren't on sale" in chat.sent[-1][1]
+    run(events.set_status(TID, ev["id"], "closed"))
+    run(chat.ec.handle_tap("27821234567", TID, f"evt_q_{gid}_1"))
+    assert chat.world.orders == [] and "aren't on sale" in chat.sent[-1][1]
+
+
+def test_my_tickets_sends_back_what_this_number_paid_for(chat):
+    ev, types = _on_sale()
+    _buy(ev, [{"type_id": types["General"]["id"], "quantity": 2}])
+    chat.world.orders[-1]["status"] = "paid"
+    run(events.issue_for_order(TID, chat.world.orders[-1]))
+    chat.sent.clear()
+    assert run(chat.ec.start("0821234567", TID, "where are my tickets?")) is True
+    kind, body, label, url = chat.sent[-1]
+    assert kind == "cta" and label == "View tickets" and "2 tickets" in body and "/tickets/" in url
+    chat.sent.clear()
+    run(chat.ec.start("27839999999", TID, "where are my tickets?"))                            # someone else's number
+    assert all("/tickets/" not in str(m) for m in chat.sent)
+
+
+# ── the reminder and the thank-you ────────────────────────────────────────────────────────────
+@pytest.fixture
+def told(world, monkeypatch):
+    out = []
+
+    async def message(tenant_id, order, text, news, button, link):
+        out.append({"order": order["display_id"], "text": text, "news": news, "button": button, "link": link})
+        return True
+
+    monkeypatch.setattr(events, "_message_buyer", message)
+    monkeypatch.setattr(tenants, "display_name", lambda tid: "SeedleMe")
+    monkeypatch.setattr("vula.consent.opted_out", lambda tid, phone: phone.endswith("9999"))
+    return out
+
+
+def _sold(world, start_in_hours, phones=("082 123 4567",), qty=2, **kw):
+    ev, types = _event(title=kw.pop("title", "Summer Market"),
+                       starts_at=(datetime.now(timezone.utc) + timedelta(hours=start_in_hours)).isoformat(),
+                       ends_at=(datetime.now(timezone.utc) + timedelta(hours=start_in_hours + 3)).isoformat(), **kw)
+    run(events.set_status(TID, ev["id"], "on_sale"))
+    for ph in phones:
+        _buy(ev, [{"type_id": types["General"]["id"], "quantity": qty}], phone=ph)
+        _pay(world)
+    return ev
+
+
+def test_the_reminder_goes_once_the_day_before(world, told):
+    ev = _sold(world, 20, phones=("082 123 4567", "083 555 0000"))
+    far = _sold(world, 24 * 5, title="Far off")
+    assert run(events.send_reminders()) == 2
+    assert {m["order"] for m in told} == {"SEE-00001", "SEE-00002"}
+    m = told[0]
+    assert "Summer Market is on" in m["news"] and "The Yard" in m["news"] and "2 tickets" in m["text"]
+    assert m["button"] == "View tickets" and "/tickets/" in m["link"] and m["text"].endswith("— SeedleMe")
+    assert run(events.send_reminders()) == 0 and len(told) == 2                      # never twice
+    assert all(k["reminded_at"] for k in world.db.rows["commerce_tickets"] if k["event_id"] == ev["id"])
+    assert not any(k.get("reminded_at") for k in world.db.rows["commerce_tickets"] if k["event_id"] == far["id"])
+
+
+def test_no_reminder_when_switched_off_or_the_ticket_is_void(world, told):
+    _sold(world, 20, remind_buyers=False)
+    ev = _sold(world, 20, title="Second")
+    events.void_for_order(TID, world.orders[-1]["id"], "refunded")
+    assert run(events.send_reminders()) == 0 and told == []
+
+
+def test_the_thank_you_goes_to_those_who_came_with_the_next_event(world, told):
+    nxt = _sold(world, 24 * 7, title="Winter Market", phones=())
+    ev = _sold(world, 5, phones=("082 123 4567", "083 555 0000", "084 000 9999"), qty=1)
+    came, stayed_home, opted_out = world.orders[-3:]
+    for o in (came, opted_out):
+        k = next(t for t in world.db.rows["commerce_tickets"] if t["order_id"] == o["id"])
+        events.check_in(TID, ev["id"], k["code"], "door")
+    after = datetime.now(timezone.utc) + timedelta(hours=5 + 3 + 6)                  # six hours after it ended
+    assert run(events.send_thanks(after)) == 1
+    m = told[0]
+    assert m["order"] == came["display_id"] and "Thank you for coming to Summer Market" in m["text"]
+    assert "Next up: Winter Market" in m["text"] and m["link"].endswith(f"/events/{nxt['id']}")
+    assert run(events.send_thanks(after)) == 0 and len(told) == 1
+    assert run(events.send_thanks(datetime.now(timezone.utc) + timedelta(hours=5 + 3 + 1))) == 0     # too soon

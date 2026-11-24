@@ -4579,6 +4579,9 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
     from vula.integrations.doc_filing import looks_like_project_answer
     kind, ref = q.get("kind"), q.get("ref_id")
     low = (text or "").strip().lower().rstrip(".!")
+    if kind == "ticket_name":
+        from vula.commerce import event_chat
+        return await event_chat.take_name(phone, tenant_id, text, q)
     if kind == "checkout_address":
         from vula.commerce import button_checkout
         return await button_checkout.take_address(phone, tenant_id, text, q)
@@ -9491,6 +9494,16 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     if await _maybe_claim_web_basket(phone, text, tenant_id):
         return
 
+    # "Tickets" → the events on sale, bought in the chat (vula/commerce/event_chat.py). Only a
+    # business with an event on sale (or this customer's own tickets) takes the message here.
+    try:
+        from vula.commerce import event_chat
+        if event_chat.is_ticket_request(text) and await event_chat.start(phone, tenant_id, text):
+            _note_handler("event_tickets")
+            return
+    except Exception as exc:
+        logger.warning("ticket request failed for %s: %s", tenant_id, exc)
+
     # Owner-configurable conversation flow (migration 118) — is this phone already mid-flow?
     # Checked before greeting/menu so a flow reply (e.g. answering "which location?") is never
     # accidentally swallowed by the greeting/supplier-intake keyword checks below.
@@ -10781,6 +10794,17 @@ async def _handle_commerce_interactive(
     if reply_id.startswith("lst_"):
         # Listing cards (real-estate add-on, vula/listings/sharing.py): exact ids, no model.
         if await _handle_listing_tap(phone, tenant_id, reply_id):
+            return
+    if reply_id.startswith("evt_"):
+        # Event tickets in the chat (vula/commerce/event_chat.py): exact ids, no model.
+        from vula.commerce import event_chat
+        try:
+            if await event_chat.handle_tap(phone, tenant_id, reply_id):
+                return
+        except Exception as exc:
+            logger.warning("ticket step %s failed for %s: %s", reply_id[:12], tenant_id, exc)
+            await _send_reply(phone, "Sorry — that didn't go through. Reply *tickets* to try again.",
+                              tenant_id=tenant_id)
             return
     if reply_id.startswith("chk_"):
         # Checkout steps (vula/commerce/button_checkout.py): exact ids, no model.
