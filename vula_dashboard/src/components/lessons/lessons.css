@@ -1,0 +1,13 @@
+/* lessons.css — Sell › Lessons (lessons/). Shares the table-booking classes (tables/tables.css); these are its own. */
+.vls-cond { display: flex; flex-direction: column; gap: var(--space-2); }
+.vls-condhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.vls-hours { display: flex; gap: var(--space-1); overflow-x: auto; padding-bottom: 4px; }
+.vls-hour { flex: none; min-width: 64px; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-caption); color: var(--muted); }
+.vls-hour strong { color: var(--ink); font-size: var(--fs-body); }
+.vls-hour[data-rating="good"] { border-color: var(--ok); background: var(--ok-soft); }
+.vls-hour[data-rating="marginal"] { border-color: var(--warn); background: var(--warn-soft); }
+.vls-hour[data-rating="poor"] { border-color: var(--danger); background: var(--danger-soft); }
+.vls-block { display: flex; flex-direction: column; gap: var(--space-2); padding-bottom: var(--space-3); border-bottom: 1px solid var(--line); }
+.vls-tier { display: grid; gap: var(--space-2); grid-template-columns: repeat(auto-fit, minmax(min(100%, 78px), 1fr)); align-items: end; }
+.vls-amount { flex: none; font-size: var(--fs-body); color: var(--ink); }
+.vls-lines { margin: 0; padding: 0; list-style: none; font-size: var(--fs-caption); color: var(--muted); }

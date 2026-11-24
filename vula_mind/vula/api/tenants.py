@@ -334,7 +334,25 @@ def _public(cfg: dict) -> dict:
         # the switches that are on for this business (names only) — the dashboard shows a
         # piloted screen such as Costing by trade only where it's on (15 Nov 2026)
         "features": _features_on(cfg.get("tenant_id")),
+        "partner": partner_of(cfg),
     }
+
+
+# 2026-11-24: a business brought to Vula by a partner that sells it under its own name (FlowCrew:
+# surf and kite schools). The business's own brand stays first on its dashboard; the partner is
+# named in the credit at the foot — "FlowCrew · Powered by Vula". Set per business in
+# vula_tenant_config.features.partner (an id from this list, beside the switches).
+PARTNERS: dict[str, dict] = {
+    "flowcrew": {"name": "FlowCrew"},
+}
+
+
+def partner_of(cfg: Optional[dict]) -> Optional[dict]:
+    """{"id", "name"} of the partner this business came through, or None. An id that isn't a
+    known partner is nobody."""
+    features = (cfg or {}).get("features")
+    pid = features.get("partner") if isinstance(features, dict) else None
+    return {"id": pid, **PARTNERS[pid]} if isinstance(pid, str) and pid in PARTNERS else None
 
 
 def _features_on(tenant_id: Optional[str]) -> list:

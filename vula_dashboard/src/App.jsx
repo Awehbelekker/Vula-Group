@@ -157,6 +157,7 @@ export default function App() {
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [tenantFeatures, setTenantFeatures] = useState([]); // piloted screens switched on for this business
+  const [tenantPartner, setTenantPartner] = useState("");   // the partner this business came through (FlowCrew), named in the credit
   const [tenantProfile, setTenantProfile] = useState(null); // what kind of business (tenants.tenant_profile)
   const [tenantLabels, setTenantLabels] = useState(null); // the tenant's own section names (ui_labels)
   const [navRequest, setNavRequest] = useState(null);   // open a section's sub-tab (redesigned shell)
@@ -280,9 +281,9 @@ export default function App() {
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
-      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); setTenantFeatures(d.features || []);
+      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); setTenantFeatures(d.features || []); setTenantPartner(d.partner?.name || "");
         setBusiness({ businessType: d.profile?.business_type || d.business_type, displayName: d.display_name }); })
-      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); setTenantFeatures([]); setBusiness({}); });
+      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); setTenantFeatures([]); setTenantPartner(""); setBusiness({}); });
     return () => { alive = false; };
   }, [user, role, tenantId, setMember]);
 
@@ -430,7 +431,7 @@ export default function App() {
     return (
       <div>
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || "Business admin" }}
+          brand={{ logoUrl: brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || "Business admin", partner: tenantPartner }}
           groups={groups}
           activeId={merchTab}
           onSelect={setMerchTab}
@@ -475,7 +476,7 @@ export default function App() {
             {impersonateReason && <span className="v2-impersonate-why">({impersonateReason})</span>}
           </div>}
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
+          brand={{ logoUrl: brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant", partner: tenantPartner }}
           groups={mGroups}
           activeId={merchTab}
           onSelect={setMerchTab}

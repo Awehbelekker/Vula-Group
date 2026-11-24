@@ -431,3 +431,10 @@ def test_prices_own_requests_and_what_the_chat_leaves_alone(chat):
     assert run(lesson_chat.handle_tap(phone, "other", "lsn_start")) is False
     lessons.save_settings(TID, {"hire": []})
     assert run(lesson_chat.start(phone, TID, "do you rent bikes")) is False                    # no hire: the assistant answers
+
+
+def test_a_partner_is_named_only_when_it_is_a_known_one():
+    assert tenants.partner_of({"features": {"partner": "flowcrew", "trade_costing": True}}) == {"id": "flowcrew", "name": "FlowCrew"}
+    for cfg in ({"features": {"partner": "someone"}}, {"features": {"partner": True}}, {"features": None}, {}, None):
+        assert tenants.partner_of(cfg) is None
+    assert tenants._public({"tenant_id": None, "features": {"partner": "flowcrew"}})["partner"]["name"] == "FlowCrew"

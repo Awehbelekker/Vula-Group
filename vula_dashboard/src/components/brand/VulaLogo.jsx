@@ -29,10 +29,10 @@ export default function VulaLogo({ kind = "lockup", size = 32, height = 40, titl
 }
 
 /** "Powered by vula" — the credit on tenant-branded screens (the logo set's inline badge). */
-export function PoweredByVula({ className = "" }) {
+export function PoweredByVula({ className = "", partner = "" }) {
   return (
     <span className={`vula-powered-by${className ? ` ${className}` : ""}`}>
-      Powered by <VulaLogo kind="lockup" height={22} title="Vula" />
+      {partner ? <><strong>{partner}</strong> · </> : null}Powered by <VulaLogo kind="lockup" height={22} title="Vula" />
     </span>
   );
 }

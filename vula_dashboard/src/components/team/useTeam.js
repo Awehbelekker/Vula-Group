@@ -44,6 +44,8 @@ export const EVENTS = [
   ["pop_to_link", "Proofs of payment to link to a bill"],
   ["delivery_problem", "A courier couldn't collect or deliver an order"],
   ["table_booking", "A new table booking"],
+  ["lesson_request", "A new lesson or hire request"],
+  ["lesson_conditions", "Tomorrow's conditions for lessons"],
 ];
 export const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
 // Friendly display label per role — the stored value stays the plain enum (used by the
