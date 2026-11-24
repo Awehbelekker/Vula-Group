@@ -30,6 +30,7 @@ import XeroMoveV2 from './connect/XeroMoveV2'
 import { DAYS, useBrandKit, useBusinessHours, useBusinessProfile, useDeliverySettings, useLearnedSummary } from './useSettings'
 import ProfileDrafts from '../ProfileDrafts.jsx'
 import './settings.css'
+import { examplesFor } from '../../lib/examples'
 
 const GROUPS = [
   { label: 'Your business', items: [
@@ -250,7 +251,7 @@ function BrandKit({ tenantId }) {
           <div className="vst-suggest">
             <span className="vst-strong"><Sparkles size={16} aria-hidden="true" />Suggest from my logo or website</span>
             <div className="vst-row">
-              <Input className="vst-grow" placeholder="Website (optional), e.g. gerflor.co.za" value={b.website} onChange={e => b.setWebsite(e.target.value)} aria-label="Website" />
+              <Input className="vst-grow" placeholder={`Website (optional), ${examplesFor(null).website}`} value={b.website} onChange={e => b.setWebsite(e.target.value)} aria-label="Website" />
               <Button variant="secondary" onClick={b.suggest} disabled={b.suggesting || (!b.logoUrl && !b.website)}>{b.suggesting ? 'Looking…' : 'Suggest'}</Button>
             </div>
             {b.suggestion && (

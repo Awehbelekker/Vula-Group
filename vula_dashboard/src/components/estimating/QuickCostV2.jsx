@@ -43,7 +43,7 @@ export default function QuickCostV2({ tenantId }) {
   const rate = AECOM_RATES[x.rateKey];
   return (
     <section className="ves" aria-label="Quick cost">
-      <p className="ves-sub">An early cost estimate from the floor area and a rate per m², with your markup, professional fees, council fee and VAT.</p>
+      <p className="ves-sub">An early cost estimate from the floor area and a rate per m², with your markup, professional fees, council fee and VAT. Rates are a Western Cape baseline and the council fee starts at the City of Cape Town tariff — change both for your area.</p>
       <div className="ves-cols">
         <div className="ves">
           <Card className="ves-card" role="group" aria-labelledby="ves-qc-project">
@@ -153,7 +153,7 @@ export default function QuickCostV2({ tenantId }) {
             {c.paTotal > 0 && <Kv label="Principal agent fee" value={rands(c.paTotal)} />}
             <Kv label="Professional fees" value={rands(c.proFeesTotal)} />
             <h3 className="ves-overline">Statutory</h3>
-            <Kv label={`Council submission (${pc(x.councilPct)}, CoCT)`} value={rands(c.councilFee)} />
+            <Kv label={`Council submission (${pc(x.councilPct)}, City of Cape Town tariff)`} value={rands(c.councilFee)} />
             <h3 className="ves-overline">Total</h3>
             <Kv label="Subtotal excl. VAT" value={rands(c.grandSubtotal)} />
             {x.includeVAT && <Kv label="VAT (15%)" value={rands(c.vatAmt)} />}

@@ -11,6 +11,7 @@ import VulaLogo, { PoweredByVula } from '../brand/VulaLogo.jsx'
 import { useLogin } from './useLogin'
 import { isPhone, NO_CODE_HINT, useWhatsAppLogin } from './useWhatsAppLogin'
 import './login.css'
+import { examplesFor } from '../../lib/examples'
 
 export default function LoginV2({ onSuccess, notice = '', email = '' }) {
   const x = useLogin({ onSuccess, notice, email })
@@ -83,7 +84,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
             <Notes x={x} info={false} />
             <form onSubmit={x.handleSetupWorkspace} className="vlg-form">
               <Field label="Business name">
-                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder="e.g. Off the Hook" />
+                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={examplesFor(null).businessName} />
               </Field>
               <Field label="What kind of business?">
                 <Select value={x.businessType} onChange={(e) => x.setBusinessType(e.target.value)}>

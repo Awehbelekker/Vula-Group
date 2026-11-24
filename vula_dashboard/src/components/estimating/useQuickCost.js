@@ -99,7 +99,7 @@ export const SACAP = {
 // ─── DEFAULT SUPPLIERS ────────────────────────────────────────────────────────
 export const DEFAULT_SUPPLIERS = [
   { id: "s1", name: "General Contractor",       category: "Construction",   listRate: 0,     discount: 0,    customCost: "" },
-  { id: "s2", name: "HVAC / ExtraAir",          category: "MEP",            listRate: 0,     discount: 0,    customCost: "" },
+  { id: "s2", name: "HVAC",                     category: "MEP",            listRate: 0,     discount: 0,    customCost: "" },
   { id: "s3", name: "Electrical Contractor",    category: "MEP",            listRate: 0,     discount: 0,    customCost: "" },
   { id: "s4", name: "Ceilings / Drywalling",   category: "Finishes",       listRate: 0,     discount: 0,    customCost: "" },
   { id: "s5", name: "Flooring Supplier",        category: "Finishes",       listRate: 0,     discount: 0,    customCost: "" },
@@ -150,7 +150,7 @@ export function useQuickCost({ tenantId }) {
   const [contingency, setContingency] = useState(10);   // % of construction
 
   // Council
-  const [councilPct, setCouncilPct]   = useState(0.85); // CoCT 0.85% of construction
+  const [councilPct, setCouncilPct]   = useState(0.85); // City of Cape Town tariff, 0.85% of construction
 
   // Suppliers
   const [suppliers, setSuppliers]     = useState(DEFAULT_SUPPLIERS);
@@ -234,7 +234,7 @@ export function useQuickCost({ tenantId }) {
   }, [area, rateKey, useRange, customRate, complexity, location, markupPct, paFee, pmMonths, pmMonthly, contingency, councilPct, includeVAT, suppliers]);
 
   const copySummary = () => {
-    const text = `VULA QS ESTIMATE\n${projectName}${clientName ? ` — ${clientName}` : ""}\n${"─".repeat(40)}\nArea: ${area}m²\nBuild type: ${AECOM_RATES[rateKey]?.label}\nRate: ${R(calc.baseRate)}/m²\n\nConstruction: ${R(calc.effectiveConstruction)}\nMarkup (${pct(markupPct)}): ${R(calc.markupAmt)}\nSACAPFee: ${R(calc.sacapFee)}\nPM (${pmMonths}mo): ${R(calc.pmTotal)}\nPA fee: ${R(calc.paTotal)}\nCouncil: ${R(calc.councilFee)}\n${includeVAT ? `VAT: ${R(calc.vatAmt)}\n` : ""}${"─".repeat(40)}\nTOTAL: ${R(calc.grandTotal)} ${includeVAT ? "incl. VAT" : "excl. VAT"}\n\nRates: AECOM 2025/26 · SACAP BN672 · CoCT tariff`;
+    const text = `VULA QS ESTIMATE\n${projectName}${clientName ? ` — ${clientName}` : ""}\n${"─".repeat(40)}\nArea: ${area}m²\nBuild type: ${AECOM_RATES[rateKey]?.label}\nRate: ${R(calc.baseRate)}/m²\n\nConstruction: ${R(calc.effectiveConstruction)}\nMarkup (${pct(markupPct)}): ${R(calc.markupAmt)}\nSACAPFee: ${R(calc.sacapFee)}\nPM (${pmMonths}mo): ${R(calc.pmTotal)}\nPA fee: ${R(calc.paTotal)}\nCouncil: ${R(calc.councilFee)}\n${includeVAT ? `VAT: ${R(calc.vatAmt)}\n` : ""}${"─".repeat(40)}\nTOTAL: ${R(calc.grandTotal)} ${includeVAT ? "incl. VAT" : "excl. VAT"}\n\nRates: AECOM 2025/26 · SACAP BN672 · City of Cape Town tariff`;
     navigator.clipboard?.writeText(text).catch(() => {});
     toast("Copied to clipboard — paste into your quote document.");
   };

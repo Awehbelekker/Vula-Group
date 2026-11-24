@@ -158,6 +158,9 @@ export function useDeliverySettings(tenantId) {
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')   // the saved settings didn't load: don't save blanks over them
   const mapRef = useRef(null)     // { map, L, marker, circle }
+  const originRef = useRef(null)  // the latest origin, for a map that's created after it loaded
+  originRef.current = origin
+  const countryView = useRef(false)   // the map opened on all of South Africa, not yet on the business
   const mapDivRef = useRef(null)
 
   useEffect(() => {
@@ -187,8 +190,10 @@ export function useDeliverySettings(tenantId) {
       if (dead || !mapDivRef.current || mapRef.current) return
       await import('leaflet/dist/leaflet.css')
       const L = Lmod.default || Lmod
-      const start = origin || { lat: -33.82, lng: 18.49 }   // Cape Town west coast default
-      const map = L.map(mapDivRef.current).setView([start.lat, start.lng], origin ? 11 : 9)
+      const saved = originRef.current
+      const start = saved || { lat: -29, lng: 24 }   // no origin yet: all of South Africa (was Cape Town for everyone)
+      countryView.current = !saved
+      const map = L.map(mapDivRef.current).setView([start.lat, start.lng], saved ? 11 : 5)
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors', maxZoom: 18,
       }).addTo(map)
@@ -211,6 +216,8 @@ export function useDeliverySettings(tenantId) {
   useEffect(() => {
     const m = mapRef.current
     if (!m || !origin) return
+    // the business's own location arrived after the map opened on the whole country: go to it once
+    if (countryView.current) { countryView.current = false; m.map.setView([origin.lat, origin.lng], 11) }
     m.marker.setLatLng([origin.lat, origin.lng])
     m.circle.setLatLng([origin.lat, origin.lng])
     m.circle.setRadius(radiusKm * 1000)
@@ -225,6 +232,7 @@ export function useDeliverySettings(tenantId) {
       })
       const d = await r.json()
       if (d.lat != null) {
+        countryView.current = false
         setOrigin({ lat: d.lat, lng: d.lng })
         setOriginLabel(d.label || geoSearch)
         mapRef.current?.map.setView([d.lat, d.lng], 12)

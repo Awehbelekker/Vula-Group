@@ -295,7 +295,7 @@ export default function NoticesV2({ tenantId }) {
             </div>
           ))}
           <div className="vtm-form">
-            <Field label="Name"><Input value={newDay.name} placeholder="DIGG's birthday" onChange={(e) => setNewDay({ ...newDay, name: e.target.value })} /></Field>
+            <Field label="Name"><Input value={newDay.name} placeholder="e.g. Company birthday" onChange={(e) => setNewDay({ ...newDay, name: e.target.value })} /></Field>
             <Field label="Day">
               <Select value={newDay.day} onChange={(e) => setNewDay({ ...newDay, day: e.target.value })}>
                 <option value="">Day</option>
@@ -308,7 +308,7 @@ export default function NoticesV2({ tenantId }) {
                 {MONTHS.map((l, i) => { const v = String(i + 1).padStart(2, "0"); return <option key={v} value={v}>{l}</option>; })}
               </Select>
             </Field>
-            <Field label="Message (optional)"><Input value={newDay.line} placeholder="today DIGG turns 5 — thank you all! 🎉" onChange={(e) => setNewDay({ ...newDay, line: e.target.value })} /></Field>
+            <Field label="Message (optional)"><Input value={newDay.line} placeholder="today we turn 5 — thank you all! 🎉" onChange={(e) => setNewDay({ ...newDay, line: e.target.value })} /></Field>
             <div className="vtm-go"><Button Icon={Plus} onClick={addCompanyDay}>Add</Button></div>
           </div>
         </Card>

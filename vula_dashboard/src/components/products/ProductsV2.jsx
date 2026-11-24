@@ -13,9 +13,13 @@ import {
   Button, Card, DataTable, EmptyState, Field, FilterBar, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatusChip, Textarea,
 } from "../ui/index.jsx";
 import CatalogueSync from "./CatalogueSync";
+import { useBusinessType } from "../../store/business";
+import { examplesFor, isFood } from "../../lib/examples";
 import "./products.css";
 
-function Row({ p, api, onEdit }) {
+// 24 Nov 2026 audit: the star (is_daily_catch) read "Catch of the day" for every business — only a
+// food business calls it that; everyone else sees "Featured". Same field either way.
+function Row({ p, api, onEdit, star }) {
   const busy = api.saving === p.id;
   const editing = api.editPrice[p.id] !== undefined;
   return (
@@ -26,7 +30,7 @@ function Row({ p, api, onEdit }) {
       <span className="vpr-main">
         <span className="vpr-name">{p.name}</span>
         <span className="vpr-chips">
-          {p.is_daily_catch && <StatusChip tone="highlight"><Star size={12} aria-hidden="true" />Catch of the day</StatusChip>}
+          {p.is_daily_catch && <StatusChip tone="highlight"><Star size={12} aria-hidden="true" />{star}</StatusChip>}
           {!p.in_stock && <StatusChip tone="warm">Out of stock</StatusChip>}
           {p.stock_quantity != null && p.in_stock && <span className="vpr-sub">{p.stock_quantity} on hand</span>}
         </span>
@@ -45,7 +49,7 @@ function Row({ p, api, onEdit }) {
           <span className="vpr-switch-knob" aria-hidden="true" />
           <span className="vpr-switch-label">{busy ? "…" : p.in_stock ? "In stock" : "Out"}</span>
         </button>
-        <IconButton Icon={Star} quiet label={p.is_daily_catch ? `Remove ${p.name} as catch of the day` : `Mark ${p.name} catch of the day`}
+        <IconButton Icon={Star} quiet label={p.is_daily_catch ? `Remove ${p.name} as ${star.toLowerCase()}` : `Mark ${p.name} ${star.toLowerCase()}`}
           aria-pressed={!!p.is_daily_catch} className="vpr-star" disabled={busy}
           onClick={() => api.patch(p.id, { is_daily_catch: !p.is_daily_catch })} />
         <Button size="sm" variant="secondary" Icon={Pencil} className="vpr-edit-btn" aria-label={`Edit ${p.name}`} onClick={() => onEdit(p.id)}><span className="vpr-edit-label">Edit</span></Button>
@@ -58,6 +62,9 @@ export default function ProductsV2({ api, EditPanel }) {
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState(null);
   const [editId, setEditId] = useState(null);
+  const businessType = useBusinessType();
+  const star = isFood(businessType) ? "Catch of the day" : "Featured";
+  const ex = examplesFor(businessType);
   const editing = api.products.find((p) => p.id === editId) || null;
 
   const groups = useMemo(() => {
@@ -132,7 +139,7 @@ export default function ProductsV2({ api, EditPanel }) {
             ))}
           </div>
           <div className="vpr-cat-add">
-            <Input placeholder="New category (e.g. Smoked Fish)" aria-label="New category" value={api.newCat}
+            <Input placeholder={`New category (${ex.category})`} aria-label="New category" value={api.newCat}
               onChange={(e) => api.setNewCat(e.target.value)} onKeyDown={(e) => e.key === "Enter" && api.addCategory()} />
             <Button variant="secondary" onClick={api.addCategory}>Add</Button>
           </div>
@@ -174,7 +181,7 @@ export default function ProductsV2({ api, EditPanel }) {
         <section key={c} className="vpr-group" aria-label={api.catLabel(c)}>
           <h2 className="vpr-cat-h">{api.catLabel(c)} <span className="vpr-sub">{items.length}</span></h2>
           <Card pad={0} role="list">
-            {items.map((p) => <Row key={p.id} p={p} api={api} onEdit={setEditId} />)}
+            {items.map((p) => <Row key={p.id} p={p} api={api} onEdit={setEditId} star={star} />)}
           </Card>
         </section>
       ))}

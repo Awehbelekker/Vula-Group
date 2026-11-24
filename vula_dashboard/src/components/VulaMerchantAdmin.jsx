@@ -18,6 +18,7 @@ import { toQty } from './stock/useStock'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { iconFor, sectionOf } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
+import { useIsFood } from '../store/business'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
 const VulaSmartScanner = lazyScreen(() => import('./VulaSmartScanner'))
@@ -869,6 +870,7 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
 // ── Products ──────────────────────────────────────────────────────────────────
 
 function ProductsTab({ tenantId }) {
+  const isFood = useIsFood()
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])   // per-tenant (migration 073); fallback = legacy labels
   const [loading, setLoading] = useState(true)
@@ -899,7 +901,9 @@ function ProductsTab({ tenantId }) {
 
   // Per-tenant category labels with legacy fallback (pre-migration-073 tenants).
   const catLabel = (key) => categories.find(c => c.key === key)?.label || CATEGORY_LABELS[key] || key
-  const catKeys = categories.length ? categories.map(c => c.key) : Object.keys(CATEGORY_LABELS)
+  // 24 Nov 2026 audit: the fish and chicken built-ins are a food business's; anyone else starts
+  // with Extras until they add their own (labels above still read for existing products).
+  const catKeys = categories.length ? categories.map(c => c.key) : (isFood ? Object.keys(CATEGORY_LABELS) : ['extras'])
 
   async function addCategory() {
     const label = newCat.trim()
@@ -1048,6 +1052,7 @@ function SectionLabel({ children }) {
 // post-create, numeric stock, multi-image gallery (persists ALL urls to `images`, first =
 // cover), sale price with end date, weight/pack/serves, archive-aware delete.
 function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, catKeys, catLabel }) {
+  const isFood = useIsFood()   // catch source / fisherman fields are a food business's (kept, not shown, otherwise)
   const [f, setF] = useState({
     name: p.name || '', category: p.category || 'extras', sold_by: p.sold_by || 'pack',
     stock: p.stock_quantity ?? '', sale: p.sale_price_cents != null ? (p.sale_price_cents / 100).toFixed(2) : '',
@@ -1184,6 +1189,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         </>)}
       </div>
 
+      {isFood && (<>
       <SectionLabel>Origin &amp; story <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, shown on the product page</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>Catch source</span>
@@ -1191,6 +1197,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         <div><span style={lbl}>Fisherman / supplier name</span>
           <input value={f.fishermanName} onChange={e => set('fishermanName', e.target.value)} placeholder="e.g. Skipper Jan" style={{ ...inp, width: '100%' }} /></div>
       </div>
+      </>)}
 
       <SectionLabel>📦 Box deal / bundle <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— sell several products as one (e.g. Braai Box)</span></SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

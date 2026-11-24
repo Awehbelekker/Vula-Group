@@ -21,7 +21,7 @@ export default function DraftV2({ tenantId }) {
       <Card className="ves-card">
         <form className="ves-form" onSubmit={(e) => { e.preventDefault(); x.generate(); }}>
           <Field label="Document"><Select value={x.docType} onChange={(e) => x.setDocType(e.target.value)}>{DOC_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</Select></Field>
-          <Field label="Brief" hint="e.g. Fee proposal for a 450 m² office fit-out in Sea Point, full service from concept to construction admin">
+          <Field label="Brief" hint="e.g. Fee proposal for a 450 m² office fit-out, full service from concept to construction admin">
             <Textarea rows={4} value={x.brief} onChange={(e) => x.setBrief(e.target.value)} />
           </Field>
           <div className="ves-grid">
