@@ -48,7 +48,8 @@ export function useTill(tenantId) {
     } catch (e) { setLoadError(e.message); setProducts([]) }
   }, [tenantId])
   const loadSummary = useCallback(async () => {
-    try { setSummary(await call(`${base(tenantId)}/summary`)) } catch { /* the takings panel just stays as it was */ }
+    // an answer missing a list is an empty list, not a crash (24 Nov 2026)
+    try { const d = await call(`${base(tenantId)}/summary`); setSummary(d ? { sales: 0, net_cents: 0, by_method: [], ...d } : null) } catch { /* the takings panel just stays as it was */ }
   }, [tenantId])
   useEffect(() => { load(); loadSummary() }, [load, loadSummary])
 

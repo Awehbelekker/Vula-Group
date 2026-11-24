@@ -111,7 +111,11 @@ export default function TablesV2({ tenantId }) {
 
   const load = useCallback(() => {
     setError('')
-    Promise.all([api(`${base}?date=${day}`), api(`${base}/settings`)]).then(([s, c]) => { setSheet(s); setConf(c) }).catch(e => setError(e.message))
+    // an answer missing a list is an empty list, not a crash (24 Nov 2026: the screen fell over on one)
+    Promise.all([api(`${base}?date=${day}`), api(`${base}/settings`)]).then(([s, c]) => {
+      setSheet({ times: [], bookings: [], ...(s || {}) })
+      setConf({ ...(c || {}), settings: { enabled: false, sittings: [], ...((c && c.settings) || {}) } })
+    }).catch(e => setError(e.message))
   }, [base, day])
   useEffect(() => { load() }, [load])
 
