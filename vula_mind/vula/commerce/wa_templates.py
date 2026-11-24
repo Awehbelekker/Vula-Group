@@ -362,6 +362,34 @@ PROACTIVE_TEMPLATES = [
 ]
 
 # Shared by every business on Vula's WhatsApp account — submitted once, reused by name.
+# The Field Ops contractor templates (vula/api/field_ops.py::FIELD_TEMPLATES; neutral names since
+# 24 Nov 2026 — they were digg_… for every business). In the standard set for a business with the
+# Field Ops module; scripts/create_launch_templates.py --set fieldops submits the same list.
+FIELD_OPS_TEMPLATES = [
+    ("field_task_assigned",
+     "Hi {{1}}, you've been assigned a task on project {{2}}: {{3}}. Reply DONE when complete, "
+     "or send photos as evidence. Reply with any questions and I'll help.",
+     ["Sipho", "Main Road fit-out", "Tile the bathroom"]),
+    ("field_task_chase",
+     "Hi {{1}}, just checking in on task {{2}}. Is it complete? Reply DONE to confirm, "
+     "or send photos if sign-off is required.",
+     ["Sipho", "Tile the bathroom"]),
+    ("field_walkthrough_start",
+     "Hi {{1}}, please do a site walkthrough for {{2}}. Check Vula for the checklist and send "
+     "photos for each item. Reply DONE when all photos are sent.",
+     ["Sipho", "First fix inspection"]),
+    ("field_walkthrough_approved",
+     "Walkthrough {{1}} has been approved. Great work!",
+     ["First fix inspection"]),
+    ("field_walkthrough_rejected",
+     "Walkthrough {{1}} needs attention: {{2}}. Please address and re-submit.",
+     ["First fix inspection", "the grout in the shower is cracked"]),
+    ("field_daily_tasks",
+     "Good morning {{1}}! You have {{2}} task(s) today. Check Vula for the full list. "
+     "Reply DONE when each task is complete, or send photos as evidence.",
+     ["Sipho", "3"]),
+]
+
 SHARED_TEMPLATES = [
     ("vula_notification", "You have a new update from {{1}}. Open Vula to see the details.", "UTILITY"),
     ("vula_owner_checkin_nudge",
@@ -473,6 +501,9 @@ def standard_templates(tenant_id: str, modules: Optional[set] = None,
     out += [{"name": template_name(tenant_id, suffix), "body": body, "category": "UTILITY", "examples": ex}
             for suffix, body, ex in PROACTIVE_TEMPLATES]
     out += [{"name": n, "body": b, "category": c} for n, b, c in SHARED_TEMPLATES]
+    if "fieldops" in mods:
+        out += [{"name": n, "body": b, "category": "UTILITY", "examples": ex}
+                for n, b, ex in FIELD_OPS_TEMPLATES]
     return out
 
 

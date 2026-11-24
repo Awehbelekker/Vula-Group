@@ -56,3 +56,39 @@ def test_the_submission_script_matches_what_the_code_sends():
             "field_walkthrough_approved": 1, "field_walkthrough_rejected": 2, "field_daily_tasks": 2}
     assert script == sent
     assert set(script) == set(field_ops.FIELD_TEMPLATES.values())
+
+
+def test_a_field_ops_business_gets_them_in_its_standard_set():
+    from vula.commerce import wa_templates
+    names = {t["name"] for t in wa_templates.standard_templates("builder-a", {"fieldops", "projects"}, "trades")}
+    assert set(field_ops.FIELD_TEMPLATES.values()) <= names
+    shop = {t["name"] for t in wa_templates.standard_templates("deli", {"orders", "products"}, "food")}
+    assert not shop & set(field_ops.FIELD_TEMPLATES.values())
+    for n, body, ex in wa_templates.FIELD_OPS_TEMPLATES:      # Meta needs one example per placeholder
+        assert body.count("{{") == len(ex), n
+
+
+@pytest.mark.asyncio
+async def test_a_new_template_still_in_review_falls_back_to_the_old_one(db, monkeypatch):
+    tried = []
+
+    async def send(tid, to, name, *params):
+        tried.append(name)
+        return name.startswith("digg_")          # Meta refuses the new one until it's approved
+
+    monkeypatch.setattr(field_ops, "_send_wa_template", send)
+    assert await field_ops._send_field("builder-a", "27825550190", "task_chase", "Sipho", "Tile") is True
+    assert tried == ["field_task_chase", "digg_task_chase"]
+
+
+@pytest.mark.asyncio
+async def test_a_business_without_the_old_ones_only_tries_the_new(db, monkeypatch):
+    tried = []
+
+    async def send(tid, to, name, *params):
+        tried.append(name)
+        return False
+
+    monkeypatch.setattr(field_ops, "_send_wa_template", send)
+    assert await field_ops._send_field("builder-b", "27825550190", "daily_tasks", "Sipho", "3") is False
+    assert tried == ["field_daily_tasks"]
