@@ -225,6 +225,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("299", "commerce_table_bookings", "ref"),           # table bookings and specials (vula/commerce/tables.py)
     ("300", "kb_table_orders", "bill_id"),               # service at the table (vula/tap/tableside.py)
     ("301", "kb_shifts", "member_id"),                   # shifts and availability (vula/tap/shifts.py)
+    ("302", "commerce_product_variants", "image_url"),   # a photo per colour (vula/commerce/product_variants.py)
 ]
 
 

@@ -20,9 +20,13 @@ import { iconFor, sectionOf } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
 import { useIsFood } from '../store/business'
 import VulaImageUpload from './VulaImageUpload'
+import { toOptions } from './products/options'
+import { tryApi } from '../lib/api'
+import { randToCents } from '../lib/money'
 import { downloadCsv, parseCsv } from '../lib/csv'
 const VulaSmartScanner = lazyScreen(() => import('./VulaSmartScanner'))
 const VulaStock = lazyScreen(() => import('./VulaStock'))
+const VariantsEditor = lazyScreen(() => import('./products/VariantsEditor'))
 import VulaHomeV2 from './VulaHomeV2'
 import VulaToday from './VulaToday'
 import VulaActivity from './VulaActivity'
@@ -891,7 +895,8 @@ function ProductsTab({ tenantId }) {
   const [showCats, setShowCats] = useState(false)
   const [newCat, setNewCat] = useState('')
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ name: '', price: '', category: 'extras', sold_by: 'pack', description: '' })
+  const EMPTY_PRODUCT = { name: '', price: '', category: 'extras', sold_by: 'pack', description: '', images: [], stock: '', sku: '', barcode: '', cost: '', hasOptions: false, optionRows: [{ name: 'Size', values: '' }, { name: 'Colour', values: '' }] }
+  const [form, setForm] = useState(EMPTY_PRODUCT)
   const [importRows, setImportRows] = useState(null) // parsed CSV preview rows, or null when closed
   const [importing, setImporting] = useState(false)
   const [importResults, setImportResults] = useState(null)
@@ -927,36 +932,56 @@ function ProductsTab({ tenantId }) {
 
   async function patch(productId, data) {
     setSaving(productId)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+    // 24 Nov 2026: a refused save (a barcode already on another product, a cost that isn't an
+    // amount) said nothing and the screen reloaded the old values
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/products/${productId}`, {
+      method: 'PATCH', body: data, fallback: "That change didn't save. Try again.",
     })
+    if (!res.ok) toast(res.error, 'danger')
     await load()
     setSaving(null)
+    return res.ok
   }
 
   async function createProduct(e) {
     e.preventDefault()
-    const cents = Math.round(parseFloat(form.price) * 100)
-    if (!form.name.trim() || isNaN(cents) || cents <= 0) return
+    // 24 Nov 2026: photo, stock, SKU, barcode, cost and sizes/colours on the Add form itself
+    // (they used to come afterwards, in a long edit sheet). Amounts are read as typed.
+    const cents = randToCents(form.price)
+    if (!form.name.trim()) return
+    if (cents === null || cents <= 0) { toast(`"${form.price}" isn't a price. Type it in rand, like 450 or 450.00.`, 'danger'); return }
+    const costCents = form.cost.trim() === '' ? null : randToCents(form.cost)
+    if (form.cost.trim() !== '' && (costCents === null || costCents < 0)) {
+      toast(`"${form.cost}" isn't an amount. Type the cost price in rand, like 85.50.`, 'danger'); return
+    }
+    const stock = form.stock === '' ? null : toQty(form.stock)
+    if (form.stock !== '' && (isNaN(stock) || stock < 0)) { toast(`"${form.stock}" isn't a stock number.`, 'danger'); return }
+    const options = form.hasOptions ? toOptions(form.optionRows).filter(o => o.name || o.values.length) : []
+    if (form.hasOptions && !options.length) {
+      toast('Type the sizes or colours you sell, separated by commas, or untick "It comes in sizes or colours".', 'danger'); return
+    }
     setAdding(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/products`, {
+      method: 'POST',
+      body: {
         name: form.name.trim(), price_cents: cents, category: form.category,
         sold_by: form.sold_by, description: form.description.trim(), in_stock: true,
-      }),
-    }).catch(() => null)
+        images: form.images, stock_quantity: stock,
+        sku: form.sku.trim() || null, barcode: form.barcode.trim() || null, cost_cents: costCents,
+        ...(options.length ? { options } : {}),
+      },
+      fallback: "That product didn't save. What you typed is still there — try again.",
+    })
     setAdding(false)
-    if (!r || !r.ok) {
+    if (!res.ok) {
       // 23 Nov 2026 audit: the form closed and cleared even when the product wasn't saved
-      const d = r ? await r.json().catch(() => ({})) : {}
-      toast(d.detail || "That product didn't save. What you typed is still there — try again.", 'danger')
+      toast(res.error, 'danger')
       return
     }
-    toast(`${form.name.trim()} added.`)
-    setForm({ name: '', price: '', category: 'extras', sold_by: 'pack', description: '' })
+    const made = (res.data.variants || []).length
+    if (res.data.variants_error) toast(res.data.variants_error, 'danger')
+    else toast(made ? `${form.name.trim()} added, in ${made} version${made === 1 ? '' : 's'}.` : `${form.name.trim()} added.`)
+    setForm(EMPTY_PRODUCT)
     setShowAdd(false)
     await load()
   }
@@ -1079,6 +1104,8 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
     productType: p.product_type || 'single',
     bundleItems: Array.isArray(p.bundle_items) ? p.bundle_items : [],
     cookingTips: p.cooking_tips || '',
+    sku: p.sku || '', barcode: p.barcode || '',
+    cost: p.cost_cents != null ? (p.cost_cents / 100).toFixed(2) : '',
   })
   const [suppliers, setSuppliers] = useState([])
   const [allProducts, setAllProducts] = useState([])
@@ -1095,7 +1122,13 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
   const lbl = { fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }
 
   function saveDetails() {
-    const upd = { name: f.name.trim() || p.name, category: f.category, sold_by: f.sold_by }
+    const costCents = f.cost.trim() === '' ? null : randToCents(f.cost)
+    if (f.cost.trim() !== '' && (costCents === null || costCents < 0)) {
+      toast(`"${f.cost}" isn't an amount. Type the cost price in rand, like 85.50.`, 'danger')
+      return
+    }
+    const upd = { name: f.name.trim() || p.name, category: f.category, sold_by: f.sold_by,
+                  sku: f.sku.trim() || null, barcode: f.barcode.trim() || null, cost_cents: costCents }
     if (f.stock !== '' && !isNaN(toQty(f.stock))) upd.stock_quantity = toQty(f.stock)
     const saleC = f.sale === '' ? null : Math.round(parseFloat(f.sale) * 100)
     upd.sale_price_cents = (saleC && saleC > 0) ? saleC : null
@@ -1199,6 +1232,16 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         </>)}
       </div>
 
+      <SectionLabel>Codes and cost <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional; a product with sizes or colours has these per version below</span></SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <div><span style={lbl}>SKU (your own code)</span>
+          <input value={f.sku} onChange={e => set('sku', e.target.value)} placeholder="e.g. SHIRT-001" style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Barcode</span>
+          <input value={f.barcode} onChange={e => set('barcode', e.target.value)} inputMode="numeric" placeholder="e.g. 6001234567890" style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Cost price (R, what you pay)</span>
+          <input value={f.cost} onChange={e => set('cost', e.target.value)} inputMode="decimal" placeholder="e.g. 85.50" style={{ ...inp, width: '100%' }} /></div>
+      </div>
+
       {isFood && (<>
       <SectionLabel>Origin &amp; story <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, shown on the product page</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
@@ -1278,8 +1321,10 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
           existingUrls={gallery}
           maxFiles={5}
           onUploaded={(urls) => {
-            const all = [...gallery, ...urls]
-            patch(p.id, { images: all, image_url: all[0] })
+            // The uploader hands back the whole list (what was there + the new ones, minus any it
+            // removed). 24 Nov 2026: adding it to the gallery again doubled every photo on each upload.
+            const all = [...new Set(urls)]
+            patch(p.id, { images: all, image_url: all[0] || null })
           }}
         />
         <AIPhotoButton tenantId={tenantId} product={p}
@@ -1318,14 +1363,16 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       </div>
 
       <div>
-        <VariantsEditor
+        <ScreenSuspense><VariantsEditor
+          styles={styles}
           tenantId={tenantId}
           productId={p.id}
           basePriceCents={p.price_cents}
           options={p.options}
+          gallery={gallery}
           suppliers={suppliers}
           onOptionsChange={(names) => patch(p.id, { options: names })}
-        />
+        /></ScreenSuspense>
       </div>
 
       <ChoicesEditor choices={p.choices} onSave={(choices) => patch(p.id, { choices })} />
@@ -1427,229 +1474,6 @@ function ChoicesEditor({ choices, onSave }) {
           </button>
         )}
       </div>
-    </div>
-  )
-}
-
-// ── Product variants (migration 087, Phase 4 — SKU/barcode, per-variant price/stock) ─────────
-
-function VariantsEditor({ tenantId, productId, basePriceCents, options, suppliers, onOptionsChange }) {
-  const [variants, setVariants] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(null)
-  const [optionsInput, setOptionsInput] = useState((options || []).join(', '))
-  const [showAdd, setShowAdd] = useState(false)
-  const [newVariant, setNewVariant] = useState({})
-  const [bulkStock, setBulkStock] = useState('')
-  const [error, setError] = useState(null)
-  const optionNames = options || []
-  const inp = { padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12.5, boxSizing: 'border-box' }
-  const lbl = { fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants`)
-    const d = await r.json()
-    setVariants(d.variants || [])
-    setLoading(false)
-  }, [tenantId, productId])
-
-  useEffect(() => { load() }, [load])
-
-  async function patchVariant(id, data) {
-    setSaving(id)
-    setError(null)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
-    })
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}))
-      setError(d.detail || 'Could not save that change.')
-    }
-    await load()
-    setSaving(null)
-  }
-
-  async function deleteVariant(id) {
-    if (!(await confirmDialog('Remove this variant?', { danger: true, confirmLabel: 'Yes' }))) return
-    setSaving(id)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${id}`, { method: 'DELETE' })
-    await load()
-    setSaving(null)
-  }
-
-  async function addVariant() {
-    setError(null)
-    const option_values = {}
-    optionNames.forEach(name => { if (newVariant[name]) option_values[name] = newVariant[name] })
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        option_values,
-        sku: newVariant.sku || null,
-        barcode: newVariant.barcode || null,
-        price_cents: newVariant.price ? Math.round(parseFloat(newVariant.price) * 100) || null : null,
-        stock_quantity: (newVariant.stock !== undefined && newVariant.stock !== '') ? toQty(newVariant.stock) : null,
-      }),
-    })
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}))
-      setError(d.detail || 'Could not add that variant.')
-      return
-    }
-    setNewVariant({})
-    setShowAdd(false)
-    await load()
-  }
-
-  async function applyBulkStock() {
-    const qty = toQty(bulkStock)
-    if (bulkStock === '' || isNaN(qty)) return
-    await Promise.all(variants.map(v => fetch(
-      `${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${v.id}`,
-      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stock_quantity: qty }) }
-    )))
-    setBulkStock('')
-    await load()
-  }
-
-  async function saveOptions() {
-    const names = optionsInput.split(',').map(s => s.trim()).filter(Boolean)
-    const changed = names.length !== optionNames.length || names.some((n, i) => n !== optionNames[i])
-    if (changed && variants.length > 0) {
-      if (!await confirmDialog(
-        `${variants.length} existing variant${variants.length === 1 ? '' : 's'} use the current option names. ` +
-        `Changing them won't delete those variants, but customers won't be able to pick them until you update ` +
-        `each variant's option values below. Continue?`
-      )) return
-    }
-    onOptionsChange(names)
-  }
-
-  return (
-    <div>
-      <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '0 0 8px' }}>
-        🧩 Variants <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— e.g. Size, Colour — each gets its own SKU/barcode/price/stock</span>
-      </p>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        <input value={optionsInput} onChange={e => setOptionsInput(e.target.value)} placeholder="Option names, e.g. Size, Colour"
-               style={{ ...inp, flex: 1 }} />
-        <button onClick={saveOptions} style={styles.btnGhost}>Save options</button>
-      </div>
-      {error && <p style={{ fontSize: 12, color: 'var(--danger)', margin: '0 0 10px' }}>⚠ {error}</p>}
-
-      {loading ? <p style={styles.loading}>Loading variants…</p> : (
-        <>
-          {variants.length > 0 && (
-            <div style={{ overflowX: 'auto', marginBottom: 10 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
-                <thead>
-                  <tr style={{ background: 'var(--bg)', textAlign: 'left' }}>
-                    <th style={{ padding: '5px 8px' }}>Options</th>
-                    <th style={{ padding: '5px 8px' }}>SKU</th>
-                    <th style={{ padding: '5px 8px' }}>Barcode</th>
-                    <th style={{ padding: '5px 8px' }}>Price (R)</th>
-                    <th style={{ padding: '5px 8px' }}>Stock</th>
-                    <th style={{ padding: '5px 8px' }}>Reorder ≤</th>
-                    <th style={{ padding: '5px 8px' }}>Supplier</th>
-                    <th style={{ padding: '5px 8px' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {variants.map(v => (
-                    <tr key={v.id} style={{ borderTop: '1px solid var(--border-soft)', opacity: v.archived ? 0.5 : 1 }}>
-                      <td style={{ padding: '5px 8px' }}>
-                        {Object.entries(v.option_values || {}).map(([k, val]) => `${k}: ${val}`).join(', ') || '—'}
-                      </td>
-                      <td style={{ padding: '5px 8px' }}>
-                        <input defaultValue={v.sku || ''} disabled={saving === v.id}
-                               onBlur={e => e.target.value !== (v.sku || '') && patchVariant(v.id, { sku: e.target.value || null })}
-                               style={{ ...inp, width: 80 }} />
-                      </td>
-                      <td style={{ padding: '5px 8px' }}>
-                        <input defaultValue={v.barcode || ''} disabled={saving === v.id}
-                               onBlur={e => e.target.value !== (v.barcode || '') && patchVariant(v.id, { barcode: e.target.value || null })}
-                               style={{ ...inp, width: 100 }} />
-                      </td>
-                      <td style={{ padding: '5px 8px' }}>
-                        <input type="number" step="0.01" disabled={saving === v.id}
-                               defaultValue={v.price_cents != null ? (v.price_cents / 100).toFixed(2) : ''}
-                               placeholder={basePriceCents != null ? (basePriceCents / 100).toFixed(2) : ''}
-                               onBlur={e => {
-                                 const val = e.target.value === '' ? null : Math.round(parseFloat(e.target.value) * 100)
-                                 patchVariant(v.id, { price_cents: (val && val > 0) ? val : null })
-                               }}
-                               style={{ ...inp, width: 70 }} />
-                      </td>
-                      <td style={{ padding: '5px 8px' }}>
-                        <input type="number" step="any" disabled={saving === v.id} defaultValue={v.stock_quantity ?? ''}
-                               onBlur={e => patchVariant(v.id, { stock_quantity: e.target.value === '' ? null : toQty(e.target.value) })}
-                               style={{ ...inp, width: 60 }} />
-                      </td>
-                      <td style={{ padding: '5px 8px' }}>
-                        <input type="number" disabled={saving === v.id} defaultValue={v.reorder_threshold ?? ''}
-                               onBlur={e => patchVariant(v.id, { reorder_threshold: e.target.value === '' ? null : toQty(e.target.value) })}
-                               style={{ ...inp, width: 55 }} />
-                      </td>
-                      <td style={{ padding: '5px 8px' }}>
-                        <select defaultValue={v.default_supplier_id || ''} disabled={saving === v.id}
-                                onChange={e => patchVariant(v.id, { default_supplier_id: e.target.value || null })}
-                                style={{ ...inp, width: 110 }}>
-                          <option value="">— none —</option>
-                          {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
-                      </td>
-                      <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
-                        <button onClick={() => patchVariant(v.id, { archived: !v.archived })} disabled={saving === v.id} style={styles.btnGhost}>
-                          {v.archived ? 'Restore' : 'Archive'}
-                        </button>
-                        <button onClick={() => deleteVariant(v.id)} disabled={saving === v.id} style={{ ...styles.btnGhost, color: 'var(--danger)' }}>✕</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {variants.length > 0 && (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
-              <input type="number" value={bulkStock} onChange={e => setBulkStock(e.target.value)}
-                     placeholder="Set all variants' stock to…" style={{ ...inp, width: 170 }} />
-              <button onClick={applyBulkStock} style={styles.btnGhost}>Apply to all</button>
-            </div>
-          )}
-
-          {!showAdd ? (
-            <button onClick={() => setShowAdd(true)} style={styles.btnGhost} disabled={!optionNames.length}>
-              + Add variant
-            </button>
-          ) : (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-              {optionNames.map(name => (
-                <div key={name}><span style={lbl}>{name}</span>
-                  <input value={newVariant[name] || ''} onChange={e => setNewVariant(prev => ({ ...prev, [name]: e.target.value }))}
-                         style={{ ...inp, width: 80 }} /></div>
-              ))}
-              <div><span style={lbl}>SKU</span>
-                <input value={newVariant.sku || ''} onChange={e => setNewVariant(prev => ({ ...prev, sku: e.target.value }))} style={{ ...inp, width: 80 }} /></div>
-              <div><span style={lbl}>Barcode</span>
-                <input value={newVariant.barcode || ''} onChange={e => setNewVariant(prev => ({ ...prev, barcode: e.target.value }))} style={{ ...inp, width: 100 }} /></div>
-              <div><span style={lbl}>Price (R, blank = inherit)</span>
-                <input type="number" step="0.01" value={newVariant.price || ''} onChange={e => setNewVariant(prev => ({ ...prev, price: e.target.value }))} style={{ ...inp, width: 70 }} /></div>
-              <div><span style={lbl}>Stock</span>
-                <input type="number" value={newVariant.stock || ''} onChange={e => setNewVariant(prev => ({ ...prev, stock: e.target.value }))} style={{ ...inp, width: 60 }} /></div>
-              <button onClick={addVariant} style={styles.btnAction}>Add</button>
-              <button onClick={() => { setShowAdd(false); setNewVariant({}) }} style={styles.btnGhost}>Cancel</button>
-            </div>
-          )}
-          {!optionNames.length && (
-            <p style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0' }}>
-              Set option names above (e.g. "Size, Colour") before adding variants.
-            </p>
-          )}
-        </>
-      )}
     </div>
   )
 }

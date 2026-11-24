@@ -19,7 +19,7 @@ export default function ScoresCard({ tenantId }) {
   const [error, setError] = useState('')
   const load = useCallback(() => {
     setError('')
-    api(`/v1/tap/${tenantId}/scores?period=${period}`).then(setD).catch(e => setError(e.message))
+    api(`/v1/tap/${tenantId}/scores?period=${period}`).then(r => setD({ board: [], ...(r || {}) })).catch(e => setError(e.message))   // a missing list is empty, not a crash
   }, [tenantId, period])
   useEffect(() => { load() }, [load])
   const tips = d?.board?.some(r => r.tips_cents != null)

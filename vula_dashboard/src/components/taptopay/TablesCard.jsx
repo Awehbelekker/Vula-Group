@@ -18,7 +18,9 @@ export default function TablesCard({ tenantId }) {
   const [add, setAdd] = useState({ label: '', waiter_id: '' })
   const base = `/v1/tap/${tenantId}/tables`
 
-  const load = useCallback(() => api(base).then(setD).catch(e => setError(e.message)), [base])
+  const load = useCallback(() => api(base)
+    .then(r => setD({ tables: [], staff: [], ...(r || {}), settings: { ...((r && r.settings) || {}) } }))   // a missing list is empty, not a crash
+    .catch(e => setError(e.message)), [base])
   useEffect(() => { load() }, [load])
 
   const run = async (fn, done) => {
