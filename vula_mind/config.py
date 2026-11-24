@@ -319,6 +319,9 @@ class Settings(BaseSettings):
     # (Google results; only the query words are sent). Without one, DuckDuckGo as before.
     serper_api_key: str = ""
     search_country: str = "za"
+    # Surf and wind forecasts for a lesson's spot (vula/commerce/conditions.py). Empty = Open-Meteo's
+    # free service, which is for non-commercial use; a key switches to its paid hosts.
+    conditions_api_key: str = ""
 
     # ── Voice-note transcription (WhatsApp audio → text) ───────────────────────
     # OpenAI-compatible /audio/transcriptions endpoint. Local-first: point

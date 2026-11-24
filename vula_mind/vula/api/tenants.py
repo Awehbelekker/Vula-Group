@@ -68,6 +68,9 @@ MODULES: dict[str, str] = {
     "pipeline":   "Deals pipeline",
     # 2026-11-24: restaurants — table bookings and today's specials — vula/commerce/tables.py.
     "tables":     "Table bookings & specials (restaurants)",
+    # 2026-11-24: surf and kite schools, gear hire — requests the business confirms by hand,
+    # quoted from its own price list — vula/commerce/lessons.py.
+    "lessons":    "Lessons & gear hire (surf, kite and other schools)",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
@@ -116,6 +119,13 @@ BUSINESS_TYPES: dict[str, dict] = {
                         "modules": ["tables", "products", "inbox", "crm", "team", "documents"]},
     "events_lite": {"label": "Events: tickets & the door only",
                     "modules": ["orders", "payments", "crm", "team", "reports", "documents"]},
+    # 2026-11-24 (FlowCrew; first business Atlantic Surf Co): a surf or kite school with a shop —
+    # lessons and gear hire asked for on WhatsApp and confirmed by a person, the shop's products,
+    # the till, payments and invoices for the lessons.
+    "watersports": {"label": "Surf / kite / water sports school, shop & gear hire",
+                    "modules": ["lessons", "products", "orders", "payments", "invoices", "wa_shop", "crm",
+                                "inbox", "broadcasts", "marketing", "reports", "team", "automations",
+                                "documents", "pages"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team", "documents"]},
 }

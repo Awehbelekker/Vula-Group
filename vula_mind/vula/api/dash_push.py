@@ -31,6 +31,8 @@ LABELS = {
     "pop_to_link": "Proofs of payment to link to a bill",
     "delivery_problem": "A courier couldn't collect or deliver an order",
     "table_booking": "A new table booking",
+    "lesson_request": "A new lesson or hire request",
+    "lesson_conditions": "Tomorrow's conditions for lessons",
 }
 
 
