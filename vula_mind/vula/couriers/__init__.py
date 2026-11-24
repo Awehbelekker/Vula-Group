@@ -445,12 +445,14 @@ def get_courier(name: str) -> Optional[_Courier]:
 # ── what a courier status means for the order ────────────────────────────────
 
 MOVING = {"collected", "at-hub", "in-transit", "at-destination-hub", "out-for-delivery",
-          "delivery-scheduled", "delivery-assigned", "manifested", "ready-for-dispatch",
+          "delivery-scheduled", "delivery-assigned", "delivery-unassigned", "delivery-rejected",
+          "manifested", "ready-for-dispatch",
           "in-locker", "ready-for-pickup", "swad-dimensions", "swad-imaging", "floor-check"}
 DELIVERED = {"delivered", "collected-from-locker", "collected-from-counter"}
 PROBLEM = {"collection-exception", "collection-failed-attempt", "delivery-exception",
            "delivery-failed-attempt", "returned-to-hub", "returned-to-sender", "return-to-hub",
-           "collect-and-return-to-hub", "undeliverable", "damaged", "on-hold", "under-query", "failed"}
+           "collect-and-return-to-hub", "undeliverable", "damaged", "on-hold", "under-query", "failed",
+           "inbound-customs-and-vat"}
 CLOSED = DELIVERED | {"cancelled", "returned-to-sender", "undeliverable"}
 
 PLAIN = {
@@ -465,7 +467,12 @@ PLAIN = {
     "delivery-exception": "Problem with delivery", "collection-failed-attempt": "Collection attempt failed",
     "collection-exception": "Problem with collection", "returned-to-sender": "Returned to you",
     "returned-to-hub": "Back at the depot", "undeliverable": "Couldn't be delivered",
-    "damaged": "Damaged", "on-hold": "On hold",
+    "damaged": "Damaged", "on-hold": "On hold", "on-hold-internal": "On hold at the courier",
+    "inbound-customs-and-vat": "Held at customs", "delivery-unassigned": "Waiting for a delivery driver",
+    "delivery-rejected": "Waiting for a delivery driver", "collection-unassigned": "Waiting for a driver to collect",
+    "collection-rejected": "Waiting for a driver to collect", "under-query": "Being queried by the courier",
+    "manifested": "On its way between depots", "ready-for-dispatch": "Ready to leave the depot",
+    "delivery-scheduled": "Delivery scheduled", "delivery-assigned": "Driver assigned to deliver",
 }
 
 
