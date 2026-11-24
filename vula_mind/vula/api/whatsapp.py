@@ -4582,6 +4582,9 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
     if kind == "table_name":
         from vula.commerce import table_chat
         return await table_chat.take_name(phone, tenant_id, text, q)
+    if kind == "lesson_name":
+        from vula.commerce import lesson_chat
+        return await lesson_chat.take_name(phone, tenant_id, text, q)
     if kind == "ticket_name":
         from vula.commerce import event_chat
         return await event_chat.take_name(phone, tenant_id, text, q)
@@ -9497,6 +9500,16 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     if await _maybe_claim_web_basket(phone, text, tenant_id):
         return
 
+    # "Surf lesson" / "hire a board" / "cancel my lesson" → a request the business confirms by hand
+    # (vula/commerce/lesson_chat.py). Only a business with lesson requests switched on.
+    try:
+        from vula.commerce import lesson_chat
+        if lesson_chat.is_request(text) and await lesson_chat.start(phone, tenant_id, text):
+            _note_handler("lesson_request")
+            return
+    except Exception as exc:
+        logger.warning("lesson request failed for %s: %s", tenant_id, exc)
+
     # "Book a table" / "specials" / "cancel my booking" → the restaurant's own times and words
     # (vula/commerce/table_chat.py). Only a business with bookings on, or a special running today.
     try:
@@ -10808,6 +10821,16 @@ async def _handle_commerce_interactive(
     if reply_id.startswith("lst_"):
         # Listing cards (real-estate add-on, vula/listings/sharing.py): exact ids, no model.
         if await _handle_listing_tap(phone, tenant_id, reply_id):
+            return
+    if reply_id.startswith("lsn_"):
+        # Lessons and gear hire in the chat (vula/commerce/lesson_chat.py): exact ids, no model.
+        from vula.commerce import lesson_chat
+        try:
+            if await lesson_chat.handle_tap(phone, tenant_id, reply_id):
+                return
+        except Exception as exc:
+            logger.warning("lesson step %s failed for %s: %s", reply_id[:12], tenant_id, exc)
+            await _send_reply(phone, "Sorry — that didn't go through. Reply *lesson* to try again.", tenant_id=tenant_id)
             return
     if reply_id.startswith("tbl_"):
         # Table bookings in the chat (vula/commerce/table_chat.py): exact ids, no model.

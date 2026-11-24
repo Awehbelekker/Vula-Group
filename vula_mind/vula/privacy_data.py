@@ -192,7 +192,8 @@ def _by_phone(table: str, column: str = "phone") -> Callable[[str, List[str]], i
 
 # (label, step). Order matters only for readability; each step stands alone.
 # 13 Nov 2026 audit: six stores that hold what was sent to or about the person were missing.
-# Left out on purpose: bookings (the business's own appointment record), emails sent to a project's
+# Left out on purpose: bookings, table bookings and lesson or hire requests (the business's own
+# appointment record), emails sent to a project's
 # client (vula_project_client_emails: kept like an invoice, owner's decision 18 Nov 2026) and vula_wa_prompt_state
 # (no tenant_id, so deleting by number would reach the person's state with other businesses).
 ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [

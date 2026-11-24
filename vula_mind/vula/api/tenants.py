@@ -68,6 +68,9 @@ MODULES: dict[str, str] = {
     "pipeline":   "Deals pipeline",
     # 2026-11-24: restaurants — table bookings and today's specials — vula/commerce/tables.py.
     "tables":     "Table bookings & specials (restaurants)",
+    # 2026-11-24: surf and kite schools, gear hire — requests the business confirms by hand,
+    # quoted from its own price list — vula/commerce/lessons.py.
+    "lessons":    "Lessons & gear hire (surf, kite and other schools)",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
@@ -116,6 +119,13 @@ BUSINESS_TYPES: dict[str, dict] = {
                         "modules": ["tables", "products", "inbox", "crm", "team", "documents"]},
     "events_lite": {"label": "Events: tickets & the door only",
                     "modules": ["orders", "payments", "crm", "team", "reports", "documents"]},
+    # 2026-11-24 (FlowCrew; first business Atlantic Surf Co): a surf or kite school with a shop —
+    # lessons and gear hire asked for on WhatsApp and confirmed by a person, the shop's products,
+    # the till, payments and invoices for the lessons.
+    "watersports": {"label": "Surf / kite / water sports school, shop & gear hire",
+                    "modules": ["lessons", "products", "orders", "payments", "invoices", "wa_shop", "crm",
+                                "inbox", "broadcasts", "marketing", "reports", "team", "automations",
+                                "documents", "pages"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team", "documents"]},
 }
@@ -324,7 +334,39 @@ def _public(cfg: dict) -> dict:
         # the switches that are on for this business (names only) — the dashboard shows a
         # piloted screen such as Costing by trade only where it's on (15 Nov 2026)
         "features": _features_on(cfg.get("tenant_id")),
+        "partner": partner_of(cfg),
     }
+
+
+# 2026-11-24: a business brought to Vula by a partner that sells it under its own name (FlowCrew:
+# surf and kite schools). The business's own brand stays first on its dashboard; the partner is
+# named in the credit at the foot — "FlowCrew · Powered by Vula". Set per business in
+# vula_tenant_config.features.partner (an id from this list, beside the switches).
+# The partner's own look (FlowCrew's, from its design system: ocean blue, fresh green, its ink) is
+# what a business it brought wears until the business sets its own in Settings › Brand kit — the
+# business's own colour, logo and name always win. The logo itself is a file the dashboard ships
+# (public/partners/<id>-mark.png).
+PARTNERS: dict[str, dict] = {
+    "flowcrew": {"name": "FlowCrew",
+                 "brand": {"accent_color": "#2196F3", "secondary_color": "#7ED321", "ink_color": "#1E2A39"}},
+}
+
+
+def partner_of(cfg: Optional[dict]) -> Optional[dict]:
+    """{"id", "name"} of the partner this business came through, or None. An id that isn't a
+    known partner is nobody."""
+    features = (cfg or {}).get("features")
+    pid = features.get("partner") if isinstance(features, dict) else None
+    return {"id": pid, "name": PARTNERS[pid]["name"]} if isinstance(pid, str) and pid in PARTNERS else None
+
+
+def partner_brand(tenant_id: Optional[str]) -> dict:
+    """The colours a business wears when it has set none of its own: its partner's, else {}."""
+    try:
+        partner = partner_of(get_config(tenant_id)) if tenant_id else None
+    except Exception:  # noqa: BLE001 — the brand must still load: Vula's own defaults
+        partner = None
+    return dict(PARTNERS[partner["id"]].get("brand") or {}) if partner else {}
 
 
 def _features_on(tenant_id: Optional[str]) -> list:

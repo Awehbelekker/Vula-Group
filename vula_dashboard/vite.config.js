@@ -10,8 +10,9 @@ export default defineConfig({
   plugins: [react(), precacheList(BUILD_ID)],
   define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   build: {
-    // four pages: the dashboard (/), the coach app (/pay/, own manifest + service worker), the customer receipt (/r/<token>) and an event's door page (/door/#<secret>)
-    rollupOptions: { input: { main: "index.html", pay: "pay/index.html", receipt: "r/index.html", door: "door/index.html" } },
+    // five pages: the dashboard (/), the coach app (/pay/, own manifest + service worker), the customer receipt (/r/<token>), an event's door page (/door/#<secret>)
+    // and the FlowCrew customer app (/flow/<business>, own manifest + service worker)
+    rollupOptions: { input: { main: "index.html", pay: "pay/index.html", receipt: "r/index.html", door: "door/index.html", flow: "flow/index.html" } },
   },
   // Screens load when opened (src/lib/lazyScreen.jsx), so the dev server would only find the
   // packages they use the first time one opens — then re-bundle and reload the page under you

@@ -28,11 +28,12 @@ export default function VulaLogo({ kind = "lockup", size = 32, height = 40, titl
   );
 }
 
-/** "Powered by vula" — the credit on tenant-branded screens (the logo set's inline badge). */
-export function PoweredByVula({ className = "" }) {
+/** "Powered by vula" — the credit on tenant-branded screens (the logo set's inline badge). A
+ *  business that came through a partner is credited to that partner alone: "Powered by FlowCrew". */
+export function PoweredByVula({ className = "", partner = "" }) {
   return (
     <span className={`vula-powered-by${className ? ` ${className}` : ""}`}>
-      Powered by <VulaLogo kind="lockup" height={22} title="Vula" />
+      Powered by {partner ? <strong>{partner}</strong> : <VulaLogo kind="lockup" height={22} title="Vula" />}
     </span>
   );
 }

@@ -6293,8 +6293,12 @@ async def public_brand(tenant_id: str):
     truth for brand: the same commerce_invoice_settings row the dashboard's Brand Kit card writes,
     replacing the old split where the storefront read a separate, never-updated tenant_config.theme."""
     settings = await service.get_invoice_settings(tenant_id) or {}
+    from vula.api import tenants as _tenants
     from vula.api.tenants import display_name as _display_name
+    # a business a partner brought (FlowCrew) wears the partner's colours until it sets its own
+    theirs = _tenants.partner_brand(tenant_id)
     return {
+        "partner": _tenants.partner_of(_tenants.get_config(tenant_id)),
         # the name everywhere (dashboard shell, login, app icon, emails): the brand kit's trading
         # name, else the company name, else the tenant's display name — never "Vula Commerce"
         "name": (settings.get("trading_as") or settings.get("company_name")
@@ -6302,9 +6306,9 @@ async def public_brand(tenant_id: str):
         "logo_url": settings.get("logo_url"),
         "icon_url": settings.get("icon_url"),
         "tagline": settings.get("tagline"),
-        "accent_color": settings.get("accent_color"),
-        "secondary_color": settings.get("secondary_color"),
-        "ink_color": settings.get("ink_color"),
+        "accent_color": settings.get("accent_color") or theirs.get("accent_color"),
+        "secondary_color": settings.get("secondary_color") or theirs.get("secondary_color"),
+        "ink_color": settings.get("ink_color") or theirs.get("ink_color"),
         "font_pairing": settings.get("font_pairing"),
         "corner_style": settings.get("corner_style") or "rounded",
         "density": settings.get("density") or "comfortable",
@@ -6338,7 +6342,8 @@ async def public_app_icon(tenant_id: str, size: int, maskable: bool = False):
     size = 512 if size > 256 else (192 if size > 180 else 180)
     settings = await service.get_invoice_settings(tenant_id) or {}
     src = settings.get("icon_url") or settings.get("logo_url")
-    accent = settings.get("accent_color") or "#2C5545"
+    from vula.api.tenants import partner_brand as _partner_brand
+    accent = settings.get("accent_color") or _partner_brand(tenant_id).get("accent_color") or "#2C5545"
     key = (tenant_id, size, src, accent, settings.get("logo_size"), bool(maskable))
     hit = _ICON_CACHE.get(key)
     if hit and _time.time() - hit[0] < 3600:
@@ -6366,7 +6371,8 @@ async def public_app_splash(tenant_id: str, size: str, dark: bool = False):
         raise HTTPException(status_code=404, detail="Not a launch screen size.")
     settings = await service.get_invoice_settings(tenant_id) or {}
     src = settings.get("icon_url") or settings.get("logo_url")
-    accent = settings.get("accent_color") or "#2C5545"
+    from vula.api.tenants import partner_brand as _partner_brand
+    accent = settings.get("accent_color") or _partner_brand(tenant_id).get("accent_color") or "#2C5545"
     name = settings.get("trading_as") or settings.get("company_name") or tenant_id
     key = ("splash", tenant_id, w, h, bool(dark), src, accent, name, settings.get("logo_size"))
     hit = _ICON_CACHE.get(key)

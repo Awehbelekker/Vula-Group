@@ -1,0 +1,16 @@
+{
+  "name": "FlowCrew",
+  "short_name": "FlowCrew",
+  "description": "Book surf lessons and hire gear, and see today's conditions.",
+  "start_url": "/flow/",
+  "scope": "/flow/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    { "src": "/flow/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/flow/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/flow/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

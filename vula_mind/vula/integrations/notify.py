@@ -32,6 +32,8 @@ EVENTS = (
     "pop_to_link",           # a proof of payment by email may pay a supplier's bill (vula/commerce/pop_links.py)
     "delivery_problem",      # a courier couldn't collect or deliver an order (vula/commerce/shipping.py)
     "table_booking",         # a customer booked a table (vula/commerce/tables.py)
+    "lesson_request",        # a customer asked for a lesson or gear, or cancelled one (vula/commerce/lessons.py)
+    "lesson_conditions",     # tomorrow's forecast for each confirmed lesson (vula/commerce/lessons.py)
 )
 
 # Alerts that must reach SOMEONE (2026-10-26). An ordinary event nobody subscribed to goes to no

@@ -1,0 +1,28 @@
+/* lessons.css — Sell › Lessons (lessons/). Shares the table-booking classes (tables/tables.css); these are its own. */
+.vls-cond { display: flex; flex-direction: column; gap: var(--space-2); }
+.vls-condhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.vls-hours { display: flex; gap: var(--space-1); overflow-x: auto; padding-bottom: 4px; }
+.vls-hour { flex: none; min-width: 64px; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-caption); color: var(--muted); }
+.vls-hour strong { color: var(--ink); font-size: var(--fs-body); }
+.vls-hour[data-rating="good"] { border-color: var(--ok); background: var(--ok-soft); }
+.vls-hour[data-rating="marginal"] { border-color: var(--warn); background: var(--warn-soft); }
+.vls-hour[data-rating="poor"] { border-color: var(--danger); background: var(--danger-soft); }
+.vls-block { display: flex; flex-direction: column; gap: var(--space-2); padding-bottom: var(--space-3); border-bottom: 1px solid var(--line); }
+.vls-tier { display: grid; gap: var(--space-2); grid-template-columns: repeat(auto-fit, minmax(min(100%, 78px), 1fr)); align-items: end; }
+.vls-amount { flex: none; font-size: var(--fs-body); color: var(--ink); }
+.vls-lines { margin: 0; padding: 0; list-style: none; font-size: var(--fs-caption); color: var(--muted); }
+.vls-beach { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.vls-busy { opacity: .6; cursor: default; }
+
+/* Points for sharing beach reports: a short board under the photo button */
+.vls-points { padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.vls-points ul { list-style: none; margin: var(--space-2) 0; padding: 0; display: grid; gap: var(--space-1); }
+.vls-points li { display: grid; grid-template-columns: 1fr auto 3.5em; gap: var(--space-3); align-items: baseline; }
+.vls-points li strong { text-align: right; }
+
+/* Coach profiles in "Coaches and being found" */
+.vls-coach { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.vls-coach img, .vls-face { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; flex: none; }
+.vls-face { display: grid; place-items: center; background: var(--brand-soft, var(--line)); font-weight: 600; }
+.vls-coach .vtb-main { flex: 1; min-width: 140px; }
+.vls-ticks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }

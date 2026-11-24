@@ -176,7 +176,7 @@ export default function VulaShellV2({
     </div>
   );
   const select = (id) => { onSelect(id); setRailOpen(false); setMore(false); };
-  const powered = <div className="v2-powered"><PoweredByVula /></div>;
+  const powered = <div className="v2-powered"><PoweredByVula partner={brand?.partner || ""} /></div>;
 
   const sidebar = (rail, onClose) => (
     <aside className={`v2-side${rail ? " rail" : ""}`}>
