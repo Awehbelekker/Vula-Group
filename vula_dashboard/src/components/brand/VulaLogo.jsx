@@ -29,9 +29,8 @@ export default function VulaLogo({ kind = "lockup", size = 32, height = 40, titl
 }
 
 /** The partner's own mark after its name (public/partners/<name>-mark.png); nothing if it has none. */
-export function PartnerMark({ name, height = 20 }) {
-  return <img src={`/partners/${String(name).toLowerCase().replace(/[^a-z0-9]/g, "")}-mark.png`} alt="" height={height}
-    style={{ height, width: "auto", verticalAlign: "middle", marginLeft: 6 }} onError={(e) => { e.currentTarget.style.display = "none"; }} />;
+export function PartnerMark({ name }) {
+  return <img src={`/partners/${name.toLowerCase()}-mark.png`} alt="" className="vula-pmark" onError={(e) => e.currentTarget.remove()} />;
 }
 
 /** "Powered by vula" — the credit on tenant-branded screens (the logo set's inline badge). A
