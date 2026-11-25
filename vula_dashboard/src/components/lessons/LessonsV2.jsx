@@ -131,6 +131,169 @@ function BeachReport({ tenantId }) {
   )
 }
 
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const addDays = (d, n) => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate() + n); return iso(x) }
+
+/** Each coach's week: their sessions day by day, with the people in each against the limit, the
+ * days they are away and the hours they said they can work. A coach sees only their own. */
+function Calendar({ tenantId, onMine }) {
+  const [week, setWeek] = useState('')
+  const [d, setD] = useState(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let live = true
+    setError('')
+    api(`/v1/commerce/${tenantId}/admin/lessons/calendar${week ? `?week=${week}` : ''}`).then(x => live && setD(x)).catch(e => live && setError(e.message))
+    return () => { live = false }
+  }, [tenantId, week])
+  if (error) return <Card><p className="vtb-error" role="alert">{error}</p></Card>
+  if (!d) return <Card><Skeleton lines={4} /></Card>
+  const today = iso(new Date())
+  return (
+    <Card className="vls-cal">
+      <div className="vls-condhead"><strong>Week of {new Date(`${d.week}T12:00:00`).toLocaleDateString('en-ZA', { day: 'numeric', month: 'long' })}</strong>
+        <span className="vtb-actions">
+          <Button size="sm" variant="quiet" onClick={() => setWeek(addDays(d.week, -7))}>Earlier</Button>
+          <Button size="sm" variant="quiet" onClick={() => setWeek('')}>This week</Button>
+          <Button size="sm" variant="quiet" onClick={() => setWeek(addDays(d.week, 7))}>Later</Button>
+          {!d.everyone && <><Button size="sm" variant="secondary" onClick={() => onMine('hours')}>My hours</Button><Button size="sm" variant="secondary" onClick={() => onMine('profile')}>My profile</Button></>}
+        </span></div>
+      {d.coaches.length === 0 && <p className="vtb-sub">Add your coaches in Team first.</p>}
+      {d.coaches.map(c => (
+        <div key={c.coach_id} className="vls-calrow">
+          <div className="vls-calwho"><strong>{c.name.split(' ')[0]}</strong><span className="vtb-sub">{c.lessons} {c.lessons === 1 ? 'lesson' : 'lessons'} · {c.people} people</span>
+            <span className="vtb-sub">{c.hours.length ? c.hours.map(h => `${DAYS[h.weekday]} ${h.start}–${h.end}`).join(', ') : 'No working hours given'}</span></div>
+          <div className="vls-caldays">
+            {d.days.map((day, i) => (
+              <div key={day} className={`vls-calday${day === today ? ' vls-calday--today' : ''}`}>
+                <span className="vls-caldate">{DAYS[i]} {Number(day.slice(8))}</span>
+                {c.away[day] && <span className="vls-away">Away{c.away[day] !== 'Away' ? `: ${c.away[day]}` : ''}</span>}
+                {c.days[day].map(s => (
+                  <span key={s.starts_at + s.item_id} className={`vls-sess${s.people > s.max ? ' vls-sess--over' : ''}`} title={s.bookings.map(b => `${b.customer_name} (${b.people})`).join(', ')}>
+                    <strong>{s.time}</strong>{s.item_name}<span>{s.people} of {s.max}</span></span>))}
+              </div>))}
+          </div>
+        </div>))}
+      {d.no_coach.length > 0 && <p className="vtb-sub"><strong>No coach yet:</strong> {d.no_coach.map(s => `${DAYS[d.days.indexOf(s.date)]} ${s.time} ${s.item_name} (${s.people})`).join(' · ')}</p>}
+      <p className="vtb-sub">Bookings for the same lesson at the same time are one group. {d.everyone ? 'Coaches set their own hours and days away from their login.' : 'This is your own week.'}</p>
+    </Card>
+  )
+}
+
+/** A coach's own hours and days away — the same the roster uses. */
+function MyHours({ tenantId, onClose }) {
+  const base = `/v1/commerce/${tenantId}/admin/lessons/my-availability`
+  const [d, setD] = useState(null)
+  const [error, setError] = useState('')
+  const [w, setW] = useState({ weekday: 0, start: '08:00', end: '17:00' })
+  const [off, setOff] = useState({ from: '', to: '', note: '' })
+  useEffect(() => { api(base).then(setD).catch(e => setError(e.message)) }, [base])
+  const send = async (opts, path = '') => { setError(''); try { setD(await api(base + path, opts)) } catch (e) { setError(e.message) } }
+  return (
+    <Sheet open title="My hours" onClose={onClose}>
+      <div className="vtb-form">
+        {!d && !error && <Skeleton lines={3} />}
+        {d && (<>
+          <h3 className="vtb-h">When I can teach</h3>
+          {d.weekly.length === 0 && <p className="vtb-sub">Nothing set, so the school can book you at any time.</p>}
+          {d.weekly.map(x => <p key={x.id} className="vtb-sub">{DAYS[x.weekday]} {x.start}–{x.end} <Button size="sm" variant="quiet" Icon={Trash2} aria-label={`Remove ${DAYS[x.weekday]} ${x.start}`} onClick={() => send({ method: 'DELETE' }, `/${x.id}`)} /></p>)}
+          <div className="vtb-row">
+            <Field label="Day"><Select value={w.weekday} onChange={e => setW({ ...w, weekday: Number(e.target.value) })}>{DAYS.map((n, i) => <option key={n} value={i}>{n}</option>)}</Select></Field>
+            <Field label="From"><Input type="time" value={w.start} onChange={e => setW({ ...w, start: e.target.value })} /></Field>
+            <Field label="To"><Input type="time" value={w.end} onChange={e => setW({ ...w, end: e.target.value })} /></Field>
+            <span className="vtb-actions"><Button size="sm" Icon={Plus} onClick={() => send({ method: 'POST', body: w })}>Add</Button></span>
+          </div>
+          <h3 className="vtb-h">Days away</h3>
+          {d.off.map(x => <p key={x.id} className="vtb-sub">{x.from}{x.to !== x.from ? ` to ${x.to}` : ''}{x.note ? ` · ${x.note}` : ''} <Button size="sm" variant="quiet" Icon={Trash2} aria-label={`Remove ${x.from}`} onClick={() => send({ method: 'DELETE' }, `/${x.id}`)} /></p>)}
+          <div className="vtb-row">
+            <Field label="First day"><Input type="date" value={off.from} onChange={e => setOff({ ...off, from: e.target.value })} /></Field>
+            <Field label="Last day"><Input type="date" value={off.to} onChange={e => setOff({ ...off, to: e.target.value })} /></Field>
+            <Field label="Note (optional)"><Input maxLength={80} value={off.note} onChange={e => setOff({ ...off, note: e.target.value })} /></Field>
+            <span className="vtb-actions"><Button size="sm" Icon={Plus} disabled={!off.from} onClick={() => send({ method: 'POST', body: { from: off.from, to: off.to || off.from, note: off.note } })}>Add</Button></span>
+          </div>
+          <p className="vtb-sub">The school sees these when it confirms a lesson. A time outside them is a warning to the school, not a block.</p>
+        </>)}
+        {error && <p className="vtb-error" role="alert">{error}</p>}
+      </div>
+    </Sheet>
+  )
+}
+
+/** A coach's own profile: their words, photo, what they teach and their favourite spots.
+ * Whether customers see it stays the owner's or a manager's decision. */
+function MyProfile({ tenantId, onClose }) {
+  const base = `/v1/commerce/${tenantId}/admin/lessons/my-profile`
+  const [d, setD] = useState(null)
+  const [p, setP] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [mapFor, setMapFor] = useState(-1)
+  useEffect(() => { api(base).then(x => { setD(x); setP({ ...x.profile, photo_url: x.profile.photo_url || '' }) }).catch(e => setError(e.message)) }, [base])
+  const flip = (list, k) => (list.includes(k) ? list.filter(x => x !== k) : [...list, k])
+  const setSpot = (n, patch) => setP(cur => ({ ...cur, spots: cur.spots.map((sp, k) => k === n ? { ...sp, ...patch } : sp) }))
+  const upload = async (e, done) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setBusy(true); setError('')
+    const { uploadBrandImage } = await import('../../lib/brandUpload')
+    const url = await uploadBrandImage(tenantId, file, 'coaches')
+    if (url) done(url); else setError("The photo didn't upload. Try a smaller one.")
+    setBusy(false)
+  }
+  const here = (n) => {
+    if (!navigator.geolocation) { setError("This device can't share its location. Pick the spot on the map."); return }
+    navigator.geolocation.getCurrentPosition(pos => { setSpot(n, { lat: pos.coords.latitude, lng: pos.coords.longitude }); setError('') },
+      () => setError("Your location wasn't shared. Pick the spot on the map."), { timeout: 10000 })
+  }
+  const save = async () => {
+    if (p.spots.some(sp => sp.lat == null)) { setError('Place each favourite spot: use where you are, or pick it on the map.'); return }
+    setBusy(true); setError('')
+    try {
+      const { shown: _s, ...mine } = p
+      await api(base, { method: 'PUT', body: { ...mine, photo_url: p.photo_url || null } }); toast('Saved'); onClose()
+    } catch (e) { setError(e.message); setBusy(false) }
+  }
+  return (
+    <Sheet open title="My profile" onClose={onClose} footer={<Button onClick={save} disabled={busy || !p}>{busy ? 'Saving…' : 'Save'}</Button>}>
+      <div className="vtb-form">
+        {!p && !error && <Skeleton lines={4} />}
+        {p && (<>
+          <div className="vls-coach">
+            {p.photo_url ? <img src={p.photo_url} alt="" /> : <span className="vls-face" aria-hidden="true">{d.me.name.slice(0, 1)}</span>}
+            <span className="vtb-main"><strong>{d.me.name.split(' ')[0]}</strong><span className="vtb-sub">{p.shown ? 'Customers can see your profile.' : 'Not shown to customers yet. The owner or a manager switches that on.'}</span></span>
+            <label className="vtb-upload"><Camera size={16} aria-hidden="true" />{p.photo_url ? 'Change photo' : 'Add a photo'}<input type="file" accept="image/*" hidden disabled={busy} onChange={e => upload(e, url => setP(cur => ({ ...cur, photo_url: url })))} /></label>
+          </div>
+          <Field label="About you"><Textarea rows={2} maxLength={300} value={p.bio} placeholder="Surfing Big Bay since 2009. Patient with first timers." onChange={e => setP({ ...p, bio: e.target.value })} /></Field>
+          <div className="vls-ticks"><span className="vtb-sub">I teach</span>
+            {Object.entries(d.levels).map(([k, label]) => <label key={k} className="vtb-check"><input type="checkbox" checked={p.levels.includes(k)} onChange={() => setP({ ...p, levels: flip(p.levels, k) })} /><span>{label.split(' (')[0]}</span></label>)}</div>
+          <div className="vls-ticks"><span className="vtb-sub">Sports</span>
+            {(d.sports || []).map(k => <label key={k} className="vtb-check"><input type="checkbox" checked={p.sports.includes(k)} onChange={() => setP({ ...p, sports: flip(p.sports, k) })} /><span>{SPORT_NAMES[k] || k}</span></label>)}</div>
+          <span className="vtb-sub">Favourite spots (up to 3)</span>
+          {p.spots.map((sp, n) => (
+            <div key={n} className="vls-spot">
+              <div className="vtb-row">
+                <Field label="Spot"><Input value={sp.name} maxLength={40} placeholder="Big Bay" onChange={e => setSpot(n, { name: e.target.value })} /></Field>
+                <span className="vtb-actions">
+                  <Button size="sm" variant="secondary" onClick={() => here(n)}>Use where I am</Button>
+                  <Button size="sm" variant="secondary" onClick={() => setMapFor(mapFor === n ? -1 : n)}>{mapFor === n ? 'Hide the map' : 'Pick on the map'}</Button>
+                  <label className="vtb-upload"><Camera size={16} aria-hidden="true" />{sp.photo_url ? 'Change photo' : 'Add a photo'}<input type="file" accept="image/*" hidden disabled={busy} onChange={e => upload(e, url => setSpot(n, { photo_url: url }))} /></label>
+                  <Button size="sm" variant="quiet" Icon={Trash2} aria-label={`Remove ${sp.name || 'this spot'}`} onClick={() => setP({ ...p, spots: p.spots.filter((_, k) => k !== n) })} />
+                </span>
+              </div>
+              <span className="vtb-sub">{sp.lat != null ? `Placed at ${Number(sp.lat).toFixed(3)}, ${Number(sp.lng).toFixed(3)}` : 'Not placed yet'}{sp.photo_url ? ' · photo added' : ''}</span>
+              {mapFor === n && <Suspense fallback={<Skeleton lines={3} />}>
+                <PinPicker tenantId={tenantId} value={sp.lat != null ? { lat: sp.lat, lng: sp.lng } : null} addressText={sp.name}
+                  onChange={v => setSpot(n, v ? { lat: v.lat, lng: v.lng } : { lat: null, lng: null })} /></Suspense>}
+            </div>))}
+          {p.spots.length < 3 && <Button size="sm" variant="quiet" Icon={Plus} onClick={() => setP({ ...p, spots: [...p.spots, { name: '', lat: null, lng: null, photo_url: null }] })}>Add a favourite spot</Button>}
+        </>)}
+        {error && <p className="vtb-error" role="alert">{error}</p>}
+      </div>
+    </Sheet>
+  )
+}
+
 /** The profile of the customer behind a booking, as far as a coach needs it — and, once the lesson
  * is done, confirming their level in that sport. */
 function CustomerSheet({ tenantId, r, levels, onClose }) {
@@ -236,15 +399,27 @@ function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
     coach_id: r.coach_id || '', price: r.amount_cents === null ? '' : rand(r.amount_cents), invoice: false })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [hit, setHit] = useState(null)            // what this coach's calendar says about this time
+  const [anyway, setAnyway] = useState(false)
+  useEffect(() => {
+    setHit(null); setAnyway(false)
+    if (r.kind !== 'lesson' || !f.coach_id || !f.date || !f.time) return undefined
+    let live = true
+    api(`/v1/commerce/${tenantId}/admin/lessons/${r.id}/check?coach_id=${encodeURIComponent(f.coach_id)}&starts_at=${encodeURIComponent(`${f.date}T${f.time}:00+02:00`)}`)
+      .then(d => live && setHit(d)).catch(() => {})
+    return () => { live = false }
+  }, [tenantId, r.id, r.kind, f.coach_id, f.date, f.time])
+  const blocked = hit && (hit.clash || hit.full)
   const save = async (e) => {
     e.preventDefault(); setError('')
     const price = cents(f.price)
     if (price === null) { setError('Enter the price in rand.'); return }
     setBusy(true)
     try {
-      const body = { starts_at: `${f.date}T${f.time}:00+02:00`, coach_id: f.coach_id, invoice: f.invoice }
+      const body = { starts_at: `${f.date}T${f.time}:00+02:00`, coach_id: f.coach_id, invoice: f.invoice, allow_clash: anyway }
       if (price !== r.amount_cents) body.price_cents = price
       const d = await api(`/v1/commerce/${tenantId}/admin/lessons/${r.id}/confirm`, { method: 'POST', body })
+      if (d.request.warning) toast(d.request.warning, 'danger')
       toast(d.request.customer_told ? 'Confirmed. The customer has been told.' : 'Confirmed. The customer could not be messaged — let them know.', d.request.customer_told ? 'ok' : 'danger')
       onDone()
     } catch (err) { setError(err.message) }
@@ -260,11 +435,15 @@ function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
         </div>
         <Field label={r.kind === 'hire' ? 'Handled by (optional)' : 'Coach'}><Select value={f.coach_id} onChange={e => setF({ ...f, coach_id: e.target.value })}>
           <option value="">Not decided yet</option>{coaches.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
+        {hit && !blocked && !hit.outside && <p className="vtb-sub">Their calendar is free then.</p>}
+        {hit?.outside && <p className="vtb-sub"><strong>Note:</strong> {hit.outside} You can still confirm.</p>}
+        {blocked && <><p className="vtb-error" role="alert">{hit.clash || hit.full}</p>
+          <label className="vtb-check"><input type="checkbox" checked={anyway} onChange={e => setAnyway(e.target.checked)} /><span>Confirm anyway</span></label></>}
         <Field label="Price (rand)" hint={r.quote_cents === null ? 'Your price list has no price for this. Enter what you agreed.' : `Your price list: ${formatMoney(r.quote_cents)}.`}>
           <Input inputMode="decimal" value={f.price} onChange={e => setF({ ...f, price: e.target.value })} /></Field>
         <label className="vtb-check"><input type="checkbox" checked={f.invoice} onChange={e => setF({ ...f, invoice: e.target.checked })} /><span>Make a draft invoice for it</span></label>
         {error && <p className="vtb-error" role="alert">{error}</p>}
-        <div><Button type="submit" Icon={Check} disabled={busy}>{busy ? 'Saving…' : 'Confirm and tell the customer'}</Button></div>
+        <div><Button type="submit" Icon={Check} disabled={busy || (blocked && !anyway)}>{busy ? 'Saving…' : 'Confirm and tell the customer'}</Button></div>
       </form>
     </Sheet>
   )
@@ -588,8 +767,8 @@ export default function LessonsV2({ tenantId }) {
         </Card>
         <Conditions tenantId={tenantId} />
         <Ratings tenantId={tenantId} />
-        <PillTabs label="Requests" tabs={[{ id: 'open', label: `Open${data.waiting ? ` · ${data.waiting} to confirm` : ''}` }, { id: 'past', label: 'Earlier' }, { id: 'coaches', label: 'Coaches' }]} active={tab} onChange={setTab} />
-        {tab === 'coaches' ? <Coaches tenantId={tenantId} /> : rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (
+        <PillTabs label="Requests" tabs={[{ id: 'open', label: `Open${data.waiting ? ` · ${data.waiting} to confirm` : ''}` }, { id: 'calendar', label: 'Calendar' }, { id: 'past', label: 'Earlier' }, { id: 'coaches', label: 'Coaches' }]} active={tab} onChange={setTab} />
+        {tab === 'calendar' ? <Calendar tenantId={tenantId} onMine={(what) => setOpen({ mine: what })} /> : tab === 'coaches' ? <Coaches tenantId={tenantId} /> : rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (
           <Card className="vtb-list">
             <ul>
               {rows.map(r => {
@@ -617,6 +796,8 @@ export default function LessonsV2({ tenantId }) {
           </Card>
         )}
       </>)}
+      {open?.mine === 'hours' && <MyHours tenantId={tenantId} onClose={() => setOpen(null)} />}
+      {open?.mine === 'profile' && <MyProfile tenantId={tenantId} onClose={() => setOpen(null)} />}
       {open?.customer && <CustomerSheet tenantId={tenantId} r={open.customer} levels={conf.levels} onClose={() => setOpen(null)} />}
       {open === 'directory' && <DirectorySheet tenantId={tenantId} conf={conf} team={data.coaches || []} onClose={() => setOpen(null)} onSaved={(d) => { setConf(d); setOpen(null) }} />}
       {open === 'settings' && <SettingsSheet tenantId={tenantId} st={st} onClose={() => setOpen(null)} onSaved={(d) => { setConf(d); setOpen(null); load() }} />}

@@ -513,7 +513,7 @@ async def _tell_customer(tenant_id: str, r: dict, text: str, news: str) -> bool:
 
 
 async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: Any = "", price_cents: Any = None,
-                  invoice: bool = False, by: str = "") -> dict:
+                  invoice: bool = False, by: str = "", allow_clash: bool = False) -> dict:
     """A person at the business gives the request its time (and coach, and price where none was
     listed). One conditional write, read back; then the customer is told."""
     from vula.api import tenants
@@ -528,6 +528,7 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
         start = start.replace(tzinfo=SAST)
     if start < _now() - timedelta(minutes=5):
         raise LessonError("That time has already passed.")
+    warning = ""
     patch: Dict[str, Any] = {"status": "confirmed", "starts_at": start.astimezone(timezone.utc).isoformat(),
                              "confirmed_by": by or None, "confirmed_at": _now().isoformat(),
                              "updated_at": _now().isoformat(), "reminded_at": None, "conditions_at": None}
@@ -536,6 +537,12 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
         if not who:
             raise LessonError("That person isn't on the team any more.")
         patch.update(coach_id=who["id"], coach_name=who["name"])
+        if cur["kind"] == "lesson":                   # the coach's calendar: not two things at once, not too many people
+            from vula.commerce import lesson_calendar
+            hit = lesson_calendar.check(tenant_id, who["id"], start, cur.get("item_id") or "", int(cur.get("party_size") or 1), request_id)
+            if (hit["clash"] or hit["full"]) and not allow_clash:
+                raise LessonError(f"{hit['clash'] or hit['full']} Choose another time or coach, or confirm anyway.", 409)
+            warning = hit["outside"]
     if price_cents is not None:
         patch["price_cents"] = _cents(price_cents, "The price")
     owed = patch.get("price_cents", cur.get("price_cents") if cur.get("price_cents") is not None else cur.get("quote_cents"))
@@ -562,6 +569,7 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     lines.append(f"Reference {r['ref']}. To cancel, reply *cancel my lesson*.\n\n— {tenants.display_name(tenant_id)}")
     r["customer_told"] = await _tell_customer(
         tenant_id, r, "\n".join(lines), f"Your {r['item_name'].lower()} is confirmed for {r['when']}. Total {r['amount']}.")
+    r["warning"] = warning                            # the coach is away or outside their hours: said, never refused
     return r
 
 

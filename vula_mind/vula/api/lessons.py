@@ -127,7 +127,8 @@ async def confirm(tenant_id: str, request_id: str, body: dict, request: Request)
     try:
         return {"request": await lessons.confirm(
             tenant_id, request_id, starts_at=b.get("starts_at"), coach_id=b.get("coach_id") or "",
-            price_cents=b.get("price_cents"), invoice=bool(b.get("invoice")), by=await _who(request, tenant_id))}
+            price_cents=b.get("price_cents"), invoice=bool(b.get("invoice")), by=await _who(request, tenant_id),
+            allow_clash=b.get("allow_clash") is True)}
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
 
@@ -185,6 +186,96 @@ async def coaches_month(tenant_id: str, request: Request, month: Optional[str] =
         return lessons.coach_month(tenant_id, month or _this_month())
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
+
+
+# ── each coach's week, and the coach's own side ───────────────────────────────────────────────
+async def _me(request: Request, tenant_id: str) -> dict:
+    """The team member behind this login — never taken from the request."""
+    me = lessons.member_for(tenant_id, await _who(request, tenant_id))
+    if not me or not me["id"]:
+        raise HTTPException(status_code=403, detail="This is for a member of the school's team.")
+    return me
+
+
+@router.get("/{tenant_id}/admin/lessons/calendar")
+async def lesson_calendar_week(tenant_id: str, request: Request, week: Optional[str] = None) -> dict:
+    """The week for each coach: sessions, days away, working hours. An owner or manager sees every
+    coach; anyone else on the team sees only their own."""
+    from vula.api.commerce import _may_apply_stock
+    from vula.commerce import lesson_calendar
+    try:
+        if await _may_apply_stock(request, tenant_id):
+            return {**lesson_calendar.week(tenant_id, week), "everyone": True}
+        me = await _me(request, tenant_id)
+        return {**lesson_calendar.week(tenant_id, week, only_coach=me["id"]), "everyone": False}
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.get("/{tenant_id}/admin/lessons/{request_id}/check")
+async def lesson_check(tenant_id: str, request_id: str, coach_id: str, starts_at: str) -> dict:
+    """What confirming this request with this coach at this time would run into, before it is saved."""
+    from vula.commerce import lesson_calendar
+    try:
+        r = lessons._get(tenant_id, request_id)
+        return lesson_calendar.check(tenant_id, coach_id, lessons._when(starts_at), r.get("item_id") or "",
+                                     int(r.get("party_size") or 1), request_id)
+    except (lessons.LessonError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="Choose the day, the time and the coach.") from exc
+
+
+@router.get("/{tenant_id}/admin/lessons/my-profile")
+async def my_coach_profile(tenant_id: str, request: Request) -> dict:
+    from vula.commerce import lesson_directory
+    me = await _me(request, tenant_id)
+    return {"me": me, "profile": lesson_directory.own_profile(tenant_id, me["id"]), "sports": list(lessons.SPORTS), **_choices()}
+
+
+@router.put("/{tenant_id}/admin/lessons/my-profile")
+async def save_my_coach_profile(tenant_id: str, body: dict, request: Request) -> dict:
+    """A coach saves their own profile and favourite spots — only their own, never whether it shows."""
+    from vula.commerce import lesson_directory
+    me = await _me(request, tenant_id)
+    try:
+        return {"me": me, "profile": lesson_directory.save_own(tenant_id, me["id"], body or {})}
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+def _roster():
+    from vula.tap import api as tap_api
+    return tap_api.get_service().shifts
+
+
+@router.get("/{tenant_id}/admin/lessons/my-availability")
+async def my_availability(tenant_id: str, request: Request) -> dict:
+    """The hours the signed-in coach said they can work, and their days away (the roster's own)."""
+    me = await _me(request, tenant_id)
+    return {"me": me, **_roster().availability(tenant_id, me["id"])}
+
+
+@router.post("/{tenant_id}/admin/lessons/my-availability")
+async def add_my_availability(tenant_id: str, body: dict, request: Request) -> dict:
+    """{weekday, start, end} adds weekly hours; {from, to, note} adds days away. Only the caller's own."""
+    from vula.tap.shifts import ShiftError
+    me = await _me(request, tenant_id)
+    b = body or {}
+    try:
+        if "weekday" in b:
+            return {"me": me, **_roster().add_weekly(tenant_id, me["id"], b.get("weekday"), b.get("start"), b.get("end"))}
+        return {"me": me, **_roster().add_time_off(tenant_id, me["id"], b.get("from"), b.get("to"), b.get("note"))}
+    except ShiftError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/{tenant_id}/admin/lessons/my-availability/{row_id}")
+async def remove_my_availability(tenant_id: str, row_id: str, request: Request) -> dict:
+    from vula.tap.shifts import ShiftError
+    me = await _me(request, tenant_id)
+    try:
+        return {"me": me, **_roster().remove_availability(tenant_id, me["id"], row_id)}
+    except ShiftError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{tenant_id}/admin/lessons/{request_id}/customer")
