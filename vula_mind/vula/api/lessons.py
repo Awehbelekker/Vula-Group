@@ -187,6 +187,17 @@ async def coaches_month(tenant_id: str, request: Request, month: Optional[str] =
         raise _refuse(exc) from exc
 
 
+@router.get("/{tenant_id}/admin/lessons/ratings")
+async def lesson_ratings_for_school(tenant_id: str, request: Request) -> dict:
+    """Customers' ratings: the school's and each coach's average, and the latest comments.
+    Owner or manager only — the comments are the customers' words to the school."""
+    from vula.api.commerce import _may_apply_stock
+    from vula.commerce import lesson_ratings
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can see the ratings.")
+    return lesson_ratings.for_school(tenant_id)
+
+
 @router.get("/{tenant_id}/admin/lessons/mine")
 async def my_lessons(tenant_id: str, request: Request, month: Optional[str] = None) -> dict:
     """The signed-in coach's own lessons to come and their own month. Who they are comes from the
@@ -316,7 +327,7 @@ async def flow_directory(request: Request, lat: Optional[str] = None, lng: Optio
 async def flow_shop(shop: str, request: Request) -> dict:
     from vula.api.commerce import public_brand
     _limit(request, "shop", 60)
-    from vula.commerce import lesson_directory
+    from vula.commerce import lesson_directory, lesson_ratings
     tenant_id = _shop(shop)
     st = lessons.settings(tenant_id)
     brand = await public_brand(tenant_id)
@@ -328,6 +339,7 @@ async def flow_shop(shop: str, request: Request) -> dict:
             # the school's OWN colours, when it has chosen any: its page wears them once it is picked
             "own_look": brand.get("own_look"),
             "theme": lesson_directory.theme_of(st),          # a ready-made look, when the school picked one
+            "rating": lesson_ratings.public(tenant_id),       # customers' stars, once anyone has rated it
             "whatsapp": digits if 9 <= len(digits) <= 15 else None,
             "coaches": lesson_directory.public_coaches(tenant_id, st), **lessons.public_settings(st)}
 
@@ -375,7 +387,34 @@ async def flow_mine(shop: str, body: dict, request: Request) -> dict:
     tokens = (body or {}).get("tokens")
     if not isinstance(tokens, list) or not all(isinstance(t, str) for t in tokens):
         raise HTTPException(status_code=400, detail="tokens must be a list.")
-    return {"requests": lessons.by_tokens(_shop(shop), tokens)}
+    tenant_id = _shop(shop)
+    return {"requests": lessons.by_tokens(tenant_id, tokens), "progress": lessons.progress_by_tokens(tenant_id, tokens)}
+
+
+@public.post("/{shop}/rate")
+async def flow_rate(shop: str, body: dict, request: Request) -> dict:
+    """The customer rates the finished lesson their token opens: the school, and its coach. Once."""
+    _limit(request, "rate", 10)
+    from vula.commerce import lesson_ratings
+    b = body or {}
+    try:
+        return {"rating": lesson_ratings.rate(_shop(shop), b.get("token"), b.get("stars"), b.get("coach_stars"), b.get("comment"))}
+    except lesson_ratings.RatingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@public.get("/{shop}/next-good-day")
+async def flow_next_good_day(shop: str, request: Request, level: str = "") -> dict:
+    """The first good part of a day in the next five, at the school's spot, for its first sport."""
+    _limit(request, "nextday", 20)
+    from vula.commerce import lesson_progress
+    st = lessons.settings(_shop(shop))
+    kinds = st.get("lessons") or []
+    if not st.get("spot") or not kinds:
+        return {"next": None}
+    return {"next": await lesson_progress.next_good_day(st["spot"], kinds[0].get("sport") or "surf",
+                                                        level if level in lessons.LEVELS else ""),
+            "lesson_id": kinds[0]["id"]}
 
 
 @public.post("/{shop}/cancel")

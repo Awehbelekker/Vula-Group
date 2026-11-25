@@ -117,3 +117,27 @@ button, input, select { font: inherit; color: inherit; }
 
 /* the find page's bar: the same floating bar as a school's page */
 .fc-find { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
+
+/* the customer's own side: progress, badges, the next good day, rating a lesson */
+.fc-prog { display: flex; gap: 14px; align-items: center; }
+/* a ring of the look's gradient round the card's own surface, so the figure reads in every look */
+.fc-prog-n { flex: none; width: 92px; height: 92px; border-radius: 50%; border: 6px solid transparent; background: linear-gradient(var(--fc-card), var(--fc-card)) padding-box, var(--fc-grad) border-box; color: var(--fc-ink); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.fc-prog-n b { font-size: 30px; line-height: 1; }
+.fc-prog-n span { font-size: 11px; font-weight: 700; }
+.fc-prog-t { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fc-badges { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+.fc-badges li { display: flex; gap: 10px; align-items: center; opacity: 0.6; }
+.fc-badges li.on { opacity: 1; }
+.fc-badges li > span:last-child { display: flex; flex-direction: column; min-width: 0; font-size: 14px; }
+.fc-badge { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 14px; background: var(--fc-bg); color: var(--fc-muted); border: 2px dashed var(--fc-line); }
+.fc-badges li.on .fc-badge { border: 3px solid transparent; background: linear-gradient(var(--fc-card), var(--fc-card)) padding-box, var(--fc-grad) border-box; color: var(--fc-ink); }
+.fc-stars { display: inline-flex; gap: 2px; }
+.fc-stars i, .fc-stars button { font-style: normal; font-size: 18px; line-height: 1; color: var(--fc-line); }
+.fc-stars button { border: 0; background: none; cursor: pointer; font-size: 34px; min-width: 44px; min-height: 44px; padding: 0; }
+.fc-stars .on { color: #E8A100; }
+.fc-stars button:focus-visible { outline: 3px solid var(--fc-blue); outline-offset: 2px; border-radius: 8px; }
+.fc-rated { font-weight: 700; font-size: 13px; color: var(--fc-ink); white-space: nowrap; }
+.fc-rated span { font-weight: 400; color: var(--fc-muted); }
+.fc-rate { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 14px; background: var(--fc-bg); }
+.fc-rate-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-size: 14px; font-weight: 600; }
+.fc-area { min-height: 64px; padding: 10px 14px; resize: vertical; font-family: inherit; }

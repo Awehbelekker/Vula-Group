@@ -789,6 +789,26 @@ def for_customer(r: dict) -> dict:
     return _for_customer(r)
 
 
+def _with_rating(rows: List[dict]) -> List[dict]:
+    """The customer's view of their own rows, each saying whether it can still be rated: a lesson
+    the school marked done that has no rating yet."""
+    from vula.commerce import lesson_ratings
+    rated = lesson_ratings.rated_ids([str(r["id"]) for r in rows if r.get("status") == "completed"])
+    return [{**_for_customer(r), "rated": str(r["id"]) in rated,
+             "can_rate": r.get("kind") == "lesson" and r.get("status") == "completed" and str(r["id"]) not in rated}
+            for r in rows]
+
+
+def _sport_of(cache: Dict[str, dict]):
+    """The sport of a request's lesson, from its own school's settings (read once a school)."""
+    def find(r: dict) -> str:
+        tid = r["tenant_id"]
+        if tid not in cache:
+            cache[tid] = settings(tid)
+        return (lesson(cache[tid], r.get("item_id") or "") or {}).get("sport") or ""
+    return find
+
+
 def for_account(user_id: str) -> dict:
     """A signed-in customer's own requests, at every school, newest first — found by their login's
     id and nothing else. Each carries its signed token (they made it, so they may open and cancel
@@ -796,16 +816,18 @@ def for_account(user_id: str) -> dict:
     from vula.api import tenants
     rows = (_db().table("commerce_lesson_requests").select("*").eq("customer_user_id", user_id)
             .order("created_at", desc=True).limit(60).execute().data or [])
+    from vula.commerce import lesson_progress
     names: Dict[str, str] = {}
-    out = []
     for r in rows:
         tid = r["tenant_id"]
         if tid not in names:
             names[tid] = tenants.display_name(tid) if tenants.is_active(tid) else ""
-        if names[tid]:                               # a paused or removed school's requests aren't shown
-            out.append({**_for_customer(r), "shop": tid.replace("_", "-"), "school": names[tid]})
+    shown = [r for r in rows if names[r["tenant_id"]]]      # a paused or removed school's requests aren't shown
+    out = [{**c, "shop": r["tenant_id"].replace("_", "-"), "school": names[r["tenant_id"]]}
+           for r, c in zip(shown, _with_rating(shown))]
     last = rows[0] if rows else {}
-    return {"requests": out, "name": last.get("customer_name") or "", "phone": last.get("customer_phone") or ""}
+    return {"requests": out, "name": last.get("customer_name") or "", "phone": last.get("customer_phone") or "",
+            "progress": lesson_progress.progress(shown, _sport_of({}))}      # across every school
 
 
 def by_tokens(tenant_id: str, tokens: List[str]) -> List[dict]:
@@ -816,7 +838,17 @@ def by_tokens(tenant_id: str, tokens: List[str]) -> List[dict]:
     rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).in_("id", ids)
             .limit(20).execute().data or [])
     rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-    return [_for_customer(r) for r in rows]
+    return _with_rating(rows)
+
+
+def progress_by_tokens(tenant_id: str, tokens: List[str]) -> dict:
+    """The progress the requests these tokens open add up to, at this school (what a phone that
+    isn't signed in can show: the lessons asked for on it)."""
+    from vula.commerce import lesson_progress
+    ids = [i for i in dict.fromkeys(id_from_token(t) for t in tokens[:20]) if i]
+    rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).in_("id", ids)
+            .limit(20).execute().data or []) if ids else []
+    return lesson_progress.progress(rows, _sport_of({}))
 
 
 async def cancel_by_token(tenant_id: str, token: Any) -> Optional[dict]:

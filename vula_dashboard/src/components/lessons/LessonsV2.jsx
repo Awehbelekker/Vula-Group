@@ -128,6 +128,24 @@ function BeachReport({ tenantId }) {
   )
 }
 
+/** What customers said: the school's and each coach's stars, and the latest comments. The route
+ * answers owners and managers only; anyone else simply doesn't see the card. */
+function Ratings({ tenantId }) {
+  const [d, setD] = useState(null)
+  useEffect(() => { api(`/v1/commerce/${tenantId}/admin/lessons/ratings`).then(setD).catch(() => setD(null)) }, [tenantId])
+  if (!d || !d.count) return null
+  const said = d.latest.filter(x => x.comment)
+  return (
+    <Card className="vls-cond">
+      <div className="vls-condhead"><strong>What customers said</strong><span className="vtb-sub">★ {d.stars.toFixed(1)} from {d.count} {d.count === 1 ? 'rating' : 'ratings'}</span></div>
+      {d.coaches.length > 0 && <p className="vtb-sub">{d.coaches.map(c => `${c.name.split(' ')[0]} ★ ${c.stars.toFixed(1)} (${c.count})`).join(' · ')}</p>}
+      {said.slice(0, 5).map((x, i) => (
+        <p key={i} className="vtb-sub"><strong>{'★'.repeat(x.stars)}</strong> “{x.comment}” — {x.customer || 'A customer'}{x.lesson ? `, ${x.lesson}` : ''}{x.coach ? ` with ${x.coach.split(' ')[0]}` : ''}</p>))}
+      <p className="vtb-sub">Customers see the stars as averages. Their words come to you only.</p>
+    </Card>
+  )
+}
+
 function Conditions({ tenantId }) {
   const [day, setDay] = useState(0)
   const [d, setD] = useState(null)
@@ -479,6 +497,7 @@ export default function LessonsV2({ tenantId }) {
             <a className="vtb-a" href={appLink(tenantId)} target="_blank" rel="noreferrer">Open<ExternalLink size={14} aria-hidden="true" /></a></span>
         </Card>
         <Conditions tenantId={tenantId} />
+        <Ratings tenantId={tenantId} />
         <PillTabs label="Requests" tabs={[{ id: 'open', label: `Open${data.waiting ? ` · ${data.waiting} to confirm` : ''}` }, { id: 'past', label: 'Earlier' }, { id: 'coaches', label: 'Coaches' }]} active={tab} onChange={setTab} />
         {tab === 'coaches' ? <Coaches tenantId={tenantId} /> : rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (
           <Card className="vtb-list">

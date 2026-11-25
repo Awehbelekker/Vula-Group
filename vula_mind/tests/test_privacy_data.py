@@ -102,7 +102,8 @@ def test_erase_removes_every_conversation_store_for_this_number_only():
                               "property_enquiries": 2, "buyer_wish": 1, "listings_sent": 1,
                               # 13 Nov 2026: stores added to the erase (none hold rows in this test)
                               "messages_sent": 0, "contact_record": 0, "broadcasts_received": 0,
-                              "delivery_failures": 0, "flow_progress": 0, "pending_confirmations": 0}
+                              "delivery_failures": 0, "flow_progress": 0, "pending_confirmations": 0,
+                              "lesson_rating_words": 0}
     assert [r["client_key"] for r in db.rows["commerce_client_summaries"]] == ["27820000009"]
     # nothing of theirs is left in this business
     assert [r["phone"] for r in db.rows["vula_chat_messages"]] == [OTHER, ME]       # other person; other business
