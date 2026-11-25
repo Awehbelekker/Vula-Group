@@ -78,6 +78,8 @@ const EventsV2 = lazyScreen(() => import('./events/EventsV2'))   // Sell › Eve
 const TablesV2 = lazyScreen(() => import('./tables/TablesV2'))     // Sell › Tables: a restaurant's bookings
 const LessonsV2 = lazyScreen(() => import('./lessons/LessonsV2'))   // Sell › Lessons: lesson and gear-hire requests
 const SpecialsV2 = lazyScreen(() => import('./tables/SpecialsV2')) // Sell › Specials
+const GuidesV2 = lazyScreen(() => import('./guides/GuidesV2'))   // Sell › Product guides
+const SpecSheet = lazyScreen(() => import('./products/SpecSheet'))
 const ShiftsV2 = lazyScreen(() => import('./shifts/ShiftsV2'))       // Admin › Shifts: the team's roster
 
 const VulaClientOnboarding = lazyScreen(() => import('./VulaClientOnboarding'))
@@ -279,6 +281,7 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
       {active === 'suppliers' && (<SuppliersV2 tenantId={tenantId} onViewInvoices={onViewInvoices} />)}
       {active === 'import' && <VulaImport tenantId={tenantId} />}
       {active === 'reviews' && <ReviewsV2 tenantId={tenantId} />}
+      {active === 'guides' && <GuidesV2 tenantId={tenantId} />}
       {active === 'till' && <TillV2 tenantId={tenantId} />}
       {active === 'events' && <EventsV2 tenantId={tenantId} />}
       {active === 'tables' && <TablesV2 tenantId={tenantId} />}
@@ -1243,6 +1246,9 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         <div><span style={lbl}>Cost price (R, what you pay)</span>
           <input value={f.cost} onChange={e => set('cost', e.target.value)} inputMode="decimal" placeholder="e.g. 85.50" style={{ ...inp, width: '100%' }} /></div>
       </div>
+
+      <SectionLabel>Spec sheet <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional; shown in product guides</span></SectionLabel>
+      <Suspense fallback={null}><SpecSheet tenantId={tenantId} product={p} /></Suspense>
 
       {isFood && (<>
       <SectionLabel>Origin &amp; story <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, shown on the product page</span></SectionLabel>

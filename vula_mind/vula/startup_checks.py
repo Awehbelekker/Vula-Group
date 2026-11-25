@@ -233,6 +233,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("307", "kb_staff_targets", "cents"),                # a team member's own target (vula/tap/scoreboard.py)
     ("308", "commerce_lesson_ratings", "stars"),         # a customer rates a finished lesson (vula/commerce/lesson_ratings.py)
     ("309", "flow_customer_profiles", "sports"),          # a customer's own profile (vula/commerce/lesson_customers.py)
+    ("310", "commerce_product_guides", "show_prices"),    # product guides a business sends its clients (vula/commerce/product_guides.py)
 ]
 
 
