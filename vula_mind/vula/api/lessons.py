@@ -327,6 +327,7 @@ async def flow_shop(shop: str, request: Request) -> dict:
             "brand": {k: brand.get(k) for k in ("accent_color", "secondary_color", "ink_color", "logo_url", "tagline")},
             # the school's OWN colours, when it has chosen any: its page wears them once it is picked
             "own_look": brand.get("own_look"),
+            "theme": lesson_directory.theme_of(st),          # a ready-made look, when the school picked one
             "whatsapp": digits if 9 <= len(digits) <= 15 else None,
             "coaches": lesson_directory.public_coaches(tenant_id, st), **lessons.public_settings(st)}
 

@@ -18,6 +18,7 @@ const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0
 const rand = (cents) => cents === null || cents === undefined ? '' : String(cents / 100)
 const cents = (text) => String(text ?? '').trim() === '' ? null : randToCents(text)
 // the customer app (src/flow/): a page customers can add to their phone, at /flow/<business>
+const THEME_WORDS = { ocean: 'green to blue', sunset: 'warm orange and pink', sand: 'sand and deep teal', kelp: 'greens', night: 'dark' }
 const appLink = (tenantId) => `${window.location.origin}/flow/${String(tenantId).replace(/_/g, '-')}`
 /** "70" or "27,5" → hundredths of a percent (7000, 2750), read as written; null when empty, undefined when unreadable. */
 const percentToBp = (text) => {
@@ -363,7 +364,7 @@ const SPORT_NAMES = { surf: 'Surf', sup: 'SUP', kite: 'Kite', skate: 'Skate', ot
  * "find a school" list. Both are the school's choice; a coach's name is their first name from the
  * team list. */
 function DirectorySheet({ tenantId, conf, team, onClose, onSaved }) {
-  const [listing, setListing] = useState(() => ({ listed: !!conf.directory.listed, about: conf.directory.about || '', town: conf.directory.town || '' }))
+  const [listing, setListing] = useState(() => ({ listed: !!conf.directory.listed, about: conf.directory.about || '', town: conf.directory.town || '', theme: conf.directory.theme || '' }))
   const [profiles, setProfiles] = useState(() => team.map(m => {
     const p = (conf.settings.coach_profiles || []).find(x => x.member_id === m.id) || {}
     return { member_id: m.id, name: m.name, bio: p.bio || '', photo_url: p.photo_url || '', levels: p.levels || [], sports: p.sports || [], shown: !!p.shown }
@@ -401,6 +402,13 @@ function DirectorySheet({ tenantId, conf, team, onClose, onSaved }) {
           <Field label="Town"><Input value={listing.town} maxLength={conf.directory.town_max} placeholder="Table View" onChange={e => setListing({ ...listing, town: e.target.value })} /></Field>
           <Field label="One line about your school"><Input value={listing.about} maxLength={conf.directory.about_max} placeholder="Lessons for all ages, every day the waves allow" onChange={e => setListing({ ...listing, about: e.target.value })} /></Field>
         </div>
+        <h3 className="vtb-h">The look of your page</h3>
+        <Field label="Look" hint="How your page in the customer app is coloured. Every look is checked so its text can be read.">
+          <Select value={listing.theme} onChange={e => setListing({ ...listing, theme: e.target.value })}>
+            <option value="">FlowCrew's own, or your brand colour</option>
+            {(conf.directory.themes || []).map(t => <option key={t.id} value={t.id}>{t.name}{THEME_WORDS[t.id] ? ` — ${THEME_WORDS[t.id]}` : ''}</option>)}
+          </Select></Field>
+        {listing.theme && <p className="vtb-sub"><a className="vtb-a" href={`${appLink(tenantId)}?theme=${listing.theme}`} target="_blank" rel="noreferrer">See your page in this look<ExternalLink size={14} aria-hidden="true" /></a> before you save.</p>}
         <h3 className="vtb-h">Coach profiles</h3>
         {profiles.length === 0 && <p className="vtb-sub">Add your coaches in Team first. Each one can then have a profile here.</p>}
         {profiles.map((p, i) => (

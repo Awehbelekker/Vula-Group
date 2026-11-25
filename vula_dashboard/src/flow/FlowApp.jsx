@@ -361,6 +361,16 @@ export default function FlowApp() {
   const load = useCallback(() => { if (shop) { setError(""); call(shop).then(setInfo).catch((e) => setError(e.message)); } }, [shop]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (info?.name) document.title = `${info.name} · FlowCrew`; }, [info]);
+  // the school's ready-made look, on <html> so the page behind the cards follows; ?theme= lets the
+  // school try one on before saving it (only the names the app knows)
+  const theme = useMemo(() => {
+    const tried = new URLSearchParams(window.location.search).get("theme");
+    return ["ocean", "sunset", "sand", "kelp", "night"].includes(tried) ? tried : info?.theme || "";
+  }, [info]);
+  useEffect(() => {
+    if (theme && theme !== "ocean") document.documentElement.dataset.fcTheme = theme; else delete document.documentElement.dataset.fcTheme;
+    return () => { delete document.documentElement.dataset.fcTheme; };
+  }, [theme]);
   const go = (to, s) => { if (to === "book") { setStart(s || {}); setBookKey((k) => k + 1); } setFresh(null); setTab(to); window.scrollTo(0, 0); };
   const waiting = LS.get(`fc.tokens.${shop}`, []).length;
 
@@ -368,7 +378,7 @@ export default function FlowApp() {
   if (error && !info) return <main className="fc"><section className="fc-card"><p className="fc-err" role="alert">{error}</p><button type="button" className="fc-btn alt" onClick={load}>Try again</button></section></main>;
   if (!info) return <main className="fc"><p className="fc-sub">Loading…</p></main>;
   return (
-    <main className="fc" style={schoolLook(info.own_look)}>
+    <main className="fc" style={theme ? undefined : schoolLook(info.own_look)}>
       {viaFind && <a className="fc-back" href="/flow/find">‹ All schools</a>}
       <header className="fc-top">
         <img src={info.brand?.logo_url || "/partners/flowcrew-mark.png"} alt="" />

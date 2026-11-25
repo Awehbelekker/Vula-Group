@@ -42,6 +42,17 @@ def _line(raw: Any, limit: int) -> str:
     return re.sub(r"\s+", " ", str(raw or "")).strip()[:limit].strip()
 
 
+# The ready-made looks a school can give its page in the customer app (25 Nov 2026). Only the name
+# is kept; the colours are the app's (flow.css), each checked to read. "ocean" is FlowCrew's own.
+THEMES = {"ocean": "Ocean", "sunset": "Sunset", "sand": "Sand", "kelp": "Kelp", "night": "Night"}
+
+
+def theme_of(st: dict) -> str:
+    """The look a school chose, or "" for FlowCrew's own (or its own colours where it set any)."""
+    theme = (st.get("listing") or {}).get("theme")
+    return theme if theme in THEMES else ""
+
+
 # ── what a school saves ───────────────────────────────────────────────────────────────────────
 def clean_listing(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict) or not isinstance(raw.get("listed"), bool):
@@ -49,7 +60,13 @@ def clean_listing(raw: Any) -> Dict[str, Any]:
     about, town = _line(raw.get("about"), ABOUT_MAX), _line(raw.get("town"), TOWN_MAX)
     if _LINK_RE.search(about) or _LINK_RE.search(town):
         raise _err("Leave web addresses out — the listing already links to your page.")
-    return {"listed": raw["listed"], "about": about, "town": town}
+    out = {"listed": raw["listed"], "about": about, "town": town}
+    theme = raw.get("theme")                      # the look of the school's page in the customer app
+    if theme not in (None, ""):
+        if theme not in THEMES:
+            raise _err("Choose one of the looks: " + ", ".join(THEMES.values()) + ".")
+        out["theme"] = theme
+    return out
 
 
 def clean_profiles(tenant_id: str, raw: Any) -> List[dict]:
@@ -95,7 +112,8 @@ def status(tenant_id: str, st: dict) -> Dict[str, Any]:
     from vula.api import tenants
     listing = st.get("listing") if isinstance(st.get("listing"), dict) else {}
     out = {"listed": listing.get("listed") is True, "about": listing.get("about") or "", "town": listing.get("town") or "",
-           "about_max": ABOUT_MAX, "town_max": TOWN_MAX, "showing": False, "why_not": ""}
+           "about_max": ABOUT_MAX, "town_max": TOWN_MAX, "showing": False, "why_not": "",
+           "theme": theme_of(st), "themes": [{"id": k, "name": v} for k, v in THEMES.items()]}
     if not out["listed"]:
         out["why_not"] = "Your school isn't listed."
     elif not tenants.is_active(tenant_id):
