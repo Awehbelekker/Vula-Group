@@ -481,7 +481,7 @@ def list_requests(tenant_id: str, status: str = "", since: str = "") -> List[dic
         return q
     rows = all_rows(query, cap=5000)
     rows.sort(key=lambda r: (r.get("starts_at") or f"{r['wanted_date']}T99", r.get("created_at") or ""))
-    return [_out(r) for r in rows]
+    return with_payment(rows, [_out(r) for r in rows])
 
 
 def coaches(tenant_id: str) -> List[dict]:
@@ -514,7 +514,7 @@ async def _tell_customer(tenant_id: str, r: dict, text: str, news: str) -> bool:
 
 
 async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: Any = "", price_cents: Any = None,
-                  invoice: bool = False, by: str = "", allow_clash: bool = False) -> dict:
+                  invoice: bool = False, by: str = "", allow_clash: bool = False, pay_link: bool = False) -> dict:
     """A person at the business gives the request its time (and coach, and price where none was
     listed). One conditional write, read back; then the customer is told."""
     from vula.api import tenants
@@ -564,14 +564,21 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     back = _get(tenant_id, request_id)
     if not done or back["status"] != "confirmed" or back.get("starts_at") is None:
         raise LessonError("The confirmation didn't save. Nothing changed.", 500)
-    if invoice and not back.get("invoice_id"):
+    if pay_link:                                      # the customer gets a link to pay this invoice
+        back = await _invoice_to_pay(tenant_id, back, int(owed))
+    elif invoice and not back.get("invoice_id"):
         back = await _draft_invoice(tenant_id, back, int(owed))
-    r = _out(back)
+    r = with_payment([back], [_out(back)])[0]
     st = settings(tenant_id)
     lines = [f"✅ Confirmed: {r['summary']} on {r['when']}."]
     if r.get("coach_name") and r["kind"] == "lesson":
         lines.append(f"Your coach is {r['coach_name'].split(' ')[0]}.")
-    lines.append(f"Total {r['amount']}." + (f" {st['pay_note']}" if st.get("pay_note") else ""))
+    if r["paid"]:
+        lines.append(f"Total {r['amount']} — paid, thank you.")
+    elif pay_link and r["pay_url"]:
+        lines.append(f"Total {r['amount']}. Pay here: {r['pay_url']}")
+    else:
+        lines.append(f"Total {r['amount']}." + (f" {st['pay_note']}" if st.get("pay_note") else ""))
     spot = st.get("spot")
     if spot:                                          # where to meet, with a map link the phone opens
         lines.append(f"We meet at {spot['name']}: https://maps.google.com/?q={spot['lat']},{spot['lng']}")
@@ -587,9 +594,10 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     return r
 
 
-async def _draft_invoice(tenant_id: str, r: dict, owed: int) -> dict:
-    """A draft invoice of the request's lines. When the agreed price differs from the quote the
-    invoice is one line at the agreed price. A failure leaves the confirmation standing."""
+async def _draft_invoice(tenant_id: str, r: dict, owed: int, status: str = "draft") -> dict:
+    """An invoice of the request's lines: a draft for the record, or `sent` when the customer is
+    given a link to pay it. When the agreed price differs from the quote the invoice is one line
+    at the agreed price. A failure leaves the confirmation standing."""
     try:
         from vula.commerce import service
         lines = r.get("quote_lines") or []
@@ -597,13 +605,98 @@ async def _draft_invoice(tenant_id: str, r: dict, owed: int) -> dict:
             lines = [_line(summary(r), 1, owed)]
         inv = await service.create_invoice(tenant_id, {
             "customer_name": r["customer_name"], "customer_phone": r.get("customer_phone"), "line_items": lines,
-            "prices_include_vat": True, "notes": f"Request {r['ref']}", "status": "draft"})
+            "prices_include_vat": True, "notes": f"Request {r['ref']}", "status": status})
         _db().table("commerce_lesson_requests").update({"invoice_id": inv["id"]}).eq("tenant_id", tenant_id) \
             .eq("id", r["id"]).execute()
         return _get(tenant_id, r["id"])
     except Exception as exc:  # noqa: BLE001
         log.warning("draft invoice for request %s (%s) failed: %s", r.get("ref"), tenant_id, exc)
         return r
+
+
+# ── paying online ──────────────────────────────────────────────────────────────────────────────
+# The request's invoice is what is paid: the customer opens the business's own pay page for it
+# (vula/commerce/pay_page.py — the card button of the gateway the business connected, and its EFT
+# details), and the gateway's signed notification marks the invoice paid. Nothing here records a
+# payment; "paid" is read from the invoice.
+def _invoices(rows: List[dict]) -> Dict[str, dict]:
+    """The invoices behind these requests, by invoice id — each read for its own business."""
+    out: Dict[str, dict] = {}
+    by_tenant: Dict[str, List[str]] = {}
+    for r in rows:
+        if r.get("invoice_id"):
+            by_tenant.setdefault(r["tenant_id"], []).append(str(r["invoice_id"]))
+    for tid, ids in by_tenant.items():
+        try:
+            for n in range(0, len(ids), 100):
+                for inv in (_db().table("commerce_invoices").select("id,status,total_cents,total_paid_cents")
+                            .eq("tenant_id", tid).in_("id", ids[n:n + 100]).execute().data or []):
+                    out[str(inv["id"])] = inv
+        except Exception as exc:  # noqa: BLE001 — the list still shows; it just can't say "paid"
+            log.warning("invoices unreadable for %s: %s", tid, exc)
+    return out
+
+
+def payment_of(r: dict, inv: Optional[dict]) -> dict:
+    """{"paid", "pay_url"} for a request: paid once its invoice is; a link to pay while the
+    invoice was sent (not a draft, not cancelled) and the request still stands."""
+    if not inv:
+        return {"paid": False, "pay_url": None}
+    paid = inv.get("status") == "paid"
+    can_pay = (not paid and inv.get("status") not in ("draft", "cancelled") and r.get("status") == "confirmed")
+    url = None
+    if can_pay:
+        from vula.commerce import pay_page
+        url = pay_page.page_url(r["tenant_id"], str(inv["id"]))
+    return {"paid": paid, "pay_url": url}
+
+
+def with_payment(rows: List[dict], outs: List[dict]) -> List[dict]:
+    """`outs` (one per row, in order) with each request's `paid` and `pay_url` added."""
+    found = _invoices(rows)
+    return [{**o, **payment_of(r, found.get(str(r.get("invoice_id") or "")))} for r, o in zip(rows, outs)]
+
+
+async def _invoice_to_pay(tenant_id: str, r: dict, owed: int) -> dict:
+    """The request's invoice, ready to be paid at `owed`: a draft is sent, one at another amount
+    that nobody has paid towards is cancelled and made again, a paid one is left alone."""
+    from vula.commerce import service
+    if r.get("invoice_id"):
+        inv = await service.get_invoice(tenant_id, str(r["invoice_id"])) or {}
+        same = int(inv.get("total_cents") or 0) == owed and inv.get("status") not in ("cancelled", None)
+        if inv.get("status") == "paid" or (same and inv.get("status") != "draft"):
+            return r
+        if int(inv.get("total_paid_cents") or 0) > 0:
+            return r                                   # money already against it: a person sorts that out
+        try:
+            if same:
+                await service.update_invoice_status(tenant_id, inv["id"], "sent")
+                return r
+            if inv.get("status") != "cancelled":
+                await service.update_invoice_status(tenant_id, inv["id"], "cancelled")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("invoice %s of request %s not updated: %s", inv.get("id"), r.get("ref"), exc)
+            return r
+    return await _draft_invoice(tenant_id, r, owed, status="sent")
+
+
+async def invoice_paid(tenant_id: str, invoice_id: str) -> bool:
+    """A lesson's invoice was paid online (called once the gateway's notification has marked it):
+    the customer hears their payment arrived. Once per invoice."""
+    try:
+        rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id)
+                .eq("invoice_id", invoice_id).limit(1).execute().data or [])
+        if not rows or rows[0].get("status") != "confirmed" or not rows[0].get("customer_phone"):
+            return False
+        from vula.api import tenants
+        from vula.api.whatsapp import _send_reply
+        r = _out(rows[0])
+        text = (f"💳 Payment received for {r['summary']} on {r['when']} — thank you. See you there.\n\n"
+                f"Reference {r['ref']}.\n\n— {tenants.display_name(tenant_id)}")
+        return bool(await _send_reply(r["customer_phone"], text, tenant_id=tenant_id, idem_key=f"lesson_paid:{invoice_id}"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lesson payment thanks not sent (%s): %s", tenant_id, exc)
+        return False
 
 
 async def decline(tenant_id: str, request_id: str, reason: Any, by: str = "") -> dict:
@@ -832,9 +925,10 @@ def _with_rating(rows: List[dict]) -> List[dict]:
     the school marked done that has no rating yet."""
     from vula.commerce import lesson_ratings
     rated = lesson_ratings.rated_ids([str(r["id"]) for r in rows if r.get("status") == "completed"])
-    return [{**_for_customer(r), "rated": str(r["id"]) in rated,
+    outs = [{**_for_customer(r), "rated": str(r["id"]) in rated,
              "can_rate": r.get("kind") == "lesson" and r.get("status") == "completed" and str(r["id"]) not in rated}
             for r in rows]
+    return with_payment(rows, outs)                   # and whether it is paid, or where to pay it
 
 
 def _sport_of(cache: Dict[str, dict]):
