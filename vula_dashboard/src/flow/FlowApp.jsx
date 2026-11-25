@@ -111,6 +111,8 @@ function Conditions({ shop, spot }) {
 }
 
 function Home({ shop, info, go }) {
+  const both = info.lessons.length > 0 && info.hire.length > 0;
+  const [show, setShow] = useState(info.lessons.length ? "lesson" : "hire");      // what the list below shows
   return (<>
     <section className="fc-card fc-hero">
       <div className="fc-glass">
@@ -131,7 +133,21 @@ function Home({ shop, info, go }) {
           <span><b>{c.name}</b>{c.levels.length > 0 && <span className="fc-sub">Teaches: {c.levels.join(", ").toLowerCase()}</span>}{c.bio && <span className="fc-sub">{c.bio}</span>}</span>
         </div>))}
     </section>}
-    {info.lessons.map((l) => {
+    {both && <div className="fc-tabs" role="tablist" aria-label="What the school offers">
+      {[["lesson", "Lessons"], ["hire", "Gear hire"]].map(([k, label]) => (
+        <button key={k} type="button" role="tab" aria-selected={show === k} className={show === k ? "on" : ""} onClick={() => setShow(k)}>{label}</button>))}
+    </div>}
+    {show === "hire" && info.hire.map((g) => (
+      <section key={g.id} className="fc-card">
+        <h3>{g.name}</h3>
+        {g.about && <p className="fc-sub">{g.about}</p>}
+        <ul className="fc-lines">
+          {Object.entries(g.prices || {}).map(([k, cents]) => <li key={k}><span>{info.durations[k] || k}</span><b>{rand(cents)}</b></li>)}
+          {g.extra_day_cents != null && <li><span>Per day, from 4 days</span><b>{rand(g.extra_day_cents)}</b></li>}
+        </ul>
+        <button type="button" className="fc-btn alt" onClick={() => go("book", { kind: "hire", item_id: g.id })}>Hire this</button>
+      </section>))}
+    {show === "lesson" && info.lessons.map((l) => {
       const from = Math.min(...l.group.map((t) => t.single_cents), ...(l.private ? [l.private.single_cents] : []));
       return (
         <section key={l.id} className="fc-card">

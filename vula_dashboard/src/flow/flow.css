@@ -97,3 +97,8 @@ button, input, select { font: inherit; color: inherit; }
 .fc-brief p { margin: 0; }
 .fc-brief-h { font-weight: 600; font-size: 17px; line-height: 1.35; }
 .fc-brief-p { font-size: 14px; line-height: 1.45; }
+
+/* Lessons | Gear hire on the school's home */
+.fc-tabs { display: flex; gap: 6px; padding: 4px; border-radius: 999px; background: var(--fc-card, #fff); border: 1px solid var(--fc-line, rgba(0,0,0,.1)); }
+.fc-tabs button { flex: 1; min-height: 44px; border: 0; border-radius: 999px; background: none; font: inherit; font-weight: 700; color: var(--fc-muted); cursor: pointer; }
+.fc-tabs button.on { background: var(--fc-ink); color: #fff; }
