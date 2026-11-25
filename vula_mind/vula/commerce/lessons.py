@@ -546,7 +546,7 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
             raise LessonError("That person isn't on the team any more.")
         if guest:                                     # the school's own coach takes it after all
             from vula.commerce import coach_pool
-            coach_pool.release(tenant_id, request_id)
+            await coach_pool.release_and_tell(tenant_id, request_id)
         patch.update(coach_id=who["id"], coach_name=who["name"])
         if cur["kind"] == "lesson":                   # the coach's calendar: not two things at once, not too many people
             from vula.commerce import lesson_calendar
@@ -580,6 +580,9 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     lines.append(f"Reference {r['ref']}. To cancel, reply *cancel my lesson*.\n\n— {tenants.display_name(tenant_id)}")
     r["customer_told"] = await _tell_customer(
         tenant_id, r, "\n".join(lines), f"Your {r['item_name'].lower()} is confirmed for {r['when']}. Total {r['amount']}.")
+    if back.get("guest_coach_id") and cur["status"] == "requested":      # the guest coach hears it is on
+        from vula.commerce import coach_pool
+        r["coach_told"] = await coach_pool.tell_guest(tenant_id, back, "confirmed")
     r["warning"] = warning                            # the coach is away or outside their hours: said, never refused
     return r
 
@@ -620,7 +623,15 @@ async def decline(tenant_id: str, request_id: str, reason: Any, by: str = "") ->
         tenant_id, r, f"Sorry, we can't do {r['summary']} on {day_text(r['wanted_date'])}: {why}\n\n"
                       f"Reply *lesson* to ask for another day.\n\n— {tenants.display_name(tenant_id)}",
         f"Sorry, we can't do your request for {day_text(r['wanted_date'])}: {why}")
+    await _guest_cancelled(tenant_id, back)
     return r
+
+
+async def _guest_cancelled(tenant_id: str, r: dict) -> None:
+    """A lesson that had a coach from another school was called off: that coach is told."""
+    if r.get("guest_coach_id"):
+        from vula.commerce import coach_pool
+        await coach_pool.tell_guest(tenant_id, r, "cancelled")
 
 
 def set_status(tenant_id: str, request_id: str, status: str) -> dict:
@@ -673,6 +684,7 @@ async def cancel_own(tenant_id: str, phone: str, request_id: str) -> Optional[di
                               idem_key=f"lesson_cancelled:{mine['id']}")
         except Exception as exc:  # noqa: BLE001
             log.warning("cancellation not sent to the team (%s): %s", tenant_id, exc)
+    await _guest_cancelled(tenant_id, mine)
     return out
 
 
@@ -896,6 +908,7 @@ async def cancel_by_token(tenant_id: str, token: Any) -> Optional[dict]:
                               idem_key=f"lesson_cancelled:{rid}")
         except Exception as exc:  # noqa: BLE001
             log.warning("cancellation not sent to the team (%s): %s", tenant_id, exc)
+    await _guest_cancelled(tenant_id, cur)
     return _for_customer(_get(tenant_id, rid))
 
 

@@ -51,11 +51,27 @@ def world(monkeypatch):
         return True
     monkeypatch.setattr("vula.integrations.notify.notify_team", note)
     monkeypatch.setattr(lessons, "_tell_customer", quiet)
+    wa = SimpleNamespace(texts=[], templates=[], window=True, keys=set())
+
+    async def send_text(phone, message, tenant_id="", idem_key=None):
+        if not wa.window:
+            return False                                # outside WhatsApp's 24 hours
+        if idem_key not in wa.keys:
+            wa.keys.add(idem_key)
+            wa.texts.append((tenant_id, phone, message))
+        return True
+
+    async def send_tpl(tenant_id, phone, name, params, lang=None):
+        wa.templates.append((tenant_id, phone, name, params))
+        return True
+    monkeypatch.setattr("vula.api.whatsapp._send_reply", send_text)
+    monkeypatch.setattr("vula.api.whatsapp.send_template", send_tpl)
+    monkeypatch.setattr(pool, "_dashboard", lambda tid: "https://app.flowcrew.co.za")
     near = {"name": "Dolphin Beach", "lat": SPOT["lat"] + 0.05, "lng": SPOT["lng"]}
     lessons.save_settings(TID, {"enabled": True, "lessons": [SURF, KITE], "hire": HIRE, "spot": SPOT, "coach_share_bp": 7000})
     lessons.save_settings(HOME, {"enabled": True, "lessons": [SURF], "spot": near, "coach_share_bp": 5000})
     lessons.save_settings(FAR, {"enabled": True, "lessons": [SURF], "spot": {"name": "North Beach", "lat": -29.85, "lng": 31.04}})
-    return SimpleNamespace(db=db, avail=avail, told=told)
+    return SimpleNamespace(db=db, avail=avail, told=told, wa=wa)
 
 
 def _next(weekday, hour=9):
@@ -219,3 +235,55 @@ def test_asking_at_a_new_time_withdraws_the_old_ask(world):
     later = run(pool.ask(TID, r["id"], (at + timedelta(hours=3)).isoformat(), [f"{HOME}:k2"]))
     assert [(o["name"], o["status"]) for o in later["offers"]] == [("Ben", "offered")]
     assert pool.mine(HOME, "k1")["asked"] == [] and len(pool.mine(HOME, "k2")["asked"]) == 1
+
+
+def test_the_coach_hears_on_whatsapp_from_their_own_schools_number_and_never_the_customer(world):
+    at = _next(1)
+    r = _ask(at, 3)
+    pool.set_open(HOME, "k1", True), pool.set_open(HOME, "k2", True)
+    out = run(pool.ask(TID, r["id"], at.isoformat(), [f"{HOME}:k1", f"{HOME}:k2"]))
+    assert (out["asked"], out["told"]) == (2, 2)
+    tenant, phone, text = world.wa.texts[0]
+    assert (tenant, phone) == (HOME, "27820000011")                               # the coach's own school's line
+    assert text.startswith(f"{tenants.display_name(TID)}: Can you teach a surf lesson on ") and f"at {SPOT['name']}, 3 people (first timer)?" in text
+    assert f"You'd earn {lessons.rand(lessons.share_of(r['amount_cents'], 7000))}." in text and "https://app.flowcrew.co.za" in text
+    assert "Thandi" not in str(world.wa.texts) and "0821234567" not in str(world.wa.texts)
+    again = run(pool.ask(TID, r["id"], at.isoformat(), [f"{HOME}:k1"]))           # already asked: nobody is told twice
+    assert (again["asked"], again["told"]) == (0, 0) and len(world.wa.texts) == 2
+    run(pool.answer(HOME, "k1", pool.mine(HOME, "k1")["asked"][0]["id"], True))
+    done = run(lessons.confirm(TID, r["id"], starts_at=at.isoformat()))
+    assert done["coach_told"] is True and "Your surf lesson on" in world.wa.texts[-1][2] and "is confirmed" in world.wa.texts[-1][2]
+    assert run(lessons.cancel_own(TID, "27821234567", r["id"])) is not None       # the customer cancels
+    assert world.wa.texts[-1][1] == "27820000011" and "has been cancelled. It is off your calendar." in world.wa.texts[-1][2]
+
+
+def test_outside_the_24_hours_the_approved_template_carries_it_and_a_release_is_told(world):
+    at = _next(2)
+    r = _ask(at)
+    pool.set_open(HOME, "k1", True)
+    world.wa.window = False
+    out = run(pool.ask(TID, r["id"], at.isoformat(), [f"{HOME}:k1"]))
+    assert out["told"] == 1 and world.wa.texts == []
+    tenant, phone, name, params = world.wa.templates[0]
+    assert (tenant, phone, name) == (HOME, "27820000011", pool.COACH_TEMPLATE)
+    assert params[:2] == ["Ayanda", tenants.display_name(TID)] and params[2].startswith("Can you teach a surf lesson on ")
+    assert len(params[2]) <= 190 and "\n" not in params[2]
+    run(pool.answer(HOME, "k1", pool.mine(HOME, "k1")["asked"][0]["id"], True))
+    back = run(pool.release_and_tell(TID, r["id"]))
+    assert back["coach_told"] is True and "dropped" not in back
+    assert "You are no longer needed for the surf lesson" in world.wa.templates[-1][3][2]
+    TEAMS[HOME][0]["whatsapp"] = ""                                               # no number on record: said, not sent
+    try:
+        run(pool.ask(TID, r["id"], at.isoformat(), [f"{HOME}:k1"]))
+        assert world.db.rows["flow_coach_offers"][-1]["status"] == "offered"
+        assert pool.for_request(TID, r["id"])[-1]["status"] == "offered" and len(world.wa.templates) == 2
+    finally:
+        TEAMS[HOME][0]["whatsapp"] = "27820000011"
+
+
+def test_the_template_is_in_the_standard_set_for_a_business_with_lessons():
+    from vula.commerce import wa_templates
+    names = [t["name"] for t in wa_templates.standard_templates(TID, {"lessons"}, "watersports")]
+    assert pool.COACH_TEMPLATE in names
+    assert pool.COACH_TEMPLATE not in [t["name"] for t in wa_templates.standard_templates(TID, {"orders"}, "retail")]
+    assert pool.COACH_TEMPLATE_BODY.count("{{") == 3 == len(pool.COACH_TEMPLATE_EXAMPLE)
