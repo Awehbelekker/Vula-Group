@@ -278,6 +278,81 @@ async def remove_my_availability(tenant_id: str, row_id: str, request: Request) 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+# ── a coach from another school (vula/commerce/coach_pool.py) ──────────────────────────────────
+@router.get("/{tenant_id}/admin/lessons/pool/mine")
+async def pool_mine(tenant_id: str, request: Request, month: Optional[str] = None) -> dict:
+    """The signed-in coach: whether other schools may ask them, what they were asked and took."""
+    from vula.commerce import coach_pool
+    me = await _me(request, tenant_id)
+    try:
+        return coach_pool.mine(tenant_id, me["id"], month or _this_month())
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.put("/{tenant_id}/admin/lessons/pool/mine")
+async def pool_choice(tenant_id: str, body: dict, request: Request) -> dict:
+    """The coach's own choice — their school has no say in it."""
+    from vula.commerce import coach_pool
+    me = await _me(request, tenant_id)
+    try:
+        coach_pool.set_open(tenant_id, me["id"], (body or {}).get("open"))
+        return coach_pool.mine(tenant_id, me["id"], _this_month())
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.post("/{tenant_id}/admin/lessons/pool/offers/{offer_id}/answer")
+async def pool_answer(tenant_id: str, offer_id: str, body: dict, request: Request) -> dict:
+    from vula.commerce import coach_pool
+    me = await _me(request, tenant_id)
+    try:
+        return await coach_pool.answer(tenant_id, me["id"], offer_id, (body or {}).get("accept") is True)
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+async def _pool_manager(request: Request, tenant_id: str) -> None:
+    from vula.api.commerce import _may_apply_stock
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can ask a coach from another school.")
+
+
+@router.get("/{tenant_id}/admin/lessons/{request_id}/pool")
+async def pool_candidates(tenant_id: str, request_id: str, request: Request, starts_at: Optional[str] = None) -> dict:
+    """Who was asked for this lesson; with a time, the coaches of other schools who are free then."""
+    from vula.commerce import coach_pool
+    await _pool_manager(request, tenant_id)
+    try:
+        out = {"offers": coach_pool.for_request(tenant_id, request_id), "available": coach_pool.partner_id(tenant_id) is not None}
+        if starts_at:
+            out.update(coach_pool.candidates(tenant_id, request_id, starts_at))
+        return out
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.post("/{tenant_id}/admin/lessons/{request_id}/pool")
+async def pool_ask(tenant_id: str, request_id: str, body: dict, request: Request) -> dict:
+    from vula.commerce import coach_pool
+    await _pool_manager(request, tenant_id)
+    b = body or {}
+    try:
+        return await coach_pool.ask(tenant_id, request_id, b.get("starts_at"), b.get("coaches"), by=await _who(request, tenant_id))
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.delete("/{tenant_id}/admin/lessons/{request_id}/pool")
+async def pool_release(tenant_id: str, request_id: str, request: Request) -> dict:
+    from vula.commerce import coach_pool
+    await _pool_manager(request, tenant_id)
+    try:
+        return coach_pool.release(tenant_id, request_id)
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
 @router.get("/{tenant_id}/admin/lessons/{request_id}/customer")
 async def lesson_customer(tenant_id: str, request_id: str) -> dict:
     """The profile of the customer behind this booking, as far as a coach needs it for the lesson."""

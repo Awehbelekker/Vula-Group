@@ -5,7 +5,7 @@
  * server's; a price typed here is read as written (lib/money.randToCents), never worked out.
  */
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { Camera, Check, Copy, ExternalLink, Plus, Settings, Trash2, Waves, X } from 'lucide-react'
+import { Camera, Check, Copy, ExternalLink, Plus, Settings, Trash2, Users, Waves, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import { formatMoney, randToCents } from '../../lib/money'
 import { Button, Card, EmptyState, ErrorCard, Field, Input, PageHeader, PillTabs, Select, Sheet, Skeleton, StatusChip, Textarea, confirmDialog, promptDialog, toast } from '../ui/index.jsx'
@@ -71,16 +71,17 @@ function Coaches({ tenantId }) {
       {all.coaches.length === 0 ? <p className="vtb-sub">No lessons in this month yet.</p> : (
         <ul>
           {all.coaches.map(c => (
-            <li key={c.coach_id || 'none'} className="vtb-b">
-              <span className="vtb-main"><strong>{c.name}</strong><span className="vtb-sub">{c.done} done · {c.people} people · {c.to_come} to come</span></span>
+            <li key={c.coach_id || `${c.guest ? 'g' : 'none'}${c.name}`} className="vtb-b">
+              <span className="vtb-main"><strong>{c.name}{c.guest ? ' (guest coach)' : ''}</strong><span className="vtb-sub">{c.done} done · {c.people} people · {c.to_come} to come</span></span>
               <span className="vls-amount vula-money">{formatMoney(c.value_cents)}</span>
-              {c.share_cents !== null && c.coach_id && <StatusChip tone="ok">Share {formatMoney(c.share_cents)}</StatusChip>}
+              {c.share_cents !== null && (c.coach_id || c.guest) && <StatusChip tone="ok">Share {formatMoney(c.share_cents)}</StatusChip>}
+              {c.guest && <StatusChip tone="muted">FlowCrew fee {formatMoney(c.fee_cents)}</StatusChip>}
             </li>))}
           <li className="vtb-b"><span className="vtb-main"><strong>Total</strong><span className="vtb-sub">{all.total.done} lessons done</span></span>
             <span className="vls-amount vula-money">{formatMoney(all.total.value_cents)}</span>
             {all.total.share_cents !== null && <StatusChip tone="ok">Shares {formatMoney(all.total.share_cents)}</StatusChip>}</li>
         </ul>)}
-      <p className="vtb-sub">{all.coach_share_bp === null ? 'Set the coach’s share in Lessons and prices to see what each coach has earned.' : `A coach’s share is ${bpToPercent(all.coach_share_bp)}% of each lesson marked done. This is a report: nothing is paid out from here.`}</p>
+      <p className="vtb-sub">{all.coach_share_bp === null ? 'Set the coach’s share in Lessons and prices to see what each coach has earned.' : `A coach’s share is ${bpToPercent(all.coach_share_bp)}% of each lesson marked done. This is a report: nothing is paid out from here.`}{all.pool_fee_cents > 0 ? ` FlowCrew’s fee on lessons taught by guest coaches this month: ${formatMoney(all.pool_fee_cents)}.` : ''}</p>
     </Card>
   )
 }
@@ -157,6 +158,7 @@ function Calendar({ tenantId, onMine }) {
           <Button size="sm" variant="quiet" onClick={() => setWeek('')}>This week</Button>
           <Button size="sm" variant="quiet" onClick={() => setWeek(addDays(d.week, 7))}>Later</Button>
           {!d.everyone && <><Button size="sm" variant="secondary" onClick={() => onMine('hours')}>My hours</Button><Button size="sm" variant="secondary" onClick={() => onMine('profile')}>My profile</Button></>}
+          <Button size="sm" variant="secondary" onClick={() => onMine('pool')}>Other schools</Button>
         </span></div>
       {d.coaches.length === 0 && <p className="vtb-sub">Add your coaches in Team first.</p>}
       {d.coaches.map(c => (
@@ -174,6 +176,8 @@ function Calendar({ tenantId, onMine }) {
               </div>))}
           </div>
         </div>))}
+      {(d.guests || []).length > 0 && <p className="vtb-sub"><strong>Guest coaches:</strong> {d.guests.map(s => `${DAYS[d.days.indexOf(s.date)]} ${s.time} ${s.item_name} with ${s.guest.split(' ')[0]} (${s.people})`).join(' · ')}</p>}
+      {(d.elsewhere || []).length > 0 && <p className="vtb-sub"><strong>At other schools:</strong> {d.elsewhere.map(o => `${o.when} ${o.lesson} at ${o.school}`).join(' · ')}</p>}
       {d.no_coach.length > 0 && <p className="vtb-sub"><strong>No coach yet:</strong> {d.no_coach.map(s => `${DAYS[d.days.indexOf(s.date)]} ${s.time} ${s.item_name} (${s.people})`).join(' · ')}</p>}
       <p className="vtb-sub">Bookings for the same lesson at the same time are one group. {d.everyone ? 'Coaches set their own hours and days away from their login.' : 'This is your own week.'}</p>
     </Card>
@@ -393,6 +397,90 @@ function Conditions({ tenantId }) {
   )
 }
 
+const OFFER = { offered: ['warn', 'Asked'], accepted: ['ok', 'Accepted'], declined: ['danger', 'Declined'], taken: ['muted', 'Went to another coach'] }
+
+/** Coaches of other schools who said they may be asked and are free at this time. The school
+ * ticks who to ask; the first to accept gets the lesson. */
+function PoolPanel({ base, startsAt, onAsked }) {
+  const [d, setD] = useState(null)
+  const [picked, setPicked] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let live = true
+    setD(null); setPicked([]); setError('')
+    api(`${base}?starts_at=${encodeURIComponent(startsAt)}`).then(x => live && setD(x)).catch(e => live && setError(e.message))
+    return () => { live = false }
+  }, [base, startsAt])
+  const ask = async () => {
+    setBusy(true); setError('')
+    try { await api(base, { method: 'POST', body: { starts_at: startsAt, coaches: picked } }); toast('Asked. You will be told when one accepts.'); onAsked() } catch (e) { setError(e.message); setBusy(false) }
+  }
+  if (error) return <p className="vtb-error" role="alert">{error}</p>
+  if (!d) return <Skeleton lines={2} />
+  const free = d.coaches.filter(c => !c.asked)
+  return (
+    <div className="vls-pool">
+      {d.offers.length > 0 && <p className="vtb-sub">Already asked: {d.offers.map(o => `${o.name} (${(OFFER[o.status] || ['', o.status])[1].toLowerCase()})`).join(', ')}.</p>}
+      {free.length === 0 ? <p className="vtb-sub">No coach from another school is free on {d.when}. Try another time.</p> : (<>
+        <p className="vtb-sub">Free on {d.when}. Tick who to ask; the first to accept gets the lesson.</p>
+        {free.map(c => (
+          <label key={c.key} className="vls-coach vls-poolrow">
+            <input type="checkbox" checked={picked.includes(c.key)} onChange={() => setPicked(picked.includes(c.key) ? picked.filter(k => k !== c.key) : [...picked, c.key])} />
+            {c.photo_url ? <img src={c.photo_url} alt="" /> : <span className="vls-face" aria-hidden="true">{c.name.slice(0, 1)}</span>}
+            <span className="vtb-main"><strong>{c.name}</strong>
+              <span className="vtb-sub">{c.school}{c.km !== null ? ` · ${c.km} km away` : ''}{c.rating ? ` · ${c.rating.stars} stars (${c.rating.count})` : ''}{c.levels.length ? ` · teaches ${c.levels.join(', ').toLowerCase()}` : ''}</span>
+              {c.bio && <span className="vtb-sub">{c.bio}</span>}</span>
+          </label>))}
+        <p className="vtb-sub">The coach earns your coach’s share, {bpToPercent(d.share_bp)}%{d.coach_cents !== null ? ` (${formatMoney(d.coach_cents)})` : ''}. FlowCrew’s fee is {bpToPercent(d.fee_bp)}% of the lesson’s price{d.fee_cents !== null ? ` (${formatMoney(d.fee_cents)})` : ''}. They see the lesson, time, place and level, never the customer’s name or number.</p>
+        <div><Button type="button" size="sm" disabled={busy || picked.length === 0} onClick={ask}>{busy ? 'Asking…' : `Ask ${picked.length || ''} ${picked.length === 1 ? 'coach' : 'coaches'}`}</Button></div>
+      </>)}
+    </div>
+  )
+}
+
+/** The coach's own side of working for other schools: their choice, what they are asked, what
+ * they have taken, and what it earned this month. Their school has no switch for it. */
+function PoolMine({ tenantId, onClose }) {
+  const base = `/v1/commerce/${tenantId}/admin/lessons/pool`
+  const [d, setD] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { api(`${base}/mine`).then(setD).catch(e => setError(e.message)) }, [base])
+  const send = async (path, opts) => {
+    setBusy(true); setError('')
+    try { await api(base + path, opts); setD(await api(`${base}/mine`)) } catch (e) { setError(e.message) }
+    setBusy(false)
+  }
+  const line = (o) => (<span className="vtb-main"><strong>{o.when} · {o.lesson}</strong>
+    <span className="vtb-sub">{o.school}{o.spot ? <> · <a href={o.spot.map} target="_blank" rel="noreferrer">{o.spot.name}</a></> : ''} · {o.people} {o.people === 1 ? 'person' : 'people'}{o.level ? ` · ${o.level}` : ''} · {o.minutes} min</span>
+    <span className="vtb-sub">You earn {bpToPercent(o.share_bp)}% of the lesson’s price{o.pay_cents !== null ? `: ${formatMoney(o.pay_cents)}` : ''}.</span></span>)
+  return (
+    <Sheet open title="Work for other schools" onClose={onClose}>
+      <div className="vtb-form">
+        {!d && !error && <Skeleton lines={3} />}
+        {d && !d.available && <p className="vtb-sub">This isn’t available for this business.</p>}
+        {d && d.available && (<>
+          <label className="vtb-check"><input type="checkbox" checked={d.open} disabled={busy} onChange={e => send('/mine', { method: 'PUT', body: { open: e.target.checked } })} /><span>Other FlowCrew schools may ask me to teach when they have no coach free</span></label>
+          <p className="vtb-sub">This is your own choice. Schools only see you when your calendar here is free and you are inside the hours you gave.</p>
+          <h3 className="vtb-h">Asked of you</h3>
+          {d.asked.length === 0 && <p className="vtb-sub">Nothing right now.</p>}
+          <ul>{d.asked.map(o => (<li key={o.id} className="vtb-b">{line(o)}
+            <span className="vtb-actions"><Button size="sm" disabled={busy} onClick={() => send(`/offers/${o.id}/answer`, { method: 'POST', body: { accept: true } })}>Accept</Button>
+              <Button size="sm" variant="quiet" disabled={busy} onClick={() => send(`/offers/${o.id}/answer`, { method: 'POST', body: { accept: false } })}>Decline</Button></span></li>))}</ul>
+          <h3 className="vtb-h">Lessons you have taken</h3>
+          {d.taken.length === 0 && <p className="vtb-sub">None to come.</p>}
+          <ul>{d.taken.map(o => (<li key={o.id} className="vtb-b">{line(o)}
+            <StatusChip tone={o.confirmed ? 'ok' : 'warn'}>{o.confirmed ? 'Confirmed' : 'School still to confirm'}</StatusChip>
+            <Button size="sm" variant="quiet" disabled={busy} onClick={() => send(`/offers/${o.id}/answer`, { method: 'POST', body: { accept: false } })}>I can’t make it</Button></li>))}</ul>
+          {d.month && <p className="vtb-sub">This month at other schools: {d.month.done} {d.month.done === 1 ? 'lesson' : 'lessons'} done, {formatMoney(d.month.share_cents)} earned. The school that booked you pays you; nothing is paid out from here.</p>}
+        </>)}
+        {error && <p className="vtb-error" role="alert">{error}</p>}
+      </div>
+    </Sheet>
+  )
+}
+
 function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
   const start = r.starts_at ? new Date(r.starts_at) : null
   const [f, setF] = useState({ date: start ? iso(start) : r.wanted_date, time: start ? start.toTimeString().slice(0, 5) : PART_TIME[r.wanted_part] || '09:00',
@@ -410,6 +498,22 @@ function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
     return () => { live = false }
   }, [tenantId, r.id, r.kind, f.coach_id, f.date, f.time])
   const blocked = hit && (hit.clash || hit.full)
+  const [pool, setPool] = useState(false)         // asking a coach from another school
+  const [guest, setGuest] = useState(null)        // the offer a guest coach accepted
+  const poolBase = `/v1/commerce/${tenantId}/admin/lessons/${r.id}/pool`
+  useEffect(() => {
+    if (!r.guest_coach) return
+    api(poolBase).then(d => {
+      const o = (d.offers || []).find(x => x.status === 'accepted')
+      if (!o) return
+      const at = new Date(o.starts_at)
+      setGuest(o); setF(cur => ({ ...cur, coach_id: '', date: iso(at), time: at.toTimeString().slice(0, 5) }))
+    }).catch(() => {})
+  }, [poolBase, r.guest_coach])
+  const release = async () => {
+    setBusy(true); setError('')
+    try { await api(poolBase, { method: 'DELETE' }); toast('Released. The lesson needs a coach again.'); onDone() } catch (err) { setError(err.message); setBusy(false) }
+  }
   const save = async (e) => {
     e.preventDefault(); setError('')
     const price = cents(f.price)
@@ -435,6 +539,10 @@ function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
         </div>
         <Field label={r.kind === 'hire' ? 'Handled by (optional)' : 'Coach'}><Select value={f.coach_id} onChange={e => setF({ ...f, coach_id: e.target.value })}>
           <option value="">Not decided yet</option>{coaches.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
+        {r.guest_coach && <p className="vtb-sub"><strong>Guest coach:</strong> {guest ? `${guest.name} from ${guest.school} accepted for ${guest.when}.` : `${(r.coach_name || 'A coach').split(' ')[0]} accepted.`} Keep that time, or <button type="button" className="vls-link" onClick={release} disabled={busy}>release them</button>.</p>}
+        {r.kind === 'lesson' && r.status === 'requested' && !r.guest_coach && !f.coach_id && (
+          <div><Button type="button" size="sm" variant="secondary" Icon={Users} onClick={() => setPool(!pool)}>{pool ? 'Hide coaches from other schools' : 'No coach free? Ask one from another school'}</Button></div>)}
+        {pool && !f.coach_id && <PoolPanel base={poolBase} startsAt={`${f.date}T${f.time}:00+02:00`} onAsked={onDone} />}
         {hit && !blocked && !hit.outside && <p className="vtb-sub">Their calendar is free then.</p>}
         {hit?.outside && <p className="vtb-sub"><strong>Note:</strong> {hit.outside} You can still confirm.</p>}
         {blocked && <><p className="vtb-error" role="alert">{hit.clash || hit.full}</p>
@@ -797,6 +905,7 @@ export default function LessonsV2({ tenantId }) {
         )}
       </>)}
       {open?.mine === 'hours' && <MyHours tenantId={tenantId} onClose={() => setOpen(null)} />}
+      {open?.mine === 'pool' && <PoolMine tenantId={tenantId} onClose={() => setOpen(null)} />}
       {open?.mine === 'profile' && <MyProfile tenantId={tenantId} onClose={() => setOpen(null)} />}
       {open?.customer && <CustomerSheet tenantId={tenantId} r={open.customer} levels={conf.levels} onClose={() => setOpen(null)} />}
       {open === 'directory' && <DirectorySheet tenantId={tenantId} conf={conf} team={data.coaches || []} onClose={() => setOpen(null)} onSaved={(d) => { setConf(d); setOpen(null) }} />}

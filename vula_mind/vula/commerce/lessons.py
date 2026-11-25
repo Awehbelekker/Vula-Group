@@ -385,6 +385,7 @@ def _out(r: dict) -> dict:
     return {**r, "summary": summary(r), "wanted": f"{day_text(r['wanted_date'])}, {PARTS.get(r.get('wanted_part') or 'any', 'Any time').lower()}",
             "when": when_text(r["starts_at"]) if r.get("starts_at") else None,
             "level_text": LEVELS.get(r.get("level") or ""), "amount_cents": owed,
+            "guest_coach": bool(r.get("guest_coach_id")),              # a coach from another school (coach_pool)
             "has_account": bool(r.get("customer_user_id")),          # a signed-in customer: their profile can be read
             "amount": rand(owed) if owed is not None else None}
 
@@ -532,10 +533,20 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     patch: Dict[str, Any] = {"status": "confirmed", "starts_at": start.astimezone(timezone.utc).isoformat(),
                              "confirmed_by": by or None, "confirmed_at": _now().isoformat(),
                              "updated_at": _now().isoformat(), "reminded_at": None, "conditions_at": None}
+    guest = cur.get("guest_coach_id")                 # a coach from another school accepted this lesson
+    if guest and not coach_id:
+        from vula.commerce import coach_pool
+        off = coach_pool.accepted(tenant_id, request_id)
+        if off and coach_pool._start_of(off["starts_at"]) != start:
+            raise LessonError(f"{(cur.get('coach_name') or 'The guest coach').split(' ')[0]} accepted for "
+                              f"{when_text(off['starts_at'])}. Keep that time, or release them first.", 409)
     if coach_id:
         who = next((c for c in coaches(tenant_id) if c["id"] == str(coach_id)), None)
         if not who:
             raise LessonError("That person isn't on the team any more.")
+        if guest:                                     # the school's own coach takes it after all
+            from vula.commerce import coach_pool
+            coach_pool.release(tenant_id, request_id)
         patch.update(coach_id=who["id"], coach_name=who["name"])
         if cur["kind"] == "lesson":                   # the coach's calendar: not two things at once, not too many people
             from vula.commerce import lesson_calendar
@@ -932,10 +943,14 @@ def coach_month(tenant_id: str, month: str, only_coach: str = "") -> dict:
              .in_("status", ["confirmed", "completed"]).gte("starts_at", lo).lt("starts_at", hi))
         return q.eq("coach_id", only_coach) if only_coach else q
     by: Dict[str, dict] = {}
+    fees = 0
     for r in all_rows(query, cap=5000):
-        key = r.get("coach_id") or ""
-        c = by.setdefault(key, {"coach_id": key or None, "name": r.get("coach_name") or "No coach set", "done": 0, "to_come": 0,
-                                "people": 0, "value_cents": 0, "share_cents": 0 if bp is not None else None})
+        gid = r.get("guest_coach_id") if not r.get("coach_id") else None      # a coach from another school
+        key = r.get("coach_id") or (f"guest:{r.get('guest_coach_tenant')}:{gid}" if gid else "")
+        c = by.setdefault(key, {"coach_id": (key or None) if not gid else None, "guest": bool(gid),
+                                "name": (r.get("coach_name") or "No coach set") if (key or not gid) else "Guest coach",
+                                "done": 0, "to_come": 0, "people": 0, "value_cents": 0,
+                                "share_cents": 0 if bp is not None else None, "fee_cents": 0 if gid else None})
         if r["status"] != "completed":
             c["to_come"] += 1
             continue
@@ -945,8 +960,12 @@ def coach_month(tenant_id: str, month: str, only_coach: str = "") -> dict:
         c["value_cents"] += int(owed or 0)
         if bp is not None and key:                       # each lesson's share to the cent, then added up
             c["share_cents"] += share_of(owed or 0, bp)
-    rows = sorted(by.values(), key=lambda c: (c["coach_id"] is None, c["name"].lower()))
-    return {"month": month, "coach_share_bp": bp, "coaches": rows,
+        if gid:                                          # the partner's fee on a lesson a guest coach taught
+            fee = share_of(owed or 0, r.get("pool_fee_bp")) or 0
+            c["fee_cents"] += fee
+            fees += fee
+    rows = sorted(by.values(), key=lambda c: (2 if c["guest"] else 3 if c["coach_id"] is None else 1, c["name"].lower()))
+    return {"month": month, "coach_share_bp": bp, "coaches": rows, "pool_fee_cents": fees,
             "total": {"done": sum(c["done"] for c in rows), "value_cents": sum(c["value_cents"] for c in rows),
                       "share_cents": sum(c["share_cents"] or 0 for c in rows) if bp is not None else None}}
 

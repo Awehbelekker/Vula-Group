@@ -356,7 +356,10 @@ PARTNERS: dict[str, dict] = {
                  # customers' app lives there, under the partner's name and look
                  "domain": "flowcrew.co.za",
                  # what a business that signs up on that address is (signup.py)
-                 "business_type": "watersports"},
+                 "business_type": "watersports",
+                 # its fee on a lesson taught by a coach from another of its schools, in hundredths
+                 # of a percent of the lesson's price (vula/commerce/coach_pool.py)
+                 "pool_fee_bp": 1000},
 }
 
 
