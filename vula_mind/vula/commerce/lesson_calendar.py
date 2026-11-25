@@ -60,12 +60,13 @@ def sessions(st: dict, rows: List[dict]) -> List[dict]:
         start = _start(r)
         if not start:
             continue
-        key = (r.get("coach_id") or "", r.get("item_id") or "", start.isoformat())
+        gid = r.get("guest_coach_id") if not r.get("coach_id") else None      # a coach from another school
+        key = (r.get("coach_id") or (f"guest:{gid}" if gid else ""), r.get("item_id") or "", start.isoformat())
         s = out.get(key)
         if not s:
             end = start + timedelta(minutes=_minutes(st, r))
             local, until = start.astimezone(L.SAST), end.astimezone(L.SAST)
-            s = out[key] = {"coach_id": r.get("coach_id") or None, "item_id": r.get("item_id"), "item_name": r.get("item_name"),
+            s = out[key] = {"coach_id": r.get("coach_id") or None, "guest": (r.get("coach_name") or "Guest coach") if gid else None, "item_id": r.get("item_id"), "item_name": r.get("item_name"),
                             "start": start, "end": end, "date": local.date().isoformat(),
                             "time": f"{local.strftime('%H:%M')}–{until.strftime('%H:%M')}", "people": 0, "max": _cap(st, r),
                             "bookings": []}
@@ -117,8 +118,14 @@ def week(tenant_id: str, day: Any = None, only_coach: str = "") -> dict:
                     "lessons": sum(1 for s in found if s["coach_id"] == c["id"]),
                     "people": sum(s["people"] for s in found if s["coach_id"] == c["id"])})
     known = {c["id"] for c in team}
-    loose = [] if only_coach else [_public(s) for s in found if s["coach_id"] not in known]
-    return {"week": monday.isoformat(), "days": days, "coaches": out, "no_coach": loose}
+    loose = [] if only_coach else [_public(s) for s in found if s["coach_id"] not in known and not s["guest"]]
+    guests = [] if only_coach else [_public(s) for s in found if s["guest"]]          # coaches from other schools
+    away_from_home = []
+    if only_coach:                                    # the coach's own week: their lessons at other schools too
+        from vula.commerce import coach_pool
+        away_from_home = coach_pool.elsewhere(tenant_id, only_coach, lo, lo + timedelta(days=7))
+    return {"week": monday.isoformat(), "days": days, "coaches": out, "no_coach": loose, "guests": guests,
+            "elsewhere": away_from_home}
 
 
 def check(tenant_id: str, coach_id: str, starts_at: datetime, item_id: str, people: int, request_id: str = "") -> dict:
