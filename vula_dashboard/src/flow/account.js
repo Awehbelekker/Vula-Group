@@ -71,3 +71,15 @@ export async function myAccount(token) {
   if (!r.ok) throw new Error(r.status === 401 ? "Your sign-in has ended. Sign in again." : "Your bookings couldn't be loaded. Try again.");
   return r.json();
 }
+
+/** The signed-in customer's own profile: read, save (only the fields sent change), delete. */
+async function profileCall(token, method, body) {
+  const r = await fetch(`${API}/v1/flow/profile`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  let d = {};
+  try { d = await r.json(); } catch { /* empty */ }
+  if (!r.ok) throw new Error(r.status === 401 ? "Your sign-in has ended. Sign in again." : typeof d.detail === "string" ? d.detail : "That didn't go through. Try again.");
+  return d;
+}
+export const getProfile = (token) => profileCall(token, "GET");
+export const saveProfile = (token, body) => profileCall(token, "PUT", body);
+export const deleteProfile = (token) => profileCall(token, "DELETE");

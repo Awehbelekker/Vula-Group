@@ -13,7 +13,7 @@ import { Rated } from "./Progress.jsx";
 
 const STATE = { requested: "Waiting for the school", confirmed: "Confirmed", declined: "Declined", cancelled: "Cancelled", completed: "Done", no_show: "Missed" };
 
-const SPORT = { surf: "Surf", sup: "SUP", kite: "Kite", skate: "Skate", other: "Other" };
+const SPORT = { surf: "Surf", sup: "SUP", kite: "Kite", windsurf: "Windsurf", wing: "Wing foil", foil: "Foil", bodyboard: "Bodyboard", kayak: "Kayak", skate: "Skate", other: "Other" };
 const RATING = { good: "Good now", marginal: "Marginal now", poor: "Poor now" };
 
 function SchoolMap({ schools }) {
