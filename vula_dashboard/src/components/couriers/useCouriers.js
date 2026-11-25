@@ -31,6 +31,14 @@ export const PROVINCES = [['', 'Province'], ['EC', 'Eastern Cape'], ['FS', 'Free
 export const findAddress = async (tenantId, query) =>
   (await call(`${base(tenantId)}/couriers/address-search`, { method: 'POST', body: { query } })).results || []
 
+/** Addresses for what has been typed so far (the dropdown). Never throws: no suggestions is an empty list. */
+export const suggestAddress = async (tenantId, query) => {
+  try { return (await call(`${base(tenantId)}/couriers/address-suggest`, { method: 'POST', body: { query } })).results || [] } catch { return [] }
+}
+/** The address at a pin dropped on the map. */
+export const addressAt = async (tenantId, lat, lng) =>
+  (await call(`${base(tenantId)}/couriers/address-at`, { method: 'POST', body: { lat, lng } })).address
+
 export function useCourierSetup(tenantId) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')

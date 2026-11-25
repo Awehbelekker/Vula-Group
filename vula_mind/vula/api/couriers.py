@@ -137,6 +137,32 @@ async def courier_address_search(tenant_id: str, body: dict) -> dict:
                                                     "Type the address in below, or try again.") from exc
 
 
+@router.post("/{tenant_id}/admin/couriers/address-suggest")
+async def courier_address_suggest(tenant_id: str, body: dict) -> dict:
+    """Addresses for what has been typed so far (the dropdown under the address box). Never an
+    error: with nothing to offer it answers an empty list and the form works by hand."""
+    from vula.commerce import address_search
+    return {"results": await address_search.suggest(str((body or {}).get("query") or ""))}
+
+
+@router.post("/{tenant_id}/admin/couriers/address-at")
+async def courier_address_at(tenant_id: str, body: dict) -> dict:
+    """The address at a pin dropped on the map, split into the form's fields."""
+    from vula.commerce import address_search
+    try:
+        lat, lng = float((body or {}).get("lat")), float((body or {}).get("lng"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Drop the pin on the map first.") from exc
+    try:
+        found = await address_search.at(lat, lng)
+    except address_search.LookupDown as exc:
+        raise HTTPException(status_code=502, detail="The map couldn't name that spot right now. "
+                                                    "Type the address in, or try again.") from exc
+    if not found:
+        raise HTTPException(status_code=404, detail="There's no South African address at that spot. Move the pin onto a street.")
+    return {"address": found}
+
+
 @router.get("/{tenant_id}/admin/couriers/pickup-points")
 async def courier_pickup_points(tenant_id: str, near: str = "", provider: Optional[str] = None,
                                 lat: Optional[float] = None, lng: Optional[float] = None) -> dict:
