@@ -550,6 +550,12 @@ function routes(role, modules = [], features = []) {
       ];
     })(),
     r("GET", `${A}/books-audit/statements`, () => ({ checks: F.booksStatementChecks })),
+    // 25 Nov 2026: every waiting statement checked again; confirm=false is the preview
+    r("POST", `${A}/books-audit/statements/apply-all`, (m, url, req) => {
+      const confirm = !!(req.postDataJSON() || {}).confirm;
+      return { ...F.booksApplyAll, preview: !confirm,
+        statements: F.booksApplyAll.statements.map((st) => (st.status === "would_apply" && confirm ? { ...st, status: "applied" } : st)) };
+    }),
     r("GET", `${A}/books-audit/statements/${T}`, () => F.booksStatementCheck),
     r("POST", `${A}/books-audit/statements/${T}/apply`, (m, url, req) => ({ ok: true, done: (req.postDataJSON() || {}).accept, skipped: [], not_saved: [] })),
     r("POST", `${A}/books-audit/statements`, () => ({ check_id: "chk-1", summary: { already_right: 40 } })),

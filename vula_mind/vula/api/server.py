@@ -1643,6 +1643,13 @@ async def _books_health_loop() -> None:
     await run_forever()
 
 
+async def _books_review_nudge_loop() -> None:
+    """Hourly: from Monday 08:00 SAST, each owner of a business with the switch on gets one note a week
+    of what's left in the books review, until the check is agreed. See vula/books_review_nudge.py."""
+    from vula.books_review_nudge import run_forever
+    await run_forever()
+
+
 async def _management_pack_loop() -> None:
     """Hourly: from 08:00 SAST on the 5th, last month's management accounts to the owners of every
     business with the switch on, once each. See vula/management_send.py."""
@@ -1843,6 +1850,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_statement_backfill_loop()))
     # Last month's management accounts to the owners, around the 5th (2026-11-23).
     _scheduled_job_tasks.append(_asyncio.create_task(_management_pack_loop()))
+    # What's left in the books review, to the owners each Monday until it's agreed (2026-11-25).
+    _scheduled_job_tasks.append(_asyncio.create_task(_books_review_nudge_loop()))
     # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
     _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
     # Right answers from each business's own records, after every deploy (2026-11-16).

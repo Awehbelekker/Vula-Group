@@ -29,7 +29,7 @@ _LOOP_NAMES = (
     "_weekly_rates_loop", "_retention_loop", "_call_sheet_loop", "_expense_sheet_loop",
     "_daily_trial_expiry_loop", "_commerce_jobs_scheduler_loop",
     "_stale_escalation_scheduler_loop", "_stale_handoff_scheduler_loop",
-    "_voice_retry_scheduler_loop", "_inbound_redrive_loop", "_mass_mind_health_watch_loop", "_local_llm_watch_loop", "_ai_health_loop", "_books_health_loop", "_statement_backfill_loop", "_management_pack_loop", "_price_vat_backfill_on_boot", "_answer_checks_loop", "_local_models_loop", "_qdrant_migrate_loop", "_kb_customer_view_weekly_loop",
+    "_voice_retry_scheduler_loop", "_inbound_redrive_loop", "_mass_mind_health_watch_loop", "_local_llm_watch_loop", "_ai_health_loop", "_books_health_loop", "_statement_backfill_loop", "_management_pack_loop", "_books_review_nudge_loop", "_price_vat_backfill_on_boot", "_answer_checks_loop", "_local_models_loop", "_qdrant_migrate_loop", "_kb_customer_view_weekly_loop",
     "_mass_mind_pattern_rollup_loop", "_voice_recheck_scheduler_loop",
 )
 

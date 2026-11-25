@@ -248,6 +248,12 @@ def refile_groups(lines: List[Dict[str, Any]], known: set, decided: set) -> List
     out = sorted(groups.values(), key=lambda g: (-g["cents"], g["payee"]))
     for g in out:
         g["label"] = g["lines"][0]["description"] if g["lines"] else g["payee"]
+        # 25 Nov 2026: every line of the payee already on one account → the owner can keep it there in one
+        # tap (filed as their choice, which teaches the payee). Not Vula's suggestion: that account is the
+        # one in doubt, so `suggested` stays empty — the person says it's right.
+        accts = [c for c in g["accounts"] if c]
+        g["keep"] = g["suggested"] is None and len(g["accounts"]) == 1 and len(accts) == 1
+        g["current"] = accts[0] if g["keep"] else None
         g["accounts"] = [{"code": c, "lines": n} for c, n in sorted(g["accounts"].items(), key=lambda x: -x[1])]
     return out
 
