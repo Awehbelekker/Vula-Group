@@ -18,6 +18,7 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
   const go = (mode) => { x.setMode(mode); x.setError(''); x.setInfo('') }
   const b = x.loginBrand
   const sc = b?.partner_login && 'school'
+  const [school, setSchool] = useState(false)      // a partner's address asks first: lessons, or a school?
 
   return (
     <main className="vlg">
@@ -79,7 +80,16 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
           </>
         )}
 
-        {x.mode === 'setup_workspace' && (
+        {x.mode === 'setup_workspace' && sc && !school && (
+          <>
+            <h1 className="vlg-h1">Welcome to {b.name}</h1>
+            <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What brings you here?</p>
+            <Button size="lg" className="vlg-wide" onClick={x.toLessons}>I want to book lessons</Button>
+            <Button size="lg" variant="secondary" Icon={Building2} className="vlg-wide" onClick={() => setSchool(true)}>I run a school</Button>
+          </>
+        )}
+
+        {x.mode === 'setup_workspace' && (!sc || school) && (
           <>
             <h1 className="vlg-h1">Set up your {sc || 'workspace'}</h1>
             <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What's your {sc || 'business'} called?</p>
