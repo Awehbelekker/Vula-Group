@@ -183,10 +183,14 @@ async def create_user(tenant: str, body: CreateUserIn,
             if not ex and body.email:
                 ex = base().eq("email", body.email).limit(1).execute().data or []
             row = {"tenant_id": tenant, "name": body.name or body.email, "email": body.email,
-                   "role": body.role, "access": body.access or [], "active": True}
+                   "role": body.role, "active": True}
+            from vula.api.tenant_auth import normalize_access
+            row["access"] = normalize_access(body.role, body.access)
             if whatsapp:
                 row["whatsapp"] = whatsapp
             if ex:
+                if not body.access:
+                    row.pop("access")   # a login for someone already on the team keeps their tabs
                 db.table("vula_team_members").update(row).eq("id", ex[0]["id"]).execute()
             else:
                 db.table("vula_team_members").insert(row).execute()

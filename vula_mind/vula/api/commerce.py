@@ -14,6 +14,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,14 @@ from vula.commerce.models import (
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["commerce"])
+
+
+def _refused(message: str, status: int = 400):
+    """A failure the dashboard can see (23 Nov 2026 audit: these routes answered 200 {"error"} and
+    screens that checked the status showed "Saved"). Both keys, so older screens that read
+    `error` still find it."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=status, content={"error": message, "detail": message})
 
 
 # ── Products ─────────────────────────────────────────────────────────────────
@@ -121,35 +130,114 @@ class ReviewIn(BaseModel):
 
 @router.post("/{tenant_id}/reviews")
 async def create_review(tenant_id: str, body: ReviewIn):
+    """A rating from the order's own customer, once per order (23 Nov 2026: this public route
+    took a rating from anyone for any business, with or without an order — fake stars on the
+    storefront. Ratings now need the order and its customer's phone)."""
     if not 1 <= body.rating <= 5:
         raise HTTPException(status_code=400, detail="rating must be 1–5")
-    row = {k: v for k, v in body.model_dump().items() if v is not None}
-    row["tenant_id"] = tenant_id
-    service._client().table("commerce_reviews").insert(row).execute()
+    phone = _norm_phone(body.customer_phone)[-9:]
+    if not body.order_id or not phone:
+        raise HTTPException(status_code=400, detail="A rating needs the order and the customer's phone.")
+    db = service._client()
+    try:
+        o = (db.table("commerce_orders").select("id,customer_phone,customer_name,review_rating")
+             .eq("id", body.order_id).eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    except Exception:
+        o = []
+    if not o or _norm_phone(o[0].get("customer_phone"))[-9:] != phone:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if o[0].get("review_rating") is not None:
+        raise HTTPException(status_code=409, detail="This order has already been rated.")
+    row = {"tenant_id": tenant_id, "order_id": body.order_id, "rating": body.rating,
+           "customer_phone": o[0].get("customer_phone"),
+           "customer_name": o[0].get("customer_name") or body.customer_name,
+           "source": (body.source or "whatsapp")[:20]}
+    if body.comment:
+        row["comment"] = body.comment.strip()[:1000]
+    if body.product_id:
+        row["product_id"] = body.product_id
+    db.table("commerce_reviews").insert(row).execute()
+    db.table("commerce_orders").update({"review_rating": body.rating}).eq("id", body.order_id) \
+        .eq("tenant_id", tenant_id).is_("review_rating", "null").execute()
     service._rating_cache.pop(tenant_id, None)  # bust cache so stars update
-    if body.order_id:
-        # Public endpoint: only the order's own customer may rate it, and only once — anyone
-        # knowing an order id could otherwise overwrite its rating.
-        try:
-            o = (service._client().table("commerce_orders").select("customer_phone,review_rating")
-                 .eq("id", body.order_id).eq("tenant_id", tenant_id).limit(1).execute().data or [])
-            same = o and _norm_phone(body.customer_phone)[-9:] and \
-                _norm_phone(o[0].get("customer_phone"))[-9:] == _norm_phone(body.customer_phone)[-9:]
-            if same and o[0].get("review_rating") is None:
-                service._client().table("commerce_orders").update(
-                    {"review_rating": body.rating}).eq("id", body.order_id).eq("tenant_id", tenant_id) \
-                    .is_("review_rating", "null").execute()
-        except Exception:
-            pass
     return {"ok": True}
 
 
 @router.get("/{tenant_id}/admin/reviews")
 async def admin_list_reviews(tenant_id: str, limit: int = Query(100, ge=1, le=500)):
-    rows = (service._client().table("commerce_reviews").select("*")
-            .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(limit).execute().data or [])
-    avg = round(sum(r["rating"] for r in rows) / len(rows), 2) if rows else None
-    return {"reviews": rows, "count": len(rows), "average": avg}
+    """Sell › Reviews: every rating counted, the latest listed, and the Google review link."""
+    from vula.commerce import reviews
+    return await asyncio.to_thread(reviews.summary, tenant_id, limit)
+
+
+class ReviewSettingsIn(BaseModel):
+    google_review_url: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/reviews/settings")
+async def admin_review_settings(tenant_id: str, body: ReviewSettingsIn, request: Request):
+    """The Google review link sent to happy customers — owner and managers only (server
+    _SECTION_RULES): it goes out on the business's WhatsApp number."""
+    from vula.commerce import reviews
+    from vula.api.merchant_audit import audit
+    try:
+        url = await asyncio.to_thread(reviews.set_google_link, tenant_id, body.google_review_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    audit(tenant_id, {"email": _actor(request)}, "google_review_link_set", url=url)
+    return {"ok": True, "google_review_url": url}
+
+
+# ── The WhatsApp catalogue (Meta Commerce Manager), from the business's own screen ──────────
+# 23 Nov 2026: only Master could push it (vula/api/master.py master_meta_catalog). The business
+# can now send its products again after editing them; connecting a catalogue stays with Vula
+# (it needs set-up on Meta's side), so the catalogue's ID is never set here.
+
+_CATALOG_LAST: dict = {}       # tenant -> when it was last sent (a send is up to thousands of items)
+_CATALOG_GAP_S = 120
+
+
+@router.get("/{tenant_id}/admin/meta-catalog")
+async def admin_meta_catalog_status(tenant_id: str):
+    from vula.commerce import meta_catalog
+    try:
+        connected = bool((meta_catalog._config(tenant_id).get("meta_catalog_id") or "").strip())
+    except Exception:
+        connected = False
+    return {"connected": connected}
+
+
+@router.post("/{tenant_id}/admin/meta-catalog/sync")
+async def admin_meta_catalog_sync(tenant_id: str, request: Request):
+    """Send every active product to the business's WhatsApp catalogue — owner and managers only."""
+    import time as _time
+    from vula.commerce import meta_catalog
+    from vula.api.merchant_audit import audit
+    now = _time.monotonic()
+    if now - _CATALOG_LAST.get(tenant_id, -1e9) < _CATALOG_GAP_S:
+        raise HTTPException(status_code=429, detail="Your products were just sent. Try again in a couple of minutes.")
+    _CATALOG_LAST[tenant_id] = now
+    res = await meta_catalog.sync(tenant_id)
+    status = res.get("status")
+    audit(tenant_id, {"email": _actor(request)}, "meta_catalog_synced", status=status,
+          synced=res.get("synced"))
+    if status == "success":
+        return {"ok": True, "synced": res.get("synced", 0),
+                "message": f"{res.get('synced', 0)} products sent to your WhatsApp catalogue. "
+                           "WhatsApp can take a few minutes to show them."}
+    if status != "no_products":
+        _CATALOG_LAST.pop(tenant_id, None)
+    log.warning("meta catalogue sync for %s: %s %s", tenant_id, status, res.get("error") or "")
+    messages = {
+        "no_catalog_id": "Your WhatsApp catalogue isn't connected yet. Ask Vula support to connect it.",
+        "no_credentials": "Your WhatsApp number isn't connected to Vula yet.",
+        "no_products": "There are no active products to send.",
+    }
+    return {"ok": False, "status": status,
+            "message": messages.get(status, "WhatsApp didn't accept the update. Ask Vula support to check "
+                                            "the catalogue connection.")}
 
 
 # ── CMS pages (Puck self-serve page builder, P3) ─────────────────────────────
@@ -157,7 +245,7 @@ async def admin_list_reviews(tenant_id: str, limit: int = Query(100, ge=1, le=50
 
 class PageIn(BaseModel):
     title: Optional[str] = None
-    puck_data: dict = {}
+    puck_data: Optional[dict] = None   # left out = keep the page's content (a rename sends none)
     seo: Optional[dict] = None
     status: str = "draft"          # draft | published
 
@@ -282,6 +370,14 @@ async def upsert_page(tenant_id: str, slug: str, body: PageIn):
         existing = (db.table("vula_pages").select("*")
                     .eq("tenant_id", tenant_id).eq("slug", slug).limit(1).execute().data or [])
         if existing:
+            # 23 Nov 2026 audit: renaming a page sent only its title and status, and the update
+            # replaced the content and SEO with {} — the page was wiped. What isn't sent is kept.
+            if body.puck_data is None:
+                row["puck_data"] = existing[0].get("puck_data") or {}
+            if body.seo is None:
+                row["seo"] = existing[0].get("seo") or {}
+            if body.title is None:
+                row["title"] = existing[0].get("title")
             if (body.status or "draft") == "published":
                 try:
                     prev = existing[0]
@@ -562,6 +658,15 @@ async def public_validate_discount_code(tenant_id: str, body: ValidateDiscountRe
 
 @router.post("/{tenant_id}/checkout")
 async def create_checkout(tenant_id: str, body: CheckoutRequest):
+    return await checkout_for(tenant_id, body)
+
+
+async def checkout_for(tenant_id: str, body: CheckoutRequest, *, extra: Optional[dict] = None,
+                       return_to=None):
+    """The checkout itself, for the storefront's route above and for server-made baskets (event
+    tickets, vula/commerce/events.py). `extra` adds to what the order is created with.
+    `return_to(order) -> (success_url, cancel_url)` says where the customer lands after paying or
+    giving up — made by the server from the order, never taken from a request."""
     from vula.api import tenants as _tenants
     if not _tenants.is_active(tenant_id):
         raise HTTPException(status_code=403, detail="This store isn't accepting orders right now.")
@@ -577,7 +682,8 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     # if the gateway is down the customer keeps their cart and can simply try again.
     try:
         order = await service.create_order(
-            tenant_id, cart, {**body.model_dump(), "payment_method": "online"}, clear_cart_after=False)
+            tenant_id, cart, {**body.model_dump(), "payment_method": "online", **(extra or {})},
+            clear_cart_after=False)
     except service.OutOfStockError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -591,15 +697,76 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
             log.warning("could not release abandoned checkout order %s: %s", order.get("id"), exc)
         raise HTTPException(status_code=detail_status, detail=detail)
 
-    # Resolve Yoco credentials — per-tenant from Supabase, env var fallback
-    from vula.api.yoco import _get_tenant_yoco_creds
-    yoco_creds = await _get_tenant_yoco_creds(tenant_id)
-    if not yoco_creds or not yoco_creds.get("secret_key"):
-        await _abandon(503, f"Payment gateway not configured for {tenant_id}. Connect Yoco in Vula Admin.")
-    yoco_secret = yoco_creds["secret_key"]
-
+    # Where the customer lands after paying: the shop's own site when it has one, else Vula's
+    # own result pages. (It used to fall back to Off the Hook's website for every business.)
+    from config import settings as _settings
     from vula.api import tenants as _tenants
-    store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
+    store_url = (_tenants.store_url(tenant_id) or "").rstrip("/")
+    api_url = (_settings.public_base_url or "").rstrip("/")
+    success_url = (f"{store_url}/payment/success?order={order['id']}" if store_url
+                   else f"{api_url}/payment/success?order={order['display_id']}")
+    cancel_url = (f"{store_url}/payment/cancel?order={order['id']}" if store_url
+                  else f"{api_url}/payment/cancel?order={order['display_id']}")
+    failure_url = f"{store_url}/payment/failed?order={order['id']}" if store_url else cancel_url
+    if return_to is not None:
+        success_url, cancel_url = return_to(order)
+        failure_url = cancel_url
+
+    async def _spent(redirect_url: str, provider: str, **status_kw):
+        """The gateway's checkout exists: the order waits for payment, the cart is spent, the
+        invoice goes out in the background, and the customer is sent to pay."""
+        await service.update_order_status(order["id"], "pending_payment", **status_kw)
+        try:
+            await service.clear_cart(cart["id"])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cart %s not cleared after checkout %s: %s", cart.get("id"), order.get("id"), exc)
+        # Fire-and-forget — the customer is waiting to be redirected to pay, so PDF render +
+        # WhatsApp media upload (a couple of seconds) must not sit in this response's critical path.
+        import asyncio
+        from vula.commerce.service import send_order_invoice
+        # with_pay_link=False: the checkout just made is this order's payment link.
+        asyncio.create_task(send_order_invoice(tenant_id, order["id"], with_pay_link=False))
+        return {
+            "order_id": order["id"],
+            "display_id": order["display_id"],
+            "redirect_url": redirect_url,
+            "provider": provider,
+            "total_cents": order["total_cents"],
+            "total_rands": f"R{order['total_cents'] / 100:.2f}",
+        }
+
+    # Which gateway (23 Nov 2026): the business's default one. This route used to know only
+    # Yoco, so a shop on PayFast, Ozow, Peach, iKhokha or Paystack had no web checkout at all.
+    # A Yoco account keeps its own checkout below (its webhook reads the order from the
+    # metadata); any other default goes through vula.payments, whose signed notification marks
+    # the order paid by its number — only when the amount covers the total (api/payments.py).
+    from vula import payments as _payments
+    from vula.api.yoco import _get_tenant_yoco_creds
+    default_row = _payments.default_provider_row(tenant_id)
+    yoco_creds = await _get_tenant_yoco_creds(tenant_id)
+    has_yoco = bool(yoco_creds and yoco_creds.get("secret_key"))
+    if default_row and (default_row.get("provider") != "yoco" or not has_yoco):
+        provider = default_row["provider"]
+        try:
+            link = await _payments.create_pay_link(
+                tenant_id, amount_cents=order["total_cents"], reference=order["display_id"],
+                description=f"Order {order['display_id']}",
+                success_url=success_url, cancel_url=cancel_url,
+                notify_url=f"{api_url}/v1/payments/webhook/{tenant_id}/{provider}",
+                customer={"name": body.customer_name, "phone": body.customer_phone,
+                          **({"email": body.customer_email} if body.customer_email else {})})
+        except Exception as exc:  # noqa: BLE001
+            log.error("%s checkout request failed for %s: %s", provider, tenant_id, type(exc).__name__)
+            await _abandon(502, "Payment gateway error — please try again")
+        if not link or not link.url:
+            log.error("%s gave no checkout address for %s", provider, tenant_id)
+            await _abandon(502, "Payment gateway error — please try again")
+        return await _spent(link.url, provider)
+
+    if not has_yoco:
+        await _abandon(503, "This shop can't take card payments online yet. "
+                            "Connect a payment gateway under Settings › Payments.")
+    yoco_secret = yoco_creds["secret_key"]
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -609,9 +776,9 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
                 json={
                     "amount": order["total_cents"],
                     "currency": "ZAR",
-                    "successUrl": f"{store_url}/payment/success?order={order['id']}",
-                    "cancelUrl": f"{store_url}/payment/cancel?order={order['id']}",
-                    "failureUrl": f"{store_url}/payment/failed?order={order['id']}",
+                    "successUrl": success_url,
+                    "cancelUrl": cancel_url,
+                    "failureUrl": failure_url,
                     "metadata": {
                         "order_id": order["id"],
                         "display_id": order["display_id"],
@@ -630,29 +797,7 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
         await _abandon(502, "Payment gateway error — please try again")
 
     yoco_data = resp.json()
-    await service.update_order_status(order["id"], "pending_payment", yoco_checkout_id=yoco_data["id"])
-    # Only now is the cart spent (see create_order's clear_cart_after).
-    try:
-        await service.clear_cart(cart["id"])
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cart %s not cleared after checkout %s: %s", cart.get("id"), order.get("id"), exc)
-
-    # Fire-and-forget — the customer is waiting to be redirected to pay, so PDF render +
-    # WhatsApp media upload (a couple of seconds) must not sit in this response's critical
-    # path. Same asyncio.create_task convention already used elsewhere in this file for
-    # background side-effects (statement ingestion jobs).
-    import asyncio
-    from vula.commerce.service import send_order_invoice
-    # with_pay_link=False: the storefront's Yoco checkout above is this order's payment link.
-    asyncio.create_task(send_order_invoice(tenant_id, order["id"], with_pay_link=False))
-
-    return {
-        "order_id": order["id"],
-        "display_id": order["display_id"],
-        "redirect_url": yoco_data["redirectUrl"],
-        "total_cents": order["total_cents"],
-        "total_rands": f"R{order['total_cents'] / 100:.2f}",
-    }
+    return await _spent(yoco_data["redirectUrl"], "yoco", yoco_checkout_id=yoco_data["id"])
 
 
 # ── Orders ───────────────────────────────────────────────────────────────────
@@ -914,6 +1059,30 @@ async def admin_list_products(tenant_id: str):
     return {"products": products, "count": len(products)}
 
 
+def _check_codes(tenant_id: str, data: dict, *, product_id: Optional[str] = None,
+                 variant_id: Optional[str] = None) -> None:
+    """SKU, barcode, cost price and a variant's photo, checked before they're written (24 Nov 2026:
+    the screen couldn't set them; a barcode must be on one product or variant only)."""
+    from vula.commerce import product_variants as pv
+    try:
+        for k in ("sku", "barcode"):
+            if k in data:
+                v = " ".join(str(data[k] or "").split())
+                if len(v) > 64:
+                    raise pv.VariantError(f"That {k.upper() if k == 'sku' else k} is too long (64 characters at most).")
+                data[k] = v or None
+        if "cost_cents" in data:
+            data["cost_cents"] = pv._cents_or_none(data["cost_cents"], "Cost price")
+        if "image_url" in data and variant_id is not None:
+            data["image_url"] = pv.https_image(data["image_url"])
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if data.get("barcode"):
+        owner = pv.barcode_owner(tenant_id, data["barcode"], product_id=product_id, variant_id=variant_id)
+        if owner:
+            raise HTTPException(status_code=409, detail=f"Barcode {data['barcode']} is already on {owner}.")
+
+
 @router.patch("/{tenant_id}/admin/products/{product_id}")
 async def admin_update_product(tenant_id: str, product_id: str, body: dict, request: Request):
     """Patch product — everything the merchant may edit (widened for migration 073 depth:
@@ -925,10 +1094,12 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict, requ
                "reorder_threshold", "reorder_qty", "default_supplier_id",
                "pricing_mode", "price_per_kg_cents", "min_weight_g", "max_weight_g",
                "reference_weight_g", "catch_source", "fisherman_name", "seo", "status", "options",
-               "product_type", "bundle_items", "cooking_tips", "related_ids", "choices"}
+               "product_type", "bundle_items", "cooking_tips", "related_ids", "choices",
+               "sku", "barcode", "cost_cents"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    _check_codes(tenant_id, update, product_id=product_id)
     if "choices" in update:              # 267: [{"name", "values"}], cleaned; empty = none
         update["choices"] = service.clean_product_choices(update["choices"]) or None
     # Keep the cover in sync: first gallery image becomes image_url unless explicitly set.
@@ -997,6 +1168,24 @@ async def admin_delete_category(tenant_id: str, key: str):
     return {"deleted": key}
 
 
+_BUILT_IN_CATEGORIES = {"fresh_fish", "fresh_chicken", "frozen_chicken", "frozen_seafood", "extras"}
+
+
+def _known_category(tenant_id: str, category: Optional[str]) -> str:
+    """The category as given when it's one of the business's own (or a built-in), else "extras"."""
+    cat = (category or "").strip()
+    if not cat:
+        return "extras"
+    if cat in _BUILT_IN_CATEGORIES:
+        return cat
+    try:
+        hit = (service._client().table("commerce_categories").select("key")
+               .eq("tenant_id", tenant_id).eq("key", cat).limit(1).execute().data or [])
+    except Exception:
+        hit = []
+    return cat if hit else "extras"
+
+
 @router.post("/{tenant_id}/admin/products")
 async def admin_create_product(tenant_id: str, body: dict):
     """Create a new product. Auto-generates a slug from the name."""
@@ -1018,11 +1207,24 @@ async def admin_create_product(tenant_id: str, body: dict):
     while slug in existing:
         slug = f"{base}-{n}"; n += 1
 
-    # Enforce the DB CHECK constraints.
-    VALID_CATEGORIES = {"fresh_fish", "fresh_chicken", "frozen_chicken", "frozen_seafood", "extras"}
-    category = body.get("category") if body.get("category") in VALID_CATEGORIES else "extras"
+    # The business's own categories (migration 073 replaced the old CHECK). 23 Nov 2026 audit: any
+    # category other than Off the Hook's five fish ones was quietly changed to "extras" on create.
+    category = _known_category(tenant_id, body.get("category"))
     sold_by = body.get("sold_by") if body.get("sold_by") in ("kg", "pack") else "pack"
 
+    from vula.commerce import product_variants as pv
+    try:
+        options = pv.clean_options(body.get("options")) if body.get("options") else []
+        images = [pv.https_image(u) for u in (body.get("images") or []) if u][:10]
+        image_url = pv.https_image(body.get("image_url")) if body.get("image_url") else None
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    codes = {k: body[k] for k in ("sku", "barcode", "cost_cents") if body.get(k) not in (None, "")}
+    _check_codes(tenant_id, codes)
+    stock = body.get("stock_quantity")
+    stock = service.qty(stock) if stock not in (None, "") else None
+    if stock is not None and stock < 0:
+        raise HTTPException(status_code=400, detail="Stock can't be below zero.")
     payload = {
         "name": name,
         "slug": slug,
@@ -1030,11 +1232,24 @@ async def admin_create_product(tenant_id: str, body: dict):
         "category": category,
         "sold_by": sold_by,
         "description": body.get("description") or "",
-        "image_url": body.get("image_url"),
-        "in_stock": body.get("in_stock", True),
-        "stock_quantity": body.get("stock_quantity"),
+        "image_url": image_url or (images[0] if images else None),
+        "in_stock": body.get("in_stock", True) if stock is None else stock > 0,
+        "stock_quantity": None if options else stock,
+        **({"images": images} if images else {}),
+        **codes,
     }
-    return await service.create_product(tenant_id, payload)
+    product = await service.create_product(tenant_id, payload)
+    if options:
+        # 24 Nov 2026: sizes and colours made with the product, each at the product's price; the
+        # stock typed on the form goes on each version (it's counted per version from then on).
+        try:
+            made = pv.generate(tenant_id, product["id"], options, stock_quantity=stock)
+            product["variants"], product["options"] = made["variants"], [o["name"] for o in options]
+        except Exception as exc:
+            log.warning("variants for a new product didn't save: %s", type(exc).__name__)
+            product["variants_error"] = ("The product was added, but its sizes and colours didn't save. "
+                                         "Open it under Edit and make them again.")
+    return product
 
 
 def _csv_bool(v, default: bool) -> bool:
@@ -1360,7 +1575,7 @@ async def admin_generate_cooking_tips(tenant_id: str, product_id: str):
             f"product: {prod['name']} ({prod.get('category')}, {prod.get('pack_size') or ''}). "
             "Direct and specific: best cooking method (braai/pan/oven), rough time/temperature, "
             "one simple flavour suggestion. No intro, no bullet points, no exclamation marks — "
-            "just the advice, as if a fishmonger or butcher is talking to a customer."
+            "just the advice, as if someone behind the counter is talking to a customer."
         )}],
         temperature=0.4, max_tokens=160, api_key=api_key, api_base=api_base,
     )
@@ -1395,7 +1610,7 @@ def _actor(request: Optional[Request]) -> str:
 
 VARIANT_FIELDS = {"option_values", "sku", "barcode", "price_cents", "stock_quantity",
                   "in_stock", "sort_order", "archived", "reorder_threshold", "reorder_qty",
-                  "default_supplier_id"}
+                  "default_supplier_id", "cost_cents", "image_url"}
 
 
 @router.get("/{tenant_id}/admin/products/{product_id}/variants")
@@ -1415,6 +1630,7 @@ def _variant_barcode_conflict(exc: Exception, barcode) -> HTTPException:
 @router.post("/{tenant_id}/admin/products/{product_id}/variants")
 async def admin_create_variant(tenant_id: str, product_id: str, body: dict):
     data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
+    _check_codes(tenant_id, data, variant_id="")
     try:
         return await service.create_variant(tenant_id, product_id, data)
     except Exception as exc:
@@ -1427,6 +1643,7 @@ async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str,
     data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
     if not data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    _check_codes(tenant_id, data, variant_id=variant_id)
     if data.get("stock_quantity") is not None:
         qty = service.qty(data.pop("stock_quantity"))
         data.pop("in_stock", None)
@@ -1440,6 +1657,42 @@ async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str,
         return await service.update_variant(tenant_id, variant_id, data)
     except Exception as exc:
         raise _variant_barcode_conflict(exc, data.get("barcode"))
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/variants/generate")
+async def admin_generate_variants(tenant_id: str, product_id: str, body: dict):
+    """Make every combination of the options not already a variant. Body: {options: [{name,
+    values}], price_cents?, stock_quantity?} — a new version's price is the product's unless
+    given. Existing versions are kept as they are; ones outside the options are listed, never
+    deleted (vula/commerce/product_variants.py)."""
+    from vula.commerce import product_variants as pv
+    body = body or {}
+    try:
+        return pv.generate(tenant_id, product_id, body.get("options"),
+                           price_cents=body.get("price_cents"), stock_quantity=body.get("stock_quantity"))
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/variants/photo")
+async def admin_variant_option_photo(tenant_id: str, product_id: str, body: dict):
+    """One photo for every version with one option value ("all the red ones"). Body: {option,
+    value, image_url} — image_url null clears it. https only, read back."""
+    from vula.commerce import product_variants as pv
+    body = body or {}
+    try:
+        return pv.set_option_photo(tenant_id, product_id, body.get("option"), body.get("value"),
+                                   body.get("image_url"))
+    except pv.VariantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.delete("/{tenant_id}/admin/products/{product_id}/variants/{variant_id}")
@@ -2343,8 +2596,15 @@ async def admin_agent_activity(tenant_id: str, limit: int = 60):
 # not a new auth boundary (route-level access is still tenant_admin_guard, same as every other
 # /admin/ route).
 
+_WIDE_CONTACTS = frozenset({"customers", "contacts", "inbox"})
+
+
 @router.get("/{tenant_id}/admin/contacts")
-async def admin_list_contacts(tenant_id: str, created_by: str = "", search: str = ""):
+async def admin_list_contacts(tenant_id: str, created_by: str = "", search: str = "",
+                              request: Request = None):  # type: ignore[assignment]
+    mine = await _only_mine(tenant_id, request, _WIDE_CONTACTS)
+    if mine is not None:
+        created_by = mine
     q = (service._client().table("commerce_contacts").select("*").eq("tenant_id", tenant_id))
     if created_by:
         q = q.eq("created_by", created_by)
@@ -2365,7 +2625,7 @@ class ContactIn(BaseModel):
 
 
 @router.post("/{tenant_id}/admin/contacts")
-async def admin_upsert_contact(tenant_id: str, body: ContactIn):
+async def admin_upsert_contact(tenant_id: str, body: ContactIn, request: Request = None):  # type: ignore[assignment]
     from uuid import uuid4
     name = (body.name or "").strip()
     if not name:
@@ -2375,17 +2635,31 @@ async def admin_upsert_contact(tenant_id: str, body: ContactIn):
         phone = "27" + phone[1:]
     if not phone:
         phone = f"nophone-{uuid4().hex[:10]}"
+    mine = await _only_mine(tenant_id, request, _WIDE_CONTACTS)
+    created_by = body.created_by or None
+    if mine is not None:
+        created_by = None if mine == _NOBODY else mine
+        # one row per (business, phone): a rep saving a number another rep already has would
+        # overwrite their contact
+        held = (service._client().table("commerce_contacts").select("created_by")
+                .eq("tenant_id", tenant_id).eq("phone", phone).limit(1).execute().data or [])
+        if held and held[0].get("created_by") and held[0]["created_by"] != created_by:
+            raise HTTPException(status_code=409, detail="A colleague already has this contact.")
     row = {"tenant_id": tenant_id, "phone": phone, "name": name,
            "email": body.email or None, "company": body.company or None,
            "title": body.title or None, "notes": body.notes or None,
-           "source": "dashboard", "created_by": body.created_by or None}
+           "source": "dashboard", "created_by": created_by}
     res = (service._client().table("commerce_contacts")
            .upsert(row, on_conflict="tenant_id,phone").execute())
     return {"saved": True, "contact": (res.data or [row])[0]}
 
 
 @router.get("/{tenant_id}/admin/reminders")
-async def admin_list_reminders(tenant_id: str, created_by: str = "", status: str = "open"):
+async def admin_list_reminders(tenant_id: str, created_by: str = "", status: str = "open",
+                               request: Request = None):  # type: ignore[assignment]
+    mine = await _only_mine(tenant_id, request, frozenset({"followups"}))
+    if mine is not None:
+        created_by = mine
     q = (service._client().table("vula_reminders").select("id,text,due_at,status,created_at")
          .eq("tenant_id", tenant_id))
     if created_by:
@@ -2417,10 +2691,31 @@ def _rep_digits(p: Optional[str]) -> str:
     return "27" + d[1:] if d.startswith("0") else d
 
 
+_NOBODY = "-"   # matches no number: a "my" list for a login with no WhatsApp number on its team row
+
+
+async def _only_mine(tenant_id: str, request: Optional[Request], wide: frozenset) -> Optional[str]:
+    """None when the caller may see everyone's rows (owner, manager, or a login with one of the
+    `wide` tabs), else the caller's own WhatsApp number to filter by (23 Nov 2026 audit: "My
+    contacts", "My reminders", "My expenses" and the rep's day took the number from the browser,
+    and an empty number returned every rep's records)."""
+    if request is None:
+        return None
+    from vula.api.tenant_auth import member_scope, scope_allows
+    scope = await member_scope(request.headers.get("authorization", ""), tenant_id)
+    if scope is None or scope_allows(scope, wide):
+        return None
+    return _rep_digits((scope.get("member") or {}).get("whatsapp")) or _NOBODY
+
+
 @router.get("/{tenant_id}/admin/rep/today")
-async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None):
+async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None,
+                          request: Request = None):  # type: ignore[assignment]
     from vula.bookings import service as bk
     rep = _rep_digits(rep_phone) or None
+    mine = await _only_mine(tenant_id, request, frozenset({"bookings"}))
+    if mine is not None:
+        rep = mine
     day = await bk.list_day(tenant_id, date, booked_by=rep)
     notes = []
     try:
@@ -2653,7 +2948,7 @@ async def admin_agent_teach(tenant_id: str, body: TeachRequest):
             content=f"Q: {q}\nA: {a}", filename="owner-taught.txt", doc_id=doc_id, source_type="reference",
             audience="public")       # taught for customers' questions too (KB audience, 2026-10-16)
     except Exception as exc:
-        return {"error": f"could not teach: {exc}"}
+        return _refused(f"could not teach: {exc}", 400)
     try:
         from core.reasoning_telemetry import emit
         emit(system="vula-agent-teach", task="correction", tenant_id=tenant_id, outcome="learned")
@@ -2735,7 +3030,7 @@ async def admin_agent_unteach(tenant_id: str, body: dict):
         from vula.ingestion.pipeline import VulaIngestionPipeline
         await VulaIngestionPipeline(tenant_id=tenant_id).store.delete_document(tenant_id, doc_id)
     except Exception as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
     return {"ok": True, "removed": q}
 
 
@@ -2777,7 +3072,7 @@ async def admin_set_persona(tenant_id: str, body: PersonaPatch):
     try:
         service._client().table("vula_tenant_config").update(patch).eq("tenant_id", tenant_id).execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 116/119/262?)"}
+        return _refused(f"{exc} (run migration 116/119/262?)", 400)
     _tenants.invalidate(tenant_id)
     out: Dict[str, Any] = {"ok": True}
     if "persona_prompt" in patch:
@@ -3128,7 +3423,7 @@ async def admin_finances_insights(tenant_id: str, days: int = 30, explain: bool 
 # ── Bank reconciliation (read the statement → match invoices/expenses) ─────────
 class BankSettingsIn(BaseModel):
     password: str            # statement PDF password (e.g. ID number) — stored encrypted
-    bank: str = "Capitec"
+    bank: Optional[str] = None   # 23 Nov 2026: no longer "Capitec" whatever the bank
 
 
 @router.post("/{tenant_id}/admin/bank/settings")
@@ -3138,7 +3433,7 @@ async def admin_bank_settings(tenant_id: str, body: BankSettingsIn):
     try:
         bank_rec.set_statement_password(tenant_id, body.password, body.bank)
     except Exception as exc:
-        return {"error": f"{exc} (connect email + run migration 057 first?)"}
+        return _refused(f"{exc} (connect email + run migration 057 first?)", 400)
     return {"ok": True, "bank": body.bank}
 
 
@@ -3220,7 +3515,7 @@ async def admin_bank_statement_from_text(tenant_id: str, body: dict):
     async def _run():
         txns = await bank_rec.extract_transactions(text)
         if not txns:
-            return {"error": "no transactions found in the text"}
+            return _refused("no transactions found in the text", 400)
         ok = bank_rec.reconciliation_ok(txns)
         result = await bank_rec.reconcile(tenant_id, txns,
                                           source_file=(body or {}).get("filename") or "pasted-statement",
@@ -3579,7 +3874,7 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
             from vula.commerce import expenses as _expenses
             _expenses.post_to_ledger(tenant_id, (res.data or [exp])[0])
         except Exception as exc:
-            return {"error": str(exc)}
+            return _refused(str(exc), 400)
     elif body.action == "ignore":
         patch = {"match_status": "ignored"}
     else:
@@ -3679,7 +3974,7 @@ async def admin_upsert_account(tenant_id: str, body: AccountIn):
     try:
         db.table("commerce_accounts").upsert(row, on_conflict="tenant_id,code").execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 058?)"}
+        return _refused(f"{exc} (run migration 058?)", 400)
     return {"account": row}
 
 
@@ -4096,9 +4391,9 @@ async def admin_upsert_worker(tenant_id: str, body: WorkerIn):
     try:
         return {"worker": labour.upsert_worker(tenant_id, body.model_dump())}
     except ValueError as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
     except Exception as exc:
-        return {"error": f"{exc} (run migration 059?)"}
+        return _refused(f"{exc} (run migration 059?)", 400)
 
 
 @router.delete("/{tenant_id}/admin/workers/{worker_id}")
@@ -4806,8 +5101,13 @@ class ExpenseAssignIn(BaseModel):
 async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
                               reimbursable: Optional[bool] = None, project: Optional[str] = None,
                               since: Optional[str] = None, until: Optional[str] = None,
-                              paid_by: Optional[str] = None):
+                              paid_by: Optional[str] = None,
+                              request: Request = None):  # type: ignore[assignment]
     from vula.commerce import expenses, accounting
+    from vula.api.server import _MONEY_TABS
+    mine = await _only_mine(tenant_id, request, _MONEY_TABS)
+    if mine is not None:          # a rep's own expenses tab: theirs only
+        paid_by = mine
     # Real chart-of-accounts categories for the dashboard's category dropdown — deliberately
     # curated/finite (not free text), unlike `project` which is inherently open-ended. Expense
     # accounts only; an expense is never income.
@@ -4841,7 +5141,7 @@ async def admin_create_expense(tenant_id: str, body: ExpenseIn):
         try:
             res = db.table("commerce_expenses").insert(row).execute()
         except Exception as exc:
-            return {"error": f"{exc} (run migration 009/074?)"}
+            return _refused(f"{exc} (run migration 009/074?)", 400)
         return {"expense": (res.data or [row])[0]}
 
     from vula.commerce import expenses
@@ -4851,7 +5151,7 @@ async def admin_create_expense(tenant_id: str, body: ExpenseIn):
             **body.model_dump(exclude={"due_date"}))
         return {"expense": claim}
     except Exception as exc:
-        return {"error": f"{exc} (run migration 060?)"}
+        return _refused(f"{exc} (run migration 060?)", 400)
 
 
 @router.post("/{tenant_id}/admin/expenses/{expense_id}/assign")
@@ -4941,7 +5241,7 @@ async def admin_add_card(tenant_id: str, body: dict):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        return {"error": f"{exc} (run migration 061?)"}
+        return _refused(f"{exc} (run migration 061?)", 400)
 
 
 @router.delete("/{tenant_id}/admin/cards/{card_id}")
@@ -5023,7 +5323,7 @@ async def admin_import_undo(tenant_id: str):
             db.table("commerce_orders").delete().eq("tenant_id", tenant_id) \
                 .like("delivery_notes", f"{IMPORT_TAG}%").execute()
     except Exception as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
     return {"removed": len(ids)}
 
 
@@ -5993,8 +6293,20 @@ async def public_brand(tenant_id: str):
     truth for brand: the same commerce_invoice_settings row the dashboard's Brand Kit card writes,
     replacing the old split where the storefront read a separate, never-updated tenant_config.theme."""
     settings = await service.get_invoice_settings(tenant_id) or {}
+    from vula.api import tenants as _tenants
     from vula.api.tenants import display_name as _display_name
+    # a business a partner brought (FlowCrew) wears the partner's colours until it sets its own
+    theirs = _tenants.partner_brand(tenant_id)
+    # Vula's own default green saved on a partner's business is "no colour chosen yet"
+    own_accent = settings.get("accent_color") if not (theirs and str(settings.get("accent_color") or "").upper() == "#2C5545") else None
     return {
+        "partner": _tenants.partner_of(_tenants.get_config(tenant_id)),
+        # The partner is the face for the team (24 Nov 2026): the dashboard of a partner's business
+        # wears the partner's look. The business's own look is for its customers — the customer
+        # app once its school is chosen, its documents — so both are given, apart.
+        "partner_look": theirs or None,
+        "own_look": {"accent_color": own_accent, "secondary_color": settings.get("secondary_color"),
+                     "ink_color": settings.get("ink_color"), "logo_url": settings.get("logo_url") or None} if theirs else None,
         # the name everywhere (dashboard shell, login, app icon, emails): the brand kit's trading
         # name, else the company name, else the tenant's display name — never "Vula Commerce"
         "name": (settings.get("trading_as") or settings.get("company_name")
@@ -6002,9 +6314,9 @@ async def public_brand(tenant_id: str):
         "logo_url": settings.get("logo_url"),
         "icon_url": settings.get("icon_url"),
         "tagline": settings.get("tagline"),
-        "accent_color": settings.get("accent_color"),
-        "secondary_color": settings.get("secondary_color"),
-        "ink_color": settings.get("ink_color"),
+        "accent_color": own_accent or theirs.get("accent_color"),
+        "secondary_color": settings.get("secondary_color") or theirs.get("secondary_color"),
+        "ink_color": settings.get("ink_color") or theirs.get("ink_color"),
         "font_pairing": settings.get("font_pairing"),
         "corner_style": settings.get("corner_style") or "rounded",
         "density": settings.get("density") or "comfortable",
@@ -6038,7 +6350,8 @@ async def public_app_icon(tenant_id: str, size: int, maskable: bool = False):
     size = 512 if size > 256 else (192 if size > 180 else 180)
     settings = await service.get_invoice_settings(tenant_id) or {}
     src = settings.get("icon_url") or settings.get("logo_url")
-    accent = settings.get("accent_color") or "#2C5545"
+    from vula.api.tenants import partner_brand as _partner_brand
+    accent = settings.get("accent_color") or _partner_brand(tenant_id).get("accent_color") or "#2C5545"
     key = (tenant_id, size, src, accent, settings.get("logo_size"), bool(maskable))
     hit = _ICON_CACHE.get(key)
     if hit and _time.time() - hit[0] < 3600:
@@ -6066,7 +6379,8 @@ async def public_app_splash(tenant_id: str, size: str, dark: bool = False):
         raise HTTPException(status_code=404, detail="Not a launch screen size.")
     settings = await service.get_invoice_settings(tenant_id) or {}
     src = settings.get("icon_url") or settings.get("logo_url")
-    accent = settings.get("accent_color") or "#2C5545"
+    from vula.api.tenants import partner_brand as _partner_brand
+    accent = settings.get("accent_color") or _partner_brand(tenant_id).get("accent_color") or "#2C5545"
     name = settings.get("trading_as") or settings.get("company_name") or tenant_id
     key = ("splash", tenant_id, w, h, bool(dark), src, accent, name, settings.get("logo_size"))
     hit = _ICON_CACHE.get(key)
@@ -6482,7 +6796,7 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
     """AI-write a WhatsApp broadcast from rough details the owner provides.
 
     Body:
-        details:      raw info, e.g. "yellowtail 180, snoek 95, kob 220, free delivery over R500"
+        details:      raw info, e.g. "gift boxes R180, mugs R95, free delivery over R500"
         message_type: weekly_fish | new_stock | reorder | promo | delivery (optional)
 
     Returns a polished, on-brand WhatsApp broadcast message the owner can
@@ -6509,7 +6823,7 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
         pass
 
     type_hint = {
-        "weekly_fish": "this week's fresh catch with prices",
+        "weekly_fish": "this week's specials with prices",
         "new_stock":   "a new stock arrival announcement",
         "reorder":     "a friendly reminder to reorder",
         "promo":       "a special promotion or limited-time offer",
@@ -6527,7 +6841,7 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
             messages=[
                 {"role": "system", "content":
                     "You write short, warm WhatsApp broadcast messages for a South African "
-                    "food business. Rules: under 60 words, friendly but not cheesy, ZAR prices, "
+                    "business. Rules: under 60 words, friendly but not cheesy, ZAR prices, "
                     "1-2 relevant emoji max, end with a clear call to action to order on WhatsApp. "
                     "Output ONLY the message text — no preamble, no quotes." +
                     (f"\n\nBrand voice:\n{brand_context}" if brand_context else "")},
@@ -6608,18 +6922,25 @@ def record_opt_in(tenant_id: str, phone: str, source: str = "start_keyword") -> 
     _log_consent_event(tenant_id, p, "opted_in", source)
 
 
-def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> None:
-    """Persist a do-not-contact suppression (kept even after PII deletion)."""
+def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> bool:
+    """Persist a do-not-contact suppression (kept even after PII deletion). True only when it is
+    read back as opted out (23 Nov 2026 audit: a failed save was logged quietly and the customer
+    was told "Done", then kept getting marketing — POPIA)."""
     p = _norm_phone(phone)
     if not tenant_id or not p:
-        return
+        return False
     try:
-        service._client().table("commerce_consent").upsert({
+        db = service._client()
+        db.table("commerce_consent").upsert({
             "tenant_id": tenant_id, "phone": p, "status": "opted_out",
             "source": source, "updated_at": "now()"}, on_conflict="tenant_id,phone").execute()
+        back = (db.table("commerce_consent").select("status").eq("tenant_id", tenant_id)
+                .eq("phone", p).limit(1).execute().data or [])
         _log_consent_event(tenant_id, p, "opted_out", source)
+        return bool(back) and back[0].get("status") == "opted_out"
     except Exception as exc:
-        log.debug("opt-out record skipped: %s", exc)
+        log.error("OPT-OUT NOT SAVED (tenant=%s): %s", tenant_id, exc)
+        return False
 
 
 def record_message_status(wamid: str, status: str, error: Optional[str] = None) -> None:
@@ -8190,7 +8511,7 @@ async def admin_customer_tags(tenant_id: str, phone: str, body: dict):
             on_conflict="tenant_id,phone",
         ).execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 046?)"}
+        return _refused(f"{exc} (run migration 046?)", 400)
     return {"ok": True, "tags": tags, "area": area}
 
 
@@ -8210,7 +8531,7 @@ async def admin_customer_note(tenant_id: str, phone: str, body: dict):
                 "channel": "web", "customer_phone": phone, "agent_note": note,
             }).execute()
     except Exception as exc:
-        return {"error": f"{exc} (run migration 048?)"}
+        return _refused(f"{exc} (run migration 048?)", 400)
     return {"ok": True, "note": note}
 
 
@@ -8252,13 +8573,13 @@ class ScanRequest(BaseModel):
 
 _SCAN_PROMPTS = {
     "receipt": (
-        "This is a supplier receipt or expense slip for a South African food business. "
+        "This is a supplier receipt or expense slip for a South African business. "
         "Extract: supplier name, date (YYYY-MM-DD), total amount in Rands, and a best-guess "
         "category from [stock, delivery, packaging, marketing, equipment, staff, rent, utilities, other]. "
         "Also list individual line items if visible."
     ),
     "delivery_note": (
-        "This is a delivery note / packing slip for fresh food stock (fish, chicken, seafood). "
+        "This is a delivery note / packing slip for stock delivered to the business. "
         "Extract each product line: product name, quantity, and unit (kg or pack). "
         "Also extract supplier name and date if visible."
     ),
@@ -8267,7 +8588,7 @@ _SCAN_PROMPTS = {
         "each line item (description, qty, unit price in Rands, line total), subtotal, VAT, and total."
     ),
     "order": (
-        "This is a handwritten or printed customer order for a food business. "
+        "This is a handwritten or printed customer order for a business. "
         "Extract: customer name, phone if present, and each item ordered (product, quantity, unit)."
     ),
 }

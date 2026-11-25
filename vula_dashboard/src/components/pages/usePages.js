@@ -8,7 +8,8 @@ import { useState, useEffect, useRef } from "react";
 import { VULA_API } from "../../lib/authFetch";
 import { getTenantTheme } from "../../theme/tenantThemes";
 import { FONT_PAIRINGS } from "../../theme/tokens";
-import { confirmDialog, promptDialog } from "../ui/index.jsx";
+import { confirmDialog, promptDialog, toast } from "../ui/index.jsx";
+import { api, tryApi } from "../../lib/api";
 
 // Every tenant gets a real, live, SSR'd storefront the instant they publish — no more "no
 // custom domain configured, previewing a Vula-hosted page" — vula_storefront serves this
@@ -340,12 +341,21 @@ export function usePages({ tenantId }) {
     setEditing({ slug, title, data: norm(tpl.data), status: "draft", seo: {} });
   };
 
+  // 23 Nov 2026 audit: every page save said "✓" whatever the server answered.
+  const putPage = async (slug, body) => {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${slug}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).catch(() => null);
+    if (r && r.ok) return true;
+    const d = r ? await r.json().catch(() => ({})) : {};
+    toast(d.detail || "That page didn't save. Try again.", "danger");
+    return false;
+  };
+
   const persist = async (data, status) => {
     setMsg("Saving…");
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: editing.title, status, puck_data: data, seo: editing.seo || {} }),
-    }).catch(() => {});
+    const ok = await putPage(editing.slug, { title: editing.title, status, puck_data: data, seo: editing.seo || {} });
+    if (!ok) { setMsg(""); return; }
     setEditing((e) => ({ ...e, data: norm(data), status }));
     setMsg(status === "published" ? "Published ✓" : "Draft saved ✓");
     setTimeout(() => setMsg(""), 1800);
@@ -355,26 +365,33 @@ export function usePages({ tenantId }) {
   const rename = async (p) => {
     const raw = await promptDialog("New page name:", p.title || p.slug);
     if (!raw || !raw.trim()) return;
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${p.slug}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: raw.trim(), status: p.status }),
-    }).catch(() => {});
+    // only the title and status: the server keeps the page's content and SEO (23 Nov 2026 —
+    // a rename used to wipe the page)
+    await putPage(p.slug, { title: raw.trim(), status: p.status });
     load();
   };
 
   const duplicate = async (p) => {
-    const full = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${p.slug}`).then((r) => r.json()).catch(() => ({}));
-    const slug = `${p.slug}-copy`;
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${slug}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: `${p.title || p.slug} (copy)`, status: "draft", puck_data: full.puck_data || {}, seo: full.seo || {} }),
-    }).catch(() => {});
+    // 23 Nov 2026 audit: a page that didn't load was copied as an empty one, and a second copy
+    // silently overwrote the first "-copy" page.
+    let full;
+    try {
+      full = await api(`/v1/commerce/${tenantId}/admin/pages/${p.slug}`);
+    } catch (e) {
+      toast(`Couldn't read "${p.title || p.slug}" to copy it: ${e.message}`, "danger");
+      return;
+    }
+    const taken = new Set(pages.map((x) => x.slug));
+    let slug = `${p.slug}-copy`;
+    for (let n = 2; taken.has(slug); n += 1) slug = `${p.slug}-copy-${n}`;
+    await putPage(slug, { title: `${p.title || p.slug} (copy)`, status: "draft", puck_data: full.puck_data || {}, seo: full.seo || {} });
     load();
   };
 
   const del = async (slug, title) => {
     if (!(await confirmDialog(`Delete the page "${title || slug}"? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return;
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${slug}`, { method: "DELETE" }).catch(() => {});
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/pages/${slug}`, { method: "DELETE" });
+    if (!res.ok) toast(`"${title || slug}" wasn't deleted: ${res.error}`, "danger");
     load();
   };
 
@@ -403,11 +420,12 @@ export function usePages({ tenantId }) {
     const originalSlug = previewPage.slug.replace(/-preview$/, "");
     if (originalSlug === previewPage.slug) return;  // not actually a preview page — refuse
     if (!(await confirmDialog(`Replace the live "${originalSlug}" page with this template? The previous version stays in History if you want it back.`, { danger: true, confirmLabel: 'Yes' }))) return;
-    const full = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${previewPage.slug}`).then((r) => r.json()).catch(() => ({}));
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${originalSlug}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: previewPage.title?.replace(/ \(new template preview\)$/, "") || originalSlug, status: "published", puck_data: full.puck_data || {}, seo: full.seo || {} }),
-    }).catch(() => {});
+    const fr = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${previewPage.slug}`).catch(() => null);
+    const full = fr && fr.ok ? await fr.json().catch(() => null) : null;
+    if (!full || !full.puck_data) { toast("Couldn't read the preview page. Nothing was changed.", "danger"); return; }
+    const ok = await putPage(originalSlug, { title: previewPage.title?.replace(/ \(new template preview\)$/, "") || originalSlug,
+      status: "published", puck_data: full.puck_data, seo: full.seo || {} });
+    if (!ok) return;   // the preview is kept until the live page really has its content
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${previewPage.slug}`, { method: "DELETE" }).catch(() => {});
     setEditing(null);
     load();
@@ -418,11 +436,15 @@ export function usePages({ tenantId }) {
     const j = index + dir;
     if (j < 0 || j >= next.length) return;
     [next[index], next[j]] = [next[j], next[index]];
+    const before = pages;
     setPages(next);   // optimistic
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/reorder`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ order: next.map((p) => p.slug) }),
-    }).catch(() => {});
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/pages/reorder`, {
+      method: "POST", body: { order: next.map((p) => p.slug) },
+    });
+    if (!res.ok) {
+      setPages(before);   // back to the order the server still has
+      toast(`The new page order wasn't saved: ${res.error}`, "danger");
+    }
   };
 
   const loadVersions = async () => {
@@ -510,13 +532,14 @@ export function usePages({ tenantId }) {
     if (!aiDraftTheme) return;
     setApplyingTheme(true);
     try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/invoice-settings`, {
+        method: "POST",
+        body: {
           accent_color: aiDraftTheme.accent_color, ink_color: aiDraftTheme.ink_color,
           font_pairing: aiDraftTheme.font_pairing,
-        }),
-      }).catch(() => {});
+        },
+      });
+      if (!res.ok) { toast(`The theme wasn't applied: ${res.error}`, "danger"); return; }
       setBrand((b) => ({ ...b, accent: aiDraftTheme.accent_color, ink: aiDraftTheme.ink_color, fontPairing: aiDraftTheme.font_pairing }));
       setMsg("Theme applied ✓");
       setTimeout(() => setMsg(""), 2000);

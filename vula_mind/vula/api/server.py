@@ -110,6 +110,11 @@ from vula.api.dash_push import router as dash_push_router
 from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.shopify_connect import router as shopify_admin_router, webhook_router as shopify_webhook_router
 from vula.api.shop_domain import router as shop_domain_router
+from vula.api.couriers import router as couriers_router, webhook_router as couriers_webhook_router
+from vula.api.till import router as till_router
+from vula.api.tables import public as tables_public_router, router as tables_router
+from vula.api.lessons import public as lessons_public_router, router as lessons_router
+from vula.api.events import door as events_door_router, public as events_public_router, router as events_router
 from vula.api.woocommerce_connect import router as woo_admin_router, webhook_router as woo_webhook_router
 from vula.api.manufacturing import router as manufacturing_router
 from vula.api.draft import router as draft_router
@@ -1636,6 +1641,33 @@ async def _ai_health_loop() -> None:
     await run_forever()
 
 
+async def _courier_tracking_loop() -> None:
+    """Every courier booking still on its way is re-read from the courier hourly — the order moves
+    on and the customer hears it even where the courier doesn't call us. See vula/commerce/shipping.py."""
+    from vula.commerce.shipping import run_forever
+    await run_forever()
+
+
+async def _event_messages_loop() -> None:
+    """Every half hour: ticket buyers are reminded the day before their event and thanked the day
+    after, once each. See vula/commerce/events.py."""
+    from vula.commerce.events import run_forever
+    await run_forever()
+
+
+async def _lesson_reminders_loop() -> None:
+    """Every half hour: a confirmed lesson is reminded once, and in the evening tomorrow's lessons
+    get the forecast for their spot. See vula/commerce/lessons.py."""
+    from vula.commerce.lessons import run_forever
+    await run_forever()
+
+
+async def _table_reminders_loop() -> None:
+    """Every half hour: a table booking a few hours away is reminded once. See vula/commerce/tables.py."""
+    from vula.commerce.tables import run_forever
+    await run_forever()
+
+
 async def _books_health_loop() -> None:
     """Hourly: failed postings tried again; daily: every business on the one trusted book checked
     (balanced, complete, bank reconciled, debtors/creditors tied) — loudly. See vula/books_health.py."""
@@ -1848,6 +1880,12 @@ def _start_scheduled_job_tasks() -> None:
     # The one trusted book: retries hourly, checks daily (2026-11-18).
     _scheduled_job_tasks.append(_asyncio.create_task(_books_health_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_statement_backfill_loop()))
+    # Courier bookings still on their way: what the courier says, hourly (2026-11-23).
+    _scheduled_job_tasks.append(_asyncio.create_task(_courier_tracking_loop()))
+    # Event ticket buyers: the reminder the day before, the thank-you the day after (2026-11-24).
+    _scheduled_job_tasks.append(_asyncio.create_task(_event_messages_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_table_reminders_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_lesson_reminders_loop()))
     # Last month's management accounts to the owners, around the 5th (2026-11-23).
     _scheduled_job_tasks.append(_asyncio.create_task(_management_pack_loop()))
     # What's left in the books review, to the owners each Monday until it's agreed (2026-11-25).
@@ -1993,9 +2031,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list(),
     # Allow every Vula tenant origin (current + future) without env changes:
-    #   *.vula-ai.com, *.offthehook.co.za, *.digg-ct.co.za, *.vercel.app, localhost
+    #   *.vula-ai.com, *.offthehook.co.za, *.digg-ct.co.za, *.flowcrew.co.za (a partner's own
+    #   address: tenants.PARTNERS), *.vercel.app, localhost
     allow_origin_regex=(
-        r"https://([a-z0-9-]+\.)*(vula-ai\.com|offthehook\.co\.za|digg-ct\.co\.za|vercel\.app)"
+        r"https://([a-z0-9-]+\.)*(vula-ai\.com|offthehook\.co\.za|digg-ct\.co\.za|flowcrew\.co\.za|vercel\.app)"
         r"|http://localhost:[0-9]+"
     ),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -2105,11 +2144,32 @@ _TENANT_GUARD_PUBLIC = [
 # rest of the admin API is still membership-only (see docs/ux-redesign-audit.md §1).
 _MONEY_TABS = frozenset({"invoices", "expenses", "bank", "books", "payments", "taptopay",
                          "budget", "scanner", "finances"})
+_WRITES = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _SECTION_RULES = [
     # (methods or None for all, path regex, tab ids that grant it)
+    # 23 Nov 2026 audit: the business's settings and connections — owner and managers only. Any
+    # member could change the bank details printed on invoices (invoice-settings isn't under
+    # invoices/), opening hours, delivery fees and payment methods, the assistant's voice, the
+    # shop and link domains, store connections, payment gateway keys, and disconnect WhatsApp or
+    # a mailbox; the screens were hidden in the browser only. Reading stays as it was. First in
+    # the list: the first rule that matches decides.
+    (_WRITES, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoice-settings|order-settings|business-profile|"
+                         r"persona|learned-answers|wa-profile|shop-domain|shop-directory|link-domain|shopify|woocommerce|"
+                         r"brand|ai/topup)(?:/|$)"), frozenset()),
+    (_WRITES, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/providers(?:/|$)"), frozenset()),
+    (_WRITES, re.compile(r"^/v1/(?:whatsapp/(?:disconnect|numbers)|email/(?:disconnect|set-primary)|"
+                         r"yoco/disconnect|connections)/"), frozenset()),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoices|invoice-clients|invoice-items|"
                       r"recurring-invoices|quotes|bank|accounts|finances)(?:/|$)"), _MONEY_TABS),
+    # 23 Nov 2026: Sell › Sales reports — sales by day and best sellers only (the bare route;
+    # P&L, VAT and the rest of reports/ stay Money access).
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports/?$"), _MONEY_TABS | {"labour", "salesreports"}),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports(?:/|$)"), _MONEY_TABS | {"labour", "management"}),
+    # 23 Nov 2026: Sell › Reviews. The Google review link goes out on the business's number, and
+    # sending the WhatsApp catalogue changes what every customer sees: owner and managers only.
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reviews/settings/?$"), frozenset()),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reviews/?$"), frozenset({"reviews", "orders", "customers"})),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/meta-catalog/sync/?$"), frozenset()),
     # a rep's own expenses tab reads the same endpoint (VulaExpenses defaultPaidBy)
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/expenses(?:/|$)"), _MONEY_TABS | {"rep-expenses"}),
     (None, re.compile(r"^/v1/commerce/[^/]+/admin/expense-sheet(?:/|$)"),
@@ -2358,6 +2418,16 @@ app.include_router(books_audit_router, prefix="/v1/commerce")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
+app.include_router(couriers_router, prefix="/v1/commerce")        # /{tenant}/admin/couriers|shipments — tenant-guarded
+app.include_router(till_router, prefix="/v1/commerce")            # /{tenant}/admin/till — tenant-guarded
+app.include_router(events_router, prefix="/v1/commerce")          # /{tenant}/admin/events — tenant-guarded
+app.include_router(events_public_router)                           # /events/{id}, /tickets/{token} — public pages
+app.include_router(events_door_router, prefix="/v1/door")              # the door link: its secret is the only way in
+app.include_router(tables_router, prefix="/v1/commerce")          # /{tenant}/admin/tables|specials — tenant-guarded
+app.include_router(lessons_router, prefix="/v1/commerce")         # /{tenant}/admin/lessons — tenant-guarded
+app.include_router(lessons_public_router, prefix="/v1/flow")      # the customer app: no login, a signed token per request
+app.include_router(tables_public_router)                           # /book/{tenant} — the public booking page
+app.include_router(couriers_webhook_router, prefix="/v1/couriers")  # the courier's tracking news — secret address, re-read from the courier
 from vula.api.buying_api import router as buying_router  # noqa: E402
 app.include_router(buying_router, prefix="/v1/commerce")          # /{tenant}/admin/buying — tenant-guarded
 from vula.api.xero import router as xero_router, public_router as xero_public_router  # noqa: E402

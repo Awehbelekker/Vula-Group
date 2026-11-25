@@ -39,3 +39,15 @@ export function formatMoney(cents, { cents: showCents = "auto", empty = "—" } 
   const body = groupThousands(String(rand)) + (withCents ? "." + String(part).padStart(2, "0") : "");
   return `${neg ? MINUS : ""}R${NBSP}${body}`;
 }
+
+/** "2 300.00", "R2,300", "2300,5" → 230000 / 230050 cents, read as written (no arithmetic on floats);
+ * null when it isn't an amount. */
+export function randToCents(text) {
+  const t = String(text ?? "").replace(/[R\s\u00a0]/gi, "");
+  if (!t) return null;
+  const m = t.match(/^(-?)(\d{1,3}(?:,\d{3})+|\d+)(?:[.,](\d{1,2}))?$/);
+  if (!m) return null;
+  const whole = m[2].replace(/,/g, "");
+  const cents = Number(whole) * 100 + Number((m[3] || "0").padEnd(2, "0"));
+  return m[1] ? -cents : cents;
+}

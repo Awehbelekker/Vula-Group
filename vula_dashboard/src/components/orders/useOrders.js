@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { confirmDialog, toast } from '../ui/index.jsx'
 import { downloadCsv } from '../../lib/csv'
-import { VULA_API } from '../../lib/authFetch'
+import { api, tryApi } from '../../lib/api'
 
 export const NEXT_STATUSES = {
   paid:      ['confirmed', 'cancelled'],
@@ -37,30 +37,38 @@ export function useOrders(tenantId) {
   const [showManual, setShowManual] = useState(false)
   const [selected, setSelected] = useState(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [loadError, setLoadError] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     const url = filter === 'all'
-      ? `${VULA_API}/v1/commerce/${tenantId}/admin/orders?limit=100`
-      : `${VULA_API}/v1/commerce/${tenantId}/admin/orders?status=${filter}&limit=100`
-    const r = await fetch(url)
-    const d = await r.json()
-    setOrders(d.orders || [])
-    setSelected(new Set())
-    setLoading(false)
+      ? `/v1/commerce/${tenantId}/admin/orders?limit=100`
+      : `/v1/commerce/${tenantId}/admin/orders?status=${filter}&limit=100`
+    try {
+      const d = await api(url)
+      setOrders(d.orders || [])
+      setSelected(new Set())
+      setLoadError('')
+    } catch (e) {
+      setLoadError(e.message)
+      toast(`Couldn't load your orders: ${e.message}`, 'danger')
+    } finally {
+      setLoading(false)
+    }
   }, [tenantId, filter])
 
   useEffect(() => { load() }, [load])
 
   async function advance(orderId, newStatus, extra = {}) {
     setUpdating(orderId)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/${orderId}/status`, {
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/orders/${orderId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus, ...extra }),
+      body: { status: newStatus, ...extra },
     })
-    const d = await r.json().catch(() => ({}))
-    if (d.refund?.status === 'pending') {
+    const d = res.data || {}
+    if (!res.ok) {
+      toast(`That order wasn't changed: ${res.error}`, 'danger')
+    } else if (d.refund?.status === 'pending') {
       toast(`Refunded R${(d.refund.amount_cents / 100).toFixed(2)} via Yoco.`)
     } else if (d.refund?.status === 'failed') {
       toast(`Order marked refunded, but the automatic Yoco refund failed: ${d.refund.detail || 'unknown error'}. Please process it manually in Yoco.`, 'danger')
@@ -97,7 +105,8 @@ export function useOrders(tenantId) {
   async function deleteOne(order) {
     if (!(await confirmDialog(`Delete order ${order.display_id}? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return
     setUpdating(order.id)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/${order.id}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/orders/${order.id}`, { method: 'DELETE' })
+    if (!res.ok) toast(`Order ${order.display_id} wasn't deleted: ${res.error}`, 'danger')
     await load()
     setUpdating(null)
   }
@@ -107,10 +116,10 @@ export function useOrders(tenantId) {
     if (!ids.length) return
     if (!(await confirmDialog(`Delete ${ids.length} selected order${ids.length === 1 ? '' : 's'}? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return
     setDeleting(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/bulk-delete`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order_ids: ids }),
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/orders/bulk-delete`, {
+      method: 'POST', body: { order_ids: ids },
     })
+    if (!res.ok) toast(`Those orders weren't deleted: ${res.error}`, 'danger')
     await load()
     setDeleting(false)
   }
@@ -124,7 +133,7 @@ export function useOrders(tenantId) {
   ])
 
   return {
-    orders, loading, load, filter, setFilter, updating, detailId, setDetailId, showManual, setShowManual,
+    orders, loading, loadError, load, filter, setFilter, updating, detailId, setDetailId, showManual, setShowManual,
     selected, setSelected, deleting, advance, refundOrder, move, toggleSelect, deleteOne, deleteSelected, exportCsv,
   }
 }

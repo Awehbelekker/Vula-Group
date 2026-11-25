@@ -19,7 +19,13 @@ export async function authFetch(path, opts = {}) {
   const resp = await fetch(`${VULA_API}${path}`, { ...opts, headers })
   if (resp.status === 401) throw new Error('Session expired — please sign in again.')
   if (resp.status === 403) throw new Error('Master access required.')
-  return resp.json()
+  const d = await resp.json().catch(() => ({}))
+  // 23 Nov 2026 audit: any other refusal (4xx/5xx) came back as if it had worked
+  if (!resp.ok) {
+    const v = d && (d.detail ?? d.error)
+    throw new Error(typeof v === 'string' && v ? v : `That didn't go through (${resp.status}). Try again.`)
+  }
+  return d
 }
 
 // Every call to the Vula API carries the signed-in user's token. This used to be a hand-kept

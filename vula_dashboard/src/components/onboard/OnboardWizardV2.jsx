@@ -133,7 +133,7 @@ function Review({ x }) {
         <li>The Vula workspace is created straight away.</li>
         <li>They get a WhatsApp message with their login link.</li>
         <li>Vula reads their documents (2–4 hours).</li>
-        <li>Richard or Judy calls within 24 hours to help them start.</li>
+        <li>Richard calls within 24 hours to help them start.</li>
         <li>No billing until day 31; they can cancel before then.</li>
       </ol>
       {x.error && <p className="vhq-error" role="alert">{x.error}</p>}
@@ -163,7 +163,7 @@ function Done({ x }) {
       <dl className="vob-timeline">
         <dt>Right now</dt><dd>Their login link arrives on WhatsApp.</dd>
         <dt>Within 4 hours</dt><dd>Vula finishes reading their documents.</dd>
-        <dt>Tomorrow</dt><dd>Richard or Judy runs a first demo with them.</dd>
+        <dt>Tomorrow</dt><dd>Richard runs a first demo with them.</dd>
         <dt>Day 7</dt><dd>Their first AI-drafted quote or proposal, ready to send.</dd>
       </dl>
       {x.paymentUrl && <a className="vob-pay" href={x.paymentUrl} target="_blank" rel="noopener noreferrer">Complete the subscription on PayFast <ExternalLink size={16} aria-hidden="true" /></a>}

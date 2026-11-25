@@ -494,7 +494,7 @@ def project_profit(tenant_id: str, project: Optional[str] = None) -> Dict[str, A
                 f"{_r(p['profit_cents'])} — {p['status']}. Biggest costs: {top}."
                 + (f" {_r(p['unallocated_trade_cents'])} of its cost isn't allocated to a trade yet."
                    if p["unallocated_trade_cents"] else "")
-                + (f" Direct suppliers paid on the project (in the BOQ, not DIGG's cost or fee): "
+                + (f" Direct suppliers paid on the project (in the BOQ, not your cost or fee): "
                    f"{_r(p['direct_cost_cents'])}." if p.get("direct_cost_cents") else "")
                 + (f" Variations over the BOQ: {p['variations']['documents']} document(s) — claimed from the "
                    f"client {_r(p['variations']['claimed_cents'])}, extra costs from suppliers "

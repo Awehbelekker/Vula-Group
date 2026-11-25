@@ -60,6 +60,10 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
       .then((r) => (r.ok ? r.json() : {}))
       .catch(() => ({}))
       .then((d) => {
+        if (d?.partner) {                                     // a partner's own address (flowcrew.co.za): its name and look
+          document.title = d.partner.name
+          return { ...d.partner.brand, name: d.partner.name, logo_url: `/partners/${d.partner.id}-mark.png`, partner_login: true }
+        }
         const tid = d?.tenant_id || HOST_HINT
         if (!tid) return null
         return fetch(`${VULA_API}/v1/commerce/${tid}/brand`).then((r) => (r.ok ? r.json() : null))
@@ -343,10 +347,18 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
     }
   }
 
+  // a partner's address: someone who signed in to book lessons, not to run a school — on to the
+  // customer app, which reads the sign-in once from the address's #fragment (never sent to a server)
+  const toLessons = async () => {
+    const { data } = await supabase.auth.getSession()
+    const t = data?.session
+    window.location.assign('/flow/find' + (t ? `#access_token=${t.access_token}&refresh_token=${t.refresh_token}&expires_in=${t.expires_in}` : ''))
+  }
+
   return {
     mode, setMode, email, setEmail, password, setPassword, newPassword, setNewPassword,
     confirmPassword, setConfirmPassword, error, setError, info, setInfo, loading, loginBrand,
-    pendingUser, businessName, setBusinessName, businessType, setBusinessType, businessTypes,
+    pendingUser, toLessons, businessName, setBusinessName, businessType, setBusinessType, businessTypes,
     resolveAndLogin, handleSignIn, handleSignUp, handleSetupWorkspace, handleGoogle,
     handleMagicLink, handleResetRequest, handleSetPassword,
     twoStepCode, setTwoStepCode, twoStepSetup, handleTwoStepCode, handleTwoStepSetup, cancelTwoStep,

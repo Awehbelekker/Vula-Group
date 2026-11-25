@@ -55,6 +55,12 @@ MAX_PAGES = 60
 SHOPIFY_PAGE_SIZE = 25
 MAX_PRODUCT_PAGES = 40            # × 25 products per feed page
 FEED_MAX_BYTES = 8 * 1024 * 1024
+# 24 Nov 2026 (Atlantic Surf Co: 55 of 60 pages "Response too large", every lesson and price page
+# among them). A page builder had put its pictures inside the page itself (data: addresses inside
+# inline SVGs — 2.9 MB of a 3.1 MB page with 6 000 characters of text). A page may now be this big
+# on the wire; the embedded pictures are cut out before it is kept (`slim`), so what stays in
+# memory for the run is about the size of the page's own markup.
+PAGE_MAX_BYTES = 16 * 1024 * 1024
 MAX_PRODUCT_URLS = 300            # product pages read one by one when there is no feed
 _CONCURRENCY = 2
 # 2026-10-13: four overlapping runs at 4 requests at a time made Shopify answer 429/503 to
@@ -636,11 +642,20 @@ async def _read_sitemap(start: str, host: str, seen: set) -> List[str]:
     return found
 
 
+_EMBEDDED = re.compile(rb"data:[a-zA-Z0-9.+/-]+;base64,[A-Za-z0-9+/=\s]{200,}")
+
+
+def slim(raw: bytes) -> bytes:
+    """A page without the pictures embedded in it (data: addresses of 200+ characters). Nothing
+    the reading uses is in them: text, links, prices, schema.org data and picture addresses stay."""
+    return _EMBEDDED.sub(b"data:,", raw) if b";base64," in raw else raw
+
+
 async def _page(url: str, cache: Optional[Dict[str, bytes]]) -> bytes:
     """A page's bytes — from this run's cache when it was already fetched (while crawling)."""
     if cache is not None and url in cache:
         return cache[url]
-    raw = await _get(url)
+    raw = slim(await _get(url, max_bytes=PAGE_MAX_BYTES))
     if cache is not None:
         cache[url] = raw
     return raw

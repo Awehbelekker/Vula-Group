@@ -244,7 +244,10 @@ async def test_saving_the_same_rate_updates_it_tenant_scoped(rates_db):
     assert out["id"] == "r2" and out["rate"] == 263.14 and "T" in out["updated_at"]
     assert len([r for r in rates_db.tables["vula_qs_rates"] if r["tenant_id"] == TID]) == 2
     other = await qs.upsert_rate(TID, qs.RateIn(id="rx", description="theirs", rate=5))
-    assert other == {"error": "Rate not found."}
+    # 23 Nov 2026: a refusal is a real 404, not 200 {"error"} (both keys kept for older screens)
+    import json as _json
+    assert other.status_code == 404
+    assert _json.loads(other.body) == {"error": "Rate not found.", "detail": "Rate not found."}
     await qs.delete_rate(TID, "rx")
     assert any(r["id"] == "rx" for r in rates_db.tables["vula_qs_rates"])
 

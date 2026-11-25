@@ -498,7 +498,7 @@ def test_direct_suppliers_count_against_the_boq_not_digg(db, monkeypatch):
     monkeypatch.setattr(project_programme, "variations_to_flag", lambda *a: [])
     cost = project_programme.cost_position(TID, "HPC Bokaap", date(2026, 10, 3), tasks=[])
     assert cost["spent_cents"] == 1000000 + 79401520 + 11661123
-    assert cost["paid_by_digg_cents"] == 1000000 and cost["paid_directly_cents"] == 79401520 + 11661123
+    assert cost["paid_by_business_cents"] == 1000000 and cost["paid_directly_cents"] == 79401520 + 11661123
 
 
 def test_an_uploaded_supplier_invoice_never_becomes_bank_lines():

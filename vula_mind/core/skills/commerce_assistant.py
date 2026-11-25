@@ -421,10 +421,20 @@ FORWARDED_NOTE = (
 )
 
 HOW_TO_ORDER_REPLY = (
-    "Easy — just tell me what you'd like and how much, e.g. \"2kg hake and 1kg prawns\". "
+    "Easy — just tell me what you'd like and how much, e.g. \"2 of the large ones and 1 gift voucher\". "
     "I'll add it to your cart and show you the total. Say \"view cart\" anytime to check it, "
     "and \"place order\" when you're ready — I'll confirm delivery or collection and payment "
     "before anything is placed.")
+# A food business keeps its food example; every other business gets the neutral one above.
+_FOOD_ORDER_EXAMPLE = "2kg hake and 1kg prawns"
+_ORDER_EXAMPLE = "2 of the large ones and 1 gift voucher"
+
+
+def how_to_order_reply(tenant_id: str) -> str:
+    """HOW_TO_ORDER_REPLY, with a food example only for a food business."""
+    if _tenant_business_type(tenant_id) == "food":
+        return HOW_TO_ORDER_REPLY.replace(_ORDER_EXAMPLE, _FOOD_ORDER_EXAMPLE)
+    return HOW_TO_ORDER_REPLY
 
 
 # 2026-09-24 (off-the-hook): "We do not deliver to Mauritius. We deliver to these areas: ..." was
@@ -668,7 +678,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                     "product": {"type": "string", "description": "Product name or slug."},
                     "quantity": {"type": "number", "description": "Amount to add. For products priced per kg, this is the number of kilograms (decimals allowed, e.g. 1.5). For packs, the number of packs. Only pass the amount the customer actually said — omit it if they didn't say one, and you'll be told to ask."},
                     "variant": {"type": "string", "description": "The customer's chosen option(s) for a product that has variants, in their own words (e.g. 'large', 'red', 'size L red'). Omit for products with no options."},
-                    "choices": {"type": "string", "description": "For a product with choices (listed under `choices`, e.g. colour, nose or tail style): what the customer chose, in their own words (e.g. 'olive green, black trim, fish tail'). Omit when the product has none."},
+                    "choices": {"type": "string", "description": "For a product with choices (listed under `choices`, e.g. colour, size or finish): what the customer chose, in their own words (e.g. 'olive green, black trim, large'). Omit when the product has none."},
                 },
                 "required": ["product"],
             },
@@ -713,7 +723,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "description": (
                 "Re-send a customer's invoice/receipt PDF via WhatsApp. Call this when they ask "
                 "to resend, reprint, or get a copy of their invoice. Accepts either the invoice's "
-                "own number (e.g. OTH-INV-00002) or the order number (e.g. OTH-00001) — customers "
+                "own number (e.g. ABC-INV-00002) or the order number (e.g. ABC-00001) — customers "
                 "don't reliably know which one they have, so try whatever they give you. If they "
                 "don't give a number at all, omit it and their most recent invoice is sent."
             ),
@@ -730,7 +740,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "function": {
             "name": "get_daily_catch",
             "description": (
-                "Return today's fresh catch highlights and any specials. Call this when a "
+                "Return today's highlights (what the business flagged for today, or what's in "
+                "stock) and any specials. Call this when a "
                 "customer asks what's fresh, what's good today, what the special is, or "
                 "when greeting and you want to proactively inspire them."
             ),
@@ -791,10 +802,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "name": "suggest_recipe",
             "description": (
                 "Suggest a South African recipe when the customer asks what to cook, "
-                "mentions a fish or ingredient, or wants meal ideas. Returns short "
+                "mentions a dish or ingredient, or wants meal ideas. Returns short "
                 "recipe(s) and lists which ingredients we have in stock so they "
                 "can be added to the cart. If the customer asks for a specific number of "
-                "recipes/ideas/options (e.g. '3 hake recipes', 'a couple of ideas'), pass that "
+                "recipes/ideas/options (e.g. '3 chicken recipes', 'a couple of ideas'), pass that "
                 "as count — do not just return one when they clearly asked for more."
             ),
             "parameters": {
@@ -802,7 +813,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "properties": {
                     "dish": {
                         "type": "string",
-                        "description": "The dish, ingredient, or meal type the customer mentioned (e.g. 'yellowtail', 'fish braai', 'snoek pâté', 'something quick for dinner').",
+                        "description": "The dish, ingredient, or meal type the customer mentioned (e.g. 'chicken', 'a braai', 'butternut soup', 'something quick for dinner').",
                     },
                     "serves": {
                         "type": "integer",
@@ -811,7 +822,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                     "count": {
                         "type": "integer",
                         "description": "How many DIFFERENT recipes to suggest, if the customer "
-                                      "asked for more than one (e.g. '3 hake recipes' -> 3). "
+                                      "asked for more than one (e.g. '3 chicken recipes' -> 3). "
                                       "Default 1. Capped at 3 to keep the reply WhatsApp-length.",
                     },
                 },
@@ -824,10 +835,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "function": {
             "name": "research_product",
             "description": (
-                "Answer a factual question about a product, ingredient, or fish/food type — "
+                "Answer a factual question about a product, material or ingredient — "
                 "origin, sustainability, local vs imported, taste, nutrition, or general facts. "
-                "Use for questions like 'is snoek local', 'is kingklip sustainable', 'what does "
-                "hake taste like'. NOT for recipes (use suggest_recipe) and NOT for prices/stock "
+                "Use for questions like 'is it made locally', 'is it sustainable', 'what is it "
+                "made of'. NOT for recipes (use suggest_recipe) and NOT for prices/stock "
                 "(use list_products). Grounds the answer in the business's own product records "
                 "and knowledge base first, then real web research — never invents facts; says "
                 "plainly when nothing reliable is found rather than guessing."
@@ -837,7 +848,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "properties": {
                     "topic": {
                         "type": "string",
-                        "description": "What the customer is asking about, e.g. 'snoek sustainability', 'kingklip origin', 'is hake local'.",
+                        "description": "What the customer is asking about, e.g. 'is the coffee locally roasted', 'what the basin is made of', 'is the cotton organic'.",
                     },
                 },
                 "required": ["topic"],
@@ -1165,7 +1176,7 @@ class CommerceAssistantSkill(BaseSkill):
         listings = _lt.tenant_has_listings(inp.tenant_id)
         if (_HOW_TO_ORDER_RE.search(inp.question or "") and not listings
                 and not _is_booking_focused(inp.tenant_id)):
-            return SkillOutput(answer=HOW_TO_ORDER_REPLY, skill_name=self.name, confidence=0.95)
+            return SkillOutput(answer=how_to_order_reply(inp.tenant_id), skill_name=self.name, confidence=0.95)
         ctx = {
             "tenant_id": inp.tenant_id,
             "session_id": (
@@ -2206,8 +2217,10 @@ class CommerceAssistantSkill(BaseSkill):
         # greeting menu header) — this is the first time a product photo appears while actually
         # shopping. Scoped to add-to-cart only (one confirmed item, one image) rather than every
         # browse/list result, to avoid sending a flood of images per message.
-        if ctx is not None and product.get("image_url"):
-            ctx["media_url"] = product["image_url"]
+        # 24 Nov 2026: the colour's own photo when it has one (migration 302).
+        photo = ((variant or {}).get("image_url") or product.get("image_url"))
+        if ctx is not None and photo:
+            ctx["media_url"] = photo
         out = {
             "added": f"{product['name']} ({variant_label})" if variant_label else product["name"],
             "quantity": _fmt_qty(product, qty),
@@ -2235,7 +2248,8 @@ class CommerceAssistantSkill(BaseSkill):
             cart = {}
         items = cart.get("items") or []
         if not items:
-            return "What would you like to order? Tell me the product and how much, e.g. \"1kg hake\"."
+            example = "1kg hake" if _tenant_business_type(ctx["tenant_id"]) == "food" else "2 of the large ones"
+            return f"What would you like to order? Tell me the product and how much, e.g. \"{example}\"."
         lines = "\n".join(f"• {i['quantity']} {i['name']} — {i['line_total']}" for i in items)
         return (f"🛒 Your cart:\n{lines}\nTotal {cart.get('total')} (incl. delivery {cart.get('delivery')}).\n\n"
                 "Reply *place order* when you're ready, or tell me what else you'd like.")
@@ -2391,7 +2405,10 @@ class CommerceAssistantSkill(BaseSkill):
 
         # Every item the list returns is named — the message used to name only the first 3 of 6,
         # and that message is answered verbatim (benchmark, 30 Sep).
-        header = "🎣 Today's catch:" if specials else "🐟 Fresh in stock today:"
+        if _tenant_business_type(tenant_id) == "food":
+            header = "🎣 Today's catch:" if specials else "🐟 Fresh in stock today:"
+        else:
+            header = "⭐ Today's highlights:" if specials else "In stock today:"
 
         def _price(p: Dict[str, Any]) -> str:
             r = f"R{p['price_cents'] / 100:.2f}"

@@ -5,7 +5,8 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { downloadCsv } from '../../lib/csv'
-import { VULA_API } from '../../lib/authFetch'
+import { api, tryApi } from '../../lib/api'
+import { toast } from '../ui/index.jsx'
 import { escapeHtml as esc } from '../../lib/html'
 
 export const AUDIENCES = [
@@ -46,14 +47,21 @@ export function useCustomers(tenantId) {
     if (openPhone === c.phone) { setOpenPhone(null); return }
     setOpenPhone(c.phone); setDetail(null); setNoteDraft('')
     setTagsDraft((c.tags || []).join(', ')); setAreaDraft(c.area || '')
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(c.phone)}/detail`)
-    const d = await r.json()
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(c.phone)}/detail`)
+    if (!res.ok) {
+      // close it rather than leave a note box that would save over the real note
+      toast(`Couldn't open this customer: ${res.error}`, 'danger')
+      setOpenPhone(null)
+      return
+    }
+    const d = res.data
     setDetail(d); setNoteDraft(d.note || '')
   }
 
   const printStatement = async (phone, name) => {
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/statement`)
-    const st = await r.json()
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/statement`)
+    if (!res.ok) { toast(`Couldn't make the statement: ${res.error}`, 'danger'); return }
+    const st = res.data
     const R = c => `R${((c || 0) / 100).toFixed(2)}`
     // Customer text is escaped (lib/html.js): this about:blank window shares the dashboard's origin.
     const rows = (st.invoices || []).map(inv =>
@@ -78,10 +86,10 @@ export function useCustomers(tenantId) {
 
   const saveNote = async (phone) => {
     setSavingNote(true)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/note`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note: noteDraft }),
-    }).catch(() => {})
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/note`, {
+      method: 'POST', body: { note: noteDraft },
+    })
+    if (!res.ok) toast(`The note wasn't saved: ${res.error}`, 'danger')
     setSavingNote(false)
   }
 
@@ -89,22 +97,26 @@ export function useCustomers(tenantId) {
     setLoading(true)
     const q = new URLSearchParams({ audience })
     if (search) q.set('search', search)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers?${q}`)
-    const d = await r.json()
-    setRows(d.customers || [])
-    setCount(d.count || 0)
-    setTotalAll(d.total_all || 0)
-    setLoading(false)
+    try {
+      const d = await api(`/v1/commerce/${tenantId}/admin/customers?${q}`)
+      setRows(d.customers || [])
+      setCount(d.count || 0)
+      setTotalAll(d.total_all || 0)
+    } catch (e) {
+      toast(`Couldn't load your customers: ${e.message}`, 'danger')
+    } finally {
+      setLoading(false)
+    }
   }, [tenantId, audience, search])
 
   const saveTags = async (phone) => {
     setSavingTags(true)
     const tags = tagsDraft.split(',').map(t => t.trim()).filter(Boolean)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/tags`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tags, area: areaDraft }),
-    }).catch(() => {})
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/tags`, {
+      method: 'POST', body: { tags, area: areaDraft },
+    })
     setSavingTags(false)
+    if (!res.ok) { toast(`The tags and area weren't saved: ${res.error}`, 'danger'); return }
     load()   // refresh so the row + segment counts reflect the change
   }
 

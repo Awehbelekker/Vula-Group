@@ -4,8 +4,10 @@
  * (/v1/commerce/{tenant}/admin/bank/*, migration 057), same bodies, same messages. Money stays
  * integer cents from the server; nothing here does arithmetic on it.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const BANK_FILTERS = [["", "All"], ["needs_input", "Needs input"], ["unmatched", "To review"], ["matched", "Matched"], ["ignored", "Ignored"]];
@@ -28,6 +30,8 @@ export function useBank(tenantId) {
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const shownError = useRef("");   // toast a failed load once, not on every reload
   const [noProject, setNoProject] = useState(false);
   // Re-file a whole category at once (DIGG, 6 Oct: 157 lines booked as "casual labour" that were
   // really materials and subcontractors): filter by category, then group by payee and apply one
@@ -47,23 +51,30 @@ export function useBank(tenantId) {
   }, [tenantId]);
 
   // Returns the fresh summary, so the statement-upload poll can watch it settle.
+  // A load that fails keeps its list empty but says so (loadError, and one toast) — it no
+  // longer looks like "nothing here" (23 Nov 2026).
   const load = useCallback(async () => {
-    const [s, t, inv, ord, acc, wk] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/reconciliation`).then(r => r.json()).catch(() => null),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions?limit=500${noProject ? "&status=no_project" : filter ? `&status=${filter}` : ""}${cat ? `&account_code=${encodeURIComponent(cat)}` : ""}`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?status=sent`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders?status=pending_payment`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/accounts`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/workers`).then(r => r.json()).catch(() => ({})),
+    const res = await Promise.all([
+      tryApi(`/v1/commerce/${tenantId}/admin/bank/reconciliation`),
+      tryApi(`/v1/commerce/${tenantId}/admin/bank/transactions?limit=500${noProject ? "&status=no_project" : filter ? `&status=${filter}` : ""}${cat ? `&account_code=${encodeURIComponent(cat)}` : ""}`),
+      tryApi(`/v1/commerce/${tenantId}/admin/invoices?status=sent`),
+      tryApi(`/v1/commerce/${tenantId}/admin/orders?status=pending_payment`),
+      tryApi(`/v1/commerce/${tenantId}/admin/accounts`),
+      tryApi(`/v1/commerce/${tenantId}/admin/workers`),
     ]);
-    setSum(s); setTxns(t.transactions || []); setInvoices(inv.invoices || []);
-    setPendingOrders(ord.orders || []);
-    setAccounts(acc.accounts || []); setVatReg(!!acc.vat_registered); setWorkers(wk.workers || []);
+    const [s, t, inv, ord, acc, wk] = res.map(x => (x.ok ? x.data : null));
+    setSum(s); setTxns(t?.transactions || []); setInvoices(inv?.invoices || []);
+    setPendingOrders(ord?.orders || []);
+    setAccounts(acc?.accounts || []); setVatReg(!!acc?.vat_registered); setWorkers(wk?.workers || []);
+    let failed = res.find(x => !x.ok);
     if (grouped) {
-      const g = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/groups?direction=out${cat ? `&account_code=${encodeURIComponent(cat)}` : ""}`)
-        .then(r => r.json()).catch(() => ({}));
-      setGroups(g.groups || []);
+      const g = await tryApi(`/v1/commerce/${tenantId}/admin/bank/transactions/groups?direction=out${cat ? `&account_code=${encodeURIComponent(cat)}` : ""}`);
+      setGroups((g.ok && g.data.groups) || []);
+      if (!g.ok && !failed) failed = g;
     }
+    const err = failed ? `Couldn't load your bank lines: ${failed.error}` : "";
+    if (err && err !== shownError.current) toast(err, "danger");
+    shownError.current = err; setLoadError(err);
     return s;
   }, [tenantId, filter, noProject, cat, grouped]);
 
@@ -80,29 +91,29 @@ export function useBank(tenantId) {
 
   const categorize = async (id, account_code) => {
     if (!account_code) return;
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${id}/categorize`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_code }),
-    }).catch(() => {});
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/bank/transactions/${id}/categorize`, {
+      method: "POST", body: { account_code },
+    });
+    if (!res.ok) toast(`Couldn't change the category: ${res.error}`, "danger");
     load();
   };
 
   const assignWorker = async (id, worker_id) => {
     if (!worker_id) return;
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${id}/worker`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ worker_id }),
-    }).catch(() => {});
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/bank/transactions/${id}/worker`, {
+      method: "POST", body: { worker_id },
+    });
+    if (!res.ok) toast(`Couldn't put this on the worker: ${res.error}`, "danger");
     load();
   };
   const workerName = (id) => (workers.find(w => w.id === id) || {}).name;
 
   // Project + trade per line (job costing reads it; Vula learns it for the next statement).
   const allocate = async (id, project, trade) => {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${id}/allocate`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: project || null, trade: trade || null }),
-    }).catch(() => {});
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/bank/transactions/${id}/allocate`, {
+      method: "POST", body: { project: project || null, trade: trade || null },
+    });
+    if (!res.ok) toast(`Couldn't save the project: ${res.error}`, "danger");
     load();
   };
   // One category (and optionally project + trade) for every line in a payee group.
@@ -150,43 +161,48 @@ export function useBank(tenantId) {
 
   const saveSettings = async () => {
     if (!pw.trim()) return flash("Enter the statement password (ID number).");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/settings`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: pw, bank: "Capitec" }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
-    if (r.error) flash(r.error); else { flash("Saved ✓ — statements now auto-unlock."); setPw(""); }
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/bank/settings`, {
+      method: "POST", body: { password: pw },
+    });
+    if (!res.ok) toast(`Couldn't save the password: ${res.error}`, "danger");
+    else { flash("Saved ✓ — statements now auto-unlock."); setPw(""); }
   };
 
   const upload = async (file) => {
     if (!file) return;
     setBusy(true); flash("Reading statement…");
     const b64 = await new Promise((res) => { const rd = new FileReader(); rd.onload = () => res(rd.result); rd.readAsDataURL(file); });
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/statement`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pdf_base64: b64, filename: file.name }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
-    if (r.error) { setBusy(false); return flash(r.error); }
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/bank/statement`, {
+      method: "POST", body: { pdf_base64: b64, filename: file.name },
+    });
+    if (!res.ok) { setBusy(false); setMsg(""); toast(`Couldn't read that statement: ${res.error}`, "danger"); return; }
     // Reconciliation runs server-side (takes minutes) — poll until transactions stop growing.
     // (The count comes from each fresh load; it used to read the summary from before the upload,
     // so the poll never saw it settle and always ran the full 10 minutes.)
+    // It says "reconciled" only when the count settled on lines; otherwise it says it's still going.
     flash("Reconciling… this takes a few minutes. The numbers below update as it works.");
     let last = -1, stable = 0;
-    for (let i = 0; i < 40 && stable < 3; i++) {
-      await new Promise(res => setTimeout(res, 15000));
-      const s = await load();
-      const n = (s && s.txn_count) || 0;
-      if (n === last && n > 0) stable++; else stable = 0;
-      last = n;
-    }
-    setBusy(false); flash("Statement reconciled ✓"); load();
+    try {
+      for (let i = 0; i < 40 && stable < 3; i++) {
+        await new Promise(res => setTimeout(res, 15000));
+        const s = await load();
+        const n = (s && s.txn_count) || 0;
+        if (n === last && n > 0) stable++; else stable = 0;
+        last = n;
+      }
+    } finally { setBusy(false); }
+    if (stable >= 3) flash("Statement reconciled ✓");
+    else toast("Vula is still working through this statement, or couldn't check on it. Refresh in a few minutes to see the lines.", "danger");
+    load();
   };
 
   const recategorize = async () => {
     setBusy(true); flash("Re-running AI on unallocated items…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/recategorize`, { method: "POST" })
-      .then(r => r.json()).catch(() => ({ error: "network" }));
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/bank/recategorize`, { method: "POST" });
     setBusy(false);
-    flash(r.error ? r.error : `Allocated ${r.updated} of ${r.reviewed} — ${r.still_pending} still need you.`);
+    const r = res.data || {};
+    if (!res.ok) { setMsg(""); toast(res.error, "danger"); }
+    else flash(`Allocated ${r.updated} of ${r.reviewed} — ${r.still_pending} still need you.`);
     load();
   };
 
@@ -223,9 +239,9 @@ export function useBank(tenantId) {
   };
 
   const reviewOnWhatsApp = async () => {
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/review/start`, { method: "POST" })
-      .then(r => r.json()).catch(() => ({ error: "network" }));
-    flash(r.error ? r.error : (r.started ? "📲 Sent to your WhatsApp — answer one at a time there." : "Nothing needs review 🎉"));
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/bank/review/start`, { method: "POST" });
+    if (!res.ok) return toast(res.error, "danger");
+    flash(res.data.started ? "📲 Sent to your WhatsApp — answer one at a time there." : "Nothing needs review 🎉");
   };
 
   const act = async (id, action, invoice_id, order_id) => {
@@ -249,6 +265,6 @@ export function useBank(tenantId) {
     sum, txns, shown, invoices, pendingOrders, accounts, workers, vatReg, filter, chooseFilter, noProject, chooseNoProject,
     pw, setPw, busy, msg, cat, setCat, grouped, setGrouped, groups, hasProjects, projectNames, sheet, setSheet,
     categorize, assignWorker, workerName, allocate, applyGroup, pickSheet, importSheet, saveSettings, upload, recategorize,
-    reviewOnWhatsApp, act, bankAccounts, loadBankAccounts, setAccountProject, nameAccount,
+    reviewOnWhatsApp, act, bankAccounts, loadBankAccounts, setAccountProject, nameAccount, loadError, reload: load,
   };
 }

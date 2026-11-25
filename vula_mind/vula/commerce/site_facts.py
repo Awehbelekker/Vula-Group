@@ -142,6 +142,26 @@ _DAYS = {"mo": "Monday", "tu": "Tuesday", "we": "Wednesday", "th": "Thursday", "
          "sa": "Saturday", "su": "Sunday"}
 _TEL = re.compile(r'(?i)href\s*=\s*["\']tel:([^"\']+)["\']')
 _MAIL = re.compile(r'(?i)href\s*=\s*["\']mailto:([^"\'?]+)')
+# 24 Nov 2026 (Atlantic Surf Co: the scan kept shop@wordpress-885179-3068786.cloudwaysapps.com, the
+# address its host made up for the staging copy, while the pages show shop@atlanticsurfco.co.za six
+# times). An address on a host's own staging domain is never the business's; the next one is read.
+_HOST_DOMAINS = ("cloudwaysapps.com", "wpengine.com", "wpenginepowered.com", "kinsta.cloud",
+                 "myshopify.com", "wordpress.com", "wpcomstaging.com", "herokuapp.com", "vercel.app",
+                 "netlify.app", "pantheonsite.io", "sg-host.com", "example.com")
+
+
+def real_email(value: Any) -> str:
+    """The address as written when it could be the business's own; "" for one on a web host's
+    staging domain or not an address at all."""
+    v = re.sub(r"\s+", "", str(value or "")).replace("mailto:", "")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}", v):
+        return ""
+    domain = v.rsplit("@", 1)[1].lower()
+    if any(domain == h or domain.endswith("." + h) for h in _HOST_DOMAINS):
+        return ""
+    return v
+
+
 _SOCIAL = re.compile(r"(?i)https?://(?:www\.)?(facebook|instagram|linkedin|tiktok|youtube|x|twitter)\.com/[^\s\"'<>]+")
 
 
@@ -225,7 +245,7 @@ def business_facts(pages: List[Tuple[str, str]]) -> Dict[str, Dict[str, str]]:
                 continue
             put("name", d.get("name"), url)
             put("phone", d.get("telephone"), url)
-            put("email", str(d.get("email") or "").replace("mailto:", ""), url)
+            put("email", real_email(d.get("email")), url)
             put("address", _address(d.get("address")), url)
             put("hours", _hours(d), url)
             area = d.get("areaServed")
@@ -237,9 +257,11 @@ def business_facts(pages: List[Tuple[str, str]]) -> Dict[str, Dict[str, str]]:
         tel = _TEL.search(page or "")
         if tel:
             put("phone", _html.unescape(tel.group(1)), url)
-        mail = _MAIL.search(page or "")
-        if mail:
-            put("email", _html.unescape(mail.group(1)), url)
+        for mail in _MAIL.finditer(page or ""):
+            address = real_email(_html.unescape(mail.group(1)))
+            if address:
+                put("email", address, url)
+                break
         socials = sorted(set(m.group(0).rstrip("/") for m in _SOCIAL.finditer(page or "")))
         if socials:
             put("socials", ", ".join(socials[:6]), url)

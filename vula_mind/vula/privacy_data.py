@@ -181,6 +181,23 @@ def _erase_listings_sent(tenant_id: str, variants: List[str]) -> int:
                   .eq("tenant_id", tenant_id).in_("phone", variants).execute())
 
 
+def _erase_lesson_rating_words(tenant_id: str, variants: List[str]) -> int:
+    """What they wrote to a school when rating a lesson (25 Nov 2026). The stars stay — they are
+    a count in an average, tied to nobody — the words go. The lesson request itself is the
+    business's appointment record and is left, like a booking."""
+    asked = (_client().table("commerce_lesson_requests").select("id").eq("tenant_id", tenant_id)
+             .in_("customer_phone", variants).limit(500).execute().data or [])
+    ids = [r["id"] for r in asked if r.get("id")]
+    if not ids:
+        return 0
+    said = [r["id"] for r in (_client().table("commerce_lesson_ratings").select("id,comment").eq("tenant_id", tenant_id)
+                              .in_("request_id", ids).limit(500).execute().data or []) if r.get("comment")]
+    if not said:
+        return 0
+    _client().table("commerce_lesson_ratings").update({"comment": None}).eq("tenant_id", tenant_id).in_("id", said).execute()
+    return len(said)
+
+
 def _by_phone(table: str, column: str = "phone") -> Callable[[str, List[str]], int]:
     """A step that deletes this business's rows for the number in `table`.`column`."""
     def step(tenant_id: str, variants: List[str]) -> int:
@@ -192,7 +209,8 @@ def _by_phone(table: str, column: str = "phone") -> Callable[[str, List[str]], i
 
 # (label, step). Order matters only for readability; each step stands alone.
 # 13 Nov 2026 audit: six stores that hold what was sent to or about the person were missing.
-# Left out on purpose: bookings (the business's own appointment record), emails sent to a project's
+# Left out on purpose: bookings, table bookings and lesson or hire requests (the business's own
+# appointment record), emails sent to a project's
 # client (vula_project_client_emails: kept like an invoice, owner's decision 18 Nov 2026) and vula_wa_prompt_state
 # (no tenant_id, so deleting by number would reach the person's state with other businesses).
 ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
@@ -209,6 +227,7 @@ ERASE_STEPS: List[Tuple[str, Callable[[str, List[str]], int]]] = [
     ("property_enquiries", _erase_property_enquiries),
     ("buyer_wish", _erase_buyer_wish),
     ("listings_sent", _erase_listings_sent),
+    ("lesson_rating_words", _erase_lesson_rating_words),
     ("messages_sent", _by_phone("vula_wa_outbound", "to_phone")),
     ("contact_record", _by_phone("commerce_contacts")),
     ("broadcasts_received", _by_phone("commerce_broadcast_recipients")),

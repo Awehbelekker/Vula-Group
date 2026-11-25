@@ -59,3 +59,27 @@
   .vpr-unit, .vpr-edit-label { display: none; }
   .vpr-edit-btn { padding: 0 !important; width: 40px; flex: none; justify-content: center; gap: 0 !important; }
 }
+/* Add form: photos, sizes and colours, codes (24 Nov 2026) */
+.vpr-wide { grid-column: 1 / -1; }
+.vpr-label { display: block; font-size: 13px; color: var(--ink); margin-bottom: 6px; }
+.vpr-check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-body); color: var(--ink); min-height: 44px; }
+.vpr-check input { width: 18px; height: 18px; }
+.vpr-more summary { cursor: pointer; font-size: var(--fs-body); color: var(--accent); min-height: 44px; display: flex; align-items: center; }
+.vpr-more[open] summary { margin-bottom: var(--space-2); }
+.vpo { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-2); }
+.vpo-row { display: grid; grid-template-columns: minmax(90px, 160px) 1fr auto; gap: var(--space-2); align-items: center; }
+.vpo-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vpo-count { font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; }
+.vpo-count--over { color: var(--danger); }
+@media (max-width: 480px) { .vpo-row { grid-template-columns: 1fr auto; } .vpo-values { grid-column: 1 / 2; } }
+.vpp { border-top: 1px solid var(--border-soft); padding-top: var(--space-2); margin: var(--space-2) 0; }
+.vpp-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); font-size: 13px; }
+.vpp-title { font-weight: 600; color: var(--ink); }
+.vpp-hint { font-size: var(--fs-caption); color: var(--muted); }
+.vpp-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 6px 0; }
+.vpp-value { min-width: 80px; font-size: 13px; color: var(--ink); }
+.vpp-pics { display: flex; flex-wrap: wrap; gap: 6px; }
+.vpp-pic { width: 44px; height: 44px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); overflow: hidden; cursor: pointer; }
+.vpp-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vpp-pic.is-on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.vpp-none { font-size: 11px; color: var(--muted); }

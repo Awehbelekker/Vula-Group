@@ -12,9 +12,18 @@ import { formatMoney } from "../../lib/money";
 import {
   Button, Card, DataTable, EmptyState, Field, FilterBar, IconButton, Input, PageHeader, Select, Sheet, Skeleton, StatusChip, Textarea,
 } from "../ui/index.jsx";
+import CatalogueSync from "./CatalogueSync";
+import VulaImageUpload from "../VulaImageUpload";
+import { useBusinessType } from "../../store/business";
+import { examplesFor, isFood } from "../../lib/examples";
+import { lazyScreen, ScreenSuspense } from "../../lib/lazyScreen.jsx";
 import "./products.css";
 
-function Row({ p, api, onEdit }) {
+const OptionsBuilder = lazyScreen(() => import("./OptionsBuilder"));
+
+// 24 Nov 2026 audit: the star (is_daily_catch) read "Catch of the day" for every business — only a
+// food business calls it that; everyone else sees "Featured". Same field either way.
+function Row({ p, api, onEdit, star }) {
   const busy = api.saving === p.id;
   const editing = api.editPrice[p.id] !== undefined;
   return (
@@ -25,7 +34,7 @@ function Row({ p, api, onEdit }) {
       <span className="vpr-main">
         <span className="vpr-name">{p.name}</span>
         <span className="vpr-chips">
-          {p.is_daily_catch && <StatusChip tone="highlight"><Star size={12} aria-hidden="true" />Catch of the day</StatusChip>}
+          {p.is_daily_catch && <StatusChip tone="highlight"><Star size={12} aria-hidden="true" />{star}</StatusChip>}
           {!p.in_stock && <StatusChip tone="warm">Out of stock</StatusChip>}
           {p.stock_quantity != null && p.in_stock && <span className="vpr-sub">{p.stock_quantity} on hand</span>}
         </span>
@@ -44,7 +53,7 @@ function Row({ p, api, onEdit }) {
           <span className="vpr-switch-knob" aria-hidden="true" />
           <span className="vpr-switch-label">{busy ? "…" : p.in_stock ? "In stock" : "Out"}</span>
         </button>
-        <IconButton Icon={Star} quiet label={p.is_daily_catch ? `Remove ${p.name} as catch of the day` : `Mark ${p.name} catch of the day`}
+        <IconButton Icon={Star} quiet label={p.is_daily_catch ? `Remove ${p.name} as ${star.toLowerCase()}` : `Mark ${p.name} ${star.toLowerCase()}`}
           aria-pressed={!!p.is_daily_catch} className="vpr-star" disabled={busy}
           onClick={() => api.patch(p.id, { is_daily_catch: !p.is_daily_catch })} />
         <Button size="sm" variant="secondary" Icon={Pencil} className="vpr-edit-btn" aria-label={`Edit ${p.name}`} onClick={() => onEdit(p.id)}><span className="vpr-edit-label">Edit</span></Button>
@@ -57,6 +66,9 @@ export default function ProductsV2({ api, EditPanel }) {
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState(null);
   const [editId, setEditId] = useState(null);
+  const businessType = useBusinessType();
+  const star = isFood(businessType) ? "Catch of the day" : "Featured";
+  const ex = examplesFor(businessType);
   const editing = api.products.find((p) => p.id === editId) || null;
 
   const groups = useMemo(() => {
@@ -88,6 +100,7 @@ export default function ProductsV2({ api, EditPanel }) {
       <PageHeader sub="Everything you sell, by category. Prices save as you leave the box."
         actions={<>
           <Button size="sm" variant="secondary" Icon={Tags} onClick={() => api.setShowCats((s) => !s)}>Categories</Button>
+          <CatalogueSync tenantId={api.tenantId} />
           <Button size="sm" variant="secondary" Icon={Download} onClick={api.exportCsv} disabled={!api.products.length}>Export CSV</Button>
           <Button size="sm" variant="secondary" Icon={Upload} onClick={() => api.fileInputRef.current?.click()}>Import CSV</Button>
           <input ref={api.fileInputRef} type="file" accept=".csv,text/csv" onChange={api.onImportFile} hidden tabIndex={-1} aria-hidden="true" />
@@ -98,7 +111,7 @@ export default function ProductsV2({ api, EditPanel }) {
         <Card className="vpr-block">
           <form onSubmit={api.createProduct} className="vpr-form">
             <Field label="Product name"><Input required value={api.form.name} onChange={(e) => api.setForm({ ...api.form, name: e.target.value })} /></Field>
-            <Field label="Price (R)"><Input required type="number" step="0.01" inputMode="decimal" value={api.form.price} onChange={(e) => api.setForm({ ...api.form, price: e.target.value })} /></Field>
+            <Field label="Price (R)"><Input required inputMode="decimal" value={api.form.price} onChange={(e) => api.setForm({ ...api.form, price: e.target.value })} /></Field>
             <Field label="Sold by">
               <Select value={api.form.sold_by} onChange={(e) => api.setForm({ ...api.form, sold_by: e.target.value })}>
                 <option value="pack">per pack / item</option><option value="kg">per kg</option>
@@ -112,10 +125,41 @@ export default function ProductsV2({ api, EditPanel }) {
             <Field label="Description (optional)" style={{ gridColumn: "1 / -1" }}>
               <Textarea rows={2} value={api.form.description} onChange={(e) => api.setForm({ ...api.form, description: e.target.value })} />
             </Field>
+            <div className="vpr-wide">
+              <span className="vpr-label">Photos <span className="vpr-sub">— the first is the cover</span></span>
+              <VulaImageUpload tenantId={api.tenantId} existingUrls={api.form.images} maxFiles={5}
+                onUploaded={(urls) => api.setForm((f) => ({ ...f, images: urls }))} />
+            </div>
+            {!api.form.hasOptions && (
+              <Field label="Stock on hand (optional)" hint="Blank means you don't count it.">
+                <Input inputMode="decimal" value={api.form.stock} onChange={(e) => api.setForm({ ...api.form, stock: e.target.value })} />
+              </Field>
+            )}
+            <label className="vpr-check vpr-wide">
+              <input type="checkbox" checked={api.form.hasOptions}
+                onChange={(e) => api.setForm({ ...api.form, hasOptions: e.target.checked })} />
+              It comes in sizes or colours
+            </label>
+            {api.form.hasOptions && (
+              <div className="vpr-wide">
+                <ScreenSuspense><OptionsBuilder rows={api.form.optionRows} disabled={api.adding}
+                  onChange={(rows) => api.setForm((f) => ({ ...f, optionRows: rows }))} /></ScreenSuspense>
+                <Field label="Stock of each version (optional)" hint="You can change each one afterwards, under Edit.">
+                  <Input inputMode="decimal" value={api.form.stock} onChange={(e) => api.setForm({ ...api.form, stock: e.target.value })} />
+                </Field>
+              </div>
+            )}
+            <details className="vpr-more vpr-wide">
+              <summary>SKU, barcode and cost price</summary>
+              <div className="vpr-form">
+                <Field label="SKU (your own code)"><Input value={api.form.sku} onChange={(e) => api.setForm({ ...api.form, sku: e.target.value })} /></Field>
+                <Field label="Barcode"><Input inputMode="numeric" value={api.form.barcode} onChange={(e) => api.setForm({ ...api.form, barcode: e.target.value })} /></Field>
+                <Field label="Cost price (R)" hint="What you pay for it, for your margins."><Input inputMode="decimal" value={api.form.cost} onChange={(e) => api.setForm({ ...api.form, cost: e.target.value })} /></Field>
+              </div>
+            </details>
             <div className="vpr-form-go">
               <Button type="submit" Icon={Plus} disabled={api.adding}>{api.adding ? "Adding…" : "Add product"}</Button>
               <Button type="button" variant="secondary" onClick={() => api.setShowAdd(false)}>Cancel</Button>
-              <span className="vpr-sub">Add a photo afterwards, under Edit.</span>
             </div>
           </form>
         </Card>
@@ -130,7 +174,7 @@ export default function ProductsV2({ api, EditPanel }) {
             ))}
           </div>
           <div className="vpr-cat-add">
-            <Input placeholder="New category (e.g. Smoked Fish)" aria-label="New category" value={api.newCat}
+            <Input placeholder={`New category (${ex.category})`} aria-label="New category" value={api.newCat}
               onChange={(e) => api.setNewCat(e.target.value)} onKeyDown={(e) => e.key === "Enter" && api.addCategory()} />
             <Button variant="secondary" onClick={api.addCategory}>Add</Button>
           </div>
@@ -172,7 +216,7 @@ export default function ProductsV2({ api, EditPanel }) {
         <section key={c} className="vpr-group" aria-label={api.catLabel(c)}>
           <h2 className="vpr-cat-h">{api.catLabel(c)} <span className="vpr-sub">{items.length}</span></h2>
           <Card pad={0} role="list">
-            {items.map((p) => <Row key={p.id} p={p} api={api} onEdit={setEditId} />)}
+            {items.map((p) => <Row key={p.id} p={p} api={api} onEdit={setEditId} star={star} />)}
           </Card>
         </section>
       ))}

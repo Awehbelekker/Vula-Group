@@ -66,6 +66,11 @@ MODULES: dict[str, str] = {
     "listings":   "Property listings (real estate)",
     # 2026-11-10: deals board for any business type (stages per business type) — vula/pipeline/.
     "pipeline":   "Deals pipeline",
+    # 2026-11-24: restaurants — table bookings and today's specials — vula/commerce/tables.py.
+    "tables":     "Table bookings & specials (restaurants)",
+    # 2026-11-24: surf and kite schools, gear hire — requests the business confirms by hand,
+    # quoted from its own price list — vula/commerce/lessons.py.
+    "lessons":    "Lessons & gear hire (surf, kite and other schools)",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
@@ -104,6 +109,23 @@ BUSINESS_TYPES: dict[str, dict] = {
     "real_estate": {"label": "Real estate / Estate agency / Rentals",
                     "modules": ["listings", "pipeline", "bookings", "crm", "followups", "pages", "inbox",
                                 "broadcasts", "marketing", "documents", "team", "reports", "invoices"]},
+    # 2026-11-24: the light plans — one job each, none of the rest. A restaurant that only wants
+    # bookings and specials; an organiser who only sells tickets. Both can move to a full type later
+    # with nothing to migrate (the modules are switches, the data is the same). Documents stays on
+    # for both (the 12 Nov rule): the menu or the event's terms is what Vula answers customers from.
+    # A restaurant also gets Products (its menu) and, through `tables`, Tap to Pay: waiters, table
+    # tags, calling and ordering from the table.
+    "restaurant_lite": {"label": "Restaurant: table bookings & specials only",
+                        "modules": ["tables", "products", "inbox", "crm", "team", "documents"]},
+    "events_lite": {"label": "Events: tickets & the door only",
+                    "modules": ["orders", "payments", "crm", "team", "reports", "documents"]},
+    # 2026-11-24 (FlowCrew; first business Atlantic Surf Co): a surf or kite school with a shop —
+    # lessons and gear hire asked for on WhatsApp and confirmed by a person, the shop's products,
+    # the till, payments and invoices for the lessons.
+    "watersports": {"label": "Surf / kite / water sports school, shop & gear hire",
+                    "modules": ["lessons", "products", "orders", "payments", "invoices", "wa_shop", "crm",
+                                "inbox", "broadcasts", "marketing", "reports", "team", "automations",
+                                "documents", "pages"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team", "documents"]},
 }
@@ -312,7 +334,61 @@ def _public(cfg: dict) -> dict:
         # the switches that are on for this business (names only) — the dashboard shows a
         # piloted screen such as Costing by trade only where it's on (15 Nov 2026)
         "features": _features_on(cfg.get("tenant_id")),
+        "partner": partner_of(cfg),
     }
+
+
+# 2026-11-24: a business brought to Vula by a partner that sells it under its own name (FlowCrew:
+# surf and kite schools). The business's own brand stays first on its dashboard; the partner is
+# named in the credit at the foot — "FlowCrew · Powered by Vula". Set per business in
+# vula_tenant_config.features.partner (an id from this list, beside the switches).
+# The partner's own look (FlowCrew's, from its design system: ocean blue, fresh green, its ink) is
+# what a business it brought wears until the business sets its own in Settings › Brand kit — the
+# business's own colour, logo and name always win. The logo itself is a file the dashboard ships
+# (public/partners/<id>-mark.png).
+PARTNERS: dict[str, dict] = {
+    "flowcrew": {"name": "FlowCrew",
+                 # font_pairing "plain": FlowCrew's design system sets everything in the plain sans —
+                 # no serif headings on its screens (the dashboard's tokens.applyFontPairing)
+                 "brand": {"accent_color": "#2196F3", "secondary_color": "#7ED321", "ink_color": "#1E2A39",
+                           "font_pairing": "plain", "tagline": "For surf and kite schools"},   # under its name at sign-in
+                 # the partner's own web address (24 Nov 2026): its businesses sign in there and its
+                 # customers' app lives there, under the partner's name and look
+                 "domain": "flowcrew.co.za",
+                 # what a business that signs up on that address is (signup.py)
+                 "business_type": "watersports",
+                 # its fee on a lesson taught by a coach from another of its schools, in hundredths
+                 # of a percent of the lesson's price (vula/commerce/coach_pool.py)
+                 "pool_fee_bp": 1000},
+}
+
+
+def partner_for_host(host: str) -> Optional[dict]:
+    """The partner a web address belongs to — its own domain or any name under it
+    (app.flowcrew.co.za) — as {"id", "name", "brand"}; None for every other address."""
+    h = (host or "").strip().lower().split(":")[0].rstrip(".")
+    for pid, p in PARTNERS.items():
+        d = p.get("domain")
+        if d and (h == d or h.endswith("." + d)):
+            return {"id": pid, "name": p["name"], "brand": dict(p.get("brand") or {})}
+    return None
+
+
+def partner_of(cfg: Optional[dict]) -> Optional[dict]:
+    """{"id", "name"} of the partner this business came through, or None. An id that isn't a
+    known partner is nobody."""
+    features = (cfg or {}).get("features")
+    pid = features.get("partner") if isinstance(features, dict) else None
+    return {"id": pid, "name": PARTNERS[pid]["name"]} if isinstance(pid, str) and pid in PARTNERS else None
+
+
+def partner_brand(tenant_id: Optional[str]) -> dict:
+    """The colours a business wears when it has set none of its own: its partner's, else {}."""
+    try:
+        partner = partner_of(get_config(tenant_id)) if tenant_id else None
+    except Exception:  # noqa: BLE001 — the brand must still load: Vula's own defaults
+        partner = None
+    return dict(PARTNERS[partner["id"]].get("brand") or {}) if partner else {}
 
 
 def _features_on(tenant_id: Optional[str]) -> list:
@@ -458,8 +534,10 @@ def dashboard_link(tenant_id: str, page: str) -> str:
 @router.get("/by-domain")
 async def get_tenant_by_domain(host: str) -> dict:
     """Public: the tenant a dashboard hostname belongs to (no secrets — just the id), for a
-    branded login page."""
-    return {"tenant_id": tenant_for_host(host)}
+    branded login page; or the partner whose own address it is (name and colours)."""
+    partner = partner_for_host(host)
+    # a partner's own address is nobody's business in particular: the login wears the partner's look
+    return {"tenant_id": None if partner else tenant_for_host(host), "partner": partner}
 
 
 @router.get("/{tenant_id}")

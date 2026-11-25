@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { REP_DEFAULT_ACCESS, MERCHANT_GROUPS } from "../../navConfig.jsx";
 import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
 
 // Sales rep ("My Work") tabs — a sales_rep login gets these by default (see createLogin).
 export const REP_MODULES = [["rep-contacts", "My Contacts"], ["rep-chats", "My chats"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
@@ -41,6 +42,10 @@ export const EVENTS = [
   ["project_margin", "Project check (weekly: jobs below their fee)"],
   ["chat_assigned", "A customer chat is assigned to me"],
   ["pop_to_link", "Proofs of payment to link to a bill"],
+  ["delivery_problem", "A courier couldn't collect or deliver an order"],
+  ["table_booking", "A new table booking"],
+  ["lesson_request", "A new lesson or hire request"],
+  ["lesson_conditions", "Tomorrow's conditions for lessons"],
 ];
 export const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
 // Friendly display label per role — the stored value stays the plain enum (used by the
@@ -126,7 +131,9 @@ export function useTeam(tenantId) {
     else setMsg(d.error || d.detail || "Reset failed");
   };
   const removeLogin = async (uid) => {
-    await fetch(`${VULA_API}/v1/users/${tenantId}/users/${uid}`, { method: "DELETE" }); load();
+    const res = await tryApi(`/v1/users/${tenantId}/users/${uid}`, { method: "DELETE" });
+    if (!res.ok) setMsg(res.error);
+    load();
   };
   const changeMyPassword = async () => {
     setMsg("");
@@ -137,22 +144,39 @@ export function useTeam(tenantId) {
 
   const add = async () => {
     if (!form.name && !form.whatsapp) return;
-    await fetch(`${VULA_API}/v1/team/${tenantId}`, {
+    setMsg("");
+    const r = await fetch(`${VULA_API}/v1/team/${tenantId}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      // no notifications until they choose; a team gives that team's tabs (12 Nov 2026)
+      // no notifications until they choose; a team gives that team's tabs (12 Nov 2026). With no
+      // team, someone who isn't a manager starts with nothing until their tabs are ticked (23 Nov 2026).
       body: JSON.stringify({ ...form, team: form.team || null, access: [], notify: [] }),
-    });
+    }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : {};
+    if (!r || !r.ok || d.error) {
+      setMsg(/duplicate|unique/i.test(d.error || "") ? "Someone on the team already has that WhatsApp number."
+        : d.detail || d.error || "That didn't save. Try again.");
+      return;
+    }
+    const full = form.role === "owner" || form.role === "manager";
+    setMsg(full || form.team ? `${form.name || form.whatsapp} added.`
+      : `${form.name || form.whatsapp} added. Tick what they can use below — until then they only see Home.`);
     setForm({ name: "", whatsapp: "", role: "staff", team: "" }); load();
   };
   const patch = async (id, body) => {
-    const d = await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
+    const r = await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then((x) => x.json()).catch(() => ({}));
+    }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : { error: "That didn't save. Check your connection and try again." };
+    if (r && !r.ok && !d.error) d.error = d.detail || "That didn't save. Try again.";
     if (d.error) setMsg(/duplicate|unique/i.test(d.error) ? "Someone on the team already has that WhatsApp number." : d.error);
     else if (d.login_revoked) setMsg("Disabled — their dashboard login was revoked too.");
     load();
   };
-  const del = async (id) => { await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, { method: "DELETE" }); load(); };
+  const del = async (id) => {
+    const res = await tryApi(`/v1/team/${tenantId}/${id}`, { method: "DELETE" });
+    if (!res.ok) setMsg(res.error);
+    load();
+  };
 
   return {
     members, form, setForm, logins, loginForm, setLoginForm, tempPw, newPw, setNewPw, msg, auditLog, showAudit, setShowAudit,

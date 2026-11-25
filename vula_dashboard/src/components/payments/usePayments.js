@@ -4,7 +4,8 @@
  * /v1/payments/{tenant}/providers endpoints and bodies. Secrets are write-only (never shown back).
  */
 import { useCallback, useEffect, useState } from "react";
-import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const META = {
   yoco:     { blurb: "Cards. Popular with SA SMEs.", where: "portal.yoco.com → Sell Online → Payment gateway → API keys" },
@@ -31,8 +32,9 @@ export function usePayments(tenantId) {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const r = await fetch(`${VULA_API}/v1/payments/${tenantId}/providers`);
-    setData(await r.json());
+    const r = await tryApi(`/v1/payments/${tenantId}/providers`);
+    if (r.ok) setData(r.data);
+    else toast(`Couldn't load your payment gateways: ${r.error}`, "danger");
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
 
@@ -42,15 +44,24 @@ export function usePayments(tenantId) {
   const connect = async (provider) => {
     setSaving(true);
     try {
-      await fetch(`${VULA_API}/v1/payments/${tenantId}/providers`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, credentials: form, mode, is_default: !hasDefault }),
+      const r = await tryApi(`/v1/payments/${tenantId}/providers`, {
+        method: "POST", body: { provider, credentials: form, mode, is_default: !hasDefault },
       });
+      // refused: the sheet stays open with the keys as typed, and says why
+      if (!r.ok) { toast(`Couldn't connect: ${r.error}`, "danger"); return; }
       setOpenId(null); setForm({}); load();
     } finally { setSaving(false); }
   };
-  const makeDefault = async (p) => { await fetch(`${VULA_API}/v1/payments/${tenantId}/providers/${p}/default`, { method: "POST" }); load(); };
-  const disconnect = async (p) => { await fetch(`${VULA_API}/v1/payments/${tenantId}/providers/${p}`, { method: "DELETE" }); load(); };
+  const makeDefault = async (p) => {
+    const r = await tryApi(`/v1/payments/${tenantId}/providers/${p}/default`, { method: "POST" });
+    if (!r.ok) toast(`Couldn't make it the default: ${r.error}`, "danger");
+    load();
+  };
+  const disconnect = async (p) => {
+    const r = await tryApi(`/v1/payments/${tenantId}/providers/${p}`, { method: "DELETE" });
+    if (!r.ok) toast(`Couldn't disconnect: ${r.error}`, "danger");
+    load();
+  };
   const open = (id) => { setOpenId(id); setForm({}); setMode(connected[id]?.mode || "live"); };
   const close = () => { setOpenId(null); setForm({}); };
 

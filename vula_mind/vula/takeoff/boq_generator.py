@@ -204,7 +204,7 @@ class RateLookup:
         "electrical_fitout":     (450,   900,  "m²",     "AECOM 2025/26"),
         "electrical_emerg_light":(800,   1500, "no",     "AECOM 2025/26"),
         "data_point_cat6a":      (1800,  3200, "point",  "AECOM 2025/26"),
-        "hvac_vrf":              (5500,  9000, "kW",     "ExtraAir 2025"),
+        "hvac_vrf":              (5500,  9000, "kW",     "HVAC supplier quote 2025"),
         "hvac_split":            (3800,  6500, "kW",     "AECOM 2025/26"),
         "fire_sprinkler":        (380,   650,  "m²",     "AECOM 2025/26"),
         "fire_detection":        (95,    180,  "m²",     "AECOM 2025/26"),

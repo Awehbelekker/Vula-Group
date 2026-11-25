@@ -5,8 +5,8 @@
  * owner's approval: nothing sends until they say go.
  */
 import { useState, useEffect, useCallback } from 'react'
-import { VULA_API } from '../../lib/authFetch'
-import { confirmDialog } from '../ui/index.jsx'
+import { tryApi } from '../../lib/api'
+import { confirmDialog, toast } from '../ui/index.jsx'
 
 export const ORDER_STATUSES = ['paid', 'confirmed', 'packing', 'dispatched', 'delivered', 'cancelled']
 
@@ -45,20 +45,23 @@ export function useAutomations(tenantId) {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations`).then(r => r.json()).catch(() => ({}))
-    setRows(r.automations || [])
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/automations`)
+    if (res.ok) setRows(res.data.automations || [])
+    else toast(`Couldn't load your automations: ${res.error}`, 'danger')
     setLoading(false)
   }, [tenantId])
   useEffect(() => { load() }, [load])
 
   const loadFirings = useCallback(async () => {
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/firings`).then(r => r.json()).catch(() => ({}))
-    setFirings(r.firings || [])
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/automations/firings`)
+    if (res.ok) setFirings(res.data.firings || [])
+    else toast(`Couldn't load the messages waiting for your approval: ${res.error}`, 'danger')
   }, [tenantId])
   useEffect(() => { loadFirings() }, [loadFirings])
 
   async function decide(firing, action) {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/firings/${firing.id}/${action}`, { method: 'POST' })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/automations/firings/${firing.id}/${action}`, { method: 'POST' })
+    if (!res.ok) toast(`That wasn't ${action === 'approve' ? 'approved' : 'turned down'}: ${res.error}`, 'danger')
     loadFirings()
   }
 
@@ -66,11 +69,11 @@ export function useAutomations(tenantId) {
     setTeachMsg('')
     if (!teachText.trim()) return
     setTeaching(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/from-text`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: teachText.trim() }),
-    }).then(r => r.json()).catch(() => ({ error: 'network' }))
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/automations/from-text`, {
+      method: 'POST', body: { text: teachText.trim() },
+    })
     setTeaching(false)
-    if (r.error) { setTeachMsg(r.error); return }
+    if (!res.ok) { setTeachMsg(res.error); return }
     setTeachMsg('Rule created ✓'); setTeachText(''); setShowTeach(false); load()
   }
 
@@ -88,26 +91,28 @@ export function useAutomations(tenantId) {
       action_type: form.action_type,
       action_config: { message: form.message.trim() },
     }
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    }).then(r => r.json()).catch(() => ({ error: 'network' }))
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/automations`, {
+      method: 'POST', body,
+    })
     setSaving(false)
-    if (r.error) return setError(r.error)
+    if (!res.ok) return setError(res.error)
     setShowNew(false)
     setForm({ name: '', trigger_type: 'order_status', to_status: 'dispatched', action_type: 'whatsapp_customer', message: '' })
     load()
   }
 
   async function toggle(row) {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/${row.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !row.enabled }),
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/automations/${row.id}`, {
+      method: 'PATCH', body: { enabled: !row.enabled },
     })
+    if (!res.ok) toast(`"${row.name}" wasn't switched ${row.enabled ? 'off' : 'on'}: ${res.error}`, 'danger')
     load()
   }
 
   async function remove(row) {
     if (!(await confirmDialog(`Delete automation "${row.name}"?`, { danger: true, confirmLabel: 'Yes' }))) return
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/${row.id}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/automations/${row.id}`, { method: 'DELETE' })
+    if (!res.ok) toast(`"${row.name}" wasn't deleted: ${res.error}`, 'danger')
     load()
   }
 

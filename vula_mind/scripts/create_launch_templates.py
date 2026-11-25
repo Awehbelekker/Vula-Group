@@ -11,7 +11,7 @@ This submits the whole set in one go. Meta review is ~24-48h; check status with:
 Run against production (needs SUPABASE + a connected WABA per tenant in vula_whatsapp_accounts):
 
     cd vula_mind && python scripts/create_launch_templates.py                 # OTH + shared
-    cd vula_mind && python scripts/create_launch_templates.py --tenant digg-demo --set fieldops
+    cd vula_mind && python scripts/create_launch_templates.py --tenant <business> --set fieldops
 
 The body text and {{n}} placeholder counts here MUST match what the code sends — see the
 inline call-site references. If you edit the wording in Meta's console instead, keep the
@@ -80,21 +80,17 @@ SUPPLIER = [
      "UTILITY", None),
 ]
 
-# vula/api/field_ops.py  (DIGG contractor flow)
-FIELDOPS = [
-    ("digg_task_assigned",
-     "New task assigned: {{1}}. Details in the message that follows. Reply DONE when complete.",
-     "UTILITY", None),
-    ("digg_daily_tasks",
-     "Good morning — you have {{1}} task(s) due today on {{2}}. Reply for the list.",
-     "UTILITY", None),
-    ("digg_walkthrough_approved",
-     "Your site walkthrough for {{1}} has been approved. Nothing further needed.",
-     "UTILITY", None),
-    ("digg_walkthrough_rejected",
-     "Your site walkthrough for {{1}} needs attention: {{2}}. Please review and resubmit.",
-     "UTILITY", None),
-]
+# vula/api/field_ops.py::FIELD_TEMPLATES  (contractor flow, any business with Field Ops)
+# 24 Nov 2026: neutral names and the bodies the code sends; the one list is
+# vula/commerce/wa_templates.FIELD_OPS_TEMPLATES, also in the dashboard's standard set for a
+# business with Field Ops. digg-demo's approved `digg_…` copies keep working until these are
+# approved for it (field_ops.field_template).
+def _fieldops():
+    from vula.commerce.wa_templates import FIELD_OPS_TEMPLATES
+    return [(name, body, "UTILITY", None) for name, body, _ex in FIELD_OPS_TEMPLATES]
+
+
+FIELDOPS = _fieldops()
 
 SETS = {
     "shared": SHARED,

@@ -106,6 +106,28 @@ class TapService:
         return TabDesk(self)
 
     @property
+    def tables(self):
+        from vula.tap.tableside import TableDesk
+        return TableDesk(self)
+
+    def _itemised_total(self, tenant_id: str, bill: dict) -> Optional[int]:
+        """What a bill made of lines owes right now (a bar tab, a table's bill); None for a bill
+        with one typed amount."""
+        if bill.get("bill_type") in ("tab", "table"):
+            return sum(int(i["line_cents"]) for i in self.repo.tab_items(tenant_id, bill["id"]))
+        return None
+
+    @property
+    def shifts(self):
+        from vula.tap.shifts import ShiftDesk
+        return ShiftDesk(self)
+
+    @property
+    def scores(self):
+        from vula.tap.scoreboard import ScoreDesk
+        return ScoreDesk(self)
+
+    @property
     def express(self):
         from vula.tap.express import ExpressPay
         return ExpressPay(self)
@@ -163,6 +185,10 @@ class TapService:
     async def _say(self, tenant_id: str, phone: str, body: str) -> None:
         await self.messenger.text(tenant_id, phone, body)
 
+    async def _say_ok(self, tenant_id: str, phone: str, body: str) -> bool:
+        """The same, saying whether WhatsApp took it (False outside the 24-hour window)."""
+        return bool(await self.messenger.text(tenant_id, phone, body))
+
     # ── 1. the tap (HTTP) ────────────────────────────────────────────────────────────────────
     def tap(self, code: str) -> Optional[str]:
         """Verify the tag and mint a one-time claim token. Returns the wa.me URL, or None when the
@@ -193,6 +219,11 @@ class TapService:
             return True
         if await self.tax.handle_text(tenant_id, phone, text):
             return True
+        try:      # a team member writing "sick" / "my shifts" / "confirm" (vula/tap/shifts.py)
+            if await self.shifts.handle_text(tenant_id, phone, text):
+                return True
+        except Exception:  # noqa: BLE001 — shifts need migration 301; never stop the pay flow
+            logger.exception("shift message failed (tenant=%s)", tenant_id)
         session = self._live(self.repo.active_session_for_payer(
             tenant_id, self.phone_hash(phone), self.now()))
         if session and session.get("expecting"):
@@ -255,6 +286,9 @@ class TapService:
         if bill.get("bill_type") == "tab" and not self.tabs.total(tenant_id, bill_id):
             await self._say(tenant_id, phone, "Your tab is empty so far. Order something first!")
             return
+        if bill.get("bill_type") == "table" and not self._itemised_total(tenant_id, bill):
+            await self._say(tenant_id, phone, MSG_NO_BILL)
+            return
         if bill["status"] == "claimed" and bill.get("claimed_by_hash") == payer:
             existing = self._live(self.repo.active_session_for_payer(tenant_id, payer, self.now()))
             if existing and existing.get("bill_id") == bill_id:
@@ -272,9 +306,9 @@ class TapService:
             await self._say(tenant_id, phone, MSG_LOCKED)    # lost the atomic claim
             return
         amount = int(bill["subtotal_cents"])
-        if bill.get("bill_type") == "tab":
-            # the items decide what is owed, worked out now the tab is claimed (staff can't add to it)
-            amount = self.tabs.total(tenant_id, bill_id)
+        if bill.get("bill_type") in ("tab", "table"):
+            # the items decide what is owed, worked out now the bill is claimed (staff can't add to it)
+            amount = self._itemised_total(tenant_id, bill)
             self.repo.update_bill(tenant_id, bill_id, {"subtotal_cents": amount})
         session = self._new_session(tenant_id, bill_id, payer, phone, amount)
         self.repo.cas_session(tenant_id, session["id"], expected="claimed", new=st.session_next("claimed", "amount_set"))
@@ -718,6 +752,14 @@ class TapService:
                     continue
                 stats["reminders"] += outcome == "sent"
                 stats["followups"] += outcome in ("followup", "opted_out")
+            try:
+                stats["shift_reminders"] = stats.get("shift_reminders", 0) + await self.shifts.sweep(t)
+            except Exception:  # noqa: BLE001 — shifts need migration 301
+                logger.exception("shift reminder sweep failed (tenant=%s)", t)
+            try:
+                stats["table_calls"] = stats.get("table_calls", 0) + await self.tables.sweep(t)
+            except Exception:  # noqa: BLE001 — table service needs migration 300; never stop the pass
+                logger.exception("table call sweep failed (tenant=%s)", t)
             try:
                 stats["tab_prompts"] = stats.get("tab_prompts", 0) + await self.tabs.sweep_idle(t)
             except Exception:  # noqa: BLE001 — tabs need migration 231; never stop the reminder pass

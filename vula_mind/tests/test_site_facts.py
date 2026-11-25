@@ -398,3 +398,38 @@ async def test_pages_that_fit_no_topic_are_still_read(monkeypatch):
     monkeypatch.setattr(pfs, "draft_from_pages", fake)
     await pfs.draft_by_topic("hv", [(f"{ROOT}/gallery/", "Gallery", "x"), (f"{ROOT}/blog/a/", "A", "x")])
     assert seen == [2]
+
+
+# ── 24 Nov 2026: a surf shop's site (pictures embedded in every page; a staging email) ────────
+def test_an_address_on_the_web_hosts_staging_domain_is_not_the_business_email():
+    page = ('<a href="mailto:shop@wordpress-885179-3068786.cloudwaysapps.com">Email</a>'
+            '<a href="mailto:shop@bigbaysurf.example.co.za">shop@bigbaysurf.example.co.za</a>')
+    facts = site_facts.business_facts([("https://bigbaysurf.example.co.za/", page)])
+    assert facts["email"]["value"] == "shop@bigbaysurf.example.co.za"
+    only = site_facts.business_facts([("https://x.example.co.za/", '<a href="mailto:a@b.kinsta.cloud">x</a>')])
+    assert "email" not in only
+
+
+def test_embedded_pictures_are_cut_out_and_the_words_and_prices_stay():
+    picture = b"data:image/png;base64," + b"iVBORw0KGgo" * 40_000
+    raw = (b'<html><body><svg><image href="' + picture + b'"/></svg>'
+           b'<h1>Surf lesson prices</h1><td>Private 1-on-1</td><td>R650</td>'
+           b'<img src="https://bigbaysurf.example.co.za/board.jpg"></body></html>')
+    out = site_import.slim(raw)
+    assert len(raw) > 400_000 and len(out) < 400
+    assert b"R650" in out and b"board.jpg" in out and b"iVBOR" not in out
+    plain = b"<p>No pictures here, R400</p>"
+    assert site_import.slim(plain) is plain
+
+
+@pytest.mark.asyncio
+async def test_a_page_over_the_old_2mb_limit_is_asked_for_with_the_page_limit(monkeypatch):
+    asked = {}
+
+    async def get(url, max_bytes=None):
+        asked["max_bytes"] = max_bytes
+        return b"<p>R400</p>"
+
+    monkeypatch.setattr(site_import, "_get", get)
+    assert await site_import._page("https://bigbaysurf.example.co.za/prices/", {}) == b"<p>R400</p>"
+    assert asked["max_bytes"] == site_import.PAGE_MAX_BYTES > 2 * 1024 * 1024

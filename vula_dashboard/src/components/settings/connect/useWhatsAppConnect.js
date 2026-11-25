@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { VULA_API } from '../../../lib/authFetch'
+import { tryApi } from '../../../lib/api'
 import { confirmDialog } from '../../ui/index.jsx'
 
 export const FB_APP_ID = import.meta.env.VITE_FB_APP_ID || ''
@@ -55,13 +56,13 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   // Load current connection status
   const reload = useCallback(() => {
     if (!tenantId) return Promise.resolve()
-    return fetch(`${VULA_API}/v1/whatsapp/connect/status/${tenantId}`)
-      .then(r => r.json())
-      .then(data => {
+    return tryApi(`/v1/whatsapp/connect/status/${tenantId}`)
+      .then(res => {
+        if (!res.ok) { setStatus('error'); setError(`Couldn't check WhatsApp: ${res.error}`); return }
+        const data = res.data
         setStatus(data.status)
         setAccount(data)
       })
-      .catch(() => setStatus('error'))
   }, [tenantId])
   useEffect(() => { reload() }, [reload])
 
@@ -198,10 +199,13 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
   const handleDisconnect = async () => {
     if (!(await confirmDialog(`Disconnect WhatsApp for ${tenantName}? Ordering will stop immediately.`, { danger: true, confirmLabel: 'Yes' }))) return
     setLoading(true)
-    await fetch(`${VULA_API}/v1/whatsapp/disconnect/${tenantId}`, { method: 'DELETE' })
+    setError(null)
+    const res = await tryApi(`/v1/whatsapp/disconnect/${tenantId}`, { method: 'DELETE' })
+    setLoading(false)
+    // only show "not connected" once the server says it's done
+    if (!res.ok) { setError(`WhatsApp wasn't disconnected: ${res.error}`); return }
     setStatus('not_connected')
     setAccount(null)
-    setLoading(false)
   }
 
   // One number: what it's for, its name, or make it the main one.
@@ -227,9 +231,11 @@ export function useWhatsAppConnect({ tenantId, tenantName, adminEmail }) {
       : `Disconnect WhatsApp for ${tenantName}? Ordering will stop immediately.`
     if (!(await confirmDialog(msg, { danger: true, confirmLabel: 'Yes' }))) return
     setBusyNumber(n.phone_number_id || 'all')
+    setError(null)
     const q = n.phone_number_id ? `?phone_number_id=${encodeURIComponent(n.phone_number_id)}` : ''
-    await fetch(`${VULA_API}/v1/whatsapp/disconnect/${tenantId}${q}`, { method: 'DELETE' })
+    const res = await tryApi(`/v1/whatsapp/disconnect/${tenantId}${q}`, { method: 'DELETE' })
     setBusyNumber(null)
+    if (!res.ok) { setError(`${n.phone_number || 'That number'} wasn't disconnected: ${res.error}`); return }
     if (others.length) { await reload(); return }
     setStatus('not_connected')
     setAccount(null)

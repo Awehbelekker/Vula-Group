@@ -60,3 +60,5 @@
 .vlg-steps li { line-height: 1.45; }
 .vlg-mfa-qr { display: block; margin: var(--space-2, 8px) 0; background: white; padding: 8px; border-radius: 8px; }
 .vlg-mfa-key { word-break: break-all; font-size: 0.85em; }
+/* a partner's own address (its mark above its name): the heading block sits in the middle */
+.vlg-brand:has(.vlg-logo + .vlg-name) { align-items: center; }

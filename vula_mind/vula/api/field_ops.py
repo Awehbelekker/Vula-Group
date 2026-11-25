@@ -39,6 +39,64 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["field-ops"])
 
 
+# The contractor templates under neutral names (24 Nov 2026 audit: every business's Field Ops sent
+# templates named `digg_…`). Meta templates belong to a WhatsApp account and can't be renamed, so a
+# business still on the old DIGG-named ones keeps them until the neutral ones are approved for it
+# (scripts/create_launch_templates.py --set fieldops). Placeholder counts are the same for both.
+FIELD_TEMPLATES = {
+    "task_assigned": "field_task_assigned",            # name, project, task
+    "task_chase": "field_task_chase",                  # name, task
+    "walkthrough_start": "field_walkthrough_start",    # name, walkthrough
+    "walkthrough_approved": "field_walkthrough_approved",  # walkthrough
+    "walkthrough_rejected": "field_walkthrough_rejected",  # walkthrough, reason
+    "daily_tasks": "field_daily_tasks",                # name, count
+}
+_LEGACY_PREFIX = "digg_"
+_NAMES_CACHE: dict = {}        # tenant -> (monotonic time, names on record)
+_NAMES_TTL_S = 600
+
+
+def _names_on_record(tenant_id: str) -> set:
+    import time
+    hit = _NAMES_CACHE.get(tenant_id)
+    if hit and time.monotonic() - hit[0] < _NAMES_TTL_S:
+        return hit[1]
+    names: set = set()
+    try:
+        from vula.commerce import service as _svc
+        wanted = list(FIELD_TEMPLATES.values()) + [_LEGACY_PREFIX + k for k in FIELD_TEMPLATES]
+        rows = (_svc._client().table("commerce_wa_templates").select("name")
+                .eq("tenant_id", tenant_id).in_("name", wanted).execute().data or [])
+        names = {r.get("name") for r in rows}
+    except Exception as exc:
+        logger.info("field templates: couldn't read %s's templates (%s)", tenant_id, type(exc).__name__)
+    _NAMES_CACHE[tenant_id] = (time.monotonic(), names)
+    return names
+
+
+def field_templates(tenant_id: str, key: str) -> list:
+    """The templates to try for `key`, in order: the neutral one, then the old DIGG-named one when
+    this business has it on record (only the old one when the neutral one isn't on record yet)."""
+    new, old = FIELD_TEMPLATES[key], _LEGACY_PREFIX + key
+    names = _names_on_record(tenant_id) if tenant_id else set()
+    if old not in names:
+        return [new]
+    return [new, old] if new in names else [old]
+
+
+def field_template(tenant_id: str, key: str) -> str:
+    return field_templates(tenant_id, key)[0]
+
+
+async def _send_field(tenant_id: str, to: str, key: str, *params: str) -> bool:
+    """Send a Field Ops template. A neutral one just submitted is on record while Meta still
+    reviews it, and Meta refuses it until it's approved — so the old approved one is tried next."""
+    for name in field_templates(tenant_id, key):
+        if await _send_wa_template(tenant_id, to, name, *params):
+            return True
+    return False
+
+
 # ─── Request / Response Models ────────────────────────────────────────────────
 
 class ContractorIn(BaseModel):
@@ -72,8 +130,13 @@ class TaskAssignIn(BaseModel):
 
 
 class CompleteRequestIn(BaseModel):
-    task_id: str
+    task_id: str = ""                # the path names the task; kept for older callers
     custom_message: str = ""
+
+
+class TaskSignOffIn(BaseModel):
+    decision: str                    # "approved" | "rejected"
+    notes: str = ""
 
 
 class WalkthroughStartIn(BaseModel):
@@ -201,7 +264,7 @@ async def assign_task(body: TaskAssignIn, request: Request, tenant_id: Optional[
         # 24h). Due date/notes go in the log; the contractor opens Vula or asks once they reply.
         logger.info("Task assigned: %s -> %s (project %s, due=%s, notes=%s)",
                     task.title, contractor.name, task.project_id, task.due_date, task.notes)
-        wa_sent = await _send_wa_template(contractor.tenant_id, contractor.phone, "digg_task_assigned",
+        wa_sent = await _send_field(contractor.tenant_id, contractor.phone, "task_assigned",
                                           contractor.name, task.project_id, task.title)
 
     return {
@@ -233,9 +296,44 @@ async def request_completion(task_id: str, body: CompleteRequestIn, request: Req
         # the contractor has messaged Vula in the last 24h, same as any normal reply).
         sent = await _send_reply(contractor.phone, body.custom_message, contractor.tenant_id)
     else:
-        sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
-                                       "digg_task_chase", contractor.name, task.title)
+        sent = await _send_field(contractor.tenant_id, contractor.phone, "task_chase", contractor.name, task.title)
     return {"task_id": task_id, "contractor_name": contractor.name, "whatsapp_sent": sent}
+
+
+@router.post("/task/{task_id}/sign-off")
+async def sign_off_task(task_id: str, body: TaskSignOffIn, request: Request,
+                        tenant_id: Optional[str] = None) -> dict:
+    """Approve or reject a task awaiting sign-off from the dashboard (23 Nov 2026 audit: the
+    dashboard sent the task's id to the walkthrough route, which found no walkthrough and refused,
+    every time). The person who signed is the signed-in login, read back from the sign-off."""
+    if body.decision not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="Decision must be approved or rejected.")
+    if body.decision == "rejected" and not (body.notes or "").strip():
+        raise HTTPException(status_code=400, detail="Say what needs fixing when rejecting.")
+    db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
+    task = db.get_task(task_id)
+    if not _theirs(task, tenant_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "awaiting_sign_off":
+        raise HTTPException(status_code=409, detail="This task isn't waiting for sign-off.")
+    from vula.api.commerce import _actor
+    who = _actor(request)
+    db.record_sign_off(task_id, who, body.decision, (body.notes or "").strip())
+    back = db.get_sign_off(task_id)
+    if not back or back.status != body.decision:
+        raise HTTPException(status_code=502, detail="The sign-off didn't save. Try again.")
+    sent = False
+    if task.assigned_to:
+        contractor = db.get_contractor(task.assigned_to)
+        if contractor:
+            if body.decision == "approved":
+                sent = await _send_reply(contractor.phone, f"✅ Signed off: {task.title}. Thank you!",
+                                         contractor.tenant_id)
+            else:
+                sent = await _send_reply(contractor.phone, f"↩️ {task.title} needs more work: {body.notes.strip()}",
+                                         contractor.tenant_id)
+    return {"task_id": task_id, "decision": body.decision, "approver": who, "whatsapp_sent": bool(sent)}
 
 
 @router.get("/task/{task_id}")
@@ -291,8 +389,7 @@ async def start_walkthrough(body: WalkthroughStartIn) -> dict:
     # template just kicks off the walkthrough, contractor opens Vula for the item list.
     numbered = "\n".join(f"{i+1}. {item}" for i, item in enumerate(body.items))
     logger.info("Walkthrough started: %s (%s) — checklist:\n%s", body.title, contractor.name, numbered)
-    sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
-                                   "digg_walkthrough_start", contractor.name, body.title)
+    sent = await _send_field(contractor.tenant_id, contractor.phone, "walkthrough_start", contractor.name, body.title)
 
     return {
         "walkthrough_id": wt.id,
@@ -321,10 +418,10 @@ async def approve_walkthrough(walkthrough_id: str, body: WalkthroughApproveIn, r
     contractors = [m for m in team if m["role"] == "contractor"]
     for c in contractors:
         if body.decision == "approved":
-            await _send_wa_template(wt.tenant_id, c["phone"], "digg_walkthrough_approved", wt.title)
+            await _send_field(wt.tenant_id, c["phone"], "walkthrough_approved", wt.title)
         else:
             reason = body.notes or "no reason given"
-            await _send_wa_template(wt.tenant_id, c["phone"], "digg_walkthrough_rejected", wt.title, reason)
+            await _send_field(wt.tenant_id, c["phone"], "walkthrough_rejected", wt.title, reason)
 
     return {
         "walkthrough_id": walkthrough_id,
@@ -384,7 +481,7 @@ async def dispatch_daily_briefings(tenant_id: str) -> dict:
             for t in contractor_tasks
         )
         logger.info("Daily briefing for %s: %d task(s)\n%s", contractor.name, len(contractor_tasks), task_lines)
-        ok = await _send_wa_template(contractor.tenant_id, contractor.phone, "digg_daily_tasks",
+        ok = await _send_field(contractor.tenant_id, contractor.phone, "daily_tasks",
                                      contractor.name, str(len(contractor_tasks)))
         if ok:
             sent_count += 1

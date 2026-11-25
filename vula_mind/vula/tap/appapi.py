@@ -85,10 +85,17 @@ async def login(body: LoginIn) -> dict:
 @router.get("/v1/tap/app/me")
 async def me(a: Actor = Depends(app_actor)) -> dict:
     svc = tap_api.get_service()
-    tag = next((t for t in svc.repo.list_tags(a.tenant_id)
-                if t.get("bound_id") == a.member_id and t.get("status") == "active"), None)
+    tag = next((t for t in svc.repo.list_tags(a.tenant_id) if t.get("bound_id") == a.member_id
+                and t.get("status") == "active" and t.get("bound_type") != "table"), None)
     base = settings.public_base_url.rstrip("/")
-    return {"name": a.name, "role": a.role, "sees_all": a.sees_all,
+    import re as _re
+    inv = svc.repo.invoice_settings(a.tenant_id) or {}
+    accent = str(inv.get("accent_color") or "")
+    accent = accent if accent.startswith("#") else f"#{accent}"
+    logo = str(inv.get("logo_url") or "")
+    return {"brand": {"accent": accent if _re.fullmatch(r"#[0-9a-fA-F]{6}", accent) else None,
+                      "logo": logo if logo.startswith("https://") else None},
+            "name": a.name, "role": a.role, "sees_all": a.sees_all,
             "merchant": svc.repo.merchant_name(a.tenant_id), "mode": tap_api.tenant_mode(a.tenant_id),
             "tag": ({"url": f"{base}/t/{tag['code']}", "qr": f"{base}/t/{tag['code']}/qr.svg"} if tag else None),
             "push_public_key": settings.vapid_public_key or None}
@@ -138,8 +145,8 @@ async def new_bill(body: NewBill, a: Actor = Depends(app_actor)) -> dict:
         raise HTTPException(status_code=409, detail="Tap to Pay is switched off. Ask your manager.")
     svc = tap_api.get_service()
     staff = body.staff_id if (body.staff_id and a.sees_all) else a.member_id
-    tag = next((t for t in svc.repo.list_tags(a.tenant_id)
-                if t.get("bound_id") == staff and t.get("status") == "active"), None)
+    tag = next((t for t in svc.repo.list_tags(a.tenant_id) if t.get("bound_id") == staff
+                and t.get("status") == "active" and t.get("bound_type") != "table"), None)
     if not tag:
         raise HTTPException(status_code=404, detail="You don't have a tag yet. Ask your manager to create one.")
     try:
@@ -302,3 +309,220 @@ async def app_add_item(bill_id: str, body: TabItem, a: Actor = Depends(app_actor
 @router.post("/v1/tap/app/tabs/{bill_id}/items/{item_id}/void")
 async def app_void_item(bill_id: str, item_id: str, a: Actor = Depends(app_actor)) -> dict:
     return _tab(_tabs_on(a).tabs.void_item, a.tenant_id, bill_id, item_id, by=a.member_id)
+
+
+# ── service at the table (vula/tap/tableside.py): calls, orders and the tables' bills ─────────
+class TableLine(BaseModel):
+    product_id: Optional[str] = Field(default=None, max_length=64)
+    quantity: int = Field(default=1, ge=1, le=99)
+    description: Optional[str] = Field(default=None, max_length=80)
+    unit_cents: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    note: str = Field(default="", max_length=40)
+
+
+class RejectIn(BaseModel):
+    reason: str = Field(default="", max_length=120)
+
+
+def _tables_on(a: Actor):
+    if not tap_api.tenant_enabled(a.tenant_id):
+        raise HTTPException(status_code=409, detail="Tap to Pay is switched off. Ask your manager.")
+    return tap_api.get_service().tables
+
+
+def _tbl(fn, *args, **kw):
+    from vula.tap.tableside import TableError
+    try:
+        return fn(*args, **kw)
+    except TableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/app/floor")
+async def app_floor(a: Actor = Depends(app_actor)) -> dict:
+    """What a waiter needs on one screen: who is calling, the orders waiting to be confirmed, and
+    the tables with their bills. A waiter sees their own tables and the ones nobody is serving."""
+    desk = tap_api.get_service().tables
+    cfg = desk.settings(a.tenant_id)
+    tables = [t for t in desk.tables(a.tenant_id) if a.sees_all or t["waiter_id"] in (a.member_id, None)] \
+        if (cfg["calls"] or cfg["orders"]) else []
+    return {"settings": cfg, "me": a.member_id,
+            "calls": desk.calls_for(a.tenant_id, a.member_id, a.sees_all) if cfg["calls"] else [],
+            "orders": desk.orders_for(a.tenant_id, a.member_id, a.sees_all) if cfg["orders"] else [],
+            "tables": tables}
+
+
+@router.get("/v1/tap/app/menu")
+async def app_menu(a: Actor = Depends(app_actor)) -> dict:
+    return {"menu": tap_api.get_service().tables.menu(a.tenant_id)}
+
+
+@router.post("/v1/tap/app/calls/{call_id}/accept")
+async def app_call_accept(call_id: str, a: Actor = Depends(app_actor)) -> dict:
+    out = _tbl(_tables_on(a).accept, a.tenant_id, call_id, a.member_id)
+    _audit(a, "table.call_accept", table=out["table"], kind=out["kind"])
+    return out
+
+
+@router.post("/v1/tap/app/calls/{call_id}/done")
+async def app_call_done(call_id: str, a: Actor = Depends(app_actor)) -> dict:
+    _tbl(_tables_on(a).done, a.tenant_id, call_id, a.member_id)
+    return {"status": "done"}
+
+
+@router.post("/v1/tap/app/orders/{order_id}/confirm")
+async def app_order_confirm(order_id: str, a: Actor = Depends(app_actor)) -> dict:
+    return {"bill": _tbl(_tables_on(a).confirm, a.tenant_id, order_id, a.member_id)}
+
+
+@router.post("/v1/tap/app/orders/{order_id}/reject")
+async def app_order_reject(order_id: str, body: RejectIn, a: Actor = Depends(app_actor)) -> dict:
+    _tbl(_tables_on(a).reject, a.tenant_id, order_id, a.member_id, body.reason)
+    _audit(a, "table.order_reject", reason=body.reason)
+    return {"status": "rejected"}
+
+
+def _my_table(a: Actor, tag_id: str) -> None:
+    """A waiter works their own tables and unassigned ones; owners and managers any."""
+    tag = tap_api.get_service().repo.get_tag(a.tenant_id, tag_id)
+    if not tag or not (a.sees_all or tag.get("bound_id") in (a.member_id, None)):
+        raise HTTPException(status_code=404, detail="Table not found.")
+
+
+@router.post("/v1/tap/app/tables/{tag_id}/take")
+async def app_table_take(tag_id: str, a: Actor = Depends(app_actor)) -> dict:
+    """ "This is my table now": calls and orders from it come to this waiter. Only an unassigned
+    table can be taken; a manager moves one that is someone else's."""
+    _my_table(a, tag_id)
+    out = _tbl(_tables_on(a).assign, a.tenant_id, tag_id, a.member_id)
+    _audit(a, "table.take", table=out["label"])
+    return out
+
+
+@router.post("/v1/tap/app/tables/{tag_id}/items")
+async def app_table_add(tag_id: str, body: TableLine, a: Actor = Depends(app_actor)) -> dict:
+    _my_table(a, tag_id)
+    return {"bill": _tbl(_tables_on(a).add_item, a.tenant_id, tag_id, a.member_id, product_id=body.product_id,
+                         quantity=body.quantity, description=body.description or "", unit_cents=body.unit_cents,
+                         note=body.note)}
+
+
+@router.post("/v1/tap/app/tables/{tag_id}/items/{item_id}/void")
+async def app_table_void(tag_id: str, item_id: str, a: Actor = Depends(app_actor)) -> dict:
+    _my_table(a, tag_id)
+    return {"bill": _tbl(_tables_on(a).void_item, a.tenant_id, tag_id, item_id, a.member_id)}
+
+
+# ── each waiter's numbers and the team's board (vula/tap/scoreboard.py) ───────────────────────
+@router.get("/v1/tap/app/scores")
+async def app_scores(period: str = "today", a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own numbers (their tips included) and the shared board (no tips)."""
+    from vula.tap.scoreboard import POINTS_RULE, ScoreError
+    desk = tap_api.get_service().scores
+    try:
+        tips = desk.tips_on_board(a.tenant_id)          # only when the owner switched it on
+        return {"me": desk.mine(a.tenant_id, a.member_id, period),
+                "board": desk.board(a.tenant_id, period, with_tips=tips), "tips_on_board": tips,
+                "points_rule": POINTS_RULE}
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class TargetIn(BaseModel):
+    period: Optional[str] = None
+    cents: Optional[int] = None
+
+
+@router.put("/v1/tap/app/target")
+async def app_set_target(body: TargetIn, a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own target (no amount removes it). Nobody else's, ever."""
+    from vula.tap.scoreboard import ScoreError
+    try:
+        return {"target": tap_api.get_service().scores.set_target(a.tenant_id, a.member_id, body.period, body.cents)}
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/app/income")
+async def app_income(days: int = 30, a: Actor = Depends(app_actor)) -> dict:
+    """The signed-in person's own earnings, day by day. Nobody else's."""
+    from vula.tap.scoreboard import ScoreError
+    try:
+        return tap_api.get_service().scores.income(a.tenant_id, a.member_id, days)
+    except ScoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── my shifts and when I can work (vula/tap/shifts.py). Everything here is the caller's own. ──
+class WeeklyIn(BaseModel):
+    weekday: int = Field(ge=0, le=6)
+    start: str = Field(max_length=5)
+    end: str = Field(max_length=5)
+
+
+class TimeOffIn(BaseModel):
+    from_date: str = Field(max_length=10)
+    to_date: Optional[str] = Field(default=None, max_length=10)
+    note: str = Field(default="", max_length=80)
+
+
+class CantIn(BaseModel):
+    sick: bool = False
+    reason: str = Field(default="", max_length=120)
+
+
+def _shift(fn, *args, **kw):
+    from vula.tap.shifts import ShiftError
+    try:
+        return fn(*args, **kw)
+    except ShiftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+async def _shift_async(coro):
+    from vula.tap.shifts import ShiftError
+    try:
+        return await coro
+    except ShiftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/v1/tap/app/shifts")
+async def app_shifts(a: Actor = Depends(app_actor)) -> dict:
+    return tap_api.get_service().shifts.mine(a.tenant_id, a.member_id)
+
+
+@router.post("/v1/tap/app/shifts/{shift_id}/confirm")
+async def app_shift_confirm(shift_id: str, a: Actor = Depends(app_actor)) -> dict:
+    return {"shift": _shift(tap_api.get_service().shifts.confirm, a.tenant_id, shift_id, a.member_id)}
+
+
+@router.post("/v1/tap/app/shifts/{shift_id}/cant")
+async def app_shift_cant(shift_id: str, body: CantIn, a: Actor = Depends(app_actor)) -> dict:
+    out = await _shift_async(tap_api.get_service().shifts.cant(a.tenant_id, shift_id, a.member_id,
+                                                              sick=body.sick, reason=body.reason))
+    _audit(a, "shift.sick" if body.sick else "shift.decline", shift_id=shift_id)
+    return {"shift": out}
+
+
+@router.post("/v1/tap/app/shifts/{shift_id}/take")
+async def app_shift_take(shift_id: str, a: Actor = Depends(app_actor)) -> dict:
+    out = await _shift_async(tap_api.get_service().shifts.take(a.tenant_id, shift_id, a.member_id))
+    _audit(a, "shift.take", shift_id=shift_id)
+    return {"shift": out}
+
+
+@router.post("/v1/tap/app/availability/weekly")
+async def app_avail_weekly(body: WeeklyIn, a: Actor = Depends(app_actor)) -> dict:
+    return _shift(tap_api.get_service().shifts.add_weekly, a.tenant_id, a.member_id, body.weekday, body.start, body.end)
+
+
+@router.post("/v1/tap/app/availability/off")
+async def app_avail_off(body: TimeOffIn, a: Actor = Depends(app_actor)) -> dict:
+    return _shift(tap_api.get_service().shifts.add_time_off, a.tenant_id, a.member_id, body.from_date,
+                  body.to_date or body.from_date, body.note)
+
+
+@router.delete("/v1/tap/app/availability/{row_id}")
+async def app_avail_remove(row_id: str, a: Actor = Depends(app_actor)) -> dict:
+    return _shift(tap_api.get_service().shifts.remove_availability, a.tenant_id, a.member_id, row_id)

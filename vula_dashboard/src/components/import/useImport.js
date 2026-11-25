@@ -6,7 +6,7 @@
  * from WhatsApp chat exports (vula/commerce/chat_learn.py); answers wait for review in Settings.
  */
 import { useState } from "react";
-import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
 
 export function useImport(tenantId) {
   const [mode, setMode] = useState("orders");          // 'orders' | 'invoices'
@@ -29,16 +29,21 @@ export function useImport(tenantId) {
     if (!text.trim()) return flash("Paste or upload something first.");
     setBusy(true); setOrders(null); setInvoices(null); flash("Reading your history…");
     if (mode === "invoices") {
-      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/invoices/extract`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
-      }).then(r => r.json()).catch(() => ({ invoices: [] }));
-      setBusy(false); setInvoices(r.invoices || []);
+      const res = await tryApi(`/v1/commerce/${tenantId}/admin/import/invoices/extract`, {
+        method: "POST", body: { text },
+      });
+      setBusy(false);
+      if (!res.ok) return flash(`Couldn't read that: ${res.error}`);
+      const r = res.data;
+      setInvoices(r.invoices || []);
       return flash(`Found ${(r.invoices || []).length} invoice(s) — review, then commit.`);
     }
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/extract`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
-    }).then(r => r.json()).catch(() => ({ orders: [] }));
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/import/extract`, {
+      method: "POST", body: { text },
+    });
     setBusy(false);
+    if (!res.ok) return flash(`Couldn't read that: ${res.error}`);
+    const r = res.data;
     setOrders(r.orders || []);
     flash(`Found ${(r.orders || []).length} order(s) — review below, then commit.`);
   };
@@ -46,11 +51,13 @@ export function useImport(tenantId) {
   const commitInvoices = async () => {
     if (!invoices?.length) return;
     setBusy(true); flash("Registering invoices…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/invoices/commit`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invoices }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/import/invoices/commit`, {
+      method: "POST", body: { invoices },
+    });
     setBusy(false);
-    if (r.error) return flash(r.error);
+    // the reviewed list stays on screen so nothing has to be redone
+    if (!res.ok) return flash(`The invoices weren't registered: ${res.error}`);
+    const r = res.data;
     flash(`✓ ${r.created} invoice(s) registered${r.skipped ? `, ${r.skipped} skipped` : ""} — bank payments will now match them.`);
     setInvoices(null); setText("");
   };
@@ -61,11 +68,12 @@ export function useImport(tenantId) {
   const commit = async () => {
     if (!orders?.length) return;
     setBusy(true); flash("Adding to Vula…");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/commit`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orders }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
+    const res = await tryApi(`/v1/commerce/${tenantId}/admin/import/commit`, {
+      method: "POST", body: { orders },
+    });
     setBusy(false);
-    if (r.error) return flash(r.error);
+    if (!res.ok) return flash(`The orders weren't added: ${res.error}`);
+    const r = res.data;
     flash(`✓ ${r.created} order(s) added${r.skipped ? `, ${r.skipped} skipped (duplicates)` : ""}.`);
     setOrders(null); setText("");
   };
@@ -100,13 +108,13 @@ export function useChatLearn(tenantId) {
   const learn = async (business) => {
     if (!files.length) return setErr("Choose one or more chat exports first.");
     setBusy(true); setErr(""); setRes(null);
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/import/chats/learn`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, business: business || null }),
-    }).then(r => r.json()).catch(() => ({ error: "Couldn't reach Vula — try again." }));
+    const out = await tryApi(`/v1/commerce/${tenantId}/admin/import/chats/learn`, {
+      method: "POST",
+      body: { files, business: business || null },
+    });
     setBusy(false);
-    if (r.error || r.detail) return setErr(r.error || r.detail);
-    setRes(r);
+    if (!out.ok) return setErr(out.error);
+    setRes(out.data);
   };
 
   return { files, busy, res, err, pick, learn };

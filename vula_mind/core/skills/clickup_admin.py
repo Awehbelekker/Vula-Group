@@ -45,7 +45,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "due_date": {"type": "string", "description": "Optional due date. Pass the user's own "
                         "words verbatim (e.g. 'tomorrow', 'Friday', 'next Friday', 'in 3 days') or "
                         "an ISO date — do NOT compute the date yourself, the tool resolves it."},
-            "assignee": {"type": "string", "description": "Name of the person to assign this task to, e.g. 'Nolo'"}},
+            "assignee": {"type": "string", "description": "Name of the person to assign this task to, e.g. 'Thandi'"}},
             "required": ["title"]},
     }},
     {"type": "function", "function": {
@@ -53,7 +53,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "description": "List the tenant's ClickUp tasks, optionally filtered by status and/or assignee.",
         "parameters": {"type": "object", "properties": {
             "status": {"type": "string", "description": "e.g. open, in progress, complete"},
-            "assignee": {"type": "string", "description": "Name of the person to filter by, e.g. 'Nolo'"},
+            "assignee": {"type": "string", "description": "Name of the person to filter by, e.g. 'Thandi'"},
             "limit": {"type": "integer"}}},
     }},
     {"type": "function", "function": {
@@ -110,7 +110,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "never assume an assignment succeeded.",
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string", "description": "A fragment of the task title to match"},
-            "assignee": {"type": "string", "description": "The person's name, e.g. 'Nolo'"}},
+            "assignee": {"type": "string", "description": "The person's name, e.g. 'Thandi'"}},
             "required": ["title", "assignee"]},
     }},
 ]
@@ -149,7 +149,7 @@ class ClickUpAdminSkill(BaseSkill):
             "resolves it deterministically and your own date arithmetic is unreliable. If you "
             "created a task without a due date and need to add or fix one, call "
             "update_task_due_date — never update_task_status for a date change, it will fail. "
-            "If the user names a person ('give Nolo a todo', 'what's on Nolo's "
+            "If the user names a person ('give Thandi a todo', 'what's on Thandi's "
             "plate'), pass their name as the assignee argument. If a create_task result comes "
             "back with assignee_not_found, tell the user plainly that no matching team member "
             "was found and that the task was created unassigned — never claim it was assigned. "

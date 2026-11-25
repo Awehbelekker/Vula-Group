@@ -153,6 +153,8 @@ async def status(tenant_id: str, kind: str = "shop") -> Dict[str, Any]:
               else web_basket.configured_shop_host(tenant_id))
     out: Dict[str, Any] = {"domain": domain, "suggestion": suggestion(tenant_id, kind), "kind": kind,
                            "automated": can_automate(), "state": "none", "records": []}
+    if kind == "shop":
+        out["free"] = await free_address(tenant_id)
     if not domain:
         return out
     live = await (web_basket.check_link_host(domain, tenant_id) if kind == "links"
@@ -169,6 +171,22 @@ async def status(tenant_id: str, kind: str = "shop") -> Dict[str, Any]:
         if out["records"] and all(r["ok"] for r in out["records"] if r["ok"] is not None) and "ISSU" not in cert:
             out["state"] = "securing"
     return out
+
+
+async def free_address(tenant_id: str) -> Optional[Dict[str, Any]]:
+    """The shop's free address (<business>.<shop_base_domain>, 23 Nov 2026) and whether it answers
+    yet. None when free addresses aren't set up, or this business has nothing to sell on one."""
+    from vula.commerce import web_basket
+    host = web_basket.free_shop_host(tenant_id)
+    if not host:
+        return None
+    try:
+        if not await web_basket.shop_products(tenant_id):
+            return None
+    except Exception:
+        return None
+    live = await web_basket.check_shop_host(host, tenant_id)
+    return {"host": host, "url": f"https://{host}/", "live": bool(live)}
 
 
 async def connect(tenant_id: str, raw: str, kind: str = "shop") -> Dict[str, Any]:

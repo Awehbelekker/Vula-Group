@@ -332,14 +332,70 @@ def _host_ready(host: str, tenant_id: str) -> bool:
     return bool(hit and hit[1])
 
 
+# ── Every shop's free address (23 Nov 2026) ──────────────────────────────────────────────────
+# <business>.<shop_base_domain> — one wildcard domain on this service serves them all, so a new
+# shop has a real web address the moment it exists, with nothing to set up and no DNS of its own.
+# The business's own address (shop.<their domain>) still wins once it is live.
+
+_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_RESERVED_LABELS = frozenset({"www", "api", "app", "admin", "mail", "shop", "store", "vula", "master",
+                              "directory"})       # directory.<base> is the shop directory
+
+
+def shop_base_domain() -> str:
+    from config import settings
+    d = (getattr(settings, "shop_base_domain", "") or "").strip().lower().strip(".")
+    return d if d and "." in d else ""
+
+
+def shop_label(tenant_id: str) -> str:
+    """The business's part of its free address: its id, as a web-safe name ('' when it can't be one)."""
+    label = str(tenant_id or "").strip().lower().replace("_", "-")
+    return label if _LABEL_RE.match(label) and label not in _RESERVED_LABELS else ""
+
+
+def free_shop_host(tenant_id: str) -> str:
+    """seedleme.shop.vula-ai.com — '' when free addresses aren't set up or the id can't be a name."""
+    base, label = shop_base_domain(), shop_label(tenant_id)
+    return f"{label}.{base}" if base and label else ""
+
+
+def _tenant_for_free_host(h: str) -> Optional[str]:
+    base = shop_base_domain()
+    if not base or not h.endswith("." + base):
+        return None
+    label = h[: -len(base) - 1]
+    if not _LABEL_RE.match(label) or label in _RESERVED_LABELS:
+        return None
+    from vula.api.tenants import get_config
+    for cand in dict.fromkeys((label, label.replace("-", "_"))):
+        try:
+            cfg = get_config(cand) or {}
+        except Exception:
+            cfg = {}
+        # Only a business that exists, and only under its own name: an id that merely looks alike
+        # (off_the_hook vs off-the-hook) answers on its own label and no other.
+        if cfg.get("tenant_id") == cand and shop_label(cand) == label:
+            return cand
+    return None
+
+
 def shop_host(tenant_id: str) -> str:
-    """The shop's own address once it's live, else '' (links use Vula's, behind buttons)."""
+    """Where this shop answers: its own address once that is live, else its free one once that
+    is, else '' (links use Vula's, behind buttons). Both are checked the same way — the address
+    must answer /shop-ping with this business — so a link never points at one that isn't up."""
     host = configured_shop_host(tenant_id)
-    return host if host and _host_ready(host, tenant_id) else ""
+    if host and _host_ready(host, tenant_id):
+        return host
+    free = free_shop_host(tenant_id)
+    return free if free and _host_ready(free, tenant_id) else ""
 
 
 def tenant_for_shop_host(host: str) -> Optional[str]:
     h = (host or "").strip().lower().split(":")[0]
+    free = _tenant_for_free_host(h)
+    if free:
+        return free
     if not h.startswith(_SHOP_PREFIXES):
         return None
     try:

@@ -219,6 +219,21 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("293", "commerce_bank_line_documents", None),
     ("294", "commerce_bank_transactions", "pop_options"),
     ("295", "commerce_scheduled_job_config", "settings"),
+    ("296", "vula_tenant_config", "google_review_url"),
+    ("297", "commerce_shipments", "open"),               # courier bookings (vula/commerce/shipping.py)
+    ("298", "commerce_tickets", "code"),                 # events and tickets (vula/commerce/events.py)
+    ("306", "commerce_lesson_requests", "customer_user_id"),   # a customer's own account in the customer app
+    ("305", "commerce_lesson_settings", "listing"),      # coach profiles + the school directory (vula/commerce/lesson_directory.py)
+    ("304", "commerce_beach_reports", "taken_at"),       # readings from the beach (vula/commerce/beach_reports.py)
+    ("303", "commerce_lesson_requests", "ref"),          # lessons and gear hire (vula/commerce/lessons.py)
+    ("299", "commerce_table_bookings", "ref"),           # table bookings and specials (vula/commerce/tables.py)
+    ("300", "kb_table_orders", "bill_id"),               # service at the table (vula/tap/tableside.py)
+    ("301", "kb_shifts", "member_id"),                   # shifts and availability (vula/tap/shifts.py)
+    ("302", "commerce_product_variants", "image_url"),   # a photo per colour (vula/commerce/product_variants.py)
+    ("307", "kb_staff_targets", "cents"),                # a team member's own target (vula/tap/scoreboard.py)
+    ("308", "commerce_lesson_ratings", "stars"),         # a customer rates a finished lesson (vula/commerce/lesson_ratings.py)
+    ("309", "flow_customer_profiles", "sports"),          # a customer's own profile (vula/commerce/lesson_customers.py)
+    ("310", "flow_coach_offers", "fee_bp"),               # a coach from another school (vula/commerce/coach_pool.py)
 ]
 
 

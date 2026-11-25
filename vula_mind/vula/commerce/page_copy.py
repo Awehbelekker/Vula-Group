@@ -331,8 +331,8 @@ def _apply_real_data_overrides(content: List[dict], grounding: Dict[str, Any]) -
 # so every AI touch-point benefits from the same knowledge, regardless of which entry point
 # (dashboard click, refine-chat message, or a WhatsApp/commerce_admin tool call) triggered it.
 DESIGN_PRINCIPLES = (
-    "Copywriting: lead with a concrete benefit or outcome, not a vague claim ('Fresh fish "
-    "delivered same-day' beats 'Quality you can trust'). A headline works best as a clear "
+    "Copywriting: lead with a concrete benefit or outcome, not a vague claim ('Repairs done "
+    "same-day' beats 'Quality you can trust'). A headline works best as a clear "
     "promise or a specific number/timeframe, not a clever pun. CTA button text names the actual "
     "next action ('Book a fitting', 'Get a quote'), not a generic 'Learn more' or 'Submit'. "
     "Write for the reader's situation, not the business's org chart — 'delivered to your door', "

@@ -11,11 +11,14 @@ import VulaLogo, { PoweredByVula } from '../brand/VulaLogo.jsx'
 import { useLogin } from './useLogin'
 import { isPhone, NO_CODE_HINT, useWhatsAppLogin } from './useWhatsAppLogin'
 import './login.css'
+import { examplesFor } from '../../lib/examples'
 
 export default function LoginV2({ onSuccess, notice = '', email = '' }) {
   const x = useLogin({ onSuccess, notice, email })
   const go = (mode) => { x.setMode(mode); x.setError(''); x.setInfo('') }
   const b = x.loginBrand
+  const sc = b?.partner_login && 'school'
+  const [school, setSchool] = useState(false)      // a partner's address asks first: lessons, or a school?
 
   return (
     <main className="vlg">
@@ -25,7 +28,8 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
             <>
               {b.logo_url ? <img src={b.logo_url} alt={b.name || ''} className="vlg-logo vula-login-logo" />
                 : <span className="vlg-name">{b.name}</span>}
-              <PoweredByVula />
+              {b.partner_login ? <><span className="vlg-name">{b.name}</span><span className="vlg-over">{b.tagline}</span></>
+                : <PoweredByVula partner={b.partner?.name || ''} />}
             </>
           ) : (
             <>
@@ -76,22 +80,32 @@ export default function LoginV2({ onSuccess, notice = '', email = '' }) {
           </>
         )}
 
-        {x.mode === 'setup_workspace' && (
+        {x.mode === 'setup_workspace' && sc && !school && (
           <>
-            <h1 className="vlg-h1">Set up your workspace</h1>
-            <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What's your business called?</p>
+            <h1 className="vlg-h1">Welcome to {b.name}</h1>
+            <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What brings you here?</p>
+            <Button size="lg" className="vlg-wide" onClick={x.toLessons}>I want to book lessons</Button>
+            <Button size="lg" variant="secondary" Icon={Building2} className="vlg-wide" onClick={() => setSchool(true)}>I run a school</Button>
+          </>
+        )}
+
+        {x.mode === 'setup_workspace' && (!sc || school) && (
+          <>
+            <h1 className="vlg-h1">Set up your {sc || 'workspace'}</h1>
+            <p className="vlg-sub">Signed in as {x.pendingUser?.email}. What's your {sc || 'business'} called?</p>
             <Notes x={x} info={false} />
             <form onSubmit={x.handleSetupWorkspace} className="vlg-form">
-              <Field label="Business name">
-                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder="e.g. Off the Hook" />
+              <Field label={sc ? 'School name' : 'Business name'}>
+                <Input type="text" required value={x.businessName} onChange={(e) => x.setBusinessName(e.target.value)} placeholder={sc ? '' : examplesFor().businessName} />
               </Field>
-              <Field label="What kind of business?">
+              {/* on a partner's own address the server decides the kind (a FlowCrew surf school) */}
+              {!sc && <Field label="What kind of business?">
                 <Select value={x.businessType} onChange={(e) => x.setBusinessType(e.target.value)}>
                   {(x.businessTypes.length ? x.businessTypes : [{ id: 'other', label: 'Other / General' }])
                     .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                 </Select>
-              </Field>
-              <Button size="lg" Icon={Building2} disabled={x.loading} className="vlg-wide">{x.loading ? 'Setting up…' : 'Create my workspace'}</Button>
+              </Field>}
+              <Button size="lg" Icon={Building2} disabled={x.loading} className="vlg-wide">{x.loading ? 'Setting up…' : `Create my ${sc || 'workspace'}`}</Button>
             </form>
           </>
         )}

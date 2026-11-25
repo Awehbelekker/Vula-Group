@@ -153,6 +153,13 @@ _ORDER_RE = re.compile(
 
 # Supplier-intake forms for tenants that had one before vula_tenant_config.supplier_intake_url
 # existed — the config value wins when set.
+# A message offering goods to the business (supplier intake), not a customer asking what's on sale.
+_SUPPLIER_OFFER_RE = re.compile(
+    r"\b(?:i|we)\s+(?:am\s+|are\s+|can\s+|could\s+|(?:would\s+like|want|wish)\s+to\s+)?(?:a\s+)?"
+    r"(?:supplier|supply|sell|catch|farm|grow|manufacture|distribute)\w*\b"
+    r"|\bsupplier\b|\bverskaf\w*\b|\bfish for you\b|\bwant to (?:supply|sell to) you\b"
+    r"|\bbecome (?:a|your) supplier\b"
+)
 _SUPPLIER_INTAKE_URLS = {"off-the-hook": "https://offthehook.co.za/suppliers"}
 
 
@@ -440,7 +447,7 @@ async def _offer_product_photos(tenant_id: str, phone: str, photos: list) -> Non
                 if len(photos) > _PHOTO_OFFERS_PER_BURST else "")
         await _send_reply(phone, (
             "Still AI pictures on your website: " + ", ".join(left) + "." + more +
-            "\nSend a photo captioned with the product name (e.g. *photo Hake Fillets*) to "
+            "\nSend a photo captioned with the product name (e.g. *photo Blue Mug*) to "
             "replace one."), tenant_id)
 
 
@@ -4572,6 +4579,15 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
     from vula.integrations.doc_filing import looks_like_project_answer
     kind, ref = q.get("kind"), q.get("ref_id")
     low = (text or "").strip().lower().rstrip(".!")
+    if kind == "table_name":
+        from vula.commerce import table_chat
+        return await table_chat.take_name(phone, tenant_id, text, q)
+    if kind == "lesson_name":
+        from vula.commerce import lesson_chat
+        return await lesson_chat.take_name(phone, tenant_id, text, q)
+    if kind == "ticket_name":
+        from vula.commerce import event_chat
+        return await event_chat.take_name(phone, tenant_id, text, q)
     if kind == "checkout_address":
         from vula.commerce import button_checkout
         return await button_checkout.take_address(phone, tenant_id, text, q)
@@ -6639,12 +6655,27 @@ async def _handle_opt_out(phone: str, tenant_id: Optional[str]) -> None:
     DELETE records, so broadcasts/campaigns/automations already honour it."""
     logger.info("Opt-out request from %s (tenant=%s)", phone, tenant_id)
     paused = 0
+    kept = True
     if tenant_id:
         try:
             from vula.api.commerce import record_opt_out
-            record_opt_out(tenant_id, phone, source="stop_keyword")
+            kept = record_opt_out(tenant_id, phone, source="stop_keyword")
         except Exception as exc:
             logger.warning("opt-out suppression failed for %s: %s", phone, exc)
+            kept = False
+        if not kept:
+            # never "Done" when it wasn't saved: the customer would keep getting marketing (POPIA)
+            try:
+                from vula.integrations.notify import notify_team
+                await notify_team(tenant_id, "help_request",
+                                  f"⚠️ A customer ({phone}) asked to STOP messages and it didn't save. "
+                                  "Please make sure they get no more marketing.")
+            except Exception:
+                pass
+            await _send_reply(phone, "Sorry — I couldn't save that just now. Please reply STOP again "
+                                     "in a minute. The team has been told, and won't send you "
+                                     "marketing meanwhile.", tenant_id)
+            return
         try:
             from vula.commerce import subscriptions
             paused = await subscriptions.pause_for_phone(tenant_id, phone)
@@ -7266,7 +7297,7 @@ async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id
         if not lines:
             await _send_reply(phone, "That looks like a delivery note, but I couldn't read its item "
                                      "lines. Send a clearer photo, or tell me what arrived "
-                                     "(e.g. \"received 10 hake, 5 prawns\").", tenant_id)
+                                     "(e.g. \"received 10 mugs, 5 teapots\").", tenant_id)
             return True
         args = {"lines": [{"product": str(ln.get("description"))[:120], "quantity": ln.get("quantity"),
                            **({"unit_cost_rands": ln["unit_price_rands"]}
@@ -7317,7 +7348,7 @@ async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id
         return True
 
     await _send_reply(phone, "I can read barcodes, labels and delivery notes, but I won't guess how "
-                             "many items are in a photo. Send the count (e.g. \"hake 12\"), a photo "
+                             "many items are in a photo. Send the count (e.g. \"mugs 12\"), a photo "
                              "of the barcode, or scan items in the dashboard's Stock: "
                              f"{_dashboard_link(tenant_id, 'stock')}",
                       tenant_id)
@@ -9469,6 +9500,37 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     if await _maybe_claim_web_basket(phone, text, tenant_id):
         return
 
+    # "Surf lesson" / "hire a board" / "cancel my lesson" → a request the business confirms by hand
+    # (vula/commerce/lesson_chat.py). Only a business with lesson requests switched on.
+    try:
+        from vula.commerce import lesson_chat
+        if lesson_chat.is_request(text) and await lesson_chat.start(phone, tenant_id, text):
+            _note_handler("lesson_request")
+            return
+    except Exception as exc:
+        logger.warning("lesson request failed for %s: %s", tenant_id, exc)
+
+    # "Book a table" / "specials" / "cancel my booking" → the restaurant's own times and words
+    # (vula/commerce/table_chat.py). Only a business with bookings on, or a special running today.
+    try:
+        from vula.commerce import table_chat
+        if (table_chat.is_booking_request(text) or table_chat.is_specials_request(text)
+                or table_chat.is_own_booking_request(text)) and await table_chat.start(phone, tenant_id, text):
+            _note_handler("table_booking")
+            return
+    except Exception as exc:
+        logger.warning("table request failed for %s: %s", tenant_id, exc)
+
+    # "Tickets" → the events on sale, bought in the chat (vula/commerce/event_chat.py). Only a
+    # business with an event on sale (or this customer's own tickets) takes the message here.
+    try:
+        from vula.commerce import event_chat
+        if event_chat.is_ticket_request(text) and await event_chat.start(phone, tenant_id, text):
+            _note_handler("event_tickets")
+            return
+    except Exception as exc:
+        logger.warning("ticket request failed for %s: %s", tenant_id, exc)
+
     # Owner-configurable conversation flow (migration 118) — is this phone already mid-flow?
     # Checked before greeting/menu so a flow reply (e.g. answering "which location?") is never
     # accidentally swallowed by the greeting/supplier-intake keyword checks below.
@@ -9515,9 +9577,9 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     _customer_asking_re = re.compile(
         r"\byou\s+(?:guys\s+)?(?:sell|supply|have|stock)\b|\bsupply\s+(?:me|us)\b|\bsell\s+(?:me|us|to me)\b"
     )
-    supplier_keywords = {"supply", "sell", "catch", "supplier", "verskaf", "fish for you"}
-    if (not _customer_asking_re.search(text_lower)
-            and any(re.search(rf"\b{re.escape(k)}\b", text_lower) for k in supplier_keywords)):
+    # 23 Nov 2026 audit: "catch", "sell" and "supply" alone sent customers asking "what's the catch
+    # today?" to the supplier reply. Only a message that says it is offering goods counts.
+    if not _customer_asking_re.search(text_lower) and _SUPPLIER_OFFER_RE.search(text_lower):
         # Each shop's own intake form (vula_tenant_config.supplier_intake_url) — this reply
         # used to send every commerce tenant's would-be suppliers to Off the Hook's form.
         from vula.api import tenants as _tenants
@@ -9529,18 +9591,19 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
                "I've passed your details to the team. ")
             + "Our team will review it and get back to you."
         )
-        await _send_reply(phone, reply, tenant_id)
-        # Log lead to Supabase (assuming table exists or using a generic log)
+        # The team is told (supplier_leads had no migration and nobody read it); "passed your
+        # details to the team" only when that worked.
+        told = False
         try:
-            from vula.commerce import service as commerce_service
-            commerce_service._client().table("supplier_leads").insert({
-                "tenant_id": tenant_id,
-                "phone": phone,
-                "raw_text": text,
-                "source": "whatsapp"
-            }).execute()
-        except Exception:
-            pass
+            from vula.integrations.notify import notify_team
+            told = (await notify_team(tenant_id, "help_request",
+                                      f"📦 A possible supplier ({phone}) messaged: {text[:300]}")) > 0
+        except Exception as exc:
+            logger.warning("supplier lead notify failed: %s", exc)
+        if not intake and not told:
+            reply = ("Thanks for reaching out! We're always looking for quality suppliers. "
+                     "Please send your company name, what you supply and your prices, and we'll be in touch.")
+        await _send_reply(phone, reply, tenant_id)
         return
 
     # Owner-configurable conversation flow — does this NEW message match a trigger phrase?
@@ -9636,10 +9699,9 @@ async def _record_rating(phone: str, tenant_id: str, order: dict, rating: int) -
         }).execute()
         db.table("commerce_orders").update({"review_rating": rating}).eq("id", order["id"]).execute()
         commerce_service._rating_cache.pop(tenant_id, None)
-        thanks = ("Thank you so much for the 5 stars! 🌟 See you next order."
-                  if rating == 5 else
-                  f"Thanks for the feedback ({rating}/5)."
-                  + (" We'd love to make it right — the owner will follow up with you." if rating <= 3 else ""))
+        from vula.commerce import reviews as _reviews
+        # a happy customer also gets the business's own Google review link, when it set one
+        thanks = _reviews.thanks_text(rating, _reviews.google_link(tenant_id) if rating >= _reviews.HAPPY else "")
         await _send_reply(phone, thanks, tenant_id)
         if rating <= 3:
             try:
@@ -10759,6 +10821,37 @@ async def _handle_commerce_interactive(
     if reply_id.startswith("lst_"):
         # Listing cards (real-estate add-on, vula/listings/sharing.py): exact ids, no model.
         if await _handle_listing_tap(phone, tenant_id, reply_id):
+            return
+    if reply_id.startswith("lsn_"):
+        # Lessons and gear hire in the chat (vula/commerce/lesson_chat.py): exact ids, no model.
+        from vula.commerce import lesson_chat
+        try:
+            if await lesson_chat.handle_tap(phone, tenant_id, reply_id):
+                return
+        except Exception as exc:
+            logger.warning("lesson step %s failed for %s: %s", reply_id[:12], tenant_id, exc)
+            await _send_reply(phone, "Sorry — that didn't go through. Reply *lesson* to try again.", tenant_id=tenant_id)
+            return
+    if reply_id.startswith("tbl_"):
+        # Table bookings in the chat (vula/commerce/table_chat.py): exact ids, no model.
+        from vula.commerce import table_chat
+        try:
+            if await table_chat.handle_tap(phone, tenant_id, reply_id):
+                return
+        except Exception as exc:
+            logger.warning("table step %s failed for %s: %s", reply_id[:12], tenant_id, exc)
+            await _send_reply(phone, "Sorry — that didn't go through. Reply *book* to try again.", tenant_id=tenant_id)
+            return
+    if reply_id.startswith("evt_"):
+        # Event tickets in the chat (vula/commerce/event_chat.py): exact ids, no model.
+        from vula.commerce import event_chat
+        try:
+            if await event_chat.handle_tap(phone, tenant_id, reply_id):
+                return
+        except Exception as exc:
+            logger.warning("ticket step %s failed for %s: %s", reply_id[:12], tenant_id, exc)
+            await _send_reply(phone, "Sorry — that didn't go through. Reply *tickets* to try again.",
+                              tenant_id=tenant_id)
             return
     if reply_id.startswith("chk_"):
         # Checkout steps (vula/commerce/button_checkout.py): exact ids, no model.

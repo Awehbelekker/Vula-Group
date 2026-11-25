@@ -1514,3 +1514,20 @@ test("master tenant detail: a feature is switched on for this business and read 
   await expect(voice).toBeChecked();
   await expect(list.getByText("· on for this business").first()).toBeVisible();
 });
+
+// 23 Nov 2026 audit: a new member with nothing ticked used to get FULL access. Now they start
+// with nothing, and the owner is told so; a refused save says why instead of clearing the form.
+test("team: a new member starts with nothing, and a refused add says why", async ({ page }) => {
+  await openScreen(page, TEAM, { viewport: VIEWPORTS.desktop, theme: "light" });
+  await page.getByLabel("Name", { exact: true }).fill("Lindiwe");
+  await page.getByRole("button", { name: "Add member" }).click();
+  await expect(page.getByText("Lindiwe added. Tick what they can use below — until then they only see Home.")).toBeVisible();
+  await page.route(/\/v1\/team\/[^/]+$/, (route) => (route.request().method() === "POST"
+    ? route.fulfill({ status: 403, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ detail: "Only the owner or a manager can change the team and logins." }) })
+    : route.fallback()));
+  await page.getByLabel("Name", { exact: true }).fill("Sizwe");
+  await page.getByRole("button", { name: "Add member" }).click();
+  await expect(page.getByText("Only the owner or a manager can change the team and logins.")).toBeVisible();
+  await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Sizwe");
+});

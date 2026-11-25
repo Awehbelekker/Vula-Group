@@ -77,6 +77,24 @@ async def check_body_tenant(tenant_id: str, authorization: str) -> None:
         if not (authorization or "").removeprefix("Bearer ").strip():
             raise HTTPException(status_code=401, detail="Sign in required.")
         raise HTTPException(status_code=403, detail="You don't have access to this workspace.")
+    # 23 Nov 2026 audit: connecting a number, a mailbox or payment keys speaks for the business —
+    # owner and managers only, like the rest of Settings (membership alone let a sales rep do it).
+    if not scope_allows(await member_scope(authorization, tenant_id), frozenset()):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can connect or change this.")
+
+
+# 23 Nov 2026 audit: an empty access list means FULL access for a team member (scope_from_rows),
+# so "Add member" with no tabs ticked, or un-ticking the last tab, quietly made someone a full user.
+# A member who isn't an owner or manager is now saved with NO_ACCESS instead — nothing until
+# their tabs are ticked. Rows saved before this keep what they have (listed for the owner).
+NO_ACCESS = ["overview"]
+
+
+def normalize_access(role: str | None, access) -> list:
+    access = [a for a in (access or []) if isinstance(a, str) and a]
+    if (role or "").lower() in _FULL_TEAM_ROLES or (role or "").lower() in ("owner", ACCOUNTANT):
+        return access
+    return access or list(NO_ACCESS)
 
 
 async def require_tenant_actor(tenant: str, authorization: str = Header(default="")) -> dict:

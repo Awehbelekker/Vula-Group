@@ -8,6 +8,7 @@ import { CalendarDays, MapPin, Printer, Truck } from 'lucide-react'
 import { formatMoney } from '../../lib/money'
 import { Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, StatCard, StatusChip, Textarea } from '../ui/index.jsx'
 import { DEL_PAID, PAYMENT_OPTIONS, SLOT_NAMES, printRunSheet, useDeliveryList, useOrderWorkflow } from './useDelivery'
+import CourierSetup from '../couriers/CourierSetup'
 import './sell.css'
 
 const money = (c) => formatMoney(c || 0, { cents: 'always' })
@@ -62,6 +63,7 @@ export default function DeliveryV2({ tenantId }) {
       ))}
 
       <Workflow tenantId={tenantId} />
+      <CourierSetup tenantId={tenantId} />
     </div>
   )
 }

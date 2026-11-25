@@ -1,2 +1,4 @@
 # message -> this task (and the tool a good first move needs)
 - {prompt: "Mark OTH-00042 as dispatched", expect: deliveries, tool: update_order_status}
+- {prompt: "Book a courier for SEE-00042", expect: deliveries, tool: book_courier}
+- {prompt: "Where is the parcel for OTH-00017?", expect: deliveries, tool: courier_status}

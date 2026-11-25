@@ -10,7 +10,7 @@ import {
   AlertTriangle, ArrowDownLeft, ArrowUpRight, FileSpreadsheet, HardHat, Landmark, MessageCircle, RefreshCw, Settings2, Upload, Users,
 } from "lucide-react";
 import { formatMoney } from "../../lib/money";
-import { Button, Card, EmptyState, Field, FilterBar, Input, PageHeader, Select, Sheet, StatCard, StatusChip } from "../ui/index.jsx";
+import { Button, Card, EmptyState, ErrorCard, Field, FilterBar, Input, PageHeader, Select, Sheet, StatCard, StatusChip } from "../ui/index.jsx";
 import { BANK_FILTERS, fetchCandidates, useBank } from "./useBank";
 import "./bank.css";
 
@@ -77,7 +77,8 @@ export default function BankV2({ tenantId }) {
       )}
 
       {!b.grouped && (b.txns.length === 0
-        ? <EmptyState Icon={Landmark} title="No bank lines yet">Upload a statement, or wait for the weekly email.</EmptyState>
+        ? b.loadError ? <ErrorCard what="your bank lines" onRetry={b.reload} />
+        : <EmptyState Icon={Landmark} title="No bank lines yet">Upload a statement, or wait for the weekly email.</EmptyState>
         : <ul className="vbr-list" aria-label="Bank lines">{b.shown.map(t => <TxnCard key={t.id} t={t} b={b} tenantId={tenantId} />)}</ul>)}
 
       <Sheet open={tools} title="Statement tools" onClose={() => setTools(false)}>

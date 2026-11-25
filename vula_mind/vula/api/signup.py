@@ -79,8 +79,19 @@ async def two_step_policy() -> dict:
     return {"required_roles": sorted(required_roles() | {"accountant"})}
 
 
+def _partner_from(origin) -> Optional[dict]:
+    """The partner whose own address the sign-up came from (flowcrew.co.za), from the browser's
+    Origin header — which a page's own script can't set. Coming through a partner gives no extra
+    access: it only decides the kind of business made and whose look it wears."""
+    from urllib.parse import urlparse
+    from vula.api.tenants import partner_for_host
+    host = urlparse(origin).hostname if isinstance(origin, str) and origin else ""
+    return partner_for_host(host or "")
+
+
 @router.post("/signup")
-async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user)) -> dict:
+async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user),
+                 origin: str = Header(default="")) -> dict:
     """Create a brand-new tenant + its first owner login, both tied to the verified caller.
     Create-only (never upserts, unlike master's POST /v1/tenants) — one tenant per Supabase
     account for now, the simplest abuse bound for a first pass."""
@@ -101,8 +112,10 @@ async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user
     if own_tenants:
         raise HTTPException(status_code=409, detail="This account already has a workspace.")
 
-    from vula.api.tenants import valid_business_type
-    btype = valid_business_type(body.business_type)
+    from vula.api.tenants import PARTNERS, valid_business_type
+    # signed up on a partner's own address: that partner's kind of business, credited to it
+    partner = _partner_from(origin)
+    btype = valid_business_type((PARTNERS[partner["id"]].get("business_type") if partner else None) or body.business_type)
     preset = BUSINESS_TYPES[btype]
     row = {
         "tenant_id": slug, "display_name": body.display_name or slug,
@@ -110,6 +123,8 @@ async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user
         "modules": preset["modules"], "plan": "starter",
         "status": "active", "updated_at": _now(),
     }
+    if partner:
+        row["features"] = {"partner": partner["id"]}
     try:
         db.table("vula_tenant_config").insert(row).execute()
     except Exception as exc:

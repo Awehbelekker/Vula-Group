@@ -362,6 +362,34 @@ PROACTIVE_TEMPLATES = [
 ]
 
 # Shared by every business on Vula's WhatsApp account — submitted once, reused by name.
+# The Field Ops contractor templates (vula/api/field_ops.py::FIELD_TEMPLATES; neutral names since
+# 24 Nov 2026 — they were digg_… for every business). In the standard set for a business with the
+# Field Ops module; scripts/create_launch_templates.py --set fieldops submits the same list.
+FIELD_OPS_TEMPLATES = [
+    ("field_task_assigned",
+     "Hi {{1}}, you've been assigned a task on project {{2}}: {{3}}. Reply DONE when complete, "
+     "or send photos as evidence. Reply with any questions and I'll help.",
+     ["Sipho", "Main Road fit-out", "Tile the bathroom"]),
+    ("field_task_chase",
+     "Hi {{1}}, just checking in on task {{2}}. Is it complete? Reply DONE to confirm, "
+     "or send photos if sign-off is required.",
+     ["Sipho", "Tile the bathroom"]),
+    ("field_walkthrough_start",
+     "Hi {{1}}, please do a site walkthrough for {{2}}. Check Vula for the checklist and send "
+     "photos for each item. Reply DONE when all photos are sent.",
+     ["Sipho", "First fix inspection"]),
+    ("field_walkthrough_approved",
+     "Walkthrough {{1}} has been approved. Great work!",
+     ["First fix inspection"]),
+    ("field_walkthrough_rejected",
+     "Walkthrough {{1}} needs attention: {{2}}. Please address and re-submit.",
+     ["First fix inspection", "the grout in the shower is cracked"]),
+    ("field_daily_tasks",
+     "Good morning {{1}}! You have {{2}} task(s) today. Check Vula for the full list. "
+     "Reply DONE when each task is complete, or send photos as evidence.",
+     ["Sipho", "3"]),
+]
+
 SHARED_TEMPLATES = [
     ("vula_notification", "You have a new update from {{1}}. Open Vula to see the details.", "UTILITY"),
     ("vula_owner_checkin_nudge",
@@ -445,18 +473,21 @@ def staff_templates(tenant_id: str) -> List[Dict[str, Any]]:
     return [
         {"name": template_name(tenant_id, STAFF_NOTICE_SUFFIX), "body": STAFF_NOTICE_BODY,
          "category": "UTILITY", "buttons": got_it,
-         "examples": ["DIGG", "The office is closed on Friday for the year-end function."]},
+         "examples": ["Sunrise Trading", "The office is closed on Friday for the year-end function."]},
         {"name": template_name(tenant_id, STAFF_NOTICE_IMAGE_SUFFIX), "body": STAFF_NOTICE_BODY,
          "category": "UTILITY", "buttons": got_it, "header_type": "IMAGE",
-         "examples": ["DIGG", "This month's newsletter is here — have a look at the picture."]},
+         "examples": ["Sunrise Trading", "This month's newsletter is here — have a look at the picture."]},
         {"name": template_name(tenant_id, STAFF_DAY_SUFFIX), "body": STAFF_DAY_BODY,
          "category": "UTILITY", "buttons": [{"type": "QUICK_REPLY", "text": "Thank you"}],
          "examples": ["Thandi", "tomorrow (Fri 16 Dec) is Day of Reconciliation, a public holiday.",
-                      "DIGG"]},
+                      "Sunrise Trading"]},
         {"name": template_name(tenant_id, STAFF_POLL_SUFFIX), "body": STAFF_POLL_BODY,
          "category": "UTILITY", "buttons": [{"type": "QUICK_REPLY", "text": "Vote"}],
-         "examples": ["Thandi", "DIGG", "Which day suits you for the year-end function?"]},
+         "examples": ["Thandi", "Sunrise Trading", "Which day suits you for the year-end function?"]},
     ]
+
+
+ROSTER_MODULES = {"tables", "taptopay", "team"}      # where Admin › Shifts shows (navConfig modmap)
 
 
 def standard_templates(tenant_id: str, modules: Optional[set] = None,
@@ -473,6 +504,15 @@ def standard_templates(tenant_id: str, modules: Optional[set] = None,
     out += [{"name": template_name(tenant_id, suffix), "body": body, "category": "UTILITY", "examples": ex}
             for suffix, body, ex in PROACTIVE_TEMPLATES]
     out += [{"name": n, "body": b, "category": c} for n, b, c in SHARED_TEMPLATES]
+    if "fieldops" in mods:
+        out += [{"name": n, "body": b, "category": "UTILITY", "examples": ex}
+                for n, b, ex in FIELD_OPS_TEMPLATES]
+    if mods & ROSTER_MODULES:
+        # a roster message to a team member outside the 24-hour window (vula/tap/shifts.py); shared
+        # across the WhatsApp account by name, like vula_notification
+        from vula.tap import shifts
+        out.append({"name": shifts.SHIFT_TEMPLATE, "body": shifts.SHIFT_TEMPLATE_BODY, "category": "UTILITY",
+                    "examples": shifts.SHIFT_TEMPLATE_EXAMPLE})
     return out
 
 

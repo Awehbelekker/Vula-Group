@@ -4,7 +4,8 @@
  * VulaRecurringOrders.jsx and recurring/RecurringV2.jsx; same /v1/subscriptions/{tenant} calls.
  */
 import { useCallback, useEffect, useState } from "react";
-import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
+import { toast } from "../ui/index.jsx";
 
 export const CAD = { weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
 export const PAY = { cod: "Pay on delivery", eft: "EFT", online: "Card / online" };
@@ -21,11 +22,13 @@ export function useRecurring(tenantId) {
   const load = useCallback(async () => {
     setLoading(true);
     const [s, p] = await Promise.all([
-      fetch(`${VULA_API}/v1/subscriptions/${tenantId}`).then(r => r.json()).catch(() => ({})),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`).then(r => r.json()).catch(() => ({})),
+      tryApi(`/v1/subscriptions/${tenantId}`),
+      tryApi(`/v1/commerce/${tenantId}/admin/products`),
     ]);
-    setSubs(s.subscriptions || []);
-    setProducts(p.products || []);
+    if (s.ok) setSubs(s.data.subscriptions || []);
+    if (p.ok) setProducts(p.data.products || []);
+    if (!s.ok) toast(`Couldn't load your standing orders: ${s.error}`, "danger");
+    else if (!p.ok) toast(`Couldn't load your products: ${p.error}`, "danger");
     setLoading(false);
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
@@ -33,16 +36,17 @@ export function useRecurring(tenantId) {
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
 
   const setStatus = async (id, status) => {
-    await fetch(`${VULA_API}/v1/subscriptions/${tenantId}/${id}/status`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
+    const res = await tryApi(`/v1/subscriptions/${tenantId}/${id}/status`, {
+      method: "POST", body: { status },
     });
+    if (!res.ok) toast(`That standing order wasn't changed: ${res.error}`, "danger");
     load();
   };
 
   const runDue = async () => {
-    const r = await fetch(`${VULA_API}/v1/subscriptions/${tenantId}/jobs/run`, { method: "POST" })
-      .then(r => r.json()).catch(() => ({}));
-    flash(`Created ${r.created ?? 0} due order(s)`);
+    const res = await tryApi(`/v1/subscriptions/${tenantId}/jobs/run`, { method: "POST" });
+    if (!res.ok) { toast(`The due orders weren't created: ${res.error}`, "danger"); return; }
+    flash(`Created ${res.data.created ?? 0} due order(s)`);
     load();
   };
 
@@ -72,13 +76,13 @@ export function useSubForm({ tenantId, products, sub, flash, onDone }) {
     if (!items.length) return flash("Add at least one product");
     if (!editing && !f.customer_phone.trim()) return flash("Customer phone is required");
     setSaving(true);
-    const url = editing ? `${VULA_API}/v1/subscriptions/${tenantId}/${sub.id}` : `${VULA_API}/v1/subscriptions/${tenantId}`;
-    const r = await fetch(url, {
-      method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editing ? { items, cadence: f.cadence, payment_method: f.payment_method, customer_name: f.customer_name } : { ...f, items }),
-    }).then(r => r.json()).catch(() => ({ error: "network" }));
+    const url = editing ? `/v1/subscriptions/${tenantId}/${sub.id}` : `/v1/subscriptions/${tenantId}`;
+    const res = await tryApi(url, {
+      method: editing ? "PATCH" : "POST",
+      body: editing ? { items, cadence: f.cadence, payment_method: f.payment_method, customer_name: f.customer_name } : { ...f, items },
+    });
     setSaving(false);
-    if (r.error) return flash(r.error);
+    if (!res.ok) return flash(res.error);
     onDone();
   };
 

@@ -2,6 +2,30 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
+  "redirects": [
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "flowcrew.co.za"
+        }
+      ],
+      "destination": "/flow/find",
+      "permanent": false
+    },
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.flowcrew.co.za"
+        }
+      ],
+      "destination": "/flow/find",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -12,6 +36,14 @@
       "destination": "/r/index.html"
     },
     {
+      "source": "/door/(.*)",
+      "destination": "/door/index.html"
+    },
+    {
+      "source": "/flow/(.*)",
+      "destination": "/flow/index.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
@@ -19,6 +51,19 @@
   "headers": [
     {
       "source": "/r/(.*)",
+      "headers": [
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    },
+    {
+      "source": "/door/(.*)",
       "headers": [
         {
           "key": "Referrer-Policy",
@@ -49,6 +94,19 @@
         {
           "key": "Service-Worker-Allowed",
           "value": "/pay/"
+        }
+      ]
+    },
+    {
+      "source": "/flow/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        },
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/flow/"
         }
       ]
     },

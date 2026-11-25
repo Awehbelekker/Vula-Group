@@ -14,6 +14,8 @@ from uuid import UUID
 from pydantic import BaseModel, field_validator
 
 
+# The first client's seafood categories, kept for reference only: a product's category is the
+# business's own key (commerce_categories, migration 073), so the models below take any string.
 class ProductCategory(str, Enum):
     linefish = "linefish"
     shellfish = "shellfish"
@@ -48,14 +50,14 @@ class Product(BaseModel):
     name: str
     slug: str
     description: str
-    category: ProductCategory
+    category: str              # the business's own category key
     price_cents: int           # ZAR cents — e.g. 18500 = R185.00
     weight_grams: Optional[int] = None
     serves: Optional[str] = None   # e.g. "2–3 people"
     in_stock: bool = True
     stock_quantity: Optional[float] = None   # exact: 2.5 kg (migration 210)
     image_url: Optional[str] = None
-    catch_source: Optional[str] = None   # "Hout Bay" / "Kalk Bay"
+    catch_source: Optional[str] = None   # where it comes from, e.g. a harbour or farm
     fisherman_name: Optional[str] = None
     is_daily_catch: bool = False
     created_at: datetime
@@ -70,7 +72,7 @@ class ProductCreate(BaseModel):
     name: str
     slug: str
     description: str
-    category: ProductCategory
+    category: str              # the business's own category key
     price_cents: int
     weight_grams: Optional[int] = None
     serves: Optional[str] = None

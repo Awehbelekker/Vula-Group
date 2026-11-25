@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Bot, MessagesSquare, Send, ThumbsDown, ThumbsUp, UserRound } from 'lucide-react'
-import { Button, Card, EmptyState, FilterBar, IconButton, Input, ListRow, PageHeader, Select, Skeleton, StatusChip } from '../ui/index.jsx'
+import { Button, Card, EmptyState, ErrorCard, FilterBar, IconButton, Input, ListRow, PageHeader, Select, Skeleton, StatusChip } from '../ui/index.jsx'
 import { useBreakpoint } from '../../hooks/useBreakpoint'
 import { since, useEscalation, useInboxList, useInboxTeam, useThread } from './useInbox'
 import './inbox.css'
@@ -14,7 +14,7 @@ import './inbox.css'
 const initial = (c) => (c.customer_name || c.customer_phone || '?').charAt(0).toUpperCase()
 
 export default function InboxV2({ tenantId, mine = false }) {
-  const { convos, escalations, loading, load, loadEscalations, mineOnly: serverMine } = useInboxList(tenantId)
+  const { convos, escalations, loading, load, loadEscalations, mineOnly: serverMine, error, escError } = useInboxList(tenantId)
   const { members, me } = useInboxTeam(tenantId)
   const mineOnly = mine || serverMine              // "My chats": only what's assigned to this login
   const [active, setActive] = useState(null)      // session_id of the open chat
@@ -70,7 +70,12 @@ export default function InboxV2({ tenantId, mine = false }) {
             </Card>
           )}
 
-          {loading ? <Skeleton lines={5} height={18} /> : convos.length === 0 ? (
+          {escError && escalations.length === 0 && (
+            <ErrorCard what="the chats waiting on you" onRetry={loadEscalations} style={{ marginBottom: 12 }} />
+          )}
+          {loading ? <Skeleton lines={5} height={18} /> : error && convos.length === 0 ? (
+            <ErrorCard what="your chats" onRetry={load} />
+          ) : convos.length === 0 ? (
             <EmptyState Icon={MessagesSquare} title="No chats yet">
               When customers message your WhatsApp line, they'll appear here.
             </EmptyState>

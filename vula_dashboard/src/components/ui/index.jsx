@@ -9,6 +9,7 @@
  * Every primitive is on #/ui-kit (master only), which the visual + axe tests screenshot.
  */
 import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { T } from "../../theme/tokens";
 import "./ui.css";
 
@@ -96,9 +97,9 @@ export function StatCard({ label, value, sub, color, accent = false, variant = "
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ font: "600 var(--fs-overline)/var(--lh-overline) var(--font-sans)", letterSpacing: ".06em",
             textTransform: "uppercase", color: variant === "hot" ? "var(--warm-text)" : "var(--muted)", marginBottom: 6 }}>{label}</div>
-          <div className={hero ? "vula-display" : "vula-money"} style={hero
-            ? { fontSize: "var(--fs-display-xl)", lineHeight: "var(--lh-display-xl)", fontWeight: 600, color: color || "var(--ink)" }
-            : { fontSize: 22, lineHeight: 1.1, color: color || "var(--ink)" }}>{value}</div>
+          <div className="vula-figure" style={hero
+            ? { fontSize: "var(--fs-display-xl)", lineHeight: 1.05, color: color || "var(--ink)" }
+            : { fontSize: 24, lineHeight: 1.1, color: color || "var(--ink)" }}>{value}</div>
           {(sub || chip) && (
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 8 }}>
               {sub && <span style={{ fontSize: "var(--fs-caption)", color: "var(--muted)" }}>{sub}</span>}
@@ -111,9 +112,9 @@ export function StatCard({ label, value, sub, color, accent = false, variant = "
   }
   return (
     <Card pad="18px 20px">
-      <div style={{ fontSize: 11, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted, fontFamily: T.mono, marginBottom: 8 }}>{label}</div>
-      <div className="vula-display" style={{ fontSize: 30, fontWeight: 700, lineHeight: 1, color: color || (accent ? T.accent : T.ink) }}>{value}</div>
-      {sub && <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6, fontFamily: T.mono }}>{sub}</div>}
+      <div style={{ font: "600 var(--fs-overline)/var(--lh-overline) var(--font-sans)", letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, marginBottom: 8 }}>{label}</div>
+      <div className="vula-figure" style={{ fontSize: 22, lineHeight: 1.1, color: color || (accent ? T.accent : T.ink) }}>{value}</div>
+      {sub && <div style={{ fontSize: "var(--fs-caption)", color: T.muted, marginTop: 6 }}>{sub}</div>}
     </Card>
   );
 }
@@ -125,7 +126,7 @@ export function Badge({ children, tone = "muted", style, outline = false, text }
   return (
     <span style={{
       padding: "3px 10px", borderRadius: T.rPill, fontSize: 11, fontWeight: 600,
-      fontFamily: T.mono, color: text || c, whiteSpace: "nowrap",
+      fontFamily: "var(--font-sans)", color: text || c, whiteSpace: "nowrap",
       background: outline ? "transparent" : tone === "accent" ? T.accentSoft : `color-mix(in srgb, ${c} 8%, transparent)`,
       border: `1px solid color-mix(in srgb, ${c} ${outline ? 45 : 19}%, transparent)`, ...style,
     }}>{children}</span>
@@ -150,7 +151,7 @@ export function StatusChip({ children, tone = "muted", outline = false, style })
 export function Field({ label, hint, children, style }) {
   return (
     <label style={{ display: "block", ...style }}>
-      {label && <div style={{ fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, fontFamily: T.mono, marginBottom: 5 }}>{label}</div>}
+      {label && <div style={{ font: "500 var(--fs-label)/var(--lh-label) var(--font-sans)", color: "var(--text)", marginBottom: 5 }}>{label}</div>}
       {children}
       {hint && <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4 }}>{hint}</div>}
     </label>
@@ -167,6 +168,39 @@ export const inputStyle = {
  * Front house / Back house / All). Arrow keys, Home and End move between tabs (2026-10-17). */
 export function SectionTabs({ tabs, active, onChange, variant, label }) {
   const ref = useRef(null);
+  // One compact row that slides: when the tabs don't fit, an arrow shows at the side there is more
+  // on, the mouse wheel moves the row, and the open tab is always brought into view. (A strip that
+  // only scrolled, with its scrollbar hidden, left the last tabs unreachable with a mouse.)
+  const [more, setMore] = useState({ left: false, right: false });
+  const count = tabs?.length || 0;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const measure = () => {
+      const left = el.scrollLeft > 2, right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+      setMore((m) => (m.left === left && m.right === right ? m : { left, right }));
+    };
+    const wheel = (e) => {
+      if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      const before = el.scrollLeft;
+      el.scrollLeft += e.deltaY;
+      if (el.scrollLeft !== before) e.preventDefault();      // at either end the page scrolls as usual
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    el.addEventListener("wheel", wheel, { passive: false });
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => { el.removeEventListener("scroll", measure); el.removeEventListener("wheel", wheel); ro?.disconnect(); };
+  }, [count]);
+  useEffect(() => {
+    const el = ref.current, tab = el?.querySelector('[aria-selected="true"]');
+    if (!el || !tab || el.scrollWidth <= el.clientWidth) return;
+    const pad = 48;                                            // room for the arrow beside it
+    if (tab.offsetLeft < el.scrollLeft + pad) el.scrollLeft = tab.offsetLeft - pad;
+    else if (tab.offsetLeft + tab.offsetWidth > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = tab.offsetLeft + tab.offsetWidth - el.clientWidth + pad;
+  }, [active, count]);
+  const slide = (dir) => ref.current?.scrollBy({ left: dir * Math.max(160, ref.current.clientWidth * 0.7), behavior: "smooth" });
   if (!tabs?.length) return null;
   const onKey = (e) => {
     const i = tabs.findIndex((t) => t.id === active);
@@ -180,6 +214,9 @@ export function SectionTabs({ tabs, active, onChange, variant, label }) {
   };
   const pill = variant === "pill";
   return (
+    <div className="vui-tabslide">
+    {more.left && <button type="button" className="vui-tabslide-btn vui-tabslide-btn--left" tabIndex={-1} aria-hidden="true" onClick={() => slide(-1)}><ChevronLeft size={18} strokeWidth={2} /></button>}
+    {more.right && <button type="button" className="vui-tabslide-btn vui-tabslide-btn--right" tabIndex={-1} aria-hidden="true" onClick={() => slide(1)}><ChevronRight size={18} strokeWidth={2} /></button>}
     <div ref={ref} className={`vula-tabs${pill ? " vui-tabs--pill" : ""}`} role="tablist" aria-label={label} onKeyDown={onKey}
       style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: `1px solid ${T.border}`, paddingBottom: 8, flexWrap: "wrap" }}>
       {tabs.map((t) => (
@@ -194,6 +231,7 @@ export function SectionTabs({ tabs, active, onChange, variant, label }) {
             : t.icon ? `${t.icon} ` : ""}{t.label}
         </button>
       ))}
+    </div>
     </div>
   );
 }

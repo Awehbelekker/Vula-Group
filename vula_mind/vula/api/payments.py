@@ -20,6 +20,14 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["payments"])
 
 
+def _refused(message: str, status: int = 400):
+    """A failure the dashboard can see (23 Nov 2026 audit: these routes answered 200 {"error"} and
+    screens that checked the status showed "Saved"). Both keys, so older screens that read
+    `error` still find it."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=status, content={"error": message, "detail": message})
+
+
 @router.get("/{tenant_id}/providers")
 async def list_providers(tenant_id: str) -> dict:
     return {
@@ -41,9 +49,9 @@ async def connect_provider(tenant_id: str, body: ConnectIn) -> dict:
     try:
         row = payments.upsert_provider(tenant_id, body.provider, body.credentials, body.mode, body.is_default)
     except ValueError as exc:
-        return {"error": str(exc)}
+        return _refused(str(exc), 400)
     except Exception as exc:
-        return {"error": f"{exc} (run migration 039?)"}
+        return _refused(f"{exc} (run migration 039?)", 400)
     return {"provider": row}
 
 

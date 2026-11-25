@@ -4,7 +4,7 @@
  * previewed first and only applied on Confirm. Moved verbatim out of VulaRepCallSheet.jsx.
  */
 import { useState, useEffect, useCallback } from "react";
-import { VULA_API } from "../../lib/authFetch";
+import { tryApi } from "../../lib/api";
 
 export const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -15,38 +15,43 @@ export function useRepCallSheet(tenantId, repPhone) {
   const [instruction, setInstruction] = useState("");
   const [preview, setPreview] = useState(null);
   const [msg, setMsg] = useState("");
+  const [loadError, setLoadError] = useState(null);   // the sheet didn't load (not "nothing logged")
 
+  // 23 Nov 2026 audit: a failed load showed "Nothing logged yet" (or spun for ever on a network
+  // error), and a fix the server refused with {detail} showed nothing at all.
   const load = useCallback(async () => {
     if (!tenantId || !repPhone) return;
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet?rep_phone=${encodeURIComponent(repPhone)}`);
-    const d = await r.json().catch(() => ({}));
-    setConfig(d.config || {});
-    setEntries(d.entries || []);
+    const { ok, data: d, error } = await tryApi(`/v1/commerce/${tenantId}/admin/call-sheet?rep_phone=${encodeURIComponent(repPhone)}`);
+    if (ok) {
+      setConfig(d.config || {});
+      setEntries(d.entries || []);
+      setLoadError(null);
+    } else {
+      setLoadError(error);
+    }
     setLoaded(true);
   }, [tenantId, repPhone]);
   useEffect(() => { load(); }, [load]);
 
   const saveConfig = async (patch) => {
     setMsg("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet/configure`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rep_phone: repPhone, ...patch }),
+    const { ok, data: d, error } = await tryApi(`/v1/commerce/${tenantId}/admin/call-sheet/configure`, {
+      method: "POST", body: { rep_phone: repPhone, ...patch },
     });
-    const d = await r.json().catch(() => ({}));
-    if (d.saved) load(); else setMsg(d.detail || "Could not save.");
+    if (ok && d.saved) load(); else setMsg(ok ? (d.detail || "Could not save.") : `Could not save: ${error}`);
   };
 
   const submitInstruction = async (confirm) => {
     setMsg("");
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet/update`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rep_phone: repPhone, instruction, confirm }),
+    const { ok, data, error } = await tryApi(`/v1/commerce/${tenantId}/admin/call-sheet/update`, {
+      method: "POST", body: { rep_phone: repPhone, instruction, confirm },
     });
-    const d = await r.json().catch(() => ({}));
-    if (d.error) { setMsg(d.error); setPreview(null); return; }
+    // what was typed stays in the box on a refusal
+    if (!ok) { setMsg(error); setPreview(null); return; }
+    const d = data || {};
     if (d.preview) { setPreview(d); return; }
     if (d.applied) { setPreview(null); setInstruction(""); load(); }
   };
 
-  return { config, entries, loaded, instruction, setInstruction, preview, setPreview, msg, saveConfig, submitInstruction };
+  return { config, entries, loaded, loadError, load, instruction, setInstruction, preview, setPreview, msg, saveConfig, submitInstruction };
 }

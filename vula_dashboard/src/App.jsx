@@ -8,6 +8,7 @@ const VulaUiKit = lazy(() => import("./components/VulaUiKit")); // #/ui-kit, mas
 const AccountantWorkspace = lazy(() => import("./components/accountant/AccountantWorkspace")); // an accountant's view-only login (19 Nov 2026)
 const ShareSheet = lazy(() => import("./components/share/ShareSheet")); // #/share, from the phone's Share sheet
 import { useAuthStore } from "./store/auth";
+import { useBusinessStore } from "./store/business";
 import { lazyScreen, ScreenSuspense } from "./lib/lazyScreen.jsx";
 const VulaDashboard = lazyScreen(() => import("./components/VulaDashboard"));
 const VulaQS = lazyScreen(() => import("./components/VulaQS"));
@@ -32,6 +33,12 @@ import { stillSignedIn } from "./lib/session";
 import { Button, promptDialog } from "./components/ui/index.jsx";
 import { ArrowLeft, Eye } from "lucide-react";
 import VulaLogo from "./components/brand/VulaLogo.jsx";
+
+// A business a partner brought (FlowCrew) wears the partner's mark until it uploads its own logo.
+// The marks ship with the dashboard (public/partners/<id>-mark.png); the id is checked against
+// this list, never put into an address as it arrives.
+const PARTNER_MARKS = { flowcrew: "/partners/flowcrew-mark.png" };
+const partnerMark = (brand) => PARTNER_MARKS[brand?.partner?.id] || undefined;
 const VulaSubscriptions = lazyScreen(() => import("./components/VulaSubscriptions"));
 const VulaTraining = lazyScreen(() => import("./components/VulaTraining"));
 const TwoStep = lazyScreen(() => import("./components/settings/TwoStep"));
@@ -156,12 +163,14 @@ export default function App() {
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [tenantFeatures, setTenantFeatures] = useState([]); // piloted screens switched on for this business
+  const [tenantPartner, setTenantPartner] = useState("");   // the partner this business came through (FlowCrew), named in the credit
   const [tenantProfile, setTenantProfile] = useState(null); // what kind of business (tenants.tenant_profile)
   const [tenantLabels, setTenantLabels] = useState(null); // the tenant's own section names (ui_labels)
   const [navRequest, setNavRequest] = useState(null);   // open a section's sub-tab (redesigned shell)
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
   const { user, role, tenantId, logout, expire, signedOutEmail, access, full, teamRole, teamPhone, setMember } = useAuthStore();
+  const setBusiness = useBusinessStore((s) => s.setBusiness);
 
   // Vula turned a request away as "sign in required": if the sign-in really has run out, go back
   // to the login page and say so, instead of showing screens that can no longer load or save
@@ -241,7 +250,9 @@ export default function App() {
       .then((r) => (r.ok ? r.json() : null))
       .then((b) => {
         if (!alive || !b) return;
-        applyBrand(b); setBrand(b);
+        // a partner's business: the team's dashboard wears the partner's look (FlowCrew is the face);
+        // the business's own look is for its customers
+        applyBrand(b?.partner_look ? { ...b, ...b.partner_look } : b); setBrand(b);
         // the installed app (home-screen name + icon) and the browser tab wear the brand too
         // ?app: the manifest is served from the API, so it learns the app's own address (start page, Share target)
         setLink("manifest", `${VULA_API}/v1/commerce/${tid}/manifest.webmanifest?app=${encodeURIComponent(window.location.origin)}`);
@@ -278,8 +289,9 @@ export default function App() {
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
-      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); setTenantFeatures(d.features || []); })
-      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); setTenantFeatures([]); });
+      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantLabels(d.ui_labels || null); setTenantFeatures(d.features || []); setTenantPartner(d.partner?.name || "");
+        setBusiness({ businessType: d.profile?.business_type || d.business_type, displayName: d.display_name }); })
+      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantLabels(null); setTenantFeatures([]); setTenantPartner(""); setBusiness({}); });
     return () => { alive = false; };
   }, [user, role, tenantId, setMember]);
 
@@ -427,7 +439,7 @@ export default function App() {
     return (
       <div>
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || "Business admin" }}
+          brand={{ logoUrl: partnerMark(brand) || brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || brand?.partner?.name || "Business admin", partner: tenantPartner || brand?.partner?.name }}
           groups={groups}
           activeId={merchTab}
           onSelect={setMerchTab}
@@ -472,7 +484,7 @@ export default function App() {
             {impersonateReason && <span className="v2-impersonate-why">({impersonateReason})</span>}
           </div>}
         <VulaShellV2
-          brand={{ logoUrl: brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
+          brand={{ logoUrl: partnerMark(brand) || brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant", partner: tenantPartner || brand?.partner?.name }}
           groups={mGroups}
           activeId={merchTab}
           onSelect={setMerchTab}

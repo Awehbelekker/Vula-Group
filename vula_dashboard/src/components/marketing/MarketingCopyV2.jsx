@@ -7,12 +7,15 @@
 import { BookmarkPlus, Check, Copy, Megaphone, Sparkles, Trash2 } from 'lucide-react'
 import { Button, Card, Field, IconButton, Input, PillTabs, Select } from '../ui/index.jsx'
 import { KINDS, TONES, useMarketingCopy } from './useMarketingCopy'
+import { useBusinessType } from '../../store/business'
+import { examplesFor } from '../../lib/examples'
 import './marketing.css'
 
 const plain = (t) => String(t || '').replace(/^[^A-Za-z0-9]+\s*/, '')
 
 export default function MarketingCopyV2({ tenantId, onSendAsBroadcast }) {
   const x = useMarketingCopy(tenantId)
+  const ex = examplesFor(useBusinessType())
   const tabs = KINDS.map(k => ({ id: k.id, label: plain(k.label) }))
   return (
     <section className="vmk" aria-label="Marketing copy">
@@ -24,7 +27,7 @@ export default function MarketingCopyV2({ tenantId, onSendAsBroadcast }) {
           {x.needsTopic && (
             <Field label={x.kind === 'product' ? 'Product' : 'The offer'} style={{ gridColumn: '1 / -1' }}>
               <Input value={x.topic} onChange={e => x.setTopic(e.target.value)}
-                placeholder={x.kind === 'product' ? 'e.g. Yellowtail' : 'e.g. 20% off crayfish this weekend'} />
+                placeholder={x.kind === 'product' ? `e.g. ${ex.productName}` : ex.discount} />
             </Field>)}
           <Field label="Tone">
             <Select value={x.tone} onChange={e => x.setTone(e.target.value)}>{TONES.map(t => <option key={t} value={t}>{t}</option>)}</Select>

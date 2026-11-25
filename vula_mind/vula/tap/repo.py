@@ -7,7 +7,7 @@ a real Postgres (migrations 199/200) but this client code needs a staging run (d
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 logger = logging.getLogger(__name__)
@@ -177,6 +177,114 @@ class SupabaseRepo:
 
     def update_tag(self, tenant_id: str, tag_id: str, fields: dict) -> None:
         self.db.table("kb_tags").update(fields).eq("tenant_id", tenant_id).eq("id", tag_id).execute()
+
+    # service at the table (migration 300): calls and orders — one small set of row helpers
+    _TABLESIDE = ("kb_table_calls", "kb_table_orders", "kb_shifts", "kb_availability")
+
+    def add_row(self, table: str, row: dict) -> Optional[dict]:
+        """Insert into one of the table-service tables. None when the row breaks a unique rule
+        (a live call of that kind already exists for the table)."""
+        assert table in self._TABLESIDE
+        try:
+            return self.db.table(table).insert(row).execute().data[0]
+        except Exception as exc:  # noqa: BLE001
+            if _is_dup(exc):
+                return None
+            raise
+
+    def get_row(self, table: str, tenant_id: str, row_id: str) -> Optional[dict]:
+        assert table in self._TABLESIDE
+        return self._one(self.db.table(table).select("*").eq("tenant_id", tenant_id).eq("id", row_id))
+
+    def find_rows(self, table: str, tenant_id: str, statuses: Sequence[str], **eq) -> list[dict]:
+        assert table in self._TABLESIDE
+        q = self.db.table(table).select("*").eq("tenant_id", tenant_id).in_("status", list(statuses))
+        for k, v in eq.items():
+            q = q.eq(k, v)
+        return q.order("created_at").limit(200).execute().data or []
+
+    def cas_row(self, table: str, tenant_id: str, row_id: str, *, expected: str, fields: dict) -> bool:
+        """Change a row only while its status is `expected` — one winner when two phones tap at once."""
+        assert table in self._TABLESIDE
+        rows = (self.db.table(table).update({**fields, "updated_at": "now()"}).eq("tenant_id", tenant_id)
+                .eq("id", row_id).eq("status", expected).execute().data or [])
+        return bool(rows)
+
+    def rows_since(self, table: str, tenant_id: str, since_iso: str) -> list[dict]:
+        """Every call or order made since a time (the scoreboard) — read page by page."""
+        assert table in self._TABLESIDE
+        from vula.db_pages import all_rows
+        return all_rows(lambda: self.db.table(table).select("*").eq("tenant_id", tenant_id).gte("created_at", since_iso))
+
+    def paid_since(self, tenant_id: str, since_iso: str) -> list[dict]:
+        """Paid bills since a time: who served, the bill amount, the tip and when it was paid."""
+        from vula.db_pages import all_rows
+        sessions = all_rows(lambda: self.db.table("kb_sessions").select("id,bill_id,bill_cents,tip_cents,updated_at")
+                            .eq("tenant_id", tenant_id).eq("state", "paid").gte("updated_at", since_iso))
+        ids = sorted({s["bill_id"] for s in sessions if s.get("bill_id")})
+        bills: dict = {}
+        for i in range(0, len(ids), 200):
+            for b in (self.db.table("kb_bills").select("id,staff_id,is_test").eq("tenant_id", tenant_id)
+                      .in_("id", ids[i:i + 200]).execute().data or []):
+                bills[b["id"]] = b
+        return [{"staff_id": (bills.get(s.get("bill_id")) or {}).get("staff_id"),
+                 "is_test": bool((bills.get(s.get("bill_id")) or {}).get("is_test")),
+                 "bill_cents": int(s["bill_cents"]), "tip_cents": int(s["tip_cents"]), "paid_at": s["updated_at"]}
+                for s in sessions]
+
+    def ledger_for(self, tenant_id: str, party_id: str, since_iso: str) -> list[dict]:
+        """One person's ledger lines since a time (their share of bills and tips, less any fee
+        they carry) — what they have earned, read page by page."""
+        from vula.db_pages import all_rows
+        return all_rows(lambda: self.db.table("kb_ledger_lines").select("id,kind,cents,created_at")
+                        .eq("tenant_id", tenant_id).eq("party_id", party_id).gte("created_at", since_iso))
+
+    # a person's own target (migration 307)
+    def get_target(self, tenant_id: str, member_id: str) -> Optional[dict]:
+        rows = (self.db.table("kb_staff_targets").select("period,cents").eq("tenant_id", tenant_id)
+                .eq("member_id", member_id).limit(1).execute().data or [])
+        return rows[0] if rows else None
+
+    def set_target(self, tenant_id: str, member_id: str, period: Optional[str], cents: Optional[int]) -> None:
+        t = self.db.table("kb_staff_targets")
+        if not cents:
+            t.delete().eq("tenant_id", tenant_id).eq("member_id", member_id).execute()
+            return
+        t.upsert({"tenant_id": tenant_id, "member_id": member_id, "period": period, "cents": cents,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}, on_conflict="tenant_id,member_id").execute()
+
+    # shifts and availability (migration 301)
+    def shifts_between(self, tenant_id: str, from_iso: str, to_iso: str) -> list[dict]:
+        from vula.db_pages import all_rows
+        return all_rows(lambda: self.db.table("kb_shifts").select("*").eq("tenant_id", tenant_id)
+                        .gte("starts_at", from_iso).lt("starts_at", to_iso))
+
+    def update_row(self, table: str, tenant_id: str, row_id: str, fields: dict) -> Optional[dict]:
+        assert table in self._TABLESIDE
+        rows = (self.db.table(table).update(fields).eq("tenant_id", tenant_id).eq("id", row_id).execute().data or [])
+        return rows[0] if rows else None
+
+    def delete_row(self, table: str, tenant_id: str, row_id: str, **eq) -> bool:
+        assert table in self._TABLESIDE
+        q = self.db.table(table).delete().eq("tenant_id", tenant_id).eq("id", row_id)
+        for k, v in eq.items():
+            q = q.eq(k, v)
+        return bool(q.execute().data)
+
+    def availability(self, tenant_id: str, member_id: Optional[str] = None) -> list[dict]:
+        q = self.db.table("kb_availability").select("*").eq("tenant_id", tenant_id)
+        if member_id:
+            q = q.eq("member_id", member_id)
+        return q.order("created_at").limit(900).execute().data or []
+
+    def menu_products(self, tenant_id: str) -> list[dict]:
+        """The business's products a customer can order from a table: listed and in stock."""
+        rows = (self.db.table("commerce_products").select("*").eq("tenant_id", tenant_id).eq("in_stock", True)
+                .order("category").order("name").limit(500).execute().data or [])
+        with_options = {v["product_id"] for v in (self.db.table("commerce_product_variants")
+                                                  .select("product_id,archived").eq("tenant_id", tenant_id)
+                                                  .limit(900).execute().data or []) if not v.get("archived")}
+        return [r for r in rows if r["id"] not in with_options]
 
     def recent_bills(self, tenant_id: str, limit: int = 20) -> list[dict]:
         return (self.db.table("kb_bills")

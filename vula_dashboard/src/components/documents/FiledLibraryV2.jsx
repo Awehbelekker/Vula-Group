@@ -7,7 +7,7 @@
  * Used by Documents, a project's Documents tab and a customer's page under the redesign.
  */
 import { CalendarDays, FileText, FolderInput, ListChecks, User } from "lucide-react";
-import { Button, Card, FilterBar, Input, Select, Sheet, Skeleton, StatusChip } from "../ui/index.jsx";
+import { Button, Card, ErrorCard, FilterBar, Input, Select, Sheet, Skeleton, StatusChip } from "../ui/index.jsx";
 import { EXT_ICON, extOf, isImageDoc, needsProject, useFiledLibrary } from "./useDocuments";
 import SendDocument from "./SendDocument.jsx";
 import "./documents.css";
@@ -58,7 +58,8 @@ export default function FiledLibraryV2({ tenantId, customerPhone, defaultFiledBy
 
       {x.moveMsg && <p className="vdc-sub vdc-pad" role="status">{x.moveMsg}</p>}
       {loading && !docs.length && <div className="vdc-pad"><Skeleton lines={3} /></div>}
-      {!loading && docs.length === 0 && <p className="vdc-empty">No documents match{customerPhone ? " this customer" : ""} yet.</p>}
+      {!loading && x.error && docs.length === 0 && <ErrorCard what="your documents" />}
+      {!loading && !x.error && docs.length === 0 && <p className="vdc-empty">No documents match{customerPhone ? " this customer" : ""} yet.</p>}
 
       {docs.length > 0 && (
         <ul className="vdc-grid" aria-label={title}>
