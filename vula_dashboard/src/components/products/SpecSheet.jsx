@@ -1,5 +1,5 @@
 /**
- * SpecSheet.jsx — Products › a product › Spec sheet (25 Nov 2026, migration 310). What product
+ * SpecSheet.jsx — Products › a product › Spec sheet (25 Nov 2026, migration 312). What product
  * guides show of the product (Sell › Product guides): a grade line, benefits, specs as
  * "Label: value" lines, a link to the maker's page. Saved on its own button
  * (PATCH /admin/products/{id} {specs}); the server cleans it and says what it can't keep. Loaded

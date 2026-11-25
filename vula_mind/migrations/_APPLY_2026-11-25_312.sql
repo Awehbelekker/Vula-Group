@@ -1,21 +1,5 @@
--- 310_product_guides.sql — spec sheets on products and product guides a business sends to its
--- clients (vula/commerce/product_guides.py, 25 Nov 2026).
---
--- Ian, 25 Nov: Floornet's "Field Guide for Specifiers" (one HTML page, products typed into it by
--- hand) is a really nice tool to have — for a Gerflor distributor, a flooring contractor, any
--- business that wants to send a client its range with the specs and a "check stock" button.
---
---   commerce_products.specs — the product's spec sheet, cleaned in code (product_guides.clean_specs):
---       {"grade": "Grade 33 · Commercial", "benefits": ["Stain resistant", …],
---        "rows": [["Backing", "Felt back"], ["Width", "4 m"], …], "link": "https://…"}
---       Null = no spec sheet. Never a price: prices stay price_cents.
---   commerce_product_guides — one guide = a secret link the business sends: its title, the
---       client it is for, an intro line, which products (categories and/or chosen products; both
---       empty = every listed product), whether prices are shown. `token` is the only way in; the
---       page is never indexed. Turned off = the link stops working.
---
--- Idempotent.
-
+-- Paste into the Supabase SQL editor (clear the editor first). Safe to run twice.
+begin;
 alter table commerce_products add column if not exists specs jsonb;
 
 create table if not exists commerce_product_guides (
@@ -43,3 +27,6 @@ create policy "tenant_isolation" on commerce_product_guides
     using (tenant_id = current_setting('app.tenant_id', true));
 
 comment on table commerce_product_guides is 'A product guide a business sends its clients: a secret link to its range with spec sheets, optionally prices, and a WhatsApp stock check.';
+insert into vula_schema_migrations (filename, number, sha256, applied_by, baseline)
+values ('312_product_guides.sql', 312, '6ed9e6859013b113a8cb65b43d31d6f63b9795e5d6e908c824bdd48ccf5c6774', 'sql-editor', false) on conflict do nothing;
+commit;

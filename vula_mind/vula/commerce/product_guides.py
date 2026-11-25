@@ -9,7 +9,7 @@ clients.
 
 Here it comes from the business's own products, so it is never out of date:
 
-  * A product carries a spec sheet (`commerce_products.specs`, migration 310), cleaned by
+  * A product carries a spec sheet (`commerce_products.specs`, migration 312), cleaned by
     `clean_specs`: a grade line, benefits, label/value rows, a link to the maker's page. Never a
     price — prices stay `price_cents`.
   * A guide (`commerce_product_guides`) is a secret link (`token`) to a choice of the products —

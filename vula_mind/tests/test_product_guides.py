@@ -1,4 +1,4 @@
-"""Product guides (vula/commerce/product_guides.py, migration 310, 25 Nov 2026): a spec sheet on a
+"""Product guides (vula/commerce/product_guides.py, migration 312, 25 Nov 2026): a spec sheet on a
 product is cleaned in code; a guide is a secret link to the business's own products, white-labelled,
 never indexed; prices only when the guide shows them, from integer cents; a turned-off or renewed
 link stops working; another business's products can't go into a guide."""

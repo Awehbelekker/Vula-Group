@@ -947,6 +947,18 @@ async def master_statement_files_backfill(tenant_id: str) -> dict:
     return await statement_files.backfill(tenant_id)
 
 
+@router.get("/partners/{partner}/pool-fees")
+async def master_partner_pool_fees(partner: str, month: Optional[str] = None) -> dict:
+    """A partner's fee for a month on lessons taught by a coach from another of its schools, school
+    by school (vula/commerce/coach_pool.py). A report: nothing is charged from here."""
+    from fastapi import HTTPException
+    from vula.commerce import coach_pool, lessons
+    try:
+        return coach_pool.partner_month(partner, month or lessons._now().astimezone(lessons.SAST).strftime("%Y-%m"))
+    except lessons.LessonError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+
+
 @router.post("/management-pack/{tenant_id}/send")
 async def master_management_pack_send(tenant_id: str, month: Optional[str] = None) -> dict:
     """Send a month's management accounts to the business's owners now (default: last month), once
