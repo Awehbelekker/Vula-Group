@@ -97,6 +97,7 @@ PUBLIC = {
     ("GET", "/"): "a shop on its own address (shop.<their domain>), or the shop directory on its address — 404 on any other host",
     ("GET", "/robots.txt"): "a shop's own or free address only — tells search engines where its sitemap is; 404 on any other host",
     ("GET", "/sitemap.xml"): "a shop's own or free address only — its one public page; 404 on any other host",
+    ("GET", "/guide/{token}"): "a product guide a business sent its client — only a live guide's secret token opens it (vula/commerce/product_guides.py); never indexed; every failure the same 404",
     ("GET", "/events/{event_id}"): "public event page — a published event's details and tickets left; drafts 404",
     ("POST", "/events/{event_id}/buy"): "public ticket purchase — ids and quantities only, priced server-side, seats held atomically, throttled",
     ("GET", "/v1/door/{key}"): "an event's door link — the unguessable key is the only way in; names and ticket types, no phones, no money; throttled",
