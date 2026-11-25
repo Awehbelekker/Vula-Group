@@ -114,6 +114,7 @@ from vula.api.couriers import router as couriers_router, webhook_router as couri
 from vula.api.till import router as till_router
 from vula.api.tables import public as tables_public_router, router as tables_router
 from vula.api.lessons import public as lessons_public_router, router as lessons_router
+from vula.api.product_guides import public as product_guides_public_router, router as product_guides_router
 from vula.api.events import door as events_door_router, public as events_public_router, router as events_router
 from vula.api.woocommerce_connect import router as woo_admin_router, webhook_router as woo_webhook_router
 from vula.api.manufacturing import router as manufacturing_router
@@ -2418,6 +2419,8 @@ app.include_router(tables_router, prefix="/v1/commerce")          # /{tenant}/ad
 app.include_router(lessons_router, prefix="/v1/commerce")         # /{tenant}/admin/lessons — tenant-guarded
 app.include_router(lessons_public_router, prefix="/v1/flow")      # the customer app: no login, a signed token per request
 app.include_router(tables_public_router)                           # /book/{tenant} — the public booking page
+app.include_router(product_guides_router, prefix="/v1/commerce")  # /{tenant}/admin/product-guides — tenant-guarded
+app.include_router(product_guides_public_router)                   # /guide/{token} — the secret link is the only way in
 app.include_router(couriers_webhook_router, prefix="/v1/couriers")  # the courier's tracking news — secret address, re-read from the courier
 from vula.api.buying_api import router as buying_router  # noqa: E402
 app.include_router(buying_router, prefix="/v1/commerce")          # /{tenant}/admin/buying — tenant-guarded
