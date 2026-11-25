@@ -10,7 +10,8 @@
  */
 import "./flow.css";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { myAccount, session } from "./account";
+import { getProfile, myAccount, session } from "./account";
+import Profile from "./Profile.jsx";
 import { NextDay, ProgressCard, Rated, RateLesson } from "./Progress.jsx";
 import AccountCard from "./AccountCard.jsx";
 
@@ -131,7 +132,8 @@ function Home({ shop, info, go }) {
       {info.coaches.map((c, i) => (
         <div key={i} className="fc-coach">
           {c.photo_url ? <img src={c.photo_url} alt="" /> : <span className="fc-face">{c.name.slice(0, 1)}</span>}
-          <span><b>{c.name} <Rated rating={c.rating} /></b>{c.levels.length > 0 && <span className="fc-sub">Teaches: {c.levels.join(", ").toLowerCase()}</span>}{c.bio && <span className="fc-sub">{c.bio}</span>}</span>
+          <span><b>{c.name} <Rated rating={c.rating} /></b>{c.levels.length > 0 && <span className="fc-sub">Teaches: {c.levels.join(", ").toLowerCase()}</span>}{c.bio && <span className="fc-sub">{c.bio}</span>}
+            {c.spots?.length > 0 && <span className="fc-spots"><span className="fc-sub">Favourite spots:</span>{c.spots.map((sp) => <a key={sp.name} className="fc-chip" href={`https://maps.google.com/?q=${sp.lat},${sp.lng}`} target="_blank" rel="noreferrer">{sp.name}</a>)}</span>}</span>
         </div>))}
     </section>}
     {both && <div className="fc-tabs" role="tablist" aria-label="What the school offers">
@@ -169,7 +171,7 @@ const Opt = ({ title, sub, pick }) => <button type="button" className="fc-opt" o
 
 const BLANK = { kind: "", item_id: "", level: "", format: "", people: 1, package: null, extras: null, duration: "", wanted_date: "", wanted_part: "" };
 
-function Book({ shop, info, start, onDone, acct }) {
+function Book({ shop, info, start, onDone, acct, levels }) {
   const [w, setW] = useState({ ...BLANK, ...start });
   const [me, setMe] = useState(() => LS.get("fc.me", { name: "", phone: "" }));
   const [quote, setQuote] = useState(null);
@@ -180,6 +182,9 @@ function Book({ shop, info, start, onDone, acct }) {
   const fill = (patch) => setW((cur) => ({ ...cur, ...patch }));   // an answer nobody had to give (one lesson, one format): not a step back
   const lesson = info.lessons.find((l) => l.id === w.item_id);
   const gear = info.hire.find((g) => g.id === w.item_id);
+  // a signed-in customer's level in this lesson's sport is already on their profile: not asked again
+  const known = lesson && levels?.[lesson.sport]?.level;
+  useEffect(() => { if (known && !w.level) fill({ level: known }); }, [known, w.level]); // eslint-disable-line react-hooks/exhaustive-deps
   const extra = lesson?.extras?.[0];
   const hasPackage = lesson && (w.format === "private" ? lesson.private?.package_cents != null : lesson.group.some((t) => t.package_cents != null));
   const days = useMemo(() => Array.from({ length: 10 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return [iso(d), dayName(d, i)]; }), []);
@@ -261,7 +266,10 @@ function Book({ shop, info, start, onDone, acct }) {
   );
 }
 
-function Mine({ shop, info, fresh, go, acct, onSignedOut }) {
+const NEWS = { confirmed: "is confirmed", declined: "was declined", completed: "is marked done — you can rate it", cancelled: "was cancelled" };
+
+function Mine({ shop, info, fresh, go, acct, onSignedOut, onLevels }) {
+  const [news, setNews] = useState([]);            // what changed since this phone last looked
   const [list, setList] = useState(null);
   const [error, setError] = useState("");
   const [prog, setProg] = useState(null);          // this phone's lessons here; a signed-in customer's everywhere
@@ -269,10 +277,20 @@ function Mine({ shop, info, fresh, go, acct, onSignedOut }) {
   const [rating, setRating] = useState("");        // the token of the lesson being rated
   const load = useCallback(() => {
     const tokens = LS.get(`fc.tokens.${shop}`, []);
-    call(shop, "/mine", { tokens }).then((d) => { setList(d.requests); setProg(d.progress); setError(""); }).catch((e) => setError(e.message));
+    call(shop, "/mine", { tokens }).then((d) => {
+      setList(d.requests); setProg(d.progress); setError("");
+      const seen = LS.get(`fc.seen.${shop}`, {});
+      const changed = d.requests.filter((r) => NEWS[r.status] && seen[r.token] && seen[r.token] !== r.status);
+      if (changed.length) setNews((cur) => [...changed.filter((r) => !cur.some((c) => c.token === r.token)), ...cur]);
+      LS.set(`fc.seen.${shop}`, Object.fromEntries(d.requests.map((r) => [r.token, r.status])));
+    }).catch((e) => setError(e.message));
   }, [shop]);
   useEffect(() => { if (acct) myAccount(acct.token).then((a) => setAll(a.progress)).catch(() => {}); else setAll(null); }, [acct]);
-  const mine = <><ProgressCard p={all || prog} everywhere={!!all} /><NextDay call={call} shop={shop} spot={info.spot} go={go} /></>;
+  const again = (c) => (c.shop === shop ? go("book", { kind: "lesson", item_id: info.lessons.some((l) => l.id === c.lesson_id) ? c.lesson_id : "" }) : window.location.assign(`/flow/${c.shop}?via=find`));
+  const mine = <>
+    {news.length > 0 && <p className="fc-news" role="status">{news.map((r) => <span key={r.token}>Your {r.summary.split(",")[0].toLowerCase()}{r.when ? ` on ${r.when}` : ""} {NEWS[r.status]}.</span>)}</p>}
+    <Profile acct={acct} go={again} onLevels={onLevels} />
+    <ProgressCard p={all || prog} everywhere={!!all} /><NextDay call={call} shop={shop} spot={info.spot} go={go} /></>;
   useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
   const cancel = async (r) => {
     if (!window.confirm(`Cancel ${r.summary}?`)) return;
@@ -297,6 +315,7 @@ function Mine({ shop, info, fresh, go, acct, onSignedOut }) {
           {r.status === "confirmed" && info.pay_note && <p className="fc-sub">{info.pay_note}</p>}
           {r.status === "confirmed" && info.form_url && <a className="fc-link" href={info.form_url} target="_blank" rel="noreferrer">Complete the indemnity form</a>}
           {(r.status === "requested" || r.status === "confirmed") && <button type="button" className="fc-btn danger" style={{ flex: "none" }} onClick={() => cancel(r)}>Cancel</button>}
+          {r.status === "confirmed" && r.coach && info.whatsapp && <a className="fc-btn alt fc-btn-link" href={`https://wa.me/${info.whatsapp}?text=${encodeURIComponent(`Hi, a message for ${r.coach} about my ${r.summary.split(",")[0].toLowerCase()} on ${r.when} (${r.ref}): `)}`} target="_blank" rel="noreferrer">Message {r.coach}</a>}
           {r.can_rate && rating !== r.token && <button type="button" className="fc-btn alt" style={{ flex: "none" }} onClick={() => setRating(r.token)}>Rate this lesson</button>}
           {r.can_rate && rating === r.token && <RateLesson call={call} shop={shop} r={r} school={info.name} onDone={() => { setRating(""); load(); }} />}
           {r.rated && <p className="fc-sub">You rated this lesson. Thank you.</p>}
@@ -364,6 +383,8 @@ export default function FlowApp() {
     });
     return () => { live = false; };
   }, [shop]);
+  const [levels, setLevels] = useState({});          // the signed-in customer's level per sport, from their profile
+  useEffect(() => { if (acct) getProfile(acct.token).then((x) => setLevels(x.profile.sports)).catch(() => {}); else setLevels({}); }, [acct]);
   const [start, setStart] = useState({});
   const [bookKey, setBookKey] = useState(0);
   const [fresh, setFresh] = useState(null);
@@ -394,8 +415,8 @@ export default function FlowApp() {
         <div><h1>{info.name}</h1><p>{info.brand?.tagline || (info.spot ? `Lessons and gear at ${info.spot.name}` : "Lessons and gear")} <Rated rating={info.rating} /></p></div>
       </header>
       {tab === "home" && <Home shop={shop} info={info} go={go} />}
-      {tab === "book" && <Book key={bookKey} shop={shop} info={info} start={start} acct={acct} onDone={(r) => { setFresh(r); setTab("mine"); window.scrollTo(0, 0); }} />}
-      {tab === "mine" && <Mine key={acctKey} shop={shop} info={info} fresh={fresh} go={go} acct={acct} onSignedOut={() => setAcct(null)} />}
+      {tab === "book" && <Book key={bookKey} shop={shop} info={info} start={start} acct={acct} levels={levels} onDone={(r) => { setFresh(r); setTab("mine"); window.scrollTo(0, 0); }} />}
+      {tab === "mine" && <Mine key={acctKey} shop={shop} info={info} fresh={fresh} go={go} acct={acct} onLevels={setLevels} onSignedOut={() => setAcct(null)} />}
       {tab === "chat" && <Chat info={info} />}
       <p className="fc-foot">Powered by {info.partner?.name || "FlowCrew"}<img src="/partners/flowcrew-mark.png" alt="" /></p>
       <nav className="fc-bar" aria-label="Main">

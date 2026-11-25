@@ -55,9 +55,9 @@ def test_a_profile_is_for_someone_on_the_team_and_the_name_is_theirs(world):
          "levels": ["first_timer", "expert"], "sports": ["surf", "golf"], "shown": True},
         {"member_id": "m2", "bio": "Owner", "shown": False}]})
     assert st["coach_profiles"][0] == {"member_id": "m1", "name": "Shane", "bio": "Surfing Big Bay since 2009.",
-                                       "photo_url": "https://cdn.example/shane.jpg", "levels": ["first_timer"], "sports": ["surf"], "shown": True}
+                                       "photo_url": "https://cdn.example/shane.jpg", "levels": ["first_timer"], "sports": ["surf"], "spots": [], "shown": True}
     assert ld.public_coaches(A, st) == [{"name": "Shane", "bio": "Surfing Big Bay since 2009.", "photo_url": "https://cdn.example/shane.jpg",
-                                         "rating": None, "levels": ["First timer"], "sports": ["surf"]}]       # Zoe isn't shown; no ids
+                                         "rating": None, "spots": [], "levels": ["First timer"], "sports": ["surf"]}]       # Zoe isn't shown; no ids
     for bad in ([{"member_id": "nobody"}], [{"member_id": "m9"}],                              # not on the team; the accountant
                 [{"member_id": "m1"}, {"member_id": "m1"}], [{"member_id": "m1", "photo_url": "http://plain.example/a.jpg"}],
                 [{"member_id": "m1", "bio": "Book at www.other.co.za"}], "nope"):
@@ -254,3 +254,18 @@ def test_a_school_picks_one_of_the_looks_and_nothing_else():
     assert "Choose one of the looks" in str(getattr(e.value, "detail", e.value))
     assert ld.theme_of({"listing": {"theme": "night"}}) == "night"
     assert ld.theme_of({"listing": {"theme": "gone"}}) == "" and ld.theme_of({}) == ""
+
+
+def test_a_coachs_favourite_spots_have_a_name_a_place_and_maybe_a_photo(world):
+    ok = {"member_id": "m1", "shown": True, "spots": [{"name": " Big  Bay ", "lat": -33.79412, "lng": 18.45939, "photo_url": "https://cdn.example/bb.jpg"},
+                                                      {"name": "Derdesteen", "lat": -33.76, "lng": 18.44}]}
+    st = lessons.save_settings(A, {"coach_profiles": [ok]})
+    assert st["coach_profiles"][0]["spots"] == [{"name": "Big Bay", "lat": -33.794, "lng": 18.459, "photo_url": "https://cdn.example/bb.jpg"},
+                                                {"name": "Derdesteen", "lat": -33.76, "lng": 18.44, "photo_url": None}]
+    assert [sp["name"] for sp in ld.public_coaches(A, st)[0]["spots"]] == ["Big Bay", "Derdesteen"]
+    for bad, why in (([{"name": "X", "lat": 1, "lng": 1}], "a name"), ([{"name": "Big Bay", "lat": 100, "lng": 1}], "on the map"),
+                     ([{"name": "Big Bay"}], "on the map"), ([{"name": "Big Bay", "lat": 1, "lng": 1, "photo_url": "http://x/y.jpg"}], "https://"),
+                     ([{"name": "Spot", "lat": 1, "lng": 1}] * 4, "up to 3")):
+        with pytest.raises(Exception) as e:
+            lessons.save_settings(A, {"coach_profiles": [{**ok, "spots": bad}]})
+        assert why in str(getattr(e.value, "detail", e.value))

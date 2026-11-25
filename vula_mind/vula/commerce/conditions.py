@@ -156,11 +156,18 @@ _LIMITS = {
 }
 
 
+# The newer sports are rated by the rule of the one they are most like, until each has its own:
+# wind sports need the wind kiting needs, a bodyboard the waves a surfboard does, a kayak the calm
+# a paddleboard does. (Foiling is left to the general rule: a foil rides too many kinds of water.)
+_RATED_LIKE = {"windsurf": "kite", "wing": "kite", "bodyboard": "surf", "kayak": "sup"}
+
+
 def rate(sport: str, level: str, hour: dict) -> dict:
     """{"rating": good | marginal | poor, "reasons": [...]} for one hour. A figure the forecast
     didn't give is not judged; with nothing to judge the rating is marginal ('no forecast')."""
     reasons: List[str] = []
     worst = 0
+    sport = _RATED_LIKE.get(sport, sport)
 
     def over(value: Any, limits: Tuple[float, float], marginal: str, poor: str) -> None:
         nonlocal worst
@@ -224,7 +231,8 @@ def day_view(hours: Dict[int, dict], sport: str = "surf", level: str = "") -> Li
 MODELS = (("ecmwf_ifs025", "ECMWF (Europe)"), ("gfs_seamless", "GFS (United States)"), ("icon_seamless", "ICON (Germany)"))
 PARTS = (("Morning", 6, 10), ("Midday", 10, 14), ("Afternoon", 14, 18))
 _SHORE_WORDS = {"onshore": "blowing onto the beach", "offshore": "blowing out to sea", "cross-shore": "blowing along the beach"}
-_SPORT_WORDS = {"surf": "a surf lesson", "sup": "paddling", "kite": "kiting"}
+_SPORT_WORDS = {"surf": "a surf lesson", "sup": "paddling", "kite": "kiting", "windsurf": "windsurfing",
+                "wing": "wing foiling", "bodyboard": "bodyboarding", "kayak": "kayaking"}
 _MODEL_CACHE: Dict[Tuple[float, float, str], Tuple[float, Dict[str, Dict[int, float]]]] = {}
 _AGREE_KN = 5.0          # the forecasts' average wind for a part of the day within this: they agree
 
