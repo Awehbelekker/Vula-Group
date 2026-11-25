@@ -3145,6 +3145,13 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
                                   "🔒 That statement is for a private account, so it's filed privately for "
                                   "its owner and isn't in the business's books."), tenant_id)
         return True
+    if rec.get("compared"):
+        # 25 Nov 2026: the business's books are under review — compared and kept, nothing written yet
+        await _send_reply(phone, bank_rec.compared_text(rec), tenant_id)
+        return True
+    if rec.get("held"):
+        await _send_reply(phone, f"🏦 That looks like a bank statement, but {rec['error']}.", tenant_id)
+        return True
     if rec.get("error"):
         await _send_reply(phone, f"🏦 That looks like a bank statement, but I couldn't "
                                  f"process it: {rec['error']}", tenant_id)

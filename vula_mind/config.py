@@ -603,6 +603,8 @@ class Settings(BaseSettings):
     books_v2_enabled: bool = False
     # The month's management accounts sent to the owners around the 5th (vula/management_send.py)
     management_accounts_enabled: bool = False
+    # A weekly note to the owners of what's left in the books review (vula/books_review_nudge.py)
+    books_review_nudge_enabled: bool = False
     open_chat_per_hour: int = 60          # messages per person per hour in the open chat
     research_per_hour: int = 10           # research questions per person per hour (vula/research.py)
     # Cut the research prompt to fit the local model so Vula's own model writes it; off = the
