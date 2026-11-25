@@ -10,6 +10,7 @@ import { useMemo, useState } from 'react'
 import { BookOpen } from 'lucide-react'
 import { Button, Card, EmptyState, ErrorCard, Field, Input, Modal, PageHeader, Skeleton, StatusChip, Textarea, confirmDialog, toast } from '../ui/index.jsx'
 import { useGuides } from './useGuides'
+import SpecImport from './SpecImport'
 import './guides.css'
 
 const when = (iso) => {
@@ -122,8 +123,9 @@ export default function GuidesV2({ tenantId }) {
         <>
           <Card className="vgd-tip">
             <p><strong>{withSpecs} of {s.products.length}</strong> products have a spec sheet (grade, benefits, specs, a link to the maker).
-              Add one on each product: Products › a product › Spec sheet.</p>
+              Add one on each product (Products › a product › Spec sheet), or read them from your maker's catalogue below.</p>
           </Card>
+          <SpecImport tenantId={tenantId} products={s.products} cats={s.cats} onApplied={s.load} />
           {s.guides.length === 0 ? (
             <EmptyState Icon={BookOpen} title="No guides yet" action={<Button onClick={() => setEditing('new')}>Make your first guide</Button>}>
               A guide is one link with your products and their specs: for an architect, a specifier or a customer.

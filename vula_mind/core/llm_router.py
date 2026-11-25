@@ -673,7 +673,9 @@ _TASK_CLOUD_DEFAULTS = {"research": "anthropic/claude-sonnet-5", "research_plan"
                         # reading prices off a supplier page (vula/takeoff, 14 Nov 2026)
                         "rates_extract": "anthropic/claude-sonnet-5",
                         # a trade build-up from cited pages (vula/commerce/buildups.py, 14 Nov 2026)
-                        "buildup_research": "anthropic/claude-sonnet-5"}
+                        "buildup_research": "anthropic/claude-sonnet-5",
+                        # spec sheets read out of a maker's catalogue (vula/commerce/spec_import.py, 25 Nov 2026)
+                        "spec_import": "anthropic/claude-sonnet-5"}
 
 
 def cloud_model_for(task_type: Optional[str]) -> str:
@@ -790,7 +792,8 @@ async def resolve_generation_route(
 # not a business operation, so a cap holds for it absolutely.
 # Research mode (vula/research.py) is the same optional extra, so it holds too.
 # 17 Nov 2026 audit: researching a build-up and reading prices off web pages are optional extras too.
-CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research", "buildup_research", "rates_extract"})
+CAP_HARD_TASKS = frozenset({"open_chat", "research_plan", "research", "buildup_research", "rates_extract",
+                            "spec_import"})
 
 
 class SpendCapReached(RuntimeError):

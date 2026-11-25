@@ -9,6 +9,12 @@ Dashboard (mounted at /v1/commerce, tenant-guarded):
     POST   /{tenant}/admin/product-guides/{id}/new-link   the old link stops working
     DELETE /{tenant}/admin/product-guides/{id}
 
+Reading spec sheets out of a maker's catalogue PDF (vula/commerce/spec_import.py):
+    POST   /{tenant}/admin/product-guides/spec-import             the PDF (multipart `file`) → {id}; read in the background
+    GET    /{tenant}/admin/product-guides/spec-import             the latest reads
+    GET    /{tenant}/admin/product-guides/spec-import/{id}        progress, then what was found
+    POST   /{tenant}/admin/product-guides/spec-import/{id}/apply  {picks: [{key, product_id} | {key, create: {category}}]}
+
 Public (no prefix): GET /guide/{token} — the guide page. White-labelled: the business's own
 name, logo and colour; Vula only as the small credit at the foot, as on the shop page. Never
 indexed, no referrer sent on. Every failure is the same 404.
@@ -18,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
 router = APIRouter(tags=["product-guides"])        # mounted at /v1/commerce
@@ -75,6 +81,51 @@ async def guides_delete(tenant_id: str, guide_id: str, request: Request):
     except pg.GuideError as exc:
         raise _bad(exc) from exc
     return {"deleted": guide_id}
+
+
+# ── spec sheets from a catalogue PDF ──────────────────────────────────────────────────────────
+
+_RUNNING: set = set()      # the background reads, kept referenced until they finish
+
+
+@router.post("/{tenant_id}/admin/product-guides/spec-import")
+async def spec_import_start(tenant_id: str, request: Request, file: UploadFile = File(...)):
+    import asyncio
+    from vula.commerce import spec_import as si
+    data = await file.read()
+    try:
+        row = await asyncio.to_thread(si.start, tenant_id, data, file.filename or "catalogue.pdf", _who(request))
+    except si.ImportError_ as exc:
+        raise _bad(exc) from exc
+    pages = row.pop("_pages")
+    task = asyncio.create_task(si.run(tenant_id, row["id"], pages))
+    _RUNNING.add(task)
+    task.add_done_callback(_RUNNING.discard)
+    return {"id": row["id"], "status": row["status"], "pages": row["pages"], "file_name": row["file_name"]}
+
+
+@router.get("/{tenant_id}/admin/product-guides/spec-import")
+async def spec_import_list(tenant_id: str):
+    from vula.commerce import spec_import as si
+    return {"imports": si.latest(tenant_id)}
+
+
+@router.get("/{tenant_id}/admin/product-guides/spec-import/{import_id}")
+async def spec_import_get(tenant_id: str, import_id: str):
+    from vula.commerce import spec_import as si
+    try:
+        return si.get(tenant_id, import_id)
+    except si.ImportError_ as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{tenant_id}/admin/product-guides/spec-import/{import_id}/apply")
+async def spec_import_apply(tenant_id: str, import_id: str, body: dict, request: Request):
+    from vula.commerce import spec_import as si
+    try:
+        return await si.apply(tenant_id, import_id, (body or {}).get("picks") or [], actor=_who(request))
+    except si.ImportError_ as exc:
+        raise _bad(exc) from exc
 
 
 # ── the page ──────────────────────────────────────────────────────────────────────────────────
