@@ -242,3 +242,15 @@ def test_a_signed_in_request_still_goes_in_where_the_account_column_is_missing(w
                                channel="app", customer_user_id="u-ann"))
     assert made["ref"].startswith("L-") and len(world.db.rows["commerce_lesson_requests"]) == 1
     assert "customer_user_id" not in world.db.rows["commerce_lesson_requests"][0]
+
+
+# ── the ready-made looks ──────────────────────────────────────────────────────────────────────
+def test_a_school_picks_one_of_the_looks_and_nothing_else():
+    from vula.commerce import lesson_directory as ld
+    assert ld.clean_listing({"listed": True, "about": "", "town": "", "theme": "sunset"})["theme"] == "sunset"
+    assert "theme" not in ld.clean_listing({"listed": False, "theme": ""})
+    with pytest.raises(Exception) as e:
+        ld.clean_listing({"listed": True, "theme": "url(evil)"})
+    assert "Choose one of the looks" in str(getattr(e.value, "detail", e.value))
+    assert ld.theme_of({"listing": {"theme": "night"}}) == "night"
+    assert ld.theme_of({"listing": {"theme": "gone"}}) == "" and ld.theme_of({}) == ""
