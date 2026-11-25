@@ -414,7 +414,8 @@ function PoolPanel({ base, startsAt, onAsked }) {
   }, [base, startsAt])
   const ask = async () => {
     setBusy(true); setError('')
-    try { await api(base, { method: 'POST', body: { starts_at: startsAt, coaches: picked } }); toast('Asked. You will be told when one accepts.'); onAsked() } catch (e) { setError(e.message); setBusy(false) }
+    try { const d = await api(base, { method: 'POST', body: { starts_at: startsAt, coaches: picked } })
+      toast(d.told >= d.asked ? 'Asked on WhatsApp. You will be told when one accepts.' : `Asked. ${d.told} of ${d.asked} got a WhatsApp; the rest will see it in their dashboard.`); onAsked() } catch (e) { setError(e.message); setBusy(false) }
   }
   if (error) return <p className="vtb-error" role="alert">{error}</p>
   if (!d) return <Skeleton lines={2} />

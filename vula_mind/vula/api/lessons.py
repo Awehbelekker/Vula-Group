@@ -145,7 +145,10 @@ async def decline(tenant_id: str, request_id: str, body: dict, request: Request)
 @router.post("/{tenant_id}/admin/lessons/{request_id}/status")
 async def set_status(tenant_id: str, request_id: str, body: dict) -> dict:
     try:
-        return {"request": lessons.set_status(tenant_id, request_id, str((body or {}).get("status") or ""))}
+        out = lessons.set_status(tenant_id, request_id, str((body or {}).get("status") or ""))
+        if out["status"] == "cancelled":              # a coach from another school hears it is off
+            await lessons._guest_cancelled(tenant_id, out)
+        return {"request": out}
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
 
@@ -348,7 +351,7 @@ async def pool_release(tenant_id: str, request_id: str, request: Request) -> dic
     from vula.commerce import coach_pool
     await _pool_manager(request, tenant_id)
     try:
-        return coach_pool.release(tenant_id, request_id)
+        return await coach_pool.release_and_tell(tenant_id, request_id)
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
 

@@ -513,6 +513,11 @@ def standard_templates(tenant_id: str, modules: Optional[set] = None,
         from vula.tap import shifts
         out.append({"name": shifts.SHIFT_TEMPLATE, "body": shifts.SHIFT_TEMPLATE_BODY, "category": "UTILITY",
                     "examples": shifts.SHIFT_TEMPLATE_EXAMPLE})
+    if "lessons" in mods:
+        # a coach asked to teach at another school, outside the 24-hour window (vula/commerce/coach_pool.py)
+        from vula.commerce import coach_pool
+        out.append({"name": coach_pool.COACH_TEMPLATE, "body": coach_pool.COACH_TEMPLATE_BODY, "category": "UTILITY",
+                    "examples": coach_pool.COACH_TEMPLATE_EXAMPLE})
     return out
 
 

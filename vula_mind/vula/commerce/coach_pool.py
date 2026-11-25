@@ -31,6 +31,14 @@ FEE_BP = 1000            # the partner's fee where it names none: 10% of the les
 MAX_KM = 60              # a coach whose home beach is further than this isn't offered
 MAX_ASKED = 10           # coaches asked for one lesson at a time
 LIVE = ("offered", "accepted")
+# The approved template that tells a coach about a lesson when they haven't written to their
+# school's number in the last 24 hours (a plain message is refused then). In the standard set for a
+# business with lessons (vula/commerce/wa_templates.py): first name, the school, the news on one line.
+COACH_TEMPLATE = "vula_coach_request"
+COACH_TEMPLATE_BODY = ("Hi {{1}}, a message from {{2}} about teaching a lesson: {{3}} "
+                       "Open Lessons, Calendar, Other schools in your dashboard to see it.")
+COACH_TEMPLATE_EXAMPLE = ["Ayanda", "Atlantic Surf Co.", "Can you teach a surf lesson on Sat 28 Nov at 09:00 at Big Bay, 3 people? You'd earn R735."]
+TEMPLATE_ROOM = 190      # send_template cuts a value at 200 characters
 
 
 def _L():
@@ -67,6 +75,76 @@ def _need_partner(tenant_id: str) -> str:
     if not pid:
         raise _err("Asking coaches from other schools isn't available for this business.", 404)
     return pid
+
+
+# ── telling the coach on WhatsApp ──────────────────────────────────────────────────────────────
+def _dashboard(tenant_id: str) -> str:
+    from vula.api import tenants
+    pid = partner_id(tenant_id)
+    domain = (tenants.PARTNERS.get(pid) or {}).get("domain") if pid else None
+    return f"https://app.{domain}" if domain else ""
+
+
+async def tell_coach(coach_tenant: str, member_id: str, school: str, news: str, key: str) -> bool:
+    """One WhatsApp message to a coach about a lesson at another school, from their OWN school's
+    number — the thread a team member has with it is private to them. A plain message inside the
+    24-hour window, else the approved template with the same news on one line. Once per `key`.
+    False when it couldn't be sent (no number on record, no line, template not approved yet):
+    the coach still sees it in the dashboard. Never raises."""
+    import re
+    try:
+        from vula import team_index
+        from vula.api.whatsapp import _send_reply, send_template
+        m = next((x for x in team_index.active_members(coach_tenant) if str(x.get("id")) == member_id), None)
+        phone = re.sub(r"\D", "", str((m or {}).get("whatsapp") or ""))
+        if len(phone) < 9:
+            return False
+        first = (m.get("name") or "there").split(" ")[0]
+        link = _dashboard(coach_tenant)
+        text = f"{school}: {news}" + (f"\n\nSee it in Lessons › Calendar › Other schools: {link}" if link else "")
+        if await _send_reply(phone, text, tenant_id=coach_tenant, idem_key=key):
+            return True
+        line = re.sub(r"\s+", " ", news).strip()[:TEMPLATE_ROOM]
+        return bool(await send_template(coach_tenant, phone, COACH_TEMPLATE, [first, school, line]))
+    except Exception as exc:  # noqa: BLE001 — the message is an extra; the offer stands without it
+        log.warning("coach not told on WhatsApp (%s): %s", coach_tenant, exc)
+        return False
+
+
+def _ask_words(o: dict) -> str:
+    """The offer in one line, from what the coach may know (`_for_coach`)."""
+    L = _L()
+    bits = [f"Can you teach a {str(o['lesson'] or 'lesson').lower()} on {o['when']}"]
+    if o.get("spot"):
+        bits.append(f" at {o['spot']['name']}")
+    bits.append(f", {o['people']} {'person' if o['people'] == 1 else 'people'}")
+    if o.get("level"):
+        bits.append(f" ({o['level'].lower()})")
+    bits.append("?")
+    if o.get("pay_cents") is not None:
+        bits.append(f" You'd earn {L.rand(o['pay_cents'])}.")
+    return "".join(bits)
+
+
+async def tell_guest(tenant_id: str, r: dict, what: str, offer: Optional[dict] = None) -> bool:
+    """Tell the guest coach of a lesson what happened to it: `confirmed`, `released` (the school
+    no longer needs them) or `cancelled` (the customer or the school called the lesson off)."""
+    from vula.api import tenants
+    L = _L()
+    try:
+        o = offer or accepted(tenant_id, str(r["id"]))
+        if not o:
+            return False
+        lesson = str(r.get("item_name") or "lesson").lower()
+        when = L.when_text(o["starts_at"])
+        news = {"confirmed": f"Your {lesson} on {when} is confirmed. See you there.",
+                "released": f"You are no longer needed for the {lesson} on {when}. It is off your calendar.",
+                "cancelled": f"The {lesson} on {when} has been cancelled. It is off your calendar."}[what]
+        return await tell_coach(o["coach_tenant_id"], o["coach_member_id"], tenants.display_name(tenant_id), news,
+                                f"pool_{what}:{o['id']}")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("guest coach not told (%s): %s", tenant_id, exc)
+        return False
 
 
 # ── the coach's own choice ─────────────────────────────────────────────────────────────────────
@@ -269,18 +347,27 @@ async def ask(tenant_id: str, request_id: str, starts_at: Any, keys: Any, by: st
     for o in _offers(tenant_id, request_id):
         if o["status"] == "offered" and _start_of(o["starts_at"]) != _start_of(start):
             _db().table("flow_coach_offers").update({"status": "withdrawn", "answered_at": now}).eq("id", o["id"]).eq("status", "offered").execute()
+    from vula.api import tenants
     live = {(o["coach_tenant_id"], o["coach_member_id"]) for o in _offers(tenant_id, request_id) if o["status"] in LIVE}
+    fresh = []
     for k in keys:
         home, mid = k.split(":", 1)
         if (home, mid) in live:
             continue
+        fresh.append((home, mid))
         name = next((c["name"] for c in L.coaches(home) if c["id"] == mid), "")
         _db().table("flow_coach_offers").insert({
             "tenant_id": tenant_id, "request_id": request_id, "coach_tenant_id": home, "coach_member_id": mid, "coach_name": name,
             "starts_at": _start_of(start).astimezone(timezone.utc).isoformat(), "minutes": found["minutes"],
             "share_bp": found["share_bp"], "fee_bp": found["fee_bp"], "status": "offered", "asked_by": by or None,
             "created_at": now}).execute()
-    return {"offers": for_request(tenant_id, request_id)}
+    told = 0                                          # each newly asked coach hears it on WhatsApp, once
+    school = tenants.display_name(tenant_id)
+    for o in _offers(tenant_id, request_id):
+        if o["status"] == "offered" and (o["coach_tenant_id"], o["coach_member_id"]) in fresh:
+            told += bool(await tell_coach(o["coach_tenant_id"], o["coach_member_id"], school,
+                                          _ask_words(_for_coach(o, cur)), f"pool_ask:{o['id']}"))
+    return {"offers": for_request(tenant_id, request_id), "asked": len(fresh), "told": told}
 
 
 def _clear_guest(tenant_id: str, request_id: str) -> None:
@@ -297,15 +384,26 @@ def release(tenant_id: str, request_id: str) -> dict:
     if cur["status"] not in L.OPEN:
         raise _err(f"This request is already {cur['status'].replace('_', ' ')}.", 409)
     now = L._now().isoformat()
+    dropped = None
     for o in _offers(tenant_id, request_id):
         if o["status"] in LIVE:
+            dropped = o if o["status"] == "accepted" else dropped
             _db().table("flow_coach_offers").update({"status": "withdrawn", "answered_at": now}).eq("id", o["id"]).execute()
     if cur.get("guest_coach_id"):
         _clear_guest(tenant_id, request_id)
     back = L._get(tenant_id, request_id)
     if back.get("guest_coach_id") or any(o["status"] in LIVE for o in _offers(tenant_id, request_id)):
         raise _err("That didn't save. Nothing changed.", 500)
-    return {"request": L._out(back), "offers": for_request(tenant_id, request_id)}
+    return {"request": L._out(back), "offers": for_request(tenant_id, request_id), "dropped": dropped}
+
+
+async def release_and_tell(tenant_id: str, request_id: str) -> dict:
+    """`release`, then the coach who had accepted is told they are no longer needed."""
+    cur = _L()._get(tenant_id, request_id)
+    out = release(tenant_id, request_id)
+    dropped = out.pop("dropped", None)
+    out["coach_told"] = bool(dropped and await tell_guest(tenant_id, cur, "released", dropped))
+    return out
 
 
 # ── the coach's side ───────────────────────────────────────────────────────────────────────────
