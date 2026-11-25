@@ -57,7 +57,7 @@ def test_a_profile_is_for_someone_on_the_team_and_the_name_is_theirs(world):
     assert st["coach_profiles"][0] == {"member_id": "m1", "name": "Shane", "bio": "Surfing Big Bay since 2009.",
                                        "photo_url": "https://cdn.example/shane.jpg", "levels": ["first_timer"], "sports": ["surf"], "shown": True}
     assert ld.public_coaches(A, st) == [{"name": "Shane", "bio": "Surfing Big Bay since 2009.", "photo_url": "https://cdn.example/shane.jpg",
-                                         "levels": ["First timer"], "sports": ["surf"]}]       # Zoe isn't shown; no ids
+                                         "rating": None, "levels": ["First timer"], "sports": ["surf"]}]       # Zoe isn't shown; no ids
     for bad in ([{"member_id": "nobody"}], [{"member_id": "m9"}],                              # not on the team; the accountant
                 [{"member_id": "m1"}, {"member_id": "m1"}], [{"member_id": "m1", "photo_url": "http://plain.example/a.jpg"}],
                 [{"member_id": "m1", "bio": "Book at www.other.co.za"}], "nope"):
@@ -115,7 +115,7 @@ def test_nearest_first_and_the_public_route(world):
         out = run(lessons_api.flow_directory(Req(), lat=lat, lng=lng))
         assert out["sorted_by"] == "name" and [s["shop"] for s in out["schools"]] == ["big-bay-surf", "muizenberg-surf"]
     assert set(out["schools"][0]) == {"shop", "name", "logo_url", "accent_color", "about", "town", "spot", "sports", "main_sport", "lessons",
-                                      "from_cents", "hire", "coaches", "coach_count", "now"}  # no tenant id, no phone
+                                      "from_cents", "hire", "coaches", "coach_count", "now", "rating"}  # no tenant id, no phone
     shop = run(lessons_api.flow_shop("big-bay-surf", Req()))
     assert shop["coaches"] == [] and shop["spot"] == {"name": "Big Bay"}                       # a school's own page never gives the position
     with pytest.raises(HTTPException):

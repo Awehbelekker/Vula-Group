@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { myAccount } from "./account";
 import AccountCard from "./AccountCard.jsx";
+import { Rated } from "./Progress.jsx";
 
 const STATE = { requested: "Waiting for the school", confirmed: "Confirmed", declined: "Declined", cancelled: "Cancelled", completed: "Done", no_show: "Missed" };
 
@@ -48,7 +49,7 @@ function Card({ s }) {
     <a className="fc-card fc-school" href={`/flow/${s.shop}?via=find`}>
       <span className="fc-school-top">
         <img src={s.logo_url || "/partners/flowcrew-mark.png"} alt="" />
-        <span><b>{s.name}</b><span className="fc-sub">{[s.spot.name, s.town].filter(Boolean).join(" · ")}</span></span>
+        <span><b>{s.name} <Rated rating={s.rating} /></b><span className="fc-sub">{[s.spot.name, s.town].filter(Boolean).join(" · ")}</span></span>
         {s.distance_km !== undefined && <span className="fc-km">{s.distance_km < 100 ? s.distance_km.toFixed(1) : Math.round(s.distance_km)} km</span>}
       </span>
       {s.about && <span className="fc-sub">{s.about}</span>}

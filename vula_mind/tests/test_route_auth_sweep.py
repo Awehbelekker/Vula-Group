@@ -108,6 +108,8 @@ PUBLIC = {
     ("GET", "/v1/flow/{shop}"): "the customer app (lessons and gear hire) — the business's name, look, lessons, gear and prices; 404 unless it takes lesson requests; throttled",
     ("GET", "/v1/flow/{shop}/conditions"): "the customer app — the forecast for the business's spot; no customer data; throttled",
     ("POST", "/v1/flow/{shop}/quote"): "the customer app — a price from the business's own list; writes nothing; throttled",
+    ("POST", "/v1/flow/{shop}/rate"): "the customer app — the customer's stars for the finished lesson their signed token opens, once; throttled",
+    ("GET", "/v1/flow/{shop}/next-good-day"): "the customer app — the first well-rated part of a day in the next five at the school's spot; the forecast only; throttled",
     ("POST", "/v1/flow/{shop}/requests"): "the customer app — a lesson or hire request the team must confirm; nothing is booked; throttled, five open per number",
     ("POST", "/v1/flow/{shop}/mine"): "the customer app — only the requests whose signed tokens the phone holds; throttled",
     ("POST", "/v1/flow/{shop}/cancel"): "the customer app — cancels the one request its signed token opens; throttled",

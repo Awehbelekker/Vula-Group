@@ -99,8 +99,11 @@ def clean_profiles(tenant_id: str, raw: Any) -> List[dict]:
 def public_coaches(tenant_id: str, st: dict) -> List[dict]:
     """The profiles a customer may see: ticked `shown`, and still on the team. No ids."""
     from vula.commerce import lessons
+    from vula.commerce import lesson_ratings
     team = {c["id"]: c["name"] for c in lessons.coaches(tenant_id)}
+    stars = lesson_ratings.summary(tenant_id)["coaches"]          # customers' stars for each coach
     return [{"name": team[p["member_id"]].split(" ")[0], "bio": p.get("bio") or "", "photo_url": p.get("photo_url"),
+             "rating": stars.get(p["member_id"]),
              "levels": [lessons.LEVELS[k].split(" (")[0] for k in p.get("levels") or [] if k in lessons.LEVELS],
              "sports": list(p.get("sports") or [])}
             for p in st.get("coach_profiles") or []
@@ -141,6 +144,7 @@ def _from_cents(lessons_list: List[dict]) -> Optional[int]:
 async def _entry(row: dict) -> Optional[Dict[str, Any]]:
     from vula.api import tenants
     from vula.api.commerce import public_brand
+    from vula.commerce import lesson_ratings
     tid = row.get("tenant_id") or ""
     listing = row.get("listing") if isinstance(row.get("listing"), dict) else {}
     spot = row.get("spot") if isinstance(row.get("spot"), dict) else None
@@ -159,6 +163,7 @@ async def _entry(row: dict) -> Optional[Dict[str, Any]]:
             "main_sport": (kinds[0].get("sport") or "other") if kinds else "other",      # its first lesson: what "now" is rated for
             "lessons": [x["name"] for x in kinds][:6],
             "from_cents": _from_cents(kinds), "hire": bool(row.get("hire")),
+            "rating": lesson_ratings.public(tid),
             "coaches": [{"name": c["name"], "photo_url": c["photo_url"]} for c in coaches[:6]], "coach_count": len(coaches)}
 
 
