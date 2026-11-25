@@ -42,6 +42,8 @@ PROVIDER_HELP = {
     "tcg": "In The Courier Guy's portal: Integrations › API Keys. Use a sandbox key with Test.",
     "pudo": "In your PUDO account: Settings › API Keys.",
 }
+# Where the business pays its courier account. Only the live portal: a test account has no money in it.
+PROVIDER_PORTALS = {"tcg": "https://portal.thecourierguy.co.za"}
 _TIMEOUT = 20.0
 
 
@@ -109,6 +111,19 @@ def rand_to_cents(v: Any) -> Optional[int]:
     except (InvalidOperation, ValueError):
         return None
     if d < 0:
+        return None
+    return int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def signed_cents(v: Any) -> Optional[int]:
+    """An account balance in rand (-129.95 = R129.95 owed) → integer cents, keeping the sign."""
+    if v in (None, "") or isinstance(v, bool):
+        return None
+    try:
+        d = Decimal(str(v).replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        return None
+    if not d.is_finite():
         return None
     return int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -248,6 +263,10 @@ class _Courier:
         """Raise CourierError when the key doesn't work."""
         raise NotImplementedError
 
+    async def account(self, creds: dict, mode: str) -> Optional[dict]:
+        """The business's account with the courier, or None where the courier doesn't say."""
+        return None
+
 
 class CourierGuy(_Courier):
     """The Courier Guy's own API (Ship Logic)."""
@@ -276,6 +295,20 @@ class CourierGuy(_Courier):
     async def check(self, creds, mode):
         await _call("GET", f"{self.base(mode)}/shipments", creds["api_key"], params={"limit": 1})
 
+    async def account(self, creds, mode) -> Optional[dict]:
+        """Read in the sandbox on 25 Nov 2026: amounts are rand; `balance` goes negative by a
+        booking's price when it is booked and back when it is cancelled (negative = owed)."""
+        rows = _rows(await _call("GET", f"{self.base(mode)}/accounts", creds["api_key"]), "accounts")
+        if not rows:
+            return None
+        a = rows[0]
+        kind = str(a.get("account_type") or "").lower()
+        return {"name": str(a.get("name") or "")[:80], "kind": kind if kind in ("prepaid", "postpaid") else "",
+                "balance_cents": signed_cents(a.get("balance")),
+                "credit_limit_cents": signed_cents(a.get("credit_limit")) if kind == "postpaid" else None,
+                "payment_terms_days": a.get("payment_terms") if isinstance(a.get("payment_terms"), int) else None,
+                "on_hold": bool(a.get("is_on_hold")), "status": str(a.get("status") or "")}
+
     async def rates(self, creds, mode, *, collection, delivery, parcels, pickup_point_id=None,
                     collection_point_id=None) -> List[Rate]:
         body: Dict[str, Any] = {"parcels": [{k: v for k, v in p.items() if k != "parcel_description"}
@@ -285,11 +318,11 @@ class CourierGuy(_Courier):
 
     async def create(self, creds, mode, *, collection, collection_contact, delivery, delivery_contact,
                      parcels, service_code, reference, pickup_point_id=None, collection_point_id=None,
-                     instructions="") -> Booked:
+                     instructions="", reference_name="Order no.") -> Booked:
         body: Dict[str, Any] = {
             "collection_contact": collection_contact, "delivery_contact": delivery_contact,
             "parcels": _parcels(parcels), "service_level_code": service_code,
-            "customer_reference_name": "Order no.", "customer_reference": reference,
+            "customer_reference_name": reference_name, "customer_reference": reference,
             "special_instructions_delivery": (instructions or "")[:200], "mute_notifications": False,
         }
         self._where(body, collection, delivery, pickup_point_id)
@@ -383,11 +416,11 @@ class Pudo(_Courier):
 
     async def create(self, creds, mode, *, collection, collection_contact, delivery, delivery_contact,
                      parcels, service_code, reference, pickup_point_id=None, collection_point_id=None,
-                     instructions="") -> Booked:
+                     instructions="", reference_name="Order no.") -> Booked:
         body: Dict[str, Any] = {
             "collection_contact": collection_contact, "delivery_contact": delivery_contact,
             "service_level_code": service_code, "opt_in_rates": [], "opt_in_time_based_rates": [],
-            "special_instructions_collection": f"Order {reference}"[:200],
+            "special_instructions_collection": f"{reference_name.replace(' no.', '')} {reference}"[:200],
         }
         if not self._where(body, collection, delivery, pickup_point_id, collection_point_id):
             body["parcels"] = [{**p, **{k: str(p[k]) for k in p if k.startswith("submitted_")},

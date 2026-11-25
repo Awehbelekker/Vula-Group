@@ -65,7 +65,8 @@ export function useCourierSetup(tenantId) {
   return { data, connected, error, setError, saving, saved, connect, makeDefault, remove, saveSettings }
 }
 
-export function useOrderShipping(tenantId, orderId) {
+/** Bookings at one address: `url` lists them (GET), prices them (POST url/quote) and books (POST url). */
+function useShipping(tenantId, url) {
   const [shipments, setShipments] = useState([])
   const [connected, setConnected] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -75,11 +76,11 @@ export function useOrderShipping(tenantId, orderId) {
 
   const load = useCallback(async () => {
     try {
-      const d = await call(`${base(tenantId)}/orders/${orderId}/shipments`)
+      const d = await call(url)
       setShipments(d.shipments || []); setConnected(!!d.connected)
     } catch { /* the panel just stays hidden */ }
     setLoaded(true)
-  }, [tenantId, orderId])
+  }, [url])
   useEffect(() => { load() }, [load])
 
   const run = async (what, fn) => {
@@ -87,9 +88,9 @@ export function useOrderShipping(tenantId, orderId) {
     try { return await fn() } catch (e) { setError(e.message); return null } finally { setBusy('') }
   }
 
-  /** Prices for this order. `opts`: {provider, address, pickup_point, parcel}. Books nothing. */
+  /** Prices. `opts`: {provider, address, pickup_point, parcel}. Books nothing. */
   const getPrices = (opts = {}) => run('quote', async () => {
-    const q = await call(`${base(tenantId)}/orders/${orderId}/shipments/quote`, { method: 'POST', body: opts })
+    const q = await call(`${url}/quote`, { method: 'POST', body: opts })
     setQuote(q)
     return q
   })
@@ -97,14 +98,14 @@ export function useOrderShipping(tenantId, orderId) {
   /** Book `rate` exactly as priced. A price that moved comes back as an error and fresh prices. */
   const book = (rate, opts = {}) => run('book', async () => {
     try {
-      const d = await call(`${base(tenantId)}/orders/${orderId}/shipments`, {
+      const d = await call(url, {
         method: 'POST', body: { ...opts, service_code: rate.code, expected_cents: rate.cents } })
       setQuote(null)
       await load()
       return d.shipment
     } catch (e) {
       if (e.price_cents != null) {
-        const q = await call(`${base(tenantId)}/orders/${orderId}/shipments/quote`, { method: 'POST', body: opts }).catch(() => null)
+        const q = await call(`${url}/quote`, { method: 'POST', body: opts }).catch(() => null)
         if (q) setQuote(q)
       }
       throw e
@@ -123,4 +124,14 @@ export function useOrderShipping(tenantId, orderId) {
   })
 
   return { shipments, connected, loaded, busy, error, setError, quote, setQuote, getPrices, book, refresh, cancel, openLabel, findPoints }
+}
+
+/** An order's courier booking. */
+export const useOrderShipping = (tenantId, orderId) => useShipping(tenantId, `${base(tenantId)}/orders/${orderId}/shipments`)
+/** Parcels sent without an order (Delivery › Couriers › Send a parcel). */
+export const useParcels = (tenantId) => useShipping(tenantId, `${base(tenantId)}/couriers/parcels`)
+
+/** What the business owes or has left with its courier, read from the courier now. Null when it can't be told. */
+export const courierAccount = async (tenantId) => {
+  try { return (await call(`${base(tenantId)}/couriers/account`)).account } catch { return null }
 }

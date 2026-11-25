@@ -11,6 +11,10 @@ a manager; booking is for whoever packs the orders.
     DELETE …/admin/couriers/{provider}
     PUT    …/admin/couriers/settings                 collection address + contact, usual parcel
     GET    …/admin/couriers/pickup-points?near=      lockers and counters near a place
+    GET    …/admin/couriers/account                  what is owed or left with the courier (owner/manager)
+    GET    …/admin/couriers/parcels                  parcels sent without an order
+    POST   …/admin/couriers/parcels/quote            prices — books nothing
+    POST   …/admin/couriers/parcels                  {request_id, service_code, expected_cents, recipient, …} — books
     GET    …/admin/orders/{order}/shipments          this order's bookings
     POST   …/admin/orders/{order}/shipments/quote    prices — books nothing
     POST   …/admin/orders/{order}/shipments          {service_code, expected_cents, …} — books
@@ -168,6 +172,51 @@ async def courier_pickup_points(tenant_id: str, near: str = "", provider: Option
                                 lat: Optional[float] = None, lng: Optional[float] = None) -> dict:
     try:
         return {"points": await shipping.pickup_points(tenant_id, provider=provider, near=near, lat=lat, lng=lng)}
+    except (shipping.ShippingError, couriers.CourierError) as exc:
+        raise _refuse(exc) from exc
+
+
+@router.get("/{tenant_id}/admin/couriers/account")
+async def courier_account(tenant_id: str, request: Request, provider: Optional[str] = None) -> dict:
+    await _owner_or_manager(request, tenant_id)
+    try:
+        return {"account": await shipping.account(tenant_id, provider)}
+    except shipping.ShippingError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.get("/{tenant_id}/admin/couriers/parcels")
+async def courier_parcels(tenant_id: str) -> dict:
+    return {"shipments": shipping.parcels(tenant_id), "connected": bool(couriers.provider_row(tenant_id))}
+
+
+def _parcel_args(b: dict) -> dict:
+    return {"provider": b.get("provider"), "address": b.get("address"), "pickup_point": b.get("pickup_point"),
+            "parcel": b.get("parcel"), "recipient": b.get("recipient")}
+
+
+@router.post("/{tenant_id}/admin/couriers/parcels/quote")
+async def courier_parcel_quote(tenant_id: str, body: dict) -> dict:
+    try:
+        return await shipping.quote_parcel(tenant_id, **_parcel_args(body or {}))
+    except (shipping.ShippingError, couriers.CourierError) as exc:
+        raise _refuse(exc) from exc
+
+
+@router.post("/{tenant_id}/admin/couriers/parcels")
+async def courier_parcel_book(tenant_id: str, body: dict, request: Request) -> dict:
+    b = body or {}
+    try:
+        cents = int(b.get("expected_cents"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Get the prices first, then book one of them.")
+    if not b.get("service_code"):
+        raise HTTPException(status_code=400, detail="Get the prices first, then book one of them.")
+    try:
+        return {"shipment": await shipping.book_parcel(
+            tenant_id, request_id=str(b.get("request_id") or ""), service_code=str(b["service_code"]),
+            expected_cents=cents, reference=str(b.get("reference") or ""), instructions=str(b.get("instructions") or ""),
+            actor=await _actor(request, tenant_id), **_parcel_args(b))}
     except (shipping.ShippingError, couriers.CourierError) as exc:
         raise _refuse(exc) from exc
 

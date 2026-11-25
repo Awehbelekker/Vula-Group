@@ -13,6 +13,7 @@ import './couriers.css'
 const PARCEL = { length_cm: '', width_cm: '', height_cm: '', weight_kg: '' }
 
 const PinMap = lazy(() => import('./PinMap.jsx'))
+const CourierDesk = lazy(() => import('./CourierDesk.jsx'))   // the account's balance and Send a parcel
 
 /** Type an address: matches appear underneath as you type; pick one and it fills the fields below
  *  and keeps its position. Find searches a second map service for the exact words. Or drop a pin. */
@@ -178,6 +179,8 @@ export default function CourierSetup({ tenantId }) {
         })}
       </ul>
 
+      {anyConnected && <Suspense fallback={null}><CourierDesk tenantId={tenantId} /></Suspense>}
+
       {anyConnected && (
         <div className="vsl-divide vcr-form">
           <h3 className="vcr-h">Where parcels are collected</h3>
@@ -194,7 +197,7 @@ export default function CourierSetup({ tenantId }) {
             <Button onClick={saveDetails} disabled={c.saving}>{c.saving ? 'Saving…' : 'Save'}</Button>
             {savedAt && <span className="vcr-saved" role="status"><Check size={16} aria-hidden="true" /> Saved at {savedAt}</span>}
           </div>
-          {savedAt && <p className="vcr-sub">These details are kept for every booking. To book a courier, open a paid order and choose Courier, then Book a courier.</p>}
+          {savedAt && <p className="vcr-sub">These details are kept for every booking. To book a courier for an order, open the order and choose Courier. For anything else, use Send a parcel above.</p>}
         </div>)}
 
       <Sheet open={!!courier} title={courier ? `${c.connected[courier.id] ? 'Change key for' : 'Connect'} ${courier.label}` : ''} onClose={() => setOpenId(null)}

@@ -19,7 +19,7 @@ const money = (c) => formatMoney(c, { cents: 'always' })
 const TONE = { Delivered: 'ok', Cancelled: 'muted', 'Not booked': 'danger', 'Booking…': 'warn' }
 const when = (ts) => (ts ? String(ts).slice(0, 16).replace('T', ' ') : '')
 
-function Booking({ s, c }) {
+export function Booking({ s, c }) {
   const busy = (what) => c.busy === `${what}:${s.id}`
   const cancel = async () => {
     const lost = !s.tracking_reference
@@ -38,7 +38,9 @@ function Booking({ s, c }) {
         {s.mode === 'test' && <StatusChip tone="warn">Test</StatusChip>}
       </div>
       {s.tracking_reference && <p className="vcr-line">Waybill <span className="vcr-code">{s.tracking_reference}</span> · {s.service_name || s.service_code} · {money(s.quoted_cents)}</p>}
+      {s.recipient?.name && <p className="vcr-line">To {s.recipient.name}{s.reference && s.reference !== 'Parcel' ? ` · ${s.reference}` : ''}</p>}
       {s.pickup_point_name && <p className="vcr-line"><MapPin size={14} aria-hidden="true" /> To {s.pickup_point_name}</p>}
+      {!s.order_id && !s.pickup_point_name && s.delivery_address?.street_address && <p className="vcr-sub">{[s.delivery_address.street_address, s.delivery_address.local_area, s.delivery_address.city].filter(Boolean).join(', ')}</p>}
       {last && <p className="vcr-sub">Last update {when(last.at)}{last.location ? ` · ${last.location}` : ''}</p>}
       {s.error && <p className="vsl-error" role="alert">{s.error}</p>}
       {s.live && s.tracking_reference && !s.verified_at && (
@@ -53,9 +55,18 @@ function Booking({ s, c }) {
   )
 }
 
-function BookSheet({ c, order, tenantId, onClose }) {
+const newRequestId = () => (globalThis.crypto?.randomUUID?.() || `p-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`)
+
+/** With an `order` it books that order's courier; without one it sends a parcel on its own, so it
+ *  also asks who it goes to. A parcel carries one request id for the life of the sheet: a second
+ *  tap or a retry finds the first booking on the server instead of paying for another. */
+export function BookSheet({ c, order, tenantId, onClose }) {
   const [to, setTo] = useState('door')
-  const [address, setAddress] = useState(null)          // null = let the server split the order's own text
+  const [address, setAddress] = useState(order ? null : EMPTY_ADDRESS)   // null = let the server split the order's own text
+  const [who, setWho] = useState({ name: '', mobile_number: '', email: '' })
+  const [reference, setReference] = useState('')
+  const [note, setNote] = useState('')
+  const [requestId] = useState(newRequestId)
   const [parcel, setParcel] = useState(null)
   const [near, setNear] = useState('')
   const [points, setPoints] = useState(null)
@@ -67,9 +78,11 @@ function BookSheet({ c, order, tenantId, onClose }) {
     ...(to === 'point' && point ? { pickup_point: { id: point.id, name: point.name } } : {}),
     ...(to === 'door' && address ? { address } : {}),
     ...(parcel ? { parcel } : {}),
+    ...(order ? {} : { recipient: who, reference, instructions: note, request_id: requestId }),
   })
+  const changed = () => { setPicked(null); c.setQuote(null) }
   const prices = async () => { setPicked(null); await c.getPrices(opts()) }
-  const search = async () => { setPoint(null); setPoints(await c.findPoints(near || order.delivery_address || '')) }
+  const search = async () => { setPoint(null); setPoints(await c.findPoints(near || order?.delivery_address || address?.city || '')) }
   const book = async () => {
     const rate = (q?.rates || []).find((r) => r.code === picked)
     if (!rate) return
@@ -81,7 +94,7 @@ function BookSheet({ c, order, tenantId, onClose }) {
   const rate = (q?.rates || []).find((r) => r.code === picked)
 
   return (
-    <Sheet open title={`Book a courier — ${order.display_id}`} onClose={onClose}
+    <Sheet open title={order ? `Book a courier — ${order.display_id}` : 'Send a parcel'} onClose={onClose}
       footer={<>
         <Button variant="secondary" onClick={onClose}>Close</Button>
         {rate
@@ -89,6 +102,17 @@ function BookSheet({ c, order, tenantId, onClose }) {
           : <Button onClick={prices} disabled={c.busy === 'quote' || (to === 'point' && !point)}>{c.busy === 'quote' ? 'Getting prices…' : 'Get prices'}</Button>}
       </>}>
       <div className="vcr-form">
+        {!order && (
+          <>
+            <div className="vcr-two">
+              <Field label="Who it goes to"><Input value={who.name} onChange={(e) => { setWho({ ...who, name: e.target.value }); changed() }} autoComplete="off" /></Field>
+              <Field label="Their cellphone"><Input type="tel" value={who.mobile_number} onChange={(e) => { setWho({ ...who, mobile_number: e.target.value }); changed() }} placeholder="082…" autoComplete="off" /></Field>
+            </div>
+            <div className="vcr-two">
+              <Field label="Their email (optional)"><Input type="email" value={who.email} onChange={(e) => { setWho({ ...who, email: e.target.value }); changed() }} autoComplete="off" /></Field>
+              <Field label="Your reference (optional)" hint="Printed on the waybill."><Input value={reference} maxLength={40} onChange={(e) => setReference(e.target.value)} placeholder="Samples" /></Field>
+            </div>
+          </>)}
         <div className="vcr-toggle" role="group" aria-label="Deliver to">
           <button type="button" aria-pressed={to === 'door'} onClick={() => { setTo('door'); c.setQuote(null); setPicked(null) }}>To the door</button>
           <button type="button" aria-pressed={to === 'point'} onClick={() => { setTo('point'); c.setQuote(null); setPicked(null) }}>To a locker or counter</button>
@@ -96,14 +120,14 @@ function BookSheet({ c, order, tenantId, onClose }) {
 
         {to === 'door' && (
           <>
-            <p className="vcr-sub">The customer wrote: {order.delivery_address || 'no address'}</p>
+            {order && <p className="vcr-sub">The customer wrote: {order.delivery_address || 'no address'}</p>}
             {(q || address) && <AddressFields value={shownAddress} company={false} tenantId={tenantId} onChange={(a) => { setAddress(a); setPicked(null); c.setQuote(null) }} />}
           </>)}
 
         {to === 'point' && (
           <>
             <div className="vcr-search">
-              <Field label="Near (suburb, town or address)"><Input value={near} onChange={(e) => setNear(e.target.value)} placeholder={order.delivery_address || 'Suburb and town'} /></Field>
+              <Field label="Near (suburb, town or address)"><Input value={near} onChange={(e) => setNear(e.target.value)} placeholder={order?.delivery_address || 'Suburb and town'} /></Field>
               <Button variant="secondary" Icon={Search} onClick={search} disabled={c.busy === 'points'}>{c.busy === 'points' ? 'Looking…' : 'Find'}</Button>
             </div>
             {points && points.length === 0 && <p className="vcr-sub">None found near there.</p>}
@@ -122,9 +146,11 @@ function BookSheet({ c, order, tenantId, onClose }) {
           <>
             <h3 className="vcr-h"><Package size={16} aria-hidden="true" /> Parcel</h3>
             {q?.weight_from === 'products' && !parcel && <p className="vcr-sub">Weight is from the products on the order; the box is your usual one.</p>}
-            {q?.weight_from === 'usual' && !parcel && <p className="vcr-sub">This is your usual parcel — change it if this order is bigger.</p>}
+            {q?.weight_from === 'usual' && !parcel && <p className="vcr-sub">This is your usual parcel. Change it if this one is bigger.</p>}
             <ParcelFields value={shownParcel} onChange={(p) => { setParcel(p); setPicked(null); c.setQuote(null) }} />
           </>)}
+
+        {!order && <Field label="Note for the driver (optional)"><Input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="Ring the bell at the gate" /></Field>}
 
         {q?.missing?.length > 0 && (
           <div className="vsl-error" role="alert">Still needed before a price can be given:

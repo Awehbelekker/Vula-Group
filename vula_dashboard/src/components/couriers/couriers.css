@@ -57,3 +57,14 @@
 .vcr-map { height: 280px; width: 100%; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; z-index: 0; }
 .vcr-save { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
 .vcr-saved { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--ok); font-size: var(--fs-body); font-weight: 600; }
+
+/* the account with the courier, and parcels sent without an order (CourierDesk) */
+.vcr-account { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); min-width: 0; }
+.vcr-account-top { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--fs-body); color: var(--ink); }
+.vcr-account-top > button { margin-left: auto; }
+.vcr-figures { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); margin: 0; }
+.vcr-figures dt { font-size: var(--fs-caption); color: var(--muted); }
+.vcr-figures dd { margin: 0; font-size: var(--fs-display-md); font-weight: 600; color: var(--ink); }
+.vcr-account .vsl-error { display: flex; align-items: flex-start; gap: var(--space-1); margin: 0; }
+.vcr-account .vsl-error svg { flex: none; margin-top: 3px; }
+.vcr-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; font-size: var(--fs-body); font-weight: 600; color: var(--brand-text); }

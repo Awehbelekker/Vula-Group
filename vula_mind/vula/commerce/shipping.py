@@ -1,6 +1,8 @@
 """
 vula/commerce/shipping.py — an order's courier booking (23 Nov 2026, vula/couriers).
 
+    quote_parcel / book_parcel  the same two steps for a parcel that belongs to no order (25 Nov)
+    account(tenant)           what the business owes or has left with the courier, read live
     quote(tenant, order)      what each service would cost for this order — books nothing
     book(tenant, order, …)    books the service the person chose, at the price they were shown
     cancel / label / refresh  the booking afterwards
@@ -230,6 +232,19 @@ def order_parcel(order: dict, settings: dict) -> Dict[str, Any]:
     return {"parcel": base, "weight_from": "usual"}
 
 
+def clean_recipient(r: Optional[dict]) -> dict:
+    """Who a parcel with no order goes to: a name and a cellphone or email."""
+    r = r or {}
+    return {"name": str(r.get("name") or "").strip()[:80], "mobile_number": mobile(r.get("mobile_number")),
+            "email": str(r.get("email") or "").strip()[:120]}
+
+
+def _parcel_as_order(tenant_id: str, recipient: dict) -> dict:
+    """A parcel with no order, in the shape the booking code reads an order in."""
+    return {"tenant_id": tenant_id, "customer_name": recipient["name"], "customer_phone": recipient["mobile_number"],
+            "customer_email": recipient["email"], "delivery_address": "", "commerce_order_items": []}
+
+
 def _contacts(order: dict, settings: dict) -> tuple:
     sender = settings.get("collection_contact") or {}
     sender = {"name": sender.get("name") or "", "mobile_number": sender.get("mobile_number") or "",
@@ -257,7 +272,7 @@ def _public(row: dict) -> dict:
         "id", "order_id", "provider", "mode", "tracking_reference", "service_code", "service_name",
         "quoted_cents", "charged_cents", "status", "delivery_kind", "pickup_point_id", "pickup_point_name",
         "delivery_address", "parcels", "events", "error", "verified_at", "booked_by", "created_at",
-        "cancelled_at", "last_checked_at")}
+        "cancelled_at", "last_checked_at", "recipient", "reference")}
     out["courier"] = couriers.PROVIDER_LABELS.get(row.get("provider"), row.get("provider"))
     out["status_text"] = ("Booking…" if row.get("status") == "booking" else
                           "Not booked" if row.get("status") == "failed" else
@@ -296,7 +311,7 @@ def _provider(tenant_id: str, provider: Optional[str]) -> tuple:
 # ── quote ─────────────────────────────────────────────────────────────────────
 
 async def _prepare(tenant_id: str, order: dict, *, provider: Optional[str], address: Optional[dict],
-                   pickup_point: Optional[dict], parcel: Optional[dict]) -> dict:
+                   pickup_point: Optional[dict], parcel: Optional[dict], who: str = "customer") -> dict:
     """Everything a quote or a booking needs, with what's missing named."""
     row, courier = _provider(tenant_id, provider)
     settings = get_settings(tenant_id)
@@ -310,7 +325,7 @@ async def _prepare(tenant_id: str, order: dict, *, provider: Optional[str], addr
     if not (sender["mobile_number"] or sender["email"]):
         missing.append("who hands over the parcel (Settings › Couriers)")
     if not (receiver["mobile_number"] or receiver["email"]):
-        missing.append("the customer's phone number or email")
+        missing.append(f"the {who}'s phone number or email")
 
     point_id = str((pickup_point or {}).get("id") or "").strip() or None
     delivery = clean_address(address) if address else parse_address(order.get("delivery_address") or "")
@@ -318,7 +333,7 @@ async def _prepare(tenant_id: str, order: dict, *, provider: Optional[str], addr
     if not point_id:
         gaps = address_gaps(delivery)
         if gaps:
-            missing.append("the customer's " + " and ".join(gaps))
+            missing.append(f"the {who}'s " + " and ".join(gaps))
         else:
             delivery = await _locate(delivery)
 
@@ -394,6 +409,19 @@ async def book(tenant_id: str, order_id: str, *, service_code: str, expected_cen
                        pickup_point=pickup_point, parcel=parcel)
     if p["missing"]:
         raise ShippingError("Can't book yet — still needed: " + "; ".join(p["missing"]) + ".", missing=p["missing"])
+    return await _place(tenant_id, p, service_code=service_code, expected_cents=expected_cents, actor=actor,
+                        row_extra={"order_id": order_id}, reference=str(order.get("display_id") or order_id)[:40],
+                        reference_name="Order no.", instructions=order.get("delivery_notes") or "",
+                        taken=lambda: (shipments_for_live(tenant_id, order_id) or [None])[0],
+                        taken_message="This order already has a courier booked. Cancel that one first.")
+
+
+async def _place(tenant_id: str, p: dict, *, service_code: str, expected_cents: int, actor: Optional[dict],
+                 row_extra: dict, reference: str, reference_name: str, instructions: str,
+                 taken, taken_message: Optional[str]) -> dict:
+    """The booking itself, for an order or a parcel on its own: price re-checked, the row written
+    first, the courier called, the booking read back. `taken()` finds the row that already stands
+    when ours can't be written; with no `taken_message` that row is the answer (a second tap)."""
     row, courier, mode = p["row"], p["courier"], p["row"].get("mode") or "live"
     creds = row["credentials"]
     point_args = {"pickup_point_id": p["point_id"], "collection_point_id": (p["collection_point"] or {}).get("id")}
@@ -409,7 +437,7 @@ async def book(tenant_id: str, order_id: str, *, service_code: str, expected_cen
                             "check the new price and book again.", price_cents=rate.cents)
 
     db = _db()
-    shipment = {"tenant_id": tenant_id, "order_id": order_id, "provider": row["provider"], "mode": mode,
+    shipment = {**row_extra, "tenant_id": tenant_id, "provider": row["provider"], "mode": mode,
                 "service_code": rate.code, "service_name": rate.name, "quoted_cents": rate.cents,
                 "status": "booking", "delivery_kind": "pickup_point" if p["point_id"] else "door",
                 "pickup_point_id": p["point_id"], "pickup_point_name": p["point_name"] or None,
@@ -418,9 +446,15 @@ async def book(tenant_id: str, order_id: str, *, service_code: str, expected_cen
                 "events": [], "open": True, "booked_by": (actor or {}).get("email") or (actor or {}).get("name")}
     try:
         made = db.table("commerce_shipments").insert(shipment).execute().data or []
-    except Exception as exc:  # noqa: BLE001 — the one-live-booking-per-order index
-        if shipments_for_live(tenant_id, order_id):
-            raise ShippingError("This order already has a courier booked. Cancel that one first.") from exc
+    except Exception as exc:  # noqa: BLE001 — one live booking per order, one per request
+        there = taken()
+        if there and taken_message:
+            raise ShippingError(taken_message) from exc
+        if there:
+            return there
+        if not row_extra.get("order_id"):
+            raise ShippingError("Sending a parcel without an order isn't set up on this database yet "
+                                "(migration 310). Nothing was booked.") from exc
         raise
     sid = made[0]["id"]
 
@@ -432,15 +466,14 @@ async def book(tenant_id: str, order_id: str, *, service_code: str, expected_cen
         booked = await courier.create(
             creds, mode, collection=p["collection"], collection_contact=p["sender"], delivery=p["delivery"],
             delivery_contact=p["receiver"], parcels=[p["parcel"]], service_code=rate.code,
-            reference=str(order.get("display_id") or order_id)[:40],
-            instructions=order.get("delivery_notes") or "", **point_args)
+            reference=reference, reference_name=reference_name, instructions=instructions, **point_args)
     except CourierError as exc:
         _save({"status": "failed", "open": False, "error": str(exc)[:400]})
         raise ShippingError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         # Unknown: the courier may or may not have it. The row stays 'booking' so nobody books a second.
         _save({"error": "The courier's answer was lost. Check the courier's own site before booking again."})
-        log.error("courier booking outcome unknown for %s order %s: %s", tenant_id, order.get("display_id"), exc)
+        log.error("courier booking outcome unknown for %s %s: %s", tenant_id, reference, exc)
         raise ShippingError("The courier's answer was lost, so Vula can't tell whether it was booked. "
                             "Check the courier's own site before booking again.") from exc
 
@@ -460,10 +493,123 @@ async def book(tenant_id: str, order_id: str, *, service_code: str, expected_cen
     except CourierError as exc:
         log.warning("courier booking %s not read back: %s", booked.tracking_reference, exc)
 
-    _audit(tenant_id, actor, "courier_booked", order=order.get("display_id"), courier=row["provider"],
+    _audit(tenant_id, actor, "courier_booked", order=reference, with_order=bool(row_extra.get("order_id")), courier=row["provider"],
            waybill=booked.tracking_reference, service=rate.code, cents=rate.cents, verified=verified)
     out = _public(_shipment(tenant_id, sid))
     out["verified"] = verified
+    return out
+
+
+# ── a parcel with no order ────────────────────────────────────────────────────
+
+def _by_request(tenant_id: str, request_id: str) -> Optional[dict]:
+    try:
+        rows = (_db().table("commerce_shipments").select("*").eq("tenant_id", tenant_id)
+                .eq("request_id", request_id).limit(1).execute().data or [])
+    except Exception:  # noqa: BLE001 — before migration 310 there is no such column
+        return None
+    return rows[0] if rows else None
+
+
+def parcels(tenant_id: str, limit: int = 30) -> List[dict]:
+    """Parcels sent without an order, newest first."""
+    try:
+        rows = (_db().table("commerce_shipments").select("*").eq("tenant_id", tenant_id)
+                .is_("order_id", "null").order("created_at", desc=True).limit(min(int(limit), 100)).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        log.debug("parcels read skipped (run migration 310?): %s", exc)
+        return []
+    return [_public(r) for r in rows]
+
+
+async def _prepare_parcel(tenant_id: str, *, provider, address, pickup_point, parcel, recipient) -> tuple:
+    who = clean_recipient(recipient)
+    p = await _prepare(tenant_id, _parcel_as_order(tenant_id, who), provider=provider, address=address or {},
+                       pickup_point=pickup_point, parcel=parcel, who="receiver")
+    if not who["name"]:
+        p["missing"].insert(0, "the receiver's name")
+    return who, p
+
+
+async def quote_parcel(tenant_id: str, *, provider: Optional[str] = None, address: Optional[dict] = None,
+                       pickup_point: Optional[dict] = None, parcel: Optional[dict] = None,
+                       recipient: Optional[dict] = None) -> dict:
+    """Prices for a parcel that belongs to no order. Books nothing."""
+    who, p = await _prepare_parcel(tenant_id, provider=provider, address=address, pickup_point=pickup_point,
+                                   parcel=parcel, recipient=recipient)
+    out = {"order": None, "recipient": who, "provider": p["row"]["provider"],
+           "courier": couriers.PROVIDER_LABELS[p["row"]["provider"]], "mode": p["row"].get("mode") or "live",
+           "address": p["delivery"],
+           "pickup_point": {"id": p["point_id"], "name": p["point_name"]} if p["point_id"] else None,
+           "parcel": p["parcel"], "weight_from": p["weight_from"], "missing": p["missing"], "rates": [], "existing": []}
+    if p["missing"]:
+        return out
+    rates = await p["courier"].rates(
+        p["row"]["credentials"], out["mode"], collection=p["collection"], delivery=p["delivery"],
+        parcels=[p["parcel"]], pickup_point_id=p["point_id"],
+        collection_point_id=(p["collection_point"] or {}).get("id"))
+    out["rates"] = [r.as_dict() for r in rates]
+    if not rates:
+        out["missing"] = ["a service — the courier offered none for this address and parcel"]
+    return out
+
+
+async def book_parcel(tenant_id: str, *, request_id: str, service_code: str, expected_cents: int,
+                      provider: Optional[str] = None, address: Optional[dict] = None,
+                      pickup_point: Optional[dict] = None, parcel: Optional[dict] = None,
+                      recipient: Optional[dict] = None, reference: str = "", instructions: str = "",
+                      actor: Optional[dict] = None) -> dict:
+    """Book a parcel that belongs to no order. `request_id` is made by the screen once per parcel:
+    the same one again (a second tap, a retry) returns the first booking instead of a second."""
+    request_id = re.sub(r"[^A-Za-z0-9_-]", "", str(request_id or ""))[:64]
+    if len(request_id) < 8:
+        raise ShippingError("Get the prices first, then book one of them.")
+    there = _by_request(tenant_id, request_id)
+    if there:
+        return _public(there)
+    who, p = await _prepare_parcel(tenant_id, provider=provider, address=address, pickup_point=pickup_point,
+                                   parcel=parcel, recipient=recipient)
+    if p["missing"]:
+        raise ShippingError("Can't book yet — still needed: " + "; ".join(p["missing"]) + ".", missing=p["missing"])
+    ref = " ".join(str(reference or "").split())[:40] or "Parcel"
+    return await _place(tenant_id, p, service_code=service_code, expected_cents=expected_cents, actor=actor,
+                        row_extra={"order_id": None, "request_id": request_id, "recipient": who, "reference": ref},
+                        reference=ref, reference_name="Reference",
+                        instructions=" ".join(str(instructions or "").split())[:200],
+                        taken=lambda: (lambda r: _public(r) if r else None)(_by_request(tenant_id, request_id)),
+                        taken_message=None)
+
+
+# ── the business's account with the courier ───────────────────────────────────
+
+LOW_CENTS = 20000          # under R200 left, a booking or two may be refused
+
+
+async def account(tenant_id: str, provider: Optional[str] = None) -> dict:
+    """What the courier says about the business's account: what it owes or has left, and whether
+    bookings are on hold. Read from the courier each time; nothing is kept. Money is added at the
+    courier (the key Vula holds can't pay), so the answer carries the courier's own portal address."""
+    row, courier = _provider(tenant_id, provider)
+    mode = row.get("mode") or "live"
+    out: Dict[str, Any] = {"provider": row["provider"], "courier": couriers.PROVIDER_LABELS[row["provider"]],
+                           "mode": mode, "known": False,
+                           "portal_url": couriers.PROVIDER_PORTALS.get(row["provider"]) if mode == "live" else None}
+    try:
+        a = await courier.account(row["credentials"], mode)
+    except CourierError as exc:
+        raise ShippingError(str(exc)) from exc
+    if not a or a.get("balance_cents") is None or not a.get("kind"):
+        return out
+    bal = int(a["balance_cents"])
+    limit = a.get("credit_limit_cents")
+    if a["kind"] == "postpaid":
+        left = (int(limit) + bal) if limit is not None else None      # the limit less what is owed
+    else:
+        left = bal
+    out.update(known=True, kind=a["kind"], name=a.get("name") or "", balance_cents=bal,
+               owed_cents=max(0, -bal), credit_limit_cents=limit, available_cents=left,
+               payment_terms_days=a.get("payment_terms_days"), on_hold=bool(a.get("on_hold")),
+               low=left is not None and left < LOW_CENTS, checked_at=_now())
     return out
 
 
@@ -572,6 +718,8 @@ async def _apply(tenant_id: str, s: dict, seen: couriers.Tracking) -> None:
 
 
 async def _move_order(tenant_id: str, s: dict, step: str) -> None:
+    if not s.get("order_id"):
+        return                    # a parcel on its own: there is no order to move
     from vula.commerce import order_updates, service
     try:
         order = await service.get_order(s["order_id"])
@@ -601,12 +749,16 @@ async def _move_order(tenant_id: str, s: dict, step: str) -> None:
 async def _tell_team(tenant_id: str, s: dict, status: str) -> None:
     try:
         from vula.integrations.notify import notify_team
-        rows = (_db().table("commerce_orders").select("display_id,customer_name")
-                .eq("tenant_id", tenant_id).eq("id", s["order_id"]).limit(1).execute().data or [{}])
-        o = rows[0]
+        if s.get("order_id"):
+            rows = (_db().table("commerce_orders").select("display_id,customer_name")
+                    .eq("tenant_id", tenant_id).eq("id", s["order_id"]).limit(1).execute().data or [{}])
+            o = rows[0]
+            what = f"order {o.get('display_id') or ''} ({o.get('customer_name') or 'customer'})"
+        else:
+            what = f"the parcel to {(s.get('recipient') or {}).get('name') or 'the receiver'}"
         await notify_team(
             tenant_id, "delivery_problem",
-            f"🚚 Delivery problem on order {o.get('display_id') or ''} ({o.get('customer_name') or 'customer'}): "
+            f"🚚 Delivery problem on {what}: "
             f"{couriers.plain_status(status)}. Waybill {s.get('tracking_reference')} with "
             f"{couriers.PROVIDER_LABELS.get(s['provider'], s['provider'])}.",
             idem_key=f"delivery_problem:{s['id']}:{status}")
