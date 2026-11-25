@@ -11,6 +11,7 @@ and Fernet secret storage (email credentials).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -1282,6 +1283,71 @@ async def _keep_file(tenant_id: str, pdf_path: Path, source_file: str, source: s
                                source=source or "dashboard", text=text, txns=txns, password=password)
 
 
+# 25 Nov 2026 (Ian: "can I add them on WhatsApp?"): while a business's books are under review
+# (books_review.under_review), a statement that arrives on WhatsApp or by email is compared like the
+# Books review upload — kept as an official statement and proposed, nothing written — and waits for
+# Money › Books review › Statements › "Check again and apply all". Any other business, and the
+# dashboard Bank upload, are unchanged.
+REVIEW_SOURCES = ("whatsapp", "email")
+HELD_TEXT = ("your books are being checked, so only a bank's own statement that I can read to the cent is "
+             "taken here — please upload this one in Money › Books review › Statements")
+
+
+def _under_review(tenant_id: str) -> bool:
+    from vula.commerce import books_review
+    return books_review.under_review(tenant_id)
+
+
+async def _compare_only(tenant_id: str, pdf_path: Path, source_file: str, source: str, text: str,
+                        txns: List[Dict[str, Any]], password: Optional[str]) -> Dict[str, Any]:
+    from vula.commerce import statement_compare, statement_files
+    name = source_file or pdf_path.name
+    out = await asyncio.to_thread(statement_compare.compare, tenant_id, filename=name, text=text,
+                                  created_by=source)
+    if out.get("error"):
+        return {"error": out["error"]}
+    await statement_files.keep(tenant_id, pdf_path, filename=name, source=source, text=text, txns=txns,
+                               official=True, password=password)
+    result = {"compared": True, "check_id": out.get("check_id"), "account": out.get("account"),
+              "period": out.get("period"), "summary": out.get("summary") or {}, "parsed": len(txns)}
+    try:     # the days this account still has no statement for (statement_files.missing)
+        last4 = str(out.get("account") or "")[-4:]
+        gaps = next((g for g in await asyncio.to_thread(statement_files.missing, tenant_id)
+                     if last4 and g["last4"] == last4), None)
+        if gaps:
+            result["still_missing"] = statement_files.ranges_text(gaps["ranges"])
+    except Exception as exc:  # noqa: BLE001 — the reply still goes, without the gaps
+        log.debug("missing statements not worked out for %s: %s", tenant_id, exc)
+    return result
+
+
+def compared_text(rec: Dict[str, Any]) -> str:
+    """The reply for a statement compared while the books are under review — built in code."""
+    from datetime import date as _d
+    s = rec.get("summary") or {}
+
+    def day(iso: Any) -> str:
+        try:
+            d = _d.fromisoformat(str(iso)[:10])
+            return f"{d.day} {d.strftime('%b %Y')}"
+        except ValueError:
+            return str(iso or "")
+    frm, to = (rec.get("period") or [None, None])[:2]
+    parts = [f"{s.get('already_right', 0)} lines already right"]
+    for k, one, many in (("restore", "line to put back", "lines to put back"), ("add", "line to add", "lines to add"),
+                         ("set_aside", "line to set aside", "lines to set aside"),
+                         ("review", "line for you to look at", "lines for you to look at")):
+        n = int(s.get(k) or 0)
+        if n:
+            parts.append(f"{n} {one if n == 1 else many}")
+    text = (f"🏦 Official statement {rec.get('account') or ''}, {day(frm)} – {day(to)}, read to the cent: "
+            f"{', '.join(parts)}. Nothing has changed yet — your books are being checked, so apply it in "
+            "Money › Books review › Statements › Check again and apply all.")
+    if rec.get("still_missing"):
+        text += f"\n📭 Still missing for {rec.get('account') or 'this account'}: {rec['still_missing']}. Send those too."
+    return text
+
+
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,
                            source_file: str = "", trusted: bool = False,
                            settle: bool = True, source: str = "") -> Dict[str, Any]:
@@ -1299,12 +1365,15 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         exact = fnb_statement.parse(fnb_text)
     except Exception as exc:
         log.debug("deterministic statement read skipped: %s", exc)
+    review = source in REVIEW_SOURCES and _under_review(tenant_id)
     if exact and exact["transactions"]:
         txns = exact["transactions"]
         acct = _statement_account(tenant_id, fnb_text, txns)
         private = _private_owner(tenant_id, acct)
         if private:
             return {"private": True, "private_to": private, "bank_account": acct, "parsed": len(txns)}
+        if review:
+            return await _compare_only(tenant_id, Path(pdf_path), source_file, source, fnb_text, txns, pwd)
         result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
                                  auto_settle=settle, bank_account=acct)
         result["bank_account"] = acct
@@ -1314,6 +1383,10 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         log.info("bank statement (FNB, exact) reconciled for %s: %s", tenant_id, result)
         await _keep_file(tenant_id, pdf_path, source_file, source, fnb_text, txns, pwd)
         return result
+    if review:
+        # Under review only a statement read to the cent is taken — compared, never written; one that
+        # isn't (another bank, a scan) would go to the model and straight into the bank lines.
+        return {"held": True, "error": HELD_TEXT}
     try:
         text = extract_pdf_text(Path(pdf_path), pwd)
     except Exception as exc:

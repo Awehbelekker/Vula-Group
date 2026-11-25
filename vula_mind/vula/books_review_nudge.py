@@ -70,6 +70,14 @@ def items(tenant_id: str) -> Optional[List[Dict[str, Any]]]:
     waiting = _waiting_statements(tenant_id)
     if waiting:
         out.append({"key": "statements", "count": waiting, "label": "Bank statements compared and waiting to be applied"})
+    try:     # statements still missing, per account (statement_files.missing)
+        from vula.commerce import statement_files
+        gaps = statement_files.missing(tenant_id)
+    except Exception:  # noqa: BLE001
+        gaps = []
+    if gaps:
+        out.append({"key": "missing_statements", "count": len(gaps), "label": "Bank statements still missing",
+                    "detail": "; ".join(f"{g['account']}: {statement_files.ranges_text(g['ranges'])}" for g in gaps)})
     if not audit:
         out.append({"key": "run", "count": 0, "label": "The books check hasn't been run yet"})
         return out
@@ -90,6 +98,9 @@ def text(business: str, open_items: List[Dict[str, Any]]) -> str:
         where = WHERE.get(it["key"]) or "Documents"
         if it["key"] == "run":
             lines.append("• The books check hasn't been run yet — Overview › Run the check")
+        elif it["key"] == "missing_statements":
+            lines.append(f"• Bank statements still missing — {it['detail']}. Send them here on WhatsApp or upload "
+                         "them in Statements")
         else:
             lines.append(f"• {it['label']}: {it['count']} — {where}")
     if len(open_items) > 6:

@@ -165,6 +165,17 @@ def run(tenant_id: str, person: str) -> Dict[str, Any]:
     return rep
 
 
+def under_review(tenant_id: str) -> bool:
+    """The business's books are being checked: a books check has been run and the latest isn't
+    signed off yet (25 Nov 2026). While they are, a bank statement that arrives on WhatsApp or by
+    email is compared, never written straight into the bank lines (bank_rec.ingest_statement)."""
+    try:
+        audit = latest(tenant_id)
+    except Exception:  # noqa: BLE001 — unreadable: treat as not under review (the old path)
+        return False
+    return bool(audit) and not audit.get("signed_off_by")
+
+
 def latest(tenant_id: str) -> Optional[Dict[str, Any]]:
     rows = (_client().table("vula_books_audits").select("*").eq("tenant_id", tenant_id)
             .order("created_at", desc=True).limit(1).execute().data or [])
