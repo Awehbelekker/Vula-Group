@@ -347,10 +347,18 @@ export function useLogin({ onSuccess, notice = '', email: knownEmail = '' } = {}
     }
   }
 
+  // a partner's address: someone who signed in to book lessons, not to run a school — on to the
+  // customer app, which reads the sign-in once from the address's #fragment (never sent to a server)
+  const toLessons = async () => {
+    const { data } = await supabase.auth.getSession()
+    const t = data?.session
+    window.location.assign('/flow/find' + (t ? `#access_token=${t.access_token}&refresh_token=${t.refresh_token}&expires_in=${t.expires_in}` : ''))
+  }
+
   return {
     mode, setMode, email, setEmail, password, setPassword, newPassword, setNewPassword,
     confirmPassword, setConfirmPassword, error, setError, info, setInfo, loading, loginBrand,
-    pendingUser, businessName, setBusinessName, businessType, setBusinessType, businessTypes,
+    pendingUser, toLessons, businessName, setBusinessName, businessType, setBusinessType, businessTypes,
     resolveAndLogin, handleSignIn, handleSignUp, handleSetupWorkspace, handleGoogle,
     handleMagicLink, handleResetRequest, handleSetPassword,
     twoStepCode, setTwoStepCode, twoStepSetup, handleTwoStepCode, handleTwoStepSetup, cancelTwoStep,
