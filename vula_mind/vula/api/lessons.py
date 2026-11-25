@@ -187,6 +187,26 @@ async def coaches_month(tenant_id: str, request: Request, month: Optional[str] =
         raise _refuse(exc) from exc
 
 
+@router.get("/{tenant_id}/admin/lessons/{request_id}/customer")
+async def lesson_customer(tenant_id: str, request_id: str) -> dict:
+    """The profile of the customer behind this booking, as far as a coach needs it for the lesson."""
+    from vula.commerce import lesson_customers
+    try:
+        return lesson_customers.for_school(tenant_id, request_id)
+    except lesson_customers.ProfileError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{tenant_id}/admin/lessons/{request_id}/level")
+async def lesson_confirm_level(tenant_id: str, request_id: str, body: dict, request: Request) -> dict:
+    """A coach confirms the customer's level in this lesson's sport, once the lesson is done."""
+    from vula.commerce import lesson_customers
+    try:
+        return lesson_customers.confirm_level(tenant_id, request_id, (body or {}).get("level"), await _who(request, tenant_id))
+    except lesson_customers.ProfileError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/{tenant_id}/admin/lessons/ratings")
 async def lesson_ratings_for_school(tenant_id: str, request: Request) -> dict:
     """Customers' ratings: the school's and each coach's average, and the latest comments.
@@ -308,6 +328,52 @@ async def flow_account(request: Request) -> dict:
     if not uid:
         raise HTTPException(status_code=401, detail="Sign in to see your bookings.")
     return lessons.for_account(uid)
+
+
+async def _signed_in(request: Request) -> dict:
+    """The signed-in customer's own sign-in record, or 401."""
+    from vula.api.master_auth import _verify_jwt
+    token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    user = await _verify_jwt(token) if token else None
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="Sign in to keep a profile.")
+    return user
+
+
+@public.get("/profile")
+async def flow_profile(request: Request) -> dict:
+    """The signed-in customer's own profile, the sports and skills it can hold, and their coaches."""
+    _limit(request, "profile", 30)
+    from vula.commerce import lesson_customers
+    user = await _signed_in(request)
+    meta = user.get("user_metadata") or {}
+    return {"profile": lesson_customers.get(str(user["id"])), "catalog": lesson_customers.catalog(),
+            "coaches": lesson_customers.my_coaches(str(user["id"])),
+            "account_photo": bool(meta.get("avatar_url") or meta.get("picture"))}
+
+
+@public.put("/profile")
+async def flow_profile_save(body: dict, request: Request) -> dict:
+    _limit(request, "profile_save", 12)
+    from vula.commerce import lesson_customers
+    user = await _signed_in(request)
+    meta = user.get("user_metadata") or {}
+    try:
+        return {"profile": lesson_customers.save(str(user["id"]), body or {}, meta.get("avatar_url") or meta.get("picture"))}
+    except lesson_customers.ProfileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@public.delete("/profile")
+async def flow_profile_delete(request: Request) -> dict:
+    """The customer deletes their own profile. Their lesson records stay with the schools."""
+    _limit(request, "profile_save", 12)
+    from vula.commerce import lesson_customers
+    user = await _signed_in(request)
+    try:
+        return {"deleted": lesson_customers.erase(str(user["id"]))}
+    except lesson_customers.ProfileError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @public.get("/directory")

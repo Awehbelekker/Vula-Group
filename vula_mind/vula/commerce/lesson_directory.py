@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 ABOUT_MAX, TOWN_MAX, BIO_MAX, MAX_PROFILES = 160, 40, 300, 20
+MAX_SPOTS = 3
 CACHE_S = 300.0
 _CACHE: Dict[str, Any] = {"at": 0.0, "rows": None}
 _LINK_RE = re.compile(r"https?://|www\.|\b[\w-]+\.(?:co\.za|com|net|org|africa|shop)\b", re.I)
@@ -92,7 +93,31 @@ def clean_profiles(tenant_id: str, raw: Any) -> List[dict]:
         levels = [k for k in lessons.LEVELS if k in (p.get("levels") or [])]
         sports = [k for k in lessons.SPORTS if k in (p.get("sports") or [])]
         out.append({"member_id": mid, "name": team[mid].split(" ")[0], "bio": bio, "photo_url": photo,
-                    "levels": levels, "sports": sports, "shown": p.get("shown") is True})
+                    "levels": levels, "sports": sports, "spots": _clean_spots(team[mid], p.get("spots")),
+                    "shown": p.get("shown") is True})
+    return out
+
+
+def _clean_spots(who: str, raw: Any) -> List[dict]:
+    """A coach's favourite spots (up to three): a name, the position to about 100 m — picked on a
+    map or taken from the phone's GPS — and optionally a photo."""
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_SPOTS:
+        raise _err(f"{who}: add up to {MAX_SPOTS} favourite spots.")
+    out = []
+    for sp in raw:
+        name = _line(sp.get("name"), 40) if isinstance(sp, dict) else ""
+        if len(name) < 2 or _LINK_RE.search(name):
+            raise _err(f"{who}: give each favourite spot a name, like Big Bay.")
+        lat, lng = sp.get("lat"), sp.get("lng")
+        ok = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lat, lng))
+        if not ok or not -90 <= lat <= 90 or not -180 <= lng <= 180:
+            raise _err(f"{who}: {name} needs its place on the map.")
+        photo = _line(sp.get("photo_url"), 500) or None
+        if photo and not _PHOTO_RE.match(photo):
+            raise _err(f"{who}: the photo of {name} must start with https://")
+        out.append({"name": name, "lat": round(float(lat), 3), "lng": round(float(lng), 3), "photo_url": photo})
     return out
 
 
@@ -104,6 +129,7 @@ def public_coaches(tenant_id: str, st: dict) -> List[dict]:
     stars = lesson_ratings.summary(tenant_id)["coaches"]          # customers' stars for each coach
     return [{"name": team[p["member_id"]].split(" ")[0], "bio": p.get("bio") or "", "photo_url": p.get("photo_url"),
              "rating": stars.get(p["member_id"]),
+             "spots": [sp for sp in p.get("spots") or [] if isinstance(sp, dict)],
              "levels": [lessons.LEVELS[k].split(" (")[0] for k in p.get("levels") or [] if k in lessons.LEVELS],
              "sports": list(p.get("sports") or [])}
             for p in st.get("coach_profiles") or []

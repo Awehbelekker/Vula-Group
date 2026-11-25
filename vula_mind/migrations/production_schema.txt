@@ -87,6 +87,7 @@ commerce_tickets: checked_in_at:timestamptz, checked_in_by:text, code:text, crea
 commerce_txn_rules: account_code:text, created_at:timestamptz, hits:int4, id:uuid, last_used:timestamptz, signal:text, signal_type:text, tenant_id:text
 commerce_wa_templates: body_text:text, buttons:jsonb, category:text, created_at:timestamptz, created_by:text, example:jsonb, header_example_url:text, header_type:text, id:uuid, language:text, name:text, param_count:int4, tenant_id:text
 commerce_workers: active:bool, bank_account:text, created_at:timestamptz, default_project:text, id:uuid, id_number:text, name:text, phone:text, rate_cents:int8, rate_period:text, tenant_id:text, type:text, updated_at:timestamptz
+flow_customer_profiles: birth_year:int4, can_swim:bool, emergency_sealed:text, gear:jsonb, medical_sealed:text, name:text, phone:text, photo_url:text, sports:jsonb, updated_at:timestamptz, user_id:uuid
 journal_bank_links: bank_txn_id:uuid, created_at:timestamptz, id:uuid, journal_entry_id:uuid, role:text, tenant_id:text
 journal_entries: bank_txn_id:uuid, created_at:timestamptz, description:text, doc_id:text, entry_date:date, id:uuid, reverses_entry_id:uuid, source_id:text, source_type:text, tenant_id:text, version:int4
 journal_lines: account_id:uuid, bank_account_id:uuid, basis:text, credit_cents:int8, debit_cents:int8, id:uuid, journal_entry_id:uuid, memo:text

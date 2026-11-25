@@ -39,7 +39,10 @@ LEVELS = {"first_timer": "First timer", "beginner": "Beginner (done it once or t
 PARTS = {"morning": "Morning", "midday": "Midday", "afternoon": "Afternoon", "any": "Any time"}
 DURATIONS = {"2h": "2 hours", "4h": "4 hours", "1d": "1 day", "2d": "2 days", "3d": "3 days", "7d": "A week"}
 _DAYS = {"1d": 1, "2d": 2, "3d": 3, "7d": 7}
-SPORTS = ("surf", "sup", "kite", "skate", "other")
+SPORTS = ("surf", "sup", "kite", "windsurf", "wing", "foil", "bodyboard", "kayak", "skate", "other")
+SPORT_NAMES = {"surf": "Surfing", "sup": "Stand-up paddling", "kite": "Kitesurfing", "windsurf": "Windsurfing",
+               "wing": "Wing foiling", "foil": "Foiling", "bodyboard": "Bodyboarding", "kayak": "Kayaking",
+               "skate": "Skating", "other": "Other"}
 DEFAULTS = {"enabled": False, "lessons": [], "hire": [], "spot": None, "form_url": None, "pay_note": None,
             "note": None, "coach_share_bp": None}
 # migration 305's columns: read with a default, written only when they are being changed, so a
@@ -382,6 +385,7 @@ def _out(r: dict) -> dict:
     return {**r, "summary": summary(r), "wanted": f"{day_text(r['wanted_date'])}, {PARTS.get(r.get('wanted_part') or 'any', 'Any time').lower()}",
             "when": when_text(r["starts_at"]) if r.get("starts_at") else None,
             "level_text": LEVELS.get(r.get("level") or ""), "amount_cents": owed,
+            "has_account": bool(r.get("customer_user_id")),          # a signed-in customer: their profile can be read
             "amount": rand(owed) if owed is not None else None}
 
 
@@ -550,6 +554,9 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     if r.get("coach_name") and r["kind"] == "lesson":
         lines.append(f"Your coach is {r['coach_name'].split(' ')[0]}.")
     lines.append(f"Total {r['amount']}." + (f" {st['pay_note']}" if st.get("pay_note") else ""))
+    spot = st.get("spot")
+    if spot:                                          # where to meet, with a map link the phone opens
+        lines.append(f"We meet at {spot['name']}: https://maps.google.com/?q={spot['lat']},{spot['lng']}")
     if st.get("form_url"):
         lines.append(f"Please complete our indemnity form before you come: {st['form_url']}")
     lines.append(f"Reference {r['ref']}. To cancel, reply *cancel my lesson*.\n\n— {tenants.display_name(tenant_id)}")

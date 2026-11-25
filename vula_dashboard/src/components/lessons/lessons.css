@@ -26,3 +26,8 @@
 .vls-face { display: grid; place-items: center; background: var(--brand-soft, var(--line)); font-weight: 600; }
 .vls-coach .vtb-main { flex: 1; min-width: 140px; }
 .vls-ticks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
+
+/* a coach's favourite spot in the profile editor */
+.vls-spot { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); min-width: 0; }
+.vls-spot .vls-map { width: 100%; height: 220px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--line); z-index: 0; }
+.vls-spot .vls-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
