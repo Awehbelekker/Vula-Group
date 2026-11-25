@@ -19,9 +19,30 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Vula" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <!-- A partner's own address (flowcrew.co.za and names under it): its name and icon from the first
+         paint, the sign-in held back until it wears the partner's look (4 s at most, so a failed
+         lookup still shows it), and a way through for someone who came for a lesson, not to run a
+         school. Here, not in the app's files, so it works before they load and adds nothing to them. -->
+    <script>
+      if (/(^|\.)flowcrew\.co\.za$/.test(location.hostname)) {
+        document.title = "FlowCrew";
+        document.documentElement.dataset.partner = "flowcrew";
+        document.querySelector("link[rel=icon]").href = "/partners/flowcrew-mark.png";
+      }
+    </script>
+    <style>
+      [data-partner] .vlg:not(:has(.vlg-logo + .vlg-name)) { visibility: hidden; animation: partner-late 0s 4s forwards; }
+      @keyframes partner-late { to { visibility: visible; } }
+      [data-partner] .vlg { padding-bottom: 72px; }
+      .partner-way { display: none; }
+      [data-partner] body:has(.vlg-logo + .vlg-name) .partner-way { display: block; position: fixed; left: 0; right: 0; bottom: 0;
+        padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); text-align: center; font: 600 15px/1.3 Inter, system-ui, sans-serif;
+        color: var(--brand-text); background: var(--surface); border-top: 1px solid var(--line); }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <a class="partner-way" href="/flow/find">Here for a lesson? Find a school</a>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
