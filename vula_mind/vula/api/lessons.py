@@ -60,7 +60,13 @@ def _choices() -> dict:
 
 @router.get("/{tenant_id}/admin/lessons/settings")
 async def get_settings(tenant_id: str) -> dict:
-    return _settings_out(tenant_id, lessons.settings(tenant_id))
+    from vula.commerce import pay_page
+    out = _settings_out(tenant_id, lessons.settings(tenant_id))
+    try:                                               # what a link to pay would offer the customer
+        out["pay"] = {"card": await pay_page.has_gateway(tenant_id), "eft": bool(pay_page.eft_details(tenant_id))}
+    except Exception:  # noqa: BLE001
+        out["pay"] = {"card": False, "eft": False}
+    return out
 
 
 @router.put("/{tenant_id}/admin/lessons/settings")
@@ -128,7 +134,7 @@ async def confirm(tenant_id: str, request_id: str, body: dict, request: Request)
         return {"request": await lessons.confirm(
             tenant_id, request_id, starts_at=b.get("starts_at"), coach_id=b.get("coach_id") or "",
             price_cents=b.get("price_cents"), invoice=bool(b.get("invoice")), by=await _who(request, tenant_id),
-            allow_clash=b.get("allow_clash") is True)}
+            allow_clash=b.get("allow_clash") is True, pay_link=b.get("pay_link") is True)}
     except lessons.LessonError as exc:
         raise _refuse(exc) from exc
 

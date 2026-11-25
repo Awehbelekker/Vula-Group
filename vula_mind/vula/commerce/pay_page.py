@@ -83,6 +83,11 @@ async def notify_paid(tenant_id: str, invoice_id: str, provider: str) -> int:
     inv = await service.get_invoice(tenant_id, invoice_id) or {}
     if inv.get("status") != "paid":
         return 0
+    try:                                               # a lesson's invoice: its customer hears it arrived
+        from vula.commerce import lessons
+        await lessons.invoice_paid(tenant_id, invoice_id)
+    except Exception as exc:
+        logger.debug("lesson payment thanks skipped for %s: %s", invoice_id, exc)
     msg = (f"💰 *{inv.get('customer_name') or 'A customer'}* paid invoice "
            f"*{inv.get('invoice_number')}* — {_r(int(inv.get('total_cents') or 0))} by "
            f"{provider.title()}. It's marked paid and booked.")

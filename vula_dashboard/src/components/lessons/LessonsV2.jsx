@@ -482,10 +482,11 @@ function PoolMine({ tenantId, onClose }) {
   )
 }
 
-function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
+function ConfirmSheet({ tenantId, r, coaches, pay, onClose, onDone }) {
+  const canPay = !!(pay && (pay.card || pay.eft))  // what a link to pay would offer the customer
   const start = r.starts_at ? new Date(r.starts_at) : null
   const [f, setF] = useState({ date: start ? iso(start) : r.wanted_date, time: start ? start.toTimeString().slice(0, 5) : PART_TIME[r.wanted_part] || '09:00',
-    coach_id: r.coach_id || '', price: r.amount_cents === null ? '' : rand(r.amount_cents), invoice: false })
+    coach_id: r.coach_id || '', price: r.amount_cents === null ? '' : rand(r.amount_cents), invoice: false, pay_link: !!(pay && pay.card) && !r.paid })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [hit, setHit] = useState(null)            // what this coach's calendar says about this time
@@ -521,7 +522,7 @@ function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
     if (price === null) { setError('Enter the price in rand.'); return }
     setBusy(true)
     try {
-      const body = { starts_at: `${f.date}T${f.time}:00+02:00`, coach_id: f.coach_id, invoice: f.invoice, allow_clash: anyway }
+      const body = { starts_at: `${f.date}T${f.time}:00+02:00`, coach_id: f.coach_id, invoice: f.invoice, allow_clash: anyway, pay_link: f.pay_link }
       if (price !== r.amount_cents) body.price_cents = price
       const d = await api(`/v1/commerce/${tenantId}/admin/lessons/${r.id}/confirm`, { method: 'POST', body })
       if (d.request.warning) toast(d.request.warning, 'danger')
@@ -550,7 +551,13 @@ function ConfirmSheet({ tenantId, r, coaches, onClose, onDone }) {
           <label className="vtb-check"><input type="checkbox" checked={anyway} onChange={e => setAnyway(e.target.checked)} /><span>Confirm anyway</span></label></>}
         <Field label="Price (rand)" hint={r.quote_cents === null ? 'Your price list has no price for this. Enter what you agreed.' : `Your price list: ${formatMoney(r.quote_cents)}.`}>
           <Input inputMode="decimal" value={f.price} onChange={e => setF({ ...f, price: e.target.value })} /></Field>
-        <label className="vtb-check"><input type="checkbox" checked={f.invoice} onChange={e => setF({ ...f, invoice: e.target.checked })} /><span>Make a draft invoice for it</span></label>
+        {r.paid ? <p className="vtb-sub"><strong>Paid online.</strong> Changing the price here won't change what was paid.</p> : (<>
+          <label className="vtb-check"><input type="checkbox" checked={f.pay_link} disabled={!canPay} onChange={e => setF({ ...f, pay_link: e.target.checked })} /><span>Send a link to pay online</span></label>
+          <p className="vtb-sub">{!canPay ? 'Connect a card gateway in Settings › Payments, or add your bank details in your invoice settings, to send a link.'
+            : pay.card ? 'The customer pays by card on your own pay page. It is marked paid when your gateway confirms it, and you are told.'
+              : 'No card gateway is connected, so the link shows your bank details for an EFT. You mark it paid yourself in Invoices.'}</p>
+          {!f.pay_link && <label className="vtb-check"><input type="checkbox" checked={f.invoice} onChange={e => setF({ ...f, invoice: e.target.checked })} /><span>Make a draft invoice for it</span></label>}
+        </>)}
         {error && <p className="vtb-error" role="alert">{error}</p>}
         <div><Button type="submit" Icon={Check} disabled={busy || (blocked && !anyway)}>{busy ? 'Saving…' : 'Confirm and tell the customer'}</Button></div>
       </form>
@@ -888,6 +895,7 @@ export default function LessonsV2({ tenantId }) {
                       <span className="vtb-sub">{r.when ? `${r.when}${r.coach_name ? ` with ${r.coach_name}` : ''}` : `Asked for ${r.wanted}`}</span>
                       <span className="vtb-sub">{[r.ref, r.level_text, r.customer_phone && `+${r.customer_phone}`, r.notes, r.decline_reason, r.conditions && `Forecast: ${r.conditions.rating}`].filter(Boolean).join(' · ')}</span></span>
                     <span className="vls-amount vula-money">{r.amount_cents === null ? 'No price yet' : formatMoney(r.amount_cents)}</span>
+                    {r.paid ? <StatusChip tone="ok">Paid</StatusChip> : r.pay_url ? <StatusChip tone="warn">Pay link sent</StatusChip> : null}
                     <StatusChip tone={tone}>{label}</StatusChip>
                     <span className="vtb-actions">
                       {r.has_account && ['requested', 'confirmed', 'completed'].includes(r.status) && <Button size="sm" variant="quiet" onClick={() => setOpen({ customer: r })}>{r.status === 'completed' ? 'Profile and level' : 'Profile'}</Button>}
@@ -909,10 +917,10 @@ export default function LessonsV2({ tenantId }) {
       {open?.mine === 'pool' && <PoolMine tenantId={tenantId} onClose={() => setOpen(null)} />}
       {open?.mine === 'profile' && <MyProfile tenantId={tenantId} onClose={() => setOpen(null)} />}
       {open?.customer && <CustomerSheet tenantId={tenantId} r={open.customer} levels={conf.levels} onClose={() => setOpen(null)} />}
-      {open === 'directory' && <DirectorySheet tenantId={tenantId} conf={conf} team={data.coaches || []} onClose={() => setOpen(null)} onSaved={(d) => { setConf(d); setOpen(null) }} />}
-      {open === 'settings' && <SettingsSheet tenantId={tenantId} st={st} onClose={() => setOpen(null)} onSaved={(d) => { setConf(d); setOpen(null); load() }} />}
+      {open === 'directory' && <DirectorySheet tenantId={tenantId} conf={conf} team={data.coaches || []} onClose={() => setOpen(null)} onSaved={(d) => { setConf({ ...d, pay: conf.pay }); setOpen(null) }} />}
+      {open === 'settings' && <SettingsSheet tenantId={tenantId} st={st} onClose={() => setOpen(null)} onSaved={(d) => { setConf({ ...d, pay: conf.pay }); setOpen(null); load() }} />}
       {open === 'add' && <AddSheet tenantId={tenantId} st={st} onClose={() => setOpen(null)} onDone={() => { setOpen(null); load() }} />}
-      {open?.confirm && <ConfirmSheet tenantId={tenantId} r={open.confirm} coaches={data.coaches} onClose={() => setOpen(null)} onDone={() => { setOpen(null); load() }} />}
+      {open?.confirm && <ConfirmSheet tenantId={tenantId} r={open.confirm} coaches={data.coaches} pay={conf.pay} onClose={() => setOpen(null)} onDone={() => { setOpen(null); load() }} />}
     </div>
   )
 }

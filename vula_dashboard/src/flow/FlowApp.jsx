@@ -311,8 +311,9 @@ function Mine({ shop, info, fresh, go, acct, onSignedOut, onLevels }) {
           <h3>{r.summary}</h3>
           <p className="fc-sub">{r.when ? `${r.when}${r.coach ? ` with ${r.coach}` : ""}` : `Asked for ${r.wanted}`} · {r.ref}</p>
           {r.decline_reason && <p className="fc-note">{r.decline_reason}</p>}
-          {r.amount && <div className="fc-total"><span>Total</span><span>{rand(r.amount_cents)}</span></div>}
-          {r.status === "confirmed" && info.pay_note && <p className="fc-sub">{info.pay_note}</p>}
+          {r.amount && <div className="fc-total"><span>Total</span><span>{rand(r.amount_cents)}{r.paid ? " · Paid" : ""}</span></div>}
+          {r.pay_url && <a className="fc-btn fc-btn-link" href={r.pay_url} target="_blank" rel="noreferrer">Pay {rand(r.amount_cents)} now</a>}
+          {r.status === "confirmed" && !r.paid && !r.pay_url && info.pay_note && <p className="fc-sub">{info.pay_note}</p>}
           {r.status === "confirmed" && info.form_url && <a className="fc-link" href={info.form_url} target="_blank" rel="noreferrer">Complete the indemnity form</a>}
           {(r.status === "requested" || r.status === "confirmed") && <button type="button" className="fc-btn danger" style={{ flex: "none" }} onClick={() => cancel(r)}>Cancel</button>}
           {r.status === "confirmed" && r.coach && info.whatsapp && <a className="fc-btn alt fc-btn-link" href={`https://wa.me/${info.whatsapp}?text=${encodeURIComponent(`Hi, a message for ${r.coach} about my ${r.summary.split(",")[0].toLowerCase()} on ${r.when} (${r.ref}): `)}`} target="_blank" rel="noreferrer">Message {r.coach}</a>}
