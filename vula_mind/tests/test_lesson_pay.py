@@ -105,3 +105,90 @@ def test_a_cancelled_or_finished_request_offers_no_link(money):
     lessons.set_status(TID, a["id"], "cancelled")
     assert lessons.list_requests(TID)[0]["pay_url"] is None
     assert lessons.by_tokens(TID, [lessons.token_for(a["id"])])[0]["pay_url"] is None
+
+
+# ── paid in person: the coach charges the lesson with Tap to Pay ───────────────────────────────
+def test_a_coach_sees_their_own_unpaid_lessons_and_never_the_customers_number(money):
+    a, b = _lesson(), _lesson(phone="083 000 1111")
+    run(lessons.confirm(TID, a["id"], starts_at=_at(), coach_id="m1"))
+    run(lessons.confirm(TID, b["id"], starts_at=_at()))                                    # no coach
+    mine = lessons.tap_due(TID, "m1")
+    assert [(x["ref"], x["customer"], x["coach"], x["billed"]) for x in mine] == [(a["ref"], "Thandi", "Shane", False)]
+    assert mine[0]["amount_cents"] == a["amount_cents"] and "082" not in str(mine) and "2782" not in str(mine)
+    assert len(lessons.tap_due(TID)) == 2 and lessons.tap_due(TID, "someone_else") == []   # a manager sees both
+    far = _lesson(phone="084 000 2222")
+    run(lessons.confirm(TID, far["id"], starts_at=_at(5), coach_id="m1"))                  # five days off: not yet
+    assert len(lessons.tap_due(TID, "m1")) == 1
+
+
+def test_a_tap_payment_marks_the_lesson_paid_once_and_cancels_the_unpaid_invoice(money):
+    a = _lesson()
+    done = run(lessons.confirm(TID, a["id"], starts_at=_at(), coach_id="m1", pay_link=True))
+    inv = money.db.rows["commerce_invoices"][0]
+    ready = lessons.tap_ready(TID, a["id"])
+    assert ready["owed_cents"] == done["amount_cents"]
+    lessons.tap_billed(TID, a["id"], "bill-1")
+    assert lessons.tap_due(TID, "m1")[0]["billed"] is True
+    assert run(lessons.tap_paid(TID, {"id": "bill-other", "subtotal_cents": 999999})) is None          # not a lesson's bill
+    assert run(lessons.tap_paid(TID, {"id": "bill-1", "subtotal_cents": done["amount_cents"] - 1})) is None   # less than it costs
+    assert money.db.rows["commerce_lesson_requests"][0].get("paid_at") is None
+    paid = run(lessons.tap_paid(TID, {"id": "bill-1", "subtotal_cents": done["amount_cents"]}))
+    assert paid["paid_at"] and paid["paid_via"] == "tap" and inv["status"] == "cancelled"   # never paid twice
+    row = lessons.list_requests(TID)[0]
+    assert row["paid"] is True and row["pay_url"] is None and row["paid_via"] == "tap"
+    mine = lessons.by_tokens(TID, [lessons.token_for(a["id"])])[0]
+    assert mine["paid"] is True and mine["pay_url"] is None
+    assert lessons.tap_due(TID, "m1") == []
+    assert run(lessons.tap_paid(TID, {"id": "bill-1", "subtotal_cents": done["amount_cents"]})) is None  # a second notice changes nothing
+    with pytest.raises(lessons.LessonError, match="already paid"):
+        lessons.tap_ready(TID, a["id"])
+
+
+def test_a_lesson_paid_online_or_not_confirmed_cant_be_charged_by_tap(money):
+    a = _lesson()
+    with pytest.raises(lessons.LessonError, match="Only a confirmed lesson"):
+        lessons.tap_ready(TID, a["id"])
+    run(lessons.confirm(TID, a["id"], starts_at=_at(), coach_id="m1", pay_link=True))
+    inv = money.db.rows["commerce_invoices"][0]
+    inv.update(status="paid", total_paid_cents=inv["total_cents"])                          # paid online first
+    assert lessons.tap_due(TID, "m1") == []
+    with pytest.raises(lessons.LessonError, match="already paid"):
+        lessons.tap_ready(TID, a["id"])
+    lessons.tap_billed(TID, a["id"], "bill-9")                                            # an old bill paid anyway
+    run(lessons.tap_paid(TID, {"id": "bill-9", "subtotal_cents": inv["total_cents"]}))
+    assert inv["status"] == "paid"                                                        # a paid invoice is never cancelled
+
+
+def test_the_staff_app_charges_the_lessons_own_amount_on_the_coachs_tag(money, monkeypatch):
+    from types import SimpleNamespace as NS
+    from fastapi import HTTPException
+    from vula.tap import api as tap_api, appapi
+    a = _lesson()
+    done = run(lessons.confirm(TID, a["id"], starts_at=_at(), coach_id="m1"))
+    made, logged = [], []
+
+    class Svc:
+        repo = NS(list_tags=lambda tid: [{"id": "tag-m1", "bound_id": "m1", "status": "active", "bound_type": "person"},
+                                         {"id": "tag-t", "bound_id": "m1", "status": "active", "bound_type": "table"}])
+
+        def create_bill(self, **kw):
+            made.append(kw)
+            return {"id": "bill-7", "bill_type": "fixed", "status": "open", "description": kw["description"],
+                    "subtotal_cents": kw["amount_cents"], "staff_id": kw["staff_id"]}
+    monkeypatch.setattr(tap_api, "tenant_enabled", lambda tid: True)
+    monkeypatch.setattr(tap_api, "get_service", lambda: Svc())
+    monkeypatch.setattr(appapi, "_audit", lambda *x, **k: logged.append(k))
+    coach = NS(tenant_id=TID, member_id="m1", device_id="d", role="staff", name="Shane", sees_all=False)
+    other = NS(tenant_id=TID, member_id="m9", device_id="d", role="staff", name="Zed", sees_all=False)
+    assert [x["ref"] for x in run(appapi.lessons_due(coach))["lessons"]] == [a["ref"]]
+    assert run(appapi.lessons_due(other))["lessons"] == []
+    with pytest.raises(HTTPException) as e:
+        run(appapi.lesson_bill(a["id"], other))                                           # not their lesson
+    assert e.value.status_code == 404 and made == []
+    bill = run(appapi.lesson_bill(a["id"], coach))
+    assert made[0]["amount_cents"] == done["amount_cents"] and made[0]["tag_id"] == "tag-m1" and made[0]["staff_id"] == "m1"
+    assert bill["description"] == f"Surf lesson · {a['ref']}" and logged[0]["lesson"] == a["ref"]
+    assert money.db.rows["commerce_lesson_requests"][0]["tap_bill_id"] == "bill-7"
+    owner = NS(tenant_id=TID, member_id="boss", device_id="d", role="owner", name="Zoe", sees_all=True)
+    run(appapi.lesson_bill(a["id"], owner))                                               # a manager: still the coach's tag
+    assert made[1]["staff_id"] == "m1" and made[1]["created_by"] == "boss"

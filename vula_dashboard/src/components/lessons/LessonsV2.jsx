@@ -895,7 +895,7 @@ export default function LessonsV2({ tenantId }) {
                       <span className="vtb-sub">{r.when ? `${r.when}${r.coach_name ? ` with ${r.coach_name}` : ''}` : `Asked for ${r.wanted}`}</span>
                       <span className="vtb-sub">{[r.ref, r.level_text, r.customer_phone && `+${r.customer_phone}`, r.notes, r.decline_reason, r.conditions && `Forecast: ${r.conditions.rating}`].filter(Boolean).join(' · ')}</span></span>
                     <span className="vls-amount vula-money">{r.amount_cents === null ? 'No price yet' : formatMoney(r.amount_cents)}</span>
-                    {r.paid ? <StatusChip tone="ok">Paid</StatusChip> : r.pay_url ? <StatusChip tone="warn">Pay link sent</StatusChip> : null}
+                    {r.paid ? <StatusChip tone="ok">{r.paid_via === 'tap' ? 'Paid by tap' : 'Paid'}</StatusChip> : r.pay_url ? <StatusChip tone="warn">Pay link sent</StatusChip> : null}
                     <StatusChip tone={tone}>{label}</StatusChip>
                     <span className="vtb-actions">
                       {r.has_account && ['requested', 'confirmed', 'completed'].includes(r.status) && <Button size="sm" variant="quiet" onClick={() => setOpen({ customer: r })}>{r.status === 'completed' ? 'Profile and level' : 'Profile'}</Button>}

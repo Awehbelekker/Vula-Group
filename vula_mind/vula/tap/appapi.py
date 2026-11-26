@@ -164,6 +164,58 @@ async def new_bill(body: NewBill, a: Actor = Depends(app_actor)) -> dict:
     return {**_public_bill(bill), "bill_code": bill.get("bill_code")}
 
 
+# ── lessons: the coach charges a confirmed lesson on their own tag ───────────────────────────
+def _personal_tag(svc, tenant_id: str, staff: str) -> Optional[dict]:
+    return next((t for t in svc.repo.list_tags(tenant_id) if t.get("bound_id") == staff
+                 and t.get("status") == "active" and t.get("bound_type") != "table"), None)
+
+
+@router.get("/v1/tap/app/lessons")
+async def lessons_due(a: Actor = Depends(app_actor)) -> dict:
+    """Confirmed lessons that can be charged now: the coach's own; a manager sees them all."""
+    from vula.commerce import lessons
+    try:
+        if not lessons.settings(a.tenant_id).get("enabled"):
+            return {"lessons": []}
+        return {"lessons": lessons.tap_due(a.tenant_id, "" if a.sees_all else a.member_id)}
+    except Exception as exc:  # noqa: BLE001 — the app's other cards still load
+        log.warning("lessons due unreadable for %s: %s", a.tenant_id, exc)
+        return {"lessons": []}
+
+
+@router.post("/v1/tap/app/lessons/{request_id}/bill")
+async def lesson_bill(request_id: str, a: Actor = Depends(app_actor)) -> dict:
+    """Open a bill for what this lesson costs — the amount is the lesson's, never typed. It goes on
+    the lesson's coach's tag when a manager opens it and that coach has one, else the opener's."""
+    from vula.commerce import lessons
+    if not tap_api.tenant_enabled(a.tenant_id):
+        raise HTTPException(status_code=409, detail="Tap to Pay is switched off. Ask your manager.")
+    svc = tap_api.get_service()
+    try:
+        r = lessons.tap_ready(a.tenant_id, request_id)
+    except lessons.LessonError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    if not a.sees_all and r.get("coach_id") != a.member_id:
+        raise HTTPException(status_code=404, detail="That lesson wasn't found.")
+    staff = r["coach_id"] if (a.sees_all and r.get("coach_id") and _personal_tag(svc, a.tenant_id, r["coach_id"])) else a.member_id
+    tag = _personal_tag(svc, a.tenant_id, staff)
+    if not tag:
+        raise HTTPException(status_code=404, detail="You don't have a tag yet. Ask your manager to create one.")
+    try:
+        bill = svc.create_bill(tenant_id=a.tenant_id, tag_id=tag["id"], amount_cents=r["owed_cents"],
+                               description=f"{r.get('item_name') or 'Lesson'} · {r['ref']}", staff_id=staff, created_by=a.member_id)
+    except MoneyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        if "23505" in str(exc) or "duplicate key" in str(exc).lower():
+            raise HTTPException(status_code=409, detail="There is already an open bill on that tag. Cancel it or wait for it to be paid.") from exc
+        raise
+    lessons.tap_billed(a.tenant_id, request_id, bill["id"])
+    _audit(a, "bill.create", bill["id"], amount_cents=r["owed_cents"], description=bill.get("description"),
+           to_customer=False, staff_id=staff, lesson=r["ref"])
+    return _public_bill(bill)
+
+
 @router.post("/v1/tap/app/bills/{bill_id}/cancel")
 async def cancel(bill_id: str, a: Actor = Depends(app_actor)) -> dict:
     b = _own_bill(a, bill_id)
