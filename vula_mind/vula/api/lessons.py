@@ -393,6 +393,20 @@ async def lesson_ratings_for_school(tenant_id: str, request: Request) -> dict:
     return lesson_ratings.for_school(tenant_id)
 
 
+@router.get("/{tenant_id}/admin/lessons/partner-fees")
+async def partner_fees_mine(tenant_id: str, request: Request) -> dict:
+    """The school's own fee to its partner: the rate, this month so far, its statements and how to
+    pay. Owner or manager only."""
+    from vula.api.commerce import _may_apply_stock
+    from vula.commerce import partner_fees
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can see this.")
+    try:
+        return partner_fees.for_school(tenant_id)
+    except lessons.LessonError as exc:
+        raise _refuse(exc) from exc
+
+
 @router.get("/{tenant_id}/admin/lessons/mine")
 async def my_lessons(tenant_id: str, request: Request, month: Optional[str] = None) -> dict:
     """The signed-in coach's own lessons to come and their own month. Who they are comes from the

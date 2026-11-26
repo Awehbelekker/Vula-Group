@@ -91,6 +91,8 @@ commerce_wa_templates: body_text:text, buttons:jsonb, category:text, created_at:
 commerce_workers: active:bool, bank_account:text, created_at:timestamptz, default_project:text, id:uuid, id_number:text, name:text, phone:text, rate_cents:int8, rate_period:text, tenant_id:text, type:text, updated_at:timestamptz
 flow_coach_offers: answered_at:timestamptz, asked_by:text, coach_member_id:text, coach_name:text, coach_tenant_id:text, created_at:timestamptz, fee_bp:int4, id:uuid, minutes:int4, request_id:uuid, share_bp:int4, starts_at:timestamptz, status:text, tenant_id:text
 flow_customer_profiles: birth_year:int4, can_swim:bool, emergency_sealed:text, gear:jsonb, medical_sealed:text, name:text, phone:text, photo_url:text, sports:jsonb, updated_at:timestamptz, user_id:uuid
+flow_partner_fee_months: closed_at:timestamptz, closed_by:text, fee_cents:int8, id:uuid, lessons:int4, month:text, note:text, partner_id:text, settled_at:timestamptz, settled_by:text, status:text, tenant_id:text, value_cents:int8
+flow_partner_settings: overrides:jsonb, partner_id:text, pay_note:text, pool_fee_bp:int4, updated_at:timestamptz, updated_by:text
 flow_pool_coaches: member_id:text, open:bool, tenant_id:text, updated_at:timestamptz
 journal_bank_links: bank_txn_id:uuid, created_at:timestamptz, id:uuid, journal_entry_id:uuid, role:text, tenant_id:text
 journal_entries: bank_txn_id:uuid, created_at:timestamptz, description:text, doc_id:text, entry_date:date, id:uuid, reverses_entry_id:uuid, source_id:text, source_type:text, tenant_id:text, version:int4

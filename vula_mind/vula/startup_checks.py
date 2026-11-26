@@ -237,6 +237,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("311", "commerce_spec_imports", "pages_read"),      # spec sheets read from a catalogue PDF (vula/commerce/spec_import.py)
     ("312", "commerce_product_guides", "show_prices"),    # product guides a business sends its clients (vula/commerce/product_guides.py)
     ("313", "commerce_lesson_requests", "tap_bill_id"),   # a lesson paid by Tap to Pay (vula/commerce/lessons.py)
+    ("314", "flow_partner_fee_months", "fee_cents"),      # a partner's fee, adjustable, with monthly statements (vula/commerce/partner_fees.py)
 ]
 
 
