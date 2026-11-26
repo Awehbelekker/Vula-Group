@@ -959,6 +959,55 @@ async def master_partner_pool_fees(partner: str, month: Optional[str] = None) ->
         raise HTTPException(status_code=exc.status, detail=str(exc))
 
 
+def _partner_refused(exc):
+    from fastapi import HTTPException
+    return HTTPException(status_code=getattr(exc, "status", 400), detail=str(exc))
+
+
+@router.get("/partners/{partner}/fees")
+async def master_partner_fees(partner: str, month: Optional[str] = None) -> dict:
+    """A partner's fee rates and one month school by school: the fee as the lessons stand, the
+    closed statements and what has been paid (vula/commerce/partner_fees.py)."""
+    from vula.commerce import lessons, partner_fees
+    try:
+        m = month or lessons._now().astimezone(lessons.SAST).strftime("%Y-%m")
+        return {"settings": partner_fees.settings(partner), **partner_fees.month(partner, m)}
+    except lessons.LessonError as exc:
+        raise _partner_refused(exc) from exc
+
+
+@router.put("/partners/{partner}/fee-settings")
+async def master_partner_fee_settings(partner: str, body: dict) -> dict:
+    """Change the usual rate, a school's own rate, or how schools pay. A lesson keeps the rate it
+    was asked at, so this reaches only coaches asked from now on."""
+    from vula.commerce import lessons, partner_fees
+    try:
+        return {"settings": partner_fees.save_settings(partner, body or {}, by="master")}
+    except lessons.LessonError as exc:
+        raise _partner_refused(exc) from exc
+
+
+@router.post("/partners/{partner}/fees/{month}/close")
+async def master_partner_fees_close(partner: str, month: str) -> dict:
+    """Freeze a finished month into one statement per school, and tell each school."""
+    from vula.commerce import lessons, partner_fees
+    try:
+        return await partner_fees.close(partner, month, by="master")
+    except lessons.LessonError as exc:
+        raise _partner_refused(exc) from exc
+
+
+@router.post("/partners/{partner}/fees/{month}/{tenant_id}/settle")
+async def master_partner_fees_settle(partner: str, month: str, tenant_id: str, body: dict) -> dict:
+    """Mark a school's closed statement paid, waived (with why) or due again."""
+    from vula.commerce import lessons, partner_fees
+    b = body or {}
+    try:
+        return partner_fees.settle(partner, tenant_id, month, b.get("status"), b.get("note"), by="master")
+    except lessons.LessonError as exc:
+        raise _partner_refused(exc) from exc
+
+
 @router.post("/management-pack/{tenant_id}/send")
 async def master_management_pack_send(tenant_id: str, month: Optional[str] = None) -> dict:
     """Send a month's management accounts to the business's owners now (default: last month), once

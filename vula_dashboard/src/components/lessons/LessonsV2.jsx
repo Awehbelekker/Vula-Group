@@ -37,6 +37,23 @@ const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${Str
 
 /** Each coach's month: lessons done, what they were charged at, and the coach's share where one is
  * set. The owner or a manager sees everyone; a coach sees only their own. Figures are the server's. */
+/** The school's fee to its partner: its rate, this month so far, its statements, how to pay. */
+function PartnerFee({ tenantId }) {
+  const [d, setD] = useState(null)
+  useEffect(() => { api(`/v1/commerce/${tenantId}/admin/lessons/partner-fees`).then(setD).catch(() => {}) }, [tenantId])
+  if (!d || !d.partner || (!d.so_far_cents && d.statements.length === 0)) return null
+  const WORD = { due: ['warn', 'Due'], paid: ['ok', 'Paid'], waived: ['muted', 'Waived'] }
+  return (
+    <Card className="vtb-list">
+      <p className="vtb-sub"><strong>{d.partner}'s fee</strong> on lessons a guest coach taught: {bpToPercent(d.fee_bp)}% of the lesson's price. This month so far: {formatMoney(d.so_far_cents)}.{d.due_cents > 0 ? ` Due now: ${formatMoney(d.due_cents)}.` : ''}</p>
+      {d.statements.length > 0 && <ul>{d.statements.map(s => (
+        <li key={s.month} className="vtb-b"><span className="vtb-main"><strong>{s.month}</strong><span className="vtb-sub">{s.lessons} {s.lessons === 1 ? 'lesson' : 'lessons'} · {formatMoney(s.value_cents)}</span></span>
+          <span className="vls-amount vula-money">{formatMoney(s.fee_cents)}</span><StatusChip tone={(WORD[s.status] || WORD.due)[0]}>{(WORD[s.status] || WORD.due)[1]}</StatusChip></li>))}</ul>}
+      {d.due_cents > 0 && d.pay_note && <p className="vtb-sub"><strong>How to pay:</strong> {d.pay_note}</p>}
+    </Card>
+  )
+}
+
 function Coaches({ tenantId }) {
   const [month, setMonth] = useState(thisMonth())
   const [all, setAll] = useState(null)
@@ -884,7 +901,7 @@ export default function LessonsV2({ tenantId }) {
         <Conditions tenantId={tenantId} />
         <Ratings tenantId={tenantId} />
         <PillTabs label="Requests" tabs={[{ id: 'open', label: `Open${data.waiting ? ` · ${data.waiting} to confirm` : ''}` }, { id: 'calendar', label: 'Calendar' }, { id: 'past', label: 'Earlier' }, { id: 'coaches', label: 'Coaches' }]} active={tab} onChange={setTab} />
-        {tab === 'calendar' ? <Calendar tenantId={tenantId} onMine={(what) => setOpen({ mine: what })} /> : tab === 'coaches' ? <Coaches tenantId={tenantId} /> : rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (
+        {tab === 'calendar' ? <Calendar tenantId={tenantId} onMine={(what) => setOpen({ mine: what })} /> : tab === 'coaches' ? <><Coaches tenantId={tenantId} /><PartnerFee tenantId={tenantId} /></> : rows.length === 0 ? <Card><p className="vtb-sub">{tab === 'open' ? 'Nothing waiting. A new request shows here and the team is told on WhatsApp.' : 'Nothing earlier yet.'}</p></Card> : (
           <Card className="vtb-list">
             <ul>
               {rows.map(r => {
