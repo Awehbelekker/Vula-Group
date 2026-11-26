@@ -607,6 +607,12 @@ class TapService:
             for p in self.repo.team_phones(tenant_id, None):
                 await self._say(tenant_id, p, f"Tap to Pay test payment received. {self.gateway_label(tenant_id)} is set up "
                                               "correctly - you can go live in the dashboard.")
+        if bill and not is_test:                     # a lesson's bill: the lesson is paid (vula/commerce/lessons.py)
+            try:
+                from vula.commerce import lessons
+                await lessons.tap_paid(tenant_id, bill)
+            except Exception as exc:  # noqa: BLE001 — the payment stands
+                logger.warning("lesson hook after tap payment failed (%s): %s", tenant_id, exc)
         if phone:
             await self._send_slip(tenant_id, s, pay, is_test, phone)
         if is_test:
