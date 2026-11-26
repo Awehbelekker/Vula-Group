@@ -49,6 +49,22 @@ def _now() -> str:
 
 # ── Products ─────────────────────────────────────────────────────────────────
 
+# What a business pays and who it buys from: never on a public product route (26 Nov 2026 — the
+# storefront routes handed out whole rows, cost price included). Variants carry cost_cents too.
+PRIVATE_PRODUCT_FIELDS = frozenset({"cost_cents", "unit_cost", "default_supplier_id",
+                                    "reorder_threshold", "reorder_qty"})
+
+
+def public_product(product: dict) -> dict:
+    """A product row as the public may see it: without cost, supplier and reorder fields,
+    on the product and on each of its variants."""
+    out = {k: v for k, v in (product or {}).items() if k not in PRIVATE_PRODUCT_FIELDS}
+    if isinstance(out.get("variants"), list):
+        out["variants"] = [{k: v for k, v in (x or {}).items() if k not in PRIVATE_PRODUCT_FIELDS}
+                           for x in out["variants"]]
+    return out
+
+
 def effective_price_cents(product: dict) -> int:
     """The price actually charged right now: sale price while a sale is active (migration 073),
     else the regular price. Single source of truth — used at cart-add time so sales charge

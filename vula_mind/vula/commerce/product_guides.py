@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 TABLE = "commerce_product_guides"
+AUDIENCES = ("client", "team")
 
 MAX_ROWS = 30
 MAX_BENEFITS = 8
@@ -171,6 +172,11 @@ def _clean_guide(data: dict, tenant_id: str, partial: bool = False) -> Dict[str,
         out["product_ids"] = ids
     if not partial or "show_prices" in data:
         out["show_prices"] = bool(data.get("show_prices"))
+    if not partial or "audience" in data:
+        aud = str(data.get("audience") or "client").strip().lower()
+        if aud not in AUDIENCES:
+            raise GuideError("A guide is for a client or for your team.")
+        out["audience"] = aud
     if partial and "active" in data:
         out["active"] = bool(data.get("active"))
     return out
@@ -184,6 +190,11 @@ def _audit(tenant_id: str, actor: Optional[dict], action: str, **detail: Any) ->
         pass
 
 
+def is_team(guide: dict) -> bool:
+    """A guide for the business's own team (migration 313): shows rival products."""
+    return (guide.get("audience") or "client") == "team"
+
+
 def link(tenant_id: str, token: str) -> str:
     """The guide's address: on the business's own shop address when it has one live, so the
     client sees the business's name, else Vula's."""
@@ -194,7 +205,7 @@ def link(tenant_id: str, token: str) -> str:
 
 def _view(row: dict) -> dict:
     out = {k: row.get(k) for k in ("id", "title", "client_name", "intro", "categories", "product_ids",
-                                   "show_prices", "active", "views", "last_viewed_at", "created_by",
+                                   "show_prices", "audience", "active", "views", "last_viewed_at", "created_by",
                                    "created_at", "updated_at")}
     out["categories"] = list(out.get("categories") or [])
     out["product_ids"] = list(out.get("product_ids") or [])
@@ -220,6 +231,8 @@ def create(tenant_id: str, data: dict, actor: Optional[dict] = None) -> dict:
     row = {"tenant_id": tenant_id, "token": secrets.token_urlsafe(18), "active": True, "views": 0,
            "created_by": (actor or {}).get("email"), "created_at": _now(), "updated_at": _now(),
            **_clean_guide(data or {}, tenant_id)}
+    if row.get("audience") == "client":
+        row.pop("audience")          # the column's default; a database before migration 313 has none
     _db().table(TABLE).insert(row).execute()
     saved = (_db().table(TABLE).select("*").eq("tenant_id", tenant_id).eq("token", row["token"])
              .limit(1).execute().data or [])
@@ -377,12 +390,18 @@ def page_data(guide: dict) -> dict:
     products.sort(key=lambda p: (order.get(p.get("category"), 999), category_label(p.get("category") or "", labels),
                                  int(p.get("sort_order") or 0), str(p.get("name") or "").lower()))
     items = [item(p, bool(guide.get("show_prices")), labels) for p in products]
+    team = is_team(guide)
+    if team:      # rival products: the team's own guide only — a client guide never reads them
+        from vula.commerce import product_rivals
+        rivals = product_rivals.for_products(tenant_id, [i["id"] for i in items])
+        for i in items:
+            i["rivals"] = rivals.get(i["id"], [])
     cats: Dict[str, str] = {}
     for i in items:
         cats.setdefault(i["cat"], i["cat_label"])
     return {"title": guide.get("title") or "Product guide", "client": guide.get("client_name") or "",
             "intro": guide.get("intro") or "", "items": items, "cats": cats,
-            "prices": bool(guide.get("show_prices"))}
+            "prices": bool(guide.get("show_prices")), "team": team}
 
 
 def stock_message(shop: str, product: str, colour: str = "", guide_title: str = "") -> str:

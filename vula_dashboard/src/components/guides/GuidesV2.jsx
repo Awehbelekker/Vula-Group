@@ -18,7 +18,7 @@ const when = (iso) => {
   return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' }) : ''
 }
 
-const EMPTY = { title: '', client_name: '', intro: '', categories: [], product_ids: [], show_prices: false }
+const EMPTY = { title: '', client_name: '', intro: '', categories: [], product_ids: [], show_prices: false, audience: 'client' }
 
 function GuideForm({ g, cats, products, onSave, onClose }) {
   const [f, setF] = useState(g ? { ...EMPTY, ...g } : EMPTY)
@@ -43,7 +43,7 @@ function GuideForm({ g, cats, products, onSave, onClose }) {
     setErr('')
     try {
       await onSave({ title: f.title, client_name: f.client_name, intro: f.intro, categories: f.categories,
-        product_ids: f.product_ids, show_prices: f.show_prices })
+        product_ids: f.product_ids, show_prices: f.show_prices, audience: f.audience || 'client' })
       onClose()
     } catch (x) {
       setErr(x.message)
@@ -61,6 +61,10 @@ function GuideForm({ g, cats, products, onSave, onClose }) {
         <Field label="A line to start with" hint="Optional. No web addresses.">
           <Textarea value={f.intro || ''} onChange={(e) => set('intro', e.target.value)} rows={2} placeholder="e.g. The ranges we discussed for the ground floor and the stairs." />
         </Field>
+        <fieldset className="vgd-set"><legend>Who it's for</legend>
+          <label className="vgd-check"><input type="radio" name="vgd-aud" checked={(f.audience || 'client') === 'client'} onChange={() => set('audience', 'client')} /> A client: no competing products</label>
+          <label className="vgd-check"><input type="radio" name="vgd-aud" checked={f.audience === 'team'} onChange={() => set('audience', 'team')} /> My team (reps): shows the products each one competes with</label>
+        </fieldset>
         <label className="vgd-check"><input type="checkbox" checked={f.show_prices} onChange={(e) => set('show_prices', e.target.checked)} /> Show prices</label>
 
         {cats.length > 0 && (
@@ -99,6 +103,7 @@ function GuideForm({ g, cats, products, onSave, onClose }) {
 }
 
 function shareText(g) {
+  if (g.audience === 'team') return `Our field guide${g.title ? ` — ${g.title}` : ''} (for the team, not for clients): ${g.url}`
   return `${g.client_name ? `Hi ${g.client_name}, here` : 'Here'} is our product guide${g.title ? ` — ${g.title}` : ''}: ${g.url}`
 }
 
@@ -136,6 +141,7 @@ export default function GuidesV2({ tenantId }) {
                 <li key={g.id}><Card className="vgd-item">
                   <div className="vgd-row vgd-top">
                     <h2 className="vgd-h">{g.title}</h2>
+                    {g.audience === 'team' && <StatusChip tone="warn">Team only</StatusChip>}
                     {g.active ? <StatusChip tone="ok">Live</StatusChip> : <StatusChip>Off</StatusChip>}
                   </div>
                   <p className="vgd-sub">
@@ -146,7 +152,7 @@ export default function GuidesV2({ tenantId }) {
                   <div className="vgd-row vgd-acts">
                     <Button size="sm" onClick={() => copy(g)} disabled={!g.active}>Copy link</Button>
                     <Button size="sm" variant="secondary" disabled={!g.active}
-                      onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(shareText(g))}`, '_blank', 'noopener')}>Send on WhatsApp</Button>
+                      onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(shareText(g))}`, '_blank', 'noopener')}>{g.audience === 'team' ? 'Send to a rep on WhatsApp' : 'Send on WhatsApp'}</Button>
                     <Button size="sm" variant="ghost" disabled={!g.active} onClick={() => window.open(g.url, '_blank', 'noopener')}>Open</Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditing(g)}>Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => act(() => s.save(g.id, { active: !g.active }), g.active ? 'Turned off. The link no longer opens.' : 'Live again.')}>{g.active ? 'Turn off' : 'Turn on'}</Button>
