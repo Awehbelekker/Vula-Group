@@ -83,6 +83,26 @@ async def guides_delete(tenant_id: str, guide_id: str, request: Request):
     return {"deleted": guide_id}
 
 
+# ── rival products, for the team only (migration 313, vula/commerce/product_rivals.py) ─────────
+#     GET /{tenant}/admin/products/{id}/rivals      the product's competing products
+#     PUT /{tenant}/admin/products/{id}/rivals      {rivals: [{brand, name, note}] | "Brand: product\n…"}
+
+@router.get("/{tenant_id}/admin/products/{product_id}/rivals")
+async def rivals_get(tenant_id: str, product_id: str):
+    from vula.commerce import product_rivals
+    return {"rivals": product_rivals.for_product(tenant_id, product_id)}
+
+
+@router.put("/{tenant_id}/admin/products/{product_id}/rivals")
+async def rivals_put(tenant_id: str, product_id: str, body: dict, request: Request):
+    from vula.commerce import product_rivals
+    try:
+        return {"rivals": product_rivals.replace(tenant_id, product_id, (body or {}).get("rivals"),
+                                                 actor=_who(request))}
+    except product_rivals.RivalError as exc:
+        raise _bad(exc) from exc
+
+
 # ── spec sheets from a catalogue PDF ──────────────────────────────────────────────────────────
 
 _RUNNING: set = set()      # the background reads, kept referenced until they finish
@@ -247,6 +267,11 @@ select{font:inherit;font-size:15px;width:100%;padding:10px 12px;border-radius:10
 .btn{display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--text);font:inherit;font-size:14px;font-weight:600;text-decoration:none;cursor:pointer;text-align:center}
 .btn.wa{grid-column:1/-1;background:var(--accent);border-color:var(--accent);color:var(--on)}
 .empty{color:var(--muted);text-align:center;padding:48px 0}
+.teamnote{background:#FFF4D6;color:#5A4300;border-bottom:1px solid #E9D48F;padding:10px 16px;font-size:14px;font-weight:600;text-align:center}
+.rivals{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px}
+.rivals b{font-size:12.5px;color:var(--muted);font-weight:600;margin-right:2px}
+.rival{border:1px dashed var(--line);border-radius:999px;padding:3px 9px;background:var(--soft)}
+.rival mark{background:color-mix(in srgb,var(--accent) 25%,transparent);color:inherit;border-radius:3px}
 .toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
 .toast.show{opacity:.95}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -255,6 +280,7 @@ select{font:inherit;font-size:15px;width:100%;padding:10px 12px;border-radius:10
  .grid{grid-template-columns:1fr 1fr}.strip img:not(:first-child){display:none}}
 {{PB_CSS}}
 </style></head><body>
+<div class="teamnote" id="teamnote" hidden>For your team only. Don't send this link to clients: it lists competing products.</div>
 <header class="hero"><div class="wrap">
   <div class="brand">{{LOGO}}<span class="shop">{{SHOP}}</span></div>
   <h1 id="t"></h1><p class="for" id="for"></p><p class="intro" id="intro"></p>
@@ -277,7 +303,9 @@ function toast(m){var t=document.getElementById('toast');t.textContent=m;t.class
 document.getElementById('t').textContent=D.title;
 if(D.client)document.getElementById('for').textContent='Prepared for '+D.client;
 if(D.intro)document.getElementById('intro').textContent=D.intro;
-function hay(i){return [i.name,i.cat_label,i.grade,i.desc].concat(i.benefits,i.colours,i.rows.map(function(r){return r[0]+' '+r[1]})).join(' ').toLowerCase()}
+if(D.team){document.getElementById('teamnote').hidden=false;document.getElementById('q').placeholder='Search, or type a rival product'}
+function rv(r){return [r.brand,r.name].filter(Boolean).join(' ')}
+function hay(i){return [i.name,i.cat_label,i.grade,i.desc].concat(i.benefits,i.colours,i.rows.map(function(r){return r[0]+' '+r[1]}),(i.rivals||[]).map(function(r){return rv(r)+' '+(r.note||'')})).join(' ').toLowerCase()}
 D.items.forEach(function(i){i._h=hay(i)});
 function match(i){if(cat&&i.cat!==cat)return false;var w=q.toLowerCase().split(/\s+/).filter(Boolean);return w.every(function(x){return i._h.indexOf(x)>=0})}
 function msg(i,kind){var c=pick[i.id]||'';
@@ -293,6 +321,10 @@ function card(i){var c=el('article',{'class':'card',id:'p-'+i.id});
   var h=el('div',{'class':'head'});h.appendChild(el('h3',null,i.name));if(i.grade)h.appendChild(el('span',{'class':'grade'},i.grade));b.appendChild(h);
   if(D.prices&&i.cents){var p=el('div',{'class':'price'},R(i.cents)+(i.unit?' / '+i.unit:''));if(i.was_cents)p.appendChild(el('s',null,R(i.was_cents)));b.appendChild(p)}
   if(i.desc)b.appendChild(el('p',{'class':'desc'},i.desc));
+  if(D.team&&i.rivals&&i.rivals.length){var rw=el('div',{'class':'rivals'});rw.appendChild(el('b',null,'Competes with'));
+    var w=q.toLowerCase();i.rivals.forEach(function(r){var t=rv(r)+(r.note?' ('+r.note+')':''),c=el('span',{'class':'rival'});
+      var at=w?t.toLowerCase().indexOf(w):-1;if(at>=0){c.appendChild(document.createTextNode(t.slice(0,at)));c.appendChild(el('mark',null,t.slice(at,at+w.length)));c.appendChild(document.createTextNode(t.slice(at+w.length)))}else{c.textContent=t}
+      rw.appendChild(c)});b.appendChild(rw)}
   if(i.benefits.length){var u=el('ul',{'class':'ben'});i.benefits.forEach(function(x){u.appendChild(el('li',null,x))});b.appendChild(u)}
   if(i.rows.length){var d=el('details');d.appendChild(el('summary',null,'Specifications'));var t=el('table');
     i.rows.forEach(function(r){var tr=el('tr');tr.appendChild(el('td',null,r[0]));tr.appendChild(el('td',null,r[1]));t.appendChild(tr)});

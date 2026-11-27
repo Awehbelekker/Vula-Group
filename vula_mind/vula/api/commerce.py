@@ -60,6 +60,7 @@ async def list_products(
     products = service.annotate_merchandising(tenant_id, products)
     if sort == "popular":
         products.sort(key=lambda p: p.get("orders_count", 0), reverse=True)
+    products = [service.public_product(p) for p in products]
     return {"tenant_id": tenant_id, "products": products, "count": len(products)}
 
 
@@ -83,7 +84,7 @@ async def get_product(tenant_id: str, slug: str):
             ]
         except Exception as exc:
             log.debug("bundle expand skipped: %s", exc)
-    return product
+    return service.public_product(product)
 
 
 @router.get("/{tenant_id}/products/{slug}/related")
