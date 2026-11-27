@@ -5,7 +5,7 @@
  * (PATCH /admin/products/{id} {specs}); the server cleans it and says what it can't keep. Loaded
  * only when a product is opened (lazy), so the app's first load stays the same size.
  *
- * Competes with (26 Nov 2026, migration 314): the rival products this one stands against, one per
+ * Competes with (26 Nov 2026, migration 315): the rival products this one stands against, one per
  * line as "Brand: product". For the team only — shown in a guide made for the team, never in a
  * client's guide, and kept apart from the product (PUT /admin/products/{id}/rivals).
  */

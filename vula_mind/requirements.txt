@@ -70,6 +70,6 @@ pyyaml>=6.0             # evals/harness.py reads its YAML cases (Master panel mo
 orjson>=3.9            # litellm imports orjson on some paths; make it explicit so it's always present
 
 # ── Error monitoring ────────────────────────────────────────────────────────
-sentry-sdk[fastapi]>=2.0.0
+sentry-sdk[fastapi]>=2.0.0,<3  # 3.0 drops transaction_style, send_default_pii and include_local_variables (server.py); move only after checking its privacy options
 segno>=1.6
 pywebpush>=2.0

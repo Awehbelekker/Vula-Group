@@ -1,6 +1,6 @@
--- 314_product_rivals.sql — rival products for reps, and guides only the team opens
--- (vula/commerce/product_rivals.py, 26 Nov 2026). Numbered 314: 313 is
--- the lesson paid by Tap to Pay (313_lesson_paid_by_tap.sql), merged the same day.
+-- 315_product_rivals.sql — rival products for reps, and guides only the team opens
+-- (vula/commerce/product_rivals.py, 26 Nov 2026). Numbered 315: 313 is
+-- the lesson paid by Tap to Pay and 314 FlowCrew's fees, both merged first.
 --
 -- Floornet's field guide lists, for each of its products, the competing products it stands
 -- against ("Tier product from B_ / from Nouwens") so a rep can answer "what's your version of

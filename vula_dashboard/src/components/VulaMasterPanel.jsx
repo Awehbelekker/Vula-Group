@@ -11,6 +11,7 @@ import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import TenantsV2 from './master/TenantsV2'
 import { HealthV2, UsageV2, UsersV2 } from './master/OpsV2'
+import PartnerFeesV2 from './master/PartnerFeesV2'
 import { AuditV2, BenchmarkV2, ConversationsCheckV2, KnowledgeV2, ModelsV2, OnboardV2 } from './master/ToolsV2'
 import TenantDetailV2 from './master/TenantDetailV2'
 import ProspectsV2 from './master/ProspectsV2'
@@ -26,6 +27,7 @@ const SUBTABS = [
   { id: 'health', label: 'Health', Icon: HeartPulse },
   { id: 'usage', label: 'Usage', Icon: Coins },
   { id: 'users', label: 'Users', Icon: UserRound },
+  { id: 'partnerfees', label: 'Partner fees', Icon: Coins },
   { id: 'knowledge', label: 'Knowledge', Icon: Brain },
   { id: 'audit', label: 'Audit', Icon: ScrollText },
   { id: 'models', label: 'Models', Icon: FlaskConical },
@@ -113,6 +115,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
         onAddLogin={(tenantId) => { setLoginPrefill({ tenant_id: tenantId, role: 'owner' }); setTab('users') }} />}
       {tab === 'health' && (<HealthV2 onError={setErr} onViewDetail={openDetail} />)}
       {tab === 'usage' && (<UsageV2 onError={setErr} onViewDetail={openDetail} />)}
+      {tab === 'partnerfees' && (<PartnerFeesV2 onError={setErr} />)}
       {tab === 'users' && (<UsersV2 onError={setErr} prefill={loginPrefill} onConsumePrefill={() => setLoginPrefill(null)} />)}
       {tab === 'knowledge' && (<KnowledgeV2 onError={setErr} onViewDetail={openDetail} />)}
       {tab === 'audit' && (<AuditV2 onError={setErr} onViewDetail={openDetail} />)}

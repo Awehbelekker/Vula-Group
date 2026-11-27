@@ -1,4 +1,4 @@
-"""Rival products for reps (vula/commerce/product_rivals.py, migration 314, 26 Nov 2026): a product's
+"""Rival products for reps (vula/commerce/product_rivals.py, migration 315, 26 Nov 2026): a product's
 competing products are the business's own sales knowledge — a team guide shows them and finds a
 product by a rival's name; a client guide never reads them; the public product routes never carry
 cost, supplier or reorder fields."""

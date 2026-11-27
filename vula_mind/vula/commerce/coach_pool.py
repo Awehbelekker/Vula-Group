@@ -65,9 +65,8 @@ def partner_id(tenant_id: str) -> Optional[str]:
 
 def fee_bp(tenant_id: str) -> Optional[int]:
     """The partner's fee for a lesson taught by a guest coach, or None outside a partner."""
-    from vula.api import tenants
-    pid = partner_id(tenant_id)
-    return int(tenants.PARTNERS[pid].get("pool_fee_bp", FEE_BP)) if pid else None
+    from vula.commerce import partner_fees             # the operator can change it; a school can have its own
+    return partner_fees.rate_for(tenant_id)
 
 
 def _need_partner(tenant_id: str) -> str:
