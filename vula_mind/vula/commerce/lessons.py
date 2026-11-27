@@ -385,6 +385,7 @@ def _out(r: dict) -> dict:
     return {**r, "summary": summary(r), "wanted": f"{day_text(r['wanted_date'])}, {PARTS.get(r.get('wanted_part') or 'any', 'Any time').lower()}",
             "when": when_text(r["starts_at"]) if r.get("starts_at") else None,
             "level_text": LEVELS.get(r.get("level") or ""), "amount_cents": owed,
+            "guest_coach": bool(r.get("guest_coach_id")),              # a coach from another school (coach_pool)
             "has_account": bool(r.get("customer_user_id")),          # a signed-in customer: their profile can be read
             "amount": rand(owed) if owed is not None else None}
 
@@ -480,7 +481,7 @@ def list_requests(tenant_id: str, status: str = "", since: str = "") -> List[dic
         return q
     rows = all_rows(query, cap=5000)
     rows.sort(key=lambda r: (r.get("starts_at") or f"{r['wanted_date']}T99", r.get("created_at") or ""))
-    return [_out(r) for r in rows]
+    return with_payment(rows, [_out(r) for r in rows])
 
 
 def coaches(tenant_id: str) -> List[dict]:
@@ -513,7 +514,7 @@ async def _tell_customer(tenant_id: str, r: dict, text: str, news: str) -> bool:
 
 
 async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: Any = "", price_cents: Any = None,
-                  invoice: bool = False, by: str = "") -> dict:
+                  invoice: bool = False, by: str = "", allow_clash: bool = False, pay_link: bool = False) -> dict:
     """A person at the business gives the request its time (and coach, and price where none was
     listed). One conditional write, read back; then the customer is told."""
     from vula.api import tenants
@@ -528,14 +529,31 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
         start = start.replace(tzinfo=SAST)
     if start < _now() - timedelta(minutes=5):
         raise LessonError("That time has already passed.")
+    warning = ""
     patch: Dict[str, Any] = {"status": "confirmed", "starts_at": start.astimezone(timezone.utc).isoformat(),
                              "confirmed_by": by or None, "confirmed_at": _now().isoformat(),
                              "updated_at": _now().isoformat(), "reminded_at": None, "conditions_at": None}
+    guest = cur.get("guest_coach_id")                 # a coach from another school accepted this lesson
+    if guest and not coach_id:
+        from vula.commerce import coach_pool
+        off = coach_pool.accepted(tenant_id, request_id)
+        if off and coach_pool._start_of(off["starts_at"]) != start:
+            raise LessonError(f"{(cur.get('coach_name') or 'The guest coach').split(' ')[0]} accepted for "
+                              f"{when_text(off['starts_at'])}. Keep that time, or release them first.", 409)
     if coach_id:
         who = next((c for c in coaches(tenant_id) if c["id"] == str(coach_id)), None)
         if not who:
             raise LessonError("That person isn't on the team any more.")
+        if guest:                                     # the school's own coach takes it after all
+            from vula.commerce import coach_pool
+            await coach_pool.release_and_tell(tenant_id, request_id)
         patch.update(coach_id=who["id"], coach_name=who["name"])
+        if cur["kind"] == "lesson":                   # the coach's calendar: not two things at once, not too many people
+            from vula.commerce import lesson_calendar
+            hit = lesson_calendar.check(tenant_id, who["id"], start, cur.get("item_id") or "", int(cur.get("party_size") or 1), request_id)
+            if (hit["clash"] or hit["full"]) and not allow_clash:
+                raise LessonError(f"{hit['clash'] or hit['full']} Choose another time or coach, or confirm anyway.", 409)
+            warning = hit["outside"]
     if price_cents is not None:
         patch["price_cents"] = _cents(price_cents, "The price")
     owed = patch.get("price_cents", cur.get("price_cents") if cur.get("price_cents") is not None else cur.get("quote_cents"))
@@ -546,14 +564,21 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     back = _get(tenant_id, request_id)
     if not done or back["status"] != "confirmed" or back.get("starts_at") is None:
         raise LessonError("The confirmation didn't save. Nothing changed.", 500)
-    if invoice and not back.get("invoice_id"):
+    if pay_link:                                      # the customer gets a link to pay this invoice
+        back = await _invoice_to_pay(tenant_id, back, int(owed))
+    elif invoice and not back.get("invoice_id"):
         back = await _draft_invoice(tenant_id, back, int(owed))
-    r = _out(back)
+    r = with_payment([back], [_out(back)])[0]
     st = settings(tenant_id)
     lines = [f"✅ Confirmed: {r['summary']} on {r['when']}."]
     if r.get("coach_name") and r["kind"] == "lesson":
         lines.append(f"Your coach is {r['coach_name'].split(' ')[0]}.")
-    lines.append(f"Total {r['amount']}." + (f" {st['pay_note']}" if st.get("pay_note") else ""))
+    if r["paid"]:
+        lines.append(f"Total {r['amount']} — paid, thank you.")
+    elif pay_link and r["pay_url"]:
+        lines.append(f"Total {r['amount']}. Pay here: {r['pay_url']}")
+    else:
+        lines.append(f"Total {r['amount']}." + (f" {st['pay_note']}" if st.get("pay_note") else ""))
     spot = st.get("spot")
     if spot:                                          # where to meet, with a map link the phone opens
         lines.append(f"We meet at {spot['name']}: https://maps.google.com/?q={spot['lat']},{spot['lng']}")
@@ -562,12 +587,17 @@ async def confirm(tenant_id: str, request_id: str, *, starts_at: Any, coach_id: 
     lines.append(f"Reference {r['ref']}. To cancel, reply *cancel my lesson*.\n\n— {tenants.display_name(tenant_id)}")
     r["customer_told"] = await _tell_customer(
         tenant_id, r, "\n".join(lines), f"Your {r['item_name'].lower()} is confirmed for {r['when']}. Total {r['amount']}.")
+    if back.get("guest_coach_id") and cur["status"] == "requested":      # the guest coach hears it is on
+        from vula.commerce import coach_pool
+        r["coach_told"] = await coach_pool.tell_guest(tenant_id, back, "confirmed")
+    r["warning"] = warning                            # the coach is away or outside their hours: said, never refused
     return r
 
 
-async def _draft_invoice(tenant_id: str, r: dict, owed: int) -> dict:
-    """A draft invoice of the request's lines. When the agreed price differs from the quote the
-    invoice is one line at the agreed price. A failure leaves the confirmation standing."""
+async def _draft_invoice(tenant_id: str, r: dict, owed: int, status: str = "draft") -> dict:
+    """An invoice of the request's lines: a draft for the record, or `sent` when the customer is
+    given a link to pay it. When the agreed price differs from the quote the invoice is one line
+    at the agreed price. A failure leaves the confirmation standing."""
     try:
         from vula.commerce import service
         lines = r.get("quote_lines") or []
@@ -575,13 +605,182 @@ async def _draft_invoice(tenant_id: str, r: dict, owed: int) -> dict:
             lines = [_line(summary(r), 1, owed)]
         inv = await service.create_invoice(tenant_id, {
             "customer_name": r["customer_name"], "customer_phone": r.get("customer_phone"), "line_items": lines,
-            "prices_include_vat": True, "notes": f"Request {r['ref']}", "status": "draft"})
+            "prices_include_vat": True, "notes": f"Request {r['ref']}", "status": status})
         _db().table("commerce_lesson_requests").update({"invoice_id": inv["id"]}).eq("tenant_id", tenant_id) \
             .eq("id", r["id"]).execute()
         return _get(tenant_id, r["id"])
     except Exception as exc:  # noqa: BLE001
         log.warning("draft invoice for request %s (%s) failed: %s", r.get("ref"), tenant_id, exc)
         return r
+
+
+# ── paying online ──────────────────────────────────────────────────────────────────────────────
+# The request's invoice is what is paid: the customer opens the business's own pay page for it
+# (vula/commerce/pay_page.py — the card button of the gateway the business connected, and its EFT
+# details), and the gateway's signed notification marks the invoice paid. Nothing here records a
+# payment; "paid" is read from the invoice.
+def _invoices(rows: List[dict]) -> Dict[str, dict]:
+    """The invoices behind these requests, by invoice id — each read for its own business."""
+    out: Dict[str, dict] = {}
+    by_tenant: Dict[str, List[str]] = {}
+    for r in rows:
+        if r.get("invoice_id"):
+            by_tenant.setdefault(r["tenant_id"], []).append(str(r["invoice_id"]))
+    for tid, ids in by_tenant.items():
+        try:
+            for n in range(0, len(ids), 100):
+                for inv in (_db().table("commerce_invoices").select("id,status,total_cents,total_paid_cents")
+                            .eq("tenant_id", tid).in_("id", ids[n:n + 100]).execute().data or []):
+                    out[str(inv["id"])] = inv
+        except Exception as exc:  # noqa: BLE001 — the list still shows; it just can't say "paid"
+            log.warning("invoices unreadable for %s: %s", tid, exc)
+    return out
+
+
+def payment_of(r: dict, inv: Optional[dict]) -> dict:
+    """{"paid", "pay_url"} for a request: paid once its invoice is; a link to pay while the
+    invoice was sent (not a draft, not cancelled) and the request still stands."""
+    if r.get("paid_at"):                              # paid in person by Tap to Pay (tap_paid)
+        return {"paid": True, "pay_url": None, "paid_via": r.get("paid_via") or "tap"}
+    if not inv:
+        return {"paid": False, "pay_url": None}
+    paid = inv.get("status") == "paid"
+    can_pay = (not paid and inv.get("status") not in ("draft", "cancelled") and r.get("status") == "confirmed")
+    url = None
+    if can_pay:
+        from vula.commerce import pay_page
+        url = pay_page.page_url(r["tenant_id"], str(inv["id"]))
+    return {"paid": paid, "pay_url": url}
+
+
+def with_payment(rows: List[dict], outs: List[dict]) -> List[dict]:
+    """`outs` (one per row, in order) with each request's `paid` and `pay_url` added."""
+    found = _invoices(rows)
+    return [{**o, **payment_of(r, found.get(str(r.get("invoice_id") or "")))} for r, o in zip(rows, outs)]
+
+
+async def _invoice_to_pay(tenant_id: str, r: dict, owed: int) -> dict:
+    """The request's invoice, ready to be paid at `owed`: a draft is sent, one at another amount
+    that nobody has paid towards is cancelled and made again, a paid one is left alone."""
+    from vula.commerce import service
+    if r.get("invoice_id"):
+        inv = await service.get_invoice(tenant_id, str(r["invoice_id"])) or {}
+        same = int(inv.get("total_cents") or 0) == owed and inv.get("status") not in ("cancelled", None)
+        if inv.get("status") == "paid" or (same and inv.get("status") != "draft"):
+            return r
+        if int(inv.get("total_paid_cents") or 0) > 0:
+            return r                                   # money already against it: a person sorts that out
+        try:
+            if same:
+                await service.update_invoice_status(tenant_id, inv["id"], "sent")
+                return r
+            if inv.get("status") != "cancelled":
+                await service.update_invoice_status(tenant_id, inv["id"], "cancelled")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("invoice %s of request %s not updated: %s", inv.get("id"), r.get("ref"), exc)
+            return r
+    return await _draft_invoice(tenant_id, r, owed, status="sent")
+
+
+# ── paid in person: the coach charges the lesson with Tap to Pay ───────────────────────────────
+# The staff app opens a Tap to Pay bill on the coach's tag for what the lesson costs; the customer
+# taps, pays and can tip. Tap to Pay books that money itself (its own ledger lines and, on the one
+# book, `tap_payment`), so the request's invoice is never paid as well: an unpaid one is cancelled.
+def tap_due(tenant_id: str, coach_id: str = "", now: Optional[datetime] = None) -> List[dict]:
+    """Confirmed lessons and hire that can be charged now — from two days back to two ahead, with
+    a price, not paid yet. `coach_id`: only that coach's (a manager passes none). What the staff
+    app shows: the customer's first name, never their number."""
+    now = now or _now()
+    lo, hi = (now - timedelta(days=2)).isoformat(), (now + timedelta(days=2)).isoformat()
+    q = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id).eq("status", "confirmed")
+         .gte("starts_at", lo).lt("starts_at", hi))
+    if coach_id:
+        q = q.eq("coach_id", coach_id)
+    rows = q.order("starts_at").limit(200).execute().data or []
+    out = []
+    for r, o in zip(rows, with_payment(rows, [_out(r) for r in rows])):
+        if o["paid"] or not o["amount_cents"]:
+            continue
+        out.append({"id": r["id"], "ref": r["ref"], "kind": r["kind"], "item_name": r.get("item_name"), "summary": o["summary"],
+                    "when": o["when"], "customer": (r.get("customer_name") or "").split(" ")[0],
+                    "coach_id": r.get("coach_id"), "coach": (r.get("coach_name") or "").split(" ")[0] or None,
+                    "amount_cents": o["amount_cents"], "billed": bool(r.get("tap_bill_id"))})
+    return out
+
+
+def tap_ready(tenant_id: str, request_id: str) -> dict:
+    """The request, checked before a bill is opened for it. Also proves the request can keep its
+    bill (migration 313) by writing nothing to that column."""
+    cur = _get(tenant_id, request_id)
+    if cur["status"] != "confirmed":
+        raise LessonError("Only a confirmed lesson can be charged.", 409)
+    if with_payment([cur], [_out(cur)])[0]["paid"]:
+        raise LessonError("This lesson is already paid.", 409)
+    owed = cur.get("price_cents") if cur.get("price_cents") is not None else cur.get("quote_cents")
+    if not owed:
+        raise LessonError("This lesson has no price yet. Set it in Lessons first.", 409)
+    try:
+        _db().table("commerce_lesson_requests").update({"tap_bill_id": cur.get("tap_bill_id")}) \
+            .eq("tenant_id", tenant_id).eq("id", request_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lesson can't keep a Tap to Pay bill (%s): %s", tenant_id, exc)
+        raise LessonError("Charging a lesson by tap isn't set up yet. Ask your manager.", 409) from exc
+    return {**cur, "owed_cents": int(owed)}
+
+
+def tap_billed(tenant_id: str, request_id: str, bill_id: str) -> None:
+    _db().table("commerce_lesson_requests").update({"tap_bill_id": bill_id, "updated_at": _now().isoformat()}) \
+        .eq("tenant_id", tenant_id).eq("id", request_id).execute()
+
+
+async def tap_paid(tenant_id: str, bill: dict) -> Optional[dict]:
+    """Tap to Pay confirmed a payment for this bill. If it is a lesson's bill and covers what the
+    lesson costs, the lesson is paid: one conditional write, read back; an invoice nobody has paid
+    towards is cancelled so the lesson can't be paid twice. Never raises."""
+    try:
+        rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id)
+                .eq("tap_bill_id", str(bill["id"])).limit(1).execute().data or [])
+        if not rows:
+            return None
+        r = rows[0]
+        owed = r.get("price_cents") if r.get("price_cents") is not None else r.get("quote_cents")
+        if r.get("paid_at") or int(bill.get("subtotal_cents") or 0) < int(owed or 0):
+            return None                                 # paid already, or the bill was for less than it costs now
+        now = _now().isoformat()
+        (_db().table("commerce_lesson_requests").update({"paid_at": now, "paid_via": "tap", "updated_at": now})
+         .eq("tenant_id", tenant_id).eq("id", r["id"]).is_("paid_at", "null").execute())
+        back = _get(tenant_id, r["id"])
+        if not back.get("paid_at"):
+            log.error("lesson %s (%s) paid by tap but not marked paid", r.get("ref"), tenant_id)
+            return None
+        if back.get("invoice_id"):
+            from vula.commerce import service
+            inv = await service.get_invoice(tenant_id, str(back["invoice_id"])) or {}
+            if inv.get("status") not in ("paid", "cancelled", None) and not int(inv.get("total_paid_cents") or 0):
+                await service.update_invoice_status(tenant_id, inv["id"], "cancelled")
+        return back
+    except Exception as exc:  # noqa: BLE001 — the payment stands whatever happens here
+        log.error("lesson not marked paid after a tap payment (%s): %s", tenant_id, exc)
+        return None
+
+
+async def invoice_paid(tenant_id: str, invoice_id: str) -> bool:
+    """A lesson's invoice was paid online (called once the gateway's notification has marked it):
+    the customer hears their payment arrived. Once per invoice."""
+    try:
+        rows = (_db().table("commerce_lesson_requests").select("*").eq("tenant_id", tenant_id)
+                .eq("invoice_id", invoice_id).limit(1).execute().data or [])
+        if not rows or rows[0].get("status") != "confirmed" or not rows[0].get("customer_phone"):
+            return False
+        from vula.api import tenants
+        from vula.api.whatsapp import _send_reply
+        r = _out(rows[0])
+        text = (f"💳 Payment received for {r['summary']} on {r['when']} — thank you. See you there.\n\n"
+                f"Reference {r['ref']}.\n\n— {tenants.display_name(tenant_id)}")
+        return bool(await _send_reply(r["customer_phone"], text, tenant_id=tenant_id, idem_key=f"lesson_paid:{invoice_id}"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lesson payment thanks not sent (%s): %s", tenant_id, exc)
+        return False
 
 
 async def decline(tenant_id: str, request_id: str, reason: Any, by: str = "") -> dict:
@@ -601,7 +800,15 @@ async def decline(tenant_id: str, request_id: str, reason: Any, by: str = "") ->
         tenant_id, r, f"Sorry, we can't do {r['summary']} on {day_text(r['wanted_date'])}: {why}\n\n"
                       f"Reply *lesson* to ask for another day.\n\n— {tenants.display_name(tenant_id)}",
         f"Sorry, we can't do your request for {day_text(r['wanted_date'])}: {why}")
+    await _guest_cancelled(tenant_id, back)
     return r
+
+
+async def _guest_cancelled(tenant_id: str, r: dict) -> None:
+    """A lesson that had a coach from another school was called off: that coach is told."""
+    if r.get("guest_coach_id"):
+        from vula.commerce import coach_pool
+        await coach_pool.tell_guest(tenant_id, r, "cancelled")
 
 
 def set_status(tenant_id: str, request_id: str, status: str) -> dict:
@@ -654,6 +861,7 @@ async def cancel_own(tenant_id: str, phone: str, request_id: str) -> Optional[di
                               idem_key=f"lesson_cancelled:{mine['id']}")
         except Exception as exc:  # noqa: BLE001
             log.warning("cancellation not sent to the team (%s): %s", tenant_id, exc)
+    await _guest_cancelled(tenant_id, mine)
     return out
 
 
@@ -801,9 +1009,10 @@ def _with_rating(rows: List[dict]) -> List[dict]:
     the school marked done that has no rating yet."""
     from vula.commerce import lesson_ratings
     rated = lesson_ratings.rated_ids([str(r["id"]) for r in rows if r.get("status") == "completed"])
-    return [{**_for_customer(r), "rated": str(r["id"]) in rated,
+    outs = [{**_for_customer(r), "rated": str(r["id"]) in rated,
              "can_rate": r.get("kind") == "lesson" and r.get("status") == "completed" and str(r["id"]) not in rated}
             for r in rows]
+    return with_payment(rows, outs)                   # and whether it is paid, or where to pay it
 
 
 def _sport_of(cache: Dict[str, dict]):
@@ -877,6 +1086,7 @@ async def cancel_by_token(tenant_id: str, token: Any) -> Optional[dict]:
                               idem_key=f"lesson_cancelled:{rid}")
         except Exception as exc:  # noqa: BLE001
             log.warning("cancellation not sent to the team (%s): %s", tenant_id, exc)
+    await _guest_cancelled(tenant_id, cur)
     return _for_customer(_get(tenant_id, rid))
 
 
@@ -924,10 +1134,14 @@ def coach_month(tenant_id: str, month: str, only_coach: str = "") -> dict:
              .in_("status", ["confirmed", "completed"]).gte("starts_at", lo).lt("starts_at", hi))
         return q.eq("coach_id", only_coach) if only_coach else q
     by: Dict[str, dict] = {}
+    fees = 0
     for r in all_rows(query, cap=5000):
-        key = r.get("coach_id") or ""
-        c = by.setdefault(key, {"coach_id": key or None, "name": r.get("coach_name") or "No coach set", "done": 0, "to_come": 0,
-                                "people": 0, "value_cents": 0, "share_cents": 0 if bp is not None else None})
+        gid = r.get("guest_coach_id") if not r.get("coach_id") else None      # a coach from another school
+        key = r.get("coach_id") or (f"guest:{r.get('guest_coach_tenant')}:{gid}" if gid else "")
+        c = by.setdefault(key, {"coach_id": (key or None) if not gid else None, "guest": bool(gid),
+                                "name": (r.get("coach_name") or "No coach set") if (key or not gid) else "Guest coach",
+                                "done": 0, "to_come": 0, "people": 0, "value_cents": 0,
+                                "share_cents": 0 if bp is not None else None, "fee_cents": 0 if gid else None})
         if r["status"] != "completed":
             c["to_come"] += 1
             continue
@@ -937,8 +1151,12 @@ def coach_month(tenant_id: str, month: str, only_coach: str = "") -> dict:
         c["value_cents"] += int(owed or 0)
         if bp is not None and key:                       # each lesson's share to the cent, then added up
             c["share_cents"] += share_of(owed or 0, bp)
-    rows = sorted(by.values(), key=lambda c: (c["coach_id"] is None, c["name"].lower()))
-    return {"month": month, "coach_share_bp": bp, "coaches": rows,
+        if gid:                                          # the partner's fee on a lesson a guest coach taught
+            fee = share_of(owed or 0, r.get("pool_fee_bp")) or 0
+            c["fee_cents"] += fee
+            fees += fee
+    rows = sorted(by.values(), key=lambda c: (2 if c["guest"] else 3 if c["coach_id"] is None else 1, c["name"].lower()))
+    return {"month": month, "coach_share_bp": bp, "coaches": rows, "pool_fee_cents": fees,
             "total": {"done": sum(c["done"] for c in rows), "value_cents": sum(c["value_cents"] for c in rows),
                       "share_cents": sum(c["share_cents"] or 0 for c in rows) if bp is not None else None}}
 

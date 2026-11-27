@@ -114,6 +114,7 @@ from vula.api.couriers import router as couriers_router, webhook_router as couri
 from vula.api.till import router as till_router
 from vula.api.tables import public as tables_public_router, router as tables_router
 from vula.api.lessons import public as lessons_public_router, router as lessons_router
+from vula.api.product_guides import public as product_guides_public_router, router as product_guides_router
 from vula.api.events import door as events_door_router, public as events_public_router, router as events_router
 from vula.api.woocommerce_connect import router as woo_admin_router, webhook_router as woo_webhook_router
 from vula.api.manufacturing import router as manufacturing_router
@@ -1675,6 +1676,13 @@ async def _books_health_loop() -> None:
     await run_forever()
 
 
+async def _books_review_nudge_loop() -> None:
+    """Hourly: from Monday 08:00 SAST, each owner of a business with the switch on gets one note a week
+    of what's left in the books review, until the check is agreed. See vula/books_review_nudge.py."""
+    from vula.books_review_nudge import run_forever
+    await run_forever()
+
+
 async def _management_pack_loop() -> None:
     """Hourly: from 08:00 SAST on the 5th, last month's management accounts to the owners of every
     business with the switch on, once each. See vula/management_send.py."""
@@ -1881,6 +1889,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_lesson_reminders_loop()))
     # Last month's management accounts to the owners, around the 5th (2026-11-23).
     _scheduled_job_tasks.append(_asyncio.create_task(_management_pack_loop()))
+    # What's left in the books review, to the owners each Monday until it's agreed (2026-11-25).
+    _scheduled_job_tasks.append(_asyncio.create_task(_books_review_nudge_loop()))
     # Prices learned before migration 284 → incl/excl VAT from their documents (2026-11-16).
     _scheduled_job_tasks.append(_asyncio.create_task(_price_vat_backfill_on_boot()))
     # Right answers from each business's own records, after every deploy (2026-11-16).
@@ -2418,6 +2428,8 @@ app.include_router(tables_router, prefix="/v1/commerce")          # /{tenant}/ad
 app.include_router(lessons_router, prefix="/v1/commerce")         # /{tenant}/admin/lessons — tenant-guarded
 app.include_router(lessons_public_router, prefix="/v1/flow")      # the customer app: no login, a signed token per request
 app.include_router(tables_public_router)                           # /book/{tenant} — the public booking page
+app.include_router(product_guides_router, prefix="/v1/commerce")  # /{tenant}/admin/product-guides — tenant-guarded
+app.include_router(product_guides_public_router)                   # /guide/{token} — the secret link is the only way in
 app.include_router(couriers_webhook_router, prefix="/v1/couriers")  # the courier's tracking news — secret address, re-read from the courier
 from vula.api.buying_api import router as buying_router  # noqa: E402
 app.include_router(buying_router, prefix="/v1/commerce")          # /{tenant}/admin/buying — tenant-guarded

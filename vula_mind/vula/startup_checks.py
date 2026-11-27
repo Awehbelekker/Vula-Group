@@ -230,10 +230,16 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("300", "kb_table_orders", "bill_id"),               # service at the table (vula/tap/tableside.py)
     ("301", "kb_shifts", "member_id"),                   # shifts and availability (vula/tap/shifts.py)
     ("302", "commerce_product_variants", "image_url"),   # a photo per colour (vula/commerce/product_variants.py)
-    ("310", "commerce_shipments", "request_id"),          # a parcel with no order (vula/commerce/shipping.py)
     ("307", "kb_staff_targets", "cents"),                # a team member's own target (vula/tap/scoreboard.py)
     ("308", "commerce_lesson_ratings", "stars"),         # a customer rates a finished lesson (vula/commerce/lesson_ratings.py)
     ("309", "flow_customer_profiles", "sports"),          # a customer's own profile (vula/commerce/lesson_customers.py)
+    ("310", "flow_coach_offers", "fee_bp"),               # a coach from another school (vula/commerce/coach_pool.py)
+    ("311", "commerce_spec_imports", "pages_read"),      # spec sheets read from a catalogue PDF (vula/commerce/spec_import.py)
+    ("312", "commerce_product_guides", "show_prices"),    # product guides a business sends its clients (vula/commerce/product_guides.py)
+    ("313", "commerce_lesson_requests", "tap_bill_id"),   # a lesson paid by Tap to Pay (vula/commerce/lessons.py)
+    ("314", "flow_partner_fee_months", "fee_cents"),      # a partner's fee, adjustable, with monthly statements (vula/commerce/partner_fees.py)
+    ("315", "commerce_product_rivals", "brand"),          # rival products for reps (vula/commerce/product_rivals.py)
+    ("316", "commerce_shipments", "request_id"),          # a parcel with no order (vula/commerce/shipping.py)
 ]
 
 

@@ -312,4 +312,29 @@ test.describe("books review", () => {
     await page.getByRole("button", { name: "Open the comparison for FNB …7663 Aug.pdf" }).click();
     await page.getByText("40 lines already right").waitFor();
   });
+
+  test("every waiting statement is checked again and applied in one go, after the totals are shown", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await page.getByRole("tab", { name: /^Statements/ }).click();
+    const bodies = [];
+    page.on("request", (r) => { if (r.url().endsWith("/statements/apply-all")) bodies.push(r.postDataJSON()); });
+    await page.getByRole("button", { name: "Check again and apply all" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("3 lines put back, 12 lines added, 1 line set aside, 4 lines tagged with their account");
+    await expect(dialog).toContainText("1 statement stays for you to look at");
+    await expect(dialog).toContainText("1 line is tied to an invoice, bill or worker");
+    expect(bodies).toEqual([{ confirm: false }]);                  // the preview changes nothing
+    await dialog.getByRole("button", { name: "Apply them" }).click();
+    await page.getByRole("list", { name: "Statements left for you" }).getByText("Before the books start").waitFor();
+    expect(bodies).toEqual([{ confirm: false }, { confirm: true }]);
+  });
+
+  test("a payee's lines are kept or filed as suggested in one tap", async ({ page }) => {
+    await openScreen(page, SCREEN(), { viewport: VIEWPORTS.desktop, theme: "light" });
+    await page.getByRole("tab", { name: /^Bank lines/ }).click();
+    const sent = page.waitForRequest((r) => r.url().endsWith("/bank/transactions/bulk-categorize"));
+    await page.getByRole("button", { name: /^File FNB bank charges as / }).click();       // no dialog: one tap
+    expect((await sent).postDataJSON()).toEqual({ txn_ids: ["bc1", "bc2"], account_code: "bank_charges" });
+    await expect(page.getByRole("button", { name: /^Keep FNB App Payment To Skipp Rubble Removal as / })).toBeVisible();
+  });
 });

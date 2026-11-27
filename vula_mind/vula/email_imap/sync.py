@@ -987,7 +987,11 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
                                          summary=f"Private bank statement, account ending {str(rec.get('bank_account'))[-4:]}",
                                          source="email")
                 return
-            logger.info("bank statement auto-reconciled (%s): %s", tenant_id, rec)
+            if rec.get("compared"):
+                logger.info("bank statement compared for the books review (%s): check %s", tenant_id,
+                            rec.get("check_id"))
+            else:
+                logger.info("bank statement auto-reconciled (%s): %s", tenant_id, rec)
             # Ask the owner to finish the ones Vula wasn't sure about (one nudge per statement).
             to_review = int(rec.get("needs_input", 0)) + int(rec.get("unmatched_credits", 0))
             if not rec.get("error") and to_review > 0 and not quiet:

@@ -337,3 +337,80 @@ async def run_forever() -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("statement backfill pass failed: %s", exc)
         await asyncio.sleep(600)
+
+
+# ── which days have no bank statement on file (25 Nov 2026, Ian: "let tenants know if something is
+# missing") ─────────────────────────────────────────────────────────────────────────────────────
+# Per account, from the first day it shows up (its earliest bank line or statement) to yesterday, the
+# days no official statement covers. A lone Saturday or Sunday between two statements isn't a gap (a
+# weekly statement runs Monday to Friday or Saturday). Told to the business when a statement comes in
+# on WhatsApp during a books review, and in the weekly books-review note.
+
+def missing(tenant_id: str, today: Optional[date] = None, official_only: bool = True) -> List[Dict[str, Any]]:
+    """[{account, last4, ranges: [(from, to)]}] — the days per account with no statement on file."""
+    from datetime import timedelta
+    today = today or date.today()
+    end = today - timedelta(days=1)
+    try:     # nothing before the business's books start (DIGG: …7663's 2025 statements)
+        from vula.commerce import ledger_v2
+        from vula.commerce.management_pack import first_trading_day
+        books_start = first_trading_day(tenant_id, ledger_v2.is_on(tenant_id))
+    except Exception:  # noqa: BLE001
+        books_start = None
+    db = _client()
+    accounts = [a for a in (db.table("commerce_bank_accounts").select("id,account_number,bank,name,private_to")
+                            .eq("tenant_id", tenant_id).execute().data or [])
+                if not a.get("private_to") and a.get("account_number")]
+    docs = (db.table("vula_filed_documents").select("fields,status").eq("tenant_id", tenant_id)
+            .eq("category", CATEGORY).execute().data or [])
+    out = []
+    for a in accounts:
+        spans = []
+        for d in docs:
+            f = d.get("fields") or {}
+            if (f.get("bank_account_id") != a["id"] or d.get("status") == "duplicate"
+                    or (official_only and not f.get("official"))):
+                continue
+            try:
+                spans.append((date.fromisoformat(str(f["period_from"])[:10]), date.fromisoformat(str(f["period_to"])[:10])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        first = (db.table("commerce_bank_transactions").select("txn_date").eq("tenant_id", tenant_id)
+                 .eq("bank_account", a["account_number"]).order("txn_date").limit(1).execute().data or [])
+        starts = [s for s, _e in spans] + ([date.fromisoformat(str(first[0]["txn_date"])[:10])] if first else [])
+        if not starts:
+            continue
+        start = max(min(starts), books_start) if books_start else min(starts)
+        covered = set()
+        for s, e in spans:
+            d = s
+            while d <= e:
+                covered.add(d)
+                d += timedelta(days=1)
+        ranges, run, d = [], None, start
+        while d <= end:
+            if d in covered:
+                if run:
+                    ranges.append(tuple(run))
+                    run = None
+            else:
+                run = [d, d] if run is None else [run[0], d]
+            d += timedelta(days=1)
+        if run:
+            ranges.append(tuple(run))
+        ranges = [(s, e) for s, e in ranges if not (s == e and s.weekday() >= 5)
+                  and not (s.weekday() == 5 and (e - s).days == 1)]       # a lone weekend between statements
+        if ranges:
+            out.append({"account": f"{a.get('name') or a.get('bank') or 'Bank'} {_mask(a['account_number'])}",
+                        "last4": a["account_number"][-4:], "ranges": ranges})
+    return out
+
+
+def ranges_text(ranges: List[tuple]) -> str:
+    """'17 Nov – 24 Nov 2026; 31 Jul 2026' — each gap in words."""
+    def one(s: date, e: date) -> str:
+        if s == e:
+            return f"{s.day} {s.strftime('%b %Y')}"
+        left = f"{s.day} {s.strftime('%b')}" + ("" if s.year == e.year else f" {s.year}")
+        return f"{left} – {e.day} {e.strftime('%b %Y')}"
+    return "; ".join(one(s, e) for s, e in ranges)

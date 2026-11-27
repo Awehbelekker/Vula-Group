@@ -1434,11 +1434,11 @@ export const booksReview = {
         { id: "inv-102", number: "MD-INV-0102", customer: "Atlantis Seafood Distributors", date: "2026-09-15", owed_cents: 575000, status: "draft", draft: true, already_paid: false }] }] }] }],
   refile: [
     { key: "skipp rubble|out|one_word_rule", payee: "skipp rubble", label: "FNB App Payment To Skipp Rubble Removal",
-      direction: "out", why: "one_word_rule", why_text: "Filed by an old one-word rule, not by who was paid", suggested: null,
+      direction: "out", why: "one_word_rule", why_text: "Filed by an old one-word rule, not by who was paid", suggested: null, keep: true, current: "casual_labour",
       count: 8, cents: 2990000, accounts: [{ code: "casual_labour", lines: 8 }], ids: ["sk1", "sk2", "sk3", "sk4", "sk5", "sk6", "sk7", "sk8"],
       lines: [brLine("sk1", "2026-07-28", "FNB App Payment To Skipp Rubble Removal", 320000, "out", { account_code: "casual_labour", categorized_by: "learned" })] },
     { key: "bank charges|out|bank_charge", payee: "bank charges", label: "FNB bank charges", direction: "out", why: "bank_charge",
-      why_text: "A bank charge filed as something else", suggested: "bank_charges", count: 2, cents: 4700,
+      why_text: "A bank charge filed as something else", suggested: "bank_charges", keep: false, current: null, count: 2, cents: 4700,
       accounts: [{ code: "casual_labour", lines: 2 }], ids: ["bc1", "bc2"],
       lines: [brLine("bc1", "2026-07-31", "FNB bank charges", 3500, "out", { account_code: "casual_labour", categorized_by: "learned" })] }],
   in_transit: [{ kind: "bill", id: "bill-35", label: "DIG-INV-00035", date: "2026-06-23", recorded_cents: -4993381, bank_cents: 0,
@@ -1679,4 +1679,17 @@ export const financialPosition = {
     lines_on_no_account: 0 },
   owed_to_you_cents: 50000, you_owe_cents: 40000, sales_month_cents: 120000, profit_month_cents: 45000,
   vat_month_cents: null,
+};
+
+
+// 25 Nov 2026: Books review › Statements › Check again and apply all — made up
+export const booksApplyAll = {
+  totals: { already_right: 140, restore: 3, add: 12, set_aside: 1, tagged: 4, review: 1 },
+  applied: 1, left: 1, failed: 0,
+  statements: [
+    { account: "…5678", from: "2025-11-01", to: "2025-11-30", copies: 1, status: "left",
+      why: "Before the books start (2026-01-02) — left for a person." },
+    { account: "…5678", from: "2026-09-01", to: "2026-09-30", copies: 2, status: "would_apply",
+      counts: { already_right: 140, restore: 3, add: 12, set_aside: 1, tagged: 4, review: 1 } },
+  ],
 };

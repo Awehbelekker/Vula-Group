@@ -22,7 +22,7 @@ export const NAV_ICONS = {
   // merchant
   overview: House, inbox: Inbox, today: CalendarCheck, activity: Activity,
   "assistant-hub": MessageSquare, assistant: MessageSquare, agentlog: BrainCircuit, automations: Zap, flows: Route,
-  sell: Store, orders: Package, till: Calculator, events: Ticket, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag, reviews: Star, salesreports: TrendingUp,
+  sell: Store, orders: Package, till: Calculator, events: Ticket, products: ShoppingBag, stock: Boxes, costing: Factory, discounts: Tag, guides: BookOpen, reviews: Star, salesreports: TrendingUp,
   subscriptions: Repeat, delivery: Bike, bookings: CalendarDays, shifts: CalendarCheck, tables: UtensilsCrossed, lessons: Waves, specials: Sparkles, listings: Building2, suppliers: Truck, import: Download,
   money: Wallet, invoices: ReceiptText, expenses: Receipt, bank: Landmark, books: BookOpen, management: ChartPie, booksreview: ClipboardCheck,
   payments: CreditCard, taptopay: Smartphone, budget: Target, scanner: ScanLine, finances: Banknote,
@@ -84,6 +84,7 @@ export const MERCHANT_GROUPS = [
       { id: "stock", icon: "📊", label: "Stock" },
       { id: "costing", icon: "🏭", label: "Costing" },
       { id: "discounts", icon: "🏷️", label: "Discounts" },
+      { id: "guides", icon: "📘", label: "Product guides" },
       { id: "reviews", icon: "⭐", label: "Reviews" },
       { id: "salesreports", icon: "📈", label: "Sales reports" },
       { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
@@ -257,6 +258,7 @@ const MERCHANT_MODMAP = {
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft',
   tradecosting: 'estimating',  // Costing by trade — also needs its switch (MERCHANT_FEATUREMAP)
   discounts: 'products',
+  guides: 'products',       // product guides a business sends its clients (Sell › Product guides)
   reviews: 'orders',        // ratings customers give their delivered orders on WhatsApp
   till: 'orders',           // selling over the counter (Sell › Till) makes the same orders
   events: 'orders',         // event tickets (Sell › Events) are sold as orders too

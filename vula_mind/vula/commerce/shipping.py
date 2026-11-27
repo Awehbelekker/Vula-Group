@@ -454,7 +454,7 @@ async def _place(tenant_id: str, p: dict, *, service_code: str, expected_cents: 
             return there
         if not row_extra.get("order_id"):
             raise ShippingError("Sending a parcel without an order isn't set up on this database yet "
-                                "(migration 310). Nothing was booked.") from exc
+                                "(migration 316). Nothing was booked.") from exc
         raise
     sid = made[0]["id"]
 
@@ -506,7 +506,7 @@ def _by_request(tenant_id: str, request_id: str) -> Optional[dict]:
     try:
         rows = (_db().table("commerce_shipments").select("*").eq("tenant_id", tenant_id)
                 .eq("request_id", request_id).limit(1).execute().data or [])
-    except Exception:  # noqa: BLE001 — before migration 310 there is no such column
+    except Exception:  # noqa: BLE001 — before migration 316 there is no such column
         return None
     return rows[0] if rows else None
 
@@ -517,7 +517,7 @@ def parcels(tenant_id: str, limit: int = 30) -> List[dict]:
         rows = (_db().table("commerce_shipments").select("*").eq("tenant_id", tenant_id)
                 .is_("order_id", "null").order("created_at", desc=True).limit(min(int(limit), 100)).execute().data or [])
     except Exception as exc:  # noqa: BLE001
-        log.debug("parcels read skipped (run migration 310?): %s", exc)
+        log.debug("parcels read skipped (run migration 316?): %s", exc)
         return []
     return [_public(r) for r in rows]
 

@@ -98,6 +98,38 @@ def clean_profiles(tenant_id: str, raw: Any) -> List[dict]:
     return out
 
 
+OWN_FIELDS = ("bio", "photo_url", "levels", "sports", "spots")
+
+
+def own_profile(tenant_id: str, member_id: str) -> dict:
+    """A coach's own profile as they may edit it. Whether customers see it stays the school's call."""
+    from vula.commerce import lessons
+    p = next((x for x in lessons.settings(tenant_id).get("coach_profiles") or []
+              if isinstance(x, dict) and x.get("member_id") == member_id), {})
+    return {"bio": p.get("bio") or "", "photo_url": p.get("photo_url"), "levels": list(p.get("levels") or []),
+            "sports": list(p.get("sports") or []), "spots": list(p.get("spots") or []), "shown": p.get("shown") is True}
+
+
+def save_own(tenant_id: str, member_id: str, data: dict) -> dict:
+    """A coach saves their own profile: their words, photo, what they teach and their favourite
+    spots — only their own entry, and never whether it is shown (the owner or a manager decides
+    that). The same rules as when the school saves it; read back."""
+    from vula.commerce import lessons
+    d = data if isinstance(data, dict) else {}
+    if member_id not in {c["id"] for c in lessons.coaches(tenant_id)}:
+        raise _err("You aren't on this school's team.")
+    profiles = [dict(x) for x in lessons.settings(tenant_id).get("coach_profiles") or [] if isinstance(x, dict)]
+    mine = next((x for x in profiles if x.get("member_id") == member_id), None)
+    if mine is None:
+        mine = {"member_id": member_id, "shown": False}
+        profiles.append(mine)
+    for k in OWN_FIELDS:
+        if k in d:
+            mine[k] = d[k]
+    lessons.save_settings(tenant_id, {"coach_profiles": profiles})
+    return own_profile(tenant_id, member_id)
+
+
 def _clean_spots(who: str, raw: Any) -> List[dict]:
     """A coach's favourite spots (up to three): a name, the position to about 100 m — picked on a
     map or taken from the phone's GPS — and optionally a photo."""

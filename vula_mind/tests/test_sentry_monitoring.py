@@ -48,3 +48,22 @@ def test_note_scheduler_lock_flap_captures_message_with_context():
 def test_note_scheduler_lock_flap_swallows_import_error():
     with patch.dict(sys.modules, {"sentry_sdk": None}):
         note_scheduler_lock_flap("host-123", "a", "b")  # must not raise
+
+
+def test_installed_sentry_accepts_the_options_server_py_uses():
+    """26 Nov 2026: requirements allowed any version from 2.0, the image picked up sentry-sdk 3.0.0,
+    which no longer takes `transaction_style` (nor `send_default_pii` / `include_local_variables`,
+    the options that keep message text out of error reports), and Sentry quietly stopped starting
+    in production. The installed version must take every option server.py passes."""
+    import inspect
+
+    import sentry_sdk.consts
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+
+    StarletteIntegration(transaction_style="endpoint")
+    FastApiIntegration(transaction_style="endpoint")
+    options = inspect.signature(sentry_sdk.consts.ClientConstructor.__init__).parameters
+    for name in ("send_default_pii", "include_local_variables", "max_request_body_size",
+                 "traces_sample_rate", "before_send"):
+        assert name in options, name

@@ -165,6 +165,17 @@ def run(tenant_id: str, person: str) -> Dict[str, Any]:
     return rep
 
 
+def under_review(tenant_id: str) -> bool:
+    """The business's books are being checked: a books check has been run and the latest isn't
+    signed off yet (25 Nov 2026). While they are, a bank statement that arrives on WhatsApp or by
+    email is compared, never written straight into the bank lines (bank_rec.ingest_statement)."""
+    try:
+        audit = latest(tenant_id)
+    except Exception:  # noqa: BLE001 — unreadable: treat as not under review (the old path)
+        return False
+    return bool(audit) and not audit.get("signed_off_by")
+
+
 def latest(tenant_id: str) -> Optional[Dict[str, Any]]:
     rows = (_client().table("vula_books_audits").select("*").eq("tenant_id", tenant_id)
             .order("created_at", desc=True).limit(1).execute().data or [])
@@ -248,6 +259,12 @@ def refile_groups(lines: List[Dict[str, Any]], known: set, decided: set) -> List
     out = sorted(groups.values(), key=lambda g: (-g["cents"], g["payee"]))
     for g in out:
         g["label"] = g["lines"][0]["description"] if g["lines"] else g["payee"]
+        # 25 Nov 2026: every line of the payee already on one account → the owner can keep it there in one
+        # tap (filed as their choice, which teaches the payee). Not Vula's suggestion: that account is the
+        # one in doubt, so `suggested` stays empty — the person says it's right.
+        accts = [c for c in g["accounts"] if c]
+        g["keep"] = g["suggested"] is None and len(g["accounts"]) == 1 and len(accts) == 1
+        g["current"] = accts[0] if g["keep"] else None
         g["accounts"] = [{"code": c, "lines": n} for c, n in sorted(g["accounts"].items(), key=lambda x: -x[1])]
     return out
 

@@ -338,3 +338,119 @@ def text_summary(out: Dict[str, Any]) -> str:
             f"{s['restore']} to restore, {s['add']} to add, {s['set_aside']} to set aside, {s['review']} for a "
             f"person's look; {s['tagged']} to tag with the account; {s['other_accounts_rows_left_alone']} rows of "
             "other accounts left alone.")
+
+
+# ── 25 Nov 2026: check every waiting statement again and apply them in one go ──────────────
+# DIGG uploaded 37 official statements on 17–20 Nov and applied 2: each comparison has to be opened
+# and applied on its own, several are the same period uploaded twice, and by now some of their actions
+# are out of date (a line since restored or tied). `apply_all` re-reads each kept official statement,
+# compares it again with the rows as they are now, and applies only what needs no person — restore,
+# add, set aside, tag; anything tied to an invoice, bill, order or worker stays for review. A
+# statement that ends before the business's books start (DIGG's Oct–Dec 2025 …7663) is left alone.
+
+SAFE_KINDS = ("restore", "add", "set_aside", "tag")
+
+
+def _kept_statement(tenant_id: str, check: Dict[str, Any], docs: List[Dict[str, Any]],
+                    accounts: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """The kept official statement behind a comparison: by its file name, else by account and period
+    (the same bytes uploaded again keep the first copy's name)."""
+    for d in docs:
+        if d.get("filename") == check.get("filename") and d.get("file_url"):
+            return d
+    for d in docs:
+        f = d.get("fields") or {}
+        if (accounts.get(str(f.get("bank_account_id"))) == check.get("account_number")
+                and str(f.get("period_from") or "")[:10] == str(check.get("period_from") or "")[:10]
+                and str(f.get("period_to") or "")[:10] == str(check.get("period_to") or "")[:10]
+                and d.get("file_url")):
+            return d
+    return None
+
+
+def apply_all(tenant_id: str, *, person: str, full_access: bool, actor: Optional[dict] = None,
+              preview: bool = True, fetch: Optional[Any] = None) -> Dict[str, Any]:
+    """Every waiting comparison, checked again against the rows as they are now: what each would do
+    (`preview`, writes nothing), or done — the safe actions applied, the old comparison closed."""
+    import tempfile
+    from vula import db_pages
+    from vula.commerce import ledger_v2, statement_files
+    from vula.commerce.management_pack import first_trading_day
+    if not full_access:
+        return {"error": "Only an owner or manager can change the bank lines."}
+    db = _client()
+    waiting = db_pages.all_rows(lambda: db.table("vula_statement_checks")
+                                .select("id,filename,account_number,period_from,period_to,created_at,status")
+                                .eq("tenant_id", tenant_id).eq("status", "proposed"))
+    docs = [d for d in (db.table("vula_filed_documents").select("id,filename,fields,file_url,status")
+                        .eq("tenant_id", tenant_id).eq("category", statement_files.CATEGORY).execute().data or [])
+            if (d.get("fields") or {}).get("official") and d.get("status") != "duplicate"]
+    accounts = {str(a["id"]): a.get("account_number") for a in (db.table("commerce_bank_accounts")
+                .select("id,account_number").eq("tenant_id", tenant_id).execute().data or [])}
+    first = first_trading_day(tenant_id, ledger_v2.is_on(tenant_id))
+    if fetch is None:
+        from vula.storage_links import fetch_sync as fetch
+    groups: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
+    for c in waiting:
+        groups[(c.get("account_number") or "", str(c.get("period_from"))[:10], str(c.get("period_to"))[:10])].append(c)
+    out: List[Dict[str, Any]] = []
+    totals = defaultdict(int)
+    for (acct, frm, to), checks in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        checks.sort(key=lambda c: str(c.get("created_at") or ""), reverse=True)
+        item: Dict[str, Any] = {"account": f"…{acct[-4:]}" if acct else None, "from": frm, "to": to,
+                                "copies": len(checks), "check_ids": [c["id"] for c in checks]}
+        out.append(item)
+        if first and to < first.isoformat():
+            item.update(status="left", why=f"Before the books start ({first.isoformat()}) — left for a person.")
+            continue
+        doc = next((d for d in (_kept_statement(tenant_id, c, docs, accounts) for c in checks) if d), None)
+        if not doc:
+            item.update(status="left", why="The statement file isn't kept — upload it again to check it.")
+            continue
+        try:
+            data = fetch(doc["file_url"])
+        except Exception as exc:  # noqa: BLE001
+            item.update(status="left", why=f"The statement file couldn't be read ({type(exc).__name__}).")
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.pdf"
+            path.write_bytes(data)
+            res = compare(tenant_id, filename=checks[0]["filename"], pdf_path=path,
+                          created_by=person, save=not preview)
+        if res.get("error"):
+            item.update(status="left", why=res["error"])
+            continue
+        safe = [a for a in res["actions"] if a["kind"] in SAFE_KINDS]
+        s = res["summary"]
+        counts = {"already_right": s["already_right"], "restore": s["restore"], "add": s["add"],
+                  "set_aside": s["set_aside"], "tagged": s["tagged"], "review": s["review"]}
+        item.update(counts=counts)
+        for k, v in counts.items():
+            totals[k] += v
+        if preview:
+            item["status"] = "would_apply" if safe else "nothing_to_do"
+            continue
+        applied = apply(tenant_id, res["check_id"], person=person, full_access=True,
+                        accept=[a["id"] for a in safe], actor=actor) if res.get("check_id") else {"ok": False}
+        item["status"] = "applied" if applied.get("ok") else "failed"
+        if not applied.get("ok"):
+            item["why"] = applied.get("error") or "The changes weren't saved."
+            continue
+        now = datetime.now(timezone.utc).isoformat()
+        for c in checks:            # the older comparisons of this statement: done by the fresh one
+            db.table("vula_statement_checks").update({
+                "status": "discarded", "applied_by": person, "applied_at": now,
+                "applied": {"replaced_by": res["check_id"], "why": "checked again and applied"}}) \
+                .eq("tenant_id", tenant_id).eq("id", c["id"]).eq("status", "proposed").execute()
+    result = {"preview": preview, "statements": out, "totals": dict(totals),
+              "applied": sum(1 for i in out if i.get("status") == "applied"),
+              "left": sum(1 for i in out if i.get("status") == "left"),
+              "failed": sum(1 for i in out if i.get("status") == "failed")}
+    if not preview:
+        try:
+            from vula.api.merchant_audit import audit
+            audit(tenant_id, actor, "statement_checks_applied_all", applied=result["applied"], left=result["left"],
+                  failed=result["failed"], totals=result["totals"])
+        except Exception:  # noqa: BLE001
+            pass
+    return result

@@ -60,6 +60,7 @@ async def list_products(
     products = service.annotate_merchandising(tenant_id, products)
     if sort == "popular":
         products.sort(key=lambda p: p.get("orders_count", 0), reverse=True)
+    products = [service.public_product(p) for p in products]
     return {"tenant_id": tenant_id, "products": products, "count": len(products)}
 
 
@@ -83,7 +84,7 @@ async def get_product(tenant_id: str, slug: str):
             ]
         except Exception as exc:
             log.debug("bundle expand skipped: %s", exc)
-    return product
+    return service.public_product(product)
 
 
 @router.get("/{tenant_id}/products/{slug}/related")
@@ -1095,10 +1096,16 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict, requ
                "pricing_mode", "price_per_kg_cents", "min_weight_g", "max_weight_g",
                "reference_weight_g", "catch_source", "fisherman_name", "seo", "status", "options",
                "product_type", "bundle_items", "cooking_tips", "related_ids", "choices",
-               "sku", "barcode", "cost_cents"}
+               "sku", "barcode", "cost_cents", "specs"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    if "specs" in update:                # 310: the spec sheet product guides show, cleaned
+        from vula.commerce import product_guides
+        try:
+            update["specs"] = product_guides.clean_specs(update["specs"])
+        except product_guides.GuideError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     _check_codes(tenant_id, update, product_id=product_id)
     if "choices" in update:              # 267: [{"name", "values"}], cleaned; empty = none
         update["choices"] = service.clean_product_choices(update["choices"]) or None

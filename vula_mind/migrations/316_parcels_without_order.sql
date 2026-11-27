@@ -1,4 +1,4 @@
--- 310_parcels_without_order.sql — send a parcel that belongs to no order (25 Nov 2026).
+-- 316_parcels_without_order.sql — send a parcel that belongs to no order (25 Nov 2026).
 --
 -- Delivery › Couriers › Send a parcel books a courier for something that isn't a sale: a sample,
 -- a return, documents. It is a commerce_shipments row like any other, with no order behind it:

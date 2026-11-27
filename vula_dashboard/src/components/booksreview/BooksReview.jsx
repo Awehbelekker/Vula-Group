@@ -232,6 +232,14 @@ function Lines({ x, r }) {
       { confirmLabel: `File as ${nameOf(code)}` }))) return;
     if (await done(await x.categorise(g.ids, code), "Re-filed.", "That didn't save — try again.")) x.reload();
   }
+  // 25 Nov 2026: the suggested account in one tap — keeping a payee where all its lines already are,
+  // or bank charges as bank charges. Saved as the owner's choice, so Vula remembers the payee.
+  async function refileSuggested(g) {
+    const code = g.keep ? g.current : g.suggested;
+    if (await done(await x.categorise(g.ids, code),
+      `${g.count} line${g.count === 1 ? "" : "s"} for ${g.label} ${g.keep ? "kept as" : "filed as"} ${nameOf(code)}.`,
+      "That didn't save — try again.")) x.reload();
+  }
 
   return (
     <div className="vbr2-stack">
@@ -287,7 +295,8 @@ function Lines({ x, r }) {
         <h3 className="vbr2-h">Filed by an old rule</h3>
         <p className="vbr2-sub">Vula filed these by a single word in the bank's description (like "App" in "FNB App
           Payment"), not by who was paid, and bank charges ended up under other accounts. Pick the right account once
-          per payee; Vula remembers it for their next payment.</p>
+          per payee — or, where every line of a payee is already on one account and that's right, keep it there in one
+          tap. Vula remembers it for their next payment.</p>
         {(r.refile || []).length ? (
           <ul className="vbr2-list">
             {(r.refile || []).map((g) => (
@@ -297,6 +306,10 @@ function Lines({ x, r }) {
                   <br /><span className="vbr2-muted">{g.why_text}. Now under {g.accounts.map((a) => nameOf(a.code)).join(", ")}
                     {g.suggested ? ` — these are ${nameOf(g.suggested).toLowerCase()}` : ""}.</span>
                 </span>
+                {(g.suggested || g.keep) && (
+                  <Button size="sm" onClick={() => refileSuggested(g)}
+                    aria-label={`${g.keep ? "Keep" : "File"} ${g.label} as ${nameOf(g.keep ? g.current : g.suggested)}`}>
+                    {g.keep ? "Keep as" : "File as"} {nameOf(g.keep ? g.current : g.suggested)}</Button>)}
                 <Select aria-label={`Account for ${g.label}`} defaultValue="" onChange={(e) => refile(g, e.target.value)}>
                   <option value="">File them as…</option>
                   {options.filter((a) => !a.directions || a.directions.includes(g.direction))
@@ -536,6 +549,61 @@ const ACTION = {
   tag: "Tag with this account number",
 };
 
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/** Every waiting comparison checked again against the bank lines as they are now, and what needs no
+ *  person applied in one go (25 Nov 2026). Shows what it would do first; anything tied to an invoice,
+ *  bill, order or worker, and statements from before the books start, stay for a person. */
+function ApplyAll({ x }) {
+  const waiting = (x.checks || []).filter((c) => c.status === "proposed").length;
+  const [busy, setBusy] = useState("");
+  const [result, setResult] = useState(null);
+  if (!waiting && !result) return null;
+  async function run() {
+    setBusy("Checking each statement again…");
+    const pre = await x.applyAll(false);
+    if (!pre.ok) { setBusy(""); toast(reason(pre, "Couldn't check the statements — try again."), "danger"); return; }
+    const t = pre.data.totals || {};
+    const changes = (t.restore || 0) + (t.add || 0) + (t.set_aside || 0) + (t.tagged || 0);
+    const sum = [t.restore && plural(t.restore, "line put back", "lines put back"),
+      t.add && plural(t.add, "line added", "lines added"), t.set_aside && plural(t.set_aside, "line set aside", "lines set aside"),
+      t.tagged && plural(t.tagged, "line tagged with its account", "lines tagged with their account")].filter(Boolean).join(", ");
+    setBusy("");
+    const ask = `${plural(pre.data.statements.length, "statement", "statements")} checked again: ${sum || "nothing to change"}.`
+      + (pre.data.left ? ` ${plural(pre.data.left, "statement stays", "statements stay")} for you to look at.` : "")
+      + (t.review ? ` ${plural(t.review, "line is", "lines are")} tied to an invoice, bill or worker and won't be touched.` : "");
+    if (!(await confirmDialog(ask, { confirmLabel: changes ? "Apply them" : "Close the comparisons" }))) return;
+    setBusy("Applying…");
+    const res = await x.applyAll(true);
+    setBusy("");
+    if (!res.ok) { toast(reason(res, "That didn't apply — try again."), "danger"); return; }
+    setResult(res.data);
+    toast(res.data.failed ? `${res.data.failed} didn't save — check again.` : `${plural(res.data.applied, "statement", "statements")} applied.`,
+      res.data.failed ? "warn" : "ok");
+    x.reload();
+  }
+  const left = (result?.statements || []).filter((s) => s.status === "left" || s.status === "failed");
+  return (
+    <Card>
+      <h3 className="vbr2-h">Apply every waiting statement</h3>
+      <p className="vbr2-sub">
+        {waiting ? `${plural(waiting, "comparison is", "comparisons are")} waiting. ` : ""}
+        Vula reads each statement again, compares it with the bank lines as they are now, and applies what needs no
+        decision: lines put back, missing lines added, copies set aside, lines tagged with their account. You see the
+        totals before anything changes.
+      </p>
+      <Button onClick={run} disabled={!!busy || !waiting}>{busy || "Check again and apply all"}</Button>
+      {left.length > 0 && (
+        <ul className="vbr2-list" aria-label="Statements left for you">
+          {left.map((s, i) => (
+            <li key={i} className="vbr2-row vbr2-wrap">
+              <span className="vbr2-text"><b>{s.account || "—"} · {s.from} to {s.to}</b> — {s.why}</span>
+            </li>))}
+        </ul>)}
+    </Card>
+  );
+}
+
 function Statements({ x }) {
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState("");
@@ -602,6 +670,7 @@ function Statements({ x }) {
           </ul>
         )}
       </Card>
+      <ApplyAll x={x} />
       <Card>
         <h3 className="vbr2-h">Comparisons</h3>
         {(x.checks || []).length ? (
@@ -609,7 +678,8 @@ function Statements({ x }) {
             {x.checks.map((c) => (
               <li key={c.id} className="vbr2-row vbr2-wrap">
                 <span className="vbr2-text"><b>{c.filename}</b> · {c.account || "—"} · {c.period_from} to {c.period_to}</span>
-                <StatusChip tone={c.status === "applied" ? "ok" : "warn"}>{c.status === "applied" ? "Applied" : "To review"}</StatusChip>
+                <StatusChip tone={c.status === "proposed" ? "warn" : "ok"}>
+                  {c.status === "applied" ? "Applied" : c.status === "discarded" ? "Checked again" : "To review"}</StatusChip>
                 <Button size="sm" variant="secondary" onClick={() => show(c.id)}>Open</Button>
               </li>
             ))}

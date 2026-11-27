@@ -361,7 +361,10 @@ def test_the_door_link_shows_names_and_hashes_never_codes_phones_or_money(door):
     lst = events.door_list(door.key)
     assert lst["sold"] == 3 and lst["checked_in"] == 0 and lst["event"]["title"] == "Summer Market"
     text = str(lst)
-    assert all(k["code"] not in text for k in door.tickets) and "2782" not in text and "cents" not in text
+    assert all(k["code"] not in text for k in door.tickets) and "cents" not in text
+    # the phone number is looked for outside the random ids and hashes, whose hex can hold "2782" by chance
+    plain = str({**lst, "tickets": [{k: v for k, v in r.items() if k not in ("id", "h")} for r in lst["tickets"]]})
+    assert "2782" not in plain
     assert {r["h"] for r in lst["tickets"]} == {events._code_hash(k["code"]) for k in door.tickets}
     assert set(lst["tickets"][0]) == {"id", "h", "name", "type", "status", "at", "by"}
 

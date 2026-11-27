@@ -83,6 +83,8 @@ export function useBooksReview(tenantId) {
   const billMatchDocument = (id, why) => post(a(`/bills/${id}/match-document`), { reason: why });
   const mergeSuppliers = (keepId, ids) => post(`${base(tenantId)}/suppliers/merge`, { keep_id: keepId, duplicate_ids: ids });
   const apply = (id, accept) => post(a(`/statements/${id}/apply`), { accept });
+  /** Every waiting statement checked again and its safe changes applied (25 Nov 2026); confirm=false = what it would do. */
+  const applyAll = (confirm) => post(a("/statements/apply-all"), { confirm });
 
   /** Upload one official statement PDF — compared only; nothing changes until it's applied. */
   async function upload(file) {
@@ -92,6 +94,6 @@ export function useBooksReview(tenantId) {
   }
 
   return { review, accounts, checks, state, reload, runCheck, restore, setAside, transfer, link, correctDate,
-    agree, categorise, payBill, payInvoices, paidBack, recordDraft, cancelDraft, upload, check, apply, docFigures, docConfirm, docBook,
+    agree, categorise, payBill, payInvoices, paidBack, recordDraft, cancelDraft, upload, check, apply, applyAll, docFigures, docConfirm, docBook,
     docNotABill, docCertificate, popLink, popDismiss, docAddToInvoices, docLinkInvoice, docDuplicate, docVatBasis, billCancelDuplicate, billMatchDocument, mergeSuppliers };
 }

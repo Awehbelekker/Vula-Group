@@ -10,6 +10,7 @@ full access (an owner or manager) — the bank data behind the books is the busi
   GET  /{tenant_id}/admin/books-audit/statements          the comparisons, newest first
   GET  /{tenant_id}/admin/books-audit/statements/{id}     one comparison with its proposed actions
   POST /{tenant_id}/admin/books-audit/statements/{id}/apply   do the confirmed actions (all, or `accept`)
+  POST /{tenant_id}/admin/books-audit/statements/apply-all    every waiting statement checked again, safe actions applied
 
 18 Nov 2026, the books review screen (vula/commerce/books_review.py):
   POST /{tenant_id}/admin/books-audit/run                 now also keeps the rebuild dry run (`books`)
@@ -381,6 +382,23 @@ async def get_check(tenant_id: str, check_id: str, request: Request) -> dict:
         if a.get("account"):
             a["account"] = f"…{a['account'][-4:]}"
     return r
+
+
+class ApplyAllBody(BaseModel):
+    confirm: bool = False                    # False = what it would do (nothing written)
+
+
+@router.post("/{tenant_id}/admin/books-audit/statements/apply-all")
+async def apply_all_checks(tenant_id: str, body: ApplyAllBody, request: Request) -> dict:
+    """Every waiting statement checked again against the bank lines as they are now, and the changes
+    that need no person applied in one go (25 Nov 2026). Without `confirm`, what it would do."""
+    person, actor = await _full(tenant_id, request)
+    from vula.commerce import statement_compare
+    out = await asyncio.to_thread(statement_compare.apply_all, tenant_id, person=person or "owner",
+                                  full_access=True, actor=actor, preview=not body.confirm)
+    if out.get("error"):
+        raise HTTPException(status_code=400, detail=out["error"])
+    return out
 
 
 class ApplyBody(BaseModel):
