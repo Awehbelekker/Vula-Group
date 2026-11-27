@@ -295,6 +295,8 @@ function Home({ token, onLock, onExpired }) {
       <Scores token={token} guard={guard} bump={bills} />
       <MyShifts token={token} guard={guard} online={online} />
       <Floor token={token} guard={guard} online={online} />
+      <Lessons token={token} guard={guard} online={online} bump={bills}
+        onBilled={async (r) => { await loadBills(); setNote(`Bill opened for ${r.customer}'s ${r.item_name.toLowerCase()}. Ask them to tap your tag.`); }} />
       <Tabs token={token} guard={guard} online={online} bump={bills} />
 
       <form className="card" onSubmit={create}>
@@ -369,6 +371,38 @@ function Home({ token, onLock, onExpired }) {
 
 // ── bar tabs: the customer opens a tab by tapping a tag (WhatsApp); staff add what they order ──
 const TAB_RE = /^\d{1,5}([.,]\d{1,2})?$/;
+
+/** Lessons the coach can charge now (a surf or kite school). The amount is the lesson's own —
+ * nothing is typed — and paying it marks the lesson paid. Hidden where there are none. */
+function Lessons({ token, guard, online, bump, onBilled }) {
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const load = useCallback(async () => {
+    try { setRows((await call("/v1/tap/app/lessons", { token })).lessons || []); }
+    catch (x) { if (x.status) guard(x); }
+  }, [token, guard]);
+  useEffect(() => { load(); }, [load, bump]);
+  const charge = async (r) => {
+    setErr(""); setBusy(r.id);
+    try { await call(`/v1/tap/app/lessons/${r.id}/bill`, { token, method: "POST" }); await onBilled(r); await load(); }
+    catch (x) { if (x.status === 401) guard(x); else setErr(x.message || "That didn't work. Try again."); }
+    setBusy("");
+  };
+  if (!rows.length) return null;
+  return (
+    <div className="card">
+      <h2>Lessons to charge</h2>
+      {err && <div className="err" role="alert">{err}</div>}
+      {rows.map((r) => (
+        <div key={r.id} className="row tab-line">
+          <span><strong>{r.customer}</strong> · {r.summary}<br /><span className="muted">{r.when}{r.coach ? ` · ${r.coach}` : ""} · {r.ref}</span></span>
+          <button type="button" className="small" disabled={!online || !!busy} onClick={() => charge(r)}>{busy === r.id ? "Opening…" : `${r.billed ? "Charge again" : "Charge"} ${rands(r.amount_cents)}`}</button>
+        </div>))}
+      <p className="muted">Opens a bill for the lesson's price on your tag. The customer taps it to pay and can add a tip.</p>
+    </div>
+  );
+}
 
 function Tabs({ token, guard, online, bump }) {
   const [tabs, setTabs] = useState(null);           // null = loading; "off" = tabs switched off

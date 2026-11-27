@@ -1,6 +1,6 @@
 """
 vula/commerce/product_rivals.py — the competing products a business's product stands against,
-for its reps only (26 Nov 2026, migration 313).
+for its reps only (26 Nov 2026, migration 314).
 
 Floornet's field guide lists, beside each of its carpets, the rival ranges it competes with, so a
 rep in front of an architect can answer "what's your version of Conqueror?" by searching the
@@ -105,7 +105,7 @@ def for_products(tenant_id: str, product_ids: List[str]) -> Dict[str, List[Dict[
         try:
             rows = all_rows(lambda: _db().table(TABLE).select("product_id,brand,name,note,sort_order")
                             .eq("tenant_id", tenant_id).in_("product_id", part), cap=20000)
-        except Exception as exc:  # noqa: BLE001 — before migration 313: simply none
+        except Exception as exc:  # noqa: BLE001 — before migration 314: simply none
             log.debug("rivals not read: %s", exc)
             return {}
         for r in rows:

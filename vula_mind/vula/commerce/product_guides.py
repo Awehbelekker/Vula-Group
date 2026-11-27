@@ -191,7 +191,7 @@ def _audit(tenant_id: str, actor: Optional[dict], action: str, **detail: Any) ->
 
 
 def is_team(guide: dict) -> bool:
-    """A guide for the business's own team (migration 313): shows rival products."""
+    """A guide for the business's own team (migration 314): shows rival products."""
     return (guide.get("audience") or "client") == "team"
 
 
@@ -232,7 +232,7 @@ def create(tenant_id: str, data: dict, actor: Optional[dict] = None) -> dict:
            "created_by": (actor or {}).get("email"), "created_at": _now(), "updated_at": _now(),
            **_clean_guide(data or {}, tenant_id)}
     if row.get("audience") == "client":
-        row.pop("audience")          # the column's default; a database before migration 313 has none
+        row.pop("audience")          # the column's default; a database before migration 314 has none
     _db().table(TABLE).insert(row).execute()
     saved = (_db().table(TABLE).select("*").eq("tenant_id", tenant_id).eq("token", row["token"])
              .limit(1).execute().data or [])

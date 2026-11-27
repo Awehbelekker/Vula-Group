@@ -1,18 +1,5 @@
--- 313_product_rivals.sql — rival products for reps, and guides only the team opens
--- (vula/commerce/product_rivals.py, 26 Nov 2026).
---
--- Floornet's field guide lists, for each of its products, the competing products it stands
--- against ("Tier product from B_ / from Nouwens") so a rep can answer "what's your version of
--- X?". That list is the business's own sales knowledge and never goes to a client:
---
---   commerce_product_rivals — one row per rival product: the brand, its product name, an optional
---       note. Its own table, NOT a column on commerce_products, because the public product routes
---       hand out whole product rows. Read only by team routes and by a guide made for the team.
---   commerce_product_guides.audience — 'client' (the default, never shows rivals) or 'team'
---       (shows them, and its page says it is not for clients).
---
--- Idempotent.
-
+-- Paste into the Supabase SQL editor (clear the editor first). Safe to run twice.
+begin;
 create table if not exists commerce_product_rivals (
     id          uuid primary key default gen_random_uuid(),
     tenant_id   text not null,
@@ -37,3 +24,9 @@ alter table commerce_product_guides add column if not exists audience text not n
 alter table commerce_product_guides drop constraint if exists commerce_product_guides_audience_check;
 alter table commerce_product_guides add constraint commerce_product_guides_audience_check
     check (audience in ('client', 'team'));
+insert into vula_schema_migrations (filename, number, sha256, applied_by, baseline)
+values ('314_product_rivals.sql', 314, '9bc4b6503b64ea499fabf854c9fe247b46f01d9a103619351988e72fd94edeee', 'sql-editor', false) on conflict do nothing;
+commit;
+select 'done' as result,
+  (select count(*) from information_schema.tables where table_name = 'commerce_product_rivals') as rivals_table,
+  (select count(*) from information_schema.columns where table_name = 'commerce_product_guides' and column_name = 'audience') as audience_column;
